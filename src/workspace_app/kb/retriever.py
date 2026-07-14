@@ -26,6 +26,7 @@ from ..resources.kb import DocChunk, RetrievedPassage, SourceDoc
 from .bm25 import bm25_rank
 from .embedder import Embedder
 from .fusion import mmr, rrf_scores
+from .image_embedder import ImageEmbedder
 from .ingest import normalize_text
 from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
@@ -208,6 +209,7 @@ class Retriever:
         candidates: int = 20,
         top_k: int = 5,
         code_embedder: Embedder | None = None,
+        image_embedder: ImageEmbedder | None = None,
         enhancement_defaults: EnhancementSettings | None = None,
         quality_weight: float = 0.10,
         quality_floor: int | None = None,
@@ -222,6 +224,11 @@ class Retriever:
         # both vector fields in parallel (one rank per field, RRF-merged).
         # None ⇒ retriever stays single-field (legacy `embedding` only).
         self._code_embedder = code_embedder
+        # #513: an image embedder for the `embedding_img` field. When wired AND
+        # the model supports text queries (CLIP-style shared space), the dense pass
+        # gains a text→image arm. None, or an image-only model, adds nothing — the
+        # text path is untouched (image-to-image search is a separate entry point).
+        self._image_embedder = image_embedder
         # Operator-level enhancement defaults + ceilings. None → bundled
         # `EnhancementSettings()` (light: expand=1, hyde=0, rerank=on).
         # Each `search` call's caller / LLM tool args resolve against
@@ -355,6 +362,21 @@ class Retriever:
                         overlay=overlay,
                     )
                 )
+            # #513 text→image arm: only for a shared-space image model. Image-only
+            # (embed_query_text → None) or no image embedder ⇒ nothing appended.
+            if self._image_embedder is not None:
+                qv_img = self._image_embedder.embed_query_text(q)
+                if qv_img is not None:
+                    ranked_lists.append(
+                        self._dense(
+                            vec=qv_img,
+                            field="embedding_img",
+                            chunks=chunks,
+                            cids=collection_ids,
+                            loc=loc,
+                            overlay=overlay,
+                        )
+                    )
             ranked_lists.append(bm25_rank(q, corpus))
 
         # HyDE: embed N hypothetical answers (as pseudo-documents); each
@@ -558,7 +580,8 @@ class Retriever:
         is the store's metric too, so this matches the persisted-vector order."""
         scored: list[tuple[float, str]] = []
         for cid, ch in chunks.items():
-            v = ch.embedding if field == "embedding" else ch.embedding_alt
+            # field is one of embedding / embedding_alt / embedding_img (#513).
+            v: list[float] | None = getattr(ch, field)
             if v:
                 scored.append((cosine_distance(v, vec), cid))
         scored.sort()

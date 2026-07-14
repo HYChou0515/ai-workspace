@@ -57,6 +57,17 @@ _KNOWN_CODE_EMBED_DIMS: dict[str, int] = {
     "": 768,
 }
 
+# #513: image-embedding width. Stored on `DocChunk.embedding_img` — its OWN
+# space, separate from EMBED_DIM / CODE_EMBED_DIM. No image model is wired yet
+# (it is an external deliverable); "" (offline / the HashImageEmbedder stub)
+# pins to a CLIP ViT-B width so the column has a fixed size. When the real model
+# lands, set KB_IMG_EMBED_DIM (or KB_IMG_EMBED_MODEL) to its output width.
+_KNOWN_IMG_EMBED_DIMS: dict[str, int] = {
+    "openai/clip-vit-base-patch32": 512,
+    "openai/clip-vit-large-patch14": 768,
+    "": 512,
+}
+
 
 def _resolve_dim(
     *,
@@ -100,11 +111,23 @@ def _resolve_code_embed_dim() -> int:
     )
 
 
+def _resolve_img_embed_dim() -> int:
+    return _resolve_dim(
+        dim_env="KB_IMG_EMBED_DIM",
+        model_env="KB_IMG_EMBED_MODEL",
+        table=_KNOWN_IMG_EMBED_DIMS,
+        default_model="",
+    )
+
+
 EMBED_DIM = _resolve_embed_dim()  # e.g. bge-m3 = 1024
 # P3.0 code-specialised embedding width. Stored on `DocChunk.embedding_alt`
 # for Collections with ``embedder_id=1`` so the retriever can fan out across
 # both fields in parallel and RRF the results. Defaults to 768.
 CODE_EMBED_DIM = _resolve_code_embed_dim()
+# #513 image-embedding width. Stored on `DocChunk.embedding_img`, an additive
+# third retrieval signal beside the text/code vectors. Defaults to 512.
+IMG_EMBED_DIM = _resolve_img_embed_dim()
 
 
 # ───────────────────────────── resources ─────────────────────────────
@@ -412,6 +435,15 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     embedding_alt: Annotated[list[float] | None, Vector(dim=CODE_EMBED_DIM, distance="cosine")] = (
         None
     )
+    # #513: the image vector, an ADDITIVE third signal. Unlike embedding /
+    # embedding_alt (exactly one set), this may coexist with `embedding` on the
+    # same chunk — a defect image indexed by both its VLM description (text) and
+    # its pixels. Nullable + its own IMG_EMBED_DIM space; None until an image
+    # embedder is wired (create_app(kb_image_embedder=...)), so existing chunks
+    # and the text-only retrieval path are untouched.
+    embedding_img: Annotated[list[float] | None, Vector(dim=IMG_EMBED_DIM, distance="cosine")] = (
+        None
+    )
 
 
 class CachedChunk(Struct):
@@ -430,6 +462,7 @@ class CachedChunk(Struct):
     provenance: dict[str, Any] = field(default_factory=dict)
     embedding: list[float] | None = None
     embedding_alt: list[float] | None = None
+    embedding_img: list[float] | None = None  # #513: mirrors DocChunk.embedding_img
 
 
 class IndexCache(Struct):  # → resource "index-cache"
