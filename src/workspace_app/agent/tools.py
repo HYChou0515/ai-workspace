@@ -1235,6 +1235,35 @@ def lookup_glossary_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -
     return block or f"No glossary entries found for: {query}"
 
 
+def lookup_defect_impl(
+    ctx: RunContextWrapper[AgentToolContext], code: str, scope_chain: list[str]
+) -> str:
+    """Look up a defect code's entry in the defect library, scoped to a station (#513).
+
+    Deterministic + instant — no knowledge-base search. Pass the defect ``code`` and
+    the ``scope_chain`` the user gave, ordered MOST-SPECIFIC FIRST (e.g.
+    ``["etchtool07", "etch", "metal"]`` = machine, station-type, layer). The most-specific
+    entry that carries the code wins, so a single machine can override the shared
+    station-type entry; a code with no scoped entry falls back to a global one. Returns the
+    matching entry (morphology + judgement criteria) as authoritative context tagged with
+    its ``card_id`` (so you can update it via update_context_card), or a short "not found"
+    note. Use this for "what defect is code X at this station"."""
+    from ..kb.context_cards import card_context_block
+    from ..kb.defect_library import resolve
+    from ..resources.kb import ContextCard
+
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: lookup_defect needs a collection-scoped context (no spec on this turn)"
+    hits: list[tuple[str, ContextCard]] = []
+    for cid in ctx.context.collection_ids:
+        got = resolve(spec, cid, code, scope_chain)
+        if got is not None:
+            hits.append(got)
+    block = card_context_block([c for _, c in hits], ids=[rid for rid, _ in hits])
+    return block or f"No defect entry found for code {code!r} in scope {scope_chain}"
+
+
 def update_context_card_impl(
     ctx: RunContextWrapper[AgentToolContext],
     card_id: str,
@@ -1591,6 +1620,8 @@ _IMPLS = {
     # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
     "resolve_collection": resolve_collection_impl,
     "lookup_glossary": lookup_glossary_impl,
+    # #513: station-scoped defect-library lookup (scope-chain, most-specific-wins).
+    "lookup_defect": lookup_defect_impl,
     "update_context_card": update_context_card_impl,
     "create_context_card": create_context_card_impl,
     # #397: submit a wiki correction (tell the maintainer what's wrong instead of
