@@ -28,6 +28,66 @@ def _run(spec, cid, docs=("d1",)):
     return CardGenRunStore(spec).start(cid, list(docs))
 
 
+def _new_collection(spec, name: str) -> str:
+    return spec.get_resource_manager(Collection).create(Collection(name=name)).resource_id
+
+
+def test_page_for_review_pages_across_collections_natively_with_total():
+    """#511 P3: the flat card stream pages ACTIVE proposals across every readable
+    collection in ONE native ``in_(cids).sort().offset().limit()`` query — the total
+    is the full count, the pages don't overlap or gap."""
+    spec, cid_a = _spec_with_collection()
+    cid_b = _new_collection(spec, "b")
+    store = CardProposalStore(spec)
+    run_a, run_b = _run(spec, cid_a), _run(spec, cid_b)
+    for i in range(3):
+        store.create_from_proposal(cid_a, run_a, ProposedCard(keys=[f"a{i}"], id=str(i)))
+    for i in range(2):
+        store.create_from_proposal(cid_b, run_b, ProposedCard(keys=[f"b{i}"], id=str(i)))
+
+    cids = [cid_a, cid_b]
+    p1, total = store.page_for_review(cids, offset=0, limit=2)
+    p2, _ = store.page_for_review(cids, offset=2, limit=2)
+    p3, _ = store.page_for_review(cids, offset=4, limit=2)
+    assert total == 5
+    assert [len(p) for p in (p1, p2, p3)] == [2, 2, 1]
+    seen = {(run_id, card.id) for page in (p1, p2, p3) for _cid, run_id, _c, card in page}
+    assert len(seen) == 5  # no overlap / gap
+
+
+def test_page_for_review_resolved_returns_the_terminal_history_set():
+    """With ``resolved=True`` the stream is the TERMINAL (committed/rejected)
+    history, excluding still-active proposals."""
+    spec, cid = _spec_with_collection()
+    store = CardProposalStore(spec)
+    run_id = _run(spec, cid)
+    store.create_from_proposal(cid, run_id, ProposedCard(keys=["a"], id="0", decision="pending"))
+    store.create_from_proposal(cid, run_id, ProposedCard(keys=["b"], id="1", decision="committed"))
+    store.create_from_proposal(cid, run_id, ProposedCard(keys=["c"], id="2", decision="rejected"))
+
+    active, active_total = store.page_for_review([cid], resolved=False)
+    hist, hist_total = store.page_for_review([cid], resolved=True)
+    assert active_total == 1 and {c.id for _cid, _r, _t, c in active} == {"0"}
+    assert hist_total == 2 and {c.id for _cid, _r, _t, c in hist} == {"1", "2"}
+
+
+def test_page_for_review_q_filters_the_text_and_totals_the_matches():
+    """A ``q`` substring (title / body / keys) narrows the stream — the total
+    reflects the filtered count, not the whole set (text isn't DB-indexed, so this
+    is a bounded scan over the collections' proposal rows, not the old load-all)."""
+    spec, cid = _spec_with_collection()
+    store = CardProposalStore(spec)
+    run_id = _run(spec, cid)
+    store.create_from_proposal(cid, run_id, ProposedCard(keys=["RZ3"], id="0", title="Reflow Zone 3"))
+    store.create_from_proposal(cid, run_id, ProposedCard(keys=["RZ4"], id="1", title="Reflow Zone 4"))
+    store.create_from_proposal(cid, run_id, ProposedCard(keys=["SMT"], id="2", body="solder paste"))
+
+    rows, total = store.page_for_review([cid], q="reflow")
+    assert total == 2 and {c.id for _cid, _r, _t, c in rows} == {"0", "1"}
+    rows2, total2 = store.page_for_review([cid], q="paste")
+    assert total2 == 1 and {c.id for _cid, _r, _t, c in rows2} == {"2"}
+
+
 def test_create_from_proposal_uses_the_prop_run_pid_id_and_round_trips():
     """A kept proposal becomes a CardProposal row addressed by the deterministic
     ``prop:{run}:{pid}`` id (aligned with the reconcile ClusterMember), carrying

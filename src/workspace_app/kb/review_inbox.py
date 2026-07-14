@@ -16,7 +16,8 @@ only converts to pydantic. Mirrors the storage-layer authorize idiom of
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 import msgspec
 from specstar import QB
@@ -25,7 +26,7 @@ from ..perm import Actor, authorize
 from ..resources.kb import ClusterMember, Collection, DocQuestion
 from .card_gen import ProposedCard
 from .card_proposal import CardProposalStore
-from .doc_questions import questions_by_status
+from .doc_questions import page_questions_by_status, questions_by_status
 
 if TYPE_CHECKING:
     from specstar import SpecStar
@@ -286,46 +287,112 @@ def build_review_inbox(
         page_s = items[offset:] if limit is None else items[offset : offset + limit]
         return ReviewInbox(cards=[], questions=[], suppressed=page_s, total=total)
 
-    merged: list[ReviewCardItem | ReviewQuestionItem] = []
-    if kind != "questions":
-        merged.extend(_card_items(spec, readable, resolved))
-    if kind != "cards":
-        merged.extend(_question_items(spec, readable, resolved))
-    if q:
-        needle = q.lower()
-        merged = [i for i in merged if _row_matches(i, needle)]
-    # ``total_actionable`` counts what the actor may write over the whole filtered
-    # set (the nav badge reads it from an empty page); computed BEFORE the
-    # ``actionable`` filter narrows the rows.
-    total_actionable = sum(1 for i in merged if i.can_act)
     # #506 P7: the clustered view groups items by concept FIRST, then pages the
     # clusters ("一群一列"). Grouping must precede pagination (a cluster's members
-    # can't straddle a page), and the actionable filter applies at CLUSTER level (a
-    # cluster is actionable if any member is), so it runs after grouping.
+    # can't straddle a page), so it still loads the WHOLE merged set (its native
+    # pagination is #511 P4 — a ClusterMember GROUP BY). Only the FLAT view below
+    # pages natively.
     if grouped:
+        merged: list[ReviewCardItem | ReviewQuestionItem] = []
+        if kind != "questions":
+            merged.extend(_card_items(spec, readable, resolved))
+        if kind != "cards":
+            merged.extend(_question_items(spec, readable, resolved))
+        if q:
+            needle = q.lower()
+            merged = [i for i in merged if _row_matches(i, needle)]
+        total_actionable = sum(1 for i in merged if i.can_act)
         cluster_of = cluster_key_map(spec, list(readable))
         clusters = group_by_cluster(merged, cluster_of)
-        if actionable:
+        if actionable:  # a cluster is actionable if any member is
             clusters = [c for c in clusters if c.can_act]
         total = len(clusters)
         page_c = clusters[offset:] if limit is None else clusters[offset : offset + limit]
         return ReviewInbox(
-            cards=[],
-            questions=[],
-            clusters=page_c,
-            total=total,
-            total_actionable=total_actionable,
+            cards=[], questions=[], clusters=page_c, total=total, total_actionable=total_actionable
         )
-    if actionable:
-        merged = [i for i in merged if i.can_act]
+
+    # ── flat view (#511 P3): each stream pages NATIVELY at the DB, no load-all ──
+    # ``actionable`` narrows to collections the actor may write (an ACL-derived,
+    # per-collection flag → pushable as a collection_id filter); ``total_actionable``
+    # is always the count over those collections (the nav badge), independent of the
+    # ``actionable`` toggle. ``q`` (a text substring) can't be DB-indexed, so a
+    # ``q``-filtered stream is a bounded scan (still just proposal/question rows).
+    act_cids = [cid for cid, ctx in readable.items() if ctx.can_act]
+    page_cids = act_cids if actionable else list(readable)
+    q_statuses = _RESOLVED_QUESTION_STATUSES if resolved else _OPEN_QUESTION_STATUSES
+    cstore = CardProposalStore(spec)
+
+    def _card_page(cids: list[str], *, offset: int, limit: int | None):
+        rows, total = cstore.page_for_review(
+            cids, resolved=resolved, q=q, offset=offset, limit=limit
+        )
+        items = [
+            ReviewCardItem(
+                run_id=run_id,
+                collection_id=cid,
+                collection_name=readable[cid].name,
+                can_act=readable[cid].can_act,
+                created_time=created,
+                card=card,
+            )
+            for cid, run_id, created, card in rows
+        ]
+        return items, total
+
+    def _question_page(cids: list[str], *, offset: int, limit: int | None):
+        rows, total = page_questions_by_status(
+            spec, cids, q_statuses, q=q, offset=offset, limit=limit
+        )
+        items = [
+            ReviewQuestionItem(
+                qid=qid,
+                collection_id=question.collection_id,
+                collection_name=readable[question.collection_id].name,
+                can_act=readable[question.collection_id].can_act,
+                created_time=created,
+                question=question,
+            )
+            for qid, created, question in rows
+        ]
+        return items, total
+
+    def _actionable_total(page: Callable[..., tuple[list[Any], int]], stream_total: int) -> int:
+        # When `actionable` is on, page_cids == act_cids so the stream total already
+        # IS the actionable count; else count over act_cids (limit=0 → total only).
+        return stream_total if actionable else page(act_cids, offset=0, limit=0)[1]
+
+    if kind == "cards":
+        cards, total = _card_page(page_cids, offset=offset, limit=limit)
+        return ReviewInbox(
+            cards=cards,
+            questions=[],
+            total=total,
+            total_actionable=_actionable_total(_card_page, total),
+        )
+    if kind == "questions":
+        questions, total = _question_page(page_cids, offset=offset, limit=limit)
+        return ReviewInbox(
+            cards=[],
+            questions=questions,
+            total=total,
+            total_actionable=_actionable_total(_question_page, total),
+        )
+    # kind == "all": a bounded merge — load the top (offset+limit) of EACH stream
+    # (enough for the global page however the two interleave), merge-sort, then slice.
+    cap = None if limit is None else offset + limit
+    cards, card_total = _card_page(page_cids, offset=0, limit=cap)
+    questions, q_total = _question_page(page_cids, offset=0, limit=cap)
+    merged = [*cards, *questions]
     merged.sort(key=lambda i: i.created_time, reverse=True)  # newest first, across both streams
-    total = len(merged)
     page = merged[offset:] if limit is None else merged[offset : offset + limit]
     return ReviewInbox(
         cards=[i for i in page if isinstance(i, ReviewCardItem)],
         questions=[i for i in page if isinstance(i, ReviewQuestionItem)],
-        total=total,
-        total_actionable=total_actionable,
+        total=card_total + q_total,
+        total_actionable=(
+            _actionable_total(_card_page, card_total) + _actionable_total(_question_page, q_total)
+        ),
     )
 
 

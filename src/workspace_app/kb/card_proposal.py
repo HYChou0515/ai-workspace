@@ -213,23 +213,54 @@ class CardProposalStore:
     def list_for_review(
         self, collection_id: str, *, resolved: bool = False
     ) -> list[tuple[str, float, ProposedCard]]:
-        """A collection's proposals for the review inbox as ``(run_id, created_epoch,
-        ProposedCard)``, newest first — the ACTIVE (待審) set, or with ``resolved``
-        the TERMINAL (history) set. P2 returns the whole filtered set (the inbox still
-        merges cards + questions then slices); P3 pages it natively."""
+        """ALL of a collection's review proposals (unpaged) as ``(run_id,
+        created_epoch, ProposedCard)``, newest first — the ACTIVE (待審) set, or with
+        ``resolved`` the TERMINAL (history) set. Used where the whole set is needed
+        (the reconcile member backfill); the inbox pages via :meth:`page_for_review`."""
+        rows, _total = self.page_for_review([collection_id], resolved=resolved)
+        return [(run_id, created, card) for _cid, run_id, created, card in rows]
+
+    def page_for_review(
+        self,
+        collection_ids: list[str],
+        *,
+        resolved: bool = False,
+        q: str = "",
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> tuple[list[tuple[str, str, float, ProposedCard]], int]:
+        """One page of the flat card stream ACROSS ``collection_ids`` as
+        ``(collection_id, run_id, created_epoch, ProposedCard)``, newest first, plus
+        the full filtered ``total`` (#511 P3).
+
+        Without ``q`` this is a single ``in_(cids) & decision.in_(set)`` query paged
+        at the DB (``offset``/``limit``) + a ``count_resources`` total — the native
+        pagination that replaces the load-every-run "fake pagination". With ``q`` (a
+        title/body/keys substring, which isn't DB-indexable) it's a bounded scan of
+        those collections' proposal rows filtered in Python — still far lighter than
+        the old load-all, since it reads only CardProposal rows, not every run's
+        nested list. ``limit=None`` returns the whole offset-onward stream."""
+        if not collection_ids:
+            return [], 0
         decisions = _TERMINAL_DECISIONS if resolved else list(_ACTIVE_DECISIONS)
-        query = (
-            (QB["collection_id"] == collection_id) & QB["decision"].in_(decisions)
-        ).sort(QB.created_time().desc(), QB.resource_id().asc())
-        out: list[tuple[str, float, ProposedCard]] = []
-        for r in self._rm.list_resources(query.build()):
-            d = r.data
-            assert isinstance(d, CardProposal)  # rm is CardProposal-typed; narrows ty
-            pid = _pid(r.info.resource_id, d.run_id)  # ty: ignore[unresolved-attribute]
-            out.append(
-                (d.run_id, r.info.created_time.timestamp(), card_proposal_to_proposed(pid, d))  # ty: ignore[unresolved-attribute]
-            )
-        return out
+        base = QB["collection_id"].in_(collection_ids) & QB["decision"].in_(decisions)
+        ordering = base.sort(QB.created_time().desc(), QB.resource_id().asc())
+        if not q:
+            total = self._rm.count_resources(base.build())
+            paged = ordering.offset(offset)
+            if limit is not None:
+                paged = paged.limit(limit)
+            rows = [_review_row(r) for r in self._rm.list_resources(paged.build())]
+            return rows, total
+        needle = q.lower()
+        matched = [
+            row
+            for r in self._rm.list_resources(ordering.build())
+            if _card_matches(needle, (row := _review_row(r))[3])
+        ]
+        total = len(matched)
+        page = matched[offset:] if limit is None else matched[offset : offset + limit]
+        return page, total
 
     def active_runs(self, collection_id: str) -> list[tuple[str, int]]:
         """The collection's runs that still hold ACTIVE proposals, as ``(run_id,
@@ -291,3 +322,25 @@ def _pid(proposal_id: str, run_id: str) -> str:
     """Recover the per-run ``pid`` from a ``prop:{run}:{pid}`` resource id (the
     inverse of :func:`card_proposal_id`)."""
     return proposal_id.removeprefix(f"prop:{run_id}:")
+
+
+def _review_row(r: object) -> tuple[str, str, float, ProposedCard]:
+    """One review-inbox row ``(collection_id, run_id, created_epoch, ProposedCard)``
+    from a stored CardProposal resource. Carries ``collection_id`` because a
+    cross-collection page can't recover it from the id-less ProposedCard."""
+    d = r.data  # ty: ignore[unresolved-attribute]
+    assert isinstance(d, CardProposal)  # rm is CardProposal-typed; narrows ty
+    pid = _pid(r.info.resource_id, d.run_id)  # ty: ignore[unresolved-attribute]
+    return (
+        d.collection_id,
+        d.run_id,
+        r.info.created_time.timestamp(),  # ty: ignore[unresolved-attribute]
+        card_proposal_to_proposed(pid, d),
+    )
+
+
+def _card_matches(needle: str, card: ProposedCard) -> bool:
+    """Whether a proposal's text contains the (already lower-cased) ``needle`` — the
+    review inbox's free-text ``q`` filter over a card's title / body / keys (mirrors
+    ``review_inbox._row_matches``)."""
+    return any(needle in field.lower() for field in (card.title, card.body, *card.keys))

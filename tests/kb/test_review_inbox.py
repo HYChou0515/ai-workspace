@@ -409,3 +409,87 @@ async def test_suppressed_audit_hidden_from_the_default_view():
     )
     normal = build_review_inbox(spec, actor=Actor.human("u"))
     assert normal.cards == [] and normal.suppressed == []
+
+
+async def test_grouped_respects_the_kind_and_q_filters():
+    """#511 P3: the grouped view still honours ``kind`` (which stream to cluster) and
+    ``q`` (text filter) — it loads the whole merged set (native paging is P4), so
+    these filters run in Python before clustering."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+    )
+    actor = Actor.human("u")
+    cards_only = build_review_inbox(spec, actor=actor, grouped=True, kind="cards")
+    assert cards_only.total == 1 and all(not cl.questions for cl in cards_only.clusters)
+    qs_only = build_review_inbox(spec, actor=actor, grouped=True, kind="questions")
+    assert qs_only.total == 1 and all(not cl.cards for cl in qs_only.clusters)
+    by_q = build_review_inbox(spec, actor=actor, grouped=True, q="rz3")
+    assert sum(len(cl.cards) for cl in by_q.clusters) == 1  # the RZ3 card matches
+    assert sum(len(cl.questions) for cl in by_q.clusters) == 0  # the R7 question filtered out
+
+
+async def test_grouped_actionable_drops_readonly_clusters():
+    """``actionable=True`` on the grouped view keeps only clusters the actor may
+    write to (a cluster is actionable if any member is)."""
+    spec = make_spec(default_user="owner")
+    coll_act = _collection(
+        spec,
+        "Act",
+        owner="owner",
+        permission=Permission(
+            visibility="restricted", read_content=["user:u"], add_content=["user:u"]
+        ),
+    )
+    coll_ro = _collection(
+        spec,
+        "RO",
+        owner="owner",
+        permission=Permission(visibility="restricted", read_content=["user:u"]),
+    )
+    coord = _coord(
+        spec,
+        {"act.md": [CardDraft(keys=["A"], title="A")], "ro.md": [CardDraft(keys=["B"], title="B")]},
+        owner="owner",
+    )
+    coord.enqueue(coll_act, [_add_source(spec, coll_act, "act.md", "x", owner="owner")])
+    coord.enqueue(coll_ro, [_add_source(spec, coll_ro, "ro.md", "y", owner="owner")])
+    await coord.aclose()
+
+    actor = Actor.human("u")
+    assert build_review_inbox(spec, actor=actor, grouped=True).total == 2
+    only_act = build_review_inbox(spec, actor=actor, grouped=True, actionable=True)
+    assert only_act.total == 1
+    assert [c.card.keys[0] for cl in only_act.clusters for c in cl.cards] == ["A"]
+
+
+async def test_suppressed_audit_respects_the_q_filter():
+    """The suppressed-audit view filters by ``q`` over the candidate label."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="0",
+        run_id="r1",
+        cluster_key="a",
+        state="suppressed",
+        label="Alpha",
+    )
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="1",
+        run_id="r2",
+        cluster_key="b",
+        state="suppressed",
+        label="Beta",
+    )
+    audit = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True, q="alph")
+    assert [s.label for s in audit.suppressed] == ["Alpha"]

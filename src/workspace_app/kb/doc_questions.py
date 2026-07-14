@@ -143,6 +143,63 @@ def questions_by_status(
     return out
 
 
+def page_questions_by_status(
+    spec: SpecStar,
+    collection_ids: list[str],
+    statuses: list[str],
+    *,
+    q: str = "",
+    offset: int = 0,
+    limit: int | None = None,
+) -> tuple[list[tuple[str, float, DocQuestion]], int]:
+    """One page of the flat question stream ACROSS ``collection_ids`` — questions in
+    one of ``statuses`` — as ``(qid, created_epoch, question)``, newest first, plus
+    the full filtered ``total`` (#511 P3).
+
+    Without ``q`` this is a single ``in_(cids) & status.in_(...)`` query paged at the
+    DB (``offset``/``limit``) + a ``count_resources`` total — the native pagination
+    that replaces the load-all. With ``q`` (a term/text/quote substring, which isn't
+    DB-indexable) it's a bounded scan of those collections' questions, filtered in
+    Python. ``limit=None`` returns the whole offset-onward stream."""
+    if not collection_ids:
+        return [], 0
+    rm = spec.get_resource_manager(DocQuestion)
+    base = QB["collection_id"].in_(collection_ids) & QB["status"].in_(statuses)
+    ordering = base.sort(QB.created_time().desc(), QB.resource_id().asc())
+    if not q:
+        total = rm.count_resources(base.build())
+        paged = ordering.offset(offset)
+        if limit is not None:
+            paged = paged.limit(limit)
+        rows = [_question_row(r) for r in rm.list_resources(paged.build())]
+        return rows, total
+    needle = q.lower()
+    matched = [
+        row
+        for r in rm.list_resources(ordering.build())
+        if _question_matches(needle, (row := _question_row(r))[2])
+    ]
+    total = len(matched)
+    page = matched[offset:] if limit is None else matched[offset : offset + limit]
+    return page, total
+
+
+def _question_row(r: object) -> tuple[str, float, DocQuestion]:
+    """One review-inbox row ``(qid, created_epoch, question)`` from a stored
+    DocQuestion resource."""
+    data = r.data  # ty: ignore[unresolved-attribute]
+    assert isinstance(data, DocQuestion)  # narrow Struct|Unset for ty
+    return (r.info.resource_id, r.info.created_time.timestamp(), data)  # ty: ignore[unresolved-attribute]
+
+
+def _question_matches(needle: str, question: DocQuestion) -> bool:
+    """Whether a question's text contains the (already lower-cased) ``needle`` — the
+    inbox's ``q`` filter over term / question_text / quote (mirrors
+    ``review_inbox._row_matches``)."""
+    fields = (question.term, question.question_text, question.quote)
+    return any(needle in field.lower() for field in fields)
+
+
 def list_open_questions(
     spec: SpecStar, *, collection_id: str | None = None
 ) -> list[tuple[str, DocQuestion]]:
