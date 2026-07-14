@@ -81,6 +81,17 @@ class CardProposal(Struct):  # → resource "card-proposal"
 4. **P4** grouped 真分頁:靠新版 `exp_aggregate_by`(order+offset+limit)分頁概念 + 載當頁成員;reconcile `ref_id`→CardProposal;history / suppressed 一併原生分頁。**（依賴 specstar 新功能）**
 5. **P5** drop 巢狀 `CardGenRun.proposals` + `set_proposals` + fallback(migration 驗證後)。
 
+## 狀態(P1–P4 DONE,PR #512)
+
+- **P1–P3(backend)DONE**。P3 flat:`CardProposalStore.page_for_review` + `page_questions_by_status` 原生分頁;`kind=all` 用 **bounded-merge**(各載 top `offset+limit`、merge-sort、切片;跨兩表單一 offset 的正確且有界解法,推翻 grill 的「無現成解」前提)。故 **flat FE 不拆兩區**——單表 Pager + 後端 merge 已達效能目標。
+- **P4 DONE**。實作時發現 plan 假設的兩個地基 #506/P2 從未建:
+  1. **`ClusterMember.state` 從不同步**——decide/commit/answer 只改 CardProposal/DocQuestion,member 永遠停在建立時的 active,故「GROUP BY active member」會把已 resolve 的概念算進總數。P4 補上 de-join:新 `kb/cluster_member.set_member_state` 接進 `CardProposalStore._cas`/`replace_run_proposals`(proposal terminal→翻同 id member,id 就是 CardProposal id `prop:{run}:{pid}`)與 `doc_questions.answer_question`/`discard_question`(term q→`tq:{qid}`;description q 無 member=no-op)。
+  2. **description DocQuestion 不投影成 member**——依 plan §「grouped 聚合限 kind∈{proposal,term_question}」,description q 只在 flat 視圖,grouped 不含(移除舊 load-all 路徑的 singleton fallback 副作用)。
+  - grouped 原生分頁:`cluster_member.page_clusters`/`count_clusters` 用 `exp_aggregate_by(QB["cluster_key"],{n:Count,latest:Max(QB.created_time())},order_by="-latest",offset,limit)` + `exp_count_groups`,載當頁成員再 resolve;`q`-過濾走 bounded scan fallback `_grouped_scan`。suppressed 也原生分頁。
+  - **specstar 0.11.15 已含 #412**;`Max(QB.created_time())` 可對 ResourceMeta 時間戳聚合,**不需**在 ClusterMember 加 indexed 時間欄。
+  - **FE 零改動**:ReviewPage grouped tab 早在 #506 G2 就送 `limit/offset` + Pager + 讀 `total`,後端原生後自動生效。
+- **剩**:P5(drop 巢狀欄)+ full 100% gate 終驗。
+
 ## 可調 / 決定
 
 - **flat 提案 vs 問題**:分兩區各自分頁(grill 敲定),不混同一時間軸。
