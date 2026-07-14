@@ -8,7 +8,12 @@ machine can override it.
 """
 
 from workspace_app.kb.context_cards import derive_norm_keys
-from workspace_app.kb.defect_library import resolve, scope_key
+from workspace_app.kb.defect_library import (
+    build_classification_prompt,
+    candidates_in_scope,
+    resolve,
+    scope_key,
+)
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, ContextCard
 
@@ -89,3 +94,62 @@ def test_resolve_matches_the_whole_code_not_a_prefix():
     cid = _collection(spec)
     _card(spec, cid, [scope_key("etch", "M40")], body="metal-40")
     assert resolve(spec, cid, "M4", ["etch"]) is None
+
+
+# --- P3: candidate gathering for image classification (use case B) ---------
+
+
+def test_candidates_in_scope_gathers_every_code_visible_at_a_station():
+    # The classification shortlist: all defect entries reachable from the scope
+    # chain — NOT a card keyed only for a different station.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _card(spec, cid, [scope_key("etch", "M4")], body="metal-4 bridge")
+    _card(spec, cid, [scope_key("etch", "scratch")], body="scratch")
+    _card(spec, cid, [scope_key("litho", "M4")], body="litho only")  # off-scope → excluded
+    got = candidates_in_scope(spec, cid, ["etchtool07", "etch"])
+    assert sorted(c.body for _, c in got) == ["metal-4 bridge", "scratch"]
+
+
+def test_candidates_in_scope_applies_the_override_once_per_code():
+    # A machine card overriding a shared type card for the SAME code appears once
+    # (the specific one), never both.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _card(spec, cid, [scope_key("etch", "M4")], body="shared")
+    _card(spec, cid, [scope_key("etchtool07", "M4")], body="tool-07")
+    got = candidates_in_scope(spec, cid, ["etchtool07", "etch"])
+    assert [c.body for _, c in got] == ["tool-07"]
+
+
+def test_candidates_in_scope_includes_global_bare_code_cards():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _card(spec, cid, ["general_defect"], body="applies everywhere")
+    got = candidates_in_scope(spec, cid, ["etch"])
+    assert [c.body for _, c in got] == ["applies everywhere"]
+
+
+def test_build_classification_prompt_lists_each_candidate_and_the_context():
+    cards = [
+        ContextCard(
+            collection_id="c",
+            keys=["etch|scratch"],
+            norm_keys=[],
+            title="Scratch",
+            body="a linear gouge across the die",
+        ),
+        ContextCard(collection_id="c", keys=["etch|M4"], norm_keys=[], body="metal-4 bridge"),
+    ]
+    prompt = build_classification_prompt(cards, context="seen near the wafer edge")
+    assert "Scratch" in prompt and "a linear gouge across the die" in prompt
+    assert "M4" in prompt and "metal-4 bridge" in prompt  # code derived from key when no title
+    assert "seen near the wafer edge" in prompt  # the user's free-text context
+    assert "rank" in prompt.lower()  # asks the VLM to rank the candidates
+
+
+def test_build_classification_prompt_without_context_omits_the_context_line():
+    cards = [ContextCard(collection_id="c", keys=["etch|scratch"], norm_keys=[], body="gouge")]
+    prompt = build_classification_prompt(cards)
+    assert "gouge" in prompt
+    assert "context" not in prompt.lower()  # no dangling empty context section

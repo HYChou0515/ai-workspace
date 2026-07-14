@@ -2,6 +2,7 @@ from .context import AgentToolContext, KbSearchBudget, WikiSearchBudget
 from .tools import (
     ask_knowledge_base_impl,
     build_tools,
+    classify_defect_image_impl,
     create_context_card_impl,
     create_entity_impl,
     delete_file_impl,
@@ -44,6 +45,7 @@ __all__ = [
     "lookup_user_impl",
     "resolve_collection_impl",
     "lookup_glossary_impl",
+    "classify_defect_image_impl",
     "lookup_defect_impl",
     "update_context_card_impl",
     "create_context_card_impl",

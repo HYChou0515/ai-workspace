@@ -79,6 +79,13 @@
   - Unit:scope 硬過濾、shortlist、VLM 比對排名(mock VLM)、#377 觸發、labeled 落地、卡提案。
   - **DoD**:上傳圖 → 排名候選 + 依據 + 可確認。**live canned check**(真 VLM 一張圖)。
   - ⚠️ 期待值:交付前 B 主要是**粗 triage + 累積標註**;細分近似缺陷的準度要等 P4 的圖向量。
+  - **狀態(核心完成)**:`defect_library.candidates_in_scope`(scope 硬過濾候選、per-code 最具體者、去重)+
+    `build_classification_prompt`(候選 morphology → VLM 排名問題,文字為主錨、context 選配)+ agent tool
+    `classify_defect`(讀上傳圖 SourceDoc → describer.answer VLM 比對 → 排名 + `card_ids` provenance,供 flywheel
+    read-before-write)。掛 3 個 kb preset(與 `lookup_defect` 並列),`register_kb_chat_routes` 接 `vlm_describer` →
+    KB chat 互動 context 有 describer(無 VLM→fail-loud）。tool_authz `classify_defect=read_content`。
+    **選配延後**(plan 標可延後):#377 DocQuestion 發問、labeled 樣本自動落地、cardgen 卡提案、index/rule 評估。
+    **DoD 待補**:live canned check(真 VLM 一張缺陷圖)。
 
 - **P4 · image embedder 接上**(gated on 他隊交付)
   - 實作 `ImageEmbedder`(他隊模型 adapter),`create_app` 從 `None` 換真的。

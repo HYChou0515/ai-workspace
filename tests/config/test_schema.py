@@ -256,14 +256,15 @@ def test_bundled_presets_include_qwen3_claude_openai_and_kb_default():
     # kb-default ships kb_search so the KB chat works out of the box, plus
     # search_wiki (#506 P4 — the budgeted in-agent wiki grep), plus lookup_glossary
     # (#106) so an unknown term resolves from the glossary before the slow kb_search,
-    # plus lookup_defect (#513) for a station-scoped defect-library lookup, plus
-    # request_wiki_update (#397) so the user can report a wrong answer for the
-    # wiki to correct.
+    # plus lookup_defect + classify_defect (#513) for the station-scoped defect
+    # library (look up a code / classify an uploaded image), plus request_wiki_update
+    # (#397) so the user can report a wrong answer for the wiki to correct.
     assert presets["kb-default"].allowed_tools == [
         "kb_search",
         "search_wiki",
         "lookup_glossary",
         "lookup_defect",
+        "classify_defect",
         "request_wiki_update",
     ]
 
