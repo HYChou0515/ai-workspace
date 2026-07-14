@@ -479,7 +479,54 @@ class Retriever:
             assert self._llm is not None
             step("\n↻ rerank\n")
             passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
-        return passages[:limit]
+        # #513 P9: pull in the parent of any attachment hit — AFTER the top_k cut,
+        # so the parent context rides along without displacing a primary result.
+        return self._augment_with_parents(passages[:limit])
+
+    def _augment_with_parents(self, passages: list[RetrievedPassage]) -> list[RetrievedPassage]:
+        """#513 P9 — attachment-aware parent merge. A hit on an attachment's chunk
+        (a defect figure) is semantically thin on its own: the morphology and
+        judgement criteria live in the PARENT document's text. So each attachment
+        passage additionally pulls in its parent document (its full text, one
+        passage, inheriting the attachment's score so it sits alongside). Deduped:
+        a parent already present — independently hit, or shared by two attachment
+        hits — is never appended twice. Non-attachment passages are untouched, so
+        an attachment-free collection returns byte-for-byte the same list."""
+        present = {p.document_id for p in passages}
+        extra: list[RetrievedPassage] = []
+        for p in passages:
+            parent_id = self._parent_doc_id(p.document_id)
+            if not parent_id or parent_id in present:
+                continue
+            path = self._doc_path(parent_id)
+            if path is None:  # pragma: no cover — parent-of-live-attachment is live
+                continue
+            text = self._canonical_text(parent_id)
+            extra.append(
+                RetrievedPassage(
+                    collection_id=p.collection_id,
+                    document_id=parent_id,
+                    filename=posixpath.basename(path),
+                    start=0,
+                    end=len(text),
+                    source_chunk_ids=[],
+                    text=text,
+                    score=p.score,
+                )
+            )
+            present.add(parent_id)
+        return passages + extra
+
+    def _parent_doc_id(self, doc_id: str) -> str:
+        """The `parent_doc_id` of a doc — non-empty iff it is an attachment (#513
+        P7). ``""`` for a top-level doc or a doc that has since been deleted."""
+        rm = self._spec.get_resource_manager(SourceDoc)
+        try:
+            doc = rm.get(doc_id).data
+        except ResourceIDNotFoundError:  # pragma: no cover — resolved id is live here
+            return ""
+        assert isinstance(doc, SourceDoc)
+        return doc.parent_doc_id
 
     def _apply_quality_prior(
         self,

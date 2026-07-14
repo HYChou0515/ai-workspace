@@ -173,6 +173,9 @@
   - 反向(命中父文字 → 附上其附件圖)可選、之後再說。
   - Unit:附件命中 → 結果含父文件;非附件命中不受影響;去重(父同時被別條命中不重複)。
   - **DoD**:以圖/附件檢索 → 拿到附件 + 它所屬缺陷文件的文字脈絡。
+  - **狀態(完成)**:`Retriever._augment_with_parents` 在 top_k 切分**之後**追加父文件全文 passage(繼承附件分數、
+    去重、無附件時 byte-for-byte 不變);父 passage `source_chunk_ids=[]`(沿用 `agent/tools.py` 既有樣式)。
+    反向(命中父文字 → 附上其附件圖)仍延後。
 
 ## 相依 / gating
 
