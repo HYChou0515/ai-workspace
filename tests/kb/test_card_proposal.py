@@ -32,6 +32,38 @@ def _new_collection(spec, name: str) -> str:
     return spec.get_resource_manager(Collection).create(Collection(name=name)).resource_id
 
 
+def _put_member(spec, cid, member_id, *, kind="proposal", ref_id="0", run_id="", state="active"):
+    """Project a ClusterMember at a SPECIFIC id — the reconcile projection uses
+    ``prop:{run}:{pid}`` for a proposal (== the CardProposal id), so a decision write
+    can find + de-join it (#511 P4)."""
+    from workspace_app.resources.kb import ClusterMember
+
+    spec.get_resource_manager(ClusterMember).create_or_update(
+        member_id,
+        ClusterMember(
+            collection_id=cid,
+            kind=kind,
+            ref_id=ref_id,
+            run_id=run_id,
+            cluster_key="k",
+            state=state,
+            norm_key="k",
+        ),
+    )
+
+
+def _member_state(spec, member_id):
+    from specstar.types import ResourceIDNotFoundError
+
+    from workspace_app.resources.kb import ClusterMember
+
+    try:
+        data = spec.get_resource_manager(ClusterMember).get(member_id).data
+    except ResourceIDNotFoundError:
+        return None
+    return data.state
+
+
 def test_page_for_review_pages_across_collections_natively_with_total():
     """#511 P3: the flat card stream pages ACTIVE proposals across every readable
     collection in ONE native ``in_(cids).sort().offset().limit()`` query — the total
@@ -78,8 +110,12 @@ def test_page_for_review_q_filters_the_text_and_totals_the_matches():
     spec, cid = _spec_with_collection()
     store = CardProposalStore(spec)
     run_id = _run(spec, cid)
-    store.create_from_proposal(cid, run_id, ProposedCard(keys=["RZ3"], id="0", title="Reflow Zone 3"))
-    store.create_from_proposal(cid, run_id, ProposedCard(keys=["RZ4"], id="1", title="Reflow Zone 4"))
+    store.create_from_proposal(
+        cid, run_id, ProposedCard(keys=["RZ3"], id="0", title="Reflow Zone 3")
+    )
+    store.create_from_proposal(
+        cid, run_id, ProposedCard(keys=["RZ4"], id="1", title="Reflow Zone 4")
+    )
     store.create_from_proposal(cid, run_id, ProposedCard(keys=["SMT"], id="2", body="solder paste"))
 
     rows, total = store.page_for_review([cid], q="reflow")
@@ -123,9 +159,7 @@ def test_list_active_pages_the_collection_at_the_db_and_excludes_terminal():
             cid, run_id, ProposedCard(keys=[f"k{i}"], id=f"c{i}", decision="pending")
         )
     # a resolved proposal must not show in the active queue
-    store.create_from_proposal(
-        cid, run_id, ProposedCard(keys=["kx"], id="cx", decision="rejected")
-    )
+    store.create_from_proposal(cid, run_id, ProposedCard(keys=["kx"], id="cx", decision="rejected"))
 
     assert store.count_active(cid) == 5
 
@@ -137,9 +171,7 @@ def test_list_active_pages_the_collection_at_the_db_and_excludes_terminal():
     ids = [pid for page in (page1, page2, page3) for pid, _cp in page]
     assert len(set(ids)) == 5  # no overlap / gap across pages
     assert f"prop:{run_id}:cx" not in ids  # terminal excluded
-    assert all(
-        cp.decision == "pending" for page in (page1, page2, page3) for _pid, cp in page
-    )
+    assert all(cp.decision == "pending" for page in (page1, page2, page3) for _pid, cp in page)
 
 
 def test_create_from_proposal_is_idempotent_and_preserves_existing():
@@ -153,15 +185,21 @@ def test_create_from_proposal_is_idempotent_and_preserves_existing():
     p = ProposedCard(keys=["k"], id="c1", title="", decision="pending")
     pid1 = store.create_from_proposal(cid, run_id, p)
     # redelivered finalize: same id, different content — first write wins
-    pid2 = store.create_from_proposal(
-        cid, run_id, msgspec.structs.replace(p, title="RE-RUN")
-    )
+    pid2 = store.create_from_proposal(cid, run_id, msgspec.structs.replace(p, title="RE-RUN"))
 
     assert pid1 == pid2
     assert store.count_active(cid) == 1  # not duplicated
     got = store.get(pid1)
     assert got is not None
     assert got.title == ""  # original preserved, not the re-run's "RE-RUN"
+
+
+def test_get_as_proposed_returns_none_for_a_missing_proposal():
+    """The grouped view resolves a cluster's proposal members by id; a member whose
+    CardProposal cascaded away resolves to ``None`` (dropped from the concept), never
+    an error."""
+    spec, _cid = _spec_with_collection()
+    assert CardProposalStore(spec).get_as_proposed("prop:ghost:0") is None
 
 
 def test_get_returns_none_for_a_missing_proposal():
@@ -243,6 +281,94 @@ def test_cas_retries_when_a_concurrent_writer_wins_the_race(monkeypatch):
     assert calls["n"] == 2  # retried once, then succeeded
     got = store.get(pid)
     assert got is not None and got.decision == "accepted"
+
+
+def test_resolving_a_proposal_deactivates_its_cluster_member():
+    """#511 P4: committing/rejecting a proposal must de-join its ClusterMember
+    (state active→inactive) so the grouped view's native GROUP-BY over ACTIVE
+    members stops counting a concept whose proposals are all resolved. The member
+    shares the proposal's ``prop:{run}:{pid}`` id, so the store flips it in place."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pid = store.create_from_proposal(cid, run_id, ProposedCard(keys=["k"], id="0"))
+    _put_member(spec, cid, pid, run_id=run_id)
+    assert _member_state(spec, pid) == "active"
+
+    store.set_decision(pid, "committed")
+    assert _member_state(spec, pid) == "inactive"
+
+
+def test_accepting_keeps_the_member_active_then_commit_deactivates():
+    """An intermediate ACTIVE decision (accept) leaves the member active; only a
+    TERMINAL decision de-joins it — so a still-pending concept stays in the queue."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pid = store.create_from_proposal(cid, run_id, ProposedCard(keys=["k"], id="0"))
+    _put_member(spec, cid, pid, run_id=run_id)
+
+    store.set_decision(pid, "accepted")
+    assert _member_state(spec, pid) == "active"  # still in the queue
+    store.mark_committed([pid])
+    assert _member_state(spec, pid) == "inactive"  # committed → de-joined
+
+
+def test_dismiss_run_deactivates_every_active_members():
+    """Whole-run dismiss rejects every active proposal, so each proposal's member
+    de-joins and the run's concepts drop out of the grouped view."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pids = [
+        store.create_from_proposal(cid, run_id, ProposedCard(keys=[f"k{i}"], id=str(i)))
+        for i in range(2)
+    ]
+    for pid in pids:
+        _put_member(spec, cid, pid, run_id=run_id)
+
+    store.dismiss_run(run_id)
+    assert all(_member_state(spec, pid) == "inactive" for pid in pids)
+
+
+def test_state_sync_never_resurrects_a_suppressed_member():
+    """A ``suppressed`` member (reconcile auto-dropped the candidate) tracks a drop,
+    not a queue decision — a decision write must not flip it back to active/inactive."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pid = store.create_from_proposal(cid, run_id, ProposedCard(keys=["k"], id="0"))
+    _put_member(spec, cid, pid, run_id=run_id, state="suppressed")
+
+    store.set_decision(pid, "committed")
+    assert _member_state(spec, pid) == "suppressed"  # untouched
+
+
+def test_state_sync_is_a_noop_when_no_member_exists():
+    """A no-reconciler build persists proposals but projects NO members — a decision
+    write must be a clean no-op, never create a bogus member."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pid = store.create_from_proposal(cid, run_id, ProposedCard(keys=["k"], id="0"))
+
+    store.set_decision(pid, "committed")  # no member to sync
+    assert _member_state(spec, pid) is None
+
+
+def test_replace_run_proposals_syncs_member_state():
+    """The bulk save-review overwrite (``replace_run_proposals``) also de-joins the
+    members of proposals it resolves."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pid = store.create_from_proposal(cid, run_id, ProposedCard(keys=["k"], id="0"))
+    _put_member(spec, cid, pid, run_id=run_id)
+
+    store.replace_run_proposals(
+        cid, run_id, [ProposedCard(keys=["k"], id="0", decision="rejected")]
+    )
+    assert _member_state(spec, pid) == "inactive"
 
 
 def test_count_active_is_scoped_per_collection():

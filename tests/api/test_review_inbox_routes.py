@@ -138,10 +138,13 @@ def test_review_inbox_grouped_returns_clusters():
         spec, collection_id=cid, term="R7", source_doc_id="d1", question_text="What is R7?"
     )
     rm = spec.get_resource_manager(ClusterMember)
-    rm.create(
+    # A proposal member is addressed by the SAME id as its CardProposal
+    # (prop:{run}:{pid}), so the grouped view resolves it back by id (#511 P4).
+    rm.create_or_update(
+        f"prop:{run_id}:0",
         ClusterMember(
             collection_id=cid, kind="proposal", ref_id="0", run_id=run_id, cluster_key="rz3"
-        )
+        ),
     )
     rm.create(ClusterMember(collection_id=cid, kind="term_question", ref_id=qid, cluster_key="rz3"))
 

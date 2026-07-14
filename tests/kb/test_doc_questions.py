@@ -185,6 +185,81 @@ def test_discard_question_sets_discarded():
     assert _get(spec, qid).status == "discarded"
 
 
+def _put_tq_member(spec, cid: str, qid: str, *, state: str = "active") -> None:
+    """Project the ``tq:{qid}`` ClusterMember reconcile makes for a TERM question, so
+    a resolve can de-join it (#511 P4)."""
+    from workspace_app.resources.kb import ClusterMember
+
+    spec.get_resource_manager(ClusterMember).create_or_update(
+        f"tq:{qid}",
+        ClusterMember(
+            collection_id=cid,
+            kind="term_question",
+            ref_id=qid,
+            cluster_key="k",
+            state=state,
+            norm_key="k",
+        ),
+    )
+
+
+def _member_state(spec, member_id: str):
+    from specstar.types import ResourceIDNotFoundError
+
+    from workspace_app.resources.kb import ClusterMember
+
+    try:
+        data = spec.get_resource_manager(ClusterMember).get(member_id).data
+    except ResourceIDNotFoundError:
+        return None
+    return data.state
+
+
+def test_answering_a_term_question_deactivates_its_cluster_member():
+    """#511 P4: answering a term question de-joins its ``tq:{qid}`` ClusterMember so
+    the grouped view's GROUP-BY over ACTIVE members stops counting the concept."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="doc1", question_text="q"
+    )
+    _put_tq_member(spec, cid, qid)
+    answer_question(spec, qid, answer="a", result_ref="context-card:abc")
+    assert _member_state(spec, f"tq:{qid}") == "inactive"
+
+
+def test_discarding_a_term_question_deactivates_its_cluster_member():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="doc1", question_text="q"
+    )
+    _put_tq_member(spec, cid, qid)
+    discard_question(spec, qid)
+    assert _member_state(spec, f"tq:{qid}") == "inactive"
+
+
+def test_get_question_returns_none_for_a_missing_id():
+    """The grouped view resolves a cluster's term-question members by id; a member
+    whose DocQuestion cascaded away resolves to ``None``, never an error."""
+    spec = make_spec(default_user="u")
+    from workspace_app.kb.doc_questions import get_question
+
+    assert get_question(spec, "ghost-q") is None
+
+
+def test_resolving_a_description_question_needs_no_member_and_is_a_noop():
+    """A DESCRIPTION question is never projected as a ClusterMember (only term
+    questions are), so the de-join is a clean no-op — no error, no phantom member."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    qid = add_description_question(
+        spec, collection_id=cid, source_doc_id="doc1", quote="a passage", question_text="why?"
+    )
+    discard_question(spec, qid)  # no tq:{qid} member — must not raise
+    assert _member_state(spec, f"tq:{qid}") is None
+
+
 def test_inbox_lists_only_open_questions_in_the_given_collections():
     spec = make_spec(default_user="u")
     a, b = _collection(spec, "a"), _collection(spec, "b")

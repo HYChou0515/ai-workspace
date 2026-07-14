@@ -17,6 +17,7 @@ from specstar import QB
 
 from ..resources.kb import ContextCard, DocQuestion
 from .card_gen import DescriptionQuestionDraft, TermQuestionDraft
+from .cluster_member import deactivate_member
 from .context_cards import derive_norm_keys, find_cards_by_key, norm
 from .wiki.store import clarification_page_path
 
@@ -217,6 +218,20 @@ def list_open_questions(
     return out
 
 
+def get_question(spec: SpecStar, qid: str) -> DocQuestion | None:
+    """One question by id — the grouped review view (#511 P4) resolves a concept's
+    term-question members (``ref_id`` == qid) back to the DocQuestion. ``None`` if it
+    cascaded away."""
+    from specstar.types import ResourceIDNotFoundError
+
+    try:
+        data = spec.get_resource_manager(DocQuestion).get(qid).data
+    except ResourceIDNotFoundError:
+        return None
+    assert isinstance(data, DocQuestion)  # narrow Struct|Unset for ty
+    return data
+
+
 def answer_question(spec: SpecStar, qid: str, *, answer: str, result_ref: str) -> None:
     """Record a human's answer and flip the question to ``answered``. ``result_ref``
     points at what the answer produced (a context-card id or clarification page path),
@@ -227,6 +242,7 @@ def answer_question(spec: SpecStar, qid: str, *, answer: str, result_ref: str) -
     rm.update(
         qid, msgspec.structs.replace(data, status="answered", answer=answer, result_ref=result_ref)
     )
+    deactivate_member(spec, f"tq:{qid}")  # #511 P4: de-join its cluster member (term q only)
 
 
 def discard_question(spec: SpecStar, qid: str) -> None:
@@ -237,6 +253,7 @@ def discard_question(spec: SpecStar, qid: str) -> None:
     data = rm.get(qid).data
     assert isinstance(data, DocQuestion)  # narrow Struct|Unset for ty
     rm.update(qid, msgspec.structs.replace(data, status="discarded"))
+    deactivate_member(spec, f"tq:{qid}")  # #511 P4: de-join its cluster member (term q only)
 
 
 def land_term_answer(

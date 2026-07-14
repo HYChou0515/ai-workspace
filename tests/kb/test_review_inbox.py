@@ -57,9 +57,25 @@ class _FakeDrafter:
         )
 
 
-def _coord(spec, by_path, *, term_qs=None, owner="u") -> CardGenCoordinator:
+def _reconciler(spec):
+    """A real finalize reconciler that projects each candidate into a ClusterMember —
+    the grouped view (#511 P4) pages over those. High taus keep every candidate its
+    OWN concept (no suppress / merge), so a grouped test gets one row per item unless
+    it wires the members itself (the merge case)."""
+    from workspace_app.kb.embedder import HashEmbedder
+    from workspace_app.kb.reconcile import Reconciler
+    from workspace_app.resources.kb import EMBED_DIM
+
+    return Reconciler(
+        spec, HashEmbedder(dim=EMBED_DIM), cluster_tau=1.01, suppress_tau=1.01, update_tau=1.01
+    )
+
+
+def _coord(spec, by_path, *, term_qs=None, owner="u", reconciler=None) -> CardGenCoordinator:
     """One coordinator per spec (a second registration of the job model raises)."""
-    return CardGenCoordinator(spec, _FakeDrafter(by_path, term_qs), get_user_id=lambda: owner)
+    return CardGenCoordinator(
+        spec, _FakeDrafter(by_path, term_qs), get_user_id=lambda: owner, reconciler=reconciler
+    )
 
 
 async def _run_one(coord, spec, cid, path="a.md", *, owner="u") -> None:
@@ -68,8 +84,10 @@ async def _run_one(coord, spec, cid, path="a.md", *, owner="u") -> None:
     await coord.aclose()
 
 
-async def _seed_run(spec, cid, *, owner="u", cards=None, term_qs=None) -> CardGenCoordinator:
-    coord = _coord(spec, cards or {}, term_qs=term_qs, owner=owner)
+async def _seed_run(
+    spec, cid, *, owner="u", cards=None, term_qs=None, reconciler=None
+) -> CardGenCoordinator:
+    coord = _coord(spec, cards or {}, term_qs=term_qs, owner=owner, reconciler=reconciler)
     await _run_one(coord, spec, cid, owner=owner)
     return coord
 
@@ -326,22 +344,38 @@ def test_msgspec_roundtrip_of_the_inbox_structs():
 
 
 def _cluster_member(
-    spec, cid, *, kind, ref_id, run_id="", cluster_key, state="active", reason="", label=""
+    spec,
+    cid,
+    *,
+    kind,
+    ref_id,
+    run_id="",
+    cluster_key,
+    state="active",
+    reason="",
+    label="",
+    member_id=None,
 ):
     from workspace_app.resources.kb import ClusterMember
 
-    spec.get_resource_manager(ClusterMember).create(
-        ClusterMember(
-            collection_id=cid,
-            kind=kind,
-            ref_id=ref_id,
-            run_id=run_id,
-            cluster_key=cluster_key,
-            state=state,
-            reason=reason,
-            label=label,
-        )
+    member = ClusterMember(
+        collection_id=cid,
+        kind=kind,
+        ref_id=ref_id,
+        run_id=run_id,
+        cluster_key=cluster_key,
+        state=state,
+        reason=reason,
+        label=label,
     )
+    rm = spec.get_resource_manager(ClusterMember)
+    # A proposal member is addressed by the SAME id as its CardProposal
+    # (prop:{run}:{pid}), so the grouped view resolves it back by id (#511 P4);
+    # a suppressed/audit member's id is irrelevant (read by ref_id / directly).
+    if member_id is None:
+        rm.create(member)
+    else:
+        rm.create_or_update(member_id, member)
 
 
 async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():
@@ -359,7 +393,15 @@ async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():
     )
     flat = build_review_inbox(spec, actor=Actor.human("u"))
     run_id, card_id, qid = flat.cards[0].run_id, flat.cards[0].card.id, flat.questions[0].qid
-    _cluster_member(spec, cid, kind="proposal", ref_id=card_id, run_id=run_id, cluster_key="rz3")
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id=card_id,
+        run_id=run_id,
+        cluster_key="rz3",
+        member_id=f"prop:{run_id}:{card_id}",
+    )
     _cluster_member(spec, cid, kind="term_question", ref_id=qid, cluster_key="rz3")
 
     grouped = build_review_inbox(spec, actor=Actor.human("u"), grouped=True)
@@ -422,6 +464,7 @@ async def test_grouped_respects_the_kind_and_q_filters():
         cid,
         cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+        reconciler=_reconciler(spec),
     )
     actor = Actor.human("u")
     cards_only = build_review_inbox(spec, actor=actor, grouped=True, kind="cards")
@@ -431,6 +474,31 @@ async def test_grouped_respects_the_kind_and_q_filters():
     by_q = build_review_inbox(spec, actor=actor, grouped=True, q="rz3")
     assert sum(len(cl.cards) for cl in by_q.clusters) == 1  # the RZ3 card matches
     assert sum(len(cl.questions) for cl in by_q.clusters) == 0  # the R7 question filtered out
+
+
+async def test_grouped_q_fallback_honours_kind_and_actionable():
+    """The grouped ``q`` fallback (a text filter can't push to the DB) still respects
+    the type filter (which stream to cluster) and the actionable filter — the branches
+    the native page doesn't run."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+        reconciler=_reconciler(spec),
+    )
+    actor = Actor.human("u")
+    # kind="cards" + q → only the card stream is loaded + filtered (skips questions)
+    cards = build_review_inbox(spec, actor=actor, grouped=True, q="rz3", kind="cards")
+    assert cards.total == 1 and all(not cl.questions for cl in cards.clusters)
+    # kind="questions" + q → only the question stream (skips cards)
+    qs = build_review_inbox(spec, actor=actor, grouped=True, q="r7", kind="questions")
+    assert qs.total == 1 and all(not cl.cards for cl in qs.clusters)
+    # actionable + q → keeps only writable concepts (the owner may write → kept)
+    act = build_review_inbox(spec, actor=actor, grouped=True, q="rz3", actionable=True)
+    assert act.total == 1
 
 
 async def test_grouped_actionable_drops_readonly_clusters():
@@ -455,6 +523,7 @@ async def test_grouped_actionable_drops_readonly_clusters():
         spec,
         {"act.md": [CardDraft(keys=["A"], title="A")], "ro.md": [CardDraft(keys=["B"], title="B")]},
         owner="owner",
+        reconciler=_reconciler(spec),
     )
     coord.enqueue(coll_act, [_add_source(spec, coll_act, "act.md", "x", owner="owner")])
     coord.enqueue(coll_ro, [_add_source(spec, coll_ro, "ro.md", "y", owner="owner")])
@@ -465,6 +534,91 @@ async def test_grouped_actionable_drops_readonly_clusters():
     only_act = build_review_inbox(spec, actor=actor, grouped=True, actionable=True)
     assert only_act.total == 1
     assert [c.card.keys[0] for cl in only_act.clusters for c in cl.cards] == ["A"]
+
+
+async def test_grouped_pages_concepts_natively_with_a_full_total():
+    """#511 P4: the grouped view pages ONE row per concept NATIVELY (a ClusterMember
+    GROUP BY at the DB), so each page is bounded no matter the backlog — ``total`` is
+    the full distinct-concept count and the pages neither overlap nor gap."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=[f"K{i}"], title=f"C{i}") for i in range(5)]},
+        reconciler=_reconciler(spec),
+    )
+    actor = Actor.human("u")
+    p1 = build_review_inbox(spec, actor=actor, grouped=True, limit=2, offset=0)
+    p2 = build_review_inbox(spec, actor=actor, grouped=True, limit=2, offset=2)
+    p3 = build_review_inbox(spec, actor=actor, grouped=True, limit=2, offset=4)
+    assert p1.total == 5
+    assert [len(p.clusters) for p in (p1, p2, p3)] == [2, 2, 1]
+    seen = {cl.cluster_key for p in (p1, p2, p3) for cl in p.clusters}
+    assert len(seen) == 5  # no overlap / gap across pages
+
+
+async def test_grouped_drops_a_resolved_concept_from_the_active_view():
+    """Resolving a proposal de-joins its ClusterMember (#511 P4 state sync), so its
+    concept leaves the grouped ACTIVE view + total — the native GROUP BY counts only
+    still-active members, no stale concept."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    coord = await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["A"], title="A"), CardDraft(keys=["B"], title="B")]},
+        reconciler=_reconciler(spec),
+    )
+    actor = Actor.human("u")
+    before = build_review_inbox(spec, actor=actor, grouped=True)
+    assert before.total == 2
+
+    victim = before.clusters[0].cards[0]
+    coord.decide(victim.run_id, victim.card.id, "rejected")  # leaves the queue
+
+    after = build_review_inbox(spec, actor=actor, grouped=True)
+    assert after.total == 1
+    survivors = {c.card.keys[0] for cl in after.clusters for c in cl.cards}
+    assert victim.card.keys[0] not in survivors
+
+
+def test_grouped_drops_members_whose_source_cascaded_away():
+    """A ClusterMember can outlive its source (an orphaned projection). The grouped
+    view resolves each member and silently drops the ones with no CardProposal /
+    DocQuestion; a concept whose members ALL vanished isn't rendered at all."""
+    from workspace_app.kb.doc_questions import open_or_merge_term_question
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    # concept "X": a live term question + an ORPHAN proposal member (no CardProposal)
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="X", source_doc_id="d", question_text="what is X?"
+    )
+    _cluster_member(spec, cid, kind="term_question", ref_id=qid, cluster_key="X")
+    _cluster_member(
+        spec, cid, kind="proposal", ref_id="0", run_id="ghost", cluster_key="X",
+        member_id="prop:ghost:0",
+    )
+    # concept "Y": ONLY an orphan term-question member (its DocQuestion is gone)
+    _cluster_member(spec, cid, kind="term_question", ref_id="ghost-q", cluster_key="Y")
+
+    grouped = build_review_inbox(spec, actor=Actor.human("u"), grouped=True)
+    assert grouped.total == 2  # the GROUP BY still counts both concepts
+    assert {cl.cluster_key for cl in grouped.clusters} == {"X"}  # Y (all-orphan) dropped
+    (x,) = grouped.clusters
+    assert len(x.cards) == 0 and len(x.questions) == 1  # the orphan proposal dropped
+
+
+def test_suppressed_audit_is_empty_when_no_collection_is_readable():
+    """Scoped to a collection the actor can't see → no readable collections → an
+    empty suppressed page (the native query short-circuits, never runs)."""
+    spec = make_spec(default_user="u")
+    _collection(spec, "Alpha")
+    audit = build_review_inbox(
+        spec, actor=Actor.human("u"), suppressed=True, collection_id="collection:nope"
+    )
+    assert audit.suppressed == [] and audit.total == 0
 
 
 async def test_suppressed_audit_respects_the_q_filter():
@@ -493,3 +647,27 @@ async def test_suppressed_audit_respects_the_q_filter():
     )
     audit = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True, q="alph")
     assert [s.label for s in audit.suppressed] == ["Alpha"]
+
+
+async def test_suppressed_audit_pages_natively_with_total():
+    """#511 P4: the suppressed-audit view pages at the DB (``state="suppressed"``
+    offset/limit) — a bounded page + the full count, not a load-all-then-slice."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    for i in range(3):
+        _cluster_member(
+            spec,
+            cid,
+            kind="proposal",
+            ref_id=str(i),
+            run_id=f"r{i}",
+            cluster_key=f"k{i}",
+            state="suppressed",
+            label=f"S{i}",
+        )
+    p1 = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True, limit=2, offset=0)
+    p2 = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True, limit=2, offset=2)
+    assert p1.total == 3
+    assert [len(p.suppressed) for p in (p1, p2)] == [2, 1]
+    seen = {s.label for p in (p1, p2) for s in p.suppressed}
+    assert seen == {"S0", "S1", "S2"}  # no overlap / gap

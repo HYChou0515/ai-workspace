@@ -26,7 +26,15 @@ from ..perm import Actor, authorize
 from ..resources.kb import ClusterMember, Collection, DocQuestion
 from .card_gen import ProposedCard
 from .card_proposal import CardProposalStore
-from .doc_questions import page_questions_by_status, questions_by_status
+from .cluster_member import ClusterRow, count_clusters, page_clusters
+from .doc_questions import get_question, page_questions_by_status, questions_by_status
+
+# The grouped view's type filter → the member kinds that form a concept (#511 P4).
+_GROUPED_KINDS: dict[str, tuple[str, ...]] = {
+    "all": ("proposal", "term_question"),
+    "cards": ("proposal",),
+    "questions": ("term_question",),
+}
 
 if TYPE_CHECKING:
     from specstar import SpecStar
@@ -128,29 +136,60 @@ def cluster_key_map(spec: SpecStar, collection_ids: list[str]) -> dict[tuple[str
     return out
 
 
-def suppressed_members(spec: SpecStar, readable: dict[str, _CollCtx]) -> list[SuppressedItem]:
-    """The auto-suppressed candidates across the readable collections — the audit
-    view (⑥). Reads ``state="suppressed"`` ClusterMembers directly (a dropped
-    candidate is on no run), newest-collection-agnostic; card members can't be
-    suppressed so ``kind`` is always proposal / term_question."""
+def _suppressed_item(readable: dict[str, _CollCtx], member: ClusterMember) -> SuppressedItem:
+    ctx = readable[member.collection_id]
+    return SuppressedItem(
+        collection_id=member.collection_id,
+        collection_name=ctx.name,
+        kind=member.kind,
+        label=member.label or member.norm_key,
+        cluster_key=member.cluster_key,
+        reason=member.reason,
+    )
+
+
+def page_suppressed(
+    spec: SpecStar,
+    readable: dict[str, _CollCtx],
+    *,
+    q: str = "",
+    offset: int = 0,
+    limit: int | None = None,
+) -> tuple[list[SuppressedItem], int]:
+    """One page of the auto-suppressed candidates — the audit view (⑥) — across the
+    readable collections, newest first, plus the full filtered ``total`` (#511 P4).
+    Reads ``state="suppressed"`` ClusterMembers directly (a dropped candidate is on no
+    run; card members can't be suppressed, so ``kind`` is always proposal /
+    term_question). Without ``q`` it pages natively at the DB
+    (``in_(cids) & state=="suppressed"`` sort + offset + limit + count); with ``q`` (a
+    label substring, not DB-indexed) it's a bounded scan filtered in Python."""
+    cids = list(readable)
+    if not cids:
+        return [], 0
     rm = spec.get_resource_manager(ClusterMember)
-    out: list[SuppressedItem] = []
-    for cid, ctx in readable.items():
-        query = ((QB["collection_id"] == cid) & (QB["state"] == "suppressed")).build()
-        for r in rm.list_resources(query):
-            member = r.data
-            assert isinstance(member, ClusterMember)
-            out.append(
-                SuppressedItem(
-                    collection_id=cid,
-                    collection_name=ctx.name,
-                    kind=member.kind,
-                    label=member.label or member.norm_key,
-                    cluster_key=member.cluster_key,
-                    reason=member.reason,
-                )
-            )
-    return out
+    base = QB["collection_id"].in_(cids) & (QB["state"] == "suppressed")
+    ordering = base.sort(QB.created_time().desc(), QB.resource_id().asc())
+
+    def _item(r: object) -> SuppressedItem:
+        member = r.data  # ty: ignore[unresolved-attribute]
+        assert isinstance(member, ClusterMember)  # rm is ClusterMember-typed; narrows ty
+        return _suppressed_item(readable, member)
+
+    if not q:
+        total = rm.count_resources(base.build())
+        paged = ordering.offset(offset)
+        if limit is not None:
+            paged = paged.limit(limit)
+        return [_item(r) for r in rm.list_resources(paged.build())], total
+    needle = q.lower()
+    matched = [
+        item
+        for r in rm.list_resources(ordering.build())
+        if needle in (item := _item(r)).label.lower()
+    ]
+    total = len(matched)
+    page = matched[offset:] if limit is None else matched[offset : offset + limit]
+    return page, total
 
 
 def _item_ref(item: ReviewCardItem | ReviewQuestionItem) -> tuple[str, str]:
@@ -275,50 +314,59 @@ def build_review_inbox(
     readable = _readable_collections(spec, actor, superusers)
     if collection_id is not None:
         readable = {cid: ctx for cid, ctx in readable.items() if cid == collection_id}
+    # The collections the actor may WRITE (act on): the `actionable` filter narrows
+    # the page to these, and `total_actionable` (the nav badge) always counts over
+    # them — an ACL-derived, per-collection flag, so it pushes down as a collection
+    # filter in both the flat and grouped native queries.
+    act_cids = [cid for cid, ctx in readable.items() if ctx.can_act]
 
-    # #506 P7: the suppressed-audit view is a different stream (dropped candidates
-    # live only as suppressed ClusterMembers, not on any run) — return it and stop.
+    # #506 P7 / #511 P4: the suppressed-audit view is a different stream (dropped
+    # candidates live only as suppressed ClusterMembers, not on any run) — paged
+    # natively over that state. Return it and stop.
     if suppressed:
-        items = suppressed_members(spec, readable)
-        if q:
-            needle = q.lower()
-            items = [s for s in items if needle in s.label.lower()]
-        total = len(items)
-        page_s = items[offset:] if limit is None else items[offset : offset + limit]
-        return ReviewInbox(cards=[], questions=[], suppressed=page_s, total=total)
+        items, total = page_suppressed(spec, readable, q=q, offset=offset, limit=limit)
+        return ReviewInbox(cards=[], questions=[], suppressed=items, total=total)
 
-    # #506 P7: the clustered view groups items by concept FIRST, then pages the
-    # clusters ("一群一列"). Grouping must precede pagination (a cluster's members
-    # can't straddle a page), so it still loads the WHOLE merged set (its native
-    # pagination is #511 P4 — a ClusterMember GROUP BY). Only the FLAT view below
-    # pages natively.
+    # #506 P7 / #511 P4: the clustered view is "one row per concept". The default
+    # (no ``q``) view pages NATIVELY over the ClusterMember ``GROUP BY cluster_key``
+    # (a real ``ORDER BY latest DESC LIMIT/OFFSET`` at the DB), replacing the
+    # load-every-item-then-group "fake pagination" (grouped ~60s). A text ``q`` can't
+    # push to the DB (no full-text index over the resolved card/question text), so a
+    # ``q``-filtered grouped view stays a bounded scan (load → group → filter).
     if grouped:
-        merged: list[ReviewCardItem | ReviewQuestionItem] = []
-        if kind != "questions":
-            merged.extend(_card_items(spec, readable, resolved))
-        if kind != "cards":
-            merged.extend(_question_items(spec, readable, resolved))
         if q:
-            needle = q.lower()
-            merged = [i for i in merged if _row_matches(i, needle)]
-        total_actionable = sum(1 for i in merged if i.can_act)
-        cluster_of = cluster_key_map(spec, list(readable))
-        clusters = group_by_cluster(merged, cluster_of)
-        if actionable:  # a cluster is actionable if any member is
-            clusters = [c for c in clusters if c.can_act]
-        total = len(clusters)
-        page_c = clusters[offset:] if limit is None else clusters[offset : offset + limit]
+            return _grouped_scan(
+                spec,
+                readable,
+                resolved=resolved,
+                kind=kind,
+                q=q,
+                actionable=actionable,
+                limit=limit,
+                offset=offset,
+            )
+        state = "inactive" if resolved else "active"
+        kinds = _GROUPED_KINDS[kind]
+        page_cids = act_cids if actionable else list(readable)
+        groups, total = page_clusters(
+            spec, page_cids, state=state, kinds=kinds, offset=offset, limit=limit
+        )
+        clusters = [
+            cluster for g in groups if (cluster := _assemble_cluster(spec, readable, g)) is not None
+        ]
         return ReviewInbox(
-            cards=[], questions=[], clusters=page_c, total=total, total_actionable=total_actionable
+            cards=[],
+            questions=[],
+            clusters=clusters,
+            total=total,
+            total_actionable=count_clusters(spec, act_cids, state=state, kinds=kinds),
         )
 
     # ── flat view (#511 P3): each stream pages NATIVELY at the DB, no load-all ──
-    # ``actionable`` narrows to collections the actor may write (an ACL-derived,
-    # per-collection flag → pushable as a collection_id filter); ``total_actionable``
+    # ``actionable`` narrows to collections the actor may write; ``total_actionable``
     # is always the count over those collections (the nav badge), independent of the
     # ``actionable`` toggle. ``q`` (a text substring) can't be DB-indexed, so a
     # ``q``-filtered stream is a bounded scan (still just proposal/question rows).
-    act_cids = [cid for cid, ctx in readable.items() if ctx.can_act]
     page_cids = act_cids if actionable else list(readable)
     q_statuses = _RESOLVED_QUESTION_STATUSES if resolved else _OPEN_QUESTION_STATUSES
     cstore = CardProposalStore(spec)
@@ -393,6 +441,107 @@ def build_review_inbox(
         total_actionable=(
             _actionable_total(_card_page, card_total) + _actionable_total(_question_page, q_total)
         ),
+    )
+
+
+def _assemble_cluster(
+    spec: SpecStar, readable: dict[str, _CollCtx], group: ClusterRow
+) -> ReviewCluster | None:
+    """Turn one native ``page_clusters`` group into a :class:`ReviewCluster` (#511
+    P4): resolve each member back to its domain row — a ``proposal`` member (id ==
+    CardProposal id) to a :class:`ProposedCard`, a ``term_question`` member
+    (``ref_id`` == qid) to a :class:`DocQuestion` — carrying the collection name +
+    the actor's per-member ``can_act``. ``created_time`` is the concept's newest
+    member (the aggregation's sort key); a member whose source cascaded away is
+    dropped; a concept with no resolvable member returns ``None``."""
+    cluster_key, latest, members = group
+    cstore = CardProposalStore(spec)
+    cards: list[ReviewCardItem] = []
+    questions: list[ReviewQuestionItem] = []
+    coll_id = coll_name = ""
+    can_act = False
+    for member_id, created, member in members:
+        # page_clusters scopes members to the readable collections, so every member's
+        # collection is present (the actor can read it).
+        ctx = readable[member.collection_id]
+        if member.kind == "proposal":
+            resolved_card = cstore.get_as_proposed(member_id)
+            if resolved_card is None:  # the proposal cascaded away
+                continue
+            run_id, card = resolved_card
+            cards.append(
+                ReviewCardItem(
+                    run_id=run_id,
+                    collection_id=member.collection_id,
+                    collection_name=ctx.name,
+                    can_act=ctx.can_act,
+                    created_time=created,
+                    card=card,
+                )
+            )
+        else:  # term_question
+            question = get_question(spec, member.ref_id)
+            if question is None:  # the question cascaded away
+                continue
+            questions.append(
+                ReviewQuestionItem(
+                    qid=member.ref_id,
+                    collection_id=member.collection_id,
+                    collection_name=ctx.name,
+                    can_act=ctx.can_act,
+                    created_time=created,
+                    question=question,
+                )
+            )
+        if not coll_id:  # the first RESOLVED member fixes the concept's collection
+            coll_id, coll_name = member.collection_id, ctx.name
+        can_act = can_act or ctx.can_act
+    if not coll_id:  # every member cascaded away → drop the empty concept
+        return None
+    return ReviewCluster(
+        cluster_key=cluster_key,
+        collection_id=coll_id,
+        collection_name=coll_name,
+        can_act=can_act,
+        created_time=latest,
+        cards=cards,
+        questions=questions,
+        size=len(cards) + len(questions),
+    )
+
+
+def _grouped_scan(
+    spec: SpecStar,
+    readable: dict[str, _CollCtx],
+    *,
+    resolved: bool,
+    kind: str,
+    q: str,
+    actionable: bool,
+    limit: int | None,
+    offset: int,
+) -> ReviewInbox:
+    """The grouped view's ``q``-filtered fallback: a text substring can't push to the
+    DB, so load the (filtered) items, group them by ``cluster_key`` in Python, then
+    page the concepts. Bounded by the ``q`` match set — far lighter than the old
+    unconditional load-all, and only this rare filtered path pays it (the default
+    view pages natively — see :func:`build_review_inbox`)."""
+    merged: list[ReviewCardItem | ReviewQuestionItem] = []
+    if kind != "questions":
+        merged.extend(_card_items(spec, readable, resolved))
+    if kind != "cards":
+        merged.extend(_question_items(spec, readable, resolved))
+    needle = q.lower()
+    merged = [i for i in merged if _row_matches(i, needle)]
+    total_actionable = sum(1 for i in merged if i.can_act)
+    cluster_of = cluster_key_map(spec, list(readable))
+    clusters = group_by_cluster(merged, cluster_of)
+    if actionable:  # a cluster is actionable if any member is
+        clusters = [c for c in clusters if c.can_act]
+    total = len(clusters)
+    page_c = clusters[offset:] if limit is None else clusters[offset : offset + limit]
+    return ReviewInbox(
+        cards=[], questions=[], clusters=page_c, total=total, total_actionable=total_actionable
     )
 
 

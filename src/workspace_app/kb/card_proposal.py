@@ -43,6 +43,7 @@ from .card_gen import (
     card_proposal_to_proposed,
     proposal_to_card_proposal,
 )
+from .cluster_member import _decision_state, set_member_state
 
 # TERMINAL decisions (a proposal that has left the queue): the history / resolved
 # view; the complement of _ACTIVE_DECISIONS. "dismissed" reuses "rejected" (#511 P2
@@ -58,6 +59,7 @@ class CardProposalStore:
     """Read/write the first-class :class:`CardProposal` rows (#511)."""
 
     def __init__(self, spec: SpecStar) -> None:
+        self._spec = spec
         self._rm = spec.get_resource_manager(CardProposal)
 
     def create_from_proposal(self, collection_id: str, run_id: str, p: ProposedCard) -> str:
@@ -118,9 +120,11 @@ class CardProposalStore:
         for pid in proposal_ids:
             self._cas(
                 pid,
-                lambda cp: msgspec.structs.replace(cp, decision="committed")
-                if cp.decision in _ACTIVE_DECISIONS
-                else None,
+                lambda cp: (
+                    msgspec.structs.replace(cp, decision="committed")
+                    if cp.decision in _ACTIVE_DECISIONS
+                    else None
+                ),
             )
 
     def dismiss_run(self, run_id: str) -> int:
@@ -131,9 +135,11 @@ class CardProposalStore:
         for pid in self._active_proposal_ids_of_run(run_id):
             if self._cas(
                 pid,
-                lambda cp: msgspec.structs.replace(cp, decision="rejected")
-                if cp.decision in _ACTIVE_DECISIONS
-                else None,
+                lambda cp: (
+                    msgspec.structs.replace(cp, decision="rejected")
+                    if cp.decision in _ACTIVE_DECISIONS
+                    else None
+                ),
             ):
                 flipped += 1
         return flipped
@@ -146,10 +152,11 @@ class CardProposalStore:
         ``create_or_update`` so it overwrites the stored content/decision with what
         the FE sent back."""
         for p in proposals:
-            self._rm.create_or_update(
-                card_proposal_id(run_id, p.id),
-                proposal_to_card_proposal(collection_id, run_id, p),
-            )
+            pid = card_proposal_id(run_id, p.id)
+            self._rm.create_or_update(pid, proposal_to_card_proposal(collection_id, run_id, p))
+            # #511 P4: mirror the saved decision onto the proposal's ClusterMember so a
+            # bulk save-review that resolves proposals also de-joins their concepts.
+            set_member_state(self._spec, pid, _decision_state(p.decision, _ACTIVE_DECISIONS))
 
     def get(self, proposal_id: str) -> CardProposal | None:
         try:
@@ -158,6 +165,15 @@ class CardProposalStore:
             return None
         assert isinstance(data, CardProposal)  # narrow Struct | Unset for ty
         return data
+
+    def get_as_proposed(self, proposal_id: str) -> tuple[str, ProposedCard] | None:
+        """One proposal by id as ``(run_id, ProposedCard)`` — the grouped view (#511
+        P4) resolves a concept's proposal members (member id == proposal id) back to
+        the domain card. ``None`` if it cascaded away."""
+        cp = self.get(proposal_id)
+        if cp is None:
+            return None
+        return cp.run_id, card_proposal_to_proposed(_pid(proposal_id, cp.run_id), cp)
 
     # ── 待審核 flat view: native DB pagination (#511) ────────────────
     def list_active(
@@ -309,6 +325,12 @@ class CardProposalStore:
                     new,
                     status=RevisionStatus.draft,
                     expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                )
+                # #511 P4: keep the proposal's ClusterMember (same id) in lock-step —
+                # a terminal decision de-joins it so the grouped GROUP-BY over ACTIVE
+                # members stops counting a resolved concept (no-op if no member).
+                set_member_state(
+                    self._spec, proposal_id, _decision_state(new.decision, _ACTIVE_DECISIONS)
                 )
                 return new
             except PreconditionFailedError:
