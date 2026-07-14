@@ -62,6 +62,7 @@ from .card_gen import (
 )
 from .card_gen_run import CardGenRunStore
 from .card_gen_sources import CardGenSources
+from .card_proposal import CardProposalStore
 from .context_cards import cards_with_ids_for_collections, derive_norm_keys
 from .doc_questions import (
     add_description_question,
@@ -121,6 +122,10 @@ class CardGenCoordinator:
         # behaviour (tests / a build with no embedder).
         self._reconciler = reconciler
         self._runs = CardGenRunStore(spec)
+        # #511 P1: each kept proposal is ALSO projected to a first-class
+        # CardProposal row so the review inbox pages at the DB (the nested
+        # CardGenRun.proposals list stays as a read-only fallback for now).
+        self._proposals = CardProposalStore(spec)
         # #377 guardrail ③: cap the clarification questions one document may raise
         # so a pathological digest can't flood the inbox (terms fill the budget
         # first, then descriptions).
@@ -484,6 +489,13 @@ class CardGenCoordinator:
         # wiki) and cluster cross-run duplicates. No reconciler → exact-only (pre-P6).
         if self._reconciler is not None:
             kept = self._reconciler.reconcile_proposals(cid, run_id, kept, existing)
+        # #511 P1: stamp ids up front so the first-class CardProposal rows share the
+        # SAME prop:{run}:{pid} id as the reconcile ClusterMember (reconcile ran the
+        # same ensure_proposal_ids, so this is a no-op there — but a no-reconciler
+        # build needs it before projecting). set_proposals re-stamps idempotently.
+        kept = ensure_proposal_ids(kept)
+        for p in kept:
+            self._proposals.create_from_proposal(cid, run_id, p)
         self._runs.set_proposals(run_id, kept)
         self._raise_questions(cid, per_doc, existing)
         self._clear_staged(run_id)

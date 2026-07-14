@@ -430,7 +430,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # staging structs live in kb.card_gen (next to ProposedCard/DocDigest, so they
     # carry those typed fields directly); imported LAZILY here — a top-level import
     # would cycle (resources → kb.card_gen → kb.context_cards → resources).
-    from ..kb.card_gen import CardGenRun, CardGenUnit
+    from ..kb.card_gen import CardGenRun, CardGenUnit, CardProposal
 
     # #506: ``collection_id`` newly indexed so the per-collection 待審核 tab queries
     # ``(collection_id, status)`` instead of scanning every collection's runs. It's a
@@ -447,6 +447,12 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
     # to merge + raise questions from). Transient; deleted at finalize.
     spec.add_model(CardGenUnit, indexed_fields=["run_id"])
+    # #511: proposals as first-class rows (extracted from CardGenRun.proposals) so
+    # the 待審核 views page via native offset/limit. collection_id + decision indexed
+    # → the flat "active proposals in this collection" query; run_id indexed → list
+    # a run's proposals (finalize idempotency check + commit). Ordered by meta
+    # created_time (no index needed, like the doc list). id = prop:{run}:{pid}.
+    spec.add_model(CardProposal, indexed_fields=["collection_id", "run_id", "decision"])
     # Issue #50: collection_id indexed so a wiki's pages list (WikiFileStore.ls)
     # is a query, not a full scan.
     spec.add_model(WikiPage, indexed_fields=["collection_id"])
