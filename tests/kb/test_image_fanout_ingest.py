@@ -138,6 +138,22 @@ def test_attachments_are_queryable_by_parent_doc_id(spec: SpecStar):
     assert _doc(spec, parent_id).parent_doc_id == ""
 
 
+def test_manual_upload_under_att_namespace_links_to_parent_by_path(spec: SpecStar):
+    """P7/P8: a file stored DIRECTLY under ``{parent}/.att/`` — a manual attachment
+    upload, no fetcher, no explicit parent arg — links to its parent by the path
+    convention alone (the same reserved namespace the fan-out uses). This is what
+    makes the FE's "＋ upload attachment" land as a real attachment."""
+    ingestor = _ingestor(spec, image_fetcher=None)
+    cid = _collection(spec)
+    ingestor.store(collection_id=cid, user="u", filename="d.md", data=b"# Parent\n")
+    ingestor.store(collection_id=cid, user="u", filename="d.md/.att/chart.png", data=b"PNGX")
+
+    parent_id = encode_doc_id(cid, "d.md")
+    att_id = encode_doc_id(cid, "d.md/.att/chart.png")
+    assert _doc(spec, att_id).parent_doc_id == parent_id  # linked by the .att/ path
+    assert _doc(spec, parent_id).parent_doc_id == ""  # a plain top-level upload stays top-level
+
+
 def test_markdown_upload_fans_out_image_links(spec: SpecStar):
     fetcher = _FakeFetcher(
         {

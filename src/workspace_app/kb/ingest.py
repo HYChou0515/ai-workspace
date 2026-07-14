@@ -261,6 +261,22 @@ def _attachment_path(parent_path: str, url: str) -> str:
     return f"{parent_path}/.att/{parts.netloc}{parts.path}"
 
 
+_ATT_MARKER = "/.att/"
+
+
+def _parent_from_att_path(collection_id: str, path: str) -> str:
+    """The parent doc id implied by an attachment's path, or ``""`` for a plain
+    top-level path (#513 P7). Parentage is a CONVENTION of the reserved ``.att/``
+    namespace — a doc at ``{parent}/.att/{tail}`` is an attachment of the doc at
+    ``{parent}`` — so a MANUAL upload to an ``.att/`` path links to its parent by
+    the SAME rule the fetch fan-out uses, with no separate parameter. The parent
+    is the path segment before the FIRST ``/.att/``."""
+    idx = path.find(_ATT_MARKER)
+    if idx == -1:
+        return ""
+    return encode_doc_id(collection_id, path[:idx])
+
+
 class _Attachment(NamedTuple):
     path: str
     data: bytes
@@ -749,11 +765,18 @@ class Ingestor:
             path=path,
             content=Binary(data=data),
             status="indexing",
-            # #513 P7: an explicit parent link marks this doc as an attachment.
-            # An empty arg INHERITS any existing parentage (same carry-across-
-            # re-upload rule as the parser overrides below), so a plain re-upload
-            # of an attachment's bytes never orphans it.
-            parent_doc_id=(parent_doc_id or (existing.parent_doc_id if existing else "")),
+            # #513 P7: a doc under the reserved `.att/` namespace is an attachment
+            # of the doc named by its path prefix. The link is resolved once, here,
+            # for BOTH entry points: the fan-out passes it explicitly, a manual
+            # upload to an `.att/` path derives the SAME id from the path. An empty
+            # result INHERITS any existing parentage (same carry-across-re-upload
+            # rule as the parser overrides below), so re-uploading an attachment's
+            # bytes never orphans it.
+            parent_doc_id=(
+                parent_doc_id
+                or _parent_from_att_path(collection_id, path)
+                or (existing.parent_doc_id if existing else "")
+            ),
             # #328/#356: carry the per-doc extraction escape hatches across a
             # re-upload. They're per-doc EXTRACTION settings, not tied to a content
             # version — so a hand-tuned doc keeps its tuning when its bytes change.
