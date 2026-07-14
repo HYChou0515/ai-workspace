@@ -160,27 +160,20 @@ def build_lifespan(
             return
 
     async def cluster_sweeper(app: FastAPI) -> None:
-        """#506 P8 + #511 P1: periodically converge the review-inbox projections.
-        First the embedder-free #511 backfill — project any pre-P1 run's nested
-        ``CardGenRun.proposals`` into first-class ``CardProposal`` rows so the flat
-        inbox pages them at the DB (in its OWN suppress so a down embedder can't
-        starve it). Then #506 P8's cluster fold — backfill any pending proposal /
-        open question that has no ClusterMember yet (a run finalized before P6, or by
-        a build with no embedder), then merge race-split clusters — so the grouped
-        待審核 inbox converges without a reindex. All passes are idempotent +
-        deterministic, so it runs unguarded on every pod (a duplicate write is a
-        no-op). Tick-first (then sleep) so a fresh pod catches the store up at
-        startup; off the loop (blocking specstar I/O + an occasional embed of a
+        """#506 P8: periodically fold the review-inbox cluster store — backfill any
+        pending proposal / open question that has no ClusterMember yet (a run
+        finalized before P6, or by a build with no embedder), then merge race-split
+        clusters — so the grouped 待審核 inbox converges without a reindex. Both passes
+        are idempotent + deterministic, so it runs unguarded on every pod (a duplicate
+        write is a no-op). Tick-first (then sleep) so a fresh pod catches the store up
+        at startup; off the loop (blocking specstar I/O + an occasional embed of a
         never-projected candidate). Errors are swallowed so one bad tick never wedges
         the loop. The KB embedder — built after the FastAPI app — is read off
         ``app.state.kb_embedder`` post-construction, symmetric with the coordinators."""
-        from ..kb.card_proposal import backfill_card_proposals
         from ..kb.reconcile import sweep_clusters
 
         try:
             while True:
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(backfill_card_proposals, spec)
                 with contextlib.suppress(Exception):
                     await asyncio.to_thread(
                         sweep_clusters,

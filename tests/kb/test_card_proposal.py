@@ -14,7 +14,7 @@ import msgspec
 
 from workspace_app.kb.card_gen import ProposedCard
 from workspace_app.kb.card_gen_run import CardGenRunStore
-from workspace_app.kb.card_proposal import CardProposalStore, backfill_card_proposals
+from workspace_app.kb.card_proposal import CardProposalStore
 from workspace_app.resources import Collection, make_spec
 
 
@@ -104,57 +104,11 @@ def test_create_from_proposal_is_idempotent_and_preserves_existing():
     assert got.title == ""  # original preserved, not the re-run's "RE-RUN"
 
 
-def test_backfill_projects_existing_nested_proposals_preserving_decision():
-    """The one-time #511 migration: a run finalized BEFORE P1 has proposals ONLY in
-    the nested ``CardGenRun.proposals`` list (no CardProposal rows). ``backfill_card_
-    proposals`` projects each into a first-class row addressed ``prop:{run}:{pid}``,
-    preserving its review ``decision`` (a terminal one is projected too, just kept
-    out of the active queue), and is idempotent — a re-run creates nothing."""
-    spec, cid = _spec_with_collection()
-    run_id = _run(spec, cid)
-    # simulate a pre-#511 finalize: nested proposals written, no CardProposal rows
-    CardGenRunStore(spec).set_proposals(
-        run_id,
-        [
-            ProposedCard(keys=["k0"], title="A", decision="pending"),
-            ProposedCard(keys=["k1"], title="B", decision="accepted"),
-            ProposedCard(keys=["k2"], title="C", decision="rejected"),
-        ],
-    )
-    store = CardProposalStore(spec)
-    assert store.count_active(cid) == 0  # nothing projected yet
-
-    assert backfill_card_proposals(spec) == 3
-    assert store.count_active(cid) == 2  # pending + accepted; rejected excluded
-    rejected = store.get(f"prop:{run_id}:2")
-    assert rejected is not None and rejected.decision == "rejected"
-    # idempotent — a second pass over a converged store creates nothing
-    assert backfill_card_proposals(spec) == 0
-
-
 def test_get_returns_none_for_a_missing_proposal():
     """A read for an id that was never projected (or cascaded away) is a clean
     ``None`` — the callers treat absence as "fall back to the nested list" (P1)."""
     spec, _cid = _spec_with_collection()
     assert CardProposalStore(spec).get("prop:nope:0") is None
-
-
-def test_backfill_respects_the_per_call_limit():
-    """One backfill pass creates at most ``limit`` rows so a huge pre-#511 backlog
-    can't stall a sweep tick; the remainder is picked up on the next pass."""
-    spec, cid = _spec_with_collection()
-    run_id = _run(spec, cid)
-    CardGenRunStore(spec).set_proposals(
-        run_id, [ProposedCard(keys=[f"k{i}"], title=str(i)) for i in range(5)]
-    )
-    store = CardProposalStore(spec)
-
-    assert backfill_card_proposals(spec, limit=2) == 2  # capped this pass
-    assert store.count_active(cid) == 2
-    assert backfill_card_proposals(spec, limit=2) == 2  # next slice
-    assert backfill_card_proposals(spec, limit=2) == 1  # tail
-    assert store.count_active(cid) == 5
-    assert backfill_card_proposals(spec, limit=2) == 0  # converged
 
 
 def test_count_active_is_scoped_per_collection():

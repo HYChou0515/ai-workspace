@@ -26,11 +26,9 @@ from specstar.types import (
 
 from .card_gen import (
     _ACTIVE_DECISIONS,
-    CardGenRun,
     CardProposal,
     ProposedCard,
     card_proposal_id,
-    ensure_proposal_ids,
     proposal_to_card_proposal,
 )
 
@@ -111,44 +109,3 @@ class CardProposalStore:
         """``(collection_id == cid) AND decision ∈ {pending, accepted}`` — the
         待審核 predicate, both indexed so it never scans."""
         return (QB["collection_id"] == collection_id) & QB["decision"].in_(list(_ACTIVE_DECISIONS))
-
-
-def backfill_card_proposals(spec: SpecStar, *, limit: int = 500) -> int:
-    """One-time #511 P1 migration: project every existing run's nested
-    ``CardGenRun.proposals`` into first-class :class:`CardProposal` rows.
-
-    A run finalized before P1 carries its proposals only in the nested list, which
-    can't be paged as DB rows. This projects each into a ``prop:{run}:{pid}`` row
-    (the same id finalize now writes + the reconcile ClusterMember uses), PRESERVING
-    its review ``decision`` — a terminal proposal is projected too so history stays
-    intact, it's just kept out of the active queue. Idempotent (a proposal already
-    projected is skipped) so it's safe to re-run and safe to race with a live
-    finalize; ``limit`` caps the rows created per call so one pass over a huge
-    backlog can't stall a sweep tick. Returns the number of rows newly created (0 =
-    the store is converged). Embedder-free — the flat inbox pages without an
-    embedder, so this must not depend on one (unlike the reconcile ClusterMember
-    backfill)."""
-    run_rm = spec.get_resource_manager(CardGenRun)
-    prop_rm = spec.get_resource_manager(CardProposal)
-    store = CardProposalStore(spec)
-    # One scan of the already-projected ids so we count + create only what's missing
-    # (mirrors reconcile.backfill_collection's `seen` set).
-    seen = {
-        r.info.resource_id  # ty: ignore[unresolved-attribute]
-        for r in prop_rm.list_resources(QB.all().build())
-    }
-    created = 0
-    for r in run_rm.list_resources(QB.all().build()):
-        run = r.data
-        assert isinstance(run, CardGenRun)  # rm is CardGenRun-typed; narrows ty
-        run_id = r.info.resource_id  # ty: ignore[unresolved-attribute]
-        for p in ensure_proposal_ids(list(run.proposals)):
-            rid = card_proposal_id(run_id, p.id)
-            if rid in seen:
-                continue
-            store.create_from_proposal(run.collection_id, run_id, p)
-            seen.add(rid)
-            created += 1
-            if created >= limit:
-                return created
-    return created
