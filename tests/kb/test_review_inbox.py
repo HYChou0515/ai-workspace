@@ -597,7 +597,12 @@ def test_grouped_drops_members_whose_source_cascaded_away():
     )
     _cluster_member(spec, cid, kind="term_question", ref_id=qid, cluster_key="X")
     _cluster_member(
-        spec, cid, kind="proposal", ref_id="0", run_id="ghost", cluster_key="X",
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="0",
+        run_id="ghost",
+        cluster_key="X",
         member_id="prop:ghost:0",
     )
     # concept "Y": ONLY an orphan term-question member (its DocQuestion is gone)
