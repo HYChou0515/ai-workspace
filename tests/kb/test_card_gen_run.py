@@ -46,7 +46,6 @@ def test_start_seeds_a_pending_run_and_returns_its_id():
         False,
         "pending",
     )
-    assert run.proposals == []
 
 
 def test_get_missing_run_is_none():

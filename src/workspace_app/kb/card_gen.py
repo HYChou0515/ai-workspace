@@ -249,9 +249,10 @@ class CardGenRun(msgspec.Struct):  # → resource "card-gen-run"
     The split job cannot hold the reviewable output — it must return fast (it can't
     block a consumer thread for the whole LLM pass), so it COMPLETEs before any
     proposal exists. So this run — addressed by the id ``enqueue`` returns — is what
-    the FE polls for ``status`` + ``proposals`` (the finalize step writes them here,
-    and the resumable review state is re-saved here too). ``doc_ids`` is the ordered
-    doc set so finalize merges the staged per-doc digests deterministically."""
+    the FE polls for ``status``; the reviewable proposals are first-class
+    :class:`CardProposal` rows (#511, addressed by ``prop:{run}:{pid}``), NOT nested
+    here — this row is purely the generation-run join state. ``doc_ids`` is the
+    ordered doc set so finalize merges the staged per-doc digests deterministically."""
 
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
     doc_ids: list[str] = msgspec.field(default_factory=list)
@@ -260,7 +261,6 @@ class CardGenRun(msgspec.Struct):  # → resource "card-gen-run"
     failed: list[int] = msgspec.field(default_factory=list)  # doc indices that gave up
     finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
     status: str = "pending"  # pending | running | done | error
-    proposals: list[ProposedCard] = msgspec.field(default_factory=list)
 
 
 class CardGenUnit(msgspec.Struct):  # → resource "card-gen-unit"
