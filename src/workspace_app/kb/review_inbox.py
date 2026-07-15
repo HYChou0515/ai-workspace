@@ -17,7 +17,7 @@ only converts to pydantic. Mirrors the storage-layer authorize idiom of
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import msgspec
 from specstar import QB
@@ -26,7 +26,13 @@ from ..perm import Actor, authorize
 from ..resources.kb import ClusterMember, Collection, DocQuestion
 from .card_gen import ProposedCard
 from .card_proposal import CardProposalStore
-from .cluster_member import ClusterRow, count_clusters, page_clusters
+from .cluster_member import (
+    ClusterRow,
+    count_clusters,
+    list_members,
+    member_query,
+    page_clusters,
+)
 from .doc_questions import get_question, page_questions_by_status, questions_by_status
 
 # The grouped view's type filter → the member kinds that form a concept (#511 P4).
@@ -119,20 +125,24 @@ class ReviewInbox(msgspec.Struct):
 
 def cluster_key_map(spec: SpecStar, collection_ids: list[str]) -> dict[tuple[str, str], str]:
     """Map each inbox-visible ClusterMember's ``(run_id, ref_id)`` to its
-    ``cluster_key`` — the join the inbox uses to group items. Only ``active``
-    proposal + term_question members participate: ``card`` members are the
+    ``cluster_key`` — the join the grouped SEARCH scan uses to group items. Only
+    ``active`` proposal + term_question members participate: ``card`` members are the
     comparison corpus (not shown) and ``suppressed``/``inactive`` members are hidden
-    from the default view. Scoped to the given collections (indexed query)."""
+    from the default view.
+
+    Perf (#508): ONE batched indexed query over all the collections (not a round-trip
+    each), excluding ``card`` members at the DB via the indexed ``kind`` (not in
+    Python), reading every member **without its ``embedding``** — see
+    :func:`~workspace_app.kb.cluster_member.list_members`. This is the unbounded read
+    the search path can't page (a substring match isn't indexed), so it is exactly
+    where loading a vector per member hurt most."""
+    if not collection_ids:
+        return {}
     rm = spec.get_resource_manager(ClusterMember)
     out: dict[tuple[str, str], str] = {}
-    for cid in collection_ids:
-        query = ((QB["collection_id"] == cid) & (QB["state"] == "active")).build()
-        for r in rm.list_resources(query):
-            member = r.data
-            assert isinstance(member, ClusterMember)
-            if member.kind == "card":
-                continue
-            out[(member.run_id, member.ref_id)] = member.cluster_key
+    for r in list_members(rm, member_query(collection_ids).build()):
+        member = cast(ClusterMember, r.data)  # projected — every field but the vector
+        out[(member.run_id, member.ref_id)] = member.cluster_key
     return out
 
 
@@ -162,7 +172,11 @@ def page_suppressed(
     run; card members can't be suppressed, so ``kind`` is always proposal /
     term_question). Without ``q`` it pages natively at the DB
     (``in_(cids) & state=="suppressed"`` sort + offset + limit + count); with ``q`` (a
-    label substring, not DB-indexed) it's a bounded scan filtered in Python."""
+    label substring, not DB-indexed) it's a bounded scan filtered in Python.
+
+    Reads every member **without its ``embedding``** (#508) — the audit shows a label /
+    reason, never the vector. Unlike the queue reads this keeps NO ``kind`` filter: it
+    is an audit, so a suppressed member of any kind must stay visible."""
     cids = list(readable)
     if not cids:
         return [], 0
@@ -170,9 +184,8 @@ def page_suppressed(
     base = QB["collection_id"].in_(cids) & (QB["state"] == "suppressed")
     ordering = base.sort(QB.created_time().desc(), QB.resource_id().asc())
 
-    def _item(r: object) -> SuppressedItem:
-        member = r.data  # ty: ignore[unresolved-attribute]
-        assert isinstance(member, ClusterMember)  # rm is ClusterMember-typed; narrows ty
+    def _item(r: Any) -> SuppressedItem:
+        member = cast(ClusterMember, r.data)  # projected — every field but the vector
         return _suppressed_item(readable, member)
 
     if not q:
@@ -180,11 +193,11 @@ def page_suppressed(
         paged = ordering.offset(offset)
         if limit is not None:
             paged = paged.limit(limit)
-        return [_item(r) for r in rm.list_resources(paged.build())], total
+        return [_item(r) for r in list_members(rm, paged.build())], total
     needle = q.lower()
     matched = [
         item
-        for r in rm.list_resources(ordering.build())
+        for r in list_members(rm, ordering.build())
         if needle in (item := _item(r)).label.lower()
     ]
     total = len(matched)

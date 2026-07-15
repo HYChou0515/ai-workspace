@@ -10,6 +10,7 @@ and the kernel + sandbox services, so they lift out of ``create_app`` as one gro
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import tempfile
 from collections.abc import AsyncIterator, Callable
@@ -52,6 +53,8 @@ from .search import InvalidQuery, compile_query, path_selected, search_text
 from .turns import ChatTurnEngine
 
 _READONLY_DIR = ".readonly"
+
+logger = logging.getLogger(__name__)
 
 
 def _skill_pref_state(value: bool | None) -> Literal["follow", "on", "off"]:
@@ -99,9 +102,22 @@ async def _stream_upload_to_store(
             async for chunk in request.stream():
                 size += len(chunk)
                 if max_file_size and size > max_file_size:
+                    logger.warning(
+                        "file_routes: upload to %s exceeds size limit (%d > %d)",
+                        path,
+                        size,
+                        max_file_size,
+                    )
                     raise HTTPException(status_code=413, detail="file exceeds the size limit")
                 if remaining is not None and size > remaining:
                     used = await files.workspace_usage(workspace_id)
+                    logger.warning(
+                        "file_routes: upload to %s exceeds quota (used=%s quota=%s attempted=%d)",
+                        path,
+                        used,
+                        workspace_quota,
+                        size,
+                    )
                     raise HTTPException(
                         status_code=507,
                         detail={
@@ -196,6 +212,7 @@ def register_file_routes(
         """Force-mirror the live sandbox to the snapshot now (don't wait for the
         ≤window throttle sweep) — the explicit 'refresh' action. No-op cold."""
         investigation_id = locator.require_item(slug, item_id)
+        logger.info("file_routes: manual mirror flush of item %s", investigation_id)
         await registry.flush(investigation_id)
         return {"ok": True}
 
@@ -232,6 +249,13 @@ def register_file_routes(
         investigation_id = locator.require_item(slug, item_id)
         members = await _collect_download_members(investigation_id, prefix)
         download_id, size = await prepare_zip(lambda out: write_zip_members(out, members))
+        logger.info(
+            "file_routes: prepared download %s of %r for item %s (%d bytes)",
+            download_id,
+            prefix,
+            investigation_id,
+            size,
+        )
         return DownloadPrepared(
             download_id=download_id,
             filename=_workspace_zip_name(investigation_id, prefix),
@@ -272,6 +296,7 @@ def register_file_routes(
             f"Wrote {norm}",
             {"investigation_id": investigation_id, "path": norm},
         )
+        logger.info("file_routes: wrote %s to item %s", norm, investigation_id)
         # #43: tell other viewers of this shared workspace the file changed so
         # they refetch (last-write-wins; this is the "someone else edited" cue).
         turn_engine.publish(
@@ -298,6 +323,7 @@ def register_file_routes(
             f"Created folder {norm}",
             {"investigation_id": investigation_id, "path": norm},
         )
+        logger.info("file_routes: created folder %s in item %s", norm, investigation_id)
         turn_engine.publish(
             investigation_id, FileChanged(path=norm, by=get_user_id(), kind="dir_created")
         )
@@ -348,6 +374,7 @@ def register_file_routes(
             f"Moved {src} → {dst}",
             {"investigation_id": investigation_id, "path": dst},
         )
+        logger.info("file_routes: moved %s to %s in item %s", src, dst, investigation_id)
         turn_engine.publish(investigation_id, FileChanged(path=dst, by=get_user_id(), kind="moved"))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -365,6 +392,7 @@ def register_file_routes(
             f"Copied {src} → {dst}",
             {"investigation_id": investigation_id, "path": dst},
         )
+        logger.info("file_routes: copied %s to %s in item %s", src, dst, investigation_id)
         turn_engine.publish(
             investigation_id, FileChanged(path=dst, by=get_user_id(), kind="copied")
         )
@@ -431,6 +459,11 @@ def register_file_routes(
                 f"Replaced {n} in {p}",
                 {"investigation_id": investigation_id, "path": p},
             )
+        logger.info(
+            "file_routes: replaced %d occurrences across matched files in item %s",
+            replaced,
+            investigation_id,
+        )
         return {"replaced": replaced}
 
     @app.delete(
@@ -447,6 +480,7 @@ def register_file_routes(
                 f"Deleted folder {norm}",
                 {"investigation_id": investigation_id, "path": norm},
             )
+            logger.info("file_routes: deleted folder %s in item %s", norm, investigation_id)
             turn_engine.publish(
                 investigation_id, FileChanged(path=norm, by=get_user_id(), kind="deleted")
             )
@@ -460,6 +494,7 @@ def register_file_routes(
             f"Deleted {norm}",
             {"investigation_id": investigation_id, "path": norm},
         )
+        logger.info("file_routes: deleted %s in item %s", norm, investigation_id)
         turn_engine.publish(
             investigation_id, FileChanged(path=norm, by=get_user_id(), kind="deleted")
         )
@@ -545,6 +580,12 @@ def register_file_routes(
             handle = await registry.ensure_handle(session)
             result = await sandbox.exec(handle, body.cmd)
         except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "file_routes: sandbox exec failed for item %s (%s), returning exit -1",
+                investigation_id,
+                type(exc).__name__,
+                exc_info=True,
+            )
             # The Terminal pane has nowhere to render an HTTP error and the
             # agent's exec tool expects a structured ExecResult body — any
             # unexpected failure becomes a 200 with a non-zero exit code and
@@ -562,6 +603,11 @@ def register_file_routes(
         # durability. Stale handle (killed mid-call) is swallowed — re-run.
         with contextlib.suppress(Exception):
             await registry.flush(investigation_id)
+        logger.info(
+            "file_routes: exec in item %s completed with exit %s",
+            investigation_id,
+            result.exit_code,
+        )
         return {
             "exit_code": result.exit_code,
             "stdout": result.stdout.decode("utf-8", errors="replace"),

@@ -17,10 +17,15 @@ citation-bubbling logic.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import logging
 from typing import TYPE_CHECKING
 
+import magic
+
 from ..agent.context import KbSearchBudget
+from ..filestore.protocol import FileNotFound
 from ..kb.collections import (
     collection_ids_from_json,
     collection_tiers_from_json,
@@ -50,6 +55,31 @@ if TYPE_CHECKING:
     from .subagent_bridge import SubagentBridge
     from .turn_context import TurnContextBuilder
     from .turns import ChatTurnEngine, TurnMessage
+
+
+logger = logging.getLogger(__name__)
+
+
+async def _load_inline_image_urls(
+    files: WorkspaceFiles, investigation_id: str, paths: list[str]
+) -> list[str]:
+    """Read each attached workspace image and encode it as a `data:` URL, so the
+    runner can inline it into a vision main model's user message (source A) — the
+    model sees the pixels directly, with no `read_image` round-trip through the
+    separate VLM. A path that vanished (deleted between upload and send) or isn't
+    actually an image is skipped rather than fatal: the turn still runs with
+    whatever images survive. Called only when the resolved agent is a VLM."""
+    urls: list[str] = []
+    for path in paths:
+        try:
+            data = await files.read(investigation_id, path)
+        except FileNotFound:
+            continue
+        mime = magic.from_buffer(data, mime=True)
+        if not mime.startswith("image/"):
+            continue
+        urls.append(f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}")
+    return urls
 
 
 class ChatSendService:
@@ -126,6 +156,12 @@ class ChatSendService:
             Message(role="user", content=body.content, author=author, created_at=created)
         )
         self._conv_rm.update(rid, conv)
+        logger.info(
+            "chat_send: user %s sent message to item %s (chat %s)",
+            author,
+            investigation_id,
+            rid,
+        )
 
         # Topic Hub §5/§7 + #280: the item's collection set (collections.json),
         # read ONCE — the flat union scopes the turn's deterministic glossary /
@@ -208,9 +244,10 @@ class ChatSendService:
         # ONE bridge for every sub-agent the RCA tools may invoke
         # (ask_knowledge_base, infer_modules, future ones) drives the turn with the
         # investigation's attached agent + the composer's per-turn depth/effort/scope.
+        agent_config = self._locator.resolve_agent_config(investigation_id)
         ctx = await self._turn_ctx.build_chat_turn(
             investigation_id,
-            agent_config=self._locator.resolve_agent_config(investigation_id),
+            agent_config=agent_config,
             run_subagent=_run_subagent_with_depth,
             # Cross-turn memory: prior dialogue (excludes the user msg just added).
             history_messages=conv.messages[:-1],
@@ -224,6 +261,16 @@ class ChatSendService:
             # disable gate (their bodies are already preloaded into the prompt).
             apply_skills=body.apply_skills or [],
         )
+
+        # Source A (#…): a vision-capable main model reads attached images
+        # directly — inline them into this turn's user message so the model sees
+        # the pixels with no `read_image` round-trip through the separate VLM.
+        # Text-only models leave this empty and use `read_image` as before; the
+        # image also persists as a workspace file, so `read_image` still works.
+        if agent_config is not None and agent_config.vision and body.image_paths:
+            ctx.turn_image_urls = await _load_inline_image_urls(
+                self._files, investigation_id, body.image_paths
+            )
 
         def persist(produced: list[TurnMessage]) -> None:
             # Persist the agent's reply + tool outputs so re-entering the
@@ -263,6 +310,7 @@ class ChatSendService:
                 "Agent finished a turn",
                 {"investigation_id": investigation_id},
             )
+            logger.info("chat_send: turn completed for item %s", investigation_id)
 
         # Topic Hub §6: prepend the App's context_files (e.g. MEMORY.md +
         # collections.json) as a labelled, authoritative block — re-derived fresh from
@@ -312,6 +360,12 @@ class ChatSendService:
         # #492: flush the item's live sandbox to durable when THIS turn ends, so
         # durable lags by at most one turn (guarantee (2)). Runs on the engine's
         # worker, off this POST's back; a flush failure never fails the turn.
+        logger.debug(
+            "chat_send: enqueue turn for item %s on engine %s (await<=%.0fs)",
+            investigation_id,
+            engine_key,
+            self._send_await_timeout,
+        )
         fut = self._turn_engine.enqueue(
             engine_key,
             turn_content,

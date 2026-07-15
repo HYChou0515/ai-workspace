@@ -12,6 +12,7 @@ with retry-with-feedback, mirroring the gate's in-step retry (§6).
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from .run import SteerInputEdit, SteerPlan
@@ -31,6 +32,8 @@ _JOURNAL_PREFIX = "/.workflow"
 # Cap how much of each input file is inlined into the steerer's prompt, so a big input
 # can't blow the context window — the model can still ``read_file`` the rest.
 _INLINE_LIMIT = 8000
+
+logger = logging.getLogger(__name__)
 
 
 class SteerProposalFailed(Exception):
@@ -169,8 +172,11 @@ async def propose_steer(
         reply = await wf.drive_turn(_steer_prompt(instruction, context, feedback), use_tools)
         plan, error = _coerce_plan(_extract_json(str(reply)), instruction)
         if plan is not None:
+            logger.info("steer: proposal accepted for instruction %r", instruction)
             return plan
+        logger.warning("steer: proposal unusable: %s", error)
         feedback = error
+    logger.warning("steer: no usable proposal for instruction %r after retries", instruction)
     raise SteerProposalFailed(error or "the steerer returned no usable plan")
 
 
@@ -196,11 +202,13 @@ async def apply_steer(wf: WorkflowHandle, plan: SteerPlan, *, decided_by: str = 
         if _under_journal(edit.path):
             raise ValueError(f"refusing to write into the journal: {edit.path!r}")
         await wf.write(edit.path, edit.content)
+        logger.debug("steer: wrote input edit %s", edit.path)
         applied.append(_norm(edit.path))
     deleted: list[str] = []
     for name in plan.invalidate:
         for p in await wf.glob([f"{wf.journal_dir.lstrip('/')}/step_{name}/*"]):
             await wf.delete(p)
+            logger.debug("steer: invalidated step %r artifact %s", name, p)
             deleted.append(p)
     receipt = await _next_receipt_path(wf)
     await wf.write_json(
@@ -214,4 +222,5 @@ async def apply_steer(wf: WorkflowHandle, plan: SteerPlan, *, decided_by: str = 
             "deleted": deleted,
         },
     )
+    logger.info("steer: applied plan receipt=%s decided_by=%s", receipt, decided_by)
     return receipt

@@ -12,6 +12,7 @@ again, finds the decision, and continues. No journal/replay machinery beyond §9
 from __future__ import annotations
 
 import json
+import logging
 from typing import TYPE_CHECKING, Any
 
 from msgspec import Struct
@@ -21,6 +22,8 @@ from .events import StepPassed, StepStarted
 
 if TYPE_CHECKING:
     from .handle import WorkflowHandle
+
+logger = logging.getLogger(__name__)
 
 
 class Decision(Struct):
@@ -70,11 +73,13 @@ async def human_gate(
         # 'passed' (green) rather than reverting to grey once the resolved
         # pending-decision overlay disappears.
         _emit(wf, StepPassed(phase=phase, name=phase))
+        logger.info("gate %s resolved with decision %s", phase, rec["choice"])
         return Decision(choice=rec["choice"], input=rec.get("input", ""))
     # First reach (no decision yet): enter the gate's phase as a *running*, current
     # step (#176) so it shows up while awaiting — instead of being invisible in the
     # run's progress until the FE overlays the pending decision.
     _emit(wf, StepStarted(phase=phase, name=phase))
+    logger.info("gate %s awaiting human decision (title=%s)", phase, title)
     raise AwaitingHuman(phase=phase, title=title, summary=_as_text(summary), allow=list(allow))
 
 
@@ -87,3 +92,4 @@ async def record_decision(
     await wf.write_json(
         _decision_path(wf, phase), {"choice": choice, "input": input, "decided_by": decided_by}
     )
+    logger.info("gate %s decision recorded: choice=%s by=%s", phase, choice, decided_by)

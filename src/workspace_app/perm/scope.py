@@ -9,6 +9,7 @@ delete) ride a `permission_checker` on top (403). See docs/plan-permissions.md.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
 # (it needs a `SpecStar` to query the `Group` resource) so `perm/` stays free of a
 # resource import; `None` ⇒ the pre-groups behaviour (user + `all` only).
 GroupsProvider = Callable[[str], frozenset[str]]
+
+logger = logging.getLogger(__name__)
 
 
 def subjects_of(user: str, groups: Iterable[str] = ()) -> list[Subject]:
@@ -58,6 +61,7 @@ def _visibility_scope(
 
     def scope(user: str) -> ConditionBuilder | _Unrestricted:
         if user in superusers:
+            logger.debug("scope: superuser %s -> unrestricted (%s)", user, visibility_field)
             return UNRESTRICTED  # the single greppable "see everything" path
         groups = groups_provider(user) if groups_provider is not None else frozenset()
         owner = QB.created_by() == user if owner_field is None else QB[owner_field] == user
@@ -181,6 +185,7 @@ def kbchat_access_scope(
 
     def scope(user: str) -> ConditionBuilder | _Unrestricted:
         if user in superusers:
+            logger.debug("scope: kbchat superuser %s -> unrestricted", user)
             return UNRESTRICTED
         granted = QB["permission.read_meta"].contains_any(subjects_of(user))
         return (

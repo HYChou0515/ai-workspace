@@ -14,12 +14,15 @@ See ``docs/plan-skills-and-tools.md`` §B.4–§B.6.
 from __future__ import annotations
 
 import io
+import logging
 import tarfile
 from collections.abc import Sequence
 from pathlib import Path
 
 from ..sandbox.protocol import ExecResult, Sandbox, SandboxHandle
 from ..tooling.registry import PackageInfo
+
+logger = logging.getLogger(__name__)
 
 
 class ProvisionError(RuntimeError):
@@ -67,6 +70,7 @@ async def provision_tools(
     for pkg in packages:
         host = prebuilt_dir / pkg.name
         dest = pkg.install_dir  # e.g. "../.tools/datalab"
+        logger.info("provision: installing %s at %s", pkg.name, dest)
         archive = f"{dest}.provision.tar.gz"
         await sandbox.upload(handle, _tar_tree(host), archive)
         # --no-same-owner: inside the userns jail we run as mapped-root,
@@ -76,5 +80,7 @@ async def provision_tools(
             f"mkdir -p {dest} && tar xzf {archive} -C {dest} --no-same-owner && rm -f {archive}"
         )
         extract = await sandbox.exec(handle, ["sh", "-c", script])
+        logger.debug("provision: %s extract exit=%d", pkg.name, extract.exit_code)
         if extract.exit_code != 0:
+            logger.warning("provision: %s extract failed (exit %d)", pkg.name, extract.exit_code)
             raise ProvisionError(pkg.name, ["tar", "-C", dest], extract)

@@ -12,9 +12,12 @@ the factories pass this shared one.
 
 from __future__ import annotations
 
+import logging
 import time
 
 from .cooldown import CooldownRegistry
+
+logger = logging.getLogger(__name__)
 
 _SHARED: CooldownRegistry | None = None
 
@@ -23,4 +26,5 @@ def get_cooldown_registry() -> CooldownRegistry:
     global _SHARED
     if _SHARED is None:
         _SHARED = CooldownRegistry(clock=time.monotonic)
+        logger.debug("cooldown: initialised process-global shared registry")
     return _SHARED

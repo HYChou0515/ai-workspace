@@ -15,6 +15,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
@@ -27,6 +28,8 @@ from ..entity.events import EntityOrigin, EntityWriteSink
 from ..filestore.protocol import FileStore
 from .engine import StepFailed, input_hash, run_step
 from .nonidempotent import Result, Verdict, run_nonidempotent
+
+logger = logging.getLogger(__name__)
 
 # How an agent node runs one turn: given the (feedback-augmented) prompt + the tool
 # subset, drive a ChatTurnEngine turn on the item and return a result summary. The
@@ -389,6 +392,11 @@ class WorkflowHandle:
             try:
                 answer = await self.ask_llm(match_prompt(dict(args), candidates))
             except Exception:  # noqa: BLE001 — fail-open (决议8): any AI failure → NEW
+                logger.warning(
+                    "create_entity %s: cross-match LLM failed, fail-open to NEW",
+                    type_name,
+                    exc_info=True,
+                )
                 return None
             return parse_match(answer, [c["number"] for c in candidates])
 
@@ -469,6 +477,7 @@ class WorkflowHandle:
                 origin=self.entity_origin,
             )
             await self.write_json(created_path, {"number": created.number})
+            logger.info("create_entity: created %s #%s", type_name, created.number)
             return Result(fields={"number": created.number, "created": True, "action": "create"})
 
         inputs: dict[str, Any] = {"type": type_name, "args": args, "on_duplicate": on_duplicate}
@@ -601,8 +610,17 @@ class WorkflowHandle:
                         origin=self.entity_origin,
                     )
                 except EntityConflict:
+                    logger.warning(
+                        "update_entity %s #%s: version conflict, retrying", type_name, number
+                    )
                     continue  # a parallel run moved it — re-read + re-apply on the fresh copy
                 return {"version": updated.version}
+            logger.warning(
+                "update_entity %s #%s: retry budget exhausted after %s retries",
+                type_name,
+                number,
+                retries,
+            )
             raise StepFailed(
                 f"update_entity {type_name} #{number}: too many version conflicts "
                 f"(retried {retries} times) — a parallel run keeps moving it"
@@ -715,6 +733,7 @@ class WorkflowHandle:
                 try:
                     await fn(item)
                 except StepFailed as exc:
+                    logger.warning("map: element %s failed (skip+collect): %s", item, exc)
                     failures.append({"item": str(item), "error": str(exc)})
 
         await asyncio.gather(*(_one(item) for item in items))

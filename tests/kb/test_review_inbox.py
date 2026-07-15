@@ -14,7 +14,7 @@ import msgspec
 from workspace_app.kb.card_gen import CardDraft, TermQuestionDraft
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
 from workspace_app.kb.doc_id import encode_doc_id
-from workspace_app.kb.review_inbox import build_review_inbox
+from workspace_app.kb.review_inbox import build_review_inbox, cluster_key_map
 from workspace_app.perm import Actor
 from workspace_app.perm.model import Permission
 from workspace_app.resources import Collection, SourceDoc, make_spec
@@ -376,6 +376,34 @@ def _cluster_member(
         rm.create(member)
     else:
         rm.create_or_update(member_id, member)
+
+
+def test_cluster_key_map_joins_only_the_inbox_visible_members():
+    """The grouped SEARCH path's join: every ACTIVE proposal / term_question member
+    maps ``(run_id, ref_id)`` → its ``cluster_key``. A ``card`` member is the
+    nearest-neighbour comparison corpus and a ``suppressed`` / ``inactive`` member has
+    left the queue — none of them may join, or a resolved or never-queued concept
+    would resurface in the grouped view. All three exclusions are query-side (#508),
+    so this is what proves the indexed predicate still selects what the old
+    load-everything-then-filter-in-Python loop did."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "c")
+    _cluster_member(spec, cid, kind="proposal", ref_id="0", run_id="r1", cluster_key="ck")
+    _cluster_member(spec, cid, kind="term_question", ref_id="q1", cluster_key="ck")
+    _cluster_member(spec, cid, kind="card", ref_id="card1", cluster_key="ck")  # corpus
+    _cluster_member(
+        spec, cid, kind="proposal", ref_id="9", run_id="r1", cluster_key="s", state="suppressed"
+    )
+    _cluster_member(
+        spec, cid, kind="proposal", ref_id="8", run_id="r1", cluster_key="d", state="inactive"
+    )
+
+    assert cluster_key_map(spec, [cid]) == {("r1", "0"): "ck", ("", "q1"): "ck"}
+
+
+def test_cluster_key_map_without_readable_collections_is_empty():
+    """No readable collections → an empty join, without going to the DB."""
+    assert cluster_key_map(make_spec(default_user="u"), []) == {}
 
 
 async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():

@@ -12,12 +12,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from typing import Any
 
 from .checks import artifact_valid, exit_zero
 from .engine import Check, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
+
+logger = logging.getLogger(__name__)
 
 
 async def reads_fingerprint(wf: WorkflowHandle, reads: list[str] | None) -> dict[str, str] | None:
@@ -94,6 +97,7 @@ async def agent_step(
         try:
             return await asyncio.wait_for(coro, wf.step_timeout_s)
         except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
+            logger.warning("agent step timed out after %ss (phase %s)", wf.step_timeout_s, phase)
             raise StepFailed(
                 f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
             ) from exc
@@ -159,6 +163,9 @@ async def agent_write_step(
             try:
                 text = await asyncio.wait_for(coro, wf.step_timeout_s)
             except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
+                logger.warning(
+                    "agent write step timed out after %ss (phase %s)", wf.step_timeout_s, phase
+                )
                 raise StepFailed(
                     f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
                 ) from exc
@@ -232,6 +239,7 @@ async def sandbox_node(
             )
 
         exit_code, stdout = await run_sandbox(run, on_output)
+        logger.info("sandbox node %s: exit=%s (phase %s)", step_name, exit_code, phase)
         result: dict[str, Any] = {"exit_code": exit_code, "stdout": stdout}
         if outputs is not None:  # #428 §1.2: parse stdout JSON into result.fields
             result["fields"] = _parse_fields(stdout)

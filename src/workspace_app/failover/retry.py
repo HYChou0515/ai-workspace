@@ -20,6 +20,7 @@ actually wait.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING
@@ -27,6 +28,8 @@ from typing import TYPE_CHECKING
 from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_fixed
 
 from .core import CallProvider
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from tenacity import RetryCallState
@@ -112,7 +115,17 @@ def call_with_failover[R](
                 return try_provider(provider.call, m=m, gap=gap, sleep=sleep)
             except Exception as exc:
                 if not is_transient(exc):
+                    logger.debug(
+                        "retry: provider %s permanent error (%r) — not retrying",
+                        provider.label,
+                        exc,
+                    )
                     raise  # a real bug / bad request — don't burn the chain
+                logger.warning(
+                    "retry: provider %s transient failure (%r) — switching to next",
+                    provider.label,
+                    exc,
+                )
                 if on_switch is not None:
                     on_switch(provider, exc)
                 last = exc  # transient — try the next provider

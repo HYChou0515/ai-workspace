@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
@@ -33,6 +34,9 @@ from .protocol import FileExists, FileNotFound, dir_ancestors
 
 _SLASH = "∕"  # division-slash look-alike (same convention as kb/doc_id.py)
 _CHUNK = 8 * 1024 * 1024  # 8 MB — read a source file into blob parts a chunk at a time
+
+
+logger = logging.getLogger(__name__)
 
 
 def _reindex_only(record: Any) -> Any:
@@ -116,6 +120,9 @@ class SpecstarFileStore:
     def _create_exclusive_sync(self, workspace_id: str, path: str, data: bytes) -> None:
         rid = _fid(workspace_id, path)
         if self._files.exists(rid):
+            logger.debug(
+                "filestore: create_exclusive %s:%s rejected, path exists", workspace_id, path
+            )
             raise FileExists(f"{workspace_id}:{path}")
         self._files.create(
             WorkspaceFile(workspace_id=workspace_id, path=path, content=Binary(data=data)),
@@ -232,6 +239,9 @@ class SpecstarFileStore:
                 part += 1
                 bs.upload_to_session(session.upload_id, chunk, part_number=part)
         self._put_record(workspace_id, path, bs.finalize_upload_session(session.upload_id))
+        logger.debug(
+            "filestore: streamed %s:%s to blob store in %d parts", workspace_id, path, part
+        )
 
     def _read_sync(self, workspace_id: str, path: str) -> bytes:
         try:
@@ -252,6 +262,7 @@ class SpecstarFileStore:
         bs = self._files.blob_store  # ty: ignore[unresolved-attribute]
         info = bs.get_stream(file_id) if isinstance(file_id, str) else None
         if info is None:
+            logger.debug("filestore: %s:%s not streamable, restoring inline", workspace_id, path)
             # Backend without streaming (in-memory) or an inline/empty blob:
             # fall back to a single restore. Big files only land on a disk blob
             # store, whose get_stream is the streaming path below.
@@ -333,6 +344,7 @@ class SpecstarFileStore:
         # Hard delete — a removed file should vanish from ls. Parent dirs are
         # intentionally left intact (honest FS; `rmdir` removes a subtree).
         self._files.permanently_delete(rid)
+        logger.debug("filestore: deleted %s:%s", workspace_id, path)
 
     # ── directories (small per-workspace record) ─────────────────────────
     def _dirs(self, workspace_id: str) -> list[str]:

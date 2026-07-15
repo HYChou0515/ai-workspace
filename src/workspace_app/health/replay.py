@@ -17,10 +17,13 @@ replay failure means "this model can't do what that turn needed" — not
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class ReplayInvalidTarget(ValueError):
@@ -80,6 +83,7 @@ def _intent(slot: dict[str, str]) -> ReplayToolCall:
         if not isinstance(args, dict):
             args = {"_raw": slot["arguments"]}
     except json.JSONDecodeError:
+        logger.debug("replay: tool-call arguments were not valid json, keeping raw")
         args = {"_raw": slot["arguments"]}
     return ReplayToolCall(name=slot["name"], arguments=args)
 
@@ -132,6 +136,7 @@ class ReplayService:
         stem = path.rsplit("/", 1)[-1][: -len(CHAT_EXPORT_SUFFIX)]
         conv_doc = to_doc(investigation_id=stem, title=title, messages=messages)
         prompt = extraction_prompt(conv_doc.get_content())
+        logger.info("replay: streaming insight extraction for path=%s", path)
         started = time.perf_counter()
         text_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -139,6 +144,7 @@ class ReplayService:
             (reasoning_parts if is_reasoning else text_parts).append(chunk)
         text = "".join(text_parts)
         n = len(_parse_insights(text, max_n=99))
+        logger.info("replay: chat-export replay produced %d candidate insight(s)", n)
         note = (
             f"{n} insight(s) would be extracted from this response"
             if n
@@ -162,6 +168,7 @@ class ReplayService:
                 "image description isn't configured on this deployment "
                 "(no vision model) — nothing to replay"
             )
+        logger.info("replay: describing image path=%s mime=%s", path, mime)
         started = time.perf_counter()
         # Identical to VlmImageParser.parse: same prompt template, same
         # mime fallback, same context line.
@@ -207,6 +214,7 @@ class ReplayService:
         from ..api.litellm_runner import ThinkSplitter, _agent_for
 
         agent = _agent_for(config, packages, template_profile=template_profile)
+        logger.info("replay: replaying turn index=%d model=%s", index, config.model)
         sent: list[dict[str, Any]] = []
         if agent.instructions:
             sent.append({"role": "system", "content": agent.instructions})
@@ -271,6 +279,7 @@ class ReplayService:
             endpoint=redact_endpoint(config.llm_base_url or self._default_base_url),
             tools=[t.name for t in agent.tools if isinstance(t, FunctionTool)],
         )
+        logger.info("replay: turn replay complete for model=%s", config.model)
         return ReplayResult(
             text="".join(text_parts),
             reasoning="".join(reasoning_parts),

@@ -20,12 +20,15 @@ host chowns to the item uid only when it restores into the local live dir.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import shutil
 import tempfile
 from pathlib import Path
 
 from .protocol import FileExists, FileNotFound
+
+logger = logging.getLogger(__name__)
 
 
 def _check_ws(workspace_id: str) -> str:
@@ -82,6 +85,7 @@ class NfsTreeFileStore:
             os.replace(tmp, target)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
+            logger.warning("nfs_tree: write to %s failed, removed temp", target, exc_info=True)
             raise
 
     async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
@@ -93,6 +97,7 @@ class NfsTreeFileStore:
         try:
             fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError as exc:
+            logger.debug("nfs_tree: create_exclusive %s rejected, exists", target)
             raise FileExists(str(target)) from exc
         with os.fdopen(fd, "wb") as f:
             f.write(data)
@@ -113,6 +118,9 @@ class NfsTreeFileStore:
             os.replace(tmp, target)
         except BaseException:
             Path(tmp).unlink(missing_ok=True)
+            logger.warning(
+                "nfs_tree: write_from_path to %s failed, removed temp", target, exc_info=True
+            )
             raise
 
     # ── reads ────────────────────────────────────────────────────────────────
@@ -189,6 +197,7 @@ class NfsTreeFileStore:
         if not target.is_file():
             raise FileNotFound(path)
         target.unlink()  # parent dirs intentionally persist (honest FS)
+        logger.debug("nfs_tree: deleted %s", target)
 
     async def mkdir(self, workspace_id: str, path: str) -> None:
         target = self._abs(workspace_id, path)
@@ -207,6 +216,7 @@ class NfsTreeFileStore:
         if not target.is_dir():
             raise FileNotFound(path)
         shutil.rmtree(target)
+        logger.debug("nfs_tree: rmdir removed subtree %s", target)
 
     # ── usage / census (#245 / #407) ─────────────────────────────────────────
 

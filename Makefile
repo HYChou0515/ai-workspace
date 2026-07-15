@@ -1,26 +1,27 @@
 # Release tooling (#441). The changelog + GitHub Release + web /help/releases all
-# derive from src/workspace_app/help_content/CHANGELOG.md, which git-cliff
-# generates from Conventional Commits. See cliff.toml and docs/releasing.md.
+# derive from src/workspace_app/help_content/CHANGELOG.md, which is generated in
+# house by `python -m workspace_app.changelog` — ONE bullet per merged PR, walked
+# via `git log --first-parent`. See docs/releasing.md and the module docstring.
 #
-#   make changelog-preview   # dry-run: what the next release section would contain
+#   make changelog-preview   # dry-run: the section for commits since the newest tag
 #   make release             # cut a CalVer release locally (bump + changelog + commit + tag)
 #
-# `release` is a MAINTAINER action: it bumps pyproject, folds unreleased commits
-# into the changelog, commits "bump v…", and creates the local tag. It does NOT
-# push — you then run `git push origin HEAD --follow-tags`, and the pushed tag
-# triggers .github/workflows/release.yml to publish the GitHub Release. Nothing
-# here is run in CI or by an agent; releasing stays a human step.
+# `release` is a MAINTAINER action: it bumps pyproject, regenerates the whole
+# changelog (adding the new version section), commits "bump v…", and creates the
+# local tag. It does NOT push — you then run `git push origin HEAD --follow-tags`,
+# and the pushed tag triggers .github/workflows/release.yml to publish the GitHub
+# Release. Nothing here is run in CI or by an agent; releasing stays a human step.
 #
-# Boundary: git-cliff's --unreleased bounds on the latest v[0-9]* tag
-# (cliff.toml tag_pattern). Before the FIRST release (no such tag) it folds the
-# ENTIRE history into the first section, so nothing done to date is lost. After
-# that, each release spans only the commits since the previous tag.
+# Granularity: first-parent walk = one entry per PR-merge / squash / direct
+# commit; the intermediate branch commits ("P1 …", "P2 …") never appear. The
+# whole file is regenerated deterministically from the git tags every time, so
+# the first (oldest) section folds the ENTIRE history and nothing is ever lost.
 
-CHANGELOG_FILE := src/workspace_app/help_content/CHANGELOG.md
+CHANGELOG_MODULE := workspace_app.changelog
 
 .PHONY: changelog-preview
 changelog-preview:
-	@uv run git-cliff --unreleased
+	@uv run python -m $(CHANGELOG_MODULE) --unreleased
 
 .PHONY: release
 release:
@@ -35,8 +36,8 @@ release:
 	echo "release → $$new  (pyproject version $$pep)"; \
 	sed -i "s/^version = .*/version = \"$$pep\"/" pyproject.toml; \
 	uv lock --quiet; \
-	uv run git-cliff --unreleased --tag "$$new" --prepend $(CHANGELOG_FILE); \
-	git add pyproject.toml uv.lock $(CHANGELOG_FILE); \
+	uv run python -m $(CHANGELOG_MODULE) --release-version "$$new" --write; \
+	git add pyproject.toml uv.lock src/workspace_app/help_content/CHANGELOG.md; \
 	git commit -m "bump $$new"; \
 	git tag "$$new"; \
 	echo "✅ 已 commit \"bump $$new\" 並建立本地 tag $$new。接著執行:"; \

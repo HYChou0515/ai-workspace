@@ -137,7 +137,7 @@ export function useItemChat({
   });
 
   const send = useCallback(
-    async (content: string, opts?: { applySkills?: string[] }) => {
+    async (content: string, opts?: { applySkills?: string[]; imagePaths?: string[] }) => {
       const trimmed = content.trim();
       if (!trimmed) return;
       // Flip into "streaming" eagerly so the composer locks; the user message +
@@ -158,6 +158,8 @@ export function useItemChat({
           enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
           // #380: skills queued in the Skills panel to apply THIS turn (one-shot).
           applySkills: opts?.applySkills,
+          // Attached image workspace paths — a VLM main model reads them inline.
+          imagePaths: opts?.imagePaths,
         });
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;

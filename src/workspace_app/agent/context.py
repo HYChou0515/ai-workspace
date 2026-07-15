@@ -144,6 +144,15 @@ class AgentToolContext:
     # memory (#17). Set per-turn by the API layer from the persisted thread; the
     # runner prepends it to this turn's message. Empty for a fresh thread.
     history: list[dict[str, str]] = field(default_factory=list)
+    # Attached images (data: URLs) to inline into THIS turn's user message so a
+    # vision-capable main model sees the pixels directly — no `read_image`
+    # round-trip through the separate VLM. Set per-turn by the API layer ONLY
+    # when the resolved agent is a VLM (`agent_config.vision`); the runner passes
+    # them to `_build_input`, which makes the user message multimodal. Empty for
+    # text-only models (and turns with no attachment) ⇒ the text-only path is
+    # unchanged. The image also persists as a workspace file, so a later turn can
+    # still `read_image` it — the persisted history stays text.
+    turn_image_urls: list[str] = field(default_factory=list)
     # Deploy-level registry of provisionable tool packages (#21, #25). When
     # the sandbox is created, the packages that appear in
     # agent_config.allowed_tools (raw pkg name, or `pkg:cmd` colon syntax) are

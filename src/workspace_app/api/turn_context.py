@@ -24,6 +24,7 @@ into two call sites that can drift.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -51,6 +52,8 @@ if TYPE_CHECKING:
 
 # The sub-agent bridge callable shape (purpose, payload, sink, origin_id, ...).
 RunSubagent = Callable[..., Awaitable[tuple[str, "list[Citation]"]]]
+
+logger = logging.getLogger(__name__)
 
 
 class TurnContextBuilder:
@@ -180,6 +183,7 @@ class TurnContextBuilder:
     ) -> AgentToolContext:
         """The full interactive RCA/workspace-chat turn context (`_send_into`)."""
         session = await self._registry.session(item_id)
+        logger.debug("turn-context: build chat turn for %s", item_id)
         return AgentToolContext(
             **self._common(
                 item_id,
@@ -239,6 +243,7 @@ class TurnContextBuilder:
         dispatcher's self-trigger + depth-cap guards effective on the agent path. None
         for a human/schedule run (a first-level write)."""
         session = await self._registry.session(item_id)
+        logger.debug("turn-context: build workflow turn for %s", item_id)
         return AgentToolContext(
             **self._common(
                 item_id,

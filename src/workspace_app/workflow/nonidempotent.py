@@ -34,6 +34,7 @@ handled *inside* ``act`` per mechanism (an external idempotency key / a send-int
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -44,6 +45,9 @@ from .engine import run_step
 
 if TYPE_CHECKING:
     from .handle import WorkflowHandle
+
+
+logger = logging.getLogger(__name__)
 
 
 class Verdict(Struct):
@@ -108,6 +112,7 @@ async def run_nonidempotent(
         cache=cache,
     )
     verdict = msgspec.convert(verdict_raw, Verdict)
+    logger.info("nonidempotent %s: decide ruled %r (key=%r)", name, verdict.kind, key)
 
     async def _run_act(_feedback: str | None) -> Any:
         return msgspec.to_builtins(await act(verdict))

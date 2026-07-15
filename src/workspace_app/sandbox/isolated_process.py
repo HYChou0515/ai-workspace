@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import shlex
 import subprocess
@@ -32,6 +33,8 @@ import xxhash
 
 from .local_process import _HOME, LocalProcessSandbox, _validate_sandbox_id
 from .protocol import SandboxHandle, SandboxSpec
+
+logger = logging.getLogger(__name__)
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
 _CPU_PERIOD = 100_000
@@ -270,6 +273,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         ws = self._workspace(handle)
         await asyncio.to_thread(self._cgroups.create, handle.id)
         await asyncio.to_thread(self._provision, ws, uid)
+        logger.info("isolated: created sandbox %s uid=%d (uid+cgroup isolation)", handle.id, uid)
         return handle
 
     def _provision(self, workspace: Path, uid: int) -> None:
@@ -287,6 +291,9 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         home = workspace.parent / _HOME
         os.chown(home, uid, -1)
         os.chmod(home, 0o700)
+        logger.debug(
+            "isolated: provisioned %s -> uid=%d (chown 0700 + default ACL)", workspace, uid
+        )
 
     async def kill(self, handle: SandboxHandle) -> None:
         # The cgroup path is DERIVED from the id (no per-pod identity map), so a
@@ -296,6 +303,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         with contextlib.suppress(ValueError):
             cg = self._cgroup_root / _validate_sandbox_id(handle.id)
             await asyncio.to_thread(self._cgroups.remove, cg)
+            logger.debug("isolated: reaped cgroup for sandbox %s", handle.id)
         await super().kill(handle)
 
     def _exec_argv(
@@ -306,4 +314,5 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         cgroup = self._cgroup_root / handle.id
         env["TMPDIR"] = str(cwd)  # per-item tmp inside the workspace
         wrapped = _setpriv_cgroup_argv(argv, uid=uid, gid=uid, cgroup=cgroup)
+        logger.debug("isolated: exec sandbox %s as uid=%d in cgroup %s", handle.id, uid, cgroup)
         return wrapped, cwd, env

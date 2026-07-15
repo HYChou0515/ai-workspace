@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import logging
 import os
 import shutil
 import tarfile
@@ -45,6 +46,8 @@ _WORKDIR = "/workspace"
 # #366: readiness marker OUTSIDE the workspace (container root), so walk never
 # sees it. Deprecated backend — kept only to satisfy the Sandbox protocol.
 _READY_MARKER = "/.ready"
+
+logger = logging.getLogger(__name__)
 
 
 class DockerSandbox:
@@ -76,6 +79,7 @@ class DockerSandbox:
         handle = SandboxHandle(id=str(uuid.uuid4()))
         container = await asyncio.to_thread(self._start_container, spec)
         self._containers[handle.id] = container
+        logger.info("docker: created container for sandbox %s (image %s)", handle.id, spec.image)
         return handle
 
     def _start_container(self, spec: SandboxSpec) -> Container:
@@ -104,6 +108,7 @@ class DockerSandbox:
         container = self._require(handle)
         await asyncio.to_thread(self._stop_and_remove, container)
         del self._containers[handle.id]
+        logger.info("docker: killed container for sandbox %s", handle.id)
 
     @staticmethod
     def _stop_and_remove(container: Container) -> None:
@@ -125,6 +130,7 @@ class DockerSandbox:
         # the sink at the end so callers still see the output.
         if on_output is not None and stdout_b:
             on_output(stdout_b)
+        logger.debug("docker: exec sandbox %s -> exit %s", handle.id, exit_code)
         return ExecResult(
             exit_code=exit_code,
             stdout=stdout_b or b"",
@@ -189,6 +195,7 @@ class DockerSandbox:
         # walk scope — so it never shows up in the file tree or in sync.
         container = self._require(handle)
         await asyncio.to_thread(container.exec_run, ["touch", _READY_MARKER])
+        logger.info("docker: marked sandbox %s ready", handle.id)
 
     async def is_ready(self, handle: SandboxHandle) -> bool:
         container = self._require(handle)

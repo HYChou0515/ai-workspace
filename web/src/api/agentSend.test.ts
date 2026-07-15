@@ -59,4 +59,18 @@ describe("sendMessage request body", () => {
     // #334: the per-message kb_search-count pick reaches the wire.
     expect(body.max_kb_searches).toBe(2);
   });
+
+  it("carries the composer's attached image paths (so a VLM main model sees them)", async () => {
+    // A vision main model reads attached images inline; the BE reads these
+    // workspace paths and inlines the images into the turn. The paths must
+    // reach the wire structurally (not only prepended as text).
+    await realApi.sendMessage({
+      slug: "rca",
+      investigationId: "inv-1",
+      content: "what defect is this?",
+      imagePaths: ["/uploads/shot.png", "/uploads/chart.png"],
+    });
+    const body = JSON.parse(captured.bodies[0]!);
+    expect(body.image_paths).toEqual(["/uploads/shot.png", "/uploads/chart.png"]);
+  });
 });

@@ -9,6 +9,7 @@ allocates the permanent number, renders the skeleton, and writes the file;
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import msgspec
@@ -21,6 +22,8 @@ from .parser import ParsedEntity, parse_entity, serialize_entity
 from .projection import Corpus, compute_derived
 from .schema import Role
 from .skeleton import render_skeleton
+
+logger = logging.getLogger(__name__)
 
 
 class EntityConflict(Exception):
@@ -109,9 +112,15 @@ class EntityStore:
                     )
                     break
                 except FileExists:
+                    logger.debug(
+                        "store: %s #%d already claimed, walking to next number",
+                        type_name,
+                        number,
+                    )
                     number += 1
             await record_high_water(self._fs, self._ws, records_path, number)
         created = parse_entity(text.encode(), number, type_name, entity_type.schema)
+        logger.info("store: created %s #%d in %s (actor=%s)", type_name, number, self._ws, actor)
         await self._emit(created, "created", actor, origin)
         return created
 
@@ -147,6 +156,13 @@ class EntityStore:
                 await self._fs.read(self._ws, path), number, type_name, entity_type.schema
             )
             if expected_version is not None and expected_version != current.version:
+                logger.warning(
+                    "store: %s #%d version conflict (expected %s, now %s)",
+                    type_name,
+                    number,
+                    expected_version,
+                    current.version,
+                )
                 raise EntityConflict(
                     f"{type_name} #{number} changed since you read it "
                     f"(expected {expected_version}, now {current.version})"
@@ -155,6 +171,7 @@ class EntityStore:
             text = serialize_entity({**current.fields, **patch}, new_body)
             await self._fs.write(self._ws, path, text.encode())
         updated = parse_entity(text.encode(), number, type_name, entity_type.schema)
+        logger.info("store: updated %s #%d in %s (actor=%s)", type_name, number, self._ws, actor)
         await self._emit(updated, "updated", actor, origin)
         return updated
 
@@ -166,6 +183,13 @@ class EntityStore:
         if self._on_write is None:
             return
         records_path = self._catalog.get(entity.type_name).records_path
+        logger.debug(
+            "store: dispatching %s event for %s #%d in %s",
+            action,
+            entity.type_name,
+            entity.number,
+            self._ws,
+        )
         await self._on_write(
             EntityWriteEvent(
                 item_id=self._ws,
@@ -181,6 +205,7 @@ class EntityStore:
         )
 
     async def _parse_type(self, type_name: str) -> list[ParsedEntity]:
+        logger.debug("store: scanning %s records in %s", type_name, self._ws)
         entity_type = self._catalog.get(type_name)
         paths = await self._fs.ls(self._ws, prefix=f"/{entity_type.records_path}/")
         numbered = sorted((n, p) for p in paths if (n := _record_number(p)) is not None)
@@ -216,6 +241,10 @@ class EntityStore:
         parsed = await self._parse_type(type_name)
         ok = [e for e in parsed if e.ok]
         if any(f.role in (Role.BACKREF, Role.ROLLUP) for f in entity_type.schema.fields):
+            logger.debug(
+                "store: %s has backref/rollup fields, computing relational projection",
+                type_name,
+            )
             corpus = await self._corpus()
             for entity in ok:
                 entity.fields.update(compute_derived(entity, entity_type.schema, corpus))

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Callable
 
 import msgspec
@@ -36,6 +37,8 @@ from .turns import ChatTurnEngine
 # flaky "no insight written" under GC pressure on a loaded CI runner. Keep a
 # strong reference until each task finishes, discarding it on completion.
 _promote_tasks: set[asyncio.Task[list[str]]] = set()
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def register_item_routes(
@@ -97,28 +100,44 @@ def register_item_routes(
         except msgspec.ValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         rev = spec.get_resource_manager(model).create(item)
-        seeded = await seed_item(
-            filestore, rev.resource_id, slug, item.profile, case_from_item(item)
-        )
-        # #280: seed the item's collections.json from the profile's DEFAULT collection
-        # set (declared by name + tier), resolving names → live ids. The picker / Monaco
-        # then edit it. Unresolvable names are skipped; an empty/undeclared default
-        # leaves whatever seed_item wrote (e.g. topic-hub's collections.json.tpl) alone.
-        from ..apps.profiles import load_profile
-        from ..kb.collections import resolve_profile_collections
-
-        declared = [(c.name, c.tier) for c in load_profile(slug, item.profile).collections]
-        rows = resolve_profile_collections(spec, declared)
-        if rows:
-            await filestore.write(
-                rev.resource_id, "/collections.json", json.dumps(rows, indent=2).encode()
+        # The item ROW now exists. Seeding its starter files + collections + the
+        # activity entry are BEST-EFFORT: if any of them raises, the create must still
+        # succeed (return the id) rather than 500 and strand the user on a frozen
+        # modal — the item was created, so the FE should navigate into it, and the
+        # workspace just starts emptier. The failure is logged (with the id) so an
+        # operator can still see it. Without this, a post-create hiccup created the
+        # item but the client saw an error → "pressed Create, nothing happened".
+        seeded: list[str] = []
+        try:
+            seeded = await seed_item(
+                filestore, rev.resource_id, slug, item.profile, case_from_item(item)
             )
-            seeded = sorted({*seeded, "/collections.json"})
-        activity.record(
-            "item_created",
-            f"Created “{item.title}”",
-            {"item_id": rev.resource_id},
-        )
+            # #280: seed the item's collections.json from the profile's DEFAULT
+            # collection set (declared by name + tier), resolving names → live ids. The
+            # picker / Monaco then edit it. Unresolvable names are skipped; an
+            # empty/undeclared default leaves whatever seed_item wrote alone.
+            from ..apps.profiles import load_profile
+            from ..kb.collections import resolve_profile_collections
+
+            declared = [(c.name, c.tier) for c in load_profile(slug, item.profile).collections]
+            rows = resolve_profile_collections(spec, declared)
+            if rows:
+                await filestore.write(
+                    rev.resource_id, "/collections.json", json.dumps(rows, indent=2).encode()
+                )
+                seeded = sorted({*seeded, "/collections.json"})
+        except Exception:  # noqa: BLE001 — best-effort seeding must not sink the create
+            _LOGGER.exception(
+                "create_app_item: post-create seeding failed for %s (app=%s profile=%s) — "
+                "the item was created; returning it so the client still navigates",
+                rev.resource_id,
+                slug,
+                item.profile,
+            )
+        try:
+            activity.record("item_created", f"Created “{item.title}”", {"item_id": rev.resource_id})
+        except Exception:  # noqa: BLE001 — the activity log is not worth failing a create over
+            _LOGGER.exception("create_app_item: activity.record failed for %s", rev.resource_id)
         return {
             "resource_id": rev.resource_id,
             "app": slug,

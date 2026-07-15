@@ -9,12 +9,15 @@ is a view concern resolved by the renderer, not here.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .parser import ParsedEntity
 from .schema import EntitySchema, Role
 
 Corpus = dict[str, dict[int, ParsedEntity]]
+
+logger = logging.getLogger(__name__)
 
 
 def _as_int(value: Any) -> int | None:
@@ -48,6 +51,11 @@ def _backref_numbers(from_: str, target_number: int, corpus: Corpus) -> list[int
 def _rollup(spec, schema: EntitySchema, target_number: int, corpus: Corpus) -> Any:
     over = schema.field(spec.over) if spec.over else None
     if over is None or over.role is not Role.BACKREF or not over.from_:
+        logger.debug(
+            "projection: rollup over=%r not a valid backref for #%d -> None",
+            spec.over,
+            target_number,
+        )
         return None
     src_type, src_field = over.from_.split(".", 1)
     matched = [

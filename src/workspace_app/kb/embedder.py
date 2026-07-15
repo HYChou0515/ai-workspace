@@ -12,6 +12,7 @@ the precedent being MockSandbox. `LitellmEmbedder` is the production path
 from __future__ import annotations
 
 import hashlib
+import logging
 import struct
 import time
 from collections.abc import Callable, Sequence
@@ -20,6 +21,8 @@ from typing import Protocol
 from ..failover.core import CallProvider
 from ..failover.observe import make_switch_logger
 from ..failover.retry import call_with_failover
+
+logger = logging.getLogger(__name__)
 
 
 class Embedder(Protocol):
@@ -168,6 +171,12 @@ class LitellmEmbedder(_PrefixedEmbedder):
         # request can't be huge (and slow to the point of timing out). Order is
         # preserved across batches.
         out: list[list[float]] = []
+        logger.debug(
+            "embedder: embedding %d texts (model=%s, batch=%d)",
+            len(texts),
+            self._model,
+            self._batch_size,
+        )
         for i in range(0, len(texts), self._batch_size):
             out.extend(self._embed_batch(texts[i : i + self._batch_size]))
         return out

@@ -823,6 +823,7 @@ def _build_preset(d: dict[str, Any]) -> Preset:
     raw_at = d.get("allowed_tools")
     return Preset(
         model=d["model"],
+        vision=bool(d.get("vision", False)),
         prompt_file=d.get("prompt_file", ""),
         description=d.get("description", ""),
         suggestions=list(d.get("suggestions", [])),

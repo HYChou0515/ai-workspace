@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -28,6 +28,7 @@ from agents import (
     ModelSettings,
     RunConfig,
     Runner,
+    ToolOutputImage,
 )
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
@@ -106,12 +107,31 @@ def _approx_tokens(chars: int) -> int:
     return round(chars / 4)
 
 
-def _build_input(history: list[dict[str, str]], prompt: str) -> str | list[dict[str, str]]:
+def _build_input(
+    history: list[dict[str, str]],
+    prompt: str,
+    image_urls: Sequence[str] = (),
+) -> str | list[dict[str, Any]]:
     """The SDK `input` for this turn: a plain string when there's no history,
     else the prior dialogue items followed by this turn's user message — so the
-    agent has cross-turn memory (#17)."""
+    agent has cross-turn memory (#17).
+
+    `image_urls` (data: URLs) are inlined into THIS turn's user message as
+    `input_image` parts so a vision-capable main model sees the attached images
+    directly — no `read_image` round-trip through the separate VLM. Only the
+    live turn's message is multimodal; the persisted history stays text (the
+    image also lives on as a workspace file the model can `read_image` later).
+    Empty ⇒ the text-only path is byte-for-byte unchanged."""
+    user_content: str | list[dict[str, Any]] = prompt
+    if image_urls:
+        user_content = [
+            {"type": "input_text", "text": prompt},
+            *({"type": "input_image", "image_url": url} for url in image_urls),
+        ]
     if not history:
-        return prompt
+        # No history + no images → keep the bare-string fast path; multimodal
+        # content still needs a message list even without history.
+        return prompt if not image_urls else [{"role": "user", "content": user_content}]
     # #199 — the SDK prepends the system prompt itself, so the replayed history
     # must never carry a `system` item; a mid-conversation one makes providers
     # reject the call with "system message must be at the beginning". Fail loud
@@ -119,7 +139,7 @@ def _build_input(history: list[dict[str, str]], prompt: str) -> str | list[dict[
     assert not any(m.get("role") == "system" for m in history), (
         "history must not contain a system message"
     )
-    return [*history, {"role": "user", "content": prompt}]
+    return [*history, {"role": "user", "content": user_content}]
 
 
 def _delta_channel(event_type: str) -> Literal["content", "reasoning", "ignore"]:
@@ -555,9 +575,21 @@ def _map_event(event: Any) -> AgentEvent | None:
     if name == "tool_output":
         # raw_item is a FunctionCallOutput TypedDict (dict) on the LiteLLM
         # path — read call_id via _raw_field, not getattr.
+        raw_out = getattr(item, "output", "")
+        # `read_image` hands a vision main model the raw image as a
+        # `ToolOutputImage`; the model sees the pixels via the SDK's own
+        # function_call_output (an input_image part). Our event/persistence layer
+        # must NOT stringify it — a `str(ToolOutputImage)` repr embeds the whole
+        # base64 data URL, which would bloat the SSE stream and, worse, replay as
+        # a giant text blob into the next turn's context. Surface a concise note.
+        out_text = (
+            "[image read directly by the vision model]"
+            if isinstance(raw_out, ToolOutputImage)
+            else str(raw_out)
+        )
         return ToolEnd(
             call_id=_call_id(item.raw_item),
-            output=str(getattr(item, "output", "")),
+            output=out_text,
         )
     # message_output_created carries the FULL assistant message; we stream
     # the incremental token deltas (raw_response_event) in _run_once instead,
@@ -696,6 +728,10 @@ class LitellmAgentRunner:
         # catalogs). A None here means resolution failed upstream — fail loud
         # rather than run some default agent the operator never picked.
         if ctx.agent_config is None:
+            _LOGGER.warning(
+                "litellm_runner: no agent config resolved for turn (investigation=%s)",
+                ctx.investigation_id,
+            )
             yield RunError(
                 message="no agent config resolved for this turn — the item could not "
                 "be matched to an App (check the item id / App registration)"
@@ -730,6 +766,10 @@ class LitellmAgentRunner:
                 # The agent burned through its turn budget — terminal, no
                 # retry would help. The SDK exception only carries a message,
                 # so we report our own configured ceiling (never a bare 0).
+                _LOGGER.warning(
+                    "litellm_runner: turn exceeded max turns (investigation=%s) — terminal",
+                    ctx.investigation_id,
+                )
                 yield MaxTurnsExceeded(turns=ctx.max_turns or self._max_turns)
                 yield RunDone()
                 return
@@ -738,6 +778,13 @@ class LitellmAgentRunner:
                 if not _should_retry(
                     progress_made=progress_made, attempt=attempt, max_retries=self._max_retries
                 ):
+                    _LOGGER.warning(
+                        "litellm_runner: turn stopped after %d attempt(s), not retrying "
+                        "(%r) (investigation=%s)",
+                        attempt,
+                        exc,
+                        ctx.investigation_id,
+                    )
                     if progress_made:
                         # Don't pretend "giving up after N attempts" — we
                         # made exactly one attempt; it produced output and
@@ -750,6 +797,13 @@ class LitellmAgentRunner:
                         )
                     yield RunDone()
                     return
+                _LOGGER.warning(
+                    "litellm_runner: turn attempt %d failed (%r) — retrying with hint "
+                    "(investigation=%s)",
+                    attempt,
+                    exc,
+                    ctx.investigation_id,
+                )
                 feedback = diagnose_error(exc)
                 yield classify_retry_event(exc, feedback)
 
@@ -806,7 +860,7 @@ class LitellmAgentRunner:
         )
         streamed = Runner.run_streamed(
             agent,
-            input=_build_input(ctx.history, prompt),  # ty: ignore[invalid-argument-type]
+            input=_build_input(ctx.history, prompt, ctx.turn_image_urls),  # ty: ignore[invalid-argument-type]
             context=ctx,
             max_turns=ctx.max_turns or self._max_turns,
             run_config=run_config,
@@ -953,7 +1007,7 @@ class LitellmAgentRunner:
         )
         result = await Runner.run(
             agent,
-            input=_build_input(ctx.history, prompt),  # ty: ignore[invalid-argument-type]
+            input=_build_input(ctx.history, prompt, ctx.turn_image_urls),  # ty: ignore[invalid-argument-type]
             context=ctx,
             max_turns=ctx.max_turns or self._max_turns,
             run_config=run_config,
