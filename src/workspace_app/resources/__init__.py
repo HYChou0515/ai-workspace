@@ -39,6 +39,7 @@ from .conversation import Conversation, Message
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
+    ClusterMember,
     CodeWikiBuildRun,
     Collection,
     ContextCard,
@@ -65,6 +66,7 @@ __all__ = [
     "AgentConfig",
     "CachedChunk",
     "CitationEvent",
+    "ClusterMember",
     "CodeWikiBuildRun",
     "Collection",
     "ContextCard",
@@ -428,12 +430,29 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # staging structs live in kb.card_gen (next to ProposedCard/DocDigest, so they
     # carry those typed fields directly); imported LAZILY here — a top-level import
     # would cycle (resources → kb.card_gen → kb.context_cards → resources).
-    from ..kb.card_gen import CardGenRun, CardGenUnit
+    from ..kb.card_gen import CardGenRun, CardGenUnit, CardProposal
 
-    spec.add_model(CardGenRun, indexed_fields=["status"])
+    # #506: ``collection_id`` newly indexed so the per-collection 待審核 tab queries
+    # ``(collection_id, status)`` instead of scanning every collection's runs. It's a
+    # NEW index, so existing rows (version ``None``) carry no extracted
+    # ``collection_id`` and the scoped query would MISS old pending runs — exactly the
+    # backlog we're trying to speed up. A no-op ``Schema("v2")`` reindex step lets an
+    # operator backfill them via ``POST /card-gen-run/migrate/execute`` (new rows are
+    # indexed on write); until then the GLOBAL inbox (status-only query) still sees
+    # every row, so nothing is lost, only the per-collection tab under-counts old rows.
+    spec.add_model(
+        Schema(CardGenRun, "v2").step(None, _reindex_only, to="v2", source_type=CardGenRun),
+        indexed_fields=["status", "collection_id"],
+    )
     # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
     # to merge + raise questions from). Transient; deleted at finalize.
     spec.add_model(CardGenUnit, indexed_fields=["run_id"])
+    # #511: proposals as first-class rows (extracted from CardGenRun.proposals) so
+    # the 待審核 views page via native offset/limit. collection_id + decision indexed
+    # → the flat "active proposals in this collection" query; run_id indexed → list
+    # a run's proposals (finalize idempotency check + commit). Ordered by meta
+    # created_time (no index needed, like the doc list). id = prop:{run}:{pid}.
+    spec.add_model(CardProposal, indexed_fields=["collection_id", "run_id", "decision"])
     # Issue #50: collection_id indexed so a wiki's pages list (WikiFileStore.ls)
     # is a query, not a full scan.
     spec.add_model(WikiPage, indexed_fields=["collection_id"])
@@ -471,6 +490,16 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # → term-question dedup is an exact element lookup; kind indexed → split term vs
     # description without a scan.
     spec.add_model(DocQuestion, indexed_fields=["collection_id", "status", "kind", "norm_key"])
+    # #506 P6 reconcile projection. collection_id scopes the native cosine query;
+    # cluster_key indexed → the inbox's GROUP BY (one row per concept, P7);
+    # state indexed → hide suppressed/inactive members without a scan; norm_key
+    # indexed → the deterministic exact-match fast path; kind indexed → grade against
+    # card members only + split proposal/term_question in the inbox. The `embedding`
+    # Vector is declared on the struct (Annotated[..., Vector]) — NOT an indexed_field.
+    spec.add_model(
+        ClusterMember,
+        indexed_fields=["collection_id", "cluster_key", "state", "norm_key", "kind"],
+    )
     # recipient indexed so "my notifications" is a query, not a full scan; dedup_key
     # indexed so a workflow send_notification's "already sent?" is a query (#435 P5).
     spec.add_model(Notification, indexed_fields=["recipient", "dedup_key"])

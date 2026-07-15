@@ -71,21 +71,6 @@ describe("ReviewTable", () => {
     expect(screen.getAllByText("Alpha").length).toBeGreaterThanOrEqual(2);
   });
 
-  it("hides read-only (non-actionable) rows when 'only actionable' is checked", () => {
-    render(
-      <ReviewTable
-        cards={[card(), card({ collection_name: "Locked", can_act: false, card: { ...card().card, id: "1", title: "Hidden" } })]}
-        questions={[]}
-        resolved={false}
-        actions={fakeActions()}
-      />,
-    );
-    expect(screen.getByText("Hidden")).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText("只看我能操作的"));
-    expect(screen.queryByText("Hidden")).not.toBeInTheDocument();
-    expect(screen.getByText("Reflow Zone 3")).toBeInTheDocument();
-  });
-
   it("shows a read-only marker and no accept button for a non-actionable card", () => {
     render(
       <ReviewTable
@@ -116,20 +101,6 @@ describe("ReviewTable", () => {
     fireEvent.click(screen.getByLabelText("選取"));
     fireEvent.click(screen.getByRole("button", { name: /套用選取/ }));
     expect(actions.commit.mutate).toHaveBeenCalledWith([{ run_id: "run-aaaa", card_id: "0" }]);
-  });
-
-  it("filters rows by the search box", () => {
-    render(
-      <ReviewTable
-        cards={[card(), card({ card: { ...card().card, id: "1", title: "Metal Four", keys: ["M4"] } })]}
-        questions={[]}
-        resolved={false}
-        actions={fakeActions()}
-      />,
-    );
-    fireEvent.change(screen.getByLabelText("搜尋標題、詞彙、問題…"), { target: { value: "metal" } });
-    expect(screen.getByText("Metal Four")).toBeInTheDocument();
-    expect(screen.queryByText("Reflow Zone 3")).not.toBeInTheDocument();
   });
 
   it("opens the drawer on a question row and answers it", () => {

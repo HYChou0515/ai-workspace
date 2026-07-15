@@ -50,7 +50,10 @@ class LlmCardDrafter:
         self._template = prompt_template or _DEFAULT_PROMPT
         self._max_cards = max_cards
 
-    def digest(self, *, doc_path: str, doc_text: str) -> DocDigest:
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = "") -> DocDigest:
+        # collection_id is unused here: the one-shot drafter sees only the document
+        # (that's exactly the open loop #506's agentic drafter closes). Accepted so
+        # both drafters satisfy the one CardDrafter signature the coordinator calls.
         # recover_reasoning (#494): a vLLM reasoning model can route the JSON reply
         # into the reasoning channel (max_tokens before </think>), leaving content
         # empty; recover it so the drafter parses the answer instead of silently
@@ -68,7 +71,7 @@ class NullCardDrafter:
     with zero proposals / no questions) instead of 503-ing, so the FE degrades
     cleanly."""
 
-    def digest(self, *, doc_path: str, doc_text: str) -> DocDigest:
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = "") -> DocDigest:
         return DocDigest()
 
 

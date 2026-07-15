@@ -48,7 +48,7 @@ class _FakeDrafter:
         self._cards = cards
         self._term_qs = term_qs or {}
 
-    def digest(self, *, doc_path: str, doc_text: str):
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = ""):
         from workspace_app.kb.card_gen import DocDigest
 
         return DocDigest(
@@ -57,9 +57,25 @@ class _FakeDrafter:
         )
 
 
-def _coord(spec, by_path, *, term_qs=None, owner="u") -> CardGenCoordinator:
+def _reconciler(spec):
+    """A real finalize reconciler that projects each candidate into a ClusterMember —
+    the grouped view (#511 P4) pages over those. High taus keep every candidate its
+    OWN concept (no suppress / merge), so a grouped test gets one row per item unless
+    it wires the members itself (the merge case)."""
+    from workspace_app.kb.embedder import HashEmbedder
+    from workspace_app.kb.reconcile import Reconciler
+    from workspace_app.resources.kb import EMBED_DIM
+
+    return Reconciler(
+        spec, HashEmbedder(dim=EMBED_DIM), cluster_tau=1.01, suppress_tau=1.01, update_tau=1.01
+    )
+
+
+def _coord(spec, by_path, *, term_qs=None, owner="u", reconciler=None) -> CardGenCoordinator:
     """One coordinator per spec (a second registration of the job model raises)."""
-    return CardGenCoordinator(spec, _FakeDrafter(by_path, term_qs), get_user_id=lambda: owner)
+    return CardGenCoordinator(
+        spec, _FakeDrafter(by_path, term_qs), get_user_id=lambda: owner, reconciler=reconciler
+    )
 
 
 async def _run_one(coord, spec, cid, path="a.md", *, owner="u") -> None:
@@ -68,8 +84,10 @@ async def _run_one(coord, spec, cid, path="a.md", *, owner="u") -> None:
     await coord.aclose()
 
 
-async def _seed_run(spec, cid, *, owner="u", cards=None, term_qs=None) -> CardGenCoordinator:
-    coord = _coord(spec, cards or {}, term_qs=term_qs, owner=owner)
+async def _seed_run(
+    spec, cid, *, owner="u", cards=None, term_qs=None, reconciler=None
+) -> CardGenCoordinator:
+    coord = _coord(spec, cards or {}, term_qs=term_qs, owner=owner, reconciler=reconciler)
     await _run_one(coord, spec, cid, owner=owner)
     return coord
 
@@ -175,9 +193,486 @@ async def test_inbox_can_scope_to_one_collection():
     assert [i.card.keys for i in inbox.cards] == [["A"]]
 
 
+async def test_inbox_limit_caps_the_page_and_reports_total():
+    """P1 pagination tracer: ``limit`` caps how many items a single page returns,
+    while ``total`` still reports the full filtered count so the FE can render
+    "showing X of N"."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={
+            "a.md": [
+                CardDraft(keys=["RZ3"], title="RZ3", snippet="s"),
+                CardDraft(keys=["RZ4"], title="RZ4", snippet="s"),
+                CardDraft(keys=["RZ5"], title="RZ5", snippet="s"),
+            ]
+        },
+    )
+    inbox = build_review_inbox(spec, actor=Actor.human("u"), limit=2)
+    assert len(inbox.cards) + len(inbox.questions) == 2  # a single page, capped
+    assert inbox.total == 3  # the full count, independent of the page size
+
+
+async def test_offset_pages_through_the_stream_without_overlap_or_gaps():
+    """P1 pagination: successive ``offset`` windows partition the full stream —
+    every item appears on exactly one page, none twice."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={
+            "a.md": [
+                CardDraft(keys=["RZ3"], title="RZ3", snippet="s"),
+                CardDraft(keys=["RZ4"], title="RZ4", snippet="s"),
+                CardDraft(keys=["RZ5"], title="RZ5", snippet="s"),
+            ]
+        },
+    )
+
+    def keys(inbox) -> set[str]:
+        return {c.card.keys[0] for c in inbox.cards}
+
+    p1 = build_review_inbox(spec, actor=Actor.human("u"), limit=2, offset=0)
+    p2 = build_review_inbox(spec, actor=Actor.human("u"), limit=2, offset=2)
+    assert len(p1.cards) == 2 and len(p2.cards) == 1
+    assert p1.total == 3 and p2.total == 3  # total is the full count on every page
+    assert keys(p1) | keys(p2) == {"RZ3", "RZ4", "RZ5"}  # complete
+    assert keys(p1) & keys(p2) == set()  # disjoint
+
+
+async def test_kind_filter_returns_only_that_stream_and_total_reflects_it():
+    """P1 server filter: ``kind`` narrows the page to one stream so the FE need not
+    over-fetch the other; ``total`` counts only the filtered kind."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+    )
+    cards_only = build_review_inbox(spec, actor=Actor.human("u"), kind="cards")
+    assert len(cards_only.cards) == 1 and cards_only.questions == []
+    assert cards_only.total == 1  # the question is excluded from the count
+
+    qs_only = build_review_inbox(spec, actor=Actor.human("u"), kind="questions")
+    assert qs_only.cards == [] and len(qs_only.questions) == 1
+    assert qs_only.total == 1
+
+    both = build_review_inbox(spec, actor=Actor.human("u"))  # kind defaults to "all"
+    assert both.total == 2
+
+
+async def test_q_filters_across_the_whole_stream_case_insensitively():
+    """P1 server filter: ``q`` is a case-insensitive substring over a card's
+    title/body/keys and a question's term/text/quote — applied to the *whole* set
+    (so a match on page 5 still surfaces), not just the current page."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={
+            "a.md": [
+                CardDraft(keys=["RZ3"], title="RZ3", body="reflow zone three"),
+                CardDraft(keys=["XY9"], title="XY9", body="gamma"),
+            ]
+        },
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+    )
+    by_body = build_review_inbox(spec, actor=Actor.human("u"), q="Reflow")  # card body, mixed case
+    assert [c.card.keys[0] for c in by_body.cards] == ["RZ3"]
+    assert by_body.questions == [] and by_body.total == 1
+
+    by_q = build_review_inbox(spec, actor=Actor.human("u"), q="r7")  # only the question
+    assert by_q.cards == [] and [q.question.term for q in by_q.questions] == ["R7"]
+    assert by_q.total == 1
+
+
+async def test_actionable_filter_and_total_actionable_count():
+    """P1: ``actionable=True`` keeps only rows the actor may write (the nav badge's
+    "what can I act on"); ``total_actionable`` reports that count over the whole
+    filtered set so the badge can read it from an empty (``limit=0``) page."""
+    spec = make_spec(default_user="owner")
+    coll_act = _collection(
+        spec,
+        "Act",
+        owner="owner",
+        permission=Permission(
+            visibility="restricted", read_content=["user:u"], add_content=["user:u"]
+        ),
+    )
+    coll_ro = _collection(
+        spec,
+        "RO",
+        owner="owner",
+        permission=Permission(visibility="restricted", read_content=["user:u"]),
+    )
+    coord = _coord(
+        spec,
+        {
+            "act.md": [CardDraft(keys=["A"], title="A", body="a")],
+            "ro.md": [CardDraft(keys=["B"], title="B", body="b")],
+        },
+        owner="owner",
+    )
+    da = _add_source(spec, coll_act, "act.md", "x", owner="owner")
+    dr = _add_source(spec, coll_ro, "ro.md", "y", owner="owner")
+    coord.enqueue(coll_act, [da])
+    coord.enqueue(coll_ro, [dr])
+    await coord.aclose()
+
+    actor = Actor.human("u")
+    full = build_review_inbox(spec, actor=actor)
+    assert full.total == 2
+    assert full.total_actionable == 1  # only the "Act" collection's card is writable by u
+
+    only_act = build_review_inbox(spec, actor=actor, actionable=True)
+    assert [c.card.keys[0] for c in only_act.cards] == ["A"]
+    assert only_act.total == 1
+
+
 def test_msgspec_roundtrip_of_the_inbox_structs():
     """The inbox structs serialise cleanly (they cross the wire via the route)."""
     from workspace_app.kb.review_inbox import ReviewInbox
 
     empty = ReviewInbox(cards=[], questions=[])
     assert msgspec.json.decode(msgspec.json.encode(empty), type=ReviewInbox) == empty
+
+
+def _cluster_member(
+    spec,
+    cid,
+    *,
+    kind,
+    ref_id,
+    run_id="",
+    cluster_key,
+    state="active",
+    reason="",
+    label="",
+    member_id=None,
+):
+    from workspace_app.resources.kb import ClusterMember
+
+    member = ClusterMember(
+        collection_id=cid,
+        kind=kind,
+        ref_id=ref_id,
+        run_id=run_id,
+        cluster_key=cluster_key,
+        state=state,
+        reason=reason,
+        label=label,
+    )
+    rm = spec.get_resource_manager(ClusterMember)
+    # A proposal member is addressed by the SAME id as its CardProposal
+    # (prop:{run}:{pid}), so the grouped view resolves it back by id (#511 P4);
+    # a suppressed/audit member's id is irrelevant (read by ref_id / directly).
+    if member_id is None:
+        rm.create(member)
+    else:
+        rm.create_or_update(member_id, member)
+
+
+async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():
+    """#506 P7: with grouped=True the inbox returns one ReviewCluster per concept —
+    a proposal + a question the reconcile step put in one cluster collapse to a
+    single row (⑤), and the flat cards/questions lists are empty (the FE reads
+    clusters)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+    )
+    flat = build_review_inbox(spec, actor=Actor.human("u"))
+    run_id, card_id, qid = flat.cards[0].run_id, flat.cards[0].card.id, flat.questions[0].qid
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id=card_id,
+        run_id=run_id,
+        cluster_key="rz3",
+        member_id=f"prop:{run_id}:{card_id}",
+    )
+    _cluster_member(spec, cid, kind="term_question", ref_id=qid, cluster_key="rz3")
+
+    grouped = build_review_inbox(spec, actor=Actor.human("u"), grouped=True)
+
+    assert grouped.total == 1
+    assert grouped.cards == [] and grouped.questions == []
+    (cl,) = grouped.clusters
+    assert cl.cluster_key == "rz3"
+    assert len(cl.cards) == 1 and len(cl.questions) == 1
+
+
+async def test_suppressed_audit_lists_dropped_candidates_with_reason():
+    """#506 P7: the suppressed filter surfaces what the reconcile step auto-dropped
+    (already explained) — each with its reason + label — so a human can audit that
+    nothing was wrongly discarded. Dropped candidates aren't on any run, so they come
+    straight from the suppressed ClusterMembers."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="0",
+        run_id="r1",
+        cluster_key="alpha",
+        state="suppressed",
+        reason="wiki",
+        label="Alpha",
+    )
+
+    audit = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True)
+
+    assert audit.cards == [] and audit.questions == [] and audit.clusters == []
+    (s,) = audit.suppressed
+    assert s.label == "Alpha"
+    assert s.reason == "wiki"
+    assert s.kind == "proposal"
+    assert s.collection_name == "Alpha"
+
+
+async def test_suppressed_audit_hidden_from_the_default_view():
+    """A suppressed candidate never appears in the normal (active) inbox."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _cluster_member(
+        spec, cid, kind="proposal", ref_id="0", run_id="r1", cluster_key="a", state="suppressed"
+    )
+    normal = build_review_inbox(spec, actor=Actor.human("u"))
+    assert normal.cards == [] and normal.suppressed == []
+
+
+async def test_grouped_respects_the_kind_and_q_filters():
+    """#511 P3: the grouped view still honours ``kind`` (which stream to cluster) and
+    ``q`` (text filter) — it loads the whole merged set (native paging is P4), so
+    these filters run in Python before clustering."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+        reconciler=_reconciler(spec),
+    )
+    actor = Actor.human("u")
+    cards_only = build_review_inbox(spec, actor=actor, grouped=True, kind="cards")
+    assert cards_only.total == 1 and all(not cl.questions for cl in cards_only.clusters)
+    qs_only = build_review_inbox(spec, actor=actor, grouped=True, kind="questions")
+    assert qs_only.total == 1 and all(not cl.cards for cl in qs_only.clusters)
+    by_q = build_review_inbox(spec, actor=actor, grouped=True, q="rz3")
+    assert sum(len(cl.cards) for cl in by_q.clusters) == 1  # the RZ3 card matches
+    assert sum(len(cl.questions) for cl in by_q.clusters) == 0  # the R7 question filtered out
+
+
+async def test_grouped_q_fallback_honours_kind_and_actionable():
+    """The grouped ``q`` fallback (a text filter can't push to the DB) still respects
+    the type filter (which stream to cluster) and the actionable filter — the branches
+    the native page doesn't run."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+        reconciler=_reconciler(spec),
+    )
+    actor = Actor.human("u")
+    # kind="cards" + q → only the card stream is loaded + filtered (skips questions)
+    cards = build_review_inbox(spec, actor=actor, grouped=True, q="rz3", kind="cards")
+    assert cards.total == 1 and all(not cl.questions for cl in cards.clusters)
+    # kind="questions" + q → only the question stream (skips cards)
+    qs = build_review_inbox(spec, actor=actor, grouped=True, q="r7", kind="questions")
+    assert qs.total == 1 and all(not cl.cards for cl in qs.clusters)
+    # actionable + q → keeps only writable concepts (the owner may write → kept)
+    act = build_review_inbox(spec, actor=actor, grouped=True, q="rz3", actionable=True)
+    assert act.total == 1
+
+
+async def test_grouped_actionable_drops_readonly_clusters():
+    """``actionable=True`` on the grouped view keeps only clusters the actor may
+    write to (a cluster is actionable if any member is)."""
+    spec = make_spec(default_user="owner")
+    coll_act = _collection(
+        spec,
+        "Act",
+        owner="owner",
+        permission=Permission(
+            visibility="restricted", read_content=["user:u"], add_content=["user:u"]
+        ),
+    )
+    coll_ro = _collection(
+        spec,
+        "RO",
+        owner="owner",
+        permission=Permission(visibility="restricted", read_content=["user:u"]),
+    )
+    coord = _coord(
+        spec,
+        {"act.md": [CardDraft(keys=["A"], title="A")], "ro.md": [CardDraft(keys=["B"], title="B")]},
+        owner="owner",
+        reconciler=_reconciler(spec),
+    )
+    coord.enqueue(coll_act, [_add_source(spec, coll_act, "act.md", "x", owner="owner")])
+    coord.enqueue(coll_ro, [_add_source(spec, coll_ro, "ro.md", "y", owner="owner")])
+    await coord.aclose()
+
+    actor = Actor.human("u")
+    assert build_review_inbox(spec, actor=actor, grouped=True).total == 2
+    only_act = build_review_inbox(spec, actor=actor, grouped=True, actionable=True)
+    assert only_act.total == 1
+    assert [c.card.keys[0] for cl in only_act.clusters for c in cl.cards] == ["A"]
+
+
+async def test_grouped_pages_concepts_natively_with_a_full_total():
+    """#511 P4: the grouped view pages ONE row per concept NATIVELY (a ClusterMember
+    GROUP BY at the DB), so each page is bounded no matter the backlog — ``total`` is
+    the full distinct-concept count and the pages neither overlap nor gap."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=[f"K{i}"], title=f"C{i}") for i in range(5)]},
+        reconciler=_reconciler(spec),
+    )
+    actor = Actor.human("u")
+    p1 = build_review_inbox(spec, actor=actor, grouped=True, limit=2, offset=0)
+    p2 = build_review_inbox(spec, actor=actor, grouped=True, limit=2, offset=2)
+    p3 = build_review_inbox(spec, actor=actor, grouped=True, limit=2, offset=4)
+    assert p1.total == 5
+    assert [len(p.clusters) for p in (p1, p2, p3)] == [2, 2, 1]
+    seen = {cl.cluster_key for p in (p1, p2, p3) for cl in p.clusters}
+    assert len(seen) == 5  # no overlap / gap across pages
+
+
+async def test_grouped_drops_a_resolved_concept_from_the_active_view():
+    """Resolving a proposal de-joins its ClusterMember (#511 P4 state sync), so its
+    concept leaves the grouped ACTIVE view + total — the native GROUP BY counts only
+    still-active members, no stale concept."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    coord = await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["A"], title="A"), CardDraft(keys=["B"], title="B")]},
+        reconciler=_reconciler(spec),
+    )
+    actor = Actor.human("u")
+    before = build_review_inbox(spec, actor=actor, grouped=True)
+    assert before.total == 2
+
+    victim = before.clusters[0].cards[0]
+    coord.decide(victim.run_id, victim.card.id, "rejected")  # leaves the queue
+
+    after = build_review_inbox(spec, actor=actor, grouped=True)
+    assert after.total == 1
+    survivors = {c.card.keys[0] for cl in after.clusters for c in cl.cards}
+    assert victim.card.keys[0] not in survivors
+
+
+def test_grouped_drops_members_whose_source_cascaded_away():
+    """A ClusterMember can outlive its source (an orphaned projection). The grouped
+    view resolves each member and silently drops the ones with no CardProposal /
+    DocQuestion; a concept whose members ALL vanished isn't rendered at all."""
+    from workspace_app.kb.doc_questions import open_or_merge_term_question
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    # concept "X": a live term question + an ORPHAN proposal member (no CardProposal)
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="X", source_doc_id="d", question_text="what is X?"
+    )
+    _cluster_member(spec, cid, kind="term_question", ref_id=qid, cluster_key="X")
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="0",
+        run_id="ghost",
+        cluster_key="X",
+        member_id="prop:ghost:0",
+    )
+    # concept "Y": ONLY an orphan term-question member (its DocQuestion is gone)
+    _cluster_member(spec, cid, kind="term_question", ref_id="ghost-q", cluster_key="Y")
+
+    grouped = build_review_inbox(spec, actor=Actor.human("u"), grouped=True)
+    assert grouped.total == 2  # the GROUP BY still counts both concepts
+    assert {cl.cluster_key for cl in grouped.clusters} == {"X"}  # Y (all-orphan) dropped
+    (x,) = grouped.clusters
+    assert len(x.cards) == 0 and len(x.questions) == 1  # the orphan proposal dropped
+
+
+def test_suppressed_audit_is_empty_when_no_collection_is_readable():
+    """Scoped to a collection the actor can't see → no readable collections → an
+    empty suppressed page (the native query short-circuits, never runs)."""
+    spec = make_spec(default_user="u")
+    _collection(spec, "Alpha")
+    audit = build_review_inbox(
+        spec, actor=Actor.human("u"), suppressed=True, collection_id="collection:nope"
+    )
+    assert audit.suppressed == [] and audit.total == 0
+
+
+async def test_suppressed_audit_respects_the_q_filter():
+    """The suppressed-audit view filters by ``q`` over the candidate label."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="0",
+        run_id="r1",
+        cluster_key="a",
+        state="suppressed",
+        label="Alpha",
+    )
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="1",
+        run_id="r2",
+        cluster_key="b",
+        state="suppressed",
+        label="Beta",
+    )
+    audit = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True, q="alph")
+    assert [s.label for s in audit.suppressed] == ["Alpha"]
+
+
+async def test_suppressed_audit_pages_natively_with_total():
+    """#511 P4: the suppressed-audit view pages at the DB (``state="suppressed"``
+    offset/limit) — a bounded page + the full count, not a load-all-then-slice."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    for i in range(3):
+        _cluster_member(
+            spec,
+            cid,
+            kind="proposal",
+            ref_id=str(i),
+            run_id=f"r{i}",
+            cluster_key=f"k{i}",
+            state="suppressed",
+            label=f"S{i}",
+        )
+    p1 = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True, limit=2, offset=0)
+    p2 = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True, limit=2, offset=2)
+    assert p1.total == 3
+    assert [len(p.suppressed) for p in (p1, p2)] == [2, 1]
+    seen = {s.label for p in (p1, p2) for s in p.suppressed}
+    assert seen == {"S0", "S1", "S2"}  # no overlap / gap

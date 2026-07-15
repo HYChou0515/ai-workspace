@@ -20,7 +20,7 @@
 import { useState } from "react";
 
 import type { ReasoningEffort } from "../api/types";
-import { useT } from "../lib/i18n";
+import { type MsgKey, useT } from "../lib/i18n";
 import {
   PRESETS,
   useKbEnhancementMode,
@@ -31,6 +31,7 @@ import {
 } from "../lib/kbEnhancementMode";
 import { useReasoningEffort } from "../lib/reasoningEffort";
 import { KB_SEARCH_MAX_UI_MAX, useKbSearchMax } from "../lib/kbSearchMax";
+import { KB_WIKI_MAX_UI_MAX, useKbWikiMax } from "../lib/kbWikiMax";
 import { Icon } from "./Icon";
 import { pxToRem } from "../lib/pxToRem";
 
@@ -178,9 +179,21 @@ function DepthSliders({
 function SearchMaxStepper({
   value,
   onChange,
+  labelKey = "searchmax.label",
+  titleKey = "searchmax.title",
+  zeroKey = "searchmax.zero",
+  decKey = "searchmax.dec",
+  incKey = "searchmax.inc",
+  max = KB_SEARCH_MAX_UI_MAX,
 }: {
   value: number;
   onChange: (n: number) => void;
+  labelKey?: MsgKey;
+  titleKey?: MsgKey;
+  zeroKey?: MsgKey;
+  decKey?: MsgKey;
+  incKey?: MsgKey;
+  max?: number;
 }) {
   const t = useT();
   const btn: React.CSSProperties = {
@@ -194,11 +207,11 @@ function SearchMaxStepper({
   };
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-      <span style={{ fontSize: pxToRem(12), color: "var(--text-paper)" }} title={t("searchmax.title")}>
-        {t("searchmax.label")}
+      <span style={{ fontSize: pxToRem(12), color: "var(--text-paper)" }} title={t(titleKey)}>
+        {t(labelKey)}
       </span>
       <span style={{ flex: 1 }} />
-      <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{t("searchmax.zero")}</span>
+      <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{t(zeroKey)}</span>
       <div
         style={{
           display: "inline-flex",
@@ -210,7 +223,7 @@ function SearchMaxStepper({
       >
         <button
           type="button"
-          aria-label={t("searchmax.dec")}
+          aria-label={t(decKey)}
           disabled={value <= 0}
           onClick={() => onChange(value - 1)}
           style={{ ...btn, opacity: value <= 0 ? 0.4 : 1, cursor: value <= 0 ? "default" : "pointer" }}
@@ -218,20 +231,20 @@ function SearchMaxStepper({
           −
         </button>
         <span
-          aria-label={t("searchmax.label")}
+          aria-label={t(labelKey)}
           style={{ minWidth: 22, textAlign: "center", fontSize: pxToRem(12), color: "var(--text-paper)" }}
         >
           {value}
         </span>
         <button
           type="button"
-          aria-label={t("searchmax.inc")}
-          disabled={value >= KB_SEARCH_MAX_UI_MAX}
+          aria-label={t(incKey)}
+          disabled={value >= max}
           onClick={() => onChange(value + 1)}
           style={{
             ...btn,
-            opacity: value >= KB_SEARCH_MAX_UI_MAX ? 0.4 : 1,
-            cursor: value >= KB_SEARCH_MAX_UI_MAX ? "default" : "pointer",
+            opacity: value >= max ? 0.4 : 1,
+            cursor: value >= max ? "default" : "pointer",
           }}
         >
           ＋
@@ -247,6 +260,7 @@ export function ModelEffortPicker({
   onSelectModel,
   retrieval = false,
   wikiAvailable = false,
+  wikiBudget = false,
 }: {
   models: PickerEntry[];
   /** Active entry name; null = the deploy default (first entry). */
@@ -254,10 +268,13 @@ export function ModelEffortPicker({
   onSelectModel: (name: string) => void;
   /** KB surface: include the knowledge-search depth section. */
   retrieval?: boolean;
-  /** Issue #50: show the "Search the wiki" toggle (a collection in scope
-   * builds one). Hidden when no collection has a wiki — the toggle would do
-   * nothing. */
+  /** Issue #50: a collection in scope builds a wiki, so surface the wiki control
+   * (hidden when no collection has a wiki — it would do nothing). */
   wikiAvailable?: boolean;
+  /** #506: render the wiki control as a budgeted "max wiki searches" number picker
+   * (KB chat: wiki is an in-agent tool) instead of the legacy boolean toggle (the
+   * RCA composer, whose wiki flag still routes through the whole-page reader). */
+  wikiBudget?: boolean;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -266,6 +283,7 @@ export function ModelEffortPicker({
   const [depthSel, setDepthMode, setDepthSlider] = useKbEnhancementMode();
   const [searchWiki, setSearchWiki] = useKbWikiToggle();
   const [maxSearches, setMaxSearches] = useKbSearchMax();
+  const [maxWiki, setMaxWiki] = useKbWikiMax();
 
   if (models.length === 0) return null;
   const active = models.find((m) => m.name === selectedName) ?? models[0]!;
@@ -461,26 +479,40 @@ export function ModelEffortPicker({
                 )}
                 <SearchMaxStepper value={maxSearches} onChange={setMaxSearches} />
                 {advanced && <DepthSliders sel={depthSel} onSlider={setDepthSlider} />}
-                {wikiAvailable && (
-                  <label
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      marginTop: 8,
-                      fontSize: pxToRem(13),
-                      cursor: "pointer",
-                    }}
-                    title={t("picker.wiki.title")}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={searchWiki}
-                      onChange={(e) => setSearchWiki(e.target.checked)}
+                {wikiAvailable &&
+                  (wikiBudget ? (
+                    // #506: wiki is a budgeted in-agent tool — a number picker like
+                    // kb_search, not a routing toggle.
+                    <SearchMaxStepper
+                      value={maxWiki}
+                      onChange={setMaxWiki}
+                      labelKey="wikimax.label"
+                      titleKey="wikimax.title"
+                      zeroKey="wikimax.zero"
+                      decKey="wikimax.dec"
+                      incKey="wikimax.inc"
+                      max={KB_WIKI_MAX_UI_MAX}
                     />
-                    {t("picker.wiki")}
-                  </label>
-                )}
+                  ) : (
+                    <label
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 8,
+                        marginTop: 8,
+                        fontSize: pxToRem(13),
+                        cursor: "pointer",
+                      }}
+                      title={t("picker.wiki.title")}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={searchWiki}
+                        onChange={(e) => setSearchWiki(e.target.checked)}
+                      />
+                      {t("picker.wiki")}
+                    </label>
+                  ))}
               </div>
             )}
 

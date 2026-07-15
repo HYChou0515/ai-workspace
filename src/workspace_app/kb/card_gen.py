@@ -88,7 +88,7 @@ class CardDrafter(Protocol):
     returns a canned digest (so the job's orchestration is testable without a
     model)."""
 
-    def digest(self, *, doc_path: str, doc_text: str) -> DocDigest: ...
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = "") -> DocDigest: ...
 
 
 class Provenance(msgspec.Struct):
@@ -122,6 +122,78 @@ class ProposedCard(msgspec.Struct):
     # committed (written to a card) / rejected are TERMINAL — a run leaves the
     # 待審核 queue only once every proposal is terminal.
     decision: str = "pending"  # pending | accepted | rejected | committed
+
+
+class CardProposal(msgspec.Struct):  # → resource "card-proposal"
+    """Issue #511: one card proposal as a first-class, queryable resource.
+
+    Extracted from the nested ``CardGenRun.proposals`` list (a msgspec field, not
+    a DB row) so the 待審核 review views page via specstar's native
+    ``order_by().offset().limit()`` instead of loading every run into memory and
+    slicing in Python (the #511 "fake pagination").
+
+    The resource id is ``prop:{run_id}:{pid}`` — the SAME id the reconcile
+    :class:`~workspace_app.resources.kb.ClusterMember` already uses for this
+    proposal — so the two stay joined by id and the backfill never re-projects
+    members. Content mirrors :class:`ProposedCard`; ``decision`` carries the
+    reviewer's verdict (ACTIVE = ``pending``/``accepted``, still in the queue;
+    TERMINAL = ``committed``/``rejected``). ``cluster_key`` is deliberately NOT
+    stored here — grouping spans proposals + questions, and only
+    ``ClusterMember`` holds both kinds, so the grouped view aggregates over the
+    member (avoids a reconcile/merge-sweeper double-write)."""
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    run_id: Annotated[str, Ref("card-gen-run", on_delete=OnDelete.cascade)]
+    keys: list[str] = msgspec.field(default_factory=list)
+    title: str = ""
+    body: str = ""
+    confident: bool = True
+    mode: str = "new"  # new | update
+    target_card_id: str | None = None
+    provenance: list[Provenance] = msgspec.field(default_factory=list)
+    decision: str = "pending"  # pending | accepted | rejected | committed
+
+
+def card_proposal_id(run_id: str, pid: str) -> str:
+    """The deterministic :class:`CardProposal` resource id — the SAME
+    ``prop:{run}:{pid}`` string the reconcile ClusterMember uses, so the two
+    rows stay joined by id (see ``reconcile.py``)."""
+    return f"prop:{run_id}:{pid}"
+
+
+def proposal_to_card_proposal(collection_id: str, run_id: str, p: ProposedCard) -> CardProposal:
+    """Project a merged/classified :class:`ProposedCard` onto its first-class
+    :class:`CardProposal` row (content + decision) — the finalize write."""
+    return CardProposal(
+        collection_id=collection_id,
+        run_id=run_id,
+        keys=list(p.keys),
+        title=p.title,
+        body=p.body,
+        confident=p.confident,
+        mode=p.mode,
+        target_card_id=p.target_card_id,
+        provenance=list(p.provenance),
+        decision=p.decision,
+    )
+
+
+def card_proposal_to_proposed(pid: str, cp: CardProposal) -> ProposedCard:
+    """Rebuild the domain :class:`ProposedCard` (the review-surface shape, carrying
+    its per-run ``pid`` id) from a stored :class:`CardProposal` — the inverse of
+    :func:`proposal_to_card_proposal`, used when the coordinator / review inbox read
+    proposals back out of the store."""
+    return ProposedCard(
+        keys=list(cp.keys),
+        id=pid,
+        title=cp.title,
+        body=cp.body,
+        confident=cp.confident,
+        mode=cp.mode,
+        target_card_id=cp.target_card_id,
+        provenance=list(cp.provenance),
+        decision=cp.decision,
+    )
 
 
 class CardGenPayload(msgspec.Struct):
@@ -177,9 +249,10 @@ class CardGenRun(msgspec.Struct):  # → resource "card-gen-run"
     The split job cannot hold the reviewable output — it must return fast (it can't
     block a consumer thread for the whole LLM pass), so it COMPLETEs before any
     proposal exists. So this run — addressed by the id ``enqueue`` returns — is what
-    the FE polls for ``status`` + ``proposals`` (the finalize step writes them here,
-    and the resumable review state is re-saved here too). ``doc_ids`` is the ordered
-    doc set so finalize merges the staged per-doc digests deterministically."""
+    the FE polls for ``status``; the reviewable proposals are first-class
+    :class:`CardProposal` rows (#511, addressed by ``prop:{run}:{pid}``), NOT nested
+    here — this row is purely the generation-run join state. ``doc_ids`` is the
+    ordered doc set so finalize merges the staged per-doc digests deterministically."""
 
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
     doc_ids: list[str] = msgspec.field(default_factory=list)
@@ -188,7 +261,6 @@ class CardGenRun(msgspec.Struct):  # → resource "card-gen-run"
     failed: list[int] = msgspec.field(default_factory=list)  # doc indices that gave up
     finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
     status: str = "pending"  # pending | running | done | error
-    proposals: list[ProposedCard] = msgspec.field(default_factory=list)
 
 
 class CardGenUnit(msgspec.Struct):  # → resource "card-gen-unit"

@@ -28,6 +28,7 @@ from .kb.index_coordinator import IndexCoordinator
 from .kb.ingest import Ingestor
 from .kb.quality import QualityScorer
 from .kb.quality_coordinator import QualityCoordinator
+from .kb.reconcile import Reconciler, collection_wiki_text
 from .kb.wiki.coordinator import WikiMaintenanceCoordinator
 from .kb.wiki.maintainer import default_wiki_maintainer_config
 
@@ -130,6 +131,10 @@ def build_coordinators(
     card_drafter_llm: ILlm | None,
     sanity_llm_factory: LlmFactory | None,
     sanity_judge_llm: ILlm | None,
+    embedder: Embedder | None = None,
+    cluster_tau: float = 0.9,
+    suppress_tau: float = 0.92,
+    update_tau: float = 0.8,
     wiki_maintainer_max_turns: int = 40,
     wiki_model: str = "",
     wiki_llm_base_url: str = "",
@@ -187,11 +192,29 @@ def build_coordinators(
     drafter = (
         LlmCardDrafter(card_drafter_llm) if card_drafter_llm is not None else NullCardDrafter()
     )
+    # #506 P6: the finalize-time semantic reconcile (suppress already-explained
+    # candidates + cluster cross-run duplicates) needs an embedder. Built only when
+    # one is wired; otherwise None ⇒ the coordinator stays exact-only (pre-P6). The
+    # wiki_text provider is the deterministic "already documented" grep net (loaded
+    # once per finalize; returns "" for a collection with no wiki).
+    reconciler = (
+        Reconciler(
+            spec,
+            embedder,
+            cluster_tau=cluster_tau,
+            suppress_tau=suppress_tau,
+            update_tau=update_tau,
+            wiki_text=lambda cid: collection_wiki_text(spec, cid),
+        )
+        if embedder is not None
+        else None
+    )
     card_gen = CardGenCoordinator(
         spec,
         drafter,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
+        reconciler=reconciler,
     )
     # #82: indexing runs off the request path on a durable, cross-pod job queue.
     # It chains the index→wiki hook, so the wiki coordinator is handed in here.

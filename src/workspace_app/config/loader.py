@@ -28,6 +28,7 @@ from .merge import merge_layered
 from .schema import (
     AgentsSettings,
     ChunkerSettings,
+    ClusterSettings,
     CodeEmbedderSettings,
     EmbedderSettings,
     EnhancementBool,
@@ -411,6 +412,8 @@ _TOP_SCHEMA: dict[str, Any] = {
             "quality_weight": set(),
             "quality_floor": set(),
         },
+        # #506: reconcile / cluster-sweeper thresholds (all scalar float leaves).
+        "cluster": _dataclass_keys(ClusterSettings),
         # Issue #195: scalar leaf (int or null). The shape walk skips its
         # non-dict value; the value range is checked by `_check_max_searches`.
         "max_searches_per_turn": set(),
@@ -688,6 +691,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             retrieval_llm=_build_retrieval_llm(d["kb"]["retrieval_llm"]),
             card_drafter=_build_retrieval_llm(d["kb"].get("card_drafter")),
             retrieval=_build_retrieval(d["kb"]["retrieval"]),
+            cluster=_build(ClusterSettings, d["kb"].get("cluster", {})),
             max_searches_per_turn=d["kb"]["max_searches_per_turn"],
             max_searches_ceiling=d["kb"]["max_searches_ceiling"],
             code_embedder=_build(CodeEmbedderSettings, d["kb"]["code_embedder"]),

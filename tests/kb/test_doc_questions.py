@@ -14,6 +14,7 @@ from workspace_app.kb.doc_questions import (
     list_open_questions,
     open_or_merge_term_question,
     open_questions_for_collections,
+    page_questions_by_status,
     plan_doc_questions,
 )
 from workspace_app.kb.wiki.store import (
@@ -182,6 +183,81 @@ def test_discard_question_sets_discarded():
     )
     discard_question(spec, qid)
     assert _get(spec, qid).status == "discarded"
+
+
+def _put_tq_member(spec, cid: str, qid: str, *, state: str = "active") -> None:
+    """Project the ``tq:{qid}`` ClusterMember reconcile makes for a TERM question, so
+    a resolve can de-join it (#511 P4)."""
+    from workspace_app.resources.kb import ClusterMember
+
+    spec.get_resource_manager(ClusterMember).create_or_update(
+        f"tq:{qid}",
+        ClusterMember(
+            collection_id=cid,
+            kind="term_question",
+            ref_id=qid,
+            cluster_key="k",
+            state=state,
+            norm_key="k",
+        ),
+    )
+
+
+def _member_state(spec, member_id: str):
+    from specstar.types import ResourceIDNotFoundError
+
+    from workspace_app.resources.kb import ClusterMember
+
+    try:
+        data = spec.get_resource_manager(ClusterMember).get(member_id).data
+    except ResourceIDNotFoundError:
+        return None
+    return data.state
+
+
+def test_answering_a_term_question_deactivates_its_cluster_member():
+    """#511 P4: answering a term question de-joins its ``tq:{qid}`` ClusterMember so
+    the grouped view's GROUP-BY over ACTIVE members stops counting the concept."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="doc1", question_text="q"
+    )
+    _put_tq_member(spec, cid, qid)
+    answer_question(spec, qid, answer="a", result_ref="context-card:abc")
+    assert _member_state(spec, f"tq:{qid}") == "inactive"
+
+
+def test_discarding_a_term_question_deactivates_its_cluster_member():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="doc1", question_text="q"
+    )
+    _put_tq_member(spec, cid, qid)
+    discard_question(spec, qid)
+    assert _member_state(spec, f"tq:{qid}") == "inactive"
+
+
+def test_get_question_returns_none_for_a_missing_id():
+    """The grouped view resolves a cluster's term-question members by id; a member
+    whose DocQuestion cascaded away resolves to ``None``, never an error."""
+    spec = make_spec(default_user="u")
+    from workspace_app.kb.doc_questions import get_question
+
+    assert get_question(spec, "ghost-q") is None
+
+
+def test_resolving_a_description_question_needs_no_member_and_is_a_noop():
+    """A DESCRIPTION question is never projected as a ClusterMember (only term
+    questions are), so the de-join is a clean no-op — no error, no phantom member."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    qid = add_description_question(
+        spec, collection_id=cid, source_doc_id="doc1", quote="a passage", question_text="why?"
+    )
+    discard_question(spec, qid)  # no tq:{qid} member — must not raise
+    assert _member_state(spec, f"tq:{qid}") is None
 
 
 def test_inbox_lists_only_open_questions_in_the_given_collections():
@@ -375,3 +451,43 @@ def test_plan_caps_total_questions_per_doc_with_terms_first():
     kept_terms, kept_desc = plan_doc_questions(terms, descs, carded_norm_keys=set(), cap=5)
     assert len(kept_terms) == 4  # terms fill first
     assert len(kept_desc) == 1  # then descriptions up to the remaining budget
+
+
+def test_page_questions_pages_open_questions_across_collections_with_total():
+    """#511 P3: the flat question stream pages OPEN questions across every readable
+    collection in one native query — the total is the full count, pages don't
+    overlap or gap."""
+    spec = make_spec(default_user="u")
+    ca, cb = _collection(spec, "a"), _collection(spec, "b")
+    for i in range(3):
+        open_or_merge_term_question(
+            spec, collection_id=ca, term=f"Ta{i}", source_doc_id="d", question_text="q"
+        )
+    for i in range(2):
+        open_or_merge_term_question(
+            spec, collection_id=cb, term=f"Tb{i}", source_doc_id="d", question_text="q"
+        )
+    cids = [ca, cb]
+    p1, total = page_questions_by_status(spec, cids, ["open"], offset=0, limit=2)
+    p2, _ = page_questions_by_status(spec, cids, ["open"], offset=2, limit=2)
+    p3, _ = page_questions_by_status(spec, cids, ["open"], offset=4, limit=2)
+    assert total == 5
+    assert [len(p) for p in (p1, p2, p3)] == [2, 2, 1]
+    qids = {qid for page in (p1, p2, p3) for qid, _c, _q in page}
+    assert len(qids) == 5
+
+
+def test_page_questions_q_filters_over_term_and_text_and_quote():
+    """A ``q`` substring narrows to matching questions (term / question_text /
+    quote), and the total reflects the filtered count."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    open_or_merge_term_question(
+        spec, collection_id=cid, term="Reflow", source_doc_id="d", question_text="what is reflow"
+    )
+    add_description_question(
+        spec, collection_id=cid, source_doc_id="d", quote="solder paste", question_text="why paste"
+    )
+    rows, total = page_questions_by_status(spec, [cid], ["open"], q="solder")
+    assert total == 1
+    assert rows[0][2].quote == "solder paste"

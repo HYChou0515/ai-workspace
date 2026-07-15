@@ -53,9 +53,11 @@ def _cpu_max(cores: float) -> str:
 
 
 def _acl_argv(workspace: Path, uid: int) -> list[str]:
-    """`setfacl` argv granting `uid` rwx on the workspace AND as the default ACL,
-    so files the root host later writes into it stay writable by the sandbox
-    uid (it owns the dir but not those root-written files)."""
+    """`setfacl` argv granting `uid` rwx on the workspace AND as the default ACL.
+    Defence-in-depth since #504: app/host-written files are now chowned to `uid`
+    (real ownership, see `_own` / `reown`), so the default ACL is a belt-and-
+    suspenders fallback for any residual root-written path — no longer the sole
+    mechanism keeping the sandbox able to touch those files."""
     spec = f"u:{uid}:rwx"
     return ["setfacl", "-R", "-m", spec, "-d", "-m", spec, str(workspace)]
 
@@ -139,6 +141,12 @@ def _run_setfacl(argv: list[str]) -> None:
     subprocess.run(argv, check=True, capture_output=True)
 
 
+def _run_chown(path: Path, uid: int) -> None:
+    """Chown `path` to `uid`, leaving the gid unchanged (-1). The host runs as
+    root (or with CAP_CHOWN) — the same power `_provision` already uses."""
+    os.chown(path, uid, -1)
+
+
 @dataclass(frozen=True)
 class _Identity:
     uid: int
@@ -149,6 +157,10 @@ class _Identity:
 # A seam for the one true system-binary boundary (`setfacl`): the default shells
 # out; tests inject a spy so they need neither root nor the `acl` package.
 AclRunner = Callable[[list[str]], None]
+# A seam for the privileged `chown` in `_own` (#504): the default calls
+# `os.chown`; tests inject a spy to assert the (path, uid) pairs non-root (the
+# uid pool is pinned to the caller's own uid).
+ChownRunner = Callable[[Path, int], None]
 
 
 class IsolatedProcessSandbox(LocalProcessSandbox):
@@ -175,6 +187,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         cpu_cores: float = 1.0,
         pids_max: int = 512,
         acl_runner: AclRunner | None = None,
+        chown_runner: ChownRunner | None = None,
     ) -> None:
         super().__init__(
             root_dir=Path(root_dir) if root_dir is not None else None,
@@ -192,6 +205,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         )
         self._identities: dict[str, _Identity] = {}
         self._acl_runner: AclRunner = acl_runner or _run_setfacl
+        self._chown_runner: ChownRunner = chown_runner or _run_chown
         self._alloc_lock = asyncio.Lock()
 
     async def create(self, spec: SandboxSpec) -> SandboxHandle:
@@ -203,6 +217,39 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             await asyncio.to_thread(self._provision, ws, uid)
             self._identities[handle.id] = _Identity(uid=uid, gid=gid, cgroup=cgroup)
             return handle
+
+    def _own(self, handle: SandboxHandle, target: Path) -> None:
+        # #504: chown the just-written path AND every ancestor up to the
+        # workspace root to the sandbox uid, so a newly-created nested path is
+        # uid-owned end to end — not just the leaf (a mid-chain root-owned dir
+        # still blocks git / rmdir, which check ownership, not the default ACL).
+        # Chowning a component already owned by the uid is an idempotent no-op.
+        # The loop only touches the workspace root and paths below it, never the
+        # infra siblings (`.home`/`.tools`/`.ready`) or the shared root above.
+        uid = self._identities[handle.id].uid
+        workspace = self._workspace(handle)
+        node = target
+        while node == workspace or workspace in node.parents:
+            self._chown_runner(node, uid)
+            if node == workspace:
+                break
+            node = node.parent
+
+    async def reown(self, handle: SandboxHandle) -> None:
+        # #504: the host's bulk rsync restore (NfsArchive.restore) writes files
+        # as root — no `-o` — bypassing per-write `_own`, so the restored tree
+        # comes back root-owned. Recursively re-own the whole workspace to the
+        # sandbox uid so git / chmod work inside. Idempotent (chowning an
+        # already-uid file is a no-op); the per-write `_own` covers everything
+        # that DOESN'T bypass the sandbox (upload / create_file / mkdir).
+        await asyncio.to_thread(self._reown_sync, handle)
+
+    def _reown_sync(self, handle: SandboxHandle) -> None:
+        uid = self._identities[handle.id].uid
+        workspace = self._workspace(handle)
+        self._chown_runner(workspace, uid)
+        for path in workspace.rglob("*"):
+            self._chown_runner(path, uid)
 
     def _provision(self, workspace: Path, uid: int) -> None:
         # Own the workspace to the sandbox uid (gid left as-is via -1, so this

@@ -87,6 +87,36 @@ def test_http_sandbox_and_host_sections_load(tmp_path: Path):
     assert s.sandbox_host.pids_max == 512
 
 
+def test_kb_cluster_thresholds_load(tmp_path: Path):
+    """#506: the reconcile / cluster-sweeper τ + sweep interval parse into typed
+    ClusterSettings; untouched knobs keep their defaults."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            kb:
+              cluster:
+                cluster_tau: 0.8
+                merge_tau: 0.99
+                sweep_interval_seconds: 300
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.kb.cluster.cluster_tau == 0.8
+    assert s.kb.cluster.merge_tau == 0.99
+    assert s.kb.cluster.sweep_interval_seconds == 300
+    assert s.kb.cluster.suppress_tau == 0.92  # untouched default
+
+
+def test_kb_cluster_defaults_when_absent():
+    """A config with no kb.cluster section still gets conservative defaults."""
+    s = load(config_path=None, env={})
+    assert s.kb.cluster.cluster_tau == 0.9
+    assert s.kb.cluster.suppress_tau == 0.92
+    assert s.kb.cluster.merge_tau == 0.95
+    assert s.kb.cluster.sweep_interval_seconds == 900.0
+
+
 def test_default_config_leaves_http_sandbox_unset():
     """A default deploy keeps the local backend; `sandbox.http` is None and the
     host section carries its bundled defaults."""

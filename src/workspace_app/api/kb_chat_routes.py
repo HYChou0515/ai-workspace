@@ -31,7 +31,9 @@ if TYPE_CHECKING:
     # to the concrete type only for that call.
     from specstar.resource_manager.core import ResourceManager
 
-from ..agent.context import AgentToolContext, KbSearchBudget
+from ..agent.ask_kb import AskKbSpec
+from ..agent.context import AgentToolContext, KbSearchBudget, WikiSearchBudget
+from ..files import WorkspaceFiles
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
@@ -43,6 +45,7 @@ from ..kb.context_cards import (
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
+from ..kb.wiki.store import WikiFileStore
 from ..perm import Actor, Permission, authorize
 from ..perm.model import Verb, user_subject
 from ..resources import AgentConfig
@@ -90,6 +93,8 @@ async def answer_question(
     on_citations: Callable[[list[Citation]], None] | None = None,
     max_searches: int | None = None,
     budget: KbSearchBudget | None = None,
+    wiki_budget: WikiSearchBudget | None = None,
+    ask_kb_spec: AskKbSpec | None = None,
     exclude_doc_ids: frozenset[str] = frozenset(),
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
@@ -107,11 +112,34 @@ async def answer_question(
 
     `wiki` opts the lookup into the LLM-wiki path (the caller passes a
     wiki-aware runner) — the RCA composer's "Search the wiki" toggle forwarded
-    over the bridge."""
+    over the bridge.
+
+    `ask_kb_spec` (#506) is the configured-`ask_knowledge_base` factory's spec: when
+    set, the sub-agent's tool set becomes `spec.allowed_tools()` (authoritative — a
+    card drafter grants exactly kb_search + glossary, not the preset's full kit) and
+    `spec.prompt` (when given) overrides its instruction. `None` leaves the resolved
+    preset untouched, so the existing interactive `ask_knowledge_base` is unchanged.
+    `wiki_budget` seeds the turn's `search_wiki` cap the same way `budget` seeds
+    kb_search's."""
+    if ask_kb_spec is not None:
+        agent_config = msgspec.structs.replace(
+            agent_config,
+            allowed_tools=ask_kb_spec.allowed_tools(),
+            system_prompt=ask_kb_spec.prompt
+            if ask_kb_spec.prompt is not None
+            else agent_config.system_prompt,
+        )
+    # #506: when this sub-agent is granted `search_wiki` (e.g. the card drafter's
+    # spec, or a kb_chat preset), wire the per-collection wiki store it greps over
+    # `collection_ids` — the same store the interactive KB turn wires. Needs a spec
+    # handle; absent one, search_wiki degrades to its "no wiki available" note.
+    grants_wiki = bool(agent_config.allowed_tools and "search_wiki" in agent_config.allowed_tools)
+    wiki_files = WorkspaceFiles(WikiFileStore(spec)) if (grants_wiki and spec is not None) else None
     ctx = AgentToolContext(
         retriever=retriever,
         collection_ids=collection_ids,
         agent_config=agent_config,
+        files=wiki_files,
         # specstar handle so a kb_chat agent granted `lookup_glossary` can read
         # context cards on the bridge path too (RCA → ask_knowledge_base → KB
         # sub-agent). None when the caller can't supply one (degrades to the
@@ -132,6 +160,10 @@ async def answer_question(
         # ask_knowledge_base calls, #334 Q6) wins — all its sub-agents then draw
         # from the one budget; otherwise seed a fresh one from `max_searches`.
         kb_search_budget=budget if budget is not None else KbSearchBudget(max_calls=max_searches),
+        # #506: the configured ask_knowledge_base seeds a search_wiki cap here the
+        # same way it seeds kb_search's budget above; absent one, wiki search stays
+        # unlimited-but-counted (the interactive path is unchanged).
+        wiki_search_budget=wiki_budget if wiki_budget is not None else WikiSearchBudget(),
         # #308: the caller (the ask_knowledge_base bridge) resolves which docs the
         # ORIGINAL speaker's per-doc override blocks, so this sub-agent's retriever
         # can't surface a doc the speaker can't read — even though the KB ctx itself
@@ -288,6 +320,10 @@ class _MsgBody(BaseModel):
     # operator default (`kb.max_searches_per_turn`); a concrete value is clamped
     # to [0, kb.max_searches_ceiling] (0 = don't search this reply).
     max_kb_searches: int | None = None
+    # #506: per-message search_wiki-count pick — the number picker that REPLACED
+    # the boolean "search wiki" toggle. Same shape/clamp as max_kb_searches (0 =
+    # don't grep the wiki this reply, N = at most N greps, None = operator default).
+    max_wiki_searches: int | None = None
 
 
 class _ShareBody(BaseModel):
@@ -612,6 +648,11 @@ def register_kb_chat_routes(
                 superusers=superusers,
             ),
             agent_config=agent_config,
+            # #506: the wiki store the agent's `search_wiki` tool greps. One shared
+            # WikiFileStore keyed per-collection; search_wiki iterates this turn's
+            # `collection_ids` and merges hits (the in-agent, budgeted replacement
+            # for the heavy whole-page reader routing).
+            files=WorkspaceFiles(WikiFileStore(spec)),
             # specstar handle so the agent's `lookup_glossary` tool (when granted)
             # can read this collection's context cards — deterministic glossary
             # path beside kb_search (unknown term → glossary, question → search).
@@ -647,6 +688,16 @@ def register_kb_chat_routes(
             kb_search_budget=KbSearchBudget(
                 max_calls=resolve_max_searches(
                     body.max_kb_searches,
+                    default=max_searches_per_turn,
+                    ceiling=max_searches_ceiling,
+                )
+            ),
+            # #506: cap how many times this reply may grep the wiki — the composer's
+            # per-message pick (the number picker that replaced the wiki toggle),
+            # clamped like kb_search's. Reuses the kb operator default/ceiling.
+            wiki_search_budget=WikiSearchBudget(
+                max_calls=resolve_max_searches(
+                    body.max_wiki_searches,
                     default=max_searches_per_turn,
                     ceiling=max_searches_ceiling,
                 )

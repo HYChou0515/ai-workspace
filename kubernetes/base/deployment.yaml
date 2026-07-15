@@ -58,11 +58,14 @@ spec:
           # and the cgroup write, and the shared-dir fix already cures the data
           # loss on its own. To opt in, set SANDBOX_ISOLATION_ENABLED="true"
           # (configmap) AND grant the pod the privileges the setuid-drop + cgroup
-          # writes need:
+          # writes + chowning restored/uploaded files to the item uid (#504) need:
           # securityContext:
           #   capabilities:
-          #     add: ["SETUID", "SETGID", "SETPCAP", "KILL"]
-          # plus a writable cgroup v2 mount at sandbox.isolation.cgroup_root
+          #     add: ["SETUID", "SETGID", "SETPCAP", "KILL", "CHOWN"]
+          # (CHOWN lets the app own restored/uploaded/created files to the per-item
+          # uid so git/chmod work inside the sandbox — #504; unneeded if the pod
+          # already runs as root.) plus a writable cgroup v2 mount at
+          # sandbox.isolation.cgroup_root
           # (a delegated sub-tree of the pod's own slice). With enabled=true on a
           # host that lacks these, the app fails loud at boot (it won't silently
           # downgrade to no isolation).

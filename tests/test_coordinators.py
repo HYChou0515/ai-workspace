@@ -106,3 +106,16 @@ def test_a_wiki_model_wires_the_code_wiki_builder():
     assert _build(make_spec(default_user="u"), _FakeIngestor()).wiki._code_builder is None
     wired = _build(make_spec(default_user="u"), _FakeIngestor(), wiki_model="ollama/qwen3:8b")
     assert wired.wiki._code_builder is not None
+
+
+def test_an_embedder_wires_the_cardgen_reconciler():
+    # #506 P6: the card-gen reconcile needs an embedder to compare candidates +
+    # cards in one vector space. No embedder ⇒ the coordinator stays exact-only.
+    from workspace_app.kb.embedder import HashEmbedder
+    from workspace_app.resources.kb import EMBED_DIM
+
+    assert _build(make_spec(default_user="u"), _FakeIngestor()).card_gen._reconciler is None
+    wired = _build(
+        make_spec(default_user="u"), _FakeIngestor(), embedder=HashEmbedder(dim=EMBED_DIM)
+    )
+    assert wired.card_gen._reconciler is not None

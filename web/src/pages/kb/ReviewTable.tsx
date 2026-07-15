@@ -31,59 +31,28 @@ function toRows(cards: KbReviewCard[], questions: KbReviewQuestion[]): Row[] {
   ];
 }
 
-function matches(row: Row, needle: string): boolean {
-  if (!needle) return true;
-  const n = needle.toLowerCase();
-  if (row.kind === "card") {
-    const c = row.data.card;
-    return (
-      c.title.toLowerCase().includes(n) ||
-      c.body.toLowerCase().includes(n) ||
-      c.keys.some((k) => k.toLowerCase().includes(n))
-    );
-  }
-  const q = row.data.question;
-  return (
-    q.term.toLowerCase().includes(n) ||
-    q.question_text.toLowerCase().includes(n) ||
-    q.quote.toLowerCase().includes(n)
-  );
-}
-
 export function ReviewTable({
   cards,
   questions,
   resolved,
   actions,
+  groupByRun = false,
   scoped = false,
 }: {
   cards: KbReviewCard[];
   questions: KbReviewQuestion[];
   resolved: boolean;
   actions: Actions;
+  groupByRun?: boolean;
   scoped?: boolean;
 }) {
   const t = useT();
-  const [search, setSearch] = useState("");
-  const [collection, setCollection] = useState("");
-  const [type, setType] = useState<"all" | "card" | "question">("all");
-  const [actionableOnly, setActionableOnly] = useState(false);
-  const [groupByRun, setGroupByRun] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [open, setOpen] = useState<Row | null>(null);
 
-  const allRows = useMemo(() => toRows(cards, questions), [cards, questions]);
-  const collectionNames = useMemo(
-    () => [...new Set(allRows.map((r) => r.data.collection_name))].sort(),
-    [allRows],
-  );
-
-  const rows = allRows.filter((r) => {
-    if (type !== "all" && r.kind !== type) return false;
-    if (collection && r.data.collection_name !== collection) return false;
-    if (actionableOnly && !r.data.can_act) return false;
-    return matches(r, search);
-  });
+  // Rows arrive already filtered + paged by the server (#506 G2) — the toolbar +
+  // pager live in ReviewPage, so this table just renders (and acts on) one page.
+  const rows = useMemo(() => toRows(cards, questions), [cards, questions]);
 
   const selectedRefs: KbCardRef[] = rows
     .filter((r): r is CardRow => r.kind === "card" && selected.has(r.key))
@@ -110,71 +79,14 @@ export function ReviewTable({
       decision: row.data.card.decision === decision ? "pending" : decision,
     });
 
-  const nothingAtAll = allRows.length === 0;
   const colCount = scoped ? 5 : 6;
 
   return (
     <div className="rvw">
-      <div className="rvw__toolbar" role="search">
-        <label className="rvw__search">
-          <Icon name="search" size={14} color="var(--text-paper-d2)" />
-          <input
-            type="search"
-            aria-label={t("review.filter.search")}
-            placeholder={t("review.filter.search")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </label>
-        {!scoped && (
-          <select
-            className="inline-edit"
-            aria-label={t("review.filter.collection")}
-            value={collection}
-            onChange={(e) => setCollection(e.target.value)}
-          >
-            <option value="">{t("review.filter.collection")}</option>
-            {collectionNames.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </select>
-        )}
-        <select
-          className="inline-edit"
-          aria-label={t("review.filter.type")}
-          value={type}
-          onChange={(e) => setType(e.target.value as typeof type)}
-        >
-          <option value="all">{t("review.filter.type")}</option>
-          <option value="card">{t("review.type.card")}</option>
-          <option value="question">{t("review.type.question")}</option>
-        </select>
-        <label className="rvw__check">
-          <input
-            type="checkbox"
-            checked={actionableOnly}
-            onChange={(e) => setActionableOnly(e.target.checked)}
-          />
-          {t("review.filter.actionable")}
-        </label>
-        <label className="rvw__check">
-          <input
-            type="checkbox"
-            checked={groupByRun}
-            onChange={(e) => setGroupByRun(e.target.checked)}
-          />
-          {t("review.groupByRun")}
-        </label>
-      </div>
-
-      {nothingAtAll ? (
+      {rows.length === 0 ? (
         <div className="rvw__empty">
           {resolved ? t("review.empty.resolved") : t("review.empty")}
         </div>
-      ) : rows.length === 0 ? (
-        <div className="rvw__empty">{t("review.empty.filtered")}</div>
       ) : (
         <div className="rvw__scroll">
           <table className="rvw__table">

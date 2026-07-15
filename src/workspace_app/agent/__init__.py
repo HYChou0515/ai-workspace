@@ -1,4 +1,4 @@
-from .context import AgentToolContext, KbSearchBudget
+from .context import AgentToolContext, KbSearchBudget, WikiSearchBudget
 from .tools import (
     ask_knowledge_base_impl,
     build_tools,
@@ -27,6 +27,7 @@ from .tools import (
 __all__ = [
     "AgentToolContext",
     "KbSearchBudget",
+    "WikiSearchBudget",
     "build_tools",
     "exec_impl",
     "read_file_impl",

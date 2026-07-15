@@ -210,6 +210,10 @@ class _HostController:
         if self._archive is not None and item_id is not None:
             self._item_of[handle.id] = item_id
             await self._archive.restore(item_id, self.sandbox.workspace_dir(handle))
+            # #504: the bulk rsync restore writes files as root (no `-o`), so the
+            # restored tree comes back root-owned. Re-own it to the sandbox uid
+            # BEFORE marking ready, so the dropped exec uid can git/chmod them.
+            await self.sandbox.reown(handle)
             await self.sandbox.mark_ready(handle)
         return handle
 

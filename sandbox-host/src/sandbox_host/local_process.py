@@ -504,11 +504,29 @@ class LocalProcessSandbox:
             stderr=b"".join(err_buf),
         )
 
+    def _own(self, handle: SandboxHandle, target: Path) -> None:
+        """Hook: make `target` (and any parent dirs this write just created, up
+        to the workspace root) owned by the sandbox principal. No-op in the base
+        — a plain subprocess owns everything it writes; `IsolatedProcessSandbox`
+        chowns to the sandbox uid so app/host-written files (restore / upload /
+        create_file) match the DROPPED exec uid: real ownership, not just a
+        default ACL (#504). Owner matters beyond access — git refuses a repo it
+        doesn't own, and only the owner can `chmod` a file."""
+        return None
+
+    async def reown(self, handle: SandboxHandle) -> None:
+        """Hook (#504): recursively re-own the workspace to the sandbox principal
+        after a BULK restore that bypassed per-write `_own` (the host's rsync
+        writes files as root, no `-o`). No-op in the base; `IsolatedProcessSandbox`
+        chowns the whole restored tree to the sandbox uid."""
+        return None
+
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
         cwd = self._workspace(handle)
         target = self._resolve(cwd, remote_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(target.write_bytes, data)
+        await asyncio.to_thread(self._own, handle, target)
 
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         cwd = self._workspace(handle)
@@ -521,6 +539,7 @@ class LocalProcessSandbox:
         target.parent.mkdir(parents=True, exist_ok=True)
         # copyfile streams in chunks (shutil.COPY_BUFSIZE) — no whole-file in RAM.
         await asyncio.to_thread(shutil.copyfile, local_path, target)
+        await asyncio.to_thread(self._own, handle, target)
 
     async def download_to_file(
         self, handle: SandboxHandle, remote_path: str, local_path: Path
@@ -546,6 +565,7 @@ class LocalProcessSandbox:
         cwd = self._workspace(handle)
         target = self._resolve(cwd, path)
         await asyncio.to_thread(lambda: target.mkdir(parents=True, exist_ok=True))
+        await asyncio.to_thread(self._own, handle, target)
 
     async def rmdir(self, handle: SandboxHandle, path: str) -> None:
         cwd = self._workspace(handle)
@@ -561,6 +581,7 @@ class LocalProcessSandbox:
             raise FileNotFoundError(src)
         await asyncio.to_thread(lambda: d.parent.mkdir(parents=True, exist_ok=True))
         await asyncio.to_thread(s.rename, d)
+        await asyncio.to_thread(self._own, handle, d)
 
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
         cwd = self._workspace(handle)

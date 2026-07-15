@@ -84,8 +84,16 @@ function CardDetail({
   const c = row.card;
   const [title, setTitle] = useState(c.title);
   const [body, setBody] = useState(c.body);
-  const edited = title !== c.title || body !== c.body;
+  const [keys, setKeys] = useState<string[]>(c.keys);
+  const [term, setTerm] = useState("");
+  const sameKeys = keys.length === c.keys.length && keys.every((k, i) => k === c.keys[i]);
+  const edited = title !== c.title || body !== c.body || !sameKeys;
 
+  const addKey = () => {
+    const k = term.trim();
+    if (k && !keys.includes(k)) setKeys([...keys, k]); // #506: no duplicate terms
+    setTerm("");
+  };
   const decide = (decision: "accepted" | "rejected") =>
     actions.decide.mutate({
       runId: row.run_id,
@@ -93,7 +101,7 @@ function CardDetail({
       decision: c.decision === decision ? "pending" : decision,
     });
   const save = () => {
-    const next: KbProposedCard = { ...c, title, body };
+    const next: KbProposedCard = { ...c, title, body, keys };
     actions.update.mutate({ runId: row.run_id, card: next });
   };
 
@@ -121,11 +129,37 @@ function CardDetail({
 
       <div className="rvw-drawer__keys">
         <span className="rvw-drawer__label">{t("review.drawer.keys")}</span>
-        {c.keys.map((k) => (
-          <code key={k} className="rvw__key">
-            {k}
-          </code>
+        {keys.map((k) => (
+          <span key={k} className="rvw__key">
+            <code>{k}</code>
+            {canAct && (
+              <button
+                type="button"
+                className="rvw-drawer__key-x"
+                aria-label={t("review.drawer.removeKey", { k })}
+                onClick={() => setKeys(keys.filter((x) => x !== k))}
+              >
+                ×
+              </button>
+            )}
+          </span>
         ))}
+        {canAct && (
+          <input
+            className="rvw-drawer__addkey"
+            aria-label={t("review.drawer.addKey")}
+            placeholder={t("review.drawer.addKey")}
+            value={term}
+            onChange={(e) => setTerm(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === ",") {
+                e.preventDefault();
+                addKey();
+              }
+            }}
+            onBlur={addKey}
+          />
+        )}
       </div>
 
       {c.mode === "update" && (

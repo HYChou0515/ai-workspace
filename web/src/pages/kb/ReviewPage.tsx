@@ -1,23 +1,85 @@
 /**
  * ReviewPage (#481) — the global 審核 inbox: every pending-review item (card-gen
- * proposals + clarification questions) across every collection the user may read,
- * in one filterable table. A pending / handled toggle switches between the live
- * queue and the resolved history. Absorbs the old (invisible) /clarifications page.
+ * proposals + clarification questions) across every collection the user may read.
+ * Four tabs — pending / by-concept / handled / auto-skipped — over the SAME
+ * server-paginated + server-filtered stream (#506 G2): this page owns the toolbar
+ * (search / collection / type / actionable / group-by-run) and the prev/next Pager,
+ * so the backend caps each fetch to one page and the FE never loads thousands of
+ * rows. The view components below are pure presenters of one page.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
+import { kbApi } from "../../api/kb";
+import { qk } from "../../api/queryKeys";
+import { Icon } from "../../components/Icon";
 import { Skeleton } from "../../components/Skeleton";
 import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { useReviewInbox } from "../../hooks/useReviewInbox";
-import { useT } from "../../lib/i18n";
+import { type MsgKey, useT } from "../../lib/i18n";
+import { ClusterReviewList } from "./ClusterReviewList";
+import { Pager } from "./Pager";
 import { ReviewTable } from "./ReviewTable";
+import { SuppressedAuditList } from "./SuppressedAuditList";
+
+type View = "pending" | "resolved" | "grouped" | "suppressed";
+type TypeFilter = "all" | "card" | "question";
+
+const TABS: { view: View; label: MsgKey }[] = [
+  { view: "pending", label: "review.tab.pending" },
+  { view: "grouped", label: "review.tab.grouped" },
+  { view: "resolved", label: "review.tab.resolved" },
+  { view: "suppressed", label: "review.tab.suppressed" },
+];
+
+const PAGE_SIZE = 50;
+const KIND: Record<TypeFilter, "all" | "cards" | "questions"> = {
+  all: "all",
+  card: "cards",
+  question: "questions",
+};
 
 export function ReviewPage() {
   const t = useT();
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: t("review.title") }]);
-  const [resolved, setResolved] = useState(false);
-  const { query, ...actions } = useReviewInbox({ resolved });
+  const [view, setView] = useState<View>("pending");
+  const [search, setSearch] = useState("");
+  const [q, setQ] = useState(""); // the debounced search actually sent to the server
+  const [collectionId, setCollectionId] = useState("");
+  const [type, setType] = useState<TypeFilter>("all");
+  const [actionable, setActionable] = useState(false);
+  const [groupByRun, setGroupByRun] = useState(false);
+  const [offset, setOffset] = useState(0);
+
+  // Debounce the search box so a keystroke doesn't fire a query per character.
+  useEffect(() => {
+    const id = setTimeout(() => setQ(search), 250);
+    return () => clearTimeout(id);
+  }, [search]);
+  // Any tab or filter change returns to the first page (offset only advances via
+  // the Pager, which is NOT in these deps).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on filter change
+  useEffect(() => setOffset(0), [view, q, collectionId, type, actionable]);
+
+  const isFlat = view === "pending" || view === "resolved";
+  const collections = useQuery({
+    queryKey: qk.kb.collections,
+    queryFn: () => kbApi.listCollections(),
+  });
+
+  const { query, ...actions } = useReviewInbox({
+    resolved: view === "resolved",
+    grouped: view === "grouped",
+    suppressed: view === "suppressed",
+    collectionId: collectionId || undefined,
+    kind: isFlat ? KIND[type] : "all",
+    q: q || undefined,
+    actionable: view === "suppressed" ? false : actionable,
+    limit: PAGE_SIZE,
+    offset,
+  });
   const inbox = query.data;
+  const total = inbox?.total ?? 0;
 
   return (
     <div className="rvw-page">
@@ -27,24 +89,76 @@ export function ReviewPage() {
       </header>
 
       <div className="kb-tabs" role="tablist" aria-label={t("review.title")}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={!resolved}
-          className={`kb-tab${!resolved ? " is-active" : ""}`}
-          onClick={() => setResolved(false)}
+        {TABS.map((tab) => (
+          <button
+            key={tab.view}
+            type="button"
+            role="tab"
+            aria-selected={view === tab.view}
+            className={`kb-tab${view === tab.view ? " is-active" : ""}`}
+            onClick={() => setView(tab.view)}
+          >
+            {t(tab.label)}
+          </button>
+        ))}
+      </div>
+
+      <div className="rvw__toolbar" role="search">
+        <label className="rvw__search">
+          <Icon name="search" size={14} color="var(--text-paper-d2)" />
+          <input
+            type="search"
+            aria-label={t("review.filter.search")}
+            placeholder={t("review.filter.search")}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </label>
+        <select
+          className="inline-edit"
+          aria-label={t("review.filter.collection")}
+          value={collectionId}
+          onChange={(e) => setCollectionId(e.target.value)}
         >
-          {t("review.tab.pending")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={resolved}
-          className={`kb-tab${resolved ? " is-active" : ""}`}
-          onClick={() => setResolved(true)}
-        >
-          {t("review.tab.resolved")}
-        </button>
+          <option value="">{t("review.filter.collection")}</option>
+          {(collections.data ?? []).map((c) => (
+            <option key={c.resource_id} value={c.resource_id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        {isFlat && (
+          <select
+            className="inline-edit"
+            aria-label={t("review.filter.type")}
+            value={type}
+            onChange={(e) => setType(e.target.value as TypeFilter)}
+          >
+            <option value="all">{t("review.filter.type")}</option>
+            <option value="card">{t("review.type.card")}</option>
+            <option value="question">{t("review.type.question")}</option>
+          </select>
+        )}
+        {view !== "suppressed" && (
+          <label className="rvw__check">
+            <input
+              type="checkbox"
+              checked={actionable}
+              onChange={(e) => setActionable(e.target.checked)}
+            />
+            {t("review.filter.actionable")}
+          </label>
+        )}
+        {isFlat && (
+          <label className="rvw__check">
+            <input
+              type="checkbox"
+              checked={groupByRun}
+              onChange={(e) => setGroupByRun(e.target.checked)}
+            />
+            {t("review.groupByRun")}
+          </label>
+        )}
       </div>
 
       {query.isPending || !inbox ? (
@@ -53,12 +167,20 @@ export function ReviewPage() {
         </div>
       ) : (
         <div className="rvw-page__body">
-          <ReviewTable
-            cards={inbox.cards}
-            questions={inbox.questions}
-            resolved={resolved}
-            actions={{ query, ...actions }}
-          />
+          {view === "grouped" ? (
+            <ClusterReviewList clusters={inbox.clusters ?? []} actions={{ query, ...actions }} />
+          ) : view === "suppressed" ? (
+            <SuppressedAuditList items={inbox.suppressed ?? []} />
+          ) : (
+            <ReviewTable
+              cards={inbox.cards}
+              questions={inbox.questions}
+              resolved={view === "resolved"}
+              groupByRun={groupByRun}
+              actions={{ query, ...actions }}
+            />
+          )}
+          <Pager total={total} offset={offset} pageSize={PAGE_SIZE} onOffset={setOffset} />
         </div>
       )}
     </div>

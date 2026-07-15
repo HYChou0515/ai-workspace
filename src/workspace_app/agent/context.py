@@ -52,6 +52,31 @@ class KbSearchBudget:
 
 
 @dataclass
+class WikiSearchBudget:
+    """Per-turn budget for how many times `search_wiki` may grep the wiki (#506).
+
+    The exact shape as `KbSearchBudget` — `max_calls` caps it (`None` ⇒ unlimited
+    but counted; `0` ⇒ no wiki search), `used` increments on every completed grep.
+    Given its own type (not reused) so the two knobs are tuned + threaded
+    independently: the card drafter's `ask_knowledge_base` spec caps wiki and
+    chunk search separately, and a function can't pass the wrong budget by mistake.
+    Default unlimited, so the wiki maintainer/reader (which never set it) are
+    unaffected.
+    """
+
+    max_calls: int | None = None
+    used: int = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return self.max_calls is not None and self.used >= self.max_calls
+
+    @property
+    def remaining(self) -> int | None:
+        return None if self.max_calls is None else max(0, self.max_calls - self.used)
+
+
+@dataclass
 class AgentToolContext:
     """Per-run context passed into agent tools.
 
@@ -213,6 +238,11 @@ class AgentToolContext:
     # result also reports the remaining budget so a small model spends frugally.
     # An app turn shares ONE instance across its ask_knowledge_base sub-agents.
     kb_search_budget: KbSearchBudget = field(default_factory=KbSearchBudget)
+    # #506: this turn's search_wiki budget — the symmetric wiki twin of
+    # kb_search_budget. Default unlimited-but-counted, so the wiki maintainer/
+    # reader (which never set it) keep grepping freely; the ask_knowledge_base
+    # spec seeds `max_calls` when the card drafter wants wiki search capped.
+    wiki_search_budget: WikiSearchBudget = field(default_factory=WikiSearchBudget)
     # Topic Hub tools (`resolve_collection`, `lookup_glossary`) query specstar
     # resources (Collection / ContextCard) directly. Set by the Topic Hub turn
     # builder; None for RCA/KB-flavour contexts.
