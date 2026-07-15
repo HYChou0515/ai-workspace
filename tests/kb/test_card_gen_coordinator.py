@@ -184,6 +184,53 @@ async def test_a_finalized_run_is_listed_for_review_then_leaves_the_queue_on_com
     assert len(_cards(spec, cid)) == 1
 
 
+async def test_finalize_writes_first_class_card_proposal_rows():
+    """#511 P1: finalizing a run projects each kept proposal into its own
+    ``CardProposal`` resource, addressed by the deterministic ``prop:{run}:{pid}``
+    id (aligned with the reconcile ClusterMember), so the review inbox can page it
+    at the DB. The nested ``CardGenRun.proposals`` list stays written too (P1 keeps
+    it as a read-only fallback), so both agree on ids + content."""
+    from workspace_app.kb.card_proposal import CardProposalStore
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
+    d2 = _add_source(spec, cid, "b.md", "RZ7 is the seventh reflow zone")
+    drafter = _FakeDrafter(
+        {
+            "a.md": [CardDraft(keys=["RZ3"], title="RZ3", body="third", snippet="s3")],
+            "b.md": [CardDraft(keys=["RZ7"], title="RZ7", body="seventh", snippet="s7")],
+        }
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [d1, d2])
+    await coord.aclose()
+
+    store = CardProposalStore(spec)
+    assert store.count_active(cid) == 2
+    rows = store.list_active(cid)
+    by_id = {pid: cp for pid, cp in rows}
+    # nested + first-class agree on ids + content
+    nested = {p.id: p for p in coord.proposals(jid).proposals}
+    assert set(by_id) == {f"prop:{jid}:{pid}" for pid in nested}
+    for pid, p in nested.items():
+        cp = by_id[f"prop:{jid}:{pid}"]
+        assert cp.run_id == jid
+        assert cp.collection_id == cid
+        assert cp.keys == p.keys
+        assert cp.title == p.title
+        assert cp.body == p.body
+        assert cp.decision == "pending"
+
+
+async def test_save_review_on_a_vanished_run_is_a_noop():
+    """#511 P2: saving a review for a run whose collection cascaded away is a clean
+    no-op (nothing to upsert), never a raise."""
+    spec = make_spec(default_user="u")
+    coord = CardGenCoordinator(spec, _FakeDrafter({}))
+    coord.save_review("nope", [])  # no run → no-op
+
+
 async def test_dismiss_removes_a_run_from_review_without_writing_cards():
     """#415: dismissing a run resolves it (status 'dismissed') so it leaves the
     queue, and writes no cards."""
@@ -202,9 +249,10 @@ async def test_dismiss_removes_a_run_from_review_without_writing_cards():
 
 
 async def test_review_resolution_is_idempotent():
-    """Resolving a run is a one-way, at-most-once transition (#415): once
-    committed, a re-commit writes no second card and a later dismiss can't yank
-    it back — both are no-ops from a non-``done`` state."""
+    """Resolving a proposal is a one-way, at-most-once transition (#511 P2): once a
+    proposal is committed, a re-commit writes no second card and a later whole-run
+    dismiss can't yank it back — both skip the now-TERMINAL proposal (idempotency is
+    per-proposal, no run.status gate)."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
@@ -217,9 +265,9 @@ async def test_review_resolution_is_idempotent():
         msgspec.structs.replace(p, decision="accepted") for p in coord.proposals(jid).proposals
     ]
     coord.save_review(jid, accepted)
-    coord.commit(jid)  # done → committed, writes one card
-    coord.commit(jid)  # committed run: guarded no-op, no second card
-    coord.dismiss(jid)  # committed run: mark_dismissed is a no-op (not 'done')
+    coord.commit(jid)  # accepted → committed, writes one card
+    coord.commit(jid)  # proposal already committed → no second card
+    coord.dismiss(jid)  # proposal already terminal → dismiss flips nothing
 
     assert len(_cards(spec, cid)) == 1
     assert coord.pending_runs(cid) == []

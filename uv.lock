@@ -3381,7 +3381,7 @@ wheels = [
 
 [[package]]
 name = "specstar"
-version = "0.11.14"
+version = "0.11.15"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -3395,9 +3395,9 @@ dependencies = [
     { name = "qqabc" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/26/f1/a4c86a2589f5483c7bbd3de39265882c8c4f5235dcd8b2631b610d9d75ad/specstar-0.11.14.tar.gz", hash = "sha256:90263fc150021a37629bad5891c0d9a862e8bcb61bb24483d90ad3166b4637e0", size = 2303385, upload-time = "2026-07-03T07:52:06.048Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/ca/fe1cee02a75ee705b6916b0ca363519e326af04ddb3879ec5d5e8f687995/specstar-0.11.15.tar.gz", hash = "sha256:823d1975afc507690e68f07508978e7cc3bf56d580a3c5a96b306965e1b4182b", size = 2307283, upload-time = "2026-07-14T04:20:38.213Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/59/83/d76672a9581aea4d2a219f5b2044faaf19dffe8c565da13021e3def2631d/specstar-0.11.14-py3-none-any.whl", hash = "sha256:b72d94cff50657d393301e3f79f4cc1b6aca04490cfec595432387f4343ea5d6", size = 475339, upload-time = "2026-07-03T07:52:03.336Z" },
+    { url = "https://files.pythonhosted.org/packages/eb/87/eafcf26444ac2c7679cd92b4794e5ca31e5355458676eb42a04ed8f0ce33/specstar-0.11.15-py3-none-any.whl", hash = "sha256:bbbda1cc7a5bb7a52c3c15ff7bc85fe01b52efe8d889c81e62434fa77defcfb3", size = 479291, upload-time = "2026-07-14T04:20:35.206Z" },
 ]
 
 [package.optional-dependencies]
@@ -3965,7 +3965,7 @@ requires-dist = [
     { name = "scikit-learn", marker = "extra == 'process-sandbox'", specifier = ">=1.8.0" },
     { name = "scipy", marker = "extra == 'process-sandbox'", specifier = ">=1.17.1" },
     { name = "seaborn", marker = "extra == 'process-sandbox'", specifier = ">=0.13.2" },
-    { name = "specstar", extras = ["magic"], specifier = ">=0.11.14" },
+    { name = "specstar", extras = ["magic"], specifier = ">=0.11.15" },
     { name = "tenacity", specifier = ">=8.5.0" },
     { name = "tree-sitter", specifier = "<0.22" },
     { name = "tree-sitter-languages", specifier = ">=1.10.2" },

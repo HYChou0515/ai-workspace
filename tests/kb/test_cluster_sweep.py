@@ -13,8 +13,9 @@ from __future__ import annotations
 
 from specstar import QB
 
-from workspace_app.kb.card_gen import ProposedCard
+from workspace_app.kb.card_gen import ProposedCard, ensure_proposal_ids
 from workspace_app.kb.card_gen_run import CardGenRunStore
+from workspace_app.kb.card_proposal import CardProposalStore
 from workspace_app.kb.doc_questions import add_description_question, open_or_merge_term_question
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.reconcile import backfill_collection, merge_near_clusters, sweep_clusters
@@ -27,9 +28,13 @@ def _collection(spec, name: str = "c") -> str:
 
 
 def _done_run(spec, cid: str, proposals: list[ProposedCard]) -> str:
+    """A finalized run whose proposals are projected to first-class CardProposal
+    rows (#511 P2 — backfill_collection reads those, not the nested list)."""
     store = CardGenRunStore(spec)
     run_id = store.start(cid, ["d1"])
-    store.set_proposals(run_id, proposals)
+    pstore = CardProposalStore(spec)
+    for p in ensure_proposal_ids(list(proposals)):
+        pstore.create_from_proposal(cid, run_id, p)
     store.finish(run_id, status="done")
     return run_id
 
