@@ -172,6 +172,38 @@ def test_build_input_appends_the_user_prompt_after_history():
     assert _build_input(hist, "q2") == [*hist, {"role": "user", "content": "q2"}]
 
 
+def test_build_input_inlines_images_as_a_multimodal_user_message():
+    """A vision main model's turn carries attached images inline as `input_image`
+    parts alongside the text, so the model sees the pixels directly with no
+    `read_image` round-trip. With no history the result is still a message LIST
+    (not the bare-string fast path) because the content is multimodal."""
+    urls = ["data:image/png;base64,AAAA", "data:image/jpeg;base64,BBBB"]
+    assert _build_input([], "what defect?", urls) == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "what defect?"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
+                {"type": "input_image", "image_url": "data:image/jpeg;base64,BBBB"},
+            ],
+        }
+    ]
+
+
+def test_build_input_inlines_images_after_history():
+    hist = [{"role": "user", "content": "q1"}, {"role": "assistant", "content": "a1"}]
+    assert _build_input(hist, "q2", ["data:image/png;base64,AAAA"]) == [
+        *hist,
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "q2"},
+                {"type": "input_image", "image_url": "data:image/png;base64,AAAA"},
+            ],
+        },
+    ]
+
+
 def test_build_input_rejects_a_system_message_in_history():
     """#199 — defensive boundary: the SDK supplies the system prompt
     separately, so the replayed history must never carry a `system`

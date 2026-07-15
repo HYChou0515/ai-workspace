@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -107,12 +107,31 @@ def _approx_tokens(chars: int) -> int:
     return round(chars / 4)
 
 
-def _build_input(history: list[dict[str, str]], prompt: str) -> str | list[dict[str, str]]:
+def _build_input(
+    history: list[dict[str, str]],
+    prompt: str,
+    image_urls: Sequence[str] = (),
+) -> str | list[dict[str, Any]]:
     """The SDK `input` for this turn: a plain string when there's no history,
     else the prior dialogue items followed by this turn's user message — so the
-    agent has cross-turn memory (#17)."""
+    agent has cross-turn memory (#17).
+
+    `image_urls` (data: URLs) are inlined into THIS turn's user message as
+    `input_image` parts so a vision-capable main model sees the attached images
+    directly — no `read_image` round-trip through the separate VLM. Only the
+    live turn's message is multimodal; the persisted history stays text (the
+    image also lives on as a workspace file the model can `read_image` later).
+    Empty ⇒ the text-only path is byte-for-byte unchanged."""
+    user_content: str | list[dict[str, Any]] = prompt
+    if image_urls:
+        user_content = [
+            {"type": "input_text", "text": prompt},
+            *({"type": "input_image", "image_url": url} for url in image_urls),
+        ]
     if not history:
-        return prompt
+        # No history + no images → keep the bare-string fast path; multimodal
+        # content still needs a message list even without history.
+        return prompt if not image_urls else [{"role": "user", "content": user_content}]
     # #199 — the SDK prepends the system prompt itself, so the replayed history
     # must never carry a `system` item; a mid-conversation one makes providers
     # reject the call with "system message must be at the beginning". Fail loud
@@ -120,7 +139,7 @@ def _build_input(history: list[dict[str, str]], prompt: str) -> str | list[dict[
     assert not any(m.get("role") == "system" for m in history), (
         "history must not contain a system message"
     )
-    return [*history, {"role": "user", "content": prompt}]
+    return [*history, {"role": "user", "content": user_content}]
 
 
 def _delta_channel(event_type: str) -> Literal["content", "reasoning", "ignore"]:
@@ -841,7 +860,7 @@ class LitellmAgentRunner:
         )
         streamed = Runner.run_streamed(
             agent,
-            input=_build_input(ctx.history, prompt),  # ty: ignore[invalid-argument-type]
+            input=_build_input(ctx.history, prompt, ctx.turn_image_urls),  # ty: ignore[invalid-argument-type]
             context=ctx,
             max_turns=ctx.max_turns or self._max_turns,
             run_config=run_config,
@@ -988,7 +1007,7 @@ class LitellmAgentRunner:
         )
         result = await Runner.run(
             agent,
-            input=_build_input(ctx.history, prompt),  # ty: ignore[invalid-argument-type]
+            input=_build_input(ctx.history, prompt, ctx.turn_image_urls),  # ty: ignore[invalid-argument-type]
             context=ctx,
             max_turns=ctx.max_turns or self._max_turns,
             run_config=run_config,

@@ -17,11 +17,15 @@ citation-bubbling logic.
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import logging
 from typing import TYPE_CHECKING
 
+import magic
+
 from ..agent.context import KbSearchBudget
+from ..filestore.protocol import FileNotFound
 from ..kb.collections import (
     collection_ids_from_json,
     collection_tiers_from_json,
@@ -54,6 +58,28 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+async def _load_inline_image_urls(
+    files: WorkspaceFiles, investigation_id: str, paths: list[str]
+) -> list[str]:
+    """Read each attached workspace image and encode it as a `data:` URL, so the
+    runner can inline it into a vision main model's user message (source A) — the
+    model sees the pixels directly, with no `read_image` round-trip through the
+    separate VLM. A path that vanished (deleted between upload and send) or isn't
+    actually an image is skipped rather than fatal: the turn still runs with
+    whatever images survive. Called only when the resolved agent is a VLM."""
+    urls: list[str] = []
+    for path in paths:
+        try:
+            data = await files.read(investigation_id, path)
+        except FileNotFound:
+            continue
+        mime = magic.from_buffer(data, mime=True)
+        if not mime.startswith("image/"):
+            continue
+        urls.append(f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}")
+    return urls
 
 
 class ChatSendService:
@@ -218,9 +244,10 @@ class ChatSendService:
         # ONE bridge for every sub-agent the RCA tools may invoke
         # (ask_knowledge_base, infer_modules, future ones) drives the turn with the
         # investigation's attached agent + the composer's per-turn depth/effort/scope.
+        agent_config = self._locator.resolve_agent_config(investigation_id)
         ctx = await self._turn_ctx.build_chat_turn(
             investigation_id,
-            agent_config=self._locator.resolve_agent_config(investigation_id),
+            agent_config=agent_config,
             run_subagent=_run_subagent_with_depth,
             # Cross-turn memory: prior dialogue (excludes the user msg just added).
             history_messages=conv.messages[:-1],
@@ -234,6 +261,16 @@ class ChatSendService:
             # disable gate (their bodies are already preloaded into the prompt).
             apply_skills=body.apply_skills or [],
         )
+
+        # Source A (#…): a vision-capable main model reads attached images
+        # directly — inline them into this turn's user message so the model sees
+        # the pixels with no `read_image` round-trip through the separate VLM.
+        # Text-only models leave this empty and use `read_image` as before; the
+        # image also persists as a workspace file, so `read_image` still works.
+        if agent_config is not None and agent_config.vision and body.image_paths:
+            ctx.turn_image_urls = await _load_inline_image_urls(
+                self._files, investigation_id, body.image_paths
+            )
 
         def persist(produced: list[TurnMessage]) -> None:
             # Persist the agent's reply + tool outputs so re-entering the
