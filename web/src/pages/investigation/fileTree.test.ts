@@ -51,6 +51,47 @@ describe("buildFileTree", () => {
     expect(tree.filter((n) => n.name === "data")).toHaveLength(1);
     expect(tree[0]!.children.map((c) => c.name)).toEqual(["a.csv"]);
   });
+
+  // The three below pin the identities the sibling scans used to compare, so a
+  // lookup-index rewrite cannot quietly change what counts as "already there".
+
+  it("keeps a file and a folder that share a name", () => {
+    const tree = buildFileTree([{ path: "/data", size: 1 }], ["/data"]);
+    expect(tree.map((n) => `${n.name}${n.isDir ? "/" : ""}`)).toEqual(["data/", "data"]);
+  });
+
+  it("drops a duplicate file rather than listing it twice", () => {
+    const tree = buildFileTree([
+      { path: "/data/a.csv", size: 1 },
+      { path: "/data/a.csv", size: 999 },
+    ]);
+    expect(tree[0]!.children).toHaveLength(1);
+    expect(tree[0]!.children[0]!.size).toBe(1); // first wins
+  });
+
+  it("dedupes on the normalised parent+name, keeping the first path verbatim", () => {
+    // Both collapse to parent "/data", name "a.csv" once empty segments are
+    // dropped — the second is a duplicate even though the raw strings differ.
+    const tree = buildFileTree([
+      { path: "/data//a.csv", size: 1 },
+      { path: "/data/a.csv", size: 2 },
+    ]);
+    expect(tree[0]!.children).toHaveLength(1);
+    expect(tree[0]!.children[0]!.path).toBe("/data//a.csv");
+  });
+
+  it("stays linear when thousands of files share one directory", () => {
+    // The sibling scans made this O(N²): 8000 flat files took 1.3 s, which is
+    // the whole reason the doc page stalls. Correctness proxy for the perf fix.
+    const files = Array.from({ length: 4000 }, (_, i) => ({ path: `/f${i}.txt`, size: 1 }));
+    const t0 = performance.now();
+    const tree = buildFileTree(files);
+    const ms = performance.now() - t0;
+    expect(tree).toHaveLength(4000);
+    // A quadratic build is ~300 ms here; a linear one is single-digit. The
+    // bound is loose on purpose — it must catch the shape, not time the CI box.
+    expect(ms).toBeLessThan(100);
+  });
 });
 
 describe("pruneTree", () => {
