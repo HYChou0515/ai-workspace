@@ -346,8 +346,11 @@ export function AgentPanel({
       setDraft("");
       return;
     }
-    // #364: image chips carry their workspace path — prepend them so the agent gets
-    // the paths (it only ever sees paths). A message with only images is valid.
+    // #364: image chips carry their workspace path. We prepend an `Attached
+    // \`path\`` note (a text-only model reaches the image via read_image) AND
+    // pass the paths structurally in `imagePaths` — a VLM main model has the BE
+    // inline the actual image, so it sees the pixels directly. A message with
+    // only images is valid.
     const imagePaths = imageChips.map((c) => c.path);
     if (!text && !imagePaths.length) return;
     const body = imagePaths.length ? [attachPrompt(imagePaths), text].filter(Boolean).join("\n\n") : text;
@@ -355,7 +358,7 @@ export function AgentPanel({
     clearImageChips();
     // #380: hand this turn's queued skills to `send`, then clear them — apply is
     // one-shot (the next turn starts with an empty apply set).
-    void send(body, { applySkills: appliedSkills });
+    void send(body, { applySkills: appliedSkills, imagePaths });
     setAppliedSkills([]);
   };
 

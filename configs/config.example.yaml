@@ -292,6 +292,16 @@
 #                   round_backoff_s: [1, 2, 4], total_deadline_s: 60 }
 #     qwen3-32b-local: { model: ollama_chat/qwen3:32b, llm: { base_url: http://gpu-2:11434 } }
 #     kb-claude: { model: claude-opus-4-7, ttft_timeout_s: 30, num_retries: 1 }  # hosted ⇒ relax ttft
+#
+# `vision: true` — the preset's model NATIVELY sees images. A workspace turn then
+# feeds attached images straight into the main model's message, and `read_image`
+# hands it the raw image, instead of routing every image through the separate
+# `kb.vlm_llm` describer (no main→VLM→main round-trip, no lossy image→text step).
+# Declarative on purpose: local Ollama VLM ids aren't in litellm's capability DB.
+# Default (absent) = false = the text-only describer path. NB: a vision preset
+# used as the main workspace agent still needs a tool-capable model for
+# `read_image` (source B) — a VLM with no tool support only sees inline images.
+#     qwen-vl: { model: ollama_chat/qwen3-vl, vision: true }
 
 # ─── chat LLM endpoint (fallback when a preset omits llm.*) ── [OPT] ─
 # Per-preset `llm.base_url` / `llm.api_key` (under agents.presets.*)

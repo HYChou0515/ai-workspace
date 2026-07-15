@@ -148,6 +148,34 @@ def test_preset_llm_sampling_penalties_flow_to_agent_config(tmp_path: Path):
     assert kb.repetition_penalty == 1.1  # ty: ignore[unresolved-attribute]
 
 
+def test_preset_vision_flag_flows_to_agent_config(tmp_path: Path):
+    """A preset declaring `vision: true` (the model natively sees images) reaches
+    the resolved AgentConfig, so the turn feeds image bytes to the main model
+    instead of the separate describer. Absent ⇒ False (text-only default)."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "agents:\n"
+        "  presets:\n"
+        "    my-vlm:\n"
+        '      model: "ollama_chat/qwen2.5vl"\n'
+        '      prompt_file: "pkg:workspace_app.kb.prompts/system.md"\n'
+        "      allowed_tools: [kb_search]\n"
+        "      vision: true\n"
+        "    my-text:\n"
+        '      model: "ollama_chat/qwen3:14b"\n'
+        '      prompt_file: "pkg:workspace_app.kb.prompts/system.md"\n'
+        "      allowed_tools: [kb_search]\n"
+        "  kb_chat:\n"
+        "    preset: my-vlm\n",
+        encoding="utf-8",
+    )
+    settings = load(config_path=cfg_file, env={})
+    assert settings.agents.presets["my-vlm"].vision is True
+    assert settings.agents.presets["my-text"].vision is False
+    cfg = build_catalog(settings, config_dir=tmp_path).kb_chat()
+    assert cfg.vision is True  # ty: ignore[unresolved-attribute]
+
+
 def test_usage_entry_overrides_take_precedence_over_preset(tmp_path: Path):
     """A usage entry that overrides allowed_tools wins over its preset's
     value (list-replace semantics from Q5). Tested on kb_chat — the override

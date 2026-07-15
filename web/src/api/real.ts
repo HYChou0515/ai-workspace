@@ -480,6 +480,7 @@ export const realApi: ApiClient = {
           enhancements: args.enhancements,
           max_kb_searches: args.maxKbSearches,
           apply_skills: args.applySkills,
+          image_paths: args.imagePaths,
         }),
         signal: args.signal,
       },

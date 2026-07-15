@@ -17,6 +17,14 @@ class Suggestion(Struct):
 class AgentConfig(Struct):
     name: str
     model: str = "ollama_chat/qwen3:14b"
+    vision: bool = False
+    """Whether ``model`` natively sees images (mirrors ``config.Preset.vision``).
+    When True the workspace turn feeds attached image bytes straight into the
+    main model's user message, and ``read_image`` returns the raw image to it,
+    instead of routing every image through the separate ``kb.vlm_llm`` describer
+    (no main→VLM→main hop, no lossy image→text step). Default False keeps
+    text-only models on the describer path."""
+
     system_prompt: str = ""
     description: str = ""
     """One-line picker blurb — the composer model picker renders it under

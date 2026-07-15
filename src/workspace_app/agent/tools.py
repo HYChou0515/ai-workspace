@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import csv
 import io
 import json
@@ -9,7 +10,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 import magic
-from agents import FunctionTool, RunContextWrapper, function_tool
+from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
 
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
@@ -165,19 +166,24 @@ async def read_image_impl(
     ctx: RunContextWrapper[AgentToolContext],
     path: str,
     question: str | None = None,
-) -> str:
-    """Look at an image file in the workspace and get a text answer about it.
+) -> str | ToolOutputImage:
+    """Look at an image file in the workspace (screenshot, chart, photo, or
+    diagram) and reason about it.
 
-    Use this for screenshots, charts, photos, or diagrams — `read_file`
-    returns raw bytes for these and is useless. `path` is the workspace path
-    to the image. `question` optionally focuses the read (e.g. "what error is
-    in this screenshot?"); omit it for a full description of everything
-    visible.
+    Use this for images — `read_file` returns raw bytes for these and is
+    useless. `path` is the workspace path to the image. `question` optionally
+    focuses the read (e.g. "what error is in this screenshot?"); omit it for a
+    full description of everything visible.
     """
     if (denied := authorize_tool(ctx.context, "read_content")) is not None:
         return denied
+    ac = ctx.context.agent_config
+    # When the MAIN agent is itself a VLM, it reads the pixels directly (below);
+    # a text-only main model instead needs the separate `kb.vlm_llm` describer to
+    # turn the image into words — and can't read images at all without one.
+    vision = ac is not None and ac.vision
     describer = ctx.context.describer
-    if describer is None:
+    if not vision and describer is None:
         return (
             "error: image reading is not available — this deployment has no "
             "vision model configured. Do not retry."
@@ -192,6 +198,16 @@ async def read_image_impl(
     if not mime.startswith("image/"):
         return f"error: not an image file: {path} (detected {mime})"
 
+    if vision:
+        # Hand the raw image straight to the vision-capable main model: it sees
+        # the pixels itself — no main→VLM→main round-trip, no lossy image→text
+        # step. The SDK renders a `ToolOutputImage` as an `input_image` part in
+        # the tool-result message (the LiteLLM path preserves non-text tool
+        # output), and `question` is already in the model's own context.
+        b64 = base64.b64encode(data).decode("ascii")
+        return ToolOutputImage(image_url=f"data:{mime};base64,{b64}")
+
+    assert describer is not None  # the text-only path is guarded above
     sink = ctx.context.on_exec_output
     on_chunk = (lambda t, _r: sink(t.encode("utf-8"))) if sink is not None else None
     if question:

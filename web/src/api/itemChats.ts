@@ -119,6 +119,9 @@ export const itemChatApi = {
     /** #380: skills the user queued to apply THIS turn (one-shot, hard-preloaded).
      * Mirrors the item-level `api.sendMessage`; the chat endpoint shares the body. */
     applySkills?: string[];
+    /** Attached image workspace paths — a VLM main model reads them inline
+     * (no read_image round-trip). Mirrors the item-level `api.sendMessage`. */
+    imagePaths?: string[];
     signal?: AbortSignal;
   }): Promise<void> {
     // #43 broadcast model: POST enqueues (202); events arrive on `subscribe`.
@@ -130,6 +133,7 @@ export const itemChatApi = {
         reasoning_effort: args.reasoningEffort,
         enhancements: args.enhancements,
         apply_skills: args.applySkills,
+        image_paths: args.imagePaths,
       }),
       signal: args.signal,
     });

@@ -44,10 +44,12 @@ export type AgentState = {
    * (notebook cell execution) are scoped to it. */
   investigationId: string;
   log: AgentLog;
-  /** Enqueue an interactive turn. `opts.applySkills` (#380) loads the named skills
+  /** Enqueue an interactive turn. `opts.imagePaths` carries the composer's
+   * attached image workspace paths so a VLM main model sees them inline (no
+   * read_image round-trip); a text-only model ignores them. `opts.applySkills` (#380) loads the named skills
    * into THIS turn (one-shot, chosen from the Skills panel); the composer clears
    * them after sending. */
-  send: (content: string, opts?: { applySkills?: string[] }) => Promise<void>;
+  send: (content: string, opts?: { applySkills?: string[]; imagePaths?: string[] }) => Promise<void>;
   /** @mention people to "come look" — notifies them, does NOT run the agent. */
   mention: (userIds: string[], note: string) => Promise<void>;
   cancel: () => void;
@@ -190,7 +192,7 @@ export function useAgentInternal(
   });
 
   const send = useCallback(
-    async (content: string, opts?: { applySkills?: string[] }) => {
+    async (content: string, opts?: { applySkills?: string[]; imagePaths?: string[] }) => {
       const trimmed = content.trim();
       if (!trimmed) return;
 
@@ -218,6 +220,8 @@ export function useAgentInternal(
           // #380: skills the user queued in the Skills panel to apply THIS turn
           // (hard-loaded into the agent's context). Empty/absent → nothing forced.
           applySkills: opts?.applySkills,
+          // Attached image workspace paths — a VLM main model reads them inline.
+          imagePaths: opts?.imagePaths,
         });
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;

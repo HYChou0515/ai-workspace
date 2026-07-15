@@ -1,14 +1,97 @@
 import asyncio
+import base64
 
 from specstar import QB
 
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
+from workspace_app.config.catalog_build import build_catalog
+from workspace_app.config.loader import load
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
 from ._client import AsyncClient, TestClient
 from .conftest import Harness, register_rca_item
+
+# A real 1×1 PNG — libmagic sniffs it as image/png.
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
+
+
+def _vision_catalog(tmp_path):
+    """A catalog where the rca-picker preset `claude-opus` is flagged vision=True,
+    so attaching it makes the resolved workspace agent a VLM."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        "agents:\n"
+        "  presets:\n"
+        "    claude-opus:\n"
+        '      model: "claude-opus-4-7"\n'
+        "      vision: true\n",
+        encoding="utf-8",
+    )
+    return build_catalog(load(config_path=cfg, env={}), config_dir=tmp_path)
+
+
+def test_vision_model_inlines_attached_images_into_the_turn(tmp_path):
+    """Source A end-to-end: a VLM main model (`Preset.vision`) receives composer-
+    attached images inline as image parts on the turn context, so it sees the
+    pixels directly — no `read_image` round-trip through the separate VLM."""
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec, attached_preset="claude-opus")
+    captured: dict[str, object] = {}
+
+    class _Capture:
+        async def run(self, prompt, ctx):
+            captured["urls"] = list(ctx.turn_image_urls)
+            yield RunDone()
+
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Capture(),
+        agent_config_catalog=_vision_catalog(tmp_path),
+    )
+    client = TestClient(app)
+    client.put(f"/a/rca/items/{iid}/files/shot.png", content=_PNG)
+
+    client.post(
+        f"/a/rca/items/{iid}/messages",
+        json={"content": "what defect?", "image_paths": ["/shot.png"]},
+    )
+
+    urls = captured["urls"]
+    assert isinstance(urls, list)
+    assert urls == [f"data:image/png;base64,{base64.b64encode(_PNG).decode('ascii')}"]
+
+
+def test_text_only_model_ignores_image_paths(tmp_path):
+    """A text-only main model leaves the inline-image channel empty even when the
+    composer sends `image_paths` — it reaches the image through `read_image` (and
+    the `Attached \\`path\\`` note in the message), exactly as before."""
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)  # default preset (qwen3-local) is vision=False
+    captured: dict[str, object] = {}
+
+    class _Capture:
+        async def run(self, prompt, ctx):
+            captured["urls"] = list(ctx.turn_image_urls)
+            yield RunDone()
+
+    app = create_app(
+        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=_Capture()
+    )
+    client = TestClient(app)
+    client.put(f"/a/rca/items/{iid}/files/shot.png", content=_PNG)
+
+    client.post(
+        f"/a/rca/items/{iid}/messages",
+        json={"content": "what defect?", "image_paths": ["/shot.png"]},
+    )
+
+    assert captured["urls"] == []
 
 
 def test_reasoning_delta_persists_to_reasoning_channel():

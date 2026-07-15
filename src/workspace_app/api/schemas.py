@@ -32,6 +32,14 @@ class _MessageBody(BaseModel):
     # "use these now" instruction — a one-shot that overrides a disabled toggle and
     # is never persisted into history. Empty / None → nothing preloaded.
     apply_skills: list[str] | None = None
+    # Workspace paths of images the composer attached this turn. When the resolved
+    # agent is a VLM (`AgentConfig.vision`), the send path reads each one and
+    # inlines it into the turn's user message as an image part — the model sees the
+    # pixels directly, no `read_image` round-trip through the separate VLM. The
+    # images are already uploaded as workspace files (the composer's #364 chip
+    # flow), so this carries paths, not bytes. Ignored for text-only models (the
+    # `Attached \`path\`` note in `content` still steers them to `read_image`).
+    image_paths: list[str] | None = None
 
 
 class _UndoOut(BaseModel):

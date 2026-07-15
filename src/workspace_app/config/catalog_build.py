@@ -183,6 +183,7 @@ def resolve_usage(
     return AgentConfig(
         name=usage.get("name") or default_name or preset_name,
         model=merged["model"],
+        vision=bool(merged.get("vision", False)),
         system_prompt=prompt_text,
         description=merged.get("description", ""),
         # ``dataclasses.asdict(preset)`` above flattens the loader-side

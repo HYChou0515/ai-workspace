@@ -293,6 +293,7 @@ class AppCatalog:
         return AgentConfig(
             name=name,
             model=preset.model,
+            vision=preset.vision,
             system_prompt=system_prompt,
             description=preset.description,
             suggestions=suggestions,
