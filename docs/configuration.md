@@ -75,6 +75,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **全部換成 OpenAI / Claude** | `agents.presets.*.model` 改模型字串 + `agents.presets.*.llm.api_key: ${OPENAI_API_KEY}`（範例 2） |
 | **只加一個調過 prompt 的模型到 picker** | 新增一個 `agents.presets.<name>` + 加進 `agents.workspace_chat[]`（範例 1） |
 | **KB 聊天換模型** | 加 `agents.kb_chat[]` 條目；接非 `kb-default` 的 preset **必須**補 `allowed_tools: [kb_search]`（範例 3/4） |
+| **選了 VLM 當主 agent，要牠自己直接看圖** | `agents.presets.<name>.vision: true`（[§7](#vlm-主-agent-直接讀圖vision)） |
 | **檔案要持久化（重啟不掉）** | `filestore.kind: specstar` + `filestore.pg_dsn: ${SPECSTAR_PG_DSN}` + `disk_root` |
 | **上多 pod（k8s）** | `sandbox.kind: http` + `sandbox.http.base_url` ＋ 共享 filestore ＋ 共享 MQ backend（見 [§5 階梯 C](#c-多-pod-k8s)） |
 | **把 job runner 拆出 API** | `server.run_consumers: false`，另跑 worker pod（[§8 訊息佇列](#8-訊息佇列-message-queue)） |
@@ -257,6 +258,33 @@ sandbox:
 2. **picker 第一條就是預設**：想換預設模型，把它排第一。
 3. **preset（哪顆模型）與 template 的 `_config.json`（哪些工具）正交合成**：picker 選 GPT，工具仍來自
    template（`rca-tools` / `ask_knowledge_base` 照給）。想改工具去改 profile，不是改 preset。
+
+### VLM 主 agent 直接讀圖（`vision`）
+
+主 agent 選了視覺模型（VLM）時，預設**牠仍看不到圖**：圖片一律繞去 `kb.vlm_llm` 那顆**獨立 VLM** 轉成文字再回來
+（main → VLM → main）。兩次轉手＝慢，圖轉文＝掉資訊。在 preset 上標 `vision: true`，就告訴系統「這顆 model 自己看得到圖」：
+
+```yaml
+agents:
+  presets:
+    qwen-vl:
+      model: ollama_chat/qwen3-vl
+      vision: true          # ← 這顆 model 原生看得到圖
+```
+
+標了之後，兩種圖都直接進主模型的眼睛，**不再經過獨立 VLM、不再轉文字**：
+
+| 圖從哪來 | 行為 |
+|---|---|
+| 使用者在對話框**夾/貼**的圖 | 送出當下就內嵌進該回合的使用者訊息 → 模型直接看到，**連工具都不用叫** |
+| agent 自己在工作區**發現**的圖（`list_files` 找到、或自己產生的） | 牠呼叫 `read_image`，拿回的是**原圖**而非文字描述 |
+
+雷區與邊界：
+
+- **這是宣告式旗標，不自動偵測**：本地 Ollama 的 VLM model id 不在 litellm 的能力資料庫裡，自動偵測會誤判成「不支援」而默默失效——所以要你自己標。
+- **預設 `false`＝維持原本行為**：純加法。沒標的 text-only 模型照舊走 `kb.vlm_llm` describer，一行行為都不變。
+- **`read_image` 那條需要模型支援 tool calling**：有些 VLM（如 Ollama 上的 `qwen2.5vl`）根本不支援工具，那牠只吃得到「夾圖內嵌」這條路。
+- **`kb.vlm_llm` 不能因此關掉**：它仍是 KB 攝取（圖片/PDF 視覺頁）與 text-only 主模型的 describer，兩者用途不同。
 
 > `prompt_file` 三種寫法：`pkg:<dotted.package>/<file.md>`（隨 wheel 打包）、`/絕對路徑.md`、`相對路徑.md`（相對**這個 config 檔**的目錄）。
 > 內建 8 個 preset 與完整範例 1–4，見 `config.example.yaml` 第 415 行起。
