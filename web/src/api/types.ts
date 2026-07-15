@@ -313,6 +313,12 @@ export type SendMessageArgs = {
   /** #380: skills the user chose to APPLY this turn (skills picker "apply"
    * button). Each named skill's body is hard-preloaded into the turn; one-shot. */
   applySkills?: string[];
+  /** Workspace paths of images attached in the composer this turn. When the
+   * item's main model is a VLM, the BE reads each one and inlines the image into
+   * the turn so the model sees the pixels directly (no read_image round-trip).
+   * The images are already uploaded as workspace files (the #364 chip flow), so
+   * this carries paths. Ignored by a text-only model. */
+  imagePaths?: string[];
 };
 
 export type ExecuteCellArgs = {

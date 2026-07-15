@@ -184,6 +184,21 @@ describe("AgentPanel image chip (#364)", () => {
     expect(screen.queryByTestId("image-chip")).not.toBeInTheDocument();
   });
 
+  it("passes the attached image path structurally so a VLM main model sees it inline", async () => {
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    const agent = renderWithAgent();
+    selectImage();
+    await screen.findByTestId("image-chip");
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "what is this" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+    const opts = (agent.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as {
+      imagePaths?: string[];
+    };
+    expect(opts.imagePaths).toEqual(["/uploads/shot.png"]);
+  });
+
   it("can send with only an image and no typed text", async () => {
     vi.spyOn(api, "uploadFile").mockResolvedValue();
     const agent = renderWithAgent();
@@ -306,7 +321,10 @@ describe("AgentPanel applied skills (#380)", () => {
     fireEvent.change(composer, { target: { value: "make slides" } });
     fireEvent.keyDown(composer, { key: "Enter" });
     await waitFor(() => expect(agent.send).toHaveBeenCalled());
-    expect(agent.send).toHaveBeenCalledWith("make slides", { applySkills: ["designed-pptx"] });
+    expect(agent.send).toHaveBeenCalledWith("make slides", {
+      applySkills: ["designed-pptx"],
+      imagePaths: [],
+    });
     expect(screen.queryByTestId("applied-skill-chip")).not.toBeInTheDocument();
   });
 
@@ -320,7 +338,7 @@ describe("AgentPanel applied skills (#380)", () => {
     fireEvent.change(composer, { target: { value: "hi" } });
     fireEvent.keyDown(composer, { key: "Enter" });
     await waitFor(() => expect(agent.send).toHaveBeenCalled());
-    expect(agent.send).toHaveBeenCalledWith("hi", { applySkills: [] });
+    expect(agent.send).toHaveBeenCalledWith("hi", { applySkills: [], imagePaths: [] });
   });
 });
 
