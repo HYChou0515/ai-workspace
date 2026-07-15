@@ -235,6 +235,11 @@ export type KbDocument = {
    * parser-guidance override do NOT ride the row — both are only shown for the
    * OPENED document and live on `KbRenderedDoc`. */
   quality_score?: number | null;
+  /** #513 P7: the parent document this row is an ATTACHMENT of (its id), or ""
+   * / absent for a top-level doc. The doc IDE splits attachments out of the path
+   * tree by this key and groups them under their parent as a card list. Absent
+   * on a pre-v9 row (reads as top-level, which it is). */
+  parent_doc_id?: string;
 };
 
 /** One page of documents inside a collection. The BE pages through specstar's
@@ -378,10 +383,17 @@ export type KbChatDetail = {
   name_hint?: string;
 };
 
+/** #513 P10: a TRANSIENT image attached to a KB chat message — base64 bytes + its
+ * mime. NOT ingested as a KB document; the server VLM-describes it into the search
+ * query for this one turn and discards it. */
+export type KbImageInput = { data: string; mime: string };
+
 export type SendKbMessageArgs = {
   chatId: string;
   content: string;
   signal?: AbortSignal;
+  /** #513 P10: optional transient image the server VLM-describes into the query. */
+  image?: KbImageInput;
   reasoningEffort?: ReasoningEffort;
   /** Per-message enhancement override (Phase C — Hybrid picker).
    * Concrete numbers / bool override the operator default for that
@@ -1363,6 +1375,7 @@ export const realKbApi: KbApi = {
         agent_name: args.agentName,
         max_kb_searches: args.maxKbSearches,
         max_wiki_searches: args.maxWikiSearches,
+        image: args.image,
       }),
       signal: args.signal,
     });

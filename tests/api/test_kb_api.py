@@ -634,6 +634,117 @@ def test_move_document_rekeys_and_preserves_content():
     assert blob.content == b"# A\nbody"  # content carried over
 
 
+class _FetchOnce:
+    """Minimal IImageFetcher for #513 P7 API tests — canned bytes per URL."""
+
+    def __init__(self, mapping: dict[str, tuple[bytes, str]]) -> None:
+        self._m = mapping
+
+    def fetch(self, url: str) -> tuple[bytes, str] | None:
+        return self._m.get(url)
+
+
+def _client_with_fetcher(mapping: dict[str, tuple[bytes, str]]) -> TestClient:
+    from workspace_app.kb.li_pipeline import build_doc_pipeline
+
+    spec = make_spec()
+    embedder = HashEmbedder(dim=EMBED_DIM)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        kb_embedder=embedder,
+        kb_pipeline=build_doc_pipeline(embedder=embedder),
+        kb_image_fetcher=_FetchOnce(mapping),
+    )
+    return TestClient(app)
+
+
+def test_move_attachment_preserves_parent_link_and_is_locked_to_att():
+    # #513 P7: renaming an attachment goes through the SAME move endpoint as any
+    # doc, but (a) keeps its `parent_doc_id` so it stays an attachment, and (b) is
+    # locked to its `{parent}/.att/` prefix so a rename can't detach or escape it.
+    client = _client_with_fetcher({"http://img.local/a.png": (b"PNGA", "image/png")})
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("d.html", b'<img src="http://img.local/a.png">', "text/html")},
+    )
+    _drain(client)
+    parent_id = encode_doc_id(cid, "d.html")
+    att_id = encode_doc_id(cid, "d.html/.att/img.local/a.png")
+
+    # Rename WITHIN .att/ → parent link preserved.
+    r = client.post(f"/kb/documents/move?id={att_id}&to=d.html/.att/front.png")
+    assert r.status_code == 200, r.text
+    _drain(client)
+    new_id = encode_doc_id(cid, "d.html/.att/front.png")
+    got = client.get(f"/source-doc/{new_id}").json()["data"]
+    assert got["parent_doc_id"] == parent_id  # still an attachment of d.html
+
+    # Moving an attachment OUT of {parent}/.att/ is rejected (400).
+    r2 = client.post(f"/kb/documents/move?id={new_id}&to=escaped.png")
+    assert r2.status_code == 400
+
+
+def test_delete_parent_cascades_to_its_attachments():
+    # #513 P7: an attachment is a child SourceDoc you open FROM its parent, so it
+    # has no meaning once the parent is gone. Deleting the parent removes the
+    # parent AND its attachments; each child tears down its own chunks/blob via
+    # the #104 refcount (same teardown as a plain delete).
+    client = _client_with_fetcher(
+        {
+            "http://img.local/a.png": (b"PNGA", "image/png"),
+            "http://img.local/b.png": (b"PNGB", "image/png"),
+        }
+    )
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={
+            "file": (
+                "d.html",
+                b'<img src="http://img.local/a.png"><img src="http://img.local/b.png">',
+                "text/html",
+            )
+        },
+    )
+    _drain(client)
+    parent_id = encode_doc_id(cid, "d.html")
+    att_a = encode_doc_id(cid, "d.html/.att/img.local/a.png")
+    att_b = encode_doc_id(cid, "d.html/.att/img.local/b.png")
+    assert client.get(f"/source-doc/{att_a}").status_code == 200
+    assert client.get(f"/source-doc/{att_b}").status_code == 200
+
+    assert client.delete("/kb/documents", params={"id": parent_id}).status_code == 200
+
+    assert client.get(f"/source-doc/{parent_id}").status_code == 404  # parent gone
+    assert client.get(f"/source-doc/{att_a}").status_code == 404  # attachment cascaded
+    assert client.get(f"/source-doc/{att_b}").status_code == 404  # attachment cascaded
+
+
+def test_document_list_carries_parent_doc_id_so_fe_can_split_attachments():
+    # #513 P7: each row exposes `parent_doc_id` — empty for a top-level doc,
+    # the parent's id for an attachment — so the FE hides attachments from the
+    # path tree and groups them under their parent (the #494-safe split lives in
+    # the FE, not a BE query over an absent-cell-trapped index).
+    client = _client_with_fetcher({"http://img.local/a.png": (b"PNGA", "image/png")})
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("d.html", b'<img src="http://img.local/a.png">', "text/html")},
+    )
+    _drain(client)
+    parent_id = encode_doc_id(cid, "d.html")
+    att_id = encode_doc_id(cid, "d.html/.att/img.local/a.png")
+
+    items = client.get(f"/kb/collections/{cid}/documents").json()["items"]
+    rows = {d["resource_id"]: d for d in items}
+    assert rows[parent_id]["parent_doc_id"] == ""  # top-level doc
+    assert rows[att_id]["parent_doc_id"] == parent_id  # attachment points at parent
+
+
 def test_same_path_from_two_users_is_one_shared_doc_last_write_wins():
     # The collection is a shared drive: a path is ONE doc whoever uploads it, so
     # a second user at the same path overwrites the content; created_by stays the

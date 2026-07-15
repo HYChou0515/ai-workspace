@@ -27,6 +27,7 @@ from ..resources.kb import DocChunk, RetrievedPassage, SourceDoc
 from .bm25 import bm25_rank
 from .embedder import Embedder
 from .fusion import mmr, rrf_scores
+from .image_embedder import ImageEmbedder
 from .ingest import normalize_text
 from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
@@ -211,6 +212,7 @@ class Retriever:
         candidates: int = 20,
         top_k: int = 5,
         code_embedder: Embedder | None = None,
+        image_embedder: ImageEmbedder | None = None,
         enhancement_defaults: EnhancementSettings | None = None,
         quality_weight: float = 0.10,
         quality_floor: int | None = None,
@@ -225,6 +227,11 @@ class Retriever:
         # both vector fields in parallel (one rank per field, RRF-merged).
         # None ⇒ retriever stays single-field (legacy `embedding` only).
         self._code_embedder = code_embedder
+        # #513: an image embedder for the `embedding_img` field. When wired AND
+        # the model supports text queries (CLIP-style shared space), the dense pass
+        # gains a text→image arm. None, or an image-only model, adds nothing — the
+        # text path is untouched (image-to-image search is a separate entry point).
+        self._image_embedder = image_embedder
         # Operator-level enhancement defaults + ceilings. None → bundled
         # `EnhancementSettings()` (light: expand=1, hyde=0, rerank=on).
         # Each `search` call's caller / LLM tool args resolve against
@@ -366,6 +373,21 @@ class Retriever:
                         overlay=overlay,
                     )
                 )
+            # #513 text→image arm: only for a shared-space image model. Image-only
+            # (embed_query_text → None) or no image embedder ⇒ nothing appended.
+            if self._image_embedder is not None:
+                qv_img = self._image_embedder.embed_query_text(q)
+                if qv_img is not None:
+                    ranked_lists.append(
+                        self._dense(
+                            vec=qv_img,
+                            field="embedding_img",
+                            chunks=chunks,
+                            cids=collection_ids,
+                            loc=loc,
+                            overlay=overlay,
+                        )
+                    )
             ranked_lists.append(bm25_rank(q, corpus))
 
         # HyDE: embed N hypothetical answers (as pseudo-documents); each
@@ -476,7 +498,54 @@ class Retriever:
             logger.debug("retriever: reranking %d merged passages via llm", len(passages))
             passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
         logger.info("retriever: search complete, ranked=%d limit=%d", len(passages), limit)
-        return passages[:limit]
+        # #513 P9: pull in the parent of any attachment hit — AFTER the top_k cut,
+        # so the parent context rides along without displacing a primary result.
+        return self._augment_with_parents(passages[:limit])
+
+    def _augment_with_parents(self, passages: list[RetrievedPassage]) -> list[RetrievedPassage]:
+        """#513 P9 — attachment-aware parent merge. A hit on an attachment's chunk
+        (often a thin image figure) is semantically thin on its own: the
+        surrounding explanation lives in the PARENT document's text. So each
+        attachment passage additionally pulls in its parent document (its full text, one
+        passage, inheriting the attachment's score so it sits alongside). Deduped:
+        a parent already present — independently hit, or shared by two attachment
+        hits — is never appended twice. Non-attachment passages are untouched, so
+        an attachment-free collection returns byte-for-byte the same list."""
+        present = {p.document_id for p in passages}
+        extra: list[RetrievedPassage] = []
+        for p in passages:
+            parent_id = self._parent_doc_id(p.document_id)
+            if not parent_id or parent_id in present:
+                continue
+            path = self._doc_path(parent_id)
+            if path is None:  # pragma: no cover — parent-of-live-attachment is live
+                continue
+            text = self._canonical_text(parent_id)
+            extra.append(
+                RetrievedPassage(
+                    collection_id=p.collection_id,
+                    document_id=parent_id,
+                    filename=posixpath.basename(path),
+                    start=0,
+                    end=len(text),
+                    source_chunk_ids=[],
+                    text=text,
+                    score=p.score,
+                )
+            )
+            present.add(parent_id)
+        return passages + extra
+
+    def _parent_doc_id(self, doc_id: str) -> str:
+        """The `parent_doc_id` of a doc — non-empty iff it is an attachment (#513
+        P7). ``""`` for a top-level doc or a doc that has since been deleted."""
+        rm = self._spec.get_resource_manager(SourceDoc)
+        try:
+            doc = rm.get(doc_id).data
+        except ResourceIDNotFoundError:  # pragma: no cover — resolved id is live here
+            return ""
+        assert isinstance(doc, SourceDoc)
+        return doc.parent_doc_id
 
     def _apply_quality_prior(
         self,
@@ -577,7 +646,8 @@ class Retriever:
         is the store's metric too, so this matches the persisted-vector order."""
         scored: list[tuple[float, str]] = []
         for cid, ch in chunks.items():
-            v = ch.embedding if field == "embedding" else ch.embedding_alt
+            # field is one of embedding / embedding_alt / embedding_img (#513).
+            v: list[float] | None = getattr(ch, field)
             if v:
                 scored.append((cosine_distance(v, vec), cid))
         scored.sort()

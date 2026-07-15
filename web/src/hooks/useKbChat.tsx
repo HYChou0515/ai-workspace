@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { kbApi, type KbApi } from "../api/kb";
+import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { getKbAgentName } from "../lib/kbAgent";
 import {
@@ -31,7 +31,7 @@ import {
 export type UseKbChat = {
   chatId: string | null;
   log: AgentLog;
-  send: (content: string) => Promise<void>;
+  send: (content: string, image?: KbImageInput) => Promise<void>;
   cancel: () => void;
   reset: () => void;
 };
@@ -80,9 +80,11 @@ export function useKbChat({
   }, [hydrated, initialChatId]);
 
   const send = useCallback(
-    async (content: string) => {
+    async (content: string, image?: KbImageInput) => {
       const trimmed = content.trim();
-      if (!trimmed || log.streaming) return;
+      // #513 P10: an image-only message (no text) is a valid turn — the VLM
+      // description carries the query — so gate on text OR image.
+      if ((!trimmed && !image) || log.streaming) return;
 
       let id = chatId;
       if (id == null) {
@@ -109,6 +111,8 @@ export function useKbChat({
         for await (const ev of client.streamMessage({
           chatId: id,
           content: trimmed,
+          // #513 P10: the server VLM-describes this transient image into the query.
+          image,
           signal: controller.signal,
           reasoningEffort: getReasoningEffort() ?? undefined,
           enhancements: toBodyEnhancements(getKbEnhancementSelection()),

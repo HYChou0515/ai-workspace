@@ -34,6 +34,8 @@ from workspace_app.factories import (
     get_doc_pipeline,
     get_embedder,
     get_filestore,
+    get_image_embedder,
+    get_image_fetcher,
     get_infer_modules_run_config,
     get_kb_describer,
     get_kb_llm,
@@ -239,12 +241,14 @@ def main() -> None:
             # P3.0: code-specialised embedder; None ⇒ code collections fall
             # back to the default embedder.
             kb_code_embedder=get_code_embedder(settings),
+            kb_image_embedder=get_image_embedder(settings),
             # P1: LlamaIndex IngestionPipeline replaces the hand-rolled chunker.
             # Tests/offline runs still pass `kb_chunker=` directly to create_app.
             kb_pipeline=get_doc_pipeline(settings, embedder),
             # Issue #39: custom parsers (kb.parsers) + VLM-backed bundled
             # parsers (kb.vlm_llm), minus kb.parsers_disabled.
             kb_parser_registry=get_parser_registry(settings),
+            kb_image_fetcher=get_image_fetcher(settings),
             # Issue #51: LLM sanity checks — fast set blocks boot, full
             # capability round runs async; FE re-runs via /health/checks.
             check_registry=get_check_registry(settings),

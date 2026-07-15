@@ -19,6 +19,7 @@ from ..health.replay import ReplayService
 from ..health.service import HealthService
 from ..kb.chunker import Chunker
 from ..kb.embedder import Embedder, HashEmbedder
+from ..kb.image_embedder import ImageEmbedder
 from ..kb.llm import ILlm, LitellmLlm
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import IVlm, VlmDescriber
@@ -108,6 +109,7 @@ def create_app(
     agent_config_catalog: AgentConfigCatalog | None = None,
     kb_embedder: Embedder | None = None,
     kb_code_embedder: Embedder | None = None,  # P3.0 code-specialised embedder
+    kb_image_embedder: ImageEmbedder | None = None,  # #513 image embedder (embedding_img)
     kb_chunker: Chunker | None = None,
     kb_pipeline: object | None = None,  # llama_index.core.ingestion.IngestionPipeline
     kb_chat_pipeline: object | None = None,  # P2 chat → knowledge IngestionPipeline
@@ -117,6 +119,7 @@ def create_app(
     # + the VLM-backed ones (image / PDF visual pages / slides) are
     # wired.
     kb_parser_registry: object | None = None,  # kb.parsers.ParserRegistry
+    kb_image_fetcher: object | None = None,  # #513 P6 kb.image_fetcher.IImageFetcher
     # Issue #51: the sanity-check registry. None ⇒ the diagnostics
     # endpoint serves an empty panel and startup probes are no-ops.
     # Production passes factories.get_check_registry(settings).
@@ -524,6 +527,7 @@ def create_app(
         chat_pipeline=kb_chat_pipeline,
         code_embedder=kb_code_embedder,
         parser_registry=kb_parser_registry,
+        image_fetcher=kb_image_fetcher,
     )
     # #54: the code-sync sweeper (in api/lifecycle.py) reads the ingestor off
     # app.state at startup — the ingestor is built after the FastAPI app, so the
@@ -617,6 +621,7 @@ def create_app(
         embedder=embedder,
         llm=kb_llm,
         code_embedder=kb_code_embedder,
+        image_embedder=kb_image_embedder,
         enhancement_defaults=kb_retrieval_enhancements,
         quality_weight=kb_quality_weight,
         quality_floor=kb_quality_floor,
@@ -708,6 +713,10 @@ def create_app(
         wiki_coordinator=wiki_coordinator,
         # #304: chat visibility/write ACL — a superuser bypasses the per-verb gate.
         superusers=superusers,
+        # #513 P10: shared VLM so a transient image attached to a KB chat message is
+        # described into the search query (generic multimodal input). None ⇒ image
+        # attachments rejected with a friendly error; text turns unaffected.
+        vlm_describer=vlm_describer,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the

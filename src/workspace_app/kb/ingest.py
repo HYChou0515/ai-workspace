@@ -13,6 +13,7 @@ import tarfile
 import zipfile
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from urllib.parse import urlsplit
 
 import magic
 import msgspec
@@ -32,6 +33,8 @@ from .code_lang import is_code_file
 from .doc_id import canonical_path, encode_doc_id
 from .doc_permission import collection_mirror_fields
 from .embedder import Embedder
+from .image_fetcher import IImageFetcher
+from .image_refs import extract_image_urls
 from .index_cache import IndexCacheStore, compute_cache_key
 from .parser_config import effective_config
 from .parsers import IParser, MaterialisedParserInput, ParserRegistry
@@ -234,6 +237,52 @@ def normalize_text(raw: str) -> str:
     return raw.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _content_format_for(path: str, mime: str) -> str | None:
+    """``"html"`` / ``"markdown"`` for an HTML/MD member, else ``None`` (#513 P6).
+    Extension wins, so a ``text/plain`` sniff on a ``.md``/``.html`` upload still
+    routes to the right image-reference extractor."""
+    p = path.lower()
+    if mime == "text/html" or p.endswith((".html", ".htm")):
+        return "html"
+    if mime == "text/markdown" or p.endswith((".md", ".markdown")):
+        return "markdown"
+    return None
+
+
+def _attachment_path(parent_path: str, url: str) -> str:
+    """The store path for an image fetched from ``url`` referenced by the doc at
+    ``parent_path`` (#513 P7): under the parent, in the reserved ``.att/``
+    namespace — ``{parent}/.att/{host}{url-path}``. Readable, keeps the extension
+    at the end (so the parser recognises the type), and locked under
+    ``{parent}/.att/`` so a rename can only touch the tail. No hash: attachments
+    are ordinary docs, so a genuine name clash is surfaced the ordinary way (a
+    move/upload 409), not silently disambiguated."""
+    parts = urlsplit(url)
+    return f"{parent_path}/.att/{parts.netloc}{parts.path}"
+
+
+_ATT_MARKER = "/.att/"
+
+
+def _parent_from_att_path(collection_id: str, path: str) -> str:
+    """The parent doc id implied by an attachment's path, or ``""`` for a plain
+    top-level path (#513 P7). Parentage is a CONVENTION of the reserved ``.att/``
+    namespace — a doc at ``{parent}/.att/{tail}`` is an attachment of the doc at
+    ``{parent}`` — so a MANUAL upload to an ``.att/`` path links to its parent by
+    the SAME rule the fetch fan-out uses, with no separate parameter. The parent
+    is the path segment before the FIRST ``/.att/``."""
+    idx = path.find(_ATT_MARKER)
+    if idx == -1:
+        return ""
+    return encode_doc_id(collection_id, path[:idx])
+
+
+class _Attachment(NamedTuple):
+    path: str
+    data: bytes
+    parent_doc_id: str
+
+
 class Ingestor:
     def __init__(
         self,
@@ -246,6 +295,7 @@ class Ingestor:
         code_embedder: Embedder | None = None,
         parser_registry: ParserRegistry | None = None,
         upload_checks: UploadCheckRegistry | None = None,
+        image_fetcher: IImageFetcher | None = None,
     ) -> None:
         """Doc-ingest mode (P1):
         - **`pipeline`** (production): LlamaIndex `IngestionPipeline`
@@ -293,6 +343,10 @@ class Ingestor:
         # refuses encrypted/unreadable Office + PDF uploads; an operator
         # can inject a custom registry to add their own checks.
         self._upload_checks = upload_checks or bundled_upload_checks()
+        # #513 P6: when wired, an HTML/MD upload's referenced images are fetched
+        # (allowlisted hosts only) and stored as their own image SourceDocs so
+        # they become first-class, VLM-describable, P4-image-vector-able units.
+        self._image_fetcher = image_fetcher
 
     def upload_check_hints(self) -> list[UploadCheckHint]:
         """The browser-runnable upload-check descriptors (#325) — served
@@ -427,6 +481,16 @@ class Ingestor:
             # any parser claims it and writes chunks; an unclaimed file
             # ends up status=ready, chunks=0.
             doc_id = self._store_file(collection_id, user, path, member)
+            if doc_id is not None:
+                touched.append(doc_id)
+        # #513 P7: fan an HTML/MD member's fetchable referenced images out as
+        # ATTACHMENT child docs — each under the parent's `.att/` namespace with
+        # a `parent_doc_id` link, so it's a first-class VLM-describable /
+        # image-vector-able unit that the doc list can hide under its parent.
+        for att in self._collect_attachments(collection_id, members):
+            doc_id = self._store_file(
+                collection_id, user, att.path, att.data, parent_doc_id=att.parent_doc_id
+            )
             if doc_id is not None:
                 touched.append(doc_id)
         return touched
@@ -626,6 +690,39 @@ class Ingestor:
         )
         return True
 
+    def _collect_attachments(
+        self, collection_id: str, members: list[tuple[str, bytes]]
+    ) -> list[_Attachment]:
+        """P7: for each HTML/MD member, fetch its allowlisted referenced images
+        and return them as ATTACHMENT records — the store path under the parent's
+        ``.att/`` namespace + the parent's doc id. No-op unless an image fetcher
+        is wired AND we're in pipeline mode (the ``VlmImageParser`` that describes
+        them + the P4 image vector only exist there; legacy chunker mode drops
+        binaries anyway). Fetch failures / off-allowlist URLs are simply absent
+        (the fetcher returns ``None``), so one broken figure never fails the doc.
+        """
+        if self._image_fetcher is None or self._pipeline is None:
+            return []
+        out: list[_Attachment] = []
+        for path, data in members:
+            member_mime = magic.from_buffer(data, mime=True)
+            fmt = _content_format_for(path, member_mime)
+            if fmt is None:
+                continue
+            parent_path = canonical_path(path)
+            parent_id = encode_doc_id(collection_id, parent_path)
+            text = data.decode("utf-8", errors="replace")
+            seen: set[str] = set()
+            for url in extract_image_urls(text, content_format=fmt):
+                if url in seen:
+                    continue
+                seen.add(url)
+                fetched = self._image_fetcher.fetch(url)
+                if fetched is None:
+                    continue
+                out.append(_Attachment(_attachment_path(parent_path, url), fetched[0], parent_id))
+        return out
+
     @staticmethod
     def _extract(mime: str, data: bytes) -> list[tuple[str, bytes]]:
         out: list[tuple[str, bytes]] = []
@@ -643,7 +740,9 @@ class Ingestor:
                         out.append((m.name, f.read()))
         return out
 
-    def _store_file(self, collection_id: str, user: str, path: str, data: bytes) -> str | None:
+    def _store_file(
+        self, collection_id: str, user: str, path: str, data: bytes, *, parent_doc_id: str = ""
+    ) -> str | None:
         # The id keys on collection + path only (NOT the user), so a collection
         # is a shared space: the same path is ONE doc whoever uploads it, and a
         # second writer updates it in place (last write wins; `created_by` stays
@@ -666,6 +765,18 @@ class Ingestor:
             path=path,
             content=Binary(data=data),
             status="indexing",
+            # #513 P7: a doc under the reserved `.att/` namespace is an attachment
+            # of the doc named by its path prefix. The link is resolved once, here,
+            # for BOTH entry points: the fan-out passes it explicitly, a manual
+            # upload to an `.att/` path derives the SAME id from the path. An empty
+            # result INHERITS any existing parentage (same carry-across-re-upload
+            # rule as the parser overrides below), so re-uploading an attachment's
+            # bytes never orphans it.
+            parent_doc_id=(
+                parent_doc_id
+                or _parent_from_att_path(collection_id, path)
+                or (existing.parent_doc_id if existing else "")
+            ),
             # #328/#356: carry the per-doc extraction escape hatches across a
             # re-upload. They're per-doc EXTRACTION settings, not tied to a content
             # version — so a hand-tuned doc keeps its tuning when its bytes change.

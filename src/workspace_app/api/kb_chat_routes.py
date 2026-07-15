@@ -12,11 +12,14 @@ reopening a thread shows the answer, its sources, and what the agent searched.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+import magic
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
@@ -44,6 +47,7 @@ from ..kb.context_cards import (
 )
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
+from ..kb.vlm import VlmDescriber
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
 from ..kb.wiki.store import WikiFileStore
 from ..perm import Actor, Permission, authorize
@@ -300,8 +304,19 @@ def resolve_max_searches(requested: int | None, *, default: int | None, ceiling:
     return max(0, min(requested, ceiling))
 
 
+class _ImageInput(BaseModel):
+    # #513 P10: a TRANSIENT image attached to a chat message — base64 bytes + its
+    # mime. NOT ingested as a KB document; the platform VLM-describes it into the
+    # search query for this one turn and discards it (see send_message).
+    data: str  # base64-encoded image bytes
+    mime: str = ""  # advisory only — the server re-sniffs the decoded bytes
+
+
 class _MsgBody(BaseModel):
     content: str
+    # #513 P10: optional transient image the platform VLM-describes into the query
+    # (generic multimodal chat input). None ⇒ a plain text turn, unchanged.
+    image: _ImageInput | None = None
     # Per-message reasoning effort from the UI selector; None → model default.
     reasoning_effort: Literal["low", "medium", "high"] | None = None
     # Per-message enhancement override. `None` (or all-null fields)
@@ -324,6 +339,31 @@ class _MsgBody(BaseModel):
     # the boolean "search wiki" toggle. Same shape/clamp as max_kb_searches (0 =
     # don't grep the wiki this reply, N = at most N greps, None = operator default).
     max_wiki_searches: int | None = None
+
+
+_IMAGE_QUERY_PREAMBLE = "[Attached image — described by the vision model]"
+
+
+async def _fold_image(content: str, image: _ImageInput, describer: VlmDescriber | None) -> str:
+    """#513 P10: decode a TRANSIENT attached image, VLM-describe it, and append the
+    caption to the query the agent searches with. The bytes are never persisted —
+    the description rides this one turn only. The client-declared mime is advisory;
+    the decoded bytes are re-sniffed so a mislabelled / non-image upload is caught."""
+    if describer is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This deployment has no vision model configured, so image "
+            "attachments can't be read — send your question as text.",
+        )
+    try:
+        data = base64.b64decode(image.data, validate=True)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="image.data is not valid base64") from None
+    mime = magic.from_buffer(data, mime=True)
+    if not mime.startswith("image/"):
+        raise HTTPException(status_code=400, detail=f"attachment is not an image (detected {mime})")
+    caption = await asyncio.to_thread(describer.describe, data, mime)
+    return f"{content}\n\n{_IMAGE_QUERY_PREAMBLE}\n{caption}"
 
 
 class _ShareBody(BaseModel):
@@ -355,6 +395,11 @@ def register_kb_chat_routes(
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     # #304: superusers bypass the per-verb chat ACL (must match make_spec's set).
     superusers: frozenset[str] = frozenset(),
+    # #513 P10: the shared VLM the KB chat uses to describe a TRANSIENT image
+    # attached to a message into the search query (generic multimodal chat input;
+    # same describer as read_image / ingestion). None ⇒ image attachments are
+    # rejected with a friendly error, text turns are unaffected.
+    vlm_describer: VlmDescriber | None = None,
 ) -> None:
     """Register the KB chat surface.
 
@@ -752,6 +797,13 @@ def register_kb_chat_routes(
             if block:
                 agent_content = f"{block}\n\n{body.content}"
             ctx.injected_card_ids.update(rid for rid, _ in hits)
+
+        # #513 P10: a transient image attached to this message is VLM-described and
+        # its caption folded into the query the agent searches with — the same
+        # "augment the agent's content, not the persisted message" pattern as the
+        # #106 card pre-scan above. The image itself is never stored (not a KB doc).
+        if body.image is not None:
+            agent_content = await _fold_image(agent_content, body.image, vlm_describer)
 
         return await engine.stream(chat_id, agent_content, ctx, on_complete=persist)
 

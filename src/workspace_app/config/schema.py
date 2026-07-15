@@ -439,6 +439,21 @@ class CodeEmbedderSettings:
 
 
 @dataclass(frozen=True)
+class ImageFetchSettings:
+    """#513 P6: fetch an HTML/MD upload's externally-linked images (``<img src>``
+    / ``![](url)``) from an internal image server so each becomes its own
+    first-class image SourceDoc (VLM-describable, P4-image-vector-able).
+
+    ``allowed_hosts`` is the SSRF allowlist — ONLY these hosts are ever fetched.
+    Empty (the default) ⇒ the fan-out is OFF: no image is ever fetched and ingest
+    behaves exactly as before (referenced images stay inert links). Internal-
+    network default: a straight GET, no auth."""
+
+    allowed_hosts: list[str] = field(default_factory=list)
+    timeout: float = 10.0
+
+
+@dataclass(frozen=True)
 class GitSettings:
     default_token: str = ""
     sync_check_interval_sec: int = 300
@@ -492,6 +507,10 @@ class KbSettings:
     # can keep a low default while still allowing the user to dial searches up.
     max_searches_ceiling: int = 10
     code_embedder: CodeEmbedderSettings = field(default_factory=CodeEmbedderSettings)
+    # #513 P6: fetch an HTML/MD upload's externally-linked images off an internal
+    # image server (SSRF-allowlisted) into their own image SourceDocs. Empty
+    # allowlist (default) ⇒ off — no fetch, ingest unchanged.
+    image_fetch: ImageFetchSettings = field(default_factory=ImageFetchSettings)
     git: GitSettings = field(default_factory=GitSettings)
     # Issue #39: the VLM the vision-backed parsers (image / PDF visual
     # pages / slides) call to turn pixels into searchable text. Same
@@ -705,7 +724,12 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         # `lookup_glossary` (#106) is the deterministic context-card path beside
         # kb_search: an unknown TERM resolves instantly from the glossary, only
         # a QUESTION needing document facts falls through to the slow RAG search.
-        "allowed_tools": ["kb_search", "search_wiki", "lookup_glossary", "request_wiki_update"],
+        "allowed_tools": [
+            "kb_search",
+            "search_wiki",
+            "lookup_glossary",
+            "request_wiki_update",
+        ],
     },
     # Bundled hosted KB-chat options — same KB system prompt + tool set
     # as `kb-default`, just a different model so the FE picker shows
@@ -724,7 +748,12 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "Summarize what we know on this topic",
             "Find related past findings",
         ],
-        "allowed_tools": ["kb_search", "search_wiki", "lookup_glossary", "request_wiki_update"],
+        "allowed_tools": [
+            "kb_search",
+            "search_wiki",
+            "lookup_glossary",
+            "request_wiki_update",
+        ],
     },
     "kb-openai": {
         "model": "openai/gpt-4o-mini",
@@ -735,7 +764,12 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "Summarize what we know on this topic",
             "Find related past findings",
         ],
-        "allowed_tools": ["kb_search", "search_wiki", "lookup_glossary", "request_wiki_update"],
+        "allowed_tools": [
+            "kb_search",
+            "search_wiki",
+            "lookup_glossary",
+            "request_wiki_update",
+        ],
     },
     # `infer-modules-default` — the sub-agent the RCA agent's
     # `infer_modules` tool delegates to. KB-retrieval-flavoured (same

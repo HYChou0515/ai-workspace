@@ -1,10 +1,10 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { KbApi, KbChatSummary, KbCollection } from "../../api/kb";
+import type { KbApi, KbChatSummary, KbCollection, SendKbMessageArgs } from "../../api/kb";
 import { mockKbApi } from "../../api/kbMock";
 import { QueryWrap } from "../../test/queryWrapper";
 import { KbChatPanel } from "./KbChatPanel";
@@ -229,5 +229,57 @@ describe("KbChatPanel wiki correction (#397)", () => {
     );
     await screen.findByText("a"); // the assistant answer rendered
     expect(screen.queryByRole("button", { name: /回報有誤/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("KbChatPanel image attach (#513 P10)", () => {
+  // A typed streamMessage spy so `.mock.calls[0][0]` carries SendKbMessageArgs.
+  const streamSpy = () => vi.fn((_args: SendKbMessageArgs) => (async function* () {})());
+
+  const stageImage = async (bytes: number[], name: string, mime = "image/png") => {
+    const file = new File([new Uint8Array(bytes)], name, { type: mime });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("kb-image-input"), { target: { files: [file] } });
+    });
+  };
+
+  it("stages an attached image and forwards it (base64) on send", async () => {
+    const stream = streamSpy();
+    const client = panelClient([coll({})], [], { streamMessage: stream });
+    render(<KbChatPanel chatId={null} collectionIds={["c1"]} client={client} />);
+
+    await stageImage([1, 2, 3], "defect.png");
+    expect(await screen.findByText("defect.png")).toBeInTheDocument(); // a preview chip appears
+
+    await userEvent.type(screen.getByPlaceholderText(/Ask the knowledge base/i), "what is this?");
+    await userEvent.click(screen.getByRole("button", { name: /Send/i }));
+
+    await waitFor(() => expect(stream).toHaveBeenCalled());
+    const arg = stream.mock.calls[0][0];
+    expect(arg.content).toBe("what is this?");
+    expect(arg.image).toEqual({ data: btoa(String.fromCharCode(1, 2, 3)), mime: "image/png" });
+  });
+
+  it("clears the composer's staged image after sending", async () => {
+    const stream = streamSpy();
+    const client = panelClient([coll({})], [], { streamMessage: stream });
+    render(<KbChatPanel chatId={null} collectionIds={["c1"]} client={client} />);
+
+    await stageImage([1], "one.png");
+    await userEvent.type(screen.getByPlaceholderText(/Ask the knowledge base/i), "q");
+    await userEvent.click(screen.getByRole("button", { name: /Send/i }));
+
+    await waitFor(() => expect(stream).toHaveBeenCalled());
+    expect(screen.queryByText("one.png")).not.toBeInTheDocument(); // chip cleared for the next turn
+  });
+
+  it("removes a staged image on request", async () => {
+    const client = panelClient([coll({})], [], { streamMessage: vi.fn(async function* () {}) });
+    render(<KbChatPanel chatId={null} collectionIds={["c1"]} client={client} />);
+
+    await stageImage([9], "d.png");
+    expect(await screen.findByText("d.png")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Remove image/i }));
+    expect(screen.queryByText("d.png")).not.toBeInTheDocument();
   });
 });

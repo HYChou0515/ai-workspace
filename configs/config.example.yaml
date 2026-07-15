@@ -430,6 +430,14 @@
 #     doc_prefix: ""
 #     base_url: ""
 #     api_key: ${KB_CODE_EMBED_API_KEY}
+#   image_fetch:                            # #513 P6: fetch an HTML/MD upload's externally-linked
+#                                           #   images (<img src> / ![](url)) off an internal image
+#                                           #   server → each becomes its own image SourceDoc (VLM-
+#                                           #   describable, P4-image-vector-able).
+#     allowed_hosts: []                     # SSRF allowlist — ONLY these hosts are ever fetched.
+#                                           #   [] (default) = OFF: no fetch, ingest unchanged.
+#                                           #   e.g. ["images.fab.internal", "yield.fab.internal"]
+#     timeout: 10.0                         # per-image GET timeout (seconds)
 #   git:
 #     default_token: ${GIT_DEFAULT_TOKEN}   # PAT for self-hosted gitlab
 #     sync_check_interval_sec: 300          # how often the sweeper wakes to check the daily-sync time

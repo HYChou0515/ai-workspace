@@ -424,6 +424,12 @@ class DocumentRow(BaseModel):
     # already carries both; keeping them off the list keeps the row servable
     # from `indexed_data` alone.
     quality_score: int | None = None
+    # #513 P7: the parent document this row is an ATTACHMENT of (its
+    # `encode_doc_id` id), or "" for a top-level doc. The FE splits attachments
+    # out of the path tree and groups them under their parent by this key — a
+    # #494-safe split done client-side (a pre-v9 row has no `parent_doc_id` cell,
+    # so `.get(...) or ""` reads it as top-level, which it is).
+    parent_doc_id: str = ""
 
 
 class CollectionImported(BaseModel):
@@ -1600,6 +1606,7 @@ def register_kb_routes(
                     units_done=units_done,
                     units_total=units_total,
                     quality_score=_opt_int(indexed.get("quality_score")),
+                    parent_doc_id=str(indexed.get("parent_doc_id") or ""),
                 )
             )
         return DocumentsPage(
@@ -1786,18 +1793,32 @@ def register_kb_routes(
             rm.get(doc_id)
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        # #43: ask the wiki to un-fold this source BEFORE the row is gone — the
-        # remove-pass snapshots its content now (it can't re-read a deleted doc).
-        # on_doc_deleted gates on the collection's use_wiki itself; create_app
-        # always wires a coordinator.
-        assert wiki_coordinator is not None
-        await wiki_coordinator.on_doc_deleted(doc_id)
-        # #104: delete this doc's content chunk set ONLY if it is the LAST holder
-        # of that content in the collection (a refcount), else leave the shared
-        # set for its surviving siblings — they resolve to it by file_id (no
-        # re-home). Governs the chunks now that source_doc_id is not a cascade.
-        teardown_doc_chunks(spec, doc_id)
-        rm.permanently_delete(doc_id)
+
+        async def _teardown_one(did: str) -> None:
+            # #43: ask the wiki to un-fold this source BEFORE the row is gone — the
+            # remove-pass snapshots its content now (it can't re-read a deleted doc).
+            # on_doc_deleted gates on the collection's use_wiki itself; create_app
+            # always wires a coordinator.
+            assert wiki_coordinator is not None
+            await wiki_coordinator.on_doc_deleted(did)
+            # #104: delete this doc's content chunk set ONLY if it is the LAST holder
+            # of that content in the collection (a refcount), else leave the shared
+            # set for its surviving siblings — they resolve to it by file_id (no
+            # re-home). Governs the chunks now that source_doc_id is not a cascade.
+            teardown_doc_chunks(spec, did)
+            rm.permanently_delete(did)
+
+        # #513 P7: cascade to attachments — a child SourceDoc (parent_doc_id ==
+        # this doc) is opened FROM its parent, so it has no meaning once the parent
+        # is gone. Collect the children BEFORE tearing the parent down; each tears
+        # down its own chunks/blob via the same #104 refcount. Single level: an
+        # attachment is a leaf (images aren't scanned for further refs).
+        children = [
+            r.resource_id for r in rm.search_resources((QB["parent_doc_id"] == doc_id).build())
+        ]
+        await _teardown_one(doc_id)
+        for child in children:
+            await _teardown_one(child)
         return DocDeletedOut(deleted=doc_id)
 
     @app.post("/kb/documents/move")
@@ -1823,6 +1844,18 @@ def register_kb_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         old = rev.data
         assert isinstance(old, SourceDoc)
+        # #513 P7: an attachment (parent_doc_id set) may only be renamed WITHIN its
+        # locked `{parent}/.att/` prefix — so a rename can't detach it from its
+        # parent or escape the attachment namespace. Top-level docs are unrestricted.
+        if old.parent_doc_id:
+            marker = "/.att/"
+            idx = old.path.find(marker)
+            prefix = old.path[: idx + len(marker)] if idx != -1 else ""
+            if prefix and not to.startswith(prefix):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"an attachment can only be renamed within {prefix}",
+                )
         # Preserve the ORIGINAL owner (resource creator), not the last writer.
         creator = rm.get_meta(doc_id).created_by
         new_id = encode_doc_id(old.collection_id, to)
@@ -1842,6 +1875,8 @@ def register_kb_routes(
             path=to,
             content=Binary(data=raw),
             status="indexing",
+            # #513 P7: a rename keeps the doc an attachment of the same parent.
+            parent_doc_id=old.parent_doc_id,
             # #303: a move re-creates the doc in the SAME collection — carry the
             # collection's read-visibility mirror so the moved doc doesn't reset to
             # the public default inside a restricted collection.
