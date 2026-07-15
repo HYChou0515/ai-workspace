@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from workspace_app.kb.cluster_member import count_clusters, page_clusters
 from workspace_app.resources import Collection, make_spec
-from workspace_app.resources.kb import ClusterMember
+from workspace_app.resources.kb import EMBED_DIM, ClusterMember
 
 
 def _spec_with_collection(name="c"):
@@ -20,7 +20,17 @@ def _spec_with_collection(name="c"):
     return spec, cid
 
 
-def _member(spec, cid, cluster_key, *, kind="proposal", ref="r", state="active", member_id=None):
+def _member(
+    spec,
+    cid,
+    cluster_key,
+    *,
+    kind="proposal",
+    ref="r",
+    state="active",
+    member_id=None,
+    embedding=None,
+):
     rm = spec.get_resource_manager(ClusterMember)
     m = ClusterMember(
         collection_id=cid,
@@ -29,6 +39,7 @@ def _member(spec, cid, cluster_key, *, kind="proposal", ref="r", state="active",
         cluster_key=cluster_key,
         state=state,
         norm_key=cluster_key,
+        embedding=embedding,
     )
     if member_id is None:
         return rm.create(m).resource_id
@@ -54,6 +65,22 @@ def test_page_clusters_pages_concepts_by_recency_with_distinct_total():
     assert len(p1[0][2]) == 2  # c3's two members grouped under one concept
     seen = {key for page in (p1, p2) for key, _latest, _members in page}
     assert seen == {"c0", "c1", "c2", "c3"}  # no overlap / gap
+
+
+def test_page_clusters_never_loads_the_embedding_vector():
+    """A page's members come back WITHOUT their ``embedding`` (#508). The 1024-dim
+    vector is reconcile's nearest-neighbour input — the review inbox reads a member's
+    scalars only — so the page projects every field EXCEPT the vector. Deserializing
+    one vector per pending member is what made the grouped inbox take 60s+; this is
+    the guard that the projection stays in place."""
+    spec, cid = _spec_with_collection()
+    _member(spec, cid, "k", embedding=[0.5] * EMBED_DIM)
+
+    (page,), _total = page_clusters(spec, [cid])
+    _key, _latest, members = page
+    _member_id, _epoch, member = members[0]
+    assert not hasattr(member, "embedding")  # projected out — never left the DB
+    assert (member.cluster_key, member.kind) == ("k", "proposal")  # scalars still there
 
 
 def test_page_clusters_filters_by_state_and_excludes_resolved():
