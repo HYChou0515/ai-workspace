@@ -611,6 +611,14 @@ class Preset:
     """
 
     model: str
+    # Whether `model` NATIVELY sees images. When True, a workspace turn feeds
+    # attached image bytes straight into the main model's message (and the
+    # `read_image` tool hands it the raw image) instead of routing every image
+    # through the separate `kb.vlm_llm` describer — no main→VLM→main round-trip,
+    # no lossy image→text step. Purely declarative: local Ollama VLM ids (e.g.
+    # `ollama_chat/qwen2.5vl`) aren't in litellm's capability DB, so we don't
+    # auto-detect. Default False keeps text-only models on the describer path.
+    vision: bool = False
     # Optional — agent-style callers (workspace_chat / kb_chat /
     # infer_modules) need a prompt; LLM-only callers (kb.retrieval_llm)
     # don't. Catalog build enforces non-empty for agent callers.
@@ -801,6 +809,7 @@ def _preset_from_dict(d: dict[str, Any]) -> Preset:
     raw_at = d.get("allowed_tools")
     return Preset(
         model=d["model"],
+        vision=bool(d.get("vision", False)),
         prompt_file=d.get("prompt_file", ""),
         description=d.get("description", ""),
         suggestions=[_to_suggestion(v) for v in d.get("suggestions", [])],

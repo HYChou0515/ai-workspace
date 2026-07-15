@@ -75,6 +75,27 @@ def test_resolve_ignores_attached_preset_outside_the_allowed_subset():
     assert cfg.model == "ollama_chat/qwen3:14b"
 
 
+def test_resolve_carries_the_preset_vision_flag():
+    """A preset flagged ``vision=True`` (the model natively sees images) resolves
+    onto ``AgentConfig.vision``, so the turn builder knows it may feed image bytes
+    straight to the main model instead of routing through the separate VLM."""
+    presets = {
+        **_presets(),
+        "claude-opus": Preset(model="claude-opus-4-7", description="hosted", vision=True),
+    }
+    cfg = AppCatalog(presets=presets).resolve(
+        app_slug="rca", profile="default", attached_preset="claude-opus"
+    )
+    assert cfg.vision is True
+
+
+def test_resolve_defaults_vision_off_for_a_text_only_preset():
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local"
+    )
+    assert cfg.vision is False
+
+
 def test_resolve_applies_tool_prefs_force_off():
     """#322: a per-item tool pref of ``{tool: False}`` removes that tool from the
     resolved set; untouched tools follow the (here: full ceiling) default."""
