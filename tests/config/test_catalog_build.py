@@ -105,10 +105,8 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
     `default_kb_agent_config` test: the kb_chat config must carry
     a knowledge-base prompt with the `[n]` citation convention,
     `kb_search` plus the `search_wiki` (#506) budgeted wiki-grep tool, the
-    `lookup_glossary` (#106) context-card tool, the `lookup_defect` +
-    `classify_defect` (#513) station-scoped defect-library tools (code lookup +
-    image classification) and the `request_wiki_update` (#397) correction tool,
-    and non-empty quick-prompt suggestions."""
+    `lookup_glossary` (#106) context-card tool and the `request_wiki_update`
+    (#397) correction tool, and non-empty quick-prompt suggestions."""
     settings = load(config_path=None, env={})
     cat = build_catalog(settings, config_dir=None)
     kb = cat.kb_chat()
@@ -116,8 +114,6 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
         "kb_search",
         "search_wiki",
         "lookup_glossary",
-        "lookup_defect",
-        "classify_defect",
         "request_wiki_update",
     ]
     assert "knowledge base" in kb.system_prompt.lower()  # ty: ignore[unresolved-attribute]

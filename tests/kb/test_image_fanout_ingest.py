@@ -1,7 +1,7 @@
 """#513 P6 — HTML/MD upload fans referenced images out into their own SourceDocs.
 
-The defect library's HTML/MD knowledge links its figures on an internal image
-server. At store time the Ingestor pulls each fetchable image down and stores it
+HTML/MD knowledge can link its figures on an internal image server. At store
+time the Ingestor pulls each fetchable image down and stores it
 as its OWN image SourceDoc (bytes on ``content``) — a first-class, VLM-
 describable, P4-image-vector-able unit — rather than folding a description into
 the text and discarding the pixels (the PdfParser template). Reuses the same

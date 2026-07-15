@@ -29,8 +29,6 @@ if TYPE_CHECKING:
 TOOL_VERBS: dict[str, Verb] = {
     "read_file": "read_content",
     "read_image": "read_content",
-    # #513 P3: reads the uploaded image doc's content to classify it.
-    "classify_defect": "read_content",
     "list_files": "read_content",
     "exists": "read_content",
     "write_file": "edit_content",

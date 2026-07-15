@@ -1,8 +1,8 @@
 """#513 P6 — extract image references from HTML/MD, gate them by an allowlist.
 
-The defect library's existing HTML/MD knowledge carries its figures as
-external ``http`` links (``<img src>`` / ``![](url)``) pointing at an internal
-image server. Ingest must (1) pull the URLs out of the text and (2) keep only
+HTML/MD knowledge can carry its figures as external ``http`` links
+(``<img src>`` / ``![](url)``) pointing at an internal image server. Ingest must
+(1) pull the URLs out of the text and (2) keep only
 the allowlisted hosts before any fetch — SSRF fencing is a hard requirement.
 These are pure functions; the network lives behind ``IImageFetcher``.
 """

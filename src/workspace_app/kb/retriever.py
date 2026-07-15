@@ -485,9 +485,9 @@ class Retriever:
 
     def _augment_with_parents(self, passages: list[RetrievedPassage]) -> list[RetrievedPassage]:
         """#513 P9 — attachment-aware parent merge. A hit on an attachment's chunk
-        (a defect figure) is semantically thin on its own: the morphology and
-        judgement criteria live in the PARENT document's text. So each attachment
-        passage additionally pulls in its parent document (its full text, one
+        (often a thin image figure) is semantically thin on its own: the
+        surrounding explanation lives in the PARENT document's text. So each
+        attachment passage additionally pulls in its parent document (its full text, one
         passage, inheriting the attachment's score so it sits alongside). Deduped:
         a parent already present — independently hit, or shared by two attachment
         hits — is never appended twice. Non-attachment passages are untouched, so

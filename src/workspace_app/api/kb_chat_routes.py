@@ -44,7 +44,6 @@ from ..kb.context_cards import (
 )
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
-from ..kb.vlm import VlmDescriber
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
 from ..kb.wiki.store import WikiFileStore
 from ..perm import Actor, Permission, authorize
@@ -356,10 +355,6 @@ def register_kb_chat_routes(
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     # #304: superusers bypass the per-verb chat ACL (must match make_spec's set).
     superusers: frozenset[str] = frozenset(),
-    # #513 P3: the vision model the KB agent's classify_defect tool uses to read an
-    # uploaded defect image. None ⇒ no VLM configured; classify_defect reports it's
-    # unavailable (same fail-loud as read_image), the rest of KB chat is unaffected.
-    vlm_describer: VlmDescriber | None = None,
 ) -> None:
     """Register the KB chat surface.
 
@@ -662,9 +657,6 @@ def register_kb_chat_routes(
             # can read this collection's context cards — deterministic glossary
             # path beside kb_search (unknown term → glossary, question → search).
             spec=spec,
-            # #513 P3: the vision model the KB agent's classify_defect tool reads an
-            # uploaded defect image with (None ⇒ the tool reports no VLM configured).
-            describer=vlm_describer,
             # Cross-turn memory: prior dialogue (excludes the user msg just added),
             # each message attributed to its author (#242).
             history=history_items(

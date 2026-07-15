@@ -1235,93 +1235,6 @@ def lookup_glossary_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -
     return block or f"No glossary entries found for: {query}"
 
 
-def lookup_defect_impl(
-    ctx: RunContextWrapper[AgentToolContext], code: str, scope_chain: list[str]
-) -> str:
-    """Look up a defect code's entry in the defect library, scoped to a station (#513).
-
-    Deterministic + instant — no knowledge-base search. Pass the defect ``code`` and
-    the ``scope_chain`` the user gave, ordered MOST-SPECIFIC FIRST (e.g.
-    ``["etchtool07", "etch", "metal"]`` = machine, station-type, layer). The most-specific
-    entry that carries the code wins, so a single machine can override the shared
-    station-type entry; a code with no scoped entry falls back to a global one. Returns the
-    matching entry (morphology + judgement criteria) as authoritative context tagged with
-    its ``card_id`` (so you can update it via update_context_card), or a short "not found"
-    note. Use this for "what defect is code X at this station"."""
-    from ..kb.context_cards import card_context_block
-    from ..kb.defect_library import resolve
-    from ..resources.kb import ContextCard
-
-    spec = ctx.context.spec
-    if spec is None:
-        return "error: lookup_defect needs a collection-scoped context (no spec on this turn)"
-    hits: list[tuple[str, ContextCard]] = []
-    for cid in ctx.context.collection_ids:
-        got = resolve(spec, cid, code, scope_chain)
-        if got is not None:
-            hits.append(got)
-    block = card_context_block([c for _, c in hits], ids=[rid for rid, _ in hits])
-    return block or f"No defect entry found for code {code!r} in scope {scope_chain}"
-
-
-def classify_defect_image_impl(
-    ctx: RunContextWrapper[AgentToolContext],
-    image_doc_id: str,
-    scope_chain: list[str],
-    context: str | None = None,
-) -> str:
-    """Classify an uploaded defect image against the defect library, scoped to a station (#513).
-
-    Use this for "what defect is THIS image (at this station)". First upload the image
-    to the collection so it has a document id; pass that as ``image_doc_id``. Pass the
-    ``scope_chain`` the user gave, MOST-SPECIFIC FIRST (e.g. ``["etchtool07", "etch", "metal"]``
-    = machine, station-type, layer) — it hard-filters the candidate defect entries to those
-    visible at that station. ``context`` optionally adds the user's free-text note (conditions,
-    where on the wafer). A vision model looks at the image and ranks it against those entries'
-    morphology / judgement criteria, citing what supports or rules out each. Returns the ranked
-    assessment plus the ``card_ids`` it considered (so a confirmed/corrected call can update an
-    entry via update_context_card). This is a coarse triage — confirm before acting."""
-    from specstar.types import ResourceIDNotFoundError
-
-    from ..kb.defect_library import build_classification_prompt, candidates_in_scope
-    from ..resources.kb import ContextCard, SourceDoc
-
-    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
-        return denied
-    spec = ctx.context.spec
-    if spec is None:
-        return "error: classify_defect needs a collection-scoped context (no spec on this turn)"
-    describer = ctx.context.describer
-    if describer is None:
-        return (
-            "error: defect image classification needs a vision model — this deployment "
-            "has none configured. Do not retry."
-        )
-    drm = spec.get_resource_manager(SourceDoc)
-    try:
-        doc = drm.get(image_doc_id).data
-    except ResourceIDNotFoundError:
-        return f"error: no document {image_doc_id!r} to classify (upload the image first)"
-    assert isinstance(doc, SourceDoc)
-    data = drm.restore_binary(doc).content.data
-    assert isinstance(data, bytes)
-    mime = magic.from_buffer(data, mime=True)
-    if not mime.startswith("image/"):
-        return f"error: document {image_doc_id!r} is not an image (detected {mime})"
-    # Scope hard-filter → the candidate shortlist across every in-scope collection.
-    pairs: list[tuple[str, ContextCard]] = []
-    for cid in ctx.context.collection_ids:
-        pairs.extend(candidates_in_scope(spec, cid, scope_chain))
-    if not pairs:
-        return f"No defect entries in scope {scope_chain} to classify against."
-    prompt = build_classification_prompt([c for _, c in pairs], context)
-    sink = ctx.context.on_exec_output
-    on_chunk = (lambda t, _r: sink(t.encode("utf-8"))) if sink is not None else None
-    out = describer.answer(data, mime, question=prompt, on_chunk=on_chunk)
-    ids = ", ".join(rid for rid, _ in pairs)
-    return f"{out}\n\n[defect entries considered — card_ids: {ids}]"
-
-
 def update_context_card_impl(
     ctx: RunContextWrapper[AgentToolContext],
     card_id: str,
@@ -1678,10 +1591,6 @@ _IMPLS = {
     # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
     "resolve_collection": resolve_collection_impl,
     "lookup_glossary": lookup_glossary_impl,
-    # #513: station-scoped defect-library lookup (scope-chain, most-specific-wins).
-    "lookup_defect": lookup_defect_impl,
-    # #513 P3: classify an uploaded defect image against the in-scope entries (VLM).
-    "classify_defect": classify_defect_image_impl,
     "update_context_card": update_context_card_impl,
     "create_context_card": create_context_card_impl,
     # #397: submit a wiki correction (tell the maintainer what's wrong instead of

@@ -446,7 +446,7 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     )
     # #513: the image vector, an ADDITIVE third signal. Unlike embedding /
     # embedding_alt (exactly one set), this may coexist with `embedding` on the
-    # same chunk — a defect image indexed by both its VLM description (text) and
+    # same chunk — an image indexed by both its VLM description (text) and
     # its pixels. Nullable + its own IMG_EMBED_DIM space; None until an image
     # embedder is wired (create_app(kb_image_embedder=...)), so existing chunks
     # and the text-only retrieval path are untouched.

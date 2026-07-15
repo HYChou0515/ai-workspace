@@ -1,8 +1,8 @@
 """IImageFetcher — pull an allowlisted internal image URL down to bytes (#513 P6).
 
-The defect library's HTML/MD knowledge references its figures as external
-``http`` links on an internal image server. This is the seam that turns such a
-link into stored image bytes.
+HTML/MD knowledge often references its figures as external ``http`` links on an
+internal image server. This is the seam that turns such a link into stored image
+bytes.
 
 The host allowlist (SSRF fence) is enforced HERE as well as by the caller's
 ``filter_allowed_urls`` pre-filter — defense in depth, so a caller that forgets

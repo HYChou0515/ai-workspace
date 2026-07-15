@@ -700,9 +700,6 @@ def create_app(
         wiki_coordinator=wiki_coordinator,
         # #304: chat visibility/write ACL — a superuser bypasses the per-verb gate.
         superusers=superusers,
-        # #513 P3: the vision model the KB agent's classify_defect tool uses (shared
-        # with read_image / ingestion). None ⇒ classify_defect reports no VLM.
-        vlm_describer=vlm_describer,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
