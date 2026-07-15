@@ -14,11 +14,16 @@ members; this module owns the two things the review lifecycle needs AFTER creati
    writes, which is the precondition for the native aggregation below to be correct.
 2. :func:`page_clusters` — the grouped view's native, paginated ``GROUP BY
    cluster_key`` (P4), replacing the load-every-item-then-group "fake pagination".
+3. :func:`list_members` — the ONE way the review path reads members: projected to
+   :data:`MEMBER_FIELDS`, i.e. every field EXCEPT the 1024-dim ``embedding`` (#508).
+   The vector is reconcile's input, never the inbox's; deserializing one per pending
+   member made the grouped inbox slow independently of how well it paged.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, cast
 
 import msgspec
 from specstar import QB, SpecStar
@@ -32,8 +37,10 @@ from ..resources.kb import ClusterMember
 # filter narrows to one of these.
 QUEUE_KINDS = ("proposal", "term_question")
 
-# One resolved page member: its resource id (== CardProposal id for a proposal),
-# its meta creation epoch, and the raw member row (kind / ref_id / run_id / collection).
+# One resolved page member: its resource id (== CardProposal id for a proposal), its
+# meta creation epoch, and the member row (kind / ref_id / run_id / collection). Typed
+# ClusterMember but carrying the vector-free projection below — a structural subset, so
+# every field EXCEPT `embedding` reads normally.
 MemberRow = tuple[str, float, ClusterMember]
 # One concept on a page: its cluster_key, the newest member's epoch (the sort key),
 # and the members grouped under it (newest first).
@@ -46,6 +53,36 @@ ClusterRow = tuple[str, float, list[MemberRow]]
 _ACTIVE = "active"
 _INACTIVE = "inactive"
 _SUPPRESSED = "suppressed"
+
+# Every ClusterMember field EXCEPT the 1024-dim `embedding` Vector (#508). The vector
+# is reconcile's nearest-neighbour input — it assigns the cluster_key and is then
+# never read again; the review views want the scalars it grouped. Deserializing one
+# vector per pending member is what made the grouped inbox take 60s+, so every read
+# on the review path projects the vector away. Listed positively (not "all but one")
+# because `partial` takes the fields to KEEP; a new scalar must be added here to be
+# readable, while a new heavy field stays out by default.
+MEMBER_FIELDS = [
+    "/collection_id",
+    "/kind",
+    "/ref_id",
+    "/run_id",
+    "/norm_key",
+    "/cluster_key",
+    "/state",
+    "/reason",
+    "/label",
+]
+
+
+def list_members(rm: Any, query: Any) -> list[Any]:
+    """The review path's ONLY ClusterMember read (#508) — the matching rows projected
+    to :data:`MEMBER_FIELDS`, so a member's ``embedding`` is never deserialized.
+
+    ``returns=["data", "info"]`` keeps ``r.info`` (the resource id + the meta creation
+    time the grouped page sorts on) while ``partial`` narrows ``r.data``; the result
+    is a ``Partial_ClusterMember`` — structurally a ClusterMember minus the vector, so
+    callers ``cast`` it rather than ``isinstance``-narrow (it is a distinct type)."""
+    return rm.list_resources(query, returns=["data", "info"], partial=MEMBER_FIELDS)
 
 
 def set_member_state(spec: SpecStar, member_id: str, target_state: str) -> None:
@@ -76,10 +113,15 @@ def deactivate_member(spec: SpecStar, member_id: str) -> None:
     set_member_state(spec, member_id, _INACTIVE)
 
 
-def _cluster_query(collection_ids: Sequence[str], state: str, kinds: Sequence[str]):
-    """The grouped view's predicate — all three fields indexed, so the GROUP BY +
-    the page-member load never scan: members in ``collection_ids`` of a ``state``
-    (active queue / inactive history) whose ``kind`` forms a concept."""
+def member_query(
+    collection_ids: Sequence[str],
+    state: str = _ACTIVE,
+    kinds: Sequence[str] = QUEUE_KINDS,
+):
+    """The review path's member predicate — all three fields indexed, so the GROUP BY,
+    the page-member load and the inbox's cluster join never scan: members in
+    ``collection_ids`` of a ``state`` (active queue / inactive history) whose ``kind``
+    forms a concept. Returns the BUILDER (callers ``&``-extend / ``sort`` / ``build``)."""
     return (
         QB["collection_id"].in_(list(collection_ids))
         & (QB["state"] == state)
@@ -101,7 +143,7 @@ def count_clusters(
         return 0
     rm = spec.get_resource_manager(ClusterMember)
     return rm.exp_count_groups(  # ty: ignore[unresolved-attribute]
-        QB["cluster_key"], query=_cluster_query(collection_ids, state, kinds).build()
+        QB["cluster_key"], query=member_query(collection_ids, state, kinds).build()
     )
 
 
@@ -127,7 +169,7 @@ def page_clusters(
     if not collection_ids:
         return [], 0
     rm = spec.get_resource_manager(ClusterMember)
-    base = _cluster_query(collection_ids, state, kinds)
+    base = member_query(collection_ids, state, kinds)
     total = rm.exp_count_groups(QB["cluster_key"], query=base.build())  # ty: ignore[unresolved-attribute]
     groups = rm.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
         QB["cluster_key"],
@@ -141,16 +183,11 @@ def page_clusters(
     page_keys = [key for key, _latest in order]
     members_by_key: dict[str, list[MemberRow]] = {key: [] for key in page_keys}
     if page_keys:
-        member_query = (base & QB["cluster_key"].in_(page_keys)).build()
-        for r in rm.list_resources(member_query):
-            member = r.data
-            assert isinstance(member, ClusterMember)  # rm is ClusterMember-typed; narrows ty
+        page_query = (base & QB["cluster_key"].in_(page_keys)).build()
+        for r in list_members(rm, page_query):
+            member = cast(ClusterMember, r.data)  # projected — every field but the vector
             members_by_key[member.cluster_key].append(
-                (
-                    r.info.resource_id,  # ty: ignore[unresolved-attribute]
-                    r.info.created_time.timestamp(),  # ty: ignore[unresolved-attribute]
-                    member,
-                )
+                (r.info.resource_id, r.info.created_time.timestamp(), member)
             )
     out: list[ClusterRow] = []
     for key, latest in order:
