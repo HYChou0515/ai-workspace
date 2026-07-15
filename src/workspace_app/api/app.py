@@ -700,6 +700,10 @@ def create_app(
         wiki_coordinator=wiki_coordinator,
         # #304: chat visibility/write ACL — a superuser bypasses the per-verb gate.
         superusers=superusers,
+        # #513 P10: shared VLM so a transient image attached to a KB chat message is
+        # described into the search query (generic multimodal input). None ⇒ image
+        # attachments rejected with a friendly error; text turns unaffected.
+        vlm_describer=vlm_describer,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the

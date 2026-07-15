@@ -1,4 +1,5 @@
-from collections.abc import AsyncIterator
+import base64
+from collections.abc import AsyncIterator, Iterator, Sequence
 
 from workspace_app.agent.ask_kb import AskKbSpec
 from workspace_app.agent.context import AgentToolContext, WikiSearchBudget
@@ -17,6 +18,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.retriever import Retriever
+from workspace_app.kb.vlm import IVlm, VlmDescriber
 from workspace_app.resources import AgentConfig, make_spec
 from workspace_app.resources.kb import EMBED_DIM, RetrievedPassage
 from workspace_app.sandbox.mock import MockSandbox
@@ -189,7 +191,7 @@ class _DualRunner:
             yield RunDone()
 
 
-def _client(runner: object) -> TestClient:
+def _client(runner: object, *, describer: VlmDescriber | None = None) -> TestClient:
     spec = make_spec()
     app = create_app(
         spec=spec,
@@ -198,6 +200,7 @@ def _client(runner: object) -> TestClient:
         runner=runner,  # ty: ignore[invalid-argument-type]
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+        vlm_describer=describer,
     )
     return TestClient(app)
 
@@ -922,3 +925,120 @@ def test_kb_chat_streams_tool_and_reasoning_before_the_answer():
     assert "tool_end" in body
     assert "message_delta" in body  # answer streamed live
     assert body.index("tool_start") < body.rindex("message_delta")  # tool before final answer
+
+
+# --- #513 P10: a KB chat message can carry a transient image the platform
+# VLM-describes into the search query (generic multimodal chat input). The image
+# is NOT ingested as a KB document — it rides the request, is described, folded
+# into the query, and discarded. ---
+
+# A real minimal 1×1 PNG — libmagic must sniff it as image/png (the route rejects
+# non-images), so a fake header won't do.
+_PNG = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00"
+    b"\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff\xff?\x00\x05\xfe\x02\xfe"
+    b"\r\xefF\xb8\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+_PNG_B64 = base64.b64encode(_PNG).decode()
+
+
+class _FakeVlm(IVlm):
+    """Records the (prompt, images) it was handed and yields a canned caption, so
+    the route↔describer contract runs end-to-end (like the read_image tool test),
+    not through a hand-rolled describer double."""
+
+    def __init__(self, caption: str) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._caption = caption
+
+    def stream(
+        self, prompt: str, *, images: Sequence[tuple[bytes, str]]
+    ) -> Iterator[tuple[str, bool]]:
+        self.calls.append({"prompt": prompt, "images": list(images)})
+        yield self._caption, False
+
+
+class _PromptRunner:
+    """Records the prompt (the content the engine handed the agent) and answers."""
+
+    def __init__(self) -> None:
+        self.seen_prompt: str | None = None
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.seen_prompt = prompt
+        yield MessageDelta(text="ok")
+        yield RunDone()
+
+
+def test_attached_image_is_vlm_described_into_the_query():
+    runner = _PromptRunner()
+    vlm = _FakeVlm("a linear gouge across the die")
+    client = _client(runner, describer=VlmDescriber(vlm))
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+
+    client.post(
+        f"/kb/chats/{cid}/messages",
+        json={"content": "what is this at etch?", "image": {"data": _PNG_B64, "mime": "image/png"}},
+    )
+
+    # the uploaded bytes reached the VLM
+    assert vlm.calls and vlm.calls[0]["images"] == [(_PNG, "image/png")]
+    # its caption was folded into the query the agent received, alongside the user's text
+    assert runner.seen_prompt is not None
+    assert "a linear gouge across the die" in runner.seen_prompt
+    assert "what is this at etch?" in runner.seen_prompt
+
+
+def test_attached_image_is_not_persisted_on_the_message():
+    # Ephemeral: the image rides the turn only. The stored user message keeps the
+    # plain text — no caption, no bytes — so history stays clean and the image is
+    # never a KB document.
+    vlm = _FakeVlm("a bright haze across the wafer")
+    client = _client(_PromptRunner(), describer=VlmDescriber(vlm))
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(
+        f"/kb/chats/{cid}/messages",
+        json={"content": "classify this", "image": {"data": _PNG_B64, "mime": "image/png"}},
+    )
+
+    user_msg = [m for m in client.get(f"/kb/chats/{cid}").json()["messages"] if m["role"] == "user"]
+    assert user_msg[-1]["content"] == "classify this"  # plain text, caption not folded in
+    assert "haze" not in user_msg[-1]["content"]
+
+
+def test_image_attachment_without_a_vision_model_is_a_friendly_400():
+    # No describer wired (this deployment has no VLM) + an image → fail loud, don't
+    # silently drop the image and answer as if it wasn't sent.
+    client = _client(_PromptRunner())  # describer=None
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    r = client.post(
+        f"/kb/chats/{cid}/messages",
+        json={"content": "what is this?", "image": {"data": _PNG_B64, "mime": "image/png"}},
+    )
+    assert r.status_code == 400
+    assert "vision model" in r.json()["detail"]
+
+
+def test_non_image_attachment_is_rejected():
+    # The declared mime is advisory; the decoded bytes are re-sniffed. Markdown
+    # labelled image/png is caught.
+    not_an_image = base64.b64encode(b"# just markdown, not an image\n").decode()
+    client = _client(_PromptRunner(), describer=VlmDescriber(_FakeVlm("x")))
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    r = client.post(
+        f"/kb/chats/{cid}/messages",
+        json={"content": "what is this?", "image": {"data": not_an_image, "mime": "image/png"}},
+    )
+    assert r.status_code == 400
+    assert "not an image" in r.json()["detail"]
+
+
+def test_invalid_base64_image_is_rejected():
+    client = _client(_PromptRunner(), describer=VlmDescriber(_FakeVlm("x")))
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    r = client.post(
+        f"/kb/chats/{cid}/messages",
+        json={"content": "hi", "image": {"data": "not!!valid!!base64", "mime": "image/png"}},
+    )
+    assert r.status_code == 400
+    assert "base64" in r.json()["detail"]
