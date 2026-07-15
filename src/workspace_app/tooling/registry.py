@@ -23,6 +23,7 @@ See `docs/plan-skills-and-tools.md` §B.3.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,8 @@ from ..agent.context import AgentToolContext
 from ..agent.plot_review import run_review
 from ..agent.tools import _exec_result_text
 from ..sandbox.protocol import ExecResult, SandboxHandle
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,7 @@ def discover_packages(prebuilt_dir: Path) -> list[PackageInfo]:
     out: list[PackageInfo] = []
     for sub in sorted(prebuilt_dir.iterdir()):
         if not sub.is_dir():
+            logger.debug("registry: skipping non-dir entry %s in %s", sub.name, prebuilt_dir)
             continue
         commands_json = sub / "commands.json"
         schemas_dir = sub / "schemas"
@@ -135,6 +139,7 @@ def discover_packages(prebuilt_dir: Path) -> list[PackageInfo]:
                 install_dir=f"../.tools/{sub.name}",
             )
         )
+    logger.info("registry: discovered %d tool package(s) from %s", len(out), prebuilt_dir)
     return out
 
 
@@ -164,6 +169,7 @@ def build_function_tools(
     else:
         selected = _select_commands(packages, allowed)
     _check_collisions(selected)
+    logger.debug("registry: %d function tool(s) selected (allowed=%s)", len(selected), allowed)
     return [_to_function_tool(pkg, cmd) for pkg, cmd in selected]
 
 
@@ -180,12 +186,14 @@ def _select_commands(
             pkg_name, cmd_name = spec, None
         pkg = by_name.get(pkg_name)
         if pkg is None:
+            logger.debug("registry: unknown package %r in allowed, skipping", pkg_name)
             continue  # unknown package — silently skip
         if cmd_name is None:
             out.extend((pkg, c) for c in pkg.commands)
             continue
         cmd = next((c for c in pkg.commands if c.name == cmd_name), None)
         if cmd is None:
+            logger.debug("registry: unknown command %r in package %r, skipping", cmd_name, pkg.name)
             continue  # unknown command — silently skip
         out.append((pkg, cmd))
     return out
@@ -223,6 +231,7 @@ def _images_from_stdout(stdout: bytes) -> list[str]:
     try:
         obj = json.loads(stdout.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
+        logger.debug("registry: exec stdout not image-json, no image paths extracted")
         return []
     if not isinstance(obj, dict):
         return []
@@ -253,10 +262,14 @@ async def _review_chart(
     try:
         first_png = await sandbox.download(handle, "/" + first.lstrip("/"))
     except Exception:  # noqa: BLE001 — can't read the render back → skip review
+        logger.warning(
+            "registry: chart review skipped, cannot read render %s", first, exc_info=True
+        )
         return text
     try:
         base_args: dict[str, Any] = json.loads(args_json or "{}")
     except ValueError:
+        logger.debug("registry: chart review args_json unparseable, using empty base args")
         base_args = {}
 
     async def render(style: dict[str, Any]) -> tuple[bytes, str]:
@@ -304,6 +317,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         actx = ctx.context
         assert actx.sandbox is not None  # provisioned tools imply a sandbox
         handle = await actx.ensure_sandbox()
+        logger.info("registry: dispatch %s:%s in sandbox %s", pkg.name, cmd.name, handle.id)
         # args_json is the raw JSON the LLM produced. We pass it through
         # verbatim — the tool's dispatcher pydantic-validates it; if it
         # fails, the tool prints a friendly error to stderr + exits 2.
@@ -312,6 +326,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
             [f"{pkg.install_dir}/launch", cmd.name, args_json or "{}"],
             on_output=actx.on_exec_output,
         )
+        logger.info("registry: dispatch %s:%s exited %d", pkg.name, cmd.name, result.exit_code)
         text = _exec_result_text(actx, cmd.name, result)
         # #285: a chart command that emits image(s) gets a VLM visual self-review
         # (detect layout issues → restyle → re-render, ≤2 passes) when a vision

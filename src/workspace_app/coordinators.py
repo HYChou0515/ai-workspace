@@ -15,6 +15,7 @@ API layer still owns the request-stack wiring (route registration,
 from __future__ import annotations
 
 import dataclasses
+import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
@@ -43,6 +44,8 @@ if TYPE_CHECKING:
 # The (model, reasoning_level) -> ILlm seam the sanity battery drives. Same
 # shape kb_search uses; mirrors health.sanity.coordinator.LlmFactory.
 LlmFactory = Callable[[str, str], "ILlm"]
+
+logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -236,6 +239,8 @@ def build_coordinators(
             judge=sanity_judge_llm,
             message_queue_factory=message_queue_factory,
         )
+        logger.info("coordinators: sanity battery coordinator wired")
+    logger.info("coordinators: built wiki/index/card_gen coordinators")
     return CoordinatorBundle(
         wiki=wiki, index=index, card_gen=card_gen, quality=quality, sanity=sanity
     )

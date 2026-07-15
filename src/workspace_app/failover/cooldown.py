@@ -12,7 +12,10 @@ re-probes it; success or failure then re-decides naturally.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Hashable, Iterable
+
+logger = logging.getLogger(__name__)
 
 
 class CooldownRegistry:
@@ -51,3 +54,4 @@ class CooldownRegistry:
     def mark(self, key: Hashable, seconds: float) -> None:
         """Park ``key`` for ``seconds`` from now (overwriting any prior deadline)."""
         self._until[key] = self._clock() + seconds
+        logger.debug("cooldown: parked %r for %.1fs", key, seconds)

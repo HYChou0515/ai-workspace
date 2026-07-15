@@ -15,6 +15,7 @@ Two operations now that the sandbox is authoritative (sandbox-as-SoT redesign):
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import tempfile
 import time
@@ -28,6 +29,9 @@ from .ignore import DEFAULT_IGNORES, should_ignore
 
 if TYPE_CHECKING:
     from ..monitor import IMonitor
+
+
+logger = logging.getLogger(__name__)
 
 
 @contextlib.contextmanager
@@ -92,6 +96,7 @@ class SandboxSync:
         n_bytes = 0
         paths = await self._fs.ls(workspace_id)
         total = len(paths)
+        logger.debug("sync: restore workspace %s: %d snapshot paths", workspace_id, total)
         # #492 P11: stream (done, total) so a slow cold wake shows "還原中 N/M"
         # instead of a blank running card. A leading 0/total makes the card
         # appear immediately with the fraction known upfront; then one tick per
@@ -108,6 +113,7 @@ class SandboxSync:
             n += 1
             if on_progress is not None:
                 on_progress(n, total)
+        logger.info("sync: restored %d files, %d bytes (workspace %s)", n, n_bytes, workspace_id)
         # Seed the diff state from the just-restored sandbox so the first mirror
         # after a wake is a no-op (nothing has changed yet).
         self._versions[workspace_id] = {
@@ -121,6 +127,7 @@ class SandboxSync:
         # leaves it absent → the mirror skips a half-restored dir instead of
         # trusting its (incomplete) file set.
         await self._sb.mark_ready(handle)
+        logger.info("sync: sandbox %s marked ready (workspace %s)", handle.id, workspace_id)
         self._record("restore", workspace_id, started, n_files=n, bytes=n_bytes)
         return n
 
@@ -142,7 +149,15 @@ class SandboxSync:
             ready_before = await self._sb.is_ready(handle)
             entries = await self._sb.walk(handle, "/")
         except SandboxNotFound:
+            logger.warning(
+                "sync: mirror workspace %s: sandbox %s gone (reaped) -> skip",
+                workspace_id,
+                handle.id,
+            )
             return 0  # sandbox gone (reaped) → skip; the snapshot is the archive
+        logger.debug(
+            "sync: mirror workspace %s: walk ok, ready_before=%s", workspace_id, ready_before
+        )
         prev = self._versions.get(workspace_id, {})
         seen: dict[str, str] = {}
         n_uploaded = 0
@@ -162,6 +177,9 @@ class SandboxSync:
             n_uploaded += 1
         n_deleted = 0
         if ready_before and await self._ready_after(handle):
+            logger.debug(
+                "sync: mirror workspace %s: deletions honored (ready sandwich held)", workspace_id
+            )
             for path in prev:
                 if path not in seen and await self._fs.exists(workspace_id, path):
                     await self._fs.delete(workspace_id, path)
@@ -179,6 +197,13 @@ class SandboxSync:
             n_deleted=n_deleted,
             bytes=n_bytes,
         )
+        logger.info(
+            "sync: mirror workspace %s: +%d uploaded, -%d deleted, %d bytes",
+            workspace_id,
+            n_uploaded,
+            n_deleted,
+            n_bytes,
+        )
         return n_uploaded + n_deleted
 
     async def _ready_after(self, handle: SandboxHandle) -> bool:
@@ -188,4 +213,7 @@ class SandboxSync:
         try:
             return await self._sb.is_ready(handle)
         except SandboxNotFound:
+            logger.debug(
+                "sync: ready-after: sandbox %s gone -> not ready (skip deletes)", handle.id
+            )
             return False

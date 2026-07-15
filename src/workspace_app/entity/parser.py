@@ -9,6 +9,7 @@ falls back to `body` and the entity drops out of any structured projection.
 from __future__ import annotations
 
 import hashlib
+import logging
 from typing import Any
 
 import msgspec
@@ -18,6 +19,8 @@ from .diagnostics import Diagnostic
 from .schema import EntitySchema, Role
 
 __all__ = ["Diagnostic", "ParsedEntity", "content_version", "parse_entity", "serialize_entity"]
+
+logger = logging.getLogger(__name__)
 
 
 def content_version(raw: bytes) -> str:
@@ -80,14 +83,30 @@ def parse_entity(raw: bytes, number: int, type_name: str, schema: EntitySchema) 
     diagnostics: list[Diagnostic] = []
     front, body = _split_frontmatter(text)
     if front is None:
+        logger.warning(
+            "parser: %s #%d has no frontmatter, degraded to body-only",
+            type_name,
+            number,
+        )
         diagnostics.append(Diagnostic("error", "no frontmatter — shown as body only"))
         return ParsedEntity(number, type_name, {}, text, diagnostics, version)
     try:
         loaded = yaml.safe_load(front)
     except yaml.YAMLError as e:
+        logger.warning(
+            "parser: %s #%d malformed frontmatter yaml, degraded to body-only",
+            type_name,
+            number,
+            exc_info=True,
+        )
         diagnostics.append(Diagnostic("error", f"malformed frontmatter YAML: {e}"))
         return ParsedEntity(number, type_name, {}, text, diagnostics, version)
     if loaded is not None and not isinstance(loaded, dict):
+        logger.warning(
+            "parser: %s #%d frontmatter is not a mapping, dropped from projection",
+            type_name,
+            number,
+        )
         diagnostics.append(Diagnostic("error", "frontmatter is not a mapping"))
         return ParsedEntity(number, type_name, {}, text, diagnostics, version)
     fields = {str(k): v for k, v in (loaded or {}).items()}

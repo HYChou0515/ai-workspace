@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -45,6 +46,8 @@ if TYPE_CHECKING:
 
 # The generic sub-agent bridge callable shape (purpose, payload, sink, origin_id, ...).
 RunSubagent = Callable[..., Awaitable[tuple[str, list]]]
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowExecutor:
@@ -122,6 +125,11 @@ class WorkflowExecutor:
             assert isinstance(got, Conversation)
             conv = got
         except (ResourceIDNotFoundError, AssertionError):
+            logger.warning(
+                "workflow_exec: chat %s unresolved, using default chat for item %s",
+                chat_key,
+                item_id,
+            )
             rid, conv = self._locator.conversation_for(item_id)  # legacy fallback (default chat)
         cfg = self._locator.resolve_agent_config(item_id)
         if cfg is not None and tools is not None:
@@ -153,6 +161,12 @@ class WorkflowExecutor:
             answer.extend(tm.content for tm in produced if tm.role == "assistant")
 
         enqueue_key = lane or chat_key
+        logger.debug(
+            "workflow_exec: enqueue turn on %s for item %s (chat %s)",
+            enqueue_key,
+            item_id,
+            chat_key,
+        )
         await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
         if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
             await self._turn_engine.forget(lane)
@@ -175,6 +189,11 @@ class WorkflowExecutor:
 
         env = f"export WF_TOKEN={shlex.quote(credential)}; " if credential else ""
         result = await self._sandbox.exec(handle, ["sh", "-lc", env + run], on_output=on_output)
+        logger.info(
+            "workflow_exec: sandbox exec for item %s completed with exit %s",
+            item_id,
+            result.exit_code,
+        )
         with contextlib.suppress(Exception):
             await self._registry.flush(item_id)
         return result.exit_code, result.stdout.decode("utf-8", errors="replace")
@@ -190,6 +209,13 @@ class WorkflowExecutor:
         """The ingest capability (§8) bound to this run's workspace + captured user.
         ``journal_dir`` is the run's journal folder (#136) so the receipt lands under
         the run's workflow folder, not scattered at the workspace root."""
+        logger.info(
+            "workflow_exec: ingest %s into collection %s for item %s (user %s)",
+            path,
+            collection,
+            item_id,
+            captured_user,
+        )
         return await ingest_to_collection(
             self._spec,
             self._ingestor,
@@ -209,6 +235,7 @@ class WorkflowExecutor:
         upload at ``src`` into text (the same KB parsers, no chunk/embed) and stage it at a
         content-coherent path derived from ``dest``, so topic-hub files only the converted
         artifact — never the raw binary."""
+        logger.debug("workflow_exec: convert %s -> %s for item %s", src, dest, item_id)
         return await convert_upload(
             self._ingestor,
             self._files,
@@ -223,6 +250,12 @@ class WorkflowExecutor:
         """The upsert-context-card capability (§8, #111) bound to this run's captured
         user — create-or-update by key, so re-classifying a term updates its card
         instead of duplicating it."""
+        logger.info(
+            "workflow_exec: upsert context card in %s (keys=%s) for user %s",
+            collection,
+            keys,
+            captured_user,
+        )
         return upsert_context_card(
             self._spec, collection=collection, keys=keys, title=title, body=body, user=captured_user
         )
@@ -261,6 +294,12 @@ class WorkflowExecutor:
     ) -> str:
         """The send_notification capability (#435 P5): one in-app Notification carrying the
         send-once fingerprint (``dedup_key``) — the create is both the send and the ledger."""
+        logger.info(
+            "workflow_exec: send notification to %s for user %s (dedup=%s)",
+            recipient,
+            captured_user,
+            dedup_key,
+        )
         return notify(
             self._spec,
             recipient=recipient,
@@ -344,6 +383,9 @@ class WorkflowExecutor:
         shared across the item's chats (§3.1), so tear the sandbox down only when no
         OTHER run is still running — a parallel run keeps it alive (§3). On terminal,
         drop the finished run's own chat turn session (never the item's other chats)."""
+        logger.info(
+            "workflow_exec: release run resources for item %s (terminal=%s)", item_id, terminal
+        )
         if not self._any_running(item_id):
             await self._registry.close_session(item_id)
         if terminal:
@@ -358,6 +400,12 @@ class WorkflowExecutor:
             return
         slug, item = found
         phase = run.current_phase or "?"
+        logger.warning(
+            "workflow_exec: workflow run failed at %r on item %s, notifying owner %s",
+            phase,
+            run.item_id,
+            item.owner,
+        )
         notify(
             self._spec,
             recipient=item.owner,

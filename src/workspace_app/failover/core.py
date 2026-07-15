@@ -22,6 +22,7 @@ is expected to carry its own ``timeout`` so an abandoned producer eventually die
 
 from __future__ import annotations
 
+import logging
 import math
 import queue
 import threading
@@ -31,6 +32,8 @@ from dataclasses import dataclass
 from typing import cast
 
 from .cooldown import CooldownRegistry
+
+logger = logging.getLogger(__name__)
 
 # Called when a tried provider fails before its first item (a switch). Receives
 # the provider and the underlying cause (a TtftTimeout for a silent stall).
@@ -170,6 +173,7 @@ def failover_stream[T](
         for provider in providers:
             if cooldown.is_cooling(provider.key):
                 continue
+            logger.debug("failover: trying provider %s", provider.label)
             for attempt in range(provider.num_retries + 1):
                 stream = _drive(provider)
                 try:
@@ -182,6 +186,13 @@ def failover_stream[T](
                         # same-endpoint retries exhausted → park it and switch; the
                         # loop then ends naturally and the next provider is tried.
                         cooldown.mark(provider.key, provider.cooldown_s)
+                        logger.warning(
+                            "failover: provider %s parked %.1fs after pre-first "
+                            "failure (%r) — switching to next",
+                            provider.label,
+                            provider.cooldown_s,
+                            failure.cause,
+                        )
                         if on_switch is not None:
                             on_switch(provider, failure.cause)
                     # else: a quick same-endpoint retry (pre-first only)
@@ -189,6 +200,7 @@ def failover_stream[T](
                     yield first
                     yield from stream  # mid-stream errors / idle stalls propagate
                     return
+    logger.warning("failover: all providers failed or were cooling — last error %r", last)
     raise AllProvidersFailed("all providers failed or were cooling") from last
 
 
@@ -231,6 +243,7 @@ def failover_call[R](
         for provider in providers:
             if cooldown.is_cooling(provider.key):
                 continue
+            logger.debug("failover: trying provider %s", provider.label)
             for attempt in range(provider.num_retries + 1):
                 try:
                     return provider.call()
@@ -240,7 +253,15 @@ def failover_call[R](
                         # retries exhausted → park it and switch; the loop then
                         # ends naturally and the next provider is tried.
                         cooldown.mark(provider.key, provider.cooldown_s)
+                        logger.warning(
+                            "failover: provider %s parked %.1fs after failure "
+                            "(%r) — switching to next",
+                            provider.label,
+                            provider.cooldown_s,
+                            exc,
+                        )
                         if on_switch is not None:
                             on_switch(provider, exc)
                     # else: a quick same-endpoint retry
+    logger.warning("failover: all providers failed or were cooling — last error %r", last)
     raise AllProvidersFailed("all providers failed or were cooling") from last

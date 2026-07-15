@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
 import subprocess
 import tomllib
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Same launcher template as the legacy `scripts/prebuild_tools.py`: the
 # AT_SECURE workaround for the jail is necessary, only the surrounding
@@ -113,12 +116,14 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
             f"`uv lock` in {source} and commit the result."
         )
     if not force and not _should_rebuild(source, dst):
+        logger.debug("prebuild: %s unchanged, skipping rebuild", name)
         return
     # The distribution name uv knows the local package by (== the
     # [project.scripts] entrypoint for CLI packages). Used to target the
     # cache-busting reinstall/refresh at just this package.
     project = tomllib.loads((source / "pyproject.toml").read_text()).get("project", {})
     dist_name = project.get("name") or name
+    logger.info("prebuild: building %s (dist=%s, force=%s)", name, dist_name, force)
     if dst.exists():
         shutil.rmtree(dst)
     dst.mkdir(parents=True)
@@ -133,6 +138,7 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
     # wheel cache for the local package so edited-but-same-version source
     # is rebuilt from disk (#64), not restored stale from cache.
     env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv.resolve())}
+    logger.debug("prebuild: uv sync --frozen for %s (dist=%s)", name, dist_name)
     subprocess.run(
         [
             "uv",
@@ -175,6 +181,7 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
     # fingerprint) so the next prebuild can tell whether anything actually
     # changed (mtime is unreliable; see _should_rebuild).
     (dst / ".built").write_text(_build_stamp(source))
+    logger.info("prebuild: built %s -> %s", name, dst)
 
 
 # uv-run debug launchers (#63): no bundled python/venv. The package source is
@@ -212,6 +219,7 @@ def build_package_uvrun(*, name: str, source: Path, dst: Path) -> None:
     src_abs = source.resolve()
     project = tomllib.loads((source / "pyproject.toml").read_text()).get("project", {})
     is_carrier = not project.get("scripts")
+    logger.info("prebuild(uvrun): building debug bundle for %s (carrier=%s)", name, is_carrier)
     dst.mkdir(parents=True, exist_ok=True)
     # Softlink the live source in — the sandbox reaches it through this link
     # (no copy), and the launch's `--project "$here/project"` points at it.
@@ -242,6 +250,7 @@ def provision_uvrun(packages: dict[str, Path], dst_root: Path) -> Path:
     dst_root.mkdir(parents=True, exist_ok=True)
     for name, source in packages.items():
         if not source.is_dir():
+            logger.debug("prebuild(uvrun): skipping %s, source dir %s missing", name, source)
             continue
         build_package_uvrun(name=name, source=source, dst=dst_root / name)
     return dst_root
@@ -342,6 +351,7 @@ def _dump_schemas(launch: Path, dst: Path) -> None:
         )
     cmds = json.loads(proc.stdout.decode("utf-8"))
     (dst / "commands.json").write_text(json.dumps(cmds))
+    logger.debug("prebuild: dumped %d command schema(s) to %s", len(cmds), dst)
     schemas_dir = dst / "schemas"
     schemas_dir.mkdir(exist_ok=True)
     for c in cmds:

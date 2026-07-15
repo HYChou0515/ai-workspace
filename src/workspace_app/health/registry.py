@@ -48,6 +48,7 @@ def run_check(check: ISanityCheck) -> CheckResult:
             detail=f"{type(exc).__name__}: {exc!s}"[:500],
         )
     latency_ms = int((time.perf_counter() - started) * 1000)
+    logger.debug("sanity check %s -> %s in %dms", check.check_id, result.status, latency_ms)
     return CheckResult(
         check_id=result.check_id,
         status=result.status,

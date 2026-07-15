@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import logging
 import time
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,8 @@ if TYPE_CHECKING:
     from ..monitor import IMonitor
 
 _LEASE_ID = "blob-gc"
+
+logger = logging.getLogger(__name__)
 
 
 class _GcLease(Struct):
@@ -70,6 +73,9 @@ def try_claim_gc(spec: SpecStar, *, now_ms: int, ttl_ms: int) -> bool:
     lease = res.data
     assert isinstance(lease, _GcLease)
     if lease.lease_until_ms > now_ms:
+        logger.debug(
+            "blob-gc: lease held until %d ms (now %d ms), skip", lease.lease_until_ms, now_ms
+        )
         return False
     try:
         rm.modify(
@@ -78,8 +84,10 @@ def try_claim_gc(spec: SpecStar, *, now_ms: int, ttl_ms: int) -> bool:
             status=RevisionStatus.draft,
             expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
         )
+        logger.info("blob-gc: won lease at now=%d ms, ttl=%d ms", now_ms, ttl_ms)
         return True
     except PreconditionFailedError:
+        logger.debug("blob-gc: lost lease CAS race, another pod is holder")
         return False
 
 
@@ -107,6 +115,13 @@ def run_blob_gc(
         return None
     started = time.monotonic()
     stats = spec.gc(mode="reconcile", t1=t1, t2=t2, now=now)
+    logger.info(
+        "blob-gc: reconcile complete quarantined=%d restored=%d deleted=%d live=%d",
+        stats.quarantined,
+        stats.restored,
+        stats.deleted,
+        stats.live,
+    )
     if monitor is not None:
         monitor.record(
             {

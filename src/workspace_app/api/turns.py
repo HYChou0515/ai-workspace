@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -44,6 +45,8 @@ from .events import (
 )
 from .repetition_guard import guard_repetition
 from .runner import AgentRunner
+
+logger = logging.getLogger(__name__)
 
 
 def _now_ms() -> int:
@@ -460,6 +463,7 @@ class ChatTurnEngine:
         #349: bump the shared epoch first so a turn for this key still running on
         a PEER pod (the delete didn't land there) aborts via its watcher instead
         of running against a conversation that no longer exists."""
+        logger.info("turns: forget conversation %s", key)
         await self._turn_control.advance(key)
         self._sessions.pop(key, None)
         ws = self._ws_sessions.pop(key, None)
@@ -496,6 +500,7 @@ class ChatTurnEngine:
             session.worker = asyncio.create_task(self._worker(session, key))
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut))
+        logger.info("turns: enqueued turn for %s", key)
         return fut
 
     async def _worker(self, session: _WorkspaceSession, key: str) -> None:
@@ -515,12 +520,14 @@ class ChatTurnEngine:
             )
             session.current_turn = turn
             self._spawn_watcher(key, my_epoch, turn)
+            logger.info("turns: worker %s turn started (epoch %d)", key, my_epoch)
             # The turn persists its own (partial) result via on_complete even
             # when cancelled; swallow the cancellation here so the worker lives.
             with contextlib.suppress(asyncio.CancelledError):
                 await turn
             session.current_turn = None
             fut.set_result(None)  # wake the POST awaiting this message's turn
+            logger.debug("turns: worker %s turn finished", key)
             session.queue.task_done()
 
     async def _run_turn(
@@ -541,11 +548,13 @@ class ChatTurnEngine:
                 reducer.add(ev)
                 publish(ev)
         except asyncio.CancelledError:
+            logger.info("turns: turn cancelled for %s", ctx.investigation_id)
             cancelled = RunCancelled()
             reducer.add(cancelled)
             publish(cancelled)
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a terminal error message
+            logger.exception("turns: turn errored for %s", ctx.investigation_id)
             err = _terminal_error(exc)
             reducer.add(err)
             publish(err)
@@ -557,6 +566,7 @@ class ChatTurnEngine:
             # turns a finished turn into a failure; on an active cancel the flush
             # may be skipped, but the periodic checkpoint + next turn still cover it.
             if on_turn_end is not None:
+                logger.debug("turns: turn-end durable flush for %s", ctx.investigation_id)
                 # A flush failure is not a turn failure (best-effort durability).
                 with contextlib.suppress(Exception):
                     await on_turn_end()
@@ -569,6 +579,7 @@ class ChatTurnEngine:
         #349: bump the shared epoch first so a turn running on a PEER pod's queue
         worker (Stop didn't land on the pod holding it) aborts via its watcher;
         the local cancel below is the same-pod fast path."""
+        logger.info("turns: cancel_current (stop) for %s", key)
         await self._turn_control.advance(key)
         session = self._ws_sessions.get(key)
         if session is None:
@@ -658,6 +669,7 @@ class ChatTurnEngine:
         if prev is None or prev.done():
             return
         prev.cancel()
+        logger.info("turns: cancelled prior in-flight turn")
         with contextlib.suppress(BaseException):
             await prev
 
@@ -671,9 +683,11 @@ class ChatTurnEngine:
             async for ev in self._events(content, ctx):
                 await queue.put(ev)
         except asyncio.CancelledError:
+            logger.info("turns: drive pump cancelled for %s", ctx.investigation_id)
             await queue.put(RunCancelled())
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a terminal error event
+            logger.exception("turns: drive pump failed for %s", ctx.investigation_id)
             await queue.put(_terminal_error(exc))
         finally:
             await queue.put(None)  # sentinel: stream closed
@@ -701,12 +715,14 @@ class ChatTurnEngine:
             task = asyncio.create_task(self._drive(content, ctx, queue))
             session.current_turn = task
             self._spawn_watcher(key, my_epoch, task)
+            logger.info("turns: stream turn started for %s (epoch %d)", key, my_epoch)
 
         async def gen() -> AsyncIterator[str]:
             reducer = _TurnReducer()
             while True:
                 item = await queue.get()
                 if item is None:
+                    logger.info("turns: stream turn complete for %s", key)
                     on_complete(reducer.produced)
                     return
                 reducer.add(item)  # build the persistable shape
@@ -721,6 +737,7 @@ class ChatTurnEngine:
         #349: bump the shared epoch first so a turn running on a PEER pod (the
         Stop request didn't land on the pod holding the turn) aborts via its
         watcher; the local cancel-prior is the same-pod fast path."""
+        logger.info("turns: cancel (stop) for %s", key)
         await self._turn_control.advance(key)
         async with (session := self._session(key)).lock:
             await self._cancel_prior_turn(session)

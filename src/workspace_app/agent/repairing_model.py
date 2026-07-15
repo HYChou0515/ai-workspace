@@ -50,12 +50,14 @@ def _safe_args(raw: str) -> str | None:
     repaired = None
     repaired = repair_tool_args(raw)  # ← #76 self-repair: comment THIS line to disable repair
     if repaired is not None:
+        _LOGGER.debug("repairing_model: self-repaired args %r -> %r", raw, repaired)
         return repaired
     # --- backstop (ALWAYS ON) ---------------------------------------------
     # Repair is off or couldn't recover the intent. Hand downstream a valid
     # JSON sentinel so nothing crashes/poisons; the tool wrap (args_recovery)
     # turns it into a clean in-band error so the turn continues and the model
     # retries — instead of aborting / giving up.
+    _LOGGER.warning("repairing_model: self-repair failed for %r; using backstop sentinel", raw)
     return make_backstop_sentinel(raw)
 
 

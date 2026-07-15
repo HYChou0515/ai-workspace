@@ -36,6 +36,7 @@ through litellm → the LlmCallLogger, so each step stays observable.
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -67,6 +68,8 @@ from .reasoning import reasoning_off_kwargs
 
 _FINAL = "final"
 _TOOL_CALL_ID = "call_dta_1"
+
+logger = logging.getLogger(__name__)
 
 
 def _json_schema_format(schema: dict[str, Any], name: str) -> dict[str, Any]:
@@ -202,6 +205,9 @@ class DecideThenActModel(Model):
 
         msg: ChatCompletionMessage
         action = await self._decide(messages, fn_tools) if fn_tools else _FINAL
+        logger.info(
+            "decide_then_act: get_response decided action=%r (model=%s)", action, self._model
+        )
         if action in fn_tools:
             args_json = await self._tool_args_json(messages, fn_tools[action], action)
             msg = ChatCompletionMessage(
@@ -252,6 +258,9 @@ class DecideThenActModel(Model):
         fn_tools = {t.name: t for t in tools if isinstance(t, FunctionTool)}
 
         action = await self._decide(messages, fn_tools) if fn_tools else _FINAL
+        logger.info(
+            "decide_then_act: stream_response decided action=%r (model=%s)", action, self._model
+        )
 
         if action not in fn_tools:
             # FINAL: stream the answer natively from the inner model. Pass tools=[]
@@ -274,6 +283,9 @@ class DecideThenActModel(Model):
         # TOOL: structured ARGS, then replay the call through the shared stream
         # handler so the Runner extracts + executes it just like a native tool_call.
         args_json = await self._tool_args_json(messages, fn_tools[action], action)
+        logger.debug(
+            "decide_then_act: emitting structured tool call %s (model=%s)", action, self._model
+        )
         initial = Response(
             id=FAKE_RESPONSES_ID,
             created_at=time.time(),

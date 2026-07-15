@@ -18,12 +18,15 @@ role.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from agents.models.interface import Model
 
 from .core import AllProvidersFailed, TtftTimeout
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..factories import LlmEndpoint
@@ -56,6 +59,12 @@ class FallbackModel(Model):
 
     def _degrade(self, endpoint: LlmEndpoint, cause: BaseException) -> None:
         self._registry.mark(endpoint.cooldown_key, endpoint.cooldown_s)
+        logger.warning(
+            "failover-model: endpoint %s parked %.1fs after failure (%r) — switching",
+            endpoint.model,
+            endpoint.cooldown_s,
+            cause,
+        )
         if self._on_switch is not None:
             self._on_switch(endpoint.model, cause)
 
@@ -85,6 +94,7 @@ class FallbackModel(Model):
             for endpoint in self._endpoints:
                 if self._registry.is_cooling(endpoint.cooldown_key):
                     continue
+                logger.debug("failover-model: trying endpoint %s (get_response)", endpoint.model)
                 for attempt in range(endpoint.num_retries + 1):
                     try:
                         return await self._make_model(endpoint).get_response(*args, **kwargs)
@@ -95,6 +105,10 @@ class FallbackModel(Model):
                             # and the next endpoint is tried.
                             self._degrade(endpoint, exc)
                         # else: a quick same-endpoint retry
+        logger.warning(
+            "failover-model: all endpoints failed or cooling (get_response) — last %r",
+            last,
+        )
         raise AllProvidersFailed("all agent models failed or were cooling") from last
 
     async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
@@ -109,6 +123,7 @@ class FallbackModel(Model):
             for endpoint in self._endpoints:
                 if self._registry.is_cooling(endpoint.cooldown_key):
                     continue
+                logger.debug("failover-model: trying endpoint %s (stream_response)", endpoint.model)
                 for attempt in range(endpoint.num_retries + 1):
                     stream = self._make_model(endpoint).stream_response(*args, **kwargs)
                     it = stream.__aiter__()
@@ -140,4 +155,8 @@ class FallbackModel(Model):
                             except StopAsyncIteration:
                                 return
                             yield event  # mid-stream errors / idle stalls propagate (terminal)
+        logger.warning(
+            "failover-model: all endpoints failed or cooling (stream_response) — last %r",
+            last,
+        )
         raise AllProvidersFailed("all agent models failed or were cooling") from last

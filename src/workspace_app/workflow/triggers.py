@@ -451,6 +451,7 @@ class SpecstarTriggerStore(ITriggerStore):
         try:
             # First claim ever for this trigger: first-writer-wins create.
             rm.create(row, resource_id=trigger_id, if_not_exists=True)  # ty: ignore[unknown-argument]
+            _log.info("trigger %s: claimed first window %s", trigger_id, fire_window)
             return True
         except DuplicateResourceError:
             pass  # a ledger row already exists — CAS-advance it below
@@ -464,6 +465,9 @@ class SpecstarTriggerStore(ITriggerStore):
             data = res.data
             assert isinstance(data, _TriggerWindow)
             if data.last_window == fire_window:
+                _log.debug(
+                    "trigger %s: window %s already claimed — skipping", trigger_id, fire_window
+                )
                 return False  # a peer (or a prior tick) already claimed this window
             try:
                 rm.modify(
@@ -472,6 +476,7 @@ class SpecstarTriggerStore(ITriggerStore):
                     status=RevisionStatus.draft,
                     expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
                 )
+                _log.info("trigger %s: advanced to window %s (CAS won)", trigger_id, fire_window)
                 return True  # we advanced the window → we start the run
             except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
                 continue  # a peer advanced between our get and modify → re-read
@@ -548,6 +553,13 @@ def build_trigger_start(start_run: OrchestratorStart) -> StartTrigger:
     from .orchestrator import ActiveRunExists
 
     async def start(t: ScheduleTrigger, window: str) -> str | None:
+        _log.info(
+            "schedule trigger %s: firing workflow %s on item %s for window %s",
+            trigger_key(t),
+            t.workflow_id,
+            t.item_id,
+            window,
+        )
         try:
             return await start_run(
                 slug=t.slug,
@@ -649,15 +661,29 @@ class TriggerSweeper:
             return True
         disp = await asyncio.to_thread(self._orphan.disposition, run_id, self._grace_ms)
         if disp == _ACTIVE:
+            _log.debug("trigger %s: run %s still active — deferring new window", key, run_id)
             return False  # a live run holds the item — don't fire a second
         if disp == _STUCK:
             if attempts < self._max_attempts:  # F-1: resume the orphan first
+                _log.info(
+                    "trigger %s: resuming stuck orphan run %s (attempt %d/%d)",
+                    key,
+                    run_id,
+                    attempts,
+                    self._max_attempts,
+                )
                 if await self._orphan.resume(
                     run_id, slug=t.slug, profile=t.profile, grace_ms=self._grace_ms
                 ):
                     await asyncio.to_thread(self._store.note_resume, key)
                 return False  # resumed (or a peer did) — skip the new window this tick
             # F-2: resume budget spent → abandon to a discoverable terminal, then free the slot.
+            _log.warning(
+                "trigger %s: abandoning stuck orphan run %s after %d resume attempts",
+                key,
+                run_id,
+                self._max_attempts,
+            )
             await self._orphan.abandon(
                 run_id, reason=f"stuck orphan abandoned after {self._max_attempts} resume attempts"
             )

@@ -22,8 +22,11 @@ error instead of aborting.
 from __future__ import annotations
 
 import json
+import logging
 
 from json_repair import repair_json
+
+logger = logging.getLogger(__name__)
 
 
 def repair_tool_args(raw: str) -> str | None:
@@ -35,9 +38,13 @@ def repair_tool_args(raw: str) -> str | None:
     try:
         obj = repair_json(raw, return_objects=True)
     except Exception:  # noqa: BLE001 — repair must never raise into the caller
+        logger.warning(
+            "arg_repair: json_repair raised on %r; giving up self-repair", raw, exc_info=True
+        )
         return None
     if isinstance(obj, dict):
         return json.dumps(obj)
+    logger.debug("arg_repair: json_repair produced non-object for %r; giving up self-repair", raw)
     return None
 
 

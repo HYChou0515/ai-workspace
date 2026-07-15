@@ -5,12 +5,15 @@ here instead when one is available). The LLM is injected; parsing is pure.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from ..resources.kb import RetrievedPassage
 from .llm import ILlm, OnChunk
 
 _INT = re.compile(r"\d+")
+
+logger = logging.getLogger(__name__)
 
 
 def rerank_passages(
@@ -25,6 +28,7 @@ def rerank_passages(
     passages it omits keep their original order at the end. Streams the model's
     work to `on_progress`."""
     if not passages:
+        logger.debug("rerank: no passages to rerank")
         return passages
     listing = "\n".join(f"[{i + 1}] {p.text}" for i, p in enumerate(passages))
     prompt = (
@@ -40,4 +44,5 @@ def rerank_passages(
             seen.add(n)
             order.append(n)
     order.extend(n for n in range(1, len(passages) + 1) if n not in seen)
+    logger.debug("rerank: llm reordered %d passages", len(passages))
     return [passages[n - 1] for n in order]

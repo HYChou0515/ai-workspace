@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -70,6 +71,8 @@ ProfileRun = Callable[[WorkflowHandle, Any], Awaitable[Any]]
 # run's stream/turn key (its workflow chat, or item_id legacy) — drive_turn enqueues
 # + persists there; run_sandbox/ingest stay on item_id (the shared workspace).
 WireHandle = Callable[[WorkflowHandle, str, str, str, str], None]
+
+logger = logging.getLogger(__name__)
 
 
 class ActiveRunExists(Exception):
@@ -211,6 +214,7 @@ class WorkflowOrchestrator:
         assert isinstance(data, WorkflowRun)
         last = data.progress_at or data.started or 0
         if data.status is not RunStatus.RUNNING or self.now() - last <= grace_ms:
+            logger.debug("resume: run %s declined (status=%s)", run_id, data.status)
             return False  # settled, or already fresh (a peer just claimed it) → not ours
         try:
             self._rm().update(
@@ -232,6 +236,7 @@ class WorkflowOrchestrator:
             data.workflow_id,
             data.chat_id,
         )
+        logger.info("resume: re-driving stuck orphan run %s", run_id)
         return True
 
     async def abandon(self, run_id: str, *, reason: str) -> None:
@@ -256,6 +261,7 @@ class WorkflowOrchestrator:
             ended=self.now(),
             result={"abandoned": True, "reason": reason},
         )
+        logger.warning("abandon: run %s -> error after resume budget (reason: %s)", run_id, reason)
         if self.credentials is not None:
             self.credentials.revoke(run_id)
         await self._release(data.item_id, terminal=True, key=data.chat_id or data.item_id)
@@ -362,6 +368,13 @@ class WorkflowOrchestrator:
         )
         self._prune_runs(item_id, keep=run_id)
         self._spawn(run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id)
+        logger.info(
+            "start: run %s created for item %s (workflow=%s, chat=%s)",
+            run_id,
+            item_id,
+            workflow_id,
+            chat_id,
+        )
         return run_id
 
     def _chat_referenced_runs(self, item_id: str) -> set[str]:
@@ -490,6 +503,9 @@ class WorkflowOrchestrator:
         except TimeoutError:
             # Wall-clock cap (§17): wait_for cancelled the run; override the driver's
             # `cancelled` with a terminal `error` carrying the reason.
+            logger.warning(
+                "run %s exceeded %ss wall-clock limit -> error", run_id, self.run_timeout_s
+            )
             self._patch(
                 run_id,
                 status=RunStatus.ERROR,
@@ -586,8 +602,12 @@ class WorkflowOrchestrator:
         if terminal and self.credentials is not None:
             self.credentials.revoke(run_id)  # the run-scoped credential dies with the run (§15)
         if terminal or status is RunStatus.AWAITING_HUMAN:
+            logger.info(
+                "run %s settled as %s, releasing sandbox (terminal=%s)", run_id, status, terminal
+            )
             await self._release(item_id, terminal, key)
         if status is RunStatus.ERROR and self.notify_failure is not None:
+            logger.warning("run %s errored, firing failure notification", run_id)
             self.notify_failure(self._get(run_id))
 
     async def _release(self, item_id: str, terminal: bool, key: str) -> None:
@@ -607,6 +627,7 @@ class WorkflowOrchestrator:
         with contextlib.suppress(BaseException):
             await task
         await self._release(item_id, terminal=True, key=key)
+        logger.info("cancel: stopped run %s (item %s)", run_id, item_id)
         return True
 
     # ── human gate (§10) ──────────────────────────────────────────────
@@ -642,6 +663,7 @@ class WorkflowOrchestrator:
         await record_decision(wf, phase=phase, choice=choice, input=input, decided_by=decided_by)
         assert manifest is not None
         self._patch(run_id, status=RunStatus.RUNNING, pending_decision=None)
+        logger.info("decide: run %s gate %s -> %s, resuming", run_id, phase, choice)
         self._spawn(
             run_id,
             slug,
@@ -696,6 +718,7 @@ class WorkflowOrchestrator:
         except SteerProposalFailed as exc:
             # Couldn't form a usable plan — leave the run stopped with the reason so the
             # operator can re-instruct or take over.
+            logger.warning("steer: run %s proposal failed: %s", run_id, exc)
             self._patch(
                 run_id,
                 status=RunStatus.CANCELLED,
@@ -707,10 +730,12 @@ class WorkflowOrchestrator:
             # Stopped mid-proposal (the operator hit Stop while the steerer ran) — settle
             # the run as cancelled instead of leaving it wedged `running` (no driver owns
             # this task to record the terminal status).
+            logger.info("steer: run %s proposal cancelled mid-flight", run_id)
             self._patch(run_id, status=RunStatus.CANCELLED, pending_steer=None)
             raise
         self._patch(run_id, status=RunStatus.AWAITING_HUMAN, pending_steer=plan)
         self.publish(key, SteerProposed(instruction=plan.instruction, rationale=plan.rationale))
+        logger.info("steer: run %s plan ready, awaiting confirm", run_id)
 
     async def confirm_steer(
         self,
@@ -738,6 +763,7 @@ class WorkflowOrchestrator:
                 else RunStatus.CANCELLED
             )
             self._patch(run_id, status=restored, pending_steer=None)
+            logger.info("confirm_steer: run %s steer rejected", run_id)
             return
         wf = self._build_handle(
             run_id,
@@ -751,6 +777,7 @@ class WorkflowOrchestrator:
         await apply_steer(wf, data.pending_steer, decided_by=decided_by)
         assert manifest is not None
         self._patch(run_id, status=RunStatus.RUNNING, pending_steer=None, pending_decision=None)
+        logger.info("confirm_steer: run %s steer approved, resuming", run_id)
         self._spawn(
             run_id,
             slug,
@@ -776,6 +803,7 @@ class WorkflowOrchestrator:
         if isinstance(ev, StepStarted):
             self._step_counts[run_id] = self._step_counts.get(run_id, 0) + 1
             if self._step_counts[run_id] > self.max_steps:
+                logger.warning("run %s exceeded max steps (%s) -> abort", run_id, self.max_steps)
                 raise StepBudgetExceeded(f"exceeded max steps ({self.max_steps})")
         data = self._get(run_id)
         phase = getattr(ev, "phase", "")

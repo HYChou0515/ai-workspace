@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from typing import TYPE_CHECKING
 
 from ..agent.context import KbSearchBudget
@@ -50,6 +51,9 @@ if TYPE_CHECKING:
     from .subagent_bridge import SubagentBridge
     from .turn_context import TurnContextBuilder
     from .turns import ChatTurnEngine, TurnMessage
+
+
+logger = logging.getLogger(__name__)
 
 
 class ChatSendService:
@@ -126,6 +130,12 @@ class ChatSendService:
             Message(role="user", content=body.content, author=author, created_at=created)
         )
         self._conv_rm.update(rid, conv)
+        logger.info(
+            "chat_send: user %s sent message to item %s (chat %s)",
+            author,
+            investigation_id,
+            rid,
+        )
 
         # Topic Hub §5/§7 + #280: the item's collection set (collections.json),
         # read ONCE — the flat union scopes the turn's deterministic glossary /
@@ -263,6 +273,7 @@ class ChatSendService:
                 "Agent finished a turn",
                 {"investigation_id": investigation_id},
             )
+            logger.info("chat_send: turn completed for item %s", investigation_id)
 
         # Topic Hub §6: prepend the App's context_files (e.g. MEMORY.md +
         # collections.json) as a labelled, authoritative block — re-derived fresh from
@@ -312,6 +323,12 @@ class ChatSendService:
         # #492: flush the item's live sandbox to durable when THIS turn ends, so
         # durable lags by at most one turn (guarantee (2)). Runs on the engine's
         # worker, off this POST's back; a flush failure never fails the turn.
+        logger.debug(
+            "chat_send: enqueue turn for item %s on engine %s (await<=%.0fs)",
+            investigation_id,
+            engine_key,
+            self._send_await_timeout,
+        )
         fut = self._turn_engine.enqueue(
             engine_key,
             turn_content,

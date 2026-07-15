@@ -22,6 +22,7 @@ This module is that on-demand surface, built on the pieces P9 already exposes:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 
 from msgspec import Struct
@@ -47,6 +48,8 @@ EntitiesOf = Callable[[str], Awaitable[list[ParsedEntity]]]
 
 # The sink a re-synthesised event is fed back through (``EventTriggerDispatcher.dispatch``).
 Dispatch = Callable[[EntityWriteEvent], Awaitable[None]]
+
+logger = logging.getLogger(__name__)
 
 
 class EntityLag(Struct):
@@ -132,6 +135,14 @@ async def backfill_trigger_lag(
         for e in await entities_of(t.entity):
             if not _behind(item_id, t, e, watermark):
                 continue
+            logger.debug(
+                "backfill: re-dispatching %s #%d@%s for trigger %s (item %s)",
+                t.entity,
+                e.number,
+                e.version,
+                trigger_key(t),
+                item_id,
+            )
             await dispatch(
                 EntityWriteEvent(
                     item_id=item_id,
@@ -146,5 +157,11 @@ async def backfill_trigger_lag(
             )
             count += 1
         if count:
+            logger.info(
+                "backfill: trigger %s re-dispatched %d missed event(s) for item %s",
+                trigger_key(t),
+                count,
+                item_id,
+            )
             fired.append(TriggerBackfill(trigger_id=trigger_key(t), fired=count))
     return BackfillReport(item_id=item_id, triggers=fired)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -20,6 +21,8 @@ from typing import Protocol
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound, SandboxSpec
 from .sandbox_activity import IActivityStore
 from .sandbox_address import IAddressStore
+
+logger = logging.getLogger(__name__)
 
 
 class _SyncHook(Protocol):
@@ -92,6 +95,13 @@ class InvestigationRegistry:
         host to rsync its own dir to the NFS archive (`delete` reconciles at a
         quiesced point; False is the additive mid-turn checkpoint). Else the
         app-side SandboxSync mirrors it, as before."""
+        logger.debug(
+            "registry: writeback item=%s handle=%s delete=%s host_managed=%s",
+            inv_id,
+            handle.id,
+            delete,
+            self.host_managed_durable,
+        )
         if self.host_managed_durable:
             persist = getattr(self.sandbox, "persist", None)
             if persist is not None:
@@ -148,6 +158,10 @@ class InvestigationRegistry:
         or rebuilds from the durable archive and republishes (CAS)."""
         session = await self.session(investigation_id)
         async with session.lock:
+            logger.info(
+                "registry: rebuild io handle for item %s (file op hit sandbox-not-found)",
+                investigation_id,
+            )
             session.handle = await self._acquire(investigation_id)
             if self.activity is not None:
                 await self.activity.bump(investigation_id)
@@ -178,6 +192,10 @@ class InvestigationRegistry:
             if session.handle is None or (
                 self.address is not None and not await self._alive(session.handle)
             ):
+                logger.debug(
+                    "registry: ensure_handle acquiring sandbox for item %s (no live handle cached)",
+                    session.investigation_id,
+                )
                 session.handle = await self._acquire(
                     session.investigation_id, on_progress=on_progress
                 )
@@ -199,8 +217,10 @@ class InvestigationRegistry:
         try:
             await self.sandbox.exists(handle, "/")
         except SandboxNotFound:
+            logger.debug("registry: probe handle %s -> not found (dead)", handle.id)
             return False
         except SandboxBusy:
+            logger.debug("registry: probe handle %s -> busy (alive, not rebuilding)", handle.id)
             return True  # reachable but slow ⇒ it exists — do not rebuild
         return True
 
@@ -225,15 +245,36 @@ class InvestigationRegistry:
             existing = await self.address.get(item)
             if existing is not None:
                 if await self._alive(existing):
+                    logger.info(
+                        "registry: acquire item %s -> converge on live address %s",
+                        item,
+                        existing.id,
+                    )
                     return existing  # a live shared sandbox → converge on ONE
+                logger.info(
+                    "registry: acquire item %s -> address %s dead, rebuilding",
+                    item,
+                    existing.id,
+                )
                 stale = existing  # dead address → rebuild + swap it out below
         fresh = await self._is_cold(item)
         handle = await self.sandbox.create(self.default_spec, sandbox_id=item)
+        logger.info(
+            "registry: created sandbox handle %s for item %s (cold=%s)",
+            handle.id,
+            item,
+            fresh,
+        )
         # #492: in host-managed mode the host already restored this item's archive
         # into the fresh sandbox during create (and marked it ready), so the app
         # skips its own per-file restore. Otherwise restore from the durable
         # snapshot when the dir was cold, as before.
         if fresh and self.sync is not None and not self.host_managed_durable:
+            logger.info(
+                "registry: restoring item %s from durable snapshot into handle %s",
+                item,
+                handle.id,
+            )
             await self.sync.restore(item, handle, on_progress=on_progress)
         if self.address is not None:
             # Publish the fresh address AFTER restore. Swap (CAS on the dead one)
@@ -245,8 +286,19 @@ class InvestigationRegistry:
                 else await self.address.claim(item, handle)
             )
             if winner != handle:
+                logger.info(
+                    "registry: lost address CAS for item %s -> converge on %s (killing orphan %s)",
+                    item,
+                    winner.id,
+                    handle.id,
+                )
                 await self.sandbox.kill(handle)  # lost the race — drop our orphan
                 return winner
+            logger.info(
+                "registry: won address CAS for item %s -> published handle %s",
+                item,
+                handle.id,
+            )
         return handle
 
     async def _is_cold(self, investigation_id: str) -> bool:
@@ -269,6 +321,7 @@ class InvestigationRegistry:
         s = self._sessions.get(investigation_id)
         if s is None or s.handle is None or not self._has_durable:
             return
+        logger.info("registry: flush write-back item %s (turn-end reconcile)", investigation_id)
         await self._writeback(investigation_id, s.handle, delete=True)  # turn-end reconcile
 
     async def mirror_warm(self) -> list[str]:
@@ -288,8 +341,14 @@ class InvestigationRegistry:
                 # here; turn-end / reap do that at a ready, settled sandbox.
                 await self._writeback(inv_id, s.handle, delete=False)
             except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
+                logger.warning(
+                    "registry: mirror_warm skipped item %s (write-back failed)",
+                    inv_id,
+                    exc_info=True,
+                )
                 continue
             mirrored.append(inv_id)
+        logger.debug("registry: mirror_warm swept, mirrored %d session(s)", len(mirrored))
         return mirrored
 
     async def kill_idle(self, threshold: timedelta) -> list[str]:
@@ -309,6 +368,11 @@ class InvestigationRegistry:
                 continue
             try:
                 if s.handle is not None and not await self._globally_idle(inv_id, cutoff_ms):
+                    logger.info(
+                        "registry: kill_idle item %s locally idle but globally active "
+                        "-> dropped local session, kept shared dir",
+                        inv_id,
+                    )
                     # Another pod is live on the shared dir — drop our local session
                     # only, leave the dir (and its heartbeat) intact.
                     del self._sessions[inv_id]
@@ -323,9 +387,19 @@ class InvestigationRegistry:
                         await self.sandbox.kill(s.handle)
                     if self.activity is not None:
                         await self.activity.forget(inv_id)
+                    logger.info(
+                        "registry: reaped idle sandbox %s for item %s (globally idle)",
+                        s.handle.id,
+                        inv_id,
+                    )
                 del self._sessions[inv_id]
                 killed.append(inv_id)
             except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
+                logger.warning(
+                    "registry: kill_idle skipped item %s (reap failed)",
+                    inv_id,
+                    exc_info=True,
+                )
                 continue
         return killed
 
@@ -352,6 +426,11 @@ class InvestigationRegistry:
             try:
                 if await self._scratch_usage(s.handle) <= max_bytes:
                     continue
+                logger.warning(
+                    "registry: enforce_quota recycling item %s (scratch dir over %d bytes)",
+                    inv_id,
+                    max_bytes,
+                )
                 if self._has_durable:
                     # write-back before rmtree (reconcile — the dir is settled)
                     await self._writeback(inv_id, s.handle, delete=True)
@@ -362,6 +441,11 @@ class InvestigationRegistry:
                 del self._sessions[inv_id]
                 recycled.append(inv_id)
             except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
+                logger.warning(
+                    "registry: enforce_quota skipped item %s (recycle failed)",
+                    inv_id,
+                    exc_info=True,
+                )
                 continue
         return recycled
 
@@ -385,6 +469,7 @@ class InvestigationRegistry:
         return ms is None or ms < cutoff_ms
 
     async def close_all(self) -> None:
+        logger.info("registry: close_all reaping %d session(s)", len(self._sessions))
         for inv_id in list(self._sessions):
             s = self._sessions.pop(inv_id)
             if s.handle is not None:
@@ -399,6 +484,7 @@ class InvestigationRegistry:
         s = self._sessions.pop(investigation_id, None)
         if s is None:
             return
+        logger.info("registry: close_session tearing down item %s", investigation_id)
         if s.handle is not None:
             if self._has_durable:
                 await self._writeback(investigation_id, s.handle, delete=True)

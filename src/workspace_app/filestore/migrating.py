@@ -20,9 +20,12 @@ an operator retires ``legacy`` and swaps this wrapper for the bare ``primary``.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from .protocol import FileExists, FileNotFound, FileStore
+
+logger = logging.getLogger(__name__)
 
 
 class MigratingFileStore:
@@ -45,6 +48,9 @@ class MigratingFileStore:
         # #419 numbering arbiter would hand out an id that already exists in the
         # not-yet-migrated legacy store. legacy is frozen, so this check is stable.
         if await self._legacy.exists(workspace_id, path):
+            logger.debug(
+                "migrating: create_exclusive %s:%s blocked, exists in legacy", workspace_id, path
+            )
             raise FileExists(path)
         await self._primary.create_exclusive(workspace_id, path, data)  # ty: ignore[unresolved-attribute]
 
@@ -56,6 +62,11 @@ class MigratingFileStore:
         except FileNotFound:
             data = await self._legacy.read(workspace_id, path)  # raises if truly absent
             await self._primary.write(workspace_id, path, data)  # backfill
+            logger.info(
+                "migrating: read %s:%s missed primary, served + backfilled from legacy",
+                workspace_id,
+                path,
+            )
             return data
 
     async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
@@ -64,6 +75,11 @@ class MigratingFileStore:
         except FileNotFound:
             await self._legacy.read_to_file(workspace_id, path, dest)  # raises if absent
             await self._primary.write_from_path(workspace_id, path, dest, None)  # backfill
+            logger.info(
+                "migrating: read_to_file %s:%s missed primary, restored + backfilled from legacy",
+                workspace_id,
+                path,
+            )
 
     # ── listings → UNION ─────────────────────────────────────────────────────
 
@@ -130,7 +146,9 @@ class MigratingFileStore:
                 await getattr(store, op)(workspace_id, path)
                 found = True
             except FileNotFound:
-                pass
+                logger.debug(
+                    "migrating: %s %s:%s absent from a store, continuing", op, workspace_id, path
+                )
         if not found:
             raise FileNotFound(path)
 
@@ -156,4 +174,5 @@ class MigratingFileStore:
         for d in await self._legacy.listdir(workspace_id):
             if not await self._primary.is_dir(workspace_id, d):
                 await self._primary.mkdir(workspace_id, d)
+        logger.info("migrating: backfilled %d files for workspace %s", n, workspace_id)
         return n
