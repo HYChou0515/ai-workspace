@@ -117,7 +117,14 @@ export function AppNewItem() {
           </div>
 
           {/* Footer (fixed) */}
-          <div style={{ padding: "14px 22px", borderTop: "1px solid var(--paper-3)", display: "flex", justifyContent: "flex-end", gap: 8, background: "var(--paper-2)" }}>
+          <div style={{ padding: "14px 22px", borderTop: "1px solid var(--paper-3)", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: 8, background: "var(--paper-2)" }}>
+            {create.isError && (
+              // Surface a failed create instead of silently flipping the button back
+              // to "Create" — a swallowed 4xx/5xx used to look like nothing happened.
+              <div role="alert" style={{ marginRight: "auto", fontSize: pxToRem(12), color: "var(--err)" }}>
+                {create.error instanceof Error ? create.error.message : "Couldn’t create — please try again."}
+              </div>
+            )}
             <button type="button" className="btn" data-variant="ghost" data-size="md" onClick={close}>
               Cancel
             </button>

@@ -65,6 +65,27 @@ describe("AppNewItem", () => {
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("/a/rca/rca-investigation%2F1"));
   });
 
+  it("surfaces a create failure instead of silently doing nothing", async () => {
+    // Regression: a failed create (e.g. a 4xx/5xx) used to leave the modal frozen —
+    // onSuccess never fired so it neither navigated nor showed anything, so the user
+    // saw the button flip back to "Create" and nothing else. It must show the error
+    // and NOT navigate.
+    createAppItem.mockRejectedValueOnce(new Error("boom: create rejected"));
+    navigate.mockClear(); // shared module mock — scope the "not navigated" assertion to this test
+    render(
+      <QueryWrap>
+        <MemoryRouter>
+          <AppNewItem />
+        </MemoryRouter>
+      </QueryWrap>,
+    );
+    await userEvent.type(screen.getByLabelText(/title/i), "Oven drift");
+    await userEvent.click(screen.getByRole("button", { name: /create/i }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/boom: create rejected/i));
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
   it("creates with the picked profile when the App ships more than one", async () => {
     render(
       <QueryWrap>
