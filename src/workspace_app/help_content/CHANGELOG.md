@@ -11,6 +11,25 @@ ship with the code, so the running version is always current. Do not hand-edit
 generated sections — they are regenerated on the next `make release`.
 
 ---
+## [2026.07.15] — 2026-07-15
+
+### Added
+
+- Real review-inbox pagination — extract CardProposal resource + native DB paging (#512) (#511)
+- Structured logging at key operational nodes (observability)
+
+### Fixed
+
+- Chown app/host-written files to the per-item uid in isolated sandbox (#504)
+
+### Changed
+
+- Generate changelog per-PR (first-parent), retire git-cliff (#441)
+
+### Documentation
+
+- Plan — closed-loop cardgen/doc-question (perf, quality, dedup, editable keys) (#506)
+
 ## [2026.07.09] — 2026-07-09
 
 ### Added
