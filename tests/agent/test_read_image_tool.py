@@ -68,6 +68,7 @@ async def test_vision_main_model_reads_images_without_a_separate_describer():
     out = await read_image_impl(ctx, "/chart.png")
 
     assert isinstance(out, ToolOutputImage)
+    assert out.image_url is not None
     assert out.image_url.startswith("data:image/png;base64,")
 
 
@@ -105,6 +106,7 @@ async def test_read_image_reports_when_no_vlm_configured():
 
     out = await read_image_impl(ctx, "/shot.png", question="q")
 
+    assert isinstance(out, str)  # text-only path returns the error string
     assert "not available" in out and "Do not retry" in out
 
 
@@ -116,6 +118,7 @@ async def test_read_image_rejects_a_non_image_file():
 
     out = await read_image_impl(ctx, "/notes.txt", question="q")
 
+    assert isinstance(out, str)
     assert out.startswith("error: not an image")
     assert vlm.calls == []
 
@@ -147,5 +150,6 @@ async def test_read_image_truncates_long_output_at_the_read_file_cap():
 
     out = await read_image_impl(ctx, "/big.png", question="q")
 
+    assert isinstance(out, str)
     assert "x" * 500 not in out
     assert "omitted" in out
