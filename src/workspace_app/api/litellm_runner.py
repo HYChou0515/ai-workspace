@@ -28,6 +28,7 @@ from agents import (
     ModelSettings,
     RunConfig,
     Runner,
+    ToolOutputImage,
 )
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
@@ -555,9 +556,21 @@ def _map_event(event: Any) -> AgentEvent | None:
     if name == "tool_output":
         # raw_item is a FunctionCallOutput TypedDict (dict) on the LiteLLM
         # path — read call_id via _raw_field, not getattr.
+        raw_out = getattr(item, "output", "")
+        # `read_image` hands a vision main model the raw image as a
+        # `ToolOutputImage`; the model sees the pixels via the SDK's own
+        # function_call_output (an input_image part). Our event/persistence layer
+        # must NOT stringify it — a `str(ToolOutputImage)` repr embeds the whole
+        # base64 data URL, which would bloat the SSE stream and, worse, replay as
+        # a giant text blob into the next turn's context. Surface a concise note.
+        out_text = (
+            "[image read directly by the vision model]"
+            if isinstance(raw_out, ToolOutputImage)
+            else str(raw_out)
+        )
         return ToolEnd(
             call_id=_call_id(item.raw_item),
-            output=str(getattr(item, "output", "")),
+            output=out_text,
         )
     # message_output_created carries the FULL assistant message; we stream
     # the incremental token deltas (raw_response_event) in _run_once instead,

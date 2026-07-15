@@ -365,6 +365,30 @@ def test_map_event_maps_tool_output():
     assert "hi" in out.output
 
 
+def test_map_event_tool_output_image_is_a_concise_note_not_base64():
+    """`read_image` hands a VLM main model the raw image as a `ToolOutputImage`;
+    the model sees the pixels via the SDK's own function_call_output. Our ToolEnd
+    (the FE event + persisted tool message) must NOT carry the base64 — a
+    `str(ToolOutputImage)` repr would bloat the SSE stream and, worse, be replayed
+    as a giant text blob into the next turn's context."""
+    from agents import ToolOutputImage
+
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="tool_output",
+        item=_Item(
+            raw_item=_RawToolOutput(call_id="c1"),
+            output=ToolOutputImage(image_url="data:image/png;base64,QUJDQUJDQUJDQUJD"),
+        ),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, ToolEnd)
+    assert out.call_id == "c1"
+    assert out.output  # a non-empty, model-friendly note
+    assert "base64" not in out.output
+    assert "QUJDQUJD" not in out.output
+
+
 def test_map_event_tool_output_with_dict_raw_item_keeps_call_id():
     """LiteLLM's tool-output raw_item is a FunctionCallOutput dict — the
     call_id must still be extracted (else the FE tool stays 'running')."""
