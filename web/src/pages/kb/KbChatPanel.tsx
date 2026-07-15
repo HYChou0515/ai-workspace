@@ -24,7 +24,9 @@ import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { TurnStatus } from "../../components/TurnStatus";
 import { KbCollectionsModal } from "./KbCollectionsModal";
 import { WikiCorrectionDialog } from "./WikiCorrectionDialog";
+import { fileToImageInput, stagedImagePreview, type StagedImage } from "./kbImage";
 import type { AgentEntry } from "../investigation/agentLog";
+import { extractClipboardFiles } from "../investigation/transfer";
 
 /** How many ranked collections to surface as quick-pick pills (#271); the rest
  * live behind the "more" modal. */
@@ -65,6 +67,10 @@ export function KbChatPanel({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
+  // #513 P10: one transient image staged for the next message. The server
+  // VLM-describes it into the query; it's never uploaded as a KB document.
+  const [image, setImage] = useState<StagedImage | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   // #51 P6: replay diagnostic for one past entry (answer / kb_search).
   const [replayReq, setReplayReq] = useState<ReplayRequest | null>(null);
   // #397: the "回報有誤" dialog for one flagged assistant answer.
@@ -128,11 +134,25 @@ export function KbChatPanel({
   // Follow the conversation as it streams; back off when the user scrolls up.
   const bodyRef = useStickToBottom<HTMLDivElement>(log);
 
+  // #513 P10: stage an image dropped / pasted / picked into the composer.
+  const stageImage = async (file: File | undefined) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    setImage(await fileToImageInput(file));
+  };
+  const stageFirstImage = (dt: DataTransfer | null) => {
+    const { images } = extractClipboardFiles(dt, Date.now());
+    if (images.length) void stageImage(images[0]);
+    return images.length > 0;
+  };
+
   const submit = (text: string) => {
     const t = text.trim();
-    if (!t || log.streaming) return;
+    // #513 P10: an image with no text is a valid turn (its VLM description is the query).
+    if ((!t && !image) || log.streaming) return;
     setDraft("");
-    void send(t);
+    const img = image;
+    setImage(null);
+    void send(t, img ? { data: img.data, mime: img.mime } : undefined);
   };
 
   const empty = log.entries.length === 0;
@@ -240,12 +260,34 @@ export function KbChatPanel({
           </div>
         )}
         <div className="kb-composer">
+          {image && (
+            <div className="kb-composer__attach">
+              <img className="kb-composer__thumb" src={stagedImagePreview(image)} alt="" />
+              <span className="kb-composer__attach-name">{image.name}</span>
+              <button
+                type="button"
+                className="kb-composer__attach-x"
+                aria-label="Remove image"
+                onClick={() => setImage(null)}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+          )}
           <textarea
             className="kb-composer__input"
             rows={2}
             placeholder="Ask the knowledge base…"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            // #513 P10: drop / paste an image straight into the composer (reuses the
+            // #364 clipboard-parsing primitive). A plain-text paste falls through.
+            onPaste={(e) => {
+              if (stageFirstImage(e.clipboardData)) e.preventDefault();
+            }}
+            onDrop={(e) => {
+              if (stageFirstImage(e.dataTransfer)) e.preventDefault();
+            }}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || !e.shiftKey)) {
                 e.preventDefault();
@@ -254,6 +296,27 @@ export function KbChatPanel({
             }}
           />
           <div className="kb-composer__row">
+            {/* #513 P10: attach a transient image the server VLM-describes into the query. */}
+            <input
+              ref={imageInputRef}
+              data-testid="kb-image-input"
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                e.target.value = ""; // allow re-picking the same file
+                void stageImage(f);
+              }}
+            />
+            <button
+              type="button"
+              className="kb-composer__attach-btn"
+              aria-label="Attach image"
+              onClick={() => imageInputRef.current?.click()}
+            >
+              <Icon name="paperclip" size={15} />
+            </button>
             <span className="kb-composer__hint">{modCombo("↵")} to send</span>
             {/* Handoff 3.0: one combined chip replaces the three
                 separate model / depth / effort controls. Model pick
@@ -278,7 +341,7 @@ export function KbChatPanel({
               <button
                 type="button"
                 className="kb-btn kb-btn--primary"
-                disabled={!draft.trim()}
+                disabled={!draft.trim() && !image}
                 onClick={() => submit(draft)}
               >
                 <Icon name="arrow_r" size={13} /> Send

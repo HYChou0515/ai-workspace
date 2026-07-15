@@ -325,6 +325,58 @@
   color: var(--text-paper-d2);
 }
 
+/* #513 P10: the transient-image attach chip + button in the composer. */
+.kb-composer__attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  margin-bottom: 8px;
+  padding: 4px 4px 4px 6px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--paper);
+}
+.kb-composer__thumb {
+  width: 28px;
+  height: 28px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex: none;
+}
+.kb-composer__attach-name {
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-composer__attach-x {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: none;
+  background: none;
+  color: var(--text-paper-d2);
+  cursor: pointer;
+  flex: none;
+}
+.kb-composer__attach-x:hover {
+  color: var(--text-paper);
+}
+.kb-composer__attach-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px;
+  border: none;
+  background: none;
+  color: var(--text-paper-d2);
+  cursor: pointer;
+}
+.kb-composer__attach-btn:hover {
+  color: var(--accent);
+}
+
 /* buttons / icon buttons */
 .kb-btn {
   display: inline-flex;

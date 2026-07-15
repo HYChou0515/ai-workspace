@@ -44,6 +44,32 @@ describe("useKbChat", () => {
     expect(answer?.kind === "message" && answer.message.citations?.[0]?.filename).toBe("reflow.md");
   });
 
+  it("forwards an attached image to streamMessage (#513 P10)", async () => {
+    const spy = vi.spyOn(mockKbApi, "streamMessage");
+    const { result } = renderHook(() => useKbChat({ collectionIds: ["col-1"], client: mockKbApi }));
+    const image = { data: "AQID", mime: "image/png" };
+
+    await act(async () => {
+      await result.current.send("what is this?", image);
+    });
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ content: "what is this?", image }));
+    spy.mockRestore();
+  });
+
+  it("sends an image-only message (no text) (#513 P10)", async () => {
+    const spy = vi.spyOn(mockKbApi, "streamMessage");
+    const { result } = renderHook(() => useKbChat({ collectionIds: ["col-1"], client: mockKbApi }));
+    const image = { data: "AQID", mime: "image/png" };
+
+    await act(async () => {
+      await result.current.send("   ", image); // whitespace text but a real image
+    });
+
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ image }));
+    spy.mockRestore();
+  });
+
   it("ignores empty input", async () => {
     const { result } = renderHook(() => useKbChat({ collectionIds: [], client: mockKbApi }));
     await act(async () => {
