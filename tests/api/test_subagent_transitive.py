@@ -11,6 +11,7 @@ from workspace_app.agent.ask_kb import AskKbSpec
 from workspace_app.agent.config_catalog import AgentConfigCatalog
 from workspace_app.agent.context import AgentToolContext, WikiSearchBudget
 from workspace_app.api.events import AgentEvent, MessageDelta, RunDone
+from workspace_app.api.runner import AgentRunner
 from workspace_app.api.subagent_bridge import SubagentBridge
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.retriever import Retriever
@@ -49,7 +50,7 @@ def _new_collection(
 
 def _bridge(
     spec: SpecStar,
-    runner: _CapturingRunner,
+    runner: AgentRunner,
     holder: dict[str, str],
     *,
     superusers: frozenset[str] = frozenset(),

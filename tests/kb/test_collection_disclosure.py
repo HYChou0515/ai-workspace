@@ -4,7 +4,6 @@ disclosed, hidden dropped) and turns disclosed ids into the id+name+owner record
 the FE renders.
 """
 
-
 from workspace_app.kb.collections import (
     partition_collection_disclosure,
     readable_collection_ids,
