@@ -13,7 +13,7 @@ import type { CollectionPermission } from "../lib/permission";
 import { API_PREFIX, apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
-import type { Provenance, ReasoningEffort } from "./types";
+import type { Provenance, ReasoningEffort, WithheldSource } from "./types";
 
 export type { UploadCheckHint } from "../kb/uploadChecks";
 
@@ -351,6 +351,9 @@ export type KbChatMessage = {
   tool_call_id: string | null;
   created_at: number | null;
   citations: KbCitation[];
+  /** Permission-disclosure: read_meta-only sources surfaced for this answer,
+   * rendered as "🔒 request access" chips. Absent/empty on other messages. */
+  withheld?: WithheldSource[];
   /** role=error only (#37) — error | cancelled | max_turns. */
   error_kind?: string | null;
   /** #113 — "repetition" when the answer was stopped + truncated for a loop. */
