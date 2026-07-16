@@ -385,10 +385,19 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # real hash onto old chunks is a reindex (denormalize-from-parent), not this
     # migrate — see #104 plan P4.
     spec.add_model(
-        Schema(DocChunk, "v4")
+        Schema(DocChunk, "v5")
         .step(None, _reindex_only, to="v3", source_type=DocChunk)
         .step("v2", _reindex_only, to="v3", source_type=DocChunk)
-        .step("v3", _reindex_only, to="v4", source_type=DocChunk),
+        .step("v3", _reindex_only, to="v4", source_type=DocChunk)
+        # specstar 0.12.1 keeps a Vector out of `indexed_data` (it has a pgvector
+        # column), but only for NEW writes; existing rows keep the fat JSONB — a
+        # 4096-float array per embedding, indexed element-by-element by the GIN —
+        # until rewritten. DocChunk carries THREE embeddings, so this is the bulk
+        # of the bloat. migrate SKIPS rows already at the latest version, so this
+        # no-op reindex gives every v4 row a v5 delta: `POST /doc-chunk/migrate/
+        # execute` then re-extracts + re-saves each, and 0.12.1 strips the vectors
+        # on the way out. Operator then `REINDEX`es the GIN to reclaim the space.
+        .step("v4", _reindex_only, to="v5", source_type=DocChunk),
         indexed_fields=[
             "source_doc_id",
             "source_file_id",
@@ -503,8 +512,14 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # indexed → the deterministic exact-match fast path; kind indexed → grade against
     # card members only + split proposal/term_question in the inbox. The `embedding`
     # Vector is declared on the struct (Annotated[..., Vector]) — NOT an indexed_field.
+    # A `Schema` wrapper (it had none) so the vector cleanup can reach these rows.
+    # ClusterMember's `embedding` Vector bloats `indexed_data` exactly like
+    # DocChunk's; without a migration, `migrate/execute` raised outright, so its
+    # rows could never be rewritten lean. The `None -> v1` reindex is identity —
+    # its only effect is the write-back that re-extracts indexed_data (specstar
+    # 0.12.1 then drops the vector). Same operator flow as doc-chunk.
     spec.add_model(
-        ClusterMember,
+        Schema(ClusterMember, "v1").step(None, _reindex_only, to="v1", source_type=ClusterMember),
         indexed_fields=["collection_id", "cluster_key", "state", "norm_key", "kind"],
     )
     # recipient indexed so "my notifications" is a query, not a full scan; dedup_key
