@@ -201,7 +201,7 @@
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: var(--paper-1);
+  background: var(--paper-2);
   border: 1px dashed var(--paper-3);
   border-radius: var(--radius-btn);
   text-align: left;
