@@ -21,6 +21,7 @@ from ..apps.base import WorkItemBase
 from ..filestore.protocol import FileStore
 from ..kb.ingest import Ingestor
 from ..perm import Actor, Permission, Verb, authorize
+from ..perm.model import user_subject
 from ..resources.groups import groups_of
 from .activity import ActivityLog
 from .item_authz import require_item_access
@@ -51,6 +52,40 @@ class ItemAccessRequestOut(BaseModel):
     item_id: str
     requested: bool
     already_readable: bool = False
+
+
+class _MembersBody(BaseModel):
+    members: list[str]
+
+
+# grill D7: a member is a Participant — the verbs that let them work in the item.
+_PARTICIPANT_VERBS: tuple[Verb, ...] = ("read_meta", "read_chat", "read_content", "converse")
+
+
+def _reconcile_member_grants(
+    current: Permission | None, old_members: list[str], new_members: list[str]
+) -> Permission:
+    """grill D7 — fold the item's member roster into its ``Permission`` as Participant
+    grants (read_meta + read_chat + read_content + converse), so a private-default
+    item's members can actually enter it (and the storage-layer list scope, which
+    reads the indexed ``permission.read_meta``, admits them). A member ADDED gains the
+    participant verbs; a member REMOVED is stripped from them — any grant the owner
+    made to a non-member (via the permission dialog) is untouched. Members exist ⇒
+    ``restricted`` so the grants are live (``public`` stays public — open anyway)."""
+    base = current if current is not None else Permission()
+    old_subjects = {user_subject(m) for m in old_members}
+    new_subjects = [user_subject(m) for m in new_members]
+    removed = old_subjects - set(new_subjects)
+    added = [s for s in new_subjects if s not in old_subjects]
+    grants: dict[str, list[str]] = {}
+    for verb in _PARTICIPANT_VERBS:
+        kept = [s for s in base.grants(verb) if s not in removed]
+        for s in added:
+            if s not in kept:
+                kept.append(s)
+        grants[verb] = kept
+    visibility = "restricted" if new_members and base.visibility != "public" else base.visibility
+    return msgspec.structs.replace(base, visibility=visibility, **grants)
 
 
 def register_item_routes(
@@ -201,6 +236,50 @@ def register_item_routes(
                 actor=me,
             )
         return PermissionOut(resource_id=item_id, visibility=new_perm.visibility, notified=notified)
+
+    @app.put("/a/{slug}/items/{item_id}/members")
+    async def set_item_members(slug: str, item_id: str, body: _MembersBody) -> PermissionOut:
+        """grill D7 — set an item's member roster AND sync it into the Permission as
+        Participant grants (so a private-default item's members can enter it). Gated
+        on ``change_permission`` (editing members now grants ACCESS, so it's owner /
+        superuser / delegate only — no longer a plain ``write_meta`` field edit).
+        Fans out the conversation read-chat mirror and notifies newly-added members."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.registry import app_model
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        model = app_model(slug)
+        item, created_by = _authorize_item(slug, item_id, "change_permission")
+        if not isinstance(item.members, list):
+            raise HTTPException(status_code=422, detail=f"app {slug!r} has no members concept")
+        old_members = item.members
+        new_perm = _reconcile_member_grants(item.permission, old_members, body.members)
+        rm = spec.get_resource_manager(model)
+        with rm.using(created_by):
+            rm.update(
+                item_id, msgspec.structs.replace(item, members=body.members, permission=new_perm)
+            )
+        await asyncio.to_thread(
+            push_item_mirror_to_conversations,
+            spec,
+            item_id,
+            visibility=new_perm.visibility,
+            read_chat=new_perm.read_chat,
+            created_by=created_by,
+        )
+        me = get_user_id()
+        added = sorted(set(body.members) - set(old_members) - {me})
+        for uid in added:
+            notify(
+                spec,
+                recipient=uid,
+                kind="share",
+                title=f'Added you to "{item.title}"',
+                link=f"/a/{slug}/{item_id}",
+                actor=me,
+            )
+        return PermissionOut(resource_id=item_id, visibility=new_perm.visibility, notified=added)
 
     @app.post("/a/{slug}/items/{item_id}/request-access")
     async def request_item_access(slug: str, item_id: str) -> ItemAccessRequestOut:

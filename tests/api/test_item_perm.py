@@ -173,6 +173,51 @@ def test_superuser_reaches_a_private_item():
     assert client.get(_wp(iid, "/files")).status_code == 200
 
 
+def test_adding_a_member_grants_participant_access():
+    # grill D7: a member auto-gets read_chat + read_content + converse.
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=Permission(visibility="private"))
+    assert client.put(_wp(iid, "/members"), json={"members": ["alice"]}).status_code == 200
+
+    holder["id"] = "alice"
+    assert client.get(_wp(iid, "/files")).status_code == 200  # read_content
+    assert client.post(_wp(iid, "/messages"), json={"content": "hi"}).status_code == 202  # converse
+
+    item = spec.get_resource_manager(RcaInvestigation).get(iid).data
+    assert isinstance(item, RcaInvestigation)
+    assert item.permission is not None
+    assert item.permission.visibility == "restricted"
+    assert "user:alice" in item.permission.read_chat
+    assert "user:alice" in item.permission.converse
+
+
+def test_removing_a_member_strips_their_grants():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=Permission(visibility="private"))
+    client.put(_wp(iid, "/members"), json={"members": ["alice", "dave"]})
+    client.put(_wp(iid, "/members"), json={"members": ["dave"]})  # drop alice
+
+    holder["id"] = "alice"
+    assert client.get(_wp(iid, "/files")).status_code == 404  # stripped → can't even see it
+    item = spec.get_resource_manager(RcaInvestigation).get(iid).data
+    assert isinstance(item, RcaInvestigation)
+    assert item.permission is not None
+    assert "user:alice" not in item.permission.read_chat
+    assert "user:dave" in item.permission.read_chat  # the kept member stays granted
+
+
+def test_editing_members_requires_change_permission():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(
+        spec, by="bob", permission=Permission(visibility="restricted", read_meta=["user:alice"])
+    )
+    holder["id"] = "alice"  # can see it (read_meta) but not change_permission → 403
+    assert client.put(_wp(iid, "/members"), json={"members": ["mallory"]}).status_code == 403
+
+
 def _access_requests(spec: SpecStar, recipient: str) -> list:
     from workspace_app.resources import Notification
 
