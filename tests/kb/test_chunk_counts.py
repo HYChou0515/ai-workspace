@@ -81,3 +81,26 @@ def test_doc_chunks_for_ids_falls_back_to_source_doc_id_for_legacy_chunks():
     s = _spec()
     _add_chunks(s, "legacy", 4, coll="c1", file_id="")
     assert doc_chunks_for_ids(s, "c1", {"legacy": ""}) == {"legacy": 4}
+
+
+def test_doc_chunks_for_ids_legacy_counts_are_collection_scoped():
+    """The legacy fallback must be bounded to the collection, like the content
+    query above it.
+
+    It was not: `source_doc_id IN (page ids) AND source_file_id == ""` carried no
+    `collection_id`, so the scan spanned DocChunk GLOBALLY — every collection's
+    chunks — on every request. The docstring claimed "two SCOPED push-downs"
+    while only one of them was.
+
+    Narrowing cannot change any REAL answer — a SourceDoc id encodes its
+    collection (`{collection}/{user}/{path}`), so two collections cannot share
+    one, and chunk sets are already collection-scoped. This test reaches that
+    state directly because a cross-collection id is the only observable proxy for
+    "the predicate is missing"; the motivation is bounding the scan, not a live
+    miscount.
+    """
+    spec = _spec()
+    _add_chunks(spec, "shared-id", 3, coll="c1")  # legacy: file_id == ""
+    _add_chunks(spec, "shared-id", 5, coll="c2")  # same doc id, other collection
+    assert doc_chunks_for_ids(spec, "c1", {"shared-id": ""}) == {"shared-id": 3}
+    assert doc_chunks_for_ids(spec, "c2", {"shared-id": ""}) == {"shared-id": 5}
