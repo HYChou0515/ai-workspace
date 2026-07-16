@@ -139,3 +139,65 @@ async def test_bridge_lets_a_superuser_speaker_read_all():
         "kb_chat", "q", collection_ids=[private]
     )
     assert runner.seen_ids == [private]
+
+
+class _DisclosingRunner:
+    """A sub-agent that records its scopes, then simulates kb_search disclosing
+    every read_meta-only (discoverable) collection into the turn accumulator."""
+
+    def __init__(self) -> None:
+        self.seen_ids: list[str] | None = None
+        self.seen_discoverable: list[str] | None = None
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.seen_ids = list(ctx.collection_ids)
+        self.seen_discoverable = list(ctx.discoverable_collection_ids)
+        ctx.withheld_collection_ids.extend(ctx.discoverable_collection_ids)
+        yield MessageDelta(text="answer")
+        yield RunDone()
+
+
+async def test_bridge_passes_discoverable_scope_and_bubbles_withheld_into_the_sink():
+    # permission-disclosure: a read_meta-only collection is NOT searched but IS
+    # handed to the sub-agent as discoverable; a disclosed match bubbles up.
+    spec = make_spec()
+    holder = {"id": "alice"}
+    readable = _new_collection(
+        spec, by="bob", permission=Permission(visibility="restricted", read_content=["user:alice"])
+    )
+    disc = _new_collection(
+        spec,
+        by="bob",
+        name="Sales-2026",
+        permission=Permission(visibility="restricted", read_meta=["user:alice"]),
+    )
+    runner = _DisclosingRunner()
+    sink: list[str] = []
+    answer, _ = await _bridge(spec, runner, holder).run(
+        "kb_chat", "q", collection_ids=[readable, disc], withheld_sink=sink
+    )
+    assert runner.seen_ids == [readable]  # searched scope: readable only
+    assert runner.seen_discoverable == [disc]  # read_meta-only handed over as discoverable
+    assert sink == [disc]  # the disclosed withheld source bubbled to the parent
+    assert answer == "answer"
+
+
+async def test_bridge_still_runs_to_disclose_when_nothing_is_readable():
+    # readable empty but discoverable present → do NOT short-circuit; run so the
+    # motivating case (the only answer is behind read_content) still discloses.
+    spec = make_spec()
+    holder = {"id": "alice"}
+    disc = _new_collection(
+        spec,
+        by="bob",
+        name="Secret",
+        permission=Permission(visibility="restricted", read_meta=["user:alice"]),
+    )
+    runner = _DisclosingRunner()
+    sink: list[str] = []
+    answer, _ = await _bridge(spec, runner, holder).run(
+        "kb_chat", "q", collection_ids=[disc], withheld_sink=sink
+    )
+    assert runner.seen_ids == []  # nothing readable to search
+    assert sink == [disc]  # but the withheld source is still disclosed
+    assert answer == "answer"

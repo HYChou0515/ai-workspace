@@ -231,6 +231,18 @@ class AgentToolContext:
     # their groups, and the superusers are all known; empty for an unwired /
     # no-override context, so a turn nobody tightened per-doc pays nothing.
     exclude_doc_ids: frozenset[str] = field(default_factory=frozenset)
+    # Permission-disclosure: collections in this turn's scope the speaker may
+    # see-exist (read_meta) but NOT read (read_content). The disclosure probe in
+    # kb_search runs over these; a competitive match is disclosed (existence only)
+    # instead of silently dropped. Computed at the API boundary beside the readable
+    # `collection_ids` + `exclude_doc_ids`; empty ⇒ nothing to disclose (the probe
+    # short-circuits, so a turn with no discoverable collections pays nothing).
+    discoverable_collection_ids: list[str] = field(default_factory=list)
+    # Permission-disclosure: the per-turn accumulator of DISCLOSED withheld
+    # collection ids (union across this turn's kb_search calls / sub-agents),
+    # mirroring `kb_passages`. Resolved to WithheldSource + persisted on the
+    # assistant message at persist time (the FE refetch renders the lock chips).
+    withheld_collection_ids: list[str] = field(default_factory=list)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
     # #484: resource-ids of the context cards already injected into this turn — by
     # the #106 user-message pre-scan (seeded at the API boundary) AND by earlier

@@ -725,6 +725,30 @@ def kb_search_impl(
 
     body = "\n\n".join(lines) if lines else "No matching passages in the knowledge base."
     body += _glossary_for_passages(ctx.context, passage_texts)
+    # Permission-disclosure: surface collections the speaker may see-exist but not
+    # read whose content is a competitive match — so the answer says "there IS an
+    # answer you can't access" instead of silently omitting it. The agent is told
+    # ONLY the COUNT (never the names/content), which keeps it from confidently
+    # claiming nothing exists without letting a small model hallucinate the withheld
+    # content; the authoritative names + "request access" action ride out-of-band on
+    # the persisted message (ctx.withheld_collection_ids → WithheldSource) that the
+    # FE renders. Skipped entirely when nothing is discoverable, so a turn with no
+    # read_meta-only collections pays nothing (and never needs the probe at all).
+    if ctx.context.discoverable_collection_ids:
+        disclosed = retriever.probe_withheld(
+            query, ctx.context.collection_ids, ctx.context.discoverable_collection_ids
+        )
+        acc = ctx.context.withheld_collection_ids
+        fresh = [c for c in disclosed if c not in acc]
+        acc.extend(fresh)
+        if fresh:
+            n = len(fresh)
+            body += (
+                f"\n\n(Note: {n} knowledge source{'s' if n != 1 else ''} you don't have "
+                "access to also appear relevant to this query. You cannot read them, but "
+                "the user can see them and request access — tell the user such sources "
+                "exist; do NOT guess their contents.)"
+            )
     if budget.max_calls is not None:
         body += (
             f"\n\n(Search budget: {budget.used} of {budget.max_calls} used, "
@@ -801,6 +825,11 @@ async def ask_knowledge_base_impl(
         ctx.context.on_exec_output,
         ctx.context.investigation_id,
         scope,
+        # Permission-disclosure: the KB sub-agent surfaces read_meta-only sources
+        # into this turn's accumulator, so the parent's assistant message can chip
+        # "there IS an answer you can't read". Keyword (not positional) so it never
+        # collides with the bridge's positional args.
+        withheld_sink=ctx.context.withheld_collection_ids,
     )
     bucket.append(citations)
     return banner + answer

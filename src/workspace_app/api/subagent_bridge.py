@@ -19,7 +19,7 @@ from ..agent.ask_kb import AskKbSpec
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import KbSearchBudget, WikiSearchBudget
 from ..kb.cited import record_citations
-from ..kb.collections import readable_collection_ids
+from ..kb.collections import partition_collection_disclosure
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..perm import Actor
@@ -74,6 +74,7 @@ class SubagentBridge:
         budget: KbSearchBudget | None = None,
         wiki_budget: WikiSearchBudget | None = None,
         ask_kb_spec: AskKbSpec | None = None,
+        withheld_sink: list[str] | None = None,
     ) -> tuple[str, list[Citation]]:
         """Generic sub-agent bridge — runs the sub-agent for `purpose`
         over every collection and returns its synthesized answer + the
@@ -120,10 +121,17 @@ class SubagentBridge:
         # continues). An already-empty scope (no collections exist) keeps its
         # prior behaviour: run the agent, which reports it found nothing.
         speaker = self._get_user_id()
-        readable = readable_collection_ids(self._spec, ids, speaker, superusers=self._superusers)
-        if ids and not readable:
+        # Permission-disclosure: split into what the speaker may read (searched) vs
+        # merely see-exist (read_meta only — disclosed by the probe, not searched).
+        # `readable` is byte-identical to the old readable_collection_ids result.
+        part = partition_collection_disclosure(
+            self._spec, ids, speaker, superusers=self._superusers
+        )
+        readable, discoverable = part.readable, part.discoverable
+        if ids and not readable and not discoverable:
             logger.warning(
-                "subagent_bridge: speaker %s can read none of the collections for purpose %r",
+                "subagent_bridge: speaker %s can neither read nor discover any of the "
+                "collections for purpose %r",
                 speaker,
                 purpose,
             )
@@ -196,6 +204,11 @@ class SubagentBridge:
             ask_kb_spec=ask_kb_spec,
             # #308: the speaker's per-doc-override exclusion (resolved above).
             exclude_doc_ids=exclude_doc_ids,
+            # Permission-disclosure: the read_meta-only collections the sub-agent's
+            # kb_search probes; the disclosed subset bubbles into `withheld_sink`
+            # (the parent turn's accumulator), then onto the assistant message.
+            discoverable_collection_ids=discoverable,
+            on_withheld=(withheld_sink.extend if withheld_sink is not None else None),
         )
         logger.debug(
             "subagent_bridge: %s sub-agent returned %d citations for origin %s",
