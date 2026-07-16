@@ -5,7 +5,7 @@
  * then refresh the listing.
  */
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { type FileCaps, type FileService, useOptionalFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
@@ -132,13 +132,22 @@ export function FileTree({
   // no-op stands in when there's no <DialogProvider>.
   const dialog = useOptionalDialog() ?? { confirm: async () => null };
   const [query, setQuery] = useState("");
-  const fullTree = buildFileTree(files, dirs);
+  // `query` lives here, so every keystroke re-renders this component — and so
+  // did the whole tree build until it was memoised. The build only depends on
+  // the data, and the prune only on the built tree plus the term; neither
+  // depends on the selection, the menus, or the panel width, all of which
+  // re-render this component too (as does the 1.5 s indexing poll).
+  const fullTree = useMemo(() => buildFileTree(files, dirs), [files, dirs]);
   // While a filter is active, `pruneTree` returns only the matching branches
   // plus the ancestor dirs to force open; an empty term is a no-op (full tree,
   // nothing forced) so the user's own collapse state is preserved (#402).
-  const { tree, expand } = searchable
-    ? pruneTree(fullTree, query)
-    : { tree: fullTree, expand: NO_FORCE_OPEN };
+  const { tree, expand } = useMemo(
+    () =>
+      searchable
+        ? pruneTree(fullTree, query)
+        : { tree: fullTree, expand: NO_FORCE_OPEN },
+    [searchable, fullTree, query],
+  );
   const collapsed = usePersistentSet(`rca:tree-collapsed:${svc.scopeId || scopeId || "default"}`);
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
