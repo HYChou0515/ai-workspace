@@ -18,8 +18,8 @@ from specstar import QB
 from specstar.types import ResourceIDNotFoundError
 
 from ..filestore.protocol import FileNotFound
-from ..perm import Actor, authorize
-from ..resources.kb import Collection
+from ..perm import Actor, DisclosurePartition, authorize, partition_by_disclosure
+from ..resources.kb import Collection, WithheldSource
 
 if TYPE_CHECKING:
     from specstar import SpecStar
@@ -105,6 +105,59 @@ def readable_collection_ids(
             superusers=superusers,
         ):
             out.append(cid)
+    return out
+
+
+def partition_collection_disclosure(
+    spec: SpecStar,
+    ids: Iterable[str],
+    user: str,
+    *,
+    superusers: frozenset[str] = frozenset(),
+) -> DisclosurePartition:
+    """The disclosure-aware sibling of ``readable_collection_ids`` (permission-
+    disclosure). Splits ``ids`` into ``readable`` (read_content — searched as
+    today), ``discoverable`` (read_meta but NOT read_content — surfaced by the
+    disclosure probe instead of dropped), and ``hidden`` (no read_meta — a uniform
+    404, never disclosed).
+
+    ``readable`` is byte-identical to ``readable_collection_ids`` (same
+    ``Actor.human(user)`` — NO groups — same point-get per id, same order), so
+    swapping a caller onto this is a no-op for the searched scope; it only ADDS the
+    middle tier. Groups are intentionally omitted to stay consistent with
+    ``readable_collection_ids``; a future change adds them to BOTH at once. An
+    unknown id is dropped; ``permission is None`` ≡ public."""
+    rm = spec.get_resource_manager(Collection)
+    actor = Actor.human(user)
+    entries: list[tuple[str, Any, str]] = []
+    for cid in ids:
+        try:
+            rev = rm.get(cid)
+        except ResourceIDNotFoundError:
+            continue
+        data = rev.data
+        assert isinstance(data, Collection)
+        entries.append((cid, data.permission, rev.info.created_by))
+    return partition_by_disclosure(actor, entries, superusers=superusers)
+
+
+def resolve_withheld(spec: SpecStar, collection_ids: Iterable[str]) -> list[WithheldSource]:
+    """Turn disclosed withheld collection ids into ``WithheldSource`` records
+    (id + name + owner) for the assistant message the FE renders. Input order is
+    preserved; a since-deleted collection is skipped. Only identity + owner are
+    read — never any content — all of which a ``read_meta`` holder already sees."""
+    rm = spec.get_resource_manager(Collection)
+    out: list[WithheldSource] = []
+    # dedupe by id (a turn's several ask_knowledge_base sub-agents each extend the
+    # same accumulator, so a collection disclosed twice must chip once).
+    for cid in dict.fromkeys(collection_ids):
+        try:
+            rev = rm.get(cid)
+        except ResourceIDNotFoundError:
+            continue
+        data = rev.data
+        assert isinstance(data, Collection)
+        out.append(WithheldSource(collection_id=cid, name=data.name, owner=rev.info.created_by))
     return out
 
 

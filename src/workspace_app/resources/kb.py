@@ -26,6 +26,7 @@ from specstar.types import Binary
 from ..perm import Permission
 from .conversation import Citation as Citation  # re-export — see conversation.Citation
 from .conversation import MessageMetrics
+from .conversation import WithheldSource as WithheldSource  # re-export — see conversation
 
 # Embedding dimensionality. MUST match the active Embedder; changing the model
 # is a re-index event (every chunk re-embedded). Set per deployment.
@@ -683,6 +684,9 @@ class KbMessage(Struct):
     tool_name: str | None = None
     tool_args: dict[str, Any] | None = None
     citations: list[Citation] = field(default_factory=list)
+    # Permission-disclosure: sources found relevant but read_meta-only for the user
+    # (see-exist, not read). Rendered as "🔒 <name> — request access" chips.
+    withheld: list[WithheldSource] = field(default_factory=list)
     created_at: int | None = None  # epoch ms
     metrics: MessageMetrics | None = None  # assistant answers: final token usage (survives reload)
     error_kind: str | None = None  # role=error (#37): error | cancelled | max_turns

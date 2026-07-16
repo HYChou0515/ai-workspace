@@ -41,6 +41,12 @@ describe("roleForVerbs", () => {
     expect(roleForVerbs(new Set(["read_content", "edit_content"]))).toBe("editor");
     expect(roleForVerbs(new Set())).toBeNull();
   });
+
+  it("maps read_meta WITHOUT read_content to the discoverable tier", () => {
+    // permission-disclosure: sees the collection exists (+ can request access),
+    // but cannot read its content — the tier below Viewer.
+    expect(roleForVerbs(new Set(["read_meta"]))).toBe("discoverable");
+  });
 });
 
 describe("grantsFromPermission", () => {

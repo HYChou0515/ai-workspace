@@ -31,6 +31,7 @@ from ..kb.collections import (
     collection_tiers_from_json,
     read_hub_collections,
     resolve_named_collection_ids,
+    resolve_withheld,
 )
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink
@@ -202,6 +203,7 @@ class ChatSendService:
             emit: OutputSink | None = None,
             origin_id: str | None = None,
             collection_ids: list[str] | None = None,
+            withheld_sink: list[str] | None = None,
         ) -> tuple[str, list[Citation]]:
             # kb_chat uses the COMPOSER's live depth + effort (#65); infer_modules
             # uses its OWN configured depth + effort + a single configured
@@ -239,6 +241,9 @@ class ChatSendService:
                 wiki_query=wiki,
                 collection_ids=colls,
                 budget=bud,
+                # Permission-disclosure: forward the parent turn's withheld
+                # accumulator so the KB sub-agent's disclosed sources bubble up.
+                withheld_sink=withheld_sink,
             )
 
         # ONE bridge for every sub-agent the RCA tools may invoke
@@ -303,6 +308,11 @@ class ChatSendService:
                         tool_idx[name] = idx + 1
                     elif tm.role == "assistant" and seen_subagent:
                         msg.citations = bubble_kb_citations(tm.content, seen_subagent)
+                    # Permission-disclosure: the turn's ask_knowledge_base sub-agents
+                    # bubbled read_meta-only sources into ctx.withheld_collection_ids;
+                    # chip them on the assistant answer (resolved to id+name+owner).
+                    if tm.role == "assistant" and ctx.withheld_collection_ids:
+                        msg.withheld = resolve_withheld(self._spec, ctx.withheld_collection_ids)
                     conv2.messages.append(msg)
                 self._conv_rm.update(rid, conv2)
             self._activity.record(

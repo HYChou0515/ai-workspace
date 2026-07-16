@@ -40,6 +40,7 @@ from ..files import WorkspaceFiles
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
+from ..kb.collections import partition_collection_disclosure, resolve_withheld
 from ..kb.context_cards import (
     card_context_block,
     cards_with_ids_for_collections,
@@ -100,6 +101,8 @@ async def answer_question(
     wiki_budget: WikiSearchBudget | None = None,
     ask_kb_spec: AskKbSpec | None = None,
     exclude_doc_ids: frozenset[str] = frozenset(),
+    discoverable_collection_ids: list[str] | None = None,
+    on_withheld: Callable[[list[str]], None] | None = None,
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
     with a compact sources footer. This is how the RCA agent's
@@ -173,6 +176,9 @@ async def answer_question(
         # can't surface a doc the speaker can't read — even though the KB ctx itself
         # carries no speaker identity.
         exclude_doc_ids=exclude_doc_ids,
+        # Permission-disclosure: collections the ORIGINAL speaker may see-exist but
+        # not read; the sub-agent's kb_search discloses a competitive match here.
+        discoverable_collection_ids=discoverable_collection_ids or [],
     )
     parts: list[str] = []
     # (tool_name, error_text) pairs captured from ToolEnd events whose
@@ -216,6 +222,10 @@ async def answer_question(
     cites = parse_citations(answer, ctx.kb_passages)
     if on_citations is not None:
         on_citations(cites)
+    # Permission-disclosure: bubble the withheld sources this sub-agent surfaced up
+    # to the caller (the bridge merges them into the parent turn's accumulator).
+    if on_withheld is not None:
+        on_withheld(list(ctx.withheld_collection_ids))
     if cites:
         footer = "; ".join(f"[{c.marker}] {c.filename}" for c in cites)
         answer = f"{answer}\n\nSources: {footer}"
@@ -679,9 +689,21 @@ def register_kb_chat_routes(
         # inherit operator default.
         caller_enh = to_caller_enhancements(body.enhancements)
 
+        # Permission-disclosure: pull the read_meta-ONLY collections out of the
+        # searched scope so the probe discloses them (existence) instead of the
+        # retriever searching a collection the speaker can't read. Only genuine
+        # discoverable collections are moved — unknown/deleted ids stay in the
+        # searched scope exactly as before (the retriever just finds nothing), so
+        # this is a strict addition: the readable scope is unchanged except that a
+        # discoverable collection is redirected to the disclosure channel.
+        _disc = partition_collection_disclosure(
+            spec, chat.collection_ids, get_user_id(), superusers=superusers
+        )
+        _discoverable = set(_disc.discoverable)
         ctx = AgentToolContext(
             retriever=retriever,
-            collection_ids=chat.collection_ids,
+            collection_ids=[c for c in chat.collection_ids if c not in _discoverable],
+            discoverable_collection_ids=_disc.discoverable,
             # #308: exclude docs whose per-doc override blocks THIS speaker's
             # read_content, so the retriever never surfaces a doc tightened away
             # from them (empty when no doc in scope is overridden).
@@ -777,6 +799,10 @@ def register_kb_chat_routes(
                         origin_id=chat_id,
                         cited_by=get_user_id(),
                     )
+                    # Permission-disclosure: attach the withheld sources this turn
+                    # surfaced (read_meta-only, competitive match) so the FE renders
+                    # the lock chips beside the answer.
+                    km.withheld = resolve_withheld(spec, ctx.withheld_collection_ids)
                 fresh.messages.append(km)
             # Same owner-acting write as the user-message append above (#304): the
             # assistant reply persists through the write handler as the chat owner.
@@ -849,5 +875,9 @@ def _message_dict(m: KbMessage) -> dict:
                 "provenance": c.provenance,
             }
             for c in m.citations
+        ],
+        # Permission-disclosure: read_meta-only sources surfaced this turn.
+        "withheld": [
+            {"collection_id": w.collection_id, "name": w.name, "owner": w.owner} for w in m.withheld
         ],
     }

@@ -186,6 +186,49 @@
 .kb-cite:hover {
   border-color: var(--accent);
 }
+/* Permission-disclosure: "🔒 <name> — request access" chips for sources the
+   user may see-exist but not read. Muted vs a real citation card (dashed border,
+   no hover affordance on the row) — it's a locked source, not a clickable one. */
+.kb-withheld-list {
+  padding-left: 28px;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.kb-withheld {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--paper-2);
+  border: 1px dashed var(--paper-3);
+  border-radius: var(--radius-btn);
+  text-align: left;
+  font-family: var(--font-body);
+}
+.kb-withheld__lock {
+  font-size: 0.8125rem;
+  line-height: 1;
+}
+.kb-withheld__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+.kb-withheld__name {
+  font-size: 0.75rem;
+  color: var(--text-paper);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-withheld__owner {
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  color: var(--text-paper-d2);
+}
 .kb-cite__marker {
   font-family: var(--font-mono);
   font-size: 0.625rem;

@@ -12,7 +12,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
-import type { Message, MessageCitation } from "../api/types";
+import type { Message, MessageCitation, WithheldSource } from "../api/types";
 import type { AgentEntry, StepView, ToolCallView } from "../pages/investigation/agentLog";
 import {
   buildByMarker,
@@ -54,6 +54,48 @@ function CitationCard({
       </span>
       <Icon name="arrow_r" size={12} color="var(--text-paper-d2)" />
     </button>
+  );
+}
+
+// Permission-disclosure: one "🔒 <name> — request access" chip for a knowledge
+// source the answer found relevant but the user may see-exist yet not read. The
+// content never travels — only the collection's name + owner, both already
+// visible to a read_meta holder. The request button flips to a sent state so a
+// second click can't double-fire.
+function WithheldChip({
+  w,
+  onRequestAccess,
+}: {
+  w: WithheldSource;
+  onRequestAccess?: (w: WithheldSource) => void;
+}) {
+  const t = useT();
+  const [requested, setRequested] = useState(false);
+  return (
+    <div className="kb-withheld">
+      <span className="kb-withheld__lock" aria-hidden>
+        🔒
+      </span>
+      <span className="kb-withheld__body">
+        <span className="kb-withheld__name">{w.name}</span>
+        <span className="kb-withheld__owner">
+          {t("entry.withheld.owner")}: {w.owner}
+        </span>
+      </span>
+      {onRequestAccess && (
+        <button
+          type="button"
+          className="btn btn--xs"
+          disabled={requested}
+          onClick={() => {
+            setRequested(true);
+            onRequestAccess(w);
+          }}
+        >
+          {t(requested ? "entry.withheld.requested" : "entry.withheld.requestAccess")}
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -113,6 +155,7 @@ function toolArgHint(name: string, args: Record<string, unknown>): string {
 export function EntryView({
   entry,
   onOpenCitation,
+  onRequestAccess,
   onReplay,
   onUndo,
   onReportWiki,
@@ -120,6 +163,9 @@ export function EntryView({
 }: {
   entry: AgentEntry;
   onOpenCitation?: (c: MessageCitation) => void;
+  /** Permission-disclosure: request read access to a withheld source (fires the
+   * owner notification). Provided by chat surfaces; absent → no request button. */
+  onRequestAccess?: (w: WithheldSource) => void;
   /** #51 P6: re-run this step (assistant answer / tool decision)
    * against the current model as a diagnostic — provided by surfaces
    * that know the persisted thread position; absent → no affordance. */
@@ -173,6 +219,7 @@ export function EntryView({
     <MessageBlock
       message={entry.message}
       onOpenCitation={onOpenCitation}
+      onRequestAccess={onRequestAccess}
       onReplay={onReplay}
       onUndo={onUndo}
       onReportWiki={onReportWiki}
@@ -400,12 +447,14 @@ function StepLine({ step }: { step: StepView }) {
 function MessageBlock({
   message,
   onOpenCitation,
+  onRequestAccess,
   onReplay,
   onUndo,
   onReportWiki,
 }: {
   message: Message;
   onOpenCitation?: (c: MessageCitation) => void;
+  onRequestAccess?: (w: WithheldSource) => void;
   onReplay?: () => void;
   onUndo?: () => void;
   onReportWiki?: () => void;
@@ -537,6 +586,14 @@ function MessageBlock({
                 c={c}
                 onOpen={onOpenCitation}
               />
+            ))}
+          </div>
+        )}
+        {message.withheld && message.withheld.length > 0 && (
+          <div className="kb-withheld-list" style={{ marginLeft: 28 }}>
+            <div className="kb-cites__label">{t("entry.withheld")}</div>
+            {message.withheld.map((w) => (
+              <WithheldChip key={w.collection_id} w={w} onRequestAccess={onRequestAccess} />
             ))}
           </div>
         )}

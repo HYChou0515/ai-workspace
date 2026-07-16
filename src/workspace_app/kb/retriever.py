@@ -216,6 +216,7 @@ class Retriever:
         enhancement_defaults: EnhancementSettings | None = None,
         quality_weight: float = 0.10,
         quality_floor: int | None = None,
+        disclosure_floor: float = 0.6,
     ) -> None:
         self._spec = spec
         self._embedder = embedder
@@ -245,6 +246,13 @@ class Retriever:
         # exclude. Both are operator config (config.example.yaml).
         self._quality_weight = quality_weight
         self._quality_floor = quality_floor
+        # Permission-disclosure probe (D9): the absolute cosine-distance ceiling a
+        # withheld collection's best chunk must clear to be disclosed when nothing
+        # is readable (or when the readable results are near-worthless — it caps a
+        # loose "beat the weakest shown" cutoff, so pure noise is never disclosed).
+        # A hyperparameter; tune per embedder. cosine distance ∈ [0, 2]; 0.6 ≈
+        # cosine similarity ≥ 0.4.
+        self._disclosure_floor = disclosure_floor
 
     @property
     def top_k(self) -> int:
@@ -637,6 +645,84 @@ class Retriever:
         return self._dense_order(
             cids, vec, field=field, location=loc, exclude_doc_ids=exclude_doc_ids
         )
+
+    def probe_withheld(
+        self,
+        query: str,
+        readable_collection_ids: list[str],
+        withheld_collection_ids: list[str],
+    ) -> list[str]:
+        """The subset of ``withheld_collection_ids`` that hold a COMPETITIVE match
+        for ``query`` — used to disclose "there IS an answer here you can't read"
+        without leaking the answer (permission-disclosure, D9).
+
+        A withheld collection is disclosed iff its best (nearest) chunk's cosine
+        distance ≤ ``min(the weakest readable top-k distance, disclosure_floor)`` —
+        i.e. at least as relevant as something we DID show (competitive) AND
+        absolutely relevant (the floor is the noise guard, and the sole test when
+        nothing is readable). SCORES-ONLY: this returns only collection ids; the
+        withheld chunks' text and vectors never leave this method, so nothing
+        enters the agent context or the readable passage list. The main ``search``
+        path is entirely untouched — this is a separate dense pass, by design."""
+        withheld = [c for c in dict.fromkeys(withheld_collection_ids) if c]
+        if not withheld:
+            return []
+        qv = self._embedder.embed_query(query)
+        # The cutoff: the weakest readable top-k distance, capped by the floor.
+        # An empty/contentless readable scope collapses to the floor alone.
+        readable_scored = self._dense_scored(list(readable_collection_ids), qv, limit=self._top_k)
+        cutoff = min(
+            max((dist for _, dist in readable_scored), default=self._disclosure_floor),
+            self._disclosure_floor,
+        )
+        # Best (nearest) distance per withheld collection, one dense pass.
+        best: dict[str, float] = {}
+        for cid, dist in self._dense_scored(withheld, qv, limit=self._candidates):
+            if cid not in best or dist < best[cid]:
+                best[cid] = dist
+        disclosed = [c for c in withheld if c in best and best[c] <= cutoff]
+        logger.info(
+            "retriever: disclosure probe cutoff=%.4f readable=%d withheld=%d disclosed=%d",
+            cutoff,
+            len(readable_collection_ids),
+            len(withheld),
+            len(disclosed),
+        )
+        return disclosed
+
+    def _dense_scored(
+        self,
+        collection_ids: list[str],
+        vec: list[float],
+        *,
+        field: str = "embedding",
+        limit: int,
+    ) -> list[tuple[str, float]]:
+        """``(collection_id, cosine_distance)`` for the ``limit`` nearest chunks to
+        ``vec`` across ``collection_ids``, nearest-first, via specstar's native
+        vector query. Backs the disclosure probe: the store returns the ORDER, and
+        we read each hit's stored vector to recover the DISTANCE magnitude needed to
+        compare two scopes. Reads ONLY ``collection_id`` + the vector off each hit —
+        never the chunk text — so nothing readable leaks through it."""
+        if not collection_ids:
+            return []
+        rm = self._spec.get_resource_manager(DocChunk)
+        query = (
+            QB["collection_id"]
+            .in_(collection_ids)
+            # specstar's order_by type union omits VectorDistanceSort (works at runtime)
+            .order_by(QB[field].cosine(vec).asc())  # ty: ignore[invalid-argument-type]
+            .limit(limit)
+            .build()
+        )
+        out: list[tuple[str, float]] = []
+        for r in rm.list_resources(query):
+            ch = r.data
+            assert isinstance(ch, DocChunk)
+            cv = _chunk_vec(ch)
+            if cv:
+                out.append((ch.collection_id, cosine_distance(cv, vec)))
+        return out
 
     def _dense_order_mem(
         self, chunks: dict[str, DocChunk], vec: list[float], *, field: str
