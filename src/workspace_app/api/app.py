@@ -769,7 +769,7 @@ def create_app(
     # #54: the item locator owns the slug/profile/title scan + default-chat /
     # engine-key / chat-validation rules every workspace route crosses. The route
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
-    locator = ItemLocator(spec, app_catalog)
+    locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
 
     mention_svc = MentionService(spec=spec, locator=locator)
 

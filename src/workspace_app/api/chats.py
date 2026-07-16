@@ -53,13 +53,18 @@ def find_default_conversation(conv_rm, item_id: str) -> tuple[str, Conversation]
     return free[0]
 
 
-def resolve_default_conversation(conv_rm, item_id: str) -> tuple[str, Conversation]:
+def resolve_default_conversation(
+    conv_rm, item_id: str, *, mirror: dict | None = None
+) -> tuple[str, Conversation]:
     """Like :func:`find_default_conversation` but **creates** the default free chat
-    when the item has none — for the item-level endpoints' get-or-create semantics."""
+    when the item has none — for the item-level endpoints' get-or-create semantics.
+    ``mirror`` (#306 PR3) stamps the item read-chat mirror on the created chat so its
+    access_scope gates the thread; ``None`` leaves the public defaults (a caller
+    without a spec handle)."""
     found = find_default_conversation(conv_rm, item_id)
     if found is not None:
         return found
-    rev = conv_rm.create(Conversation(item_id=item_id, created_ms=_now_ms()))
+    rev = conv_rm.create(Conversation(item_id=item_id, created_ms=_now_ms(), **(mirror or {})))
     got = conv_rm.get(rev.resource_id).data
     assert isinstance(got, Conversation)
     return rev.resource_id, got

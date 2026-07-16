@@ -15,6 +15,8 @@ item's default chat.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from fastapi import HTTPException
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
@@ -22,8 +24,11 @@ from specstar.types import ResourceIDNotFoundError
 from ..apps.catalog import AppCatalog
 from ..apps.manifest import load_app_manifest
 from ..apps.resolve import find_work_item, resolve_item_agent_config
+from ..perm import Verb
 from ..resources import AgentConfig, Conversation
 from .chats import find_default_conversation, resolve_default_conversation
+from .item_authz import require_item_access
+from .item_conversation_perm import item_conversation_mirror
 
 
 class ItemLocator:
@@ -31,10 +36,23 @@ class ItemLocator:
     conversations from an opaque ``item_id``. Wraps ``apps.resolve.find_work_item``
     so the "id → which App owns it + the item" scan lives in one place."""
 
-    def __init__(self, spec: SpecStar, app_catalog: AppCatalog) -> None:
+    def __init__(
+        self,
+        spec: SpecStar,
+        app_catalog: AppCatalog,
+        *,
+        get_user_id: Callable[[], str] = lambda: "",
+        superusers: frozenset[str] = frozenset(),
+    ) -> None:
         self._spec = spec
         self._app_catalog = app_catalog
         self._conv_rm = spec.get_resource_manager(Conversation)
+        # #306 PR3: the current-request user + superuser set, so a workspace
+        # sub-route can gate itself (`require_access`) against the item's live
+        # Permission — the auto-CRUD scope only covers the item resource, not the
+        # hand-written file/chat/stream routes that go through this locator.
+        self._get_user_id = get_user_id
+        self._superusers = superusers
 
     def title_of(self, item_id: str) -> str | None:
         """Title of any App's WorkItem, resolved generically by id (the mention
@@ -76,6 +94,21 @@ class ItemLocator:
             )
         return item_id
 
+    def require_access(self, slug: str, item_id: str, verb: Verb) -> str:
+        """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,
+        then gate the current user for ``verb`` against the item's live Permission
+        (``read_meta`` first → 404 no existence leak, then ``verb`` → 403). Returns
+        the ``item_id`` so a handler drops it in where it used ``require_item``."""
+        require_item_access(
+            self._spec,
+            slug,
+            item_id,
+            verb,
+            user=self._get_user_id(),
+            superusers=self._superusers,
+        )
+        return item_id
+
     def resolve_agent_config(self, item_id: str) -> AgentConfig | None:
         """#89: a per-App WorkItem (RcaInvestigation, …) resolves its turn's
         config via the 3-layer AppCatalog (app ◇ profile ◇ preset)."""
@@ -95,7 +128,9 @@ class ItemLocator:
         resolves the implicit default and never returns a workflow chat. Pre-multi-chat
         items have one (unstamped) conversation, which stays the default — byte-for-byte
         preserved."""
-        return resolve_default_conversation(self._conv_rm, item_id)
+        return resolve_default_conversation(
+            self._conv_rm, item_id, mirror=item_conversation_mirror(self._spec, item_id)
+        )
 
     def engine_key(self, item_id: str, chat_id: str) -> str:
         """The turn-engine / SSE key for a chat (manual §3). The DEFAULT chat keeps

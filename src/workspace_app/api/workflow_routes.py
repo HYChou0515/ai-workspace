@@ -35,6 +35,7 @@ from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import WorkflowRun
 from .activity import ActivityLog
 from .events import FileChanged
+from .item_conversation_perm import item_conversation_mirror
 from .locator import ItemLocator
 from .schemas import (
     _DecisionBody,
@@ -236,7 +237,13 @@ def register_workflow_routes(
         else:
             title = manifest.title or workflow_id or "Workflow"
             target_chat_id = conv_rm.create(
-                Conversation(item_id=investigation_id, title=title, created_ms=now_ms())
+                Conversation(
+                    item_id=investigation_id,
+                    title=title,
+                    created_ms=now_ms(),
+                    # #306 PR3: stamp the item read-chat mirror on the workflow chat.
+                    **item_conversation_mirror(spec, investigation_id),
+                )
             ).resource_id
         try:
             run_id = await workflow_orchestrator.start(

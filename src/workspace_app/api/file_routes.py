@@ -159,7 +159,7 @@ def register_file_routes(
         index uses, so the picker can't drift from what the agent sees."""
         from ..apps.skills import effective_item_skills, workspace_skill_metas
 
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_meta")
         profile = locator.profile_of(investigation_id)
         prefs = locator.skill_prefs_of(investigation_id)
         ws_metas = await workspace_skill_metas(files, investigation_id)
@@ -183,7 +183,7 @@ def register_file_routes(
         # #362: size comes from cheap metadata (a warm `walk` stat, or the cold
         # snapshot record's inline size) — NEVER by reading each file's bytes, so
         # a 600-file tree costs one listing, not 600 full-content downloads.
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         entries = await files.stat_all(investigation_id, prefix)
         return [
             _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
@@ -195,7 +195,7 @@ def register_file_routes(
         """#245: the workspace's durable byte total vs its quota — backs the
         upload usage bar. Registered before the ``/files/{path:path}`` read route
         so the literal ``usage`` segment isn't swallowed as a file path."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         return _WorkspaceUsage(
             used=await files.workspace_usage(investigation_id),
             quota=workspace_quota,
@@ -204,14 +204,14 @@ def register_file_routes(
     @app.get("/a/{slug}/items/{item_id}/dirs")
     async def list_dirs(slug: str, item_id: str) -> list[str]:
         """Directory paths (incl. empty ones) for the file tree."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         return sorted(await files.listdir(investigation_id))
 
     @app.post("/a/{slug}/items/{item_id}/files/refresh")
     async def refresh_files(slug: str, item_id: str) -> dict:
         """Force-mirror the live sandbox to the snapshot now (don't wait for the
         ≤window throttle sweep) — the explicit 'refresh' action. No-op cold."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         logger.info("file_routes: manual mirror flush of item %s", investigation_id)
         await registry.flush(investigation_id)
         return {"ok": True}
@@ -246,7 +246,7 @@ def register_file_routes(
         (`prefix=""` = the whole workspace), entries re-rooted at the folder.
         Reading routes warm→sandbox / cold→snapshot via the facade; only the
         compression runs off the event loop."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         members = await _collect_download_members(investigation_id, prefix)
         download_id, size = await prepare_zip(lambda out: write_zip_members(out, members))
         logger.info(
@@ -268,7 +268,7 @@ def register_file_routes(
     ) -> FileResponse:
         """Stream a prepared workspace ZIP once, then delete it. 404 when the id
         is malformed / already streamed / reaped."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         path = prepared_path(download_id)
         if path is None:
             raise HTTPException(status_code=404, detail="download not found")
@@ -279,7 +279,7 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def write_file(slug: str, item_id: str, path: str, request: Request) -> Response:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
         norm = "/" + path.lstrip("/")
         if _is_readonly_path(norm):
             # #205: the `.readonly/` snapshot the human diffs against is not hand-editable.
@@ -312,7 +312,7 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def make_dir(slug: str, item_id: str, body: _MkdirBody) -> Response:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "add_content")
         norm = "/" + body.path.strip("/")
         try:
             await files.mkdir(investigation_id, norm)
@@ -365,7 +365,7 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def move_file(slug: str, item_id: str, body: _MoveBody) -> Response:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
         src = "/" + body.from_.strip("/")
         dst = "/" + body.to.strip("/")
         await _transfer(investigation_id, src, dst, copy=False)
@@ -383,7 +383,7 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def copy_file(slug: str, item_id: str, body: _MoveBody) -> Response:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "add_content")
         src = "/" + body.from_.strip("/")
         dst = "/" + body.to.strip("/")
         await _transfer(investigation_id, src, dst, copy=True)
@@ -427,7 +427,7 @@ def register_file_routes(
 
     @app.post("/a/{slug}/items/{item_id}/search")
     async def search(slug: str, item_id: str, body: _SearchBody) -> list[dict]:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         if not body.query:
             return []
         _pattern, results = await _search_files(investigation_id, body)
@@ -441,7 +441,7 @@ def register_file_routes(
 
     @app.post("/a/{slug}/items/{item_id}/replace")
     async def replace(slug: str, item_id: str, body: _ReplaceBody) -> dict:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
         if not body.query:
             return {"replaced": 0}
         pattern, results = await _search_files(investigation_id, body)
@@ -471,7 +471,7 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def delete_file(slug: str, item_id: str, path: str) -> Response:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
         norm = "/" + path.lstrip("/")
         if await files.is_dir(investigation_id, norm):
             await files.rmdir(investigation_id, norm)
@@ -502,7 +502,7 @@ def register_file_routes(
 
     @app.get("/a/{slug}/items/{item_id}/files/{path:path}")
     async def read_file(slug: str, item_id: str, path: str) -> Response:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_content")
         import mimetypes
 
         try:
@@ -536,7 +536,7 @@ def register_file_routes(
         idx: int,
         body: _CellExecuteBody,
     ) -> StreamingResponse:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "execute")
         handle = await kernels.get_or_start(investigation_id, notebook_path)
 
         async def gen() -> AsyncIterator[str]:
@@ -551,7 +551,7 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def interrupt_cell(slug: str, item_id: str, notebook_path: str, idx: int) -> Response:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "execute")
         handle = kernels.peek(investigation_id, notebook_path)
         if handle is not None:
             await kernels.interrupt(handle)
@@ -562,7 +562,7 @@ def register_file_routes(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def restart_kernel(slug: str, item_id: str, notebook_path: str) -> Response:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "execute")
         handle = kernels.peek(investigation_id, notebook_path)
         if handle is not None:
             await kernels.restart(handle)
@@ -572,7 +572,7 @@ def register_file_routes(
 
     @app.post("/a/{slug}/items/{item_id}/exec")
     async def exec_in_sandbox(slug: str, item_id: str, body: _ExecBody) -> dict[str, object]:
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "execute")
         if not body.cmd:
             raise HTTPException(status_code=422, detail="cmd must be non-empty")
         try:
