@@ -20,7 +20,7 @@ import os
 from typing import Annotated, Any
 
 from msgspec import Struct, field
-from specstar import OnDelete, Ref, Vector
+from specstar import OnDelete, Ref, SortIndex, Vector
 from specstar.types import Binary
 
 from ..perm import Permission
@@ -327,7 +327,15 @@ class SourceDoc(Struct):  # → resource "source-doc"
     # AI's short justification shown in the UI. Both are display-only. Scoring
     # runs async after `status="ready"` (see kb.quality / kb.index_coordinator),
     # so a judge failure leaves the doc un-scored, never un-indexed.
-    quality_score: int | None = None
+    #
+    # `SortIndex` (specstar #418) is what actually makes "sort by quality" fast:
+    # the `IndexableField` above only lands the value in `indexed_data`, and the
+    # GIN over that jsonb answers containment, never ordering — so before v0.12.0
+    # `sort=quality` fully sorted the collection every page. The btree over
+    # (indexed_data->'quality_score') serves the ORDER BY prefix directly (an
+    # incremental sort then breaks ties on resource_id). Sort-only field: no
+    # range or equality filter reads it, and un-scored rows stay `None`.
+    quality_score: Annotated[int | None, SortIndex()] = None
     quality_breakdown: dict[str, Any] = {}
     quality_rationale: str = ""
     # Issue #328: per-doc override of a prompt/param-driven parser's STRUCTURED
