@@ -612,6 +612,12 @@ export interface KbApi {
     id: string,
     perm: CollectionPermission,
   ): Promise<{ visibility: string; notified: string[] }>;
+  /** Permission-disclosure — ask a collection's owner for read access (the "🔒
+   * request access" chip). Sends one deduped notification to the owner
+   * (`POST …/request-access`). Idempotent: a repeat returns `requested:false`. */
+  requestCollectionAccess(
+    id: string,
+  ): Promise<{ collection_id: string; requested: boolean; already_readable: boolean }>;
   /** #308 — a document's CURRENT per-doc read override, for the share dialog to
    * pre-fill (`GET /kb/documents/{id}/permission`). No override reads as public
    * with empty grants (the doc then purely inherits its collection). */
@@ -1320,6 +1326,19 @@ export const realKbApi: KbApi = {
       "set collection permission",
     );
     return (await resp.json()) as { visibility: string; notified: string[] };
+  },
+  async requestCollectionAccess(id) {
+    const resp = await ok(
+      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/request-access`, {
+        method: "POST",
+      }),
+      "request collection access",
+    );
+    return (await resp.json()) as {
+      collection_id: string;
+      requested: boolean;
+      already_readable: boolean;
+    };
   },
   async getDocPermission(id) {
     const resp = await ok(

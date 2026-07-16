@@ -44,6 +44,10 @@ export type Message = {
   created_at?: number | null;
   /** Resolved [n] markers (KB answers). Rendered as clickable source cards. */
   citations?: MessageCitation[];
+  /** Permission-disclosure: knowledge sources found relevant but which the user
+   * may see-exist (read_meta) yet not read (read_content). Rendered as "🔒 name —
+   * request access" chips so a withheld answer isn't silently dropped. */
+  withheld?: WithheldSource[];
   /** role=mention only — the user ids summoned ("@ come look"). */
   mentions?: string[];
   /** role=error only (#37) — why the turn failed: error | cancelled |
@@ -72,6 +76,15 @@ export type MessageCitation = {
 /** #254 — a passage's structural location, aggregated across its merged
  * chunks: each locator key → its distinct values. */
 export type Provenance = Record<string, Array<string | number>>;
+
+/** Permission-disclosure: a knowledge source (collection) the user may see-exist
+ * but not read. Only identity + owner travel — never the withheld content. */
+export type WithheldSource = {
+  collection_id: string;
+  name: string;
+  /** The collection owner (created_by) — shown, and the "request access" target. */
+  owner: string;
+};
 
 export type Conversation = {
   resource_id: string;

@@ -180,6 +180,11 @@ export function KbChatPanel({
             key={i}
             entry={entry}
             onOpenCitation={onOpenCitation}
+            // Permission-disclosure: the "🔒 request access" chip asks the
+            // withheld collection's owner for read access (deduped server-side).
+            onRequestAccess={(w) => {
+              void client.requestCollectionAccess(w.collection_id);
+            }}
             // #51 P6: same 1:1 entry↔message mapping as the RCA panel;
             // only for persisted threads (chatId) and never mid-stream.
             onReplay={

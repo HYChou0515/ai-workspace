@@ -145,6 +145,14 @@ export const messages = {
   "tool.streamingHint": { "zh-TW": "即時輸出，可能未完成", en: "Live output — may be incomplete" },
   "entry.retry": { "zh-TW": "重試：", en: "Retry: " },
   "entry.sources": { "zh-TW": "來源", en: "Sources" },
+  // Permission-disclosure: relevant sources the user can see-exist but not read.
+  "entry.withheld": {
+    "zh-TW": "你沒有權限的相關來源",
+    en: "Related sources you can't access",
+  },
+  "entry.withheld.requestAccess": { "zh-TW": "申請存取", en: "Request access" },
+  "entry.withheld.requested": { "zh-TW": "已送出申請", en: "Access requested" },
+  "entry.withheld.owner": { "zh-TW": "擁有者", en: "Owner" },
   // #254 — citation source-location chip labels. The formatter adds one space
   // before the value, so labels carry none (the i18n layer has no interpolation).
   "cite.loc.page": { "zh-TW": "頁碼", en: "p." },

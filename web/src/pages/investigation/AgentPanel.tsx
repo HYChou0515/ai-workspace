@@ -446,6 +446,10 @@ export function AgentPanel({
             onOpenCitation={(c) =>
               window.open(docHref(c.document_id, c.snippet), "_blank", "noopener,noreferrer")
             }
+            // Permission-disclosure: ask the withheld collection's owner for access.
+            onRequestAccess={(w) => {
+              void kbApi.requestCollectionAccess(w.collection_id);
+            }}
             // #51 P6: hydrated entries map 1:1 onto the persisted
             // conversation (logFromMessages), so the entry index IS the
             // message index. Hidden while streaming — the in-flight

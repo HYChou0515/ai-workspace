@@ -46,7 +46,7 @@ export const ALL_VERBS: (keyof Omit<CollectionPermission, "visibility">)[] = [
   "change_permission",
 ];
 
-export type RoleId = "viewer" | "collaborator" | "editor";
+export type RoleId = "discoverable" | "viewer" | "collaborator" | "editor";
 
 export type RoleDef = {
   id: RoleId;
@@ -62,6 +62,14 @@ export type RoleDef = {
  * highest role whose signature verb they hold; saving writes the role's exact
  * verb set. */
 export const COLLECTION_ROLES: RoleDef[] = [
+  {
+    id: "discoverable",
+    label: "Discoverable",
+    // Permission-disclosure: read_meta ONLY — sees the collection exists and can
+    // request access, but cannot read its content. Below Viewer.
+    hint: "Can see it exists + request access, not read",
+    verbs: ["read_meta"],
+  },
   { id: "viewer", label: "Viewer", hint: "Can read documents", verbs: ["read_meta", "read_content"] },
   {
     id: "collaborator",
@@ -80,7 +88,7 @@ export const COLLECTION_ROLES: RoleDef[] = [
 /** #308 — a per-doc read override only TIGHTENS read access (the backend honours
  * just the read verbs on a doc), so its dialog offers a single Viewer role. Reuses
  * the Viewer def so the role⇄grant mapping is identical to a collection viewer. */
-export const DOC_ROLES: RoleDef[] = [COLLECTION_ROLES[0]];
+export const DOC_ROLES: RoleDef[] = COLLECTION_ROLES.filter((r) => r.id === "viewer");
 
 /** The verbs any collection role touches — the set the dialog OWNS. Every other
  * verb on the permission is left untouched on save. */
@@ -103,7 +111,9 @@ export const roleDef = (id: RoleId): RoleDef =>
 export function roleForVerbs(verbs: Set<string>): RoleId | null {
   if (verbs.has("edit_content") || verbs.has("write_meta")) return "editor";
   if (verbs.has("add_content")) return "collaborator";
-  if (verbs.has("read_content") || verbs.has("read_meta")) return "viewer";
+  if (verbs.has("read_content")) return "viewer";
+  // read_meta WITHOUT read_content — the disclosure tier: sees it exists only.
+  if (verbs.has("read_meta")) return "discoverable";
   return null;
 }
 
