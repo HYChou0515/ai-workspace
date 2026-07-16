@@ -689,18 +689,20 @@ def register_kb_chat_routes(
         # inherit operator default.
         caller_enh = to_caller_enhancements(body.enhancements)
 
-        # Permission-disclosure: split the chat's collections into what the speaker
-        # may read (searched as before) vs merely see-exist (read_meta only — the
-        # disclosure probe discloses a competitive match instead of the retriever
-        # silently searching a collection they can't read). In the ordinary case
-        # (every collection readable) `readable` == `chat.collection_ids`, so this
-        # is a no-op for the searched scope; it only adds the discoverable tier.
+        # Permission-disclosure: pull the read_meta-ONLY collections out of the
+        # searched scope so the probe discloses them (existence) instead of the
+        # retriever searching a collection the speaker can't read. Only genuine
+        # discoverable collections are moved — unknown/deleted ids stay in the
+        # searched scope exactly as before (the retriever just finds nothing), so
+        # this is a strict addition: the readable scope is unchanged except that a
+        # discoverable collection is redirected to the disclosure channel.
         _disc = partition_collection_disclosure(
             spec, chat.collection_ids, get_user_id(), superusers=superusers
         )
+        _discoverable = set(_disc.discoverable)
         ctx = AgentToolContext(
             retriever=retriever,
-            collection_ids=_disc.readable,
+            collection_ids=[c for c in chat.collection_ids if c not in _discoverable],
             discoverable_collection_ids=_disc.discoverable,
             # #308: exclude docs whose per-doc override blocks THIS speaker's
             # read_content, so the retriever never surfaces a doc tightened away
