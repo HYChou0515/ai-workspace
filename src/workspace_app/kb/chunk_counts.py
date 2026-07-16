@@ -31,10 +31,13 @@ def doc_chunks_for_ids(
 ) -> dict[str, int]:
     """``{doc_id: chunk count}`` for a page's docs — ``doc_file_ids`` maps each
     rendered doc id to its ``content.file_id`` (``""`` when unknown / legacy).
-    Two scoped, indexed ``GROUP BY`` push-downs (never a chunk-body scan): one by
-    ``source_file_id`` for content-addressed chunks, one by ``source_doc_id`` for
-    legacy ``source_file_id == ""`` chunks. Only positive counts are returned
-    (#103). Empty input ⇒ no query (``{}``)."""
+    Two collection-scoped, indexed ``GROUP BY`` push-downs (never a chunk-body
+    scan): one by ``source_file_id`` for content-addressed chunks, one by
+    ``source_doc_id`` for legacy ``source_file_id == ""`` chunks. Both carry
+    ``collection_id`` — DocChunk is the largest table here, so an unbounded
+    predicate makes the page's cost a function of the whole corpus rather than the
+    collection. Only positive counts are returned (#103). Empty input ⇒ no query
+    (``{}``)."""
     if not doc_file_ids:
         return {}
     rm = spec.get_resource_manager(DocChunk)
@@ -53,10 +56,20 @@ def doc_chunks_for_ids(
         )
         by_content = {r.key: r.n for r in content_rows}
     # Legacy fallback: pre-#104 chunks (source_file_id == "") tallied by doc id.
+    # Collection-scoped like the content query above — this predicate was missing,
+    # so the scan spanned DocChunk GLOBALLY (every collection's chunks) on every
+    # request, while the docstring claimed both push-downs were scoped. It cannot
+    # change the answer: a SourceDoc id encodes its collection, so the ids in
+    # `doc_ids` only ever match chunks already inside `collection_id` — it purely
+    # bounds the work, which on the largest table in the system is the point.
     legacy_rows = rm.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
         by=QB["source_doc_id"],
         aggregates={"n": Count()},
-        query=((QB["source_doc_id"].in_(doc_ids)) & (QB["source_file_id"] == "")).build(),
+        query=(
+            (QB["collection_id"] == collection_id)
+            & (QB["source_doc_id"].in_(doc_ids))
+            & (QB["source_file_id"] == "")
+        ).build(),
     )
     by_legacy = {r.key: r.n for r in legacy_rows}
     out: dict[str, int] = {}
