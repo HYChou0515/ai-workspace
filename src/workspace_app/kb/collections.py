@@ -108,6 +108,44 @@ def readable_collection_ids(
     return out
 
 
+def global_collection_ids(spec: SpecStar) -> list[str]:
+    """The ids of every collection flagged ``is_global`` — the AI's baseline
+    retrieval scope in every conversation. An INDEXED query (``is_global`` is in
+    Collection's ``indexed_fields``), not a full scan. Governance: only a superuser
+    may set the flag (grill D3), so this set is curated."""
+    rm = spec.get_resource_manager(Collection)
+    return [
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources((QB["is_global"] == True).build())  # noqa: E712
+    ]
+
+
+def resolve_effective_scope(
+    spec: SpecStar,
+    specified: Iterable[str] | None,
+    *,
+    excluded: Iterable[str] = (),
+) -> list[str]:
+    """The global-aware retrieval scope, BEFORE the per-user permission filter:
+    ``(specified ∪ global) \\ excluded`` (grill D2). ``specified`` None/empty ⇒ the
+    global set ALONE ("unspecified → global", the D5 hard cutover — no globals means
+    an empty scope). Order-preserving (specified first in input order, then globals
+    not already listed) and deduped; exclusion wins over inclusion for the same id.
+
+    This is the ONE place the union/exclude lives — every retrieval surface
+    (subagent bridge, KB chat, ask_knowledge_base tiers) calls it, then applies its
+    own readable/discoverable partition ON TOP of the returned ids."""
+    excl = set(excluded)
+    base = list(specified) if specified else []
+    seen: set[str] = set()
+    out: list[str] = []
+    for cid in (*base, *global_collection_ids(spec)):
+        if cid and cid not in seen and cid not in excl:
+            seen.add(cid)
+            out.append(cid)
+    return out
+
+
 def partition_collection_disclosure(
     spec: SpecStar,
     ids: Iterable[str],

@@ -163,6 +163,17 @@ class AccessRequestOut(BaseModel):
     already_readable: bool = False
 
 
+class _GlobalBody(BaseModel):
+    is_global: bool
+
+
+class GlobalOut(BaseModel):
+    """Result of PUT /kb/collections/:id/global (global-collection concept)."""
+
+    resource_id: str
+    is_global: bool
+
+
 class WikiTreeOut(BaseModel):
     """The LLM wiki's page paths for one collection (#50 P7), for the read-only
     browser's tree. Sorted; empty when the wiki hasn't been built yet."""
@@ -864,6 +875,35 @@ def register_kb_routes(
         return PermissionOut(
             resource_id=collection_id, visibility=new_perm.visibility, notified=notified
         )
+
+    @app.put("/kb/collections/{collection_id}/global")
+    async def set_collection_global(collection_id: str, body: _GlobalBody) -> GlobalOut:
+        """Global-collection concept: mark/unmark a collection as GLOBAL — part of
+        the AI's BASELINE retrieval scope in every conversation. SUPERUSER-ONLY
+        (grill D3): global is a system-wide governance decision, not a per-owner
+        one. 403 for a non-superuser, 404 for an unknown collection. Persisted AS
+        THE OWNER so the per-verb write checker (write_meta) is satisfied."""
+        me = get_user_id()
+        if me not in superusers:
+            raise HTTPException(
+                status_code=403, detail="only a superuser may set a collection global"
+            )
+        rm = spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="collection not found") from exc
+        assert isinstance(coll, Collection)
+        created_by = rm.get_meta(collection_id).created_by
+        with rm.using(created_by):
+            rm.update(collection_id, msgspec.structs.replace(coll, is_global=body.is_global))
+        _LOGGER.info(
+            "set_collection_global: %s is_global=%s by superuser %s",
+            collection_id,
+            body.is_global,
+            me,
+        )
+        return GlobalOut(resource_id=collection_id, is_global=body.is_global)
 
     @app.post("/kb/collections/{collection_id}/request-access")
     async def request_collection_access(collection_id: str) -> AccessRequestOut:

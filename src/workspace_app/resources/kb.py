@@ -167,6 +167,12 @@ class Collection(Struct):  # → resource "collection"
     # query). Both on ⇒ both run and their answers merge.
     use_rag: bool = True
     use_wiki: bool = False
+    # Global-collection concept: a collection flagged global is part of the AI's
+    # BASELINE retrieval scope in every conversation — the effective scope is
+    # `(specified ∪ global) \ excluded` (see kb.collections.resolve_effective_scope).
+    # System-wide governance: only a superuser may set it (grill D3). Indexed so
+    # the global set is a query, not a scan. Absent ≡ not global (no migration).
+    is_global: bool = False
     # Issue #90: per-collection wiki guidance, APPENDED onto the bundled wiki
     # prompts (never a replacement — the machinery stays). `maintainer` shapes
     # how pages are written/organised (fold + unfold); `reader` shapes how the
