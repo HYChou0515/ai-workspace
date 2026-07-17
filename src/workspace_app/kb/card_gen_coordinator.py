@@ -40,10 +40,11 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.types import ResourceIDNotFoundError, TaskStatus
 
-from ..resources import ContextCard, SourceDoc
+from ..resources import Collection, ContextCard, SourceDoc
 from .card_gen import (
     CardDraft,
     CardDrafter,
@@ -165,13 +166,26 @@ class CardGenCoordinator:
 
     # ── enqueue (producer) ───────────────────────────────────────────
     def enqueue(
-        self, collection_id: str, doc_ids: list[str], *, requested_by: str | None = None
+        self,
+        collection_id: str,
+        doc_ids: list[str],
+        *,
+        requested_by: str | None = None,
+        ensure_auto_digest: bool = False,
     ) -> str:
         """Queue a generation run over ``doc_ids`` for ``collection_id`` and
         return the RUN id (the FE polls it for status + proposals). Returns
         immediately — the drafting fans out to background consumers. ``requested_by``
-        credits the job (a route leaves it ``None`` → the current request user)."""
+        credits the job (a route leaves it ``None`` → the current request user).
+
+        ``ensure_auto_digest`` is set by the manual "generate cards" action: it opts
+        the collection into ``auto_digest`` so a doc still indexing at click-time is
+        drafted by the index-completion hook (#377) once it's ready — the run below
+        skips a not-ready doc rather than digesting empty text, and the hook picks it
+        up. The auto path (the hook's own enqueue) leaves the flag untouched."""
         actor = requested_by if requested_by is not None else self._get_user_id()
+        if ensure_auto_digest:
+            self._opt_into_auto_digest(collection_id, actor)
         run_id = self._runs.start(collection_id, doc_ids)
         with self._job_rm.using(user=actor):
             self._job_rm.create(
@@ -186,6 +200,21 @@ class CardGenCoordinator:
                 )
             )
         return run_id
+
+    def _opt_into_auto_digest(self, collection_id: str, actor: str) -> None:
+        """Turn on the collection's ``auto_digest`` (idempotent) so the index-
+        completion hook drafts stragglers. A vanished collection is a no-op; an
+        already-on flag skips the write (no needless revision churn)."""
+        rm = self._spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError:
+            return  # collection deleted between the click and here
+        assert isinstance(coll, Collection)  # rm is Collection-typed; narrows for ty
+        if coll.auto_digest:
+            return
+        with rm.using(user=actor):
+            rm.update(collection_id, msgspec.structs.replace(coll, auto_digest=True))
 
     # ── status / proposals (read off the run) ────────────────────────
     def status(self, run_id: str) -> TaskStatus:
@@ -411,6 +440,20 @@ class CardGenCoordinator:
                 doc_index,
             )
             self._runs.mark_done(run_id, doc_index)  # doc deleted before run — nothing to digest
+            return
+        if not ref.ready:
+            # Still indexing (a binary doc carries no extracted text until it
+            # flips to "ready"), so digesting now would silently draft 0 cards.
+            # Skip it — the auto-digest hook (#377) drafts it once its own index
+            # job completes (manual generate opted the collection in above).
+            _LOGGER.info(
+                "CardGen: doc %s (run %s, index %d) still indexing — skipped; the "
+                "auto-digest hook will draft it once it's ready",
+                doc_id,
+                run_id,
+                doc_index,
+            )
+            self._runs.mark_done(run_id, doc_index)  # close the slot; defer to the hook
             return
         try:
             # #506: the agentic drafter scopes its ask_knowledge_base to the doc's
