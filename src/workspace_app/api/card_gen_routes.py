@@ -110,12 +110,10 @@ def _from_io(p: ProposedCardIO) -> ProposedCard:
 def register_card_gen_routes(app: FastAPI | APIRouter, coordinator: CardGenCoordinator) -> None:
     @app.post("/kb/collections/{collection_id}/context-cards/generate")
     def generate_context_cards(collection_id: str, body: GenerateBody) -> GenerateOut:
-        # The manual generate action opts the collection into auto_digest so a doc
-        # still indexing at click-time is drafted by the index-completion hook once
-        # it's ready — the run skips not-ready docs rather than digesting empty.
-        return GenerateOut(
-            job_id=coordinator.enqueue(collection_id, body.doc_ids, ensure_auto_digest=True)
-        )
+        # One-shot: draft cards over the picked (ready) docs. Still-indexing docs
+        # are skipped; whether they auto-generate once ready is governed by the
+        # collection's user-owned `auto_digest` setting, not this action.
+        return GenerateOut(job_id=coordinator.enqueue(collection_id, body.doc_ids))
 
     @app.get("/kb/context-card-gen/{job_id}")
     def context_card_gen_status(job_id: str) -> GenStatusOut:
