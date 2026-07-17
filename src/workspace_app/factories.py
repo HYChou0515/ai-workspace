@@ -364,9 +364,7 @@ def get_runner(settings: Settings) -> AgentRunner:
     # no auth) has no token concept, so no service is wired.
     system_key = settings.llm.api_key or None
     token_service = (
-        CachingTokenService(SystemTokenService(system_key))
-        if system_key is not None
-        else None
+        CachingTokenService(SystemTokenService(system_key)) if system_key is not None else None
     )
     return LitellmAgentRunner(
         max_retries=settings.runner.max_retries,
