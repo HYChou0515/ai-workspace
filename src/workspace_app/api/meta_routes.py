@@ -59,13 +59,17 @@ def register_meta_routes(
     get_user_id: Callable[[], str],
     activity: ActivityLog,
     monitor: IMonitor,
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     """Mount the platform meta routes onto ``app``."""
 
     @app.get("/me")
     async def get_me() -> dict:
-        """The signed-in user (resolved from the auth seam via the directory)."""
-        return users.get(get_user_id()).to_dict()
+        """The signed-in user (resolved from the auth seam via the directory).
+        ``is_superuser`` lets the FE gate superuser-only affordances (e.g. the
+        global-collection toggle) without hardcoding the operator's superuser set."""
+        me = get_user_id()
+        return {**users.get(me).to_dict(), "is_superuser": me in superusers}
 
     @app.get("/users")
     async def list_users() -> list[dict]:

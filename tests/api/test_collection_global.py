@@ -66,3 +66,12 @@ def test_unknown_collection_is_404():
     client, _ = _client_and_spec(holder, superusers=frozenset({"root"}))
     resp = client.put("/kb/collections/ghost/global", json={"is_global": True})
     assert resp.status_code == 404
+
+
+def test_me_reports_superuser_status_for_the_fe():
+    # The FE gates the global toggle on /me's is_superuser (no hardcoded set).
+    holder = {"id": "root"}
+    client, _ = _client_and_spec(holder, superusers=frozenset({"root"}))
+    assert client.get("/me").json()["is_superuser"] is True
+    holder["id"] = "alice"
+    assert client.get("/me").json()["is_superuser"] is False
