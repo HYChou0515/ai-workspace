@@ -64,6 +64,7 @@ from .sandbox.isolated_process import (
 from .sandbox.local_process import LocalProcessSandbox
 from .sandbox.mock import MockSandbox
 from .sandbox.protocol import Sandbox
+from .tokens import CachingTokenService, SystemTokenService
 
 __all__ = [
     "Settings",
@@ -356,13 +357,25 @@ def get_runner(settings: Settings) -> AgentRunner:
         chain = resolve_llm_chain(settings, RetrievalLlmRef(preset=name))
         if len(chain) >= 2:
             chains[(chain[0].model, chain[0].base_url)] = chain
+    # Per-user token seam (behaviour-preserving v1): resolve each turn's api_key
+    # through a token service keyed on the acting user. V1 hands back the system
+    # token for everyone, behind a per-user TTL cache; swap the inner source for a
+    # real per-user impl later without touching the runner. A None key (Ollama /
+    # no auth) has no token concept, so no service is wired.
+    system_key = settings.llm.api_key or None
+    token_service = (
+        CachingTokenService(SystemTokenService(system_key))
+        if system_key is not None
+        else None
+    )
     return LitellmAgentRunner(
         max_retries=settings.runner.max_retries,
         max_turns=settings.runner.max_turns,
         base_url=settings.llm.base_url or None,
-        api_key=settings.llm.api_key or None,
+        api_key=system_key,
         fallback_chains=chains or None,
         cooldown_registry=get_cooldown_registry() if chains else None,
+        token_service=token_service,
     )
 
 

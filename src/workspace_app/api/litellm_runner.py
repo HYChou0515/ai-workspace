@@ -43,6 +43,7 @@ from ..agent.context import AgentToolContext
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
 from ..resources import AgentConfig
+from ..tokens import ITokenService, SystemTokenService
 from ..tooling.registry import PackageInfo, build_function_tools
 from ..users.labels import speaker_note
 from .events import (
@@ -708,6 +709,7 @@ class LitellmAgentRunner:
         api_key: str | None = None,
         fallback_chains: FallbackChains | None = None,
         cooldown_registry: CooldownRegistry | None = None,
+        token_service: ITokenService | None = None,
     ) -> None:
         # #94: no runner-level default config. Every turn's config arrives on
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
@@ -718,9 +720,28 @@ class LitellmAgentRunner:
         # own provider env / Ollama defaults.
         self._base_url = base_url
         self._api_key = api_key
+        # Per-user token seam: resolve each turn's api_key from the speaker's
+        # token when a user is known. Default (none injected) is behaviour-
+        # preserving — the system key wrapped in a SystemTokenService — so every
+        # user gets the same key as today. A None api_key (Ollama / no auth) has
+        # no token concept, so it stays None and never routes through a service.
+        self._token_service = token_service or (
+            SystemTokenService(api_key) if api_key is not None else None
+        )
         # #196 busy-aware failover (None when no preset declares fallbacks).
         self._fallback_chains = fallback_chains
         self._cooldown_registry = cooldown_registry
+
+    async def _api_key_for(self, ctx: AgentToolContext) -> str | None:
+        """The api_key for this turn: the acting user's token when the turn has a
+        known speaker, else the system default (``self._api_key``) unchanged.
+
+        The seam where a personal per-user token later replaces the system token
+        — v1's :class:`SystemTokenService` returns the system token for everyone,
+        so behaviour is identical until the source is swapped."""
+        if self._token_service is not None and ctx.speaker is not None:
+            return await self._token_service.get_token(ctx.speaker.id)
+        return self._api_key
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         # #94: no silent fallback. Every turn must arrive with a resolved
@@ -840,7 +861,7 @@ class LitellmAgentRunner:
             ctx.packages,
             extra_instructions=_turn_instructions(ctx, feedback),
             base_url=self._base_url,
-            api_key=self._api_key,
+            api_key=await self._api_key_for(ctx),
             reasoning_effort=ctx.reasoning_effort,
             app_slug=ctx.app_slug,
             template_profile=ctx.template_profile,
@@ -989,7 +1010,7 @@ class LitellmAgentRunner:
             ctx.packages,
             extra_instructions=_turn_instructions(ctx, feedback),
             base_url=self._base_url,
-            api_key=self._api_key,
+            api_key=await self._api_key_for(ctx),
             reasoning_effort=ctx.reasoning_effort,
             app_slug=ctx.app_slug,
             template_profile=ctx.template_profile,
