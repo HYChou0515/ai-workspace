@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MessageCitation } from "../api/types";
+import type { AgentEntry } from "../pages/investigation/agentLog";
 import { EntryView } from "./AgentEntryView";
 import { ToolCatalogContext } from "./toolCatalog";
 
@@ -172,6 +173,54 @@ describe("EntryView — ask_knowledge_base tool card citations", () => {
       />,
     );
     expect(screen.queryByText(/來源|Sources/)).not.toBeInTheDocument();
+  });
+});
+
+describe("EntryView — permission-disclosure withheld chips", () => {
+  const withheldMsg: AgentEntry = {
+    kind: "message",
+    message: {
+      role: "assistant",
+      content: "In your accessible sources I found nothing about layoffs.",
+      withheld: [{ collection_id: "col-sales", name: "Sales-2026", owner: "alice" }],
+    },
+  };
+
+  it("renders a lock chip with the source name and owner", () => {
+    render(<EntryView entry={withheldMsg} />);
+    expect(screen.getByText("Sales-2026")).toBeInTheDocument();
+    expect(screen.getByText(/alice/)).toBeInTheDocument();
+    expect(screen.getByText("🔒")).toBeInTheDocument();
+  });
+
+  it("clicking request-access fires the callback and disables the button", () => {
+    const onRequest = vi.fn();
+    render(<EntryView entry={withheldMsg} onRequestAccess={onRequest} />);
+    const btn = screen.getByRole("button", { name: /申請存取|Request access/ });
+    fireEvent.click(btn);
+    expect(onRequest).toHaveBeenCalledWith({
+      collection_id: "col-sales",
+      name: "Sales-2026",
+      owner: "alice",
+    });
+    // flips to a sent state so a second click can't double-fire
+    expect(screen.getByRole("button", { name: /已送出申請|Access requested/ })).toBeDisabled();
+  });
+
+  it("shows no request button when the surface provides no handler", () => {
+    render(<EntryView entry={withheldMsg} />);
+    expect(
+      screen.queryByRole("button", { name: /申請存取|Request access/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders nothing extra when there are no withheld sources", () => {
+    const plain: AgentEntry = {
+      kind: "message",
+      message: { role: "assistant", content: "hi" },
+    };
+    render(<EntryView entry={plain} onRequestAccess={vi.fn()} />);
+    expect(screen.queryByText(/沒有權限|can't access/)).not.toBeInTheDocument();
   });
 });
 

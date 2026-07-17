@@ -13,7 +13,7 @@ import type { CollectionPermission } from "../lib/permission";
 import { API_PREFIX, apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
-import type { Provenance, ReasoningEffort } from "./types";
+import type { Provenance, ReasoningEffort, WithheldSource } from "./types";
 
 export type { UploadCheckHint } from "../kb/uploadChecks";
 
@@ -351,6 +351,9 @@ export type KbChatMessage = {
   tool_call_id: string | null;
   created_at: number | null;
   citations: KbCitation[];
+  /** Permission-disclosure: read_meta-only sources surfaced for this answer,
+   * rendered as "🔒 request access" chips. Absent/empty on other messages. */
+  withheld?: WithheldSource[];
   /** role=error only (#37) — error | cancelled | max_turns. */
   error_kind?: string | null;
   /** #113 — "repetition" when the answer was stopped + truncated for a loop. */
@@ -612,6 +615,12 @@ export interface KbApi {
     id: string,
     perm: CollectionPermission,
   ): Promise<{ visibility: string; notified: string[] }>;
+  /** Permission-disclosure — ask a collection's owner for read access (the "🔒
+   * request access" chip). Sends one deduped notification to the owner
+   * (`POST …/request-access`). Idempotent: a repeat returns `requested:false`. */
+  requestCollectionAccess(
+    id: string,
+  ): Promise<{ collection_id: string; requested: boolean; already_readable: boolean }>;
   /** #308 — a document's CURRENT per-doc read override, for the share dialog to
    * pre-fill (`GET /kb/documents/{id}/permission`). No override reads as public
    * with empty grants (the doc then purely inherits its collection). */
@@ -1320,6 +1329,19 @@ export const realKbApi: KbApi = {
       "set collection permission",
     );
     return (await resp.json()) as { visibility: string; notified: string[] };
+  },
+  async requestCollectionAccess(id) {
+    const resp = await ok(
+      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/request-access`, {
+        method: "POST",
+      }),
+      "request collection access",
+    );
+    return (await resp.json()) as {
+      collection_id: string;
+      requested: boolean;
+      already_readable: boolean;
+    };
   },
   async getDocPermission(id) {
     const resp = await ok(

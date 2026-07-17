@@ -14,7 +14,7 @@ from msgspec import Struct
 
 class Notification(Struct):  # → resource "notification"
     recipient: str  # user id this is addressed to
-    kind: str  # mention | share | status | (assignment|agent_done|system reserved)
+    kind: str  # mention | share | status | access_request | (assignment|agent_done|system reserved)
     title: str
     body: str = ""
     link: str = ""  # where clicking goes, e.g. /a/{slug}/items/{id} or /kb/chats/{id}

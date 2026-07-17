@@ -28,6 +28,7 @@ from ..perm.checker import (
 from ..perm.scope import (
     GroupsProvider,
     collection_access_scope,
+    conversation_access_scope,
     kbchat_access_scope,
     source_doc_access_scope,
 )
@@ -197,10 +198,6 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     from ..apps.registry import register_apps
 
     register_apps(spec, superusers)
-    # item_id indexed so the per-item conversation lookup is a query, not a full
-    # scan. (#89: was investigation_id + a typed Ref; now an opaque key so one
-    # Conversation table serves every App's items.)
-    spec.add_model(Conversation, indexed_fields=["item_id"])
     # #307: a flat, owner-managed logical Group. `members` indexed so resolving a
     # user → the groups they're in (`groups_of`) is a `members.contains(user)`
     # query, not a scan. No access_scope / permission (owner-managed via routes),
@@ -211,6 +208,24 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # needs `spec` to query the Group model, which keeps `perm/` free of a resource
     # import. Closed over THIS spec so tests with isolated specs stay isolated.
     groups = _groups_provider(spec)
+    # item_id indexed so the per-item conversation lookup is a query, not a full
+    # scan. (#89: was investigation_id + a typed Ref; now an opaque key so one
+    # Conversation table serves every App's items.) #306 PR3: the denormalized
+    # item-permission mirror (`item_visibility` / `item_read_chat` / `item_created_by`)
+    # is indexed so `conversation_access_scope` gates reading the thread on the
+    # item's `read_chat` at the storage layer (the item's own scope never covers the
+    # Conversation auto-CRUD). Registered AFTER `groups` so a `group:` read_chat
+    # grant matches. A pre-#306 chat (absent mirror cell) reads as public via isna().
+    spec.add_model(
+        Conversation,
+        indexed_fields=[
+            "item_id",
+            ("item_visibility", str),
+            ("item_read_chat", list),
+            "item_created_by",
+        ],
+        access_scope=conversation_access_scope(superusers, groups),
+    )
     # #262: `permission.read_meta` / `.visibility` drive the access_scope (row-
     # level visibility) — see perm.scope. Indexed so the scope filters at storage.
     # #262: `permission_checker=` is SHADOWED by specstar's spec-level AllowAll

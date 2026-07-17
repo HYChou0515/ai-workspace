@@ -54,7 +54,7 @@ from ..perm import Actor, Permission, Verb, Visibility, authorize
 from ..resources.groups import groups_of
 from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
 from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
-from .notifications import notify
+from .notifications import notification_sent, notify
 from .permission_body import PermissionBody as _PermissionBody
 from .permission_body import PermissionOut, build_permission
 from .permission_body import granted_user_ids as _granted_user_ids
@@ -151,6 +151,16 @@ class SyncOut(BaseModel):
 
     status: str
     git_last_sha: str | None = None
+
+
+class AccessRequestOut(BaseModel):
+    """Result of POST /kb/collections/:id/request-access (permission-disclosure).
+    `requested` is True iff a fresh owner notification was sent; `already_readable`
+    is True when the caller can already read the collection (nothing to request)."""
+
+    collection_id: str
+    requested: bool
+    already_readable: bool = False
 
 
 class WikiTreeOut(BaseModel):
@@ -854,6 +864,60 @@ def register_kb_routes(
         return PermissionOut(
             resource_id=collection_id, visibility=new_perm.visibility, notified=notified
         )
+
+    @app.post("/kb/collections/{collection_id}/request-access")
+    async def request_collection_access(collection_id: str) -> AccessRequestOut:
+        """Permission-disclosure: the caller (who can SEE the collection exists via
+        read_meta — the disclosure chip they clicked) asks its owner to grant read
+        access. A `read_meta` gate first, so someone who can't even see it gets a
+        uniform 404 (no existence leak). Sends ONE deduped `access_request`
+        notification to the owner — a repeat request (same collection + requester)
+        doesn't re-notify. A caller who can already read the content has nothing to
+        request. Reuses the existing notify/bell + owner-side PermissionDialog; no
+        durable request state (grill-me D8)."""
+        rm = spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="collection not found") from exc
+        assert isinstance(coll, Collection)
+        owner = rm.get_meta(collection_id).created_by
+        actor, me = _actor(), get_user_id()
+        # A reader (or owner / superuser) has nothing to request — and can already
+        # see it, so this precedes the read_meta 404 gate (read_content need not
+        # imply an explicit read_meta grant).
+        if me == owner or authorize(
+            actor, "read_content", coll.permission, created_by=owner, superusers=superusers
+        ):
+            return AccessRequestOut(
+                collection_id=collection_id, requested=False, already_readable=True
+            )
+        # Otherwise the caller must at least be able to SEE the collection, or it's
+        # a uniform 404 (no existence leak to someone who can't discover it).
+        if not authorize(
+            actor, "read_meta", coll.permission, created_by=owner, superusers=superusers
+        ):
+            raise HTTPException(status_code=404, detail="collection not found")
+        dedup_key = f"access_request:{collection_id}:{me}"
+        if notification_sent(spec, dedup_key):
+            return AccessRequestOut(collection_id=collection_id, requested=False)
+        notify(
+            spec,
+            recipient=owner,
+            kind="access_request",
+            title=f'{me} requests access to "{coll.name}"',
+            body=(
+                f'{me} asked to read the collection "{coll.name}". Open its sharing '
+                "settings to grant read access."
+            ),
+            link=f"/kb/collections/{collection_id}",
+            actor=me,
+            dedup_key=dedup_key,
+        )
+        _LOGGER.info(
+            "access request: user=%s collection=%s owner=%s notified", me, collection_id, owner
+        )
+        return AccessRequestOut(collection_id=collection_id, requested=True)
 
     # ── Issue #308: per-doc read override (set / clear / read) ────────────
     def _authorize_doc_permission(doc_id: str) -> tuple[SourceDoc, str]:

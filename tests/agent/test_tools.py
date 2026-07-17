@@ -459,7 +459,12 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
     )
 
     async def fake_run(
-        purpose: str, payload: str, emit: object, origin_id: object, collection_ids: object = None
+        purpose: str,
+        payload: str,
+        emit: object,
+        origin_id: object,
+        collection_ids: object = None,
+        withheld_sink: object = None,
     ) -> tuple[str, list[Citation]]:
         # The bridge returns BOTH the synthesized answer AND its resolved
         # citations so the impl can stash them on ctx for the turn engine
@@ -512,7 +517,7 @@ async def test_ask_knowledge_base_two_calls_stash_per_call_citations():
 
     calls: list[str] = []
 
-    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None):
+    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None, withheld_sink=None):
         assert purpose == "kb_chat"
         calls.append(payload)
         return f"a:{payload}", [_cite(len(calls))]
@@ -534,7 +539,7 @@ async def test_ask_knowledge_base_scopes_the_subagent_to_the_requested_rank():
 
     seen: dict[str, object] = {}
 
-    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None):
+    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None, withheld_sink=None):
         seen["scope"] = collection_ids
         return "ans", []
 
@@ -555,7 +560,7 @@ async def test_ask_knowledge_base_last_tier_says_no_more_tiers():
 
     from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
 
-    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None):
+    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None, withheld_sink=None):
         return "ans", []
 
     actx = AgentToolContext(run_subagent=fake_run, collection_tiers=[["a"], ["b"]])
@@ -574,7 +579,7 @@ async def test_ask_knowledge_base_rank_past_last_tier_stops_without_searching():
 
     ran = {"n": 0}
 
-    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None):
+    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None, withheld_sink=None):
         ran["n"] += 1
         return "ans", []
 

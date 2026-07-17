@@ -40,6 +40,24 @@ class Citation(Struct):
     provenance: dict[str, Any] = field(default_factory=dict)
 
 
+class WithheldSource(Struct):
+    """A knowledge source (a collection) the user may SEE EXISTS (``read_meta``)
+    but may NOT read (``read_content``), surfaced by the disclosure probe because
+    it holds a competitive answer to the query. Persisted on the assistant message
+    so the FE can render a "🔒 <name> — request access" chip instead of the system
+    silently dropping the source (permission-disclosure).
+
+    The withheld CONTENT never travels — only the collection's identity + owner,
+    all of which a ``read_meta`` holder already sees. Lives here (not ``kb.py``) so
+    both the RCA ``Message`` and the KB ``KbMessage`` can carry it, mirroring
+    ``Citation``.
+    """
+
+    collection_id: str
+    name: str
+    owner: str  # created_by — the grant authority and the "request access" target
+
+
 class Message(Struct):
     role: str
     """One of `user` / `assistant` / `tool` / `system` / `error`.
@@ -101,6 +119,12 @@ class Message(Struct):
     all other messages. Mirrors `KbMessage.citations`; lets the FE render
     the same reference cards in RCA chat that direct KB chat already shows."""
 
+    withheld: list[WithheldSource] = field(default_factory=list)
+    """Only set on the assistant answer — knowledge sources the disclosure probe
+    found relevant but that the user may see-exist-but-not-read (read_meta without
+    read_content). Bubbled up from the turn's ask_knowledge_base sub-agents. Empty
+    for everything else. Mirrors `KbMessage.withheld` (permission-disclosure)."""
+
     tool_display: str = ""
     """Only set when role=tool and it differs from `content` (#62) — the FULL
     exec result with a successful command's stderr kept. `content` stays the
@@ -133,3 +157,14 @@ class Conversation(Struct):
     `created_time` (which advances on every update, so it can't order births). None on
     conversations written before multi-chat (manual §3) — they predate every stamped
     chat, so they remain the default."""
+
+    # #306 PR3: denormalized mirror of the owning item's read-visibility, so the
+    # Conversation's own access_scope can gate reading the thread on the item's
+    # `read_chat` WITHOUT a cross-resource join (the #303 SourceDoc pattern). The
+    # thread is served by the Conversation auto-CRUD, which the item's own scope
+    # never covers. Stamped at chat-create from the live item permission and
+    # re-pushed when the item's permission / members change. Defaults keep a
+    # pre-#306 (absent-cell) conversation PUBLIC via the scope's `isna()` clause.
+    item_visibility: str = "public"
+    item_read_chat: list[str] = field(default_factory=list)
+    item_created_by: str = ""

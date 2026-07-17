@@ -470,6 +470,9 @@ export const mockKbApi: KbApi = {
     collectionPerms.set(id, perm);
     return { visibility: perm.visibility, notified: [] };
   },
+  async requestCollectionAccess(id) {
+    return { collection_id: id, requested: true, already_readable: false };
+  },
   async getDocPermission(id) {
     return docPerms.get(id) ?? defaultPermission();
   },

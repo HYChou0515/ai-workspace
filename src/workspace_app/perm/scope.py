@@ -203,6 +203,27 @@ def kbchat_access_scope(
     return scope
 
 
+def conversation_access_scope(
+    superusers: frozenset[str] = frozenset(),
+    groups_provider: GroupsProvider | None = None,
+) -> AccessScope:
+    """#306 PR3 — a Conversation (chat thread) is visible iff its OWNING ITEM admits
+    the caller to ``read_chat``. Conversation is served by its own auto-CRUD (the
+    item scope never covers it), so it gates on the SAME ``_visibility_scope`` over
+    the denormalized ``item_*`` mirror the chat carries — visibility + the item's
+    ``read_chat`` grant list + the mirrored item owner. A pre-#306 conversation
+    (absent mirror cell) passes via ``isna()`` ≡ public, so legacy threads stay
+    readable until the next stamp. The mirror is pushed at chat-create and re-pushed
+    on item permission / member changes."""
+    return _visibility_scope(
+        visibility_field="item_visibility",
+        read_meta_field="item_read_chat",
+        owner_field="item_created_by",
+        superusers=superusers,
+        groups_provider=groups_provider,
+    )
+
+
 def work_item_access_scope(
     superusers: frozenset[str] = frozenset(),
 ) -> AccessScope:

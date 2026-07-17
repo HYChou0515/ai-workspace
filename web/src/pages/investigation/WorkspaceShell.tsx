@@ -10,6 +10,9 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "../../api";
 import type { AppItem, AppManifest, CloseStatus, FileInfo } from "../../api/types";
+import { ItemShareDialog } from "../../components/ItemShareDialog";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { canConverse, canReadItemContent, parseItemPermission } from "../../lib/itemPermission";
 import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
@@ -199,6 +202,14 @@ function ShellBody({
   const groups = useEditorGroups(initialPaths);
   const [activityMode, setActivityMode] = useState<ActivityMode>("evidence");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Permission-disclosure graceful-degrade: lock the panels the user lacks the
+  // verb for, so a limited-access member sees a clean locked state instead of a
+  // raw 403 from the file / chat sub-route (the backend still enforces). Owner
+  // for access is `created_by`, not the display `owner` field.
+  const me = useCurrentUser();
+  const _perm = parseItemPermission(item.permission);
+  const _canSeeFiles = canReadItemContent(_perm, me, item.created_by);
+  const _canConverse = canConverse(_perm, me, item.created_by);
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
   // toggle the sidebar / bottom panel.
@@ -423,7 +434,7 @@ function ShellBody({
               terminal tab inside is further gated on `function.terminal` —
               sandbox's only human UI surface (exec/package are backend tools,
               gated by allowed_tools), so there is no separate sandbox pane. */}
-          {manifest.function.workspace && !ideCollapsed && (
+          {manifest.function.workspace && !ideCollapsed && _canSeeFiles && (
             <>
           <ActivityBar
             mode={activityMode}
@@ -541,6 +552,7 @@ function ShellBody({
                 never a dead end. The shell carries workflow launches as chats too,
                 so the old single-chat WorkflowRunSection is retired. */}
             <ItemChatShell
+              readOnly={!_canConverse}
               slug={manifest.slug}
               itemId={item.resource_id}
               profile={String(item.profile ?? manifest.default_profile)}
@@ -595,6 +607,13 @@ export function EditItemModal({
   onClose: () => void;
   onSubmit: (patch: Record<string, unknown>) => void;
 }) {
+  const me = useCurrentUser();
+  const [sharing, setSharing] = useState(false);
+  const owner = (item.created_by as string) || (item.owner as string) || "";
+  // #306 PR3: the sharing control (grill D2). Owner-only in the UI; the backend
+  // additionally honours change_permission delegates (it enforces regardless).
+  const canManageAccess = me === owner;
+  const perm = parseItemPermission((item as Record<string, unknown>).permission);
   return (
     <ModalShell
       onClose={onClose}
@@ -612,6 +631,31 @@ export function EditItemModal({
         submitLabel="Save"
         onSubmit={(values) => onSubmit(pruneEmpty(values))}
       />
+      {canManageAccess && (
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          data-testid="manage-access"
+          style={{ marginTop: 12 }}
+          onClick={() => setSharing(true)}
+        >
+          Manage access…
+        </button>
+      )}
+      {sharing && (
+        <ItemShareDialog
+          itemName={(item.title as string) || manifest.item.noun}
+          owner={owner}
+          value={perm ?? { visibility: "private" }}
+          onSubmit={async (next) => {
+            await api.setItemPermission(manifest.slug, item.resource_id, next);
+            setSharing(false);
+          }}
+          onClose={() => setSharing(false)}
+        />
+      )}
     </ModalShell>
   );
 }

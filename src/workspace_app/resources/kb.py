@@ -20,12 +20,13 @@ import os
 from typing import Annotated, Any
 
 from msgspec import Struct, field
-from specstar import OnDelete, Ref, SortIndex, Vector
+from specstar import OnDelete, Ref, SortIndex, TrigramIndex, Vector
 from specstar.types import Binary
 
 from ..perm import Permission
 from .conversation import Citation as Citation  # re-export — see conversation.Citation
 from .conversation import MessageMetrics
+from .conversation import WithheldSource as WithheldSource  # re-export — see conversation
 
 # Embedding dimensionality. MUST match the active Embedder; changing the model
 # is a re-index event (every chunk re-embedded). Set per deployment.
@@ -598,7 +599,12 @@ class ContextCard(Struct):  # → resource "context-card"
 
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
     keys: list[str]  # author surface forms: ["M4", "Metal 4", "capping"]
-    norm_keys: list[str] = field(default_factory=list)  # derived + indexed; server-set
+    # derived + indexed; server-set. TrigramIndex → a pg_trgm GIN so a direct API
+    # user's ``?qb=`` substring / fuzzy query (``.any().contains`` / ``.fuzzy``) over
+    # norm_keys is index-backed on Postgres (exact ``.contains`` membership still
+    # rides the shared jsonb @> GIN; the annotation is additive, other backends
+    # ignore it and compute by scan).
+    norm_keys: Annotated[list[str], TrigramIndex()] = field(default_factory=list)
     title: str = ""  # display name (FE list/detail); "" → keys[0]
     body: str = ""  # markdown explanation
 
@@ -683,6 +689,9 @@ class KbMessage(Struct):
     tool_name: str | None = None
     tool_args: dict[str, Any] | None = None
     citations: list[Citation] = field(default_factory=list)
+    # Permission-disclosure: sources found relevant but read_meta-only for the user
+    # (see-exist, not read). Rendered as "🔒 <name> — request access" chips.
+    withheld: list[WithheldSource] = field(default_factory=list)
     created_at: int | None = None  # epoch ms
     metrics: MessageMetrics | None = None  # assistant answers: final token usage (survives reload)
     error_kind: str | None = None  # role=error (#37): error | cancelled | max_turns

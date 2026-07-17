@@ -78,6 +78,7 @@ const hdrBtn: React.CSSProperties = {
 
 export function AgentPanel({
   investigationId,
+  readOnly = false,
   agent: agentProp,
   width = 380,
   fill = false,
@@ -95,6 +96,10 @@ export function AgentPanel({
   uploadDir = "uploads",
 }: {
   investigationId: string;
+  /** Permission-disclosure: the current user may read the thread but lacks
+   * `converse` — the composer is disabled with a hint (the backend also 403s a
+   * send, this just makes the lock legible instead of a raw error). */
+  readOnly?: boolean;
   /** The agent conversation state. Defaults to the surrounding
    * `<AgentProvider>` (RCA's single chat); the multi-chat shell injects a
    * per-chat `useItemChat()` here so one chat tab drives this panel. */
@@ -446,6 +451,10 @@ export function AgentPanel({
             onOpenCitation={(c) =>
               window.open(docHref(c.document_id, c.snippet), "_blank", "noopener,noreferrer")
             }
+            // Permission-disclosure: ask the withheld collection's owner for access.
+            onRequestAccess={(w) => {
+              void kbApi.requestCollectionAccess(w.collection_id);
+            }}
             // #51 P6: hydrated entries map 1:1 onto the persisted
             // conversation (logFromMessages), so the entry index IS the
             // message index. Hidden while streaming — the in-flight
@@ -737,6 +746,7 @@ export function AgentPanel({
         <textarea
           ref={composerRef}
           value={draft}
+          disabled={readOnly}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onComposerKeyDown}
           // #364: paste an image (screenshot) → chip; paste a file → path; plain text
@@ -750,11 +760,13 @@ export function AgentPanel({
             }
           }}
           placeholder={
-            onSteer
-              ? "Tell the run what to change (e.g. use the X collection, redo from ingest)…"
-              : mentions.length > 0
-                ? "Add a note (optional)…"
-                : "Ask the agent…"
+            readOnly
+              ? "You don't have permission to send messages in this workspace."
+              : onSteer
+                ? "Tell the run what to change (e.g. use the X collection, redo from ingest)…"
+                : mentions.length > 0
+                  ? "Add a note (optional)…"
+                  : "Ask the agent…"
           }
           rows={3}
           style={{
@@ -889,7 +901,7 @@ export function AgentPanel({
           ) : (
             (() => {
               const summoning = mentions.length > 0;
-              const enabled = summoning || draft.trim().length > 0;
+              const enabled = !readOnly && (summoning || draft.trim().length > 0);
               return (
                 <button
                   type="submit"

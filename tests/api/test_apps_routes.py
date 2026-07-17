@@ -156,7 +156,7 @@ def test_post_app_item_creates_the_resource_and_seeds_the_profile():
     got = spec.get_resource_manager(RcaInvestigation).get(body["resource_id"]).data
     assert got.title == "Oven drift"
     assert got.severity is Severity.P1
-    assert got.owner == "default-user"  # from auth, NOT the body's "hacker"
+    assert got.owner == "u"  # from auth (spec default_user), NOT the body's "hacker"
     assert got.profile == "default"  # the App's default_profile
 
 
