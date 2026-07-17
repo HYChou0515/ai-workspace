@@ -23,6 +23,7 @@ const coll = (over: Partial<KbCollection>): KbCollection => ({
   use_wiki: false,
   wiki_maintainer_guidance: "",
   wiki_reader_guidance: "",
+  is_global: false,
   ...over,
 });
 
@@ -71,6 +72,38 @@ describe("KbCollectionsModal", () => {
     );
     fireEvent.click(screen.getByTestId("kb-collections-done"));
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it("renders a Global badge on a global collection and reflects it as checked", () => {
+    const collections = [coll({ resource_id: "g", name: "Baseline", is_global: true }), ...COLLECTIONS];
+    render(
+      <KbCollectionsModal
+        collections={collections}
+        // A global starts in scope (checked); the KB chat seeds it this way.
+        selected={new Set(["g"])}
+        onChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("collection-global-badge-g")).toBeInTheDocument();
+    expect(screen.getByTestId("collection-check-g")).toBeChecked();
+  });
+
+  it("un-checking a global drops it from the selection (→ excluded upstream)", () => {
+    const onChange = vi.fn();
+    const collections = [coll({ resource_id: "g", name: "Baseline", is_global: true }), ...COLLECTIONS];
+    render(
+      <KbCollectionsModal
+        collections={collections}
+        selected={new Set(["g", "a"])}
+        onChange={onChange}
+        onClose={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("collection-check-g"));
+    // Removed from the checked set — the panel maps a NOT-checked global to
+    // excluded_collection_ids on create.
+    expect(onChange).toHaveBeenCalledWith(new Set(["a"]));
   });
 
   it("closes on a backdrop click but not on a click inside the dialog", () => {

@@ -23,6 +23,7 @@ const coll = (over: Partial<KbCollection>): KbCollection => ({
   use_wiki: false,
   wiki_maintainer_guidance: "",
   wiki_reader_guidance: "",
+  is_global: false,
   ...over,
 });
 
@@ -112,5 +113,17 @@ describe("CollectionsChecklist", () => {
     render(<CollectionsChecklist collections={[]} selected={new Set()} onChange={vi.fn()} />);
     expect(screen.getByText("目前沒有任何知識庫可選。")).toBeInTheDocument();
     expect(screen.queryByTestId("collections-select-all")).not.toBeInTheDocument();
+  });
+
+  it("renders a Global badge only on global collections", () => {
+    render(
+      <CollectionsChecklist
+        collections={[coll({ resource_id: "g", name: "Baseline", is_global: true }), ...COLLECTIONS]}
+        selected={new Set()}
+        onChange={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("collection-global-badge-g")).toBeInTheDocument();
+    expect(screen.queryByTestId("collection-global-badge-a")).not.toBeInTheDocument();
   });
 });

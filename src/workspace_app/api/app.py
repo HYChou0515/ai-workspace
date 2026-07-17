@@ -505,7 +505,12 @@ def create_app(
     register_health_routes(api, health_service)
 
     register_meta_routes(
-        api, users=users, get_user_id=get_user_id, activity=activity, monitor=monitor
+        api,
+        users=users,
+        get_user_id=get_user_id,
+        activity=activity,
+        monitor=monitor,
+        superusers=superusers,
     )
 
     # #106: context-card create/update custom actions must register on the spec

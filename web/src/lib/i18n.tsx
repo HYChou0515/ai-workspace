@@ -484,6 +484,9 @@ export const messages = {
     en: "No collections match “{q}”.",
   },
   "collections.none": { "zh-TW": "目前沒有任何知識庫可選。", en: "No collections to choose from." },
+  // Global collection — the system-wide baseline badge on a checklist row and
+  // the superuser toggle on the collection page.
+  "collections.global": { "zh-TW": "全域", en: "Global" },
   // #298 — the Skills panel (co-created skills in a workspace).
   "skills.button": { "zh-TW": "技能", en: "Skills" },
   "skills.tip": {
@@ -551,6 +554,12 @@ export const messages = {
 
   // KB collection page (KbCollectionPage) (#172)
   "kb.reindexAll": { "zh-TW": "全部重新讀取", en: "Re-read all" },
+  // Global collection — the superuser-only toggle on the collection page.
+  "kb.global.label": { "zh-TW": "全域知識庫", en: "Global collection" },
+  "kb.global.help": {
+    "zh-TW": "納入每個 AI 對話的預設檢索範圍",
+    en: "In every AI conversation's baseline scope",
+  },
   "kb.uploadFiles": { "zh-TW": "上傳檔案", en: "Upload files" },
   "kb.uploadFolder": { "zh-TW": "上傳資料夾", en: "Upload folder" },
   "kb.dropToUpload": { "zh-TW": "放開以上傳", en: "Drop to upload" },

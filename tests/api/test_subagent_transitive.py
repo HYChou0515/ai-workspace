@@ -106,16 +106,22 @@ async def test_bridge_searches_only_collections_the_speaker_can_read():
     assert answer == "answer"
 
 
-async def test_bridge_filters_the_search_them_all_path_too():
-    """The `collection_ids is None` fan-out (search every collection) is filtered
-    the same way — the speaker never reaches a collection they can't read."""
+async def test_bridge_filters_the_unspecified_global_path_too():
+    """The unspecified fan-out — now the GLOBAL set (grill D2/D5), no longer "all" —
+    is permission-filtered the same way: the speaker never reaches a global
+    collection they can't read."""
     spec = make_spec()
     holder = {"id": "alice"}
-    _new_collection(spec, by="bob", permission=Permission(visibility="private"), name="secret")
-    public = _new_collection(spec, by="bob", name="open")
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("bob"):
+        # a PRIVATE global — visible to nobody but its owner
+        rm.create(
+            Collection(name="secret", is_global=True, permission=Permission(visibility="private"))
+        )
+    public_global = _global_collection(spec, by="bob", name="open")
     runner = _CapturingRunner()
-    await _bridge(spec, runner, holder).run("kb_chat", "q")  # collection_ids omitted → all
-    assert runner.seen_ids == [public]
+    await _bridge(spec, runner, holder).run("kb_chat", "q")  # unspecified → global set
+    assert runner.seen_ids == [public_global]  # the private global is filtered out
 
 
 async def test_bridge_returns_no_sources_when_speaker_can_read_none():
@@ -202,3 +208,68 @@ async def test_bridge_still_runs_to_disclose_when_nothing_is_readable():
     assert runner.seen_ids == []  # nothing readable to search
     assert sink == [disc]  # but the withheld source is still disclosed
     assert answer == "answer"
+
+
+def _global_collection(spec: SpecStar, *, by: str, name: str = "g") -> str:
+    """A public collection flagged is_global — always in the AI's baseline scope."""
+    rm = spec.get_resource_manager(Collection)
+    with rm.using(by):
+        return rm.create(Collection(name=name, is_global=True)).resource_id
+
+
+async def test_kb_chat_scope_unions_the_global_collections():
+    # global-collection concept: a specified collection is searched TOGETHER WITH
+    # the always-in-scope global set (grill D2 mode 2: specified ∪ global).
+    spec = make_spec()
+    holder = {"id": "alice"}
+    specified = _new_collection(spec, by="alice", name="my-docs")
+    g = _global_collection(spec, by="bob", name="Sales-KB")
+    runner = _CapturingRunner()
+    await _bridge(spec, runner, holder).run("kb_chat", "q", collection_ids=[specified])
+    assert runner.seen_ids == [specified, g]  # specified first, then global
+
+
+async def test_unspecified_kb_chat_scope_is_the_global_set_not_all():
+    # grill D2 mode 1 / D5: unspecified ⇒ GLOBAL only — NOT every collection.
+    spec = make_spec()
+    holder = {"id": "alice"}
+    g = _global_collection(spec, by="bob", name="HR")
+    _new_collection(spec, by="bob", name="unrelated")  # public, but NOT global
+    runner = _CapturingRunner()
+    await _bridge(spec, runner, holder).run("kb_chat", "q")  # collection_ids omitted
+    assert runner.seen_ids == [g]  # only the global one, not the unrelated public one
+
+
+async def test_infer_modules_does_not_union_global():
+    # infer_modules is a focused classifier over its single configured collection —
+    # global is deliberately NOT added (only the KB-answer path unions global).
+    spec = make_spec()
+    holder = {"id": "alice"}
+    specified = _new_collection(spec, by="alice", name="one")
+    _global_collection(spec, by="bob", name="Sales-KB")
+    cfg = AgentConfig(name="infer", model="x", allowed_tools=["kb_search"])
+    runner = _CapturingRunner()
+    bridge = SubagentBridge(
+        spec=spec,
+        runner=runner,
+        kb_runner=runner,
+        retriever=Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM)),
+        catalog=AgentConfigCatalog(),
+        purpose_fallbacks={"infer_modules": cfg},
+        get_user_id=lambda: holder["id"],
+        max_searches=None,
+    )
+    await bridge.run("infer_modules", "q", collection_ids=[specified])
+    assert runner.seen_ids == [specified]  # no global union
+
+
+async def test_kb_chat_scope_drops_an_excluded_global():
+    # grill D2 mode 3: global \ excluded — the effective scope removes an
+    # explicitly-excluded global from the baseline.
+    spec = make_spec()
+    holder = {"id": "alice"}
+    g1 = _global_collection(spec, by="bob", name="g1")
+    g2 = _global_collection(spec, by="bob", name="g2")
+    runner = _CapturingRunner()
+    await _bridge(spec, runner, holder).run("kb_chat", "q", excluded_collection_ids=[g1])
+    assert runner.seen_ids == [g2]  # g1 excluded from the global baseline

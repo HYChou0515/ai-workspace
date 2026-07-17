@@ -121,6 +121,22 @@ export function CollectionsChecklist({
             >
               {c.name}
             </span>
+            {c.is_global && (
+              <span
+                data-testid={`collection-global-badge-${c.resource_id}`}
+                style={{
+                  fontSize: pxToRem(10),
+                  fontWeight: 600,
+                  color: "var(--accent-h)",
+                  border: "1px solid var(--accent-h)",
+                  borderRadius: "var(--radius-btn)",
+                  padding: "1px 6px",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t("collections.global")}
+              </span>
+            )}
             <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
               {t("collections.docCount", { n: c.doc_count })}
             </span>

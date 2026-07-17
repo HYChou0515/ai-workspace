@@ -29,6 +29,7 @@ from ..filestore.protocol import FileNotFound
 from ..kb.collections import (
     collection_ids_from_json,
     collection_tiers_from_json,
+    excluded_ids_from_json,
     read_hub_collections,
     resolve_named_collection_ids,
     resolve_withheld,
@@ -171,6 +172,9 @@ class ChatSendService:
         hub_data = await read_hub_collections(self._filestore, investigation_id)
         hub_collection_ids = collection_ids_from_json(hub_data)
         hub_collection_tiers = collection_tiers_from_json(hub_data)
+        # Global-collection concept: globals the item's collections.json flagged
+        # `exclude: true` — removed from the (tier ∪ global) baseline (grill D2 mode 3).
+        hub_excluded = excluded_ids_from_json(hub_data)
         # Composer knowledge-search depth: applies to this turn's KB
         # lookups. The bridge wrapper forwards it to the kb_chat
         # sub-agent only — infer_modules' focused classification probe
@@ -244,6 +248,10 @@ class ChatSendService:
                 # Permission-disclosure: forward the parent turn's withheld
                 # accumulator so the KB sub-agent's disclosed sources bubble up.
                 withheld_sink=withheld_sink,
+                # Global-collection concept: the item's collections.json excludes
+                # apply to the KB-answer scope (bridge resolves (tier ∪ global) \
+                # excluded). infer_modules keeps its focused single collection.
+                excluded_collection_ids=hub_excluded if purpose == "kb_chat" else None,
             )
 
         # ONE bridge for every sub-agent the RCA tools may invoke

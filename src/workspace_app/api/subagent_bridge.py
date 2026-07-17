@@ -19,7 +19,7 @@ from ..agent.ask_kb import AskKbSpec
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import KbSearchBudget, WikiSearchBudget
 from ..kb.cited import record_citations
-from ..kb.collections import partition_collection_disclosure
+from ..kb.collections import partition_collection_disclosure, resolve_effective_scope
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..perm import Actor
@@ -75,6 +75,7 @@ class SubagentBridge:
         wiki_budget: WikiSearchBudget | None = None,
         ask_kb_spec: AskKbSpec | None = None,
         withheld_sink: list[str] | None = None,
+        excluded_collection_ids: list[str] | None = None,
     ) -> tuple[str, list[Citation]]:
         """Generic sub-agent bridge — runs the sub-agent for `purpose`
         over every collection and returns its synthesized answer + the
@@ -98,11 +99,18 @@ class SubagentBridge:
                 f"{sorted(self._purpose_fallbacks)})"
             )
 
-        # #66: infer_modules passes a pre-resolved collection scope (a single
-        # configured collection, resolved ONCE per turn) so its ~1500 per-step
-        # calls don't each re-list every collection. None ⇒ search them all
-        # (ask_knowledge_base / unconfigured infer_modules).
-        if collection_ids is not None:
+        # Global-collection concept: for the KB-answer path (ask_knowledge_base),
+        # the effective scope UNIONS the always-in-scope global set and drops any
+        # excluded ids — unspecified ⇒ global alone (the D5 hard cutover). This runs
+        # BEFORE the permission partition below. infer_modules (#66: a focused
+        # classifier over a SINGLE pre-resolved collection, ~1500 calls/turn) is
+        # deliberately left out — it keeps exactly its configured collection; its
+        # `None` still means "search them all".
+        if purpose == "kb_chat":
+            ids = resolve_effective_scope(
+                self._spec, collection_ids, excluded=excluded_collection_ids or ()
+            )
+        elif collection_ids is not None:
             ids = collection_ids
         else:
             coll_rm = self._spec.get_resource_manager(Collection)

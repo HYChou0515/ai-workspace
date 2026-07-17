@@ -27,6 +27,7 @@ function mkColl(over: Partial<KbCollection> = {}): KbCollection {
     git_last_pulled_at: null,
     wiki_maintainer_guidance: "",
     wiki_reader_guidance: "",
+    is_global: false,
     ...over,
   };
 }

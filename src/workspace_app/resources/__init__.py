@@ -236,7 +236,12 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # decides "does this row exist for me?", the checker decides "may I write it?".
     spec.add_model(
         Collection,
-        indexed_fields=[("permission.visibility", str), ("permission.read_meta", list)],
+        indexed_fields=[
+            ("permission.visibility", str),
+            ("permission.read_meta", list),
+            # Global-collection concept: the baseline scope is a query over this.
+            ("is_global", bool),
+        ],
         access_scope=collection_access_scope(superusers, groups),
         event_handlers=[collection_permission_event_handler(superusers, groups)],
     )

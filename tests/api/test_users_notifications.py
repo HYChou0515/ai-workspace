@@ -44,7 +44,14 @@ def test_me_resolves_the_current_user_via_the_directory():
 def test_me_falls_back_to_a_placeholder_for_an_unknown_id():
     c = _client({"id": "ghost"})
     me = c.get("/me").json()
-    assert me == {"id": "ghost", "name": "ghost", "section": "", "email": "", "photo_url": None}
+    assert me == {
+        "id": "ghost",
+        "name": "ghost",
+        "section": "",
+        "email": "",
+        "photo_url": None,
+        "is_superuser": False,  # a plain user — the FE hides superuser-only affordances
+    }
 
 
 def test_users_lists_the_directory():
