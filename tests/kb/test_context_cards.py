@@ -1,3 +1,5 @@
+from specstar.types import extract_trigram_index_field_infos
+
 from workspace_app.kb.context_cards import (
     build_vocab,
     card_context_block,
@@ -8,6 +10,15 @@ from workspace_app.kb.context_cards import (
 )
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, ContextCard
+
+
+def test_norm_keys_carries_a_trigram_index():
+    """The derived lookup surface opts into a pg_trgm GIN so a direct API user can
+    run index-backed substring / fuzzy ``?qb=`` queries over ``norm_keys`` (exact
+    membership already rides the shared jsonb ``@>`` GIN; this adds the fuzzy path).
+    """
+    infos = extract_trigram_index_field_infos(ContextCard)
+    assert {i.name: i.is_list for i in infos} == {"norm_keys": True}
 
 
 def _collection(spec, name: str = "c") -> str:

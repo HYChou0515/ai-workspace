@@ -118,3 +118,35 @@ def test_specstar_auto_route_lists_cards_scoped_to_a_collection(harness):
     assert items[0]["data"]["norm_keys"] == ["m4"]
     assert items[0]["data"]["title"] == "t"
     assert items[0]["revision_info"]["resource_id"].startswith("context-card:")
+
+
+def _norm_keys_of(items: list[dict]) -> list[str]:
+    return sorted(k for it in items for k in it["data"]["norm_keys"])
+
+
+def test_api_user_can_fuzzy_and_substring_query_norm_keys_over_qb(harness):
+    # The TrigramIndex on norm_keys lets a direct API user reach a card by a
+    # fragment / typo of its key over the same auto CRUD ?qb= route — not just an
+    # exact key. (Index-backed on Postgres; correct on every backend.)
+    cid = _collection(harness.spec)
+    for key in ["capping", "molecular", "reflow zone"]:
+        harness.client.post(
+            "/context-card/author",
+            json={"collection_id": cid, "keys": [key], "title": key, "body": "b"},
+        )
+
+    # fuzzy: "capp" is a fragment of "capping" and resolves it (and only it).
+    r = harness.client.get(
+        "/context-card",
+        params={"qb": f"(QB['collection_id'] == '{cid}') & QB['norm_keys'].fuzzy('capp')"},
+    )
+    assert r.status_code == 200, r.text
+    assert _norm_keys_of(r.json()) == ["capping"]
+
+    # substring within an element: "flow" ⊂ "reflow zone" via .any().contains().
+    r2 = harness.client.get(
+        "/context-card",
+        params={"qb": f"(QB['collection_id'] == '{cid}') & QB['norm_keys'].any().contains('flow')"},
+    )
+    assert r2.status_code == 200, r2.text
+    assert _norm_keys_of(r2.json()) == ["reflow zone"]

@@ -20,7 +20,7 @@ import os
 from typing import Annotated, Any
 
 from msgspec import Struct, field
-from specstar import OnDelete, Ref, SortIndex, Vector
+from specstar import OnDelete, Ref, SortIndex, TrigramIndex, Vector
 from specstar.types import Binary
 
 from ..perm import Permission
@@ -599,7 +599,12 @@ class ContextCard(Struct):  # → resource "context-card"
 
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
     keys: list[str]  # author surface forms: ["M4", "Metal 4", "capping"]
-    norm_keys: list[str] = field(default_factory=list)  # derived + indexed; server-set
+    # derived + indexed; server-set. TrigramIndex → a pg_trgm GIN so a direct API
+    # user's ``?qb=`` substring / fuzzy query (``.any().contains`` / ``.fuzzy``) over
+    # norm_keys is index-backed on Postgres (exact ``.contains`` membership still
+    # rides the shared jsonb @> GIN; the annotation is additive, other backends
+    # ignore it and compute by scan).
+    norm_keys: Annotated[list[str], TrigramIndex()] = field(default_factory=list)
     title: str = ""  # display name (FE list/detail); "" → keys[0]
     body: str = ""  # markdown explanation
 
