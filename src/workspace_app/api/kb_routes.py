@@ -1511,6 +1511,12 @@ def register_kb_routes(
         rm = spec.get_resource_manager(SourceDoc)
         queued = 0
         for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
+            doc = r.data
+            if not (isinstance(doc, SourceDoc) and doc.status == "ready"):
+                # Still indexing — no extracted text to fold yet; the index-
+                # completion hook folds it once ready. Skip it so `queued`
+                # reflects what actually folds now, not an inflated count.
+                continue
             await wiki_coordinator.on_doc_indexed(r.info.resource_id)  # ty: ignore[unresolved-attribute]
             queued += 1
         return WikiRebuildOut(queued=queued)

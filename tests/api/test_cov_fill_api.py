@@ -181,6 +181,51 @@ def test_rebuild_wiki_unknown_collection_404():
     assert r.status_code == 404
 
 
+async def test_rebuild_wiki_skips_still_indexing_docs_in_the_queued_count():
+    """A manual wiki rebuild must not fold a doc that's still ``indexing`` (no
+    extracted text yet — it would push an empty source into the wiki). The route
+    counts only the ready docs it actually folds; the still-indexing one self-heals
+    via the index-completion hook once it's ready."""
+    from specstar.types import Binary
+
+    from workspace_app.kb.doc_id import encode_doc_id
+    from workspace_app.resources import Collection, SourceDoc
+
+    spec = make_spec(default_user="u")
+    app = _full_app(spec)
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    dm = spec.get_resource_manager(SourceDoc)
+    dm.create(
+        SourceDoc(
+            collection_id=cid,
+            path="ready.md",
+            content=Binary(data=b"alpha fact"),
+            text="alpha fact",
+            status="ready",
+        ),
+        resource_id=encode_doc_id(cid, "ready.md"),
+    )
+    dm.create(
+        SourceDoc(
+            collection_id=cid,
+            path="pending.pdf",
+            content=Binary(data=b"%PDF-1.4 pending", content_type="application/pdf"),
+            text=None,
+            status="indexing",
+        ),
+        resource_id=encode_doc_id(cid, "pending.pdf"),
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post(f"/kb/collections/{cid}/wiki/rebuild")
+    assert r.status_code == 200
+    assert r.json()["queued"] == 1  # only the ready doc folds; the indexing one is skipped
+
+
 # ── kb_routes.py: documents page exercises the chunk-count loop ───────
 
 
