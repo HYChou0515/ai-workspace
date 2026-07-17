@@ -40,7 +40,11 @@ from ..files import WorkspaceFiles
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
-from ..kb.collections import partition_collection_disclosure, resolve_withheld
+from ..kb.collections import (
+    partition_collection_disclosure,
+    resolve_effective_scope,
+    resolve_withheld,
+)
 from ..kb.context_cards import (
     card_context_block,
     cards_with_ids_for_collections,
@@ -696,13 +700,18 @@ def register_kb_chat_routes(
         # searched scope exactly as before (the retriever just finds nothing), so
         # this is a strict addition: the readable scope is unchanged except that a
         # discoverable collection is redirected to the disclosure channel.
+        # Global-collection concept: the effective scope UNIONS the always-in-scope
+        # global set and drops excluded ids (unspecified ⇒ global alone) BEFORE the
+        # permission partition — so a KB chat with no collections picked searches the
+        # global baseline, and a picked set adds global on top.
+        _effective = resolve_effective_scope(spec, chat.collection_ids)
         _disc = partition_collection_disclosure(
-            spec, chat.collection_ids, get_user_id(), superusers=superusers
+            spec, _effective, get_user_id(), superusers=superusers
         )
         _discoverable = set(_disc.discoverable)
         ctx = AgentToolContext(
             retriever=retriever,
-            collection_ids=[c for c in chat.collection_ids if c not in _discoverable],
+            collection_ids=[c for c in _effective if c not in _discoverable],
             discoverable_collection_ids=_disc.discoverable,
             # #308: exclude docs whose per-doc override blocks THIS speaker's
             # read_content, so the retriever never surfaces a doc tightened away
