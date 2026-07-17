@@ -10,6 +10,9 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "../../api";
 import type { AppItem, AppManifest, CloseStatus, FileInfo } from "../../api/types";
+import { ItemShareDialog } from "../../components/ItemShareDialog";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { parseItemPermission } from "../../lib/itemPermission";
 import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
@@ -595,6 +598,13 @@ export function EditItemModal({
   onClose: () => void;
   onSubmit: (patch: Record<string, unknown>) => void;
 }) {
+  const me = useCurrentUser();
+  const [sharing, setSharing] = useState(false);
+  const owner = (item.created_by as string) || (item.owner as string) || "";
+  // #306 PR3: the sharing control (grill D2). Owner-only in the UI; the backend
+  // additionally honours change_permission delegates (it enforces regardless).
+  const canManageAccess = me === owner;
+  const perm = parseItemPermission((item as Record<string, unknown>).permission);
   return (
     <ModalShell
       onClose={onClose}
@@ -612,6 +622,31 @@ export function EditItemModal({
         submitLabel="Save"
         onSubmit={(values) => onSubmit(pruneEmpty(values))}
       />
+      {canManageAccess && (
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          data-testid="manage-access"
+          style={{ marginTop: 12 }}
+          onClick={() => setSharing(true)}
+        >
+          Manage access…
+        </button>
+      )}
+      {sharing && (
+        <ItemShareDialog
+          itemName={(item.title as string) || manifest.item.noun}
+          owner={owner}
+          value={perm ?? { visibility: "private" }}
+          onSubmit={async (next) => {
+            await api.setItemPermission(manifest.slug, item.resource_id, next);
+            setSharing(false);
+          }}
+          onClose={() => setSharing(false)}
+        />
+      )}
     </ModalShell>
   );
 }

@@ -722,6 +722,19 @@ export const mockApi: ApiClient = {
     return { resource_id: id };
   },
 
+  async setItemPermission(_slug: string, _itemId: string, perm) {
+    await delay(10);
+    return { visibility: perm.visibility, notified: [] as string[] };
+  },
+  async setItemMembers(_slug: string, _itemId: string, _members: string[]) {
+    await delay(10);
+    return { visibility: "restricted", notified: [] as string[] };
+  },
+  async requestItemAccess(_slug: string, itemId: string) {
+    await delay(10);
+    return { item_id: itemId, requested: true, already_readable: false };
+  },
+
   async listActivity() {
     await delay(10);
     const now = Date.now();
