@@ -318,6 +318,13 @@ class WikiMaintenanceCoordinator:
         if coll.git_url:
             self._enqueue_code_build(cid, actor)
             return
+        if doc.status != "ready":
+            # Still indexing — a binary doc (PDF/image/office) carries no extracted
+            # text yet, so folding it now would push an empty source into the wiki
+            # (the silent-empty bug a manual rebuild hit by looping every doc). Skip
+            # it BEFORE the counter bump so it doesn't inflate the "X/N" progress;
+            # the index-completion hook re-fires this once the doc reaches "ready".
+            return
         # Start (or grow) the build epoch's source counter. A fresh batch (no
         # active jobs) resets the counter so the FE shows "1/N" not "29/N".
         # #186: the build-state row + the job are both credited to the requester

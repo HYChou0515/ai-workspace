@@ -512,6 +512,44 @@ async def test_indexed_doc_without_use_wiki_does_not_run_the_maintainer():
     assert await WikiFileStore(spec).ls(cid) == []
 
 
+async def test_a_still_indexing_doc_is_not_folded():
+    """A manual wiki rebuild folds every source, but a doc still ``indexing`` has
+    no extracted text yet — folding it would push empty content into the wiki. The
+    fold is skipped (no maintainer run, no page, no fold job enqueued, so the
+    build-state total isn't inflated by a doc that never folds); the
+    index-completion hook re-fires this once the doc reaches ``ready``."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    doc_id = (
+        spec.get_resource_manager(SourceDoc)
+        .create(
+            SourceDoc(
+                collection_id=cid,
+                path="pending.pdf",
+                content=Binary(data=b"%PDF-1.4 pending", content_type="application/pdf"),
+                text=None,  # no extracted text until indexing finishes
+                status="indexing",
+            ),
+            resource_id=encode_doc_id(cid, "pending.pdf"),
+        )
+        .resource_id
+    )
+
+    runner = _RecordingRunner()
+    coord = WikiMaintenanceCoordinator(spec, runner)
+    await coord.on_doc_indexed(doc_id)
+    await coord.aclose()
+
+    assert runner.sources_seen == []  # never folded
+    assert await WikiFileStore(spec).ls(cid) == []  # no page written
+    jrm = spec.get_resource_manager(WikiMaintenanceJob)
+    assert list(jrm.list_resources(QB.all().build())) == []  # no fold job enqueued
+
+
 async def test_bursty_uploads_to_one_collection_are_each_integrated():
     spec = make_spec(default_user="u")
     cid = (

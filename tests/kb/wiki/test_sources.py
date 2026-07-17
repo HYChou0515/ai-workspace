@@ -119,3 +119,42 @@ def test_ref_by_id_fetches_the_exact_source():
     ref = s.ref_by_id(encode_doc_id(cid, "guide.md"))
     assert ref is not None and ref.path == "guide.md" and ref.text == "GUIDE"
     assert s.ref_by_id(encode_doc_id(cid, "gone.md")) is None  # deleted / never existed
+
+
+def test_ref_reports_readiness_so_callers_can_skip_still_indexing_docs():
+    """The card-gen / wiki-build write paths must not fold a doc that is still
+    being indexed: a binary doc (PDF/image/office) carries no extracted ``text``
+    until it flips to ``status="ready"``, so reading it early yields empty text —
+    silently producing 0 cards / an empty wiki source. The ref exposes ``ready``
+    (``status == "ready"``) so those callers can skip + defer to the
+    index-completion hook instead of generating from nothing."""
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    rm = spec.get_resource_manager(SourceDoc)
+    big = b"\x89PNG\r\n" + b"\xff\x00" * 100_000
+    rm.create(
+        SourceDoc(
+            collection_id=cid,
+            path="pending.png",
+            content=Binary(data=big, content_type="image/png"),
+            text=None,
+            status="indexing",  # uploaded, not yet indexed → text not extracted
+        ),
+        resource_id=encode_doc_id(cid, "pending.png"),
+    )
+    rm.create(
+        SourceDoc(
+            collection_id=cid,
+            path="done.png",
+            content=Binary(data=big, content_type="image/png"),
+            text="A flowchart",
+            status="ready",
+        ),
+        resource_id=encode_doc_id(cid, "done.png"),
+    )
+
+    s = SpecstarWikiSources(spec, cid)
+    pending = s.ref_by_id(encode_doc_id(cid, "pending.png"))
+    done = s.ref_by_id(encode_doc_id(cid, "done.png"))
+    assert pending is not None and pending.ready is False  # still indexing → skip me
+    assert done is not None and done.ready is True  # fully indexed → safe to fold

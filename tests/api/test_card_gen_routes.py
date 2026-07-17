@@ -124,6 +124,25 @@ def test_generate_review_commit_roundtrip():
     assert card.body == "The third reflow zone."
 
 
+def test_generate_opts_the_collection_into_auto_digest():
+    """The manual 'generate cards' action turns on ``auto_digest`` so a doc still
+    indexing at click-time is drafted by the index-completion hook once it's ready
+    (#377) — the run skips not-ready docs rather than digesting empty text."""
+    spec, app = _make_app(_ONE_CARD)
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    rm = spec.get_resource_manager(Collection)
+    before = rm.get(cid).data
+    assert isinstance(before, Collection) and before.auto_digest is False  # default off
+
+    client = ApiTestClient(app)
+    r = client.post(f"/kb/collections/{cid}/context-cards/generate", json={"doc_ids": [doc]})
+    assert r.status_code == 200
+
+    after = rm.get(cid).data
+    assert isinstance(after, Collection) and after.auto_digest is True  # opted in by the click
+
+
 def test_pending_queue_lists_a_finalized_run_and_commit_removes_it():
     """#415: a finalized run is a row in the collection's 待審核 queue; committing
     it (via the existing commit route) resolves it out of the queue."""

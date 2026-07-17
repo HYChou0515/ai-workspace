@@ -619,6 +619,10 @@ export const messages = {
   // Glossary auto-generate controls — were hardcoded zh-TW (#456).
   "kb.cards.autogen": { "zh-TW": "⚡ 自動生成", en: "⚡ Auto-generate" },
   "kb.cards.autogen.count": { "zh-TW": "自動生成（{n}）", en: "Auto-generate ({n})" },
+  "kb.cards.autogen.pending": {
+    "zh-TW": "其中 {n} 份仍在索引，完成後會自動生成。",
+    en: "{n} still indexing — they'll be generated automatically once ready.",
+  },
   // Glossary (Context Cards) tab empty states.
   "kb.cards.empty.none": {
     "zh-TW": "還沒有詞彙卡。詞彙表讓你定義 AI 該照字面使用的詞——例如「COGS 一律指 Cost of Goods Sold」。用左側「＋ 新增」開始。",

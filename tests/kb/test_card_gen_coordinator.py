@@ -46,6 +46,29 @@ def _add_source(spec, collection_id: str, path: str, text: str) -> str:
     return rev.resource_id
 
 
+def _add_indexing_binary(spec, collection_id: str, path: str) -> str:
+    """A just-uploaded binary doc as the upload fast-path leaves it: no extracted
+    ``text`` yet and ``status="indexing"`` (the index job hasn't run)."""
+    rm = spec.get_resource_manager(SourceDoc)
+    rev = rm.create(
+        SourceDoc(
+            collection_id=collection_id,
+            path=path,
+            content=Binary(data=b"\x89PNG\r\n" + b"\xff\x00" * 64, content_type="image/png"),
+            text=None,
+            status="indexing",
+        ),
+        resource_id=encode_doc_id(collection_id, path),
+    )
+    return rev.resource_id
+
+
+def _coll(spec, cid: str) -> Collection:
+    d = spec.get_resource_manager(Collection).get(cid).data
+    assert isinstance(d, Collection)  # rm is Collection-typed; narrows Struct|Unset for ty
+    return d
+
+
 def _add_wiki(spec, collection_id: str, path: str, text: str) -> str:
     """An LLM wiki page with its real ``_rid`` id — what the picker submits when a
     reviewer picks a wiki page as a card-gen source (#415)."""
@@ -151,6 +174,46 @@ async def test_generates_a_new_card_proposal_from_a_document():
     assert p.provenance[0].path == "spec.md"
     assert p.provenance[0].doc_id == doc
     assert p.provenance[0].snippet == "The reflow zone uses RZ3 heating."
+
+
+async def test_a_still_indexing_doc_is_skipped_not_digested_to_nothing():
+    """A binary doc still ``indexing`` has no extracted text yet, so digesting it
+    now would silently produce 0 cards (the drafter sees empty text). The run
+    SKIPS it — deferring to the auto-digest hook that fires when it finishes
+    indexing — instead of drafting from nothing. The ready doc still generates."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    ready = _add_source(spec, cid, "ready.md", "RZ3 is the third reflow zone")
+    pending = _add_indexing_binary(spec, cid, "pending.png")
+    drafter = _FakeDrafter({"ready.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [ready, pending])
+    await coord.aclose()
+
+    assert coord.status(jid) == TaskStatus.COMPLETED  # the run still closes cleanly
+    assert drafter.seen == ["ready.md"]  # the still-indexing doc was never digested
+    assert [p.keys for p in coord.proposals(jid).proposals] == [["RZ3"]]  # only the ready doc
+
+
+async def test_manual_enqueue_opts_the_collection_into_auto_digest():
+    """The manual 'generate cards' action opts the collection into ``auto_digest``,
+    so a doc still indexing at click-time gets drafted by the index-completion hook
+    (#377) once it's ready — reusing the existing hook, no pending-intent store. A
+    plain enqueue (e.g. the hook's own) must NOT touch the flag."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3")
+    assert _coll(spec, cid).auto_digest is False  # default off
+
+    coord = CardGenCoordinator(spec, _FakeDrafter({}))
+    coord.enqueue(cid, [doc], ensure_auto_digest=True)
+    assert _coll(spec, cid).auto_digest is True  # the manual action opted in
+
+    # a plain enqueue leaves config untouched (idempotent-safe for the hook path)
+    rm = spec.get_resource_manager(Collection)
+    rm.update(cid, msgspec.structs.replace(_coll(spec, cid), auto_digest=False))
+    coord.enqueue(cid, [doc])
+    assert _coll(spec, cid).auto_digest is False
 
 
 def _cards(spec, cid: str):

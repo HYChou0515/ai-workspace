@@ -96,6 +96,18 @@ describe("AutoGenerateCards picker (#415)", () => {
     expect(checkbox("b.md").checked).toBe(true);
   });
 
+  it("does not show a still-indexing note when every picked document is ready", async () => {
+    await mockKbApi.uploadDocument("col-1", new File(["x"], "reflow.md")); // mock docs are ready
+    const user = userEvent.setup();
+    renderModal();
+    await screen.findByRole("checkbox", { name: "reflow.md" });
+
+    await user.click(screen.getByRole("button", { name: "全選" }));
+    await user.click(screen.getByRole("button", { name: /自動生成/ }));
+    await screen.findByTestId("cardgen-started");
+    expect(screen.queryByTestId("cardgen-pending")).not.toBeInTheDocument();
+  });
+
   it("disables generate until at least one source is picked", async () => {
     await mockKbApi.uploadDocument("col-1", new File(["x"], "a.md"));
     renderModal();
