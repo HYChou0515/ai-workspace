@@ -134,7 +134,7 @@ def register_workflow_routes(
         from ..apps.profiles import load_profile_workflow
         from ..workflow.workspace_store import load_workspace_workflow
 
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_meta")
         profile = locator.profile_of(investigation_id)
         manifest = load_profile_workflow(slug, profile, workflow_id)
         if manifest is None and workflow_id:  # fall through to a workspace-authored one
@@ -155,7 +155,7 @@ def register_workflow_routes(
         skipped (``save_workflow`` is the loud guard)."""
         from ..workflow.workspace_store import workspace_workflow_metas
 
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_meta")
         metas = await workspace_workflow_metas(files, investigation_id)
         return [msgspec.to_builtins(m) for m in metas]
 
@@ -213,6 +213,9 @@ def register_workflow_routes(
         starts. A path that escapes the workspace root aborts the whole call (400) so
         nothing is half-written and no run begins. With no body the call is the plain
         trigger the FE makes — the upload path is skipped entirely."""
+        # #306 PR3: launching a workflow drives the agent + stages input files →
+        # gate on `converse` BEFORE the upload writes anything.
+        locator.require_access(slug, item_id, "converse")
         workflow_id, staged = await _staged_run_uploads(request, workflow_id)
         investigation_id, profile, manifest = await _workflow_manifest_or_404(
             slug, item_id, workflow_id
@@ -282,7 +285,7 @@ def register_workflow_routes(
     @app.get("/a/{slug}/items/{item_id}/runs")
     async def list_workflow_runs(slug: str, item_id: str) -> list[dict]:
         """#100: the item's run history (newest first), for the run-list view."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
         rm = spec.get_resource_manager(WorkflowRun)
         out: list[dict] = []
         for r in rm.list_resources((QB["item_id"] == investigation_id).build()):
@@ -308,6 +311,7 @@ def register_workflow_routes(
         Registered before ``/runs/{run_id}`` so ``preview`` isn't read as a run id."""
         from ..workflow.discovery import load_preflight_callable
 
+        locator.require_access(slug, item_id, "read_chat")  # #306 PR3: reads the run/workspace
         investigation_id, profile, manifest = await _workflow_manifest_or_404(
             slug, item_id, workflow_id
         )
@@ -350,7 +354,7 @@ def register_workflow_routes(
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}")
     async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:
         """#100 (manual §14): poll a run — status + result + per-phase progress."""
-        locator.require_item(slug, item_id)
+        locator.require_access(slug, item_id, "read_chat")
         rm = spec.get_resource_manager(WorkflowRun)
         try:
             data = rm.get(run_id).data
@@ -364,7 +368,7 @@ def register_workflow_routes(
         """#100 / P8 (manual §3, §14): the run's live SSE — its WORKFLOW CHAT's stream
         (agent events + phase/step events overlaid). Falls back to the item's broadcast
         stream when the run / its chat can't be resolved (defensive)."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_chat")
         key = investigation_id
         try:
             run = spec.get_resource_manager(WorkflowRun).get(run_id).data
@@ -381,7 +385,7 @@ def register_workflow_routes(
     async def cancel_workflow_run(slug: str, item_id: str, run_id: str) -> Response:
         """#100 (manual §10): Stop a run — it goes terminal (cancelled) and the item
         opens to interactive use. Idempotent (a no-op when nothing is running)."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "converse")
         logger.info(
             "workflow_routes: cancel requested for run %s on item %s", run_id, investigation_id
         )
@@ -397,6 +401,7 @@ def register_workflow_routes(
     ) -> dict:
         """#100 (manual §10): answer a `human_gate` — records the decision artifact
         and resumes the run (completed steps skip; the gate reads the decision)."""
+        locator.require_access(slug, item_id, "converse")  # #306 PR3: resumes/drives the run
         investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
         try:
             await workflow_orchestrator.decide(
@@ -432,6 +437,7 @@ def register_workflow_routes(
         then runs the read-only steerer in the background — it streams into the run's
         chat and, when it has a plan, suspends the run `awaiting_human` with
         `pending_steer` set for the human to confirm (the FE refetches the run)."""
+        locator.require_access(slug, item_id, "converse")  # #306 PR3: stops + steers the run
         investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
         try:
             await workflow_orchestrator.steer(
@@ -459,6 +465,7 @@ def register_workflow_routes(
         """#288 (manual §10): resolve a pending steer plan — approve to apply the edits +
         invalidate the steps and resume the same run (the valid prefix skips, §9), or
         reject to discard it (the run returns to its gate or to a stopped state)."""
+        locator.require_access(slug, item_id, "converse")  # #306 PR3: resolves the steer plan
         investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
         try:
             await workflow_orchestrator.confirm_steer(
@@ -484,7 +491,7 @@ def register_workflow_routes(
         """#429 P11 (D2d): the records each of this app's event triggers has NOT fired for on
         this item — the watermark's discoverable lag (a run missed when a pod died mid-dispatch,
         or a trigger added after the write). Read-only, so it doubles as the backfill dry-run."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "read_meta")
         triggers = [t for t in event_dispatcher.event_triggers() if t.slug == slug]
         lag = await find_trigger_lag(
             investigation_id,
@@ -499,7 +506,7 @@ def register_workflow_routes(
         """#429 P11 (D2d): re-dispatch every record its trigger's watermark is behind on,
         catching the missed runs up. Idempotent — the dispatcher's once-per-version gate means
         a version a live dispatch already handled is a no-op, so it's safe to re-run."""
-        investigation_id = locator.require_item(slug, item_id)
+        investigation_id = locator.require_access(slug, item_id, "converse")
         triggers = [t for t in event_dispatcher.event_triggers() if t.slug == slug]
         report = await backfill_trigger_lag(
             investigation_id,

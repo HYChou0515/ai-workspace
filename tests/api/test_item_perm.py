@@ -291,3 +291,59 @@ def test_mirror_stamped_on_default_chat_matches_item(tmp_path=None):
     }
     # unused import guard
     assert msgspec is not None and QB is not None and dt is not None
+
+
+# ── workflow routes are gated too (#306 PR3): launch/control → converse, reads →
+#    read_chat — a non-member can't drive a private item's workflows ──────────────
+
+
+def _participant() -> Permission:
+    """What the members→grants sync produces: read_meta + read_chat + read_content
+    + converse for user:carol on a restricted item."""
+    return Permission(
+        visibility="restricted",
+        read_meta=["user:carol"],
+        read_chat=["user:carol"],
+        read_content=["user:carol"],
+        converse=["user:carol"],
+    )
+
+
+def test_launching_a_workflow_needs_converse():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=_participant())
+
+    # a stranger can't even see it → 404 (no existence leak)
+    holder["id"] = "mallory"
+    assert client.post(_wp(iid, "/run")).status_code == 404
+
+    # carol is a Participant → passes the converse gate (422/400 for the missing
+    # workflow def is fine; the point is it is NOT blocked at 403/404)
+    holder["id"] = "carol"
+    assert client.post(_wp(iid, "/run")).status_code not in (403, 404)
+
+    # the owner is never blocked
+    holder["id"] = "bob"
+    assert client.post(_wp(iid, "/run")).status_code not in (403, 404)
+
+
+def test_read_meta_only_cannot_launch_or_list_workflow_runs():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    # dana may SEE the item (read_meta) but has neither read_chat nor converse
+    iid = _item(
+        spec, by="bob", permission=Permission(visibility="restricted", read_meta=["user:dana"])
+    )
+
+    holder["id"] = "dana"
+    assert client.post(_wp(iid, "/run")).status_code == 403  # no converse
+    assert client.get(_wp(iid, "/runs")).status_code == 403  # no read_chat
+
+
+def test_a_participant_can_list_workflow_runs():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    iid = _item(spec, by="bob", permission=_participant())
+    holder["id"] = "carol"
+    assert client.get(_wp(iid, "/runs")).status_code == 200  # read_chat granted
