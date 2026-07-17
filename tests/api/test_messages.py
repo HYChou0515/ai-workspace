@@ -772,7 +772,7 @@ def test_export_carries_item_metadata_when_the_resource_exists():
     ).json()["resource_id"]
 
     meta = client.get(f"/a/rca/items/{item_id}/export").json()["investigation"]
-    assert meta["title"] == "Reflow voids" and meta["owner"] == "default-user"  # owner from auth
+    assert meta["title"] == "Reflow voids" and meta["owner"] == "u"  # owner from auth
     assert meta["severity"] == "P1" and meta["product"] == "PanelX"
 
 
