@@ -430,6 +430,26 @@ export interface ApiClient {
     id: string,
     data: Record<string, unknown>,
   ): Promise<{ resource_id: string }>;
+  /** PUT /a/{slug}/items/{id}/permission — set an item's access control (#306 PR3).
+   * `perm` is the full desired state; returns the newly-notified user ids. */
+  setItemPermission(
+    slug: string,
+    itemId: string,
+    perm: import("../lib/itemPermission").ItemPermission,
+  ): Promise<{ visibility: string; notified: string[] }>;
+  /** PUT /a/{slug}/items/{id}/members — set the member roster; the backend syncs
+   * each member to a Participant grant (grill D7). Returns notified user ids. */
+  setItemMembers(
+    slug: string,
+    itemId: string,
+    members: string[],
+  ): Promise<{ visibility: string; notified: string[] }>;
+  /** POST /a/{slug}/items/{id}/request-access — ask the item owner for access
+   * (the 🔒 locked list row's action). Deduped server-side. */
+  requestItemAccess(
+    slug: string,
+    itemId: string,
+  ): Promise<{ item_id: string; requested: boolean; already_readable: boolean }>;
   /** GET /activity — recent-activity feed (newest first). */
   listActivity(): Promise<ActivityEntry[]>;
 

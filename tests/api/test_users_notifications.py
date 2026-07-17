@@ -83,9 +83,12 @@ def test_users_dedupes_by_id_even_if_the_directory_repeats_a_person():
 
 def _make_item(c: TestClient, holder: dict[str, str], owner: str, members: list[str]) -> str:
     holder["id"] = owner  # the new create takes its owner from auth
+    # Public so a third party may drive a status change — these tests exercise the
+    # notification fan-out, not access control (that's test_item_perm.py); the new
+    # private default would otherwise 404 the actor before any notification is sent.
     return c.post(
         "/a/rca/items",
-        json={"title": "Reflow drift", "members": members},
+        json={"title": "Reflow drift", "members": members, "permission": {"visibility": "public"}},
     ).json()["resource_id"]
 
 

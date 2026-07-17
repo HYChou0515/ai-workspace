@@ -221,6 +221,34 @@ export const realApi: ApiClient = {
     return json<{ resource_id: string }>(resp);
   },
 
+  async setItemPermission(slug, itemId, perm) {
+    const resp = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/permission`,
+      { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(perm) },
+    );
+    return json<{ visibility: string; notified: string[] }>(resp);
+  },
+
+  async setItemMembers(slug, itemId, members) {
+    const resp = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/members`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ members }),
+      },
+    );
+    return json<{ visibility: string; notified: string[] }>(resp);
+  },
+
+  async requestItemAccess(slug, itemId) {
+    const resp = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/request-access`,
+      { method: "POST" },
+    );
+    return json<{ item_id: string; requested: boolean; already_readable: boolean }>(resp);
+  },
+
   async listActivity() {
     try {
       return await json<ActivityEntry[]>(await apiFetch("/activity"));

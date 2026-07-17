@@ -25,6 +25,7 @@ import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
 import { Link, Outlet, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
+import { api } from "../api";
 import type { AppItem, FieldSpec } from "../api/types";
 import { summarize } from "../api/types";
 import { AppIcon } from "../components/AppIcon";
@@ -43,6 +44,7 @@ import { useOnboarding } from "../hooks/useOnboarding";
 import { usePinned, useRecentlyViewed } from "../hooks/usePins";
 import { useAppItems, useAppManifest } from "../hooks/useResources";
 import { useUser, useUsers } from "../hooks/useUsers";
+import { isDiscoverableOnly, parseItemPermission } from "../lib/itemPermission";
 import { pxToRem } from "../lib/pxToRem";
 
 const DAY = 86_400_000;
@@ -458,6 +460,7 @@ export function AppDashboard() {
                 key={it.resource_id}
                 slug={slug}
                 item={it}
+                me={me}
                 statusSpec={fieldSpec(statusField)}
                 statusTone={toneOf(statusField, it[statusField])}
                 sevSpec={fieldSpec(sevField)}
@@ -579,9 +582,39 @@ function FilterSelect({
   );
 }
 
+// Permission-disclosure: a locked item's title — 🔒 + plain (non-link) title + a
+// one-shot "request access" button that notifies the item owner (deduped BE-side).
+function ItemLockedTitle({ slug, itemId, title }: { slug: string; itemId: string; title: string }) {
+  const t = useT();
+  const [requested, setRequested] = useState(false);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+      <span aria-hidden>🔒</span>
+      <span
+        title={title}
+        style={{ fontWeight: 600, fontSize: pxToRem(14), color: "var(--text-paper-d)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+      >
+        {title}
+      </span>
+      <button
+        type="button"
+        className="btn btn--xs"
+        disabled={requested}
+        onClick={() => {
+          setRequested(true);
+          void api.requestItemAccess(slug, itemId);
+        }}
+      >
+        {t(requested ? "entry.withheld.requested" : "entry.withheld.requestAccess")}
+      </button>
+    </div>
+  );
+}
+
 function ItemRow({
   slug,
   item,
+  me,
   statusSpec,
   statusTone,
   sevSpec,
@@ -595,6 +628,7 @@ function ItemRow({
 }: {
   slug: string;
   item: AppItem;
+  me: string;
   statusSpec?: FieldSpec;
   statusTone: ChipTone;
   sevSpec?: FieldSpec;
@@ -610,6 +644,10 @@ function ItemRow({
   const summary = typeof item.description === "string" ? summarize(item.description) : "";
   const topics = topicsOf(item);
   const statusVal = String(item[statusSpec?.name ?? "status"] ?? "");
+  // Permission-disclosure: an item the user may see-exist (read_meta) but not enter
+  // (read_chat). It stays in the list but is a locked row — no link in, a "request
+  // access" action instead. Owner-for-access is `created_by`, not the `owner` field.
+  const locked = isDiscoverableOnly(parseItemPermission(item.permission), me, item.created_by);
 
   return (
     <div role="row" style={{ display: "grid", gridTemplateColumns: GRID, padding: "14px 16px", alignItems: "center", gap: 10, borderBottom: last ? "none" : "1px solid var(--paper-3)" }}>
@@ -618,15 +656,20 @@ function ItemRow({
         aria-label={`${pinned ? "Unpin" : "Pin"} ${item.title}`}
         title={pinned ? "Unpin" : "Pin"}
         onClick={onTogglePin}
-        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, border: "none", background: "transparent", cursor: "pointer", color: pinned ? "var(--accent)" : "var(--text-paper-d2)" }}
+        disabled={locked}
+        style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 24, height: 24, border: "none", background: "transparent", cursor: locked ? "default" : "pointer", color: pinned ? "var(--accent)" : "var(--text-paper-d2)", opacity: locked ? 0.4 : 1 }}
       >
         <Icon name="pin" size={14} />
       </button>
 
       <div style={{ minWidth: 0 }}>
-        <Link to={`/a/${slug}/${encodeURIComponent(item.resource_id)}`} onClick={onOpen} style={{ color: "var(--text-paper)", textDecoration: "none", fontWeight: 600, fontSize: pxToRem(14) }}>
-          {item.title}
-        </Link>
+        {locked ? (
+          <ItemLockedTitle slug={slug} itemId={item.resource_id} title={item.title} />
+        ) : (
+          <Link to={`/a/${slug}/${encodeURIComponent(item.resource_id)}`} onClick={onOpen} style={{ color: "var(--text-paper)", textDecoration: "none", fontWeight: 600, fontSize: pxToRem(14) }}>
+            {item.title}
+          </Link>
+        )}
         {summary && (
           <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{summary}</div>
         )}

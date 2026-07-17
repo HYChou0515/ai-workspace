@@ -157,3 +157,14 @@ class Conversation(Struct):
     `created_time` (which advances on every update, so it can't order births). None on
     conversations written before multi-chat (manual §3) — they predate every stamped
     chat, so they remain the default."""
+
+    # #306 PR3: denormalized mirror of the owning item's read-visibility, so the
+    # Conversation's own access_scope can gate reading the thread on the item's
+    # `read_chat` WITHOUT a cross-resource join (the #303 SourceDoc pattern). The
+    # thread is served by the Conversation auto-CRUD, which the item's own scope
+    # never covers. Stamped at chat-create from the live item permission and
+    # re-pushed when the item's permission / members change. Defaults keep a
+    # pre-#306 (absent-cell) conversation PUBLIC via the scope's `isna()` clause.
+    item_visibility: str = "public"
+    item_read_chat: list[str] = field(default_factory=list)
+    item_created_by: str = ""
