@@ -117,10 +117,10 @@ def test_converse_grant_opens_sending():
 
 def _conversations_for(client: TestClient, iid: str) -> list:
     # the FE reads the thread via the Conversation auto-CRUD, filtered by item_id
-    resp = client.get(
-        "/conversation",
-        params={"data_conditions": '[{"field_path":"item_id","operator":"eq","value":"%s"}]' % iid},
-    )
+    import json
+
+    cond = json.dumps([{"field_path": "item_id", "operator": "eq", "value": iid}])
+    resp = client.get("/conversation", params={"data_conditions": cond})
     return resp.json() if resp.status_code == 200 else []
 
 
