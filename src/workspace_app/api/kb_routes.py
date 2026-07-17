@@ -134,6 +134,9 @@ class CollectionOut(BaseModel):
     # Issue #50: retrieval pipeline toggles.
     use_rag: bool = True
     use_wiki: bool = False
+    # Global-collection concept: part of the AI's baseline scope. The picker
+    # badges + pre-checks globals; the settings page shows the superuser toggle.
+    is_global: bool = False
     # Issue #90: per-collection wiki guidance, so the editor can prefill the
     # current values. Blank ⇒ the bundled wiki prompt is used verbatim.
     wiki_maintainer_guidance: str = ""
@@ -607,6 +610,7 @@ def register_kb_routes(
             sync_interval_hours=data.sync_interval_hours,
             use_rag=data.use_rag,
             use_wiki=data.use_wiki,
+            is_global=data.is_global,
             wiki_maintainer_guidance=data.wiki_maintainer_guidance,
             wiki_reader_guidance=data.wiki_reader_guidance,
             quality_rubric=data.quality_rubric,
