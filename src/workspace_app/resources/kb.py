@@ -713,7 +713,11 @@ class KbChat(Struct):  # → resource "kb-chat"
     "Shared with me" and can read it, but only the owner can send."""
 
     title: str = ""  # #357: "" = unnamed → FE labels it by name_hint (first msg)
-    collection_ids: list[str] = field(default_factory=list)  # plain ids
+    collection_ids: list[str] = field(default_factory=list)  # plain ids (specified)
+    # Global-collection concept (grill D2 mode 3): global collections the picker
+    # un-checked — removed from the always-in-scope global baseline for this chat.
+    # Effective scope = (collection_ids ∪ global) \ excluded_collection_ids.
+    excluded_collection_ids: list[str] = field(default_factory=list)
     messages: list[KbMessage] = field(default_factory=list)
     # #304: LEGACY read-only share list. Superseded by `permission` (below) — new
     # shares write `permission.read_chat`; the migration backfills `permission`

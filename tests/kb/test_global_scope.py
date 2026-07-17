@@ -86,3 +86,34 @@ def test_excluding_a_specified_collection_removes_it_too():
     spec = make_spec()
     c = _coll(spec, name="c", is_global=False)
     assert resolve_effective_scope(spec, [c], excluded=[c]) == []
+
+
+# ── collections.json exclude parsing (grill D2 mode 3, topic-hub path) ──────────
+
+
+def test_excluded_ids_from_json_reads_the_exclude_flag():
+    from workspace_app.kb.collections import (
+        collection_ids_from_json,
+        collection_tiers_from_json,
+        excluded_ids_from_json,
+    )
+
+    data = [
+        {"id": "a", "name": "A"},
+        {"id": "g", "name": "Global", "exclude": True},
+        {"id": "b", "name": "B", "tier": 10},
+    ]
+    # includes skip the exclude entry
+    assert collection_ids_from_json(data) == ["a", "b"]
+    # tiers skip the exclude entry too (it is not a tier member)
+    assert collection_tiers_from_json(data) == [["a"], ["b"]]
+    # the exclude entry is surfaced separately
+    assert excluded_ids_from_json(data) == ["g"]
+
+
+def test_excluded_ids_from_json_tolerates_junk():
+    from workspace_app.kb.collections import excluded_ids_from_json
+
+    assert excluded_ids_from_json("not-a-list") == []
+    assert excluded_ids_from_json([{"exclude": True}, {"id": "", "exclude": True}, 3]) == []
+    assert excluded_ids_from_json([{"id": "x"}]) == []  # exclude absent ⇒ not excluded

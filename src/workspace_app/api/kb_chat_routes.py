@@ -254,6 +254,8 @@ class _ChatBody(BaseModel):
     # generic label. Manual rename sets a real title.
     title: str = ""
     collection_ids: list[str] = []
+    # Global-collection concept: globals the picker un-checked (removed from scope).
+    excluded_collection_ids: list[str] = []
 
 
 class KbChatSummary(BaseModel):
@@ -509,6 +511,7 @@ def register_kb_chat_routes(
             KbChat(
                 title=body.title,
                 collection_ids=body.collection_ids,
+                excluded_collection_ids=body.excluded_collection_ids,
                 permission=Permission(visibility="private"),
             )
         )
@@ -543,6 +546,7 @@ def register_kb_chat_routes(
             "resource_id": chat_id,
             "title": data.title,
             "collection_ids": data.collection_ids,
+            "excluded_collection_ids": data.excluded_collection_ids,
             "messages": [_message_dict(m) for m in data.messages],
             "owner": owner,
             "shared_with": _shared_user_ids(data, owner),
@@ -704,7 +708,9 @@ def register_kb_chat_routes(
         # global set and drops excluded ids (unspecified ⇒ global alone) BEFORE the
         # permission partition — so a KB chat with no collections picked searches the
         # global baseline, and a picked set adds global on top.
-        _effective = resolve_effective_scope(spec, chat.collection_ids)
+        _effective = resolve_effective_scope(
+            spec, chat.collection_ids, excluded=chat.excluded_collection_ids
+        )
         _disc = partition_collection_disclosure(
             spec, _effective, get_user_id(), superusers=superusers
         )

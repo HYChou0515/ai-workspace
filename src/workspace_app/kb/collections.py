@@ -38,7 +38,24 @@ def collection_ids_from_json(data: Any) -> list[str]:
     if not isinstance(data, list):
         return out
     for entry in data:
-        if isinstance(entry, dict):
+        # Global-collection concept: an ``exclude: true`` entry is a NEGATIVE marker
+        # (remove this global from scope), not a positive include — skip it here.
+        if isinstance(entry, dict) and entry.get("exclude") is not True:
+            cid = entry.get("id")
+            if isinstance(cid, str) and cid:
+                out.append(cid)
+    return out
+
+
+def excluded_ids_from_json(data: Any) -> list[str]:
+    """The ids of ``collections.json`` entries flagged ``exclude: true`` — global
+    collections the item wants OUT of scope (grill D2 mode 3). Same tolerance as the
+    include parsers (malformed entries skipped); a file with no excludes yields []."""
+    out: list[str] = []
+    if not isinstance(data, list):
+        return out
+    for entry in data:
+        if isinstance(entry, dict) and entry.get("exclude") is True:
             cid = entry.get("id")
             if isinstance(cid, str) and cid:
                 out.append(cid)
@@ -62,6 +79,8 @@ def collection_tiers_from_json(data: Any) -> list[list[str]]:
         return []
     for entry in data:
         if not isinstance(entry, dict):
+            continue
+        if entry.get("exclude") is True:  # a negative marker, not a tier member
             continue
         cid = entry.get("id")
         if not (isinstance(cid, str) and cid):

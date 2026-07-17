@@ -261,3 +261,15 @@ async def test_infer_modules_does_not_union_global():
     )
     await bridge.run("infer_modules", "q", collection_ids=[specified])
     assert runner.seen_ids == [specified]  # no global union
+
+
+async def test_kb_chat_scope_drops_an_excluded_global():
+    # grill D2 mode 3: global \ excluded — the effective scope removes an
+    # explicitly-excluded global from the baseline.
+    spec = make_spec()
+    holder = {"id": "alice"}
+    g1 = _global_collection(spec, by="bob", name="g1")
+    g2 = _global_collection(spec, by="bob", name="g2")
+    runner = _CapturingRunner()
+    await _bridge(spec, runner, holder).run("kb_chat", "q", excluded_collection_ids=[g1])
+    assert runner.seen_ids == [g2]  # g1 excluded from the global baseline
