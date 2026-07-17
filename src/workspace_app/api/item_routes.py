@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from collections.abc import Callable
 
 import msgspec
@@ -141,19 +142,23 @@ def register_item_routes(
             item = msgspec.convert(payload, type=model)
         except msgspec.ValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        rev = spec.get_resource_manager(model).create(item)
-        # The item ROW now exists. Seeding its starter files + collections + the
-        # activity entry are BEST-EFFORT: if any of them raises, the create must still
-        # succeed (return the id) rather than 500 and strand the user on a frozen
-        # modal — the item was created, so the FE should navigate into it, and the
-        # workspace just starts emptier. The failure is logged (with the id) so an
-        # operator can still see it. Without this, a post-create hiccup created the
-        # item but the client saw an error → "pressed Create, nothing happened".
+        rm = spec.get_resource_manager(model)
+        # Seed the durable files BEFORE the WorkItem row exists, keyed on the id it
+        # WILL have (pre-minted in specstar's own `{resource_name}:{uuid}` form).
+        # Otherwise the item is discoverable — and its workspace warmable — while
+        # its files are still being written one-by-one; a sandbox warm that lands in
+        # that window restores a PARTIAL set and, because the facade serves any live
+        # sandbox regardless of readiness, serves that partial set for as long as the
+        # sandbox stays warm (the "PM item only has one file" data bug). Creating the
+        # row LAST closes the window: durable is complete the instant the item
+        # appears, so every warm restores the full set.
+        item_id = f"{rm.resource_name}:{uuid.uuid4()}"
+        # Seeding is BEST-EFFORT: if it raises, the item is still created (it just
+        # starts emptier) rather than 500 and strand the user on a frozen modal. The
+        # failure is logged (with the id) so an operator can see it.
         seeded: list[str] = []
         try:
-            seeded = await seed_item(
-                filestore, rev.resource_id, slug, item.profile, case_from_item(item)
-            )
+            seeded = await seed_item(filestore, item_id, slug, item.profile, case_from_item(item))
             # #280: seed the item's collections.json from the profile's DEFAULT
             # collection set (declared by name + tier), resolving names → live ids. The
             # picker / Monaco then edit it. Unresolvable names are skipped; an
@@ -165,17 +170,20 @@ def register_item_routes(
             rows = resolve_profile_collections(spec, declared)
             if rows:
                 await filestore.write(
-                    rev.resource_id, "/collections.json", json.dumps(rows, indent=2).encode()
+                    item_id, "/collections.json", json.dumps(rows, indent=2).encode()
                 )
                 seeded = sorted({*seeded, "/collections.json"})
         except Exception:  # noqa: BLE001 — best-effort seeding must not sink the create
             _LOGGER.exception(
-                "create_app_item: post-create seeding failed for %s (app=%s profile=%s) — "
-                "the item was created; returning it so the client still navigates",
-                rev.resource_id,
+                "create_app_item: pre-create seeding failed for %s (app=%s profile=%s) — "
+                "creating the item anyway; it just starts emptier",
+                item_id,
                 slug,
                 item.profile,
             )
+        # Durable is now complete → create the row with the pre-minted id, making the
+        # item discoverable (and warmable) ONLY after it is fully seeded.
+        rev = rm.create(item, resource_id=item_id)
         try:
             activity.record("item_created", f"Created “{item.title}”", {"item_id": rev.resource_id})
         except Exception:  # noqa: BLE001 — the activity log is not worth failing a create over
