@@ -137,6 +137,9 @@ class CollectionOut(BaseModel):
     # Global-collection concept: part of the AI's baseline scope. The picker
     # badges + pre-checks globals; the settings page shows the superuser toggle.
     is_global: bool = False
+    # #377: auto-generate context cards (+ raise clarification questions) for every
+    # doc as it finishes indexing. User-owned; the settings panel toggles it.
+    auto_digest: bool = False
     # Issue #90: per-collection wiki guidance, so the editor can prefill the
     # current values. Blank ⇒ the bundled wiki prompt is used verbatim.
     wiki_maintainer_guidance: str = ""
@@ -611,6 +614,7 @@ def register_kb_routes(
             use_rag=data.use_rag,
             use_wiki=data.use_wiki,
             is_global=data.is_global,
+            auto_digest=data.auto_digest,
             wiki_maintainer_guidance=data.wiki_maintainer_guidance,
             wiki_reader_guidance=data.wiki_reader_guidance,
             quality_rubric=data.quality_rubric,

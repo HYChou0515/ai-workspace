@@ -135,6 +135,10 @@ def test_patch_can_set_auto_digest():
 
     assert client.patch(f"/collection/{cid}", json={"auto_digest": True}).status_code == 200
     assert client.get(f"/collection/{cid}").json()["data"]["auto_digest"] is True
+    # …and it surfaces in the /kb/collections list (CollectionOut) the FE reads to
+    # reflect the toggle — guards against a pydantic response-model field drop.
+    row = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert row["auto_digest"] is True
 
 
 def test_patch_cannot_rewire_permission_without_change_permission():
