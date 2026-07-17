@@ -1,6 +1,7 @@
-"""ITokenService — maps a user id to that user's API token for the external
-(LLM) system. V1 is behaviour-preserving: it hands back the system token for
-everyone, so the seam exists to be swapped for a real per-user impl later.
+"""ITokenService — resolves the api_key to use for one LLM endpoint on a user's
+behalf. There is no universal system key (each preset configures its own), so the
+V1 PassthroughTokenService returns each endpoint's own key unchanged; a real impl
+returns the user's personal token instead, optionally behind a per-user TTL cache.
 """
 
 import pytest
@@ -8,41 +9,43 @@ import pytest
 from workspace_app.tokens import (
     CachingTokenService,
     ITokenService,
-    SystemTokenService,
+    PassthroughTokenService,
 )
 
 
-async def test_system_token_service_returns_the_system_token_for_any_user():
-    svc = SystemTokenService("sys-key")
+async def test_passthrough_returns_the_current_key_unchanged_for_any_user():
+    svc = PassthroughTokenService()
     assert isinstance(svc, ITokenService)
-    # v1: the user id is ignored — everyone gets the one system token, so
-    # external behaviour is unchanged from "one baked api_key".
-    assert await svc.get_token("alice") == "sys-key"
-    assert await svc.get_token("bob") == "sys-key"
+    # v1: identity — every preset's own key is used, untouched, so external
+    # behaviour is unchanged. A None key (Ollama / no auth) stays None.
+    assert await svc.get_token("alice", "preset-a-key") == "preset-a-key"
+    assert await svc.get_token("bob", "preset-b-key") == "preset-b-key"
+    assert await svc.get_token("alice", None) is None
 
 
 class _CountingSource(ITokenService):
-    """A source that returns a fresh, per-user-numbered token each call, so a
-    cache hit (no re-fetch) is observable in the returned value + the call count."""
+    """A real-style source: the token depends only on the user (it ignores
+    current_key), and is numbered so a cache hit is observable."""
 
     def __init__(self) -> None:
         self.calls: dict[str, int] = {}
 
-    async def get_token(self, user_id: str) -> str:
+    async def get_token(self, user_id: str, current_key: str | None) -> str | None:
         self.calls[user_id] = self.calls.get(user_id, 0) + 1
         return f"tok-{user_id}-{self.calls[user_id]}"
 
 
-async def test_caching_service_caches_per_user_within_ttl():
+async def test_caching_service_caches_per_user_ignoring_current_key():
     now = {"t": 0.0}
     src = _CountingSource()
     svc = CachingTokenService(src, ttl_seconds=100.0, _now=lambda: now["t"])
-    assert await svc.get_token("alice") == "tok-alice-1"
-    now["t"] = 99.0  # still within the 100s TTL
-    assert await svc.get_token("alice") == "tok-alice-1"  # cache hit, no re-fetch
+    assert await svc.get_token("alice", "k1") == "tok-alice-1"
+    now["t"] = 99.0
+    # cached by USER — a different endpoint (current_key) still gets the cached
+    # per-user token, no re-fetch (a real user token is the same for every endpoint)
+    assert await svc.get_token("alice", "k2") == "tok-alice-1"
     assert src.calls["alice"] == 1
-    # a different user is a separate cache entry
-    assert await svc.get_token("bob") == "tok-bob-1"
+    assert await svc.get_token("bob", "k1") == "tok-bob-1"
     assert src.calls == {"alice": 1, "bob": 1}
 
 
@@ -50,9 +53,9 @@ async def test_caching_service_refetches_after_ttl_expiry():
     now = {"t": 0.0}
     src = _CountingSource()
     svc = CachingTokenService(src, ttl_seconds=100.0, _now=lambda: now["t"])
-    assert await svc.get_token("alice") == "tok-alice-1"
+    assert await svc.get_token("alice", "k") == "tok-alice-1"
     now["t"] = 100.0  # at the TTL boundary the entry is stale → re-fetch
-    assert await svc.get_token("alice") == "tok-alice-2"
+    assert await svc.get_token("alice", "k") == "tok-alice-2"
     assert src.calls["alice"] == 2
 
 
@@ -61,7 +64,7 @@ async def test_caching_service_does_not_cache_a_failed_fetch():
         def __init__(self) -> None:
             self.n = 0
 
-        async def get_token(self, user_id: str) -> str:
+        async def get_token(self, user_id: str, current_key: str | None) -> str | None:
             self.n += 1
             if self.n == 1:
                 raise RuntimeError("external system down")
@@ -69,6 +72,6 @@ async def test_caching_service_does_not_cache_a_failed_fetch():
 
     svc = CachingTokenService(_FlakySource(), ttl_seconds=100.0)
     with pytest.raises(RuntimeError):
-        await svc.get_token("alice")
+        await svc.get_token("alice", "k")
     # the failure was not cached, so the next call retries and succeeds
-    assert await svc.get_token("alice") == "recovered"
+    assert await svc.get_token("alice", "k") == "recovered"
