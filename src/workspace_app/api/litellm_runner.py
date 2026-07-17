@@ -43,6 +43,7 @@ from ..agent.context import AgentToolContext
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
 from ..resources import AgentConfig
+from ..tokens import ITokenService
 from ..tooling.registry import PackageInfo, build_function_tools
 from ..users.labels import speaker_note
 from .events import (
@@ -260,6 +261,7 @@ def _agent_for(
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
     on_failover_switch: Callable[[str, str], None] | None = None,
+    resolve_key: Callable[[str | None], str | None] = lambda key: key,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
@@ -373,7 +375,9 @@ def _agent_for(
     # over the runner's constructor default — empty strings mean
     # "inherit from runner" so a single-endpoint deploy still works.
     eff_base_url = config.llm_base_url or base_url
-    eff_api_key = config.llm_api_key or api_key
+    # Per-user token seam: resolve the endpoint key on the speaker's behalf
+    # (identity when no user / no service — see LitellmAgentRunner._key_resolver).
+    eff_api_key = resolve_key(config.llm_api_key or api_key)
 
     def _build_model(
         model_id: str, b_url: str | None, a_key: str | None, timeout: float | None = None
@@ -426,7 +430,9 @@ def _agent_for(
         model: Model = FallbackModel(
             chain,
             cooldown_registry,
-            make_model=lambda e: _build_model(e.model, e.base_url, e.api_key, e.idle_s),
+            make_model=lambda e: _build_model(
+                e.model, e.base_url, resolve_key(e.api_key), e.idle_s
+            ),
             on_switch=on_switch,
         )
     else:
@@ -708,6 +714,7 @@ class LitellmAgentRunner:
         api_key: str | None = None,
         fallback_chains: FallbackChains | None = None,
         cooldown_registry: CooldownRegistry | None = None,
+        token_service: ITokenService | None = None,
     ) -> None:
         # #94: no runner-level default config. Every turn's config arrives on
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
@@ -718,9 +725,41 @@ class LitellmAgentRunner:
         # own provider env / Ollama defaults.
         self._base_url = base_url
         self._api_key = api_key
+        # Per-user token seam. There is no universal system key — each preset
+        # configures its own endpoint key — so the token service resolves PER
+        # ENDPOINT: given the speaker + the key that endpoint would otherwise use,
+        # it returns the key to actually use. V1 (PassthroughTokenService) returns
+        # it unchanged; a real user-keyed source swaps in later. None = no service
+        # wired → every key passes through untouched (behaviour unchanged).
+        self._token_service = token_service
         # #196 busy-aware failover (None when no preset declares fallbacks).
         self._fallback_chains = fallback_chains
         self._cooldown_registry = cooldown_registry
+
+    async def _key_resolver(self, ctx: AgentToolContext) -> Callable[[str | None], str | None]:
+        """A SYNC ``key -> key`` mapping for THIS turn's endpoints, resolved through
+        the token service on the speaker's behalf.
+
+        The token service is async but the models are built synchronously (a
+        fallback endpoint's model is built deep inside the SDK), so we pre-resolve
+        every key the turn can use — the primary ``config.llm_api_key or
+        self._api_key`` plus each fallback endpoint's ``e.api_key`` — into a map,
+        and hand ``_agent_for`` a sync lookup. No speaker or no service → identity
+        (every key unchanged), so a user-less turn is byte-for-byte as before."""
+        ts = self._token_service
+        speaker = ctx.speaker
+        config = ctx.agent_config
+        if ts is None or speaker is None or config is None:
+            return lambda key: key
+        eff_base_url = config.llm_base_url or self._base_url
+        raw_keys = {config.llm_api_key or self._api_key}
+        chain = (self._fallback_chains or {}).get((config.model, eff_base_url))
+        if chain is not None:
+            raw_keys.update(e.api_key for e in chain)
+        resolved: dict[str | None, str | None] = {}
+        for key in raw_keys:
+            resolved[key] = await ts.get_token(speaker.id, key)
+        return lambda key: resolved.get(key, key)
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         # #94: no silent fallback. Every turn must arrive with a resolved
@@ -835,6 +874,7 @@ class LitellmAgentRunner:
         ctx.on_restore_progress = lambda done, total: queue.put_nowait(
             RestoreProgress(done=done, total=total)
         )
+        resolve_key = await self._key_resolver(ctx)
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
@@ -847,6 +887,7 @@ class LitellmAgentRunner:
             fallback_chains=self._fallback_chains,
             cooldown_registry=self._cooldown_registry,
             on_failover_switch=_failover_emitter(queue),
+            resolve_key=resolve_key,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))
@@ -984,6 +1025,7 @@ class LitellmAgentRunner:
         recovery errors) straight up to ``run()`` which maps them as usual. The
         RepairingModel + args_recovery backstops still apply (``_agent_for``)."""
         assert ctx.agent_config is not None
+        resolve_key = await self._key_resolver(ctx)
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
@@ -995,6 +1037,7 @@ class LitellmAgentRunner:
             template_profile=ctx.template_profile,
             fallback_chains=self._fallback_chains,
             cooldown_registry=self._cooldown_registry,
+            resolve_key=resolve_key,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))

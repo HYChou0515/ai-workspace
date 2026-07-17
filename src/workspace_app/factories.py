@@ -64,6 +64,7 @@ from .sandbox.isolated_process import (
 from .sandbox.local_process import LocalProcessSandbox
 from .sandbox.mock import MockSandbox
 from .sandbox.protocol import Sandbox
+from .tokens import PassthroughTokenService
 
 __all__ = [
     "Settings",
@@ -356,6 +357,12 @@ def get_runner(settings: Settings) -> AgentRunner:
         chain = resolve_llm_chain(settings, RetrievalLlmRef(preset=name))
         if len(chain) >= 2:
             chains[(chain[0].model, chain[0].base_url)] = chain
+    # Per-user token seam (behaviour-preserving v1): each turn's per-endpoint key
+    # is resolved through a token service on the acting user's behalf. V1
+    # PassthroughTokenService returns every endpoint's own key unchanged (there is
+    # no universal system key — each preset configures its own); swap in a real
+    # user-keyed source later (behind CachingTokenService) without touching the
+    # runner.
     return LitellmAgentRunner(
         max_retries=settings.runner.max_retries,
         max_turns=settings.runner.max_turns,
@@ -363,6 +370,7 @@ def get_runner(settings: Settings) -> AgentRunner:
         api_key=settings.llm.api_key or None,
         fallback_chains=chains or None,
         cooldown_registry=get_cooldown_registry() if chains else None,
+        token_service=PassthroughTokenService(),
     )
 
 
