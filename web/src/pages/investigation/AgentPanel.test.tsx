@@ -443,3 +443,29 @@ describe("AgentPanel undo restores draft (#370)", () => {
     expect(composer.value).toBe("keep me");
   });
 });
+
+describe("AgentPanel — permission-disclosure readOnly composer", () => {
+  function renderReadOnly() {
+    return renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          readOnly
+          agent={stubAgent()}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+        />
+      </DialogProvider>,
+    );
+  }
+
+  it("disables the composer + send when the user lacks converse", () => {
+    renderReadOnly();
+    const composer = screen.getByPlaceholderText(/don't have permission to send/i);
+    expect(composer).toBeDisabled();
+    expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+  });
+});

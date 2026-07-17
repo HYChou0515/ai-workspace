@@ -67,6 +67,7 @@ type AgentChrome = {
 export function ItemChatShell({
   slug,
   itemId,
+  readOnly = false,
   profile,
   chatSwitcher,
   showCollections,
@@ -83,6 +84,9 @@ export function ItemChatShell({
 }: {
   slug: string;
   itemId: string;
+  /** Permission-disclosure: forwarded to the composer — true disables it (the
+   * user can read the thread but lacks `converse`). */
+  readOnly?: boolean;
   profile: string;
   /** #200: how prominent the switcher is. "auto" hides it until a 2nd chat
    * exists (single-chat-leaning); "always" surfaces it up front (Topic Hub). */
@@ -230,6 +234,7 @@ export function ItemChatShell({
           key={active.chat_id}
           slug={slug}
           itemId={itemId}
+          readOnly={readOnly}
           chat={active}
           workflows={workflows}
           // #200: when the bar is hidden the chat header carries the lone escape
@@ -259,6 +264,7 @@ export function ItemChatShell({
 function ItemChatPanel({
   slug,
   itemId,
+  readOnly = false,
   chat,
   workflows,
   onNewChat,
@@ -275,6 +281,7 @@ function ItemChatPanel({
 }: {
   slug: string;
   itemId: string;
+  readOnly?: boolean;
   chat: ItemChatSummary;
   workflows: WorkflowManifestDTO[];
   /** #200: the single-chat-leaning escape hatch — present only when the shell
@@ -408,6 +415,7 @@ function ItemChatPanel({
 
       <AgentPanel
         investigationId={itemId}
+        readOnly={readOnly}
         agent={agent}
         fill
         onNewChat={onNewChat}

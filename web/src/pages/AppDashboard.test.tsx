@@ -63,7 +63,7 @@ vi.mock("../hooks/useResources", () => ({
     agent: { picker: [] },
     default_profile: "default",
   })),
-  useAppItems: () => ({
+  useAppItems: vi.fn(() => ({
     items: [
       {
         resource_id: "rca-investigation/1",
@@ -85,7 +85,7 @@ vi.mock("../hooks/useResources", () => ({
       },
     ],
     isPending: false,
-  }),
+  })),
 }));
 
 function renderDashAt(entry: string, extra?: React.ReactNode) {
@@ -310,5 +310,39 @@ describe("AppDashboard", () => {
     cleanup();
     renderDashAt("/a/rca?topic=Reflow");
     expect(screen.getByRole("link", { name: /Oven drift/ })).toBeInTheDocument();
+  });
+});
+
+describe("AppDashboard — permission-disclosure locked item (grill D4/D5)", () => {
+  it("renders a read_meta-only item as a 🔒 locked row with request-access, no link", async () => {
+    const { api } = await import("../api");
+    const { useAppItems } = await import("../hooks/useResources");
+    const reqSpy = vi
+      .spyOn(api, "requestItemAccess")
+      .mockResolvedValue({ item_id: "rca-investigation/9", requested: true, already_readable: false });
+    vi.mocked(useAppItems).mockReturnValue({
+      items: [
+        {
+          resource_id: "rca-investigation/9",
+          title: "Locked case",
+          owner: "someone-else",
+          created_by: "someone-else",
+          created_time: "",
+          permission: { visibility: "restricted", read_meta: ["user:default-user"], read_chat: [] },
+        } as never,
+      ],
+      isPending: false,
+    } as never);
+
+    renderDash();
+
+    // the title is present but NOT a link into the workspace
+    const title = screen.getByText("Locked case");
+    expect(title.closest("a")).toBeNull();
+    expect(screen.getByText("🔒")).toBeInTheDocument();
+
+    const btn = screen.getByRole("button", { name: /申請存取|Request access/ });
+    fireEvent.click(btn);
+    expect(reqSpy).toHaveBeenCalledWith("rca", "rca-investigation/9");
   });
 });
