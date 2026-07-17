@@ -315,7 +315,19 @@ def create_app(
     # against — otherwise the request's owner can diverge from who we
     # think they are.
     if get_user_id is None:
-        get_user_id = lambda: "default-user"  # noqa: E731
+        # Default the request user to the spec's configured `default_user` (not a
+        # divergent constant) so the actor matches the `created_by` specstar stamps
+        # — otherwise every request is a NON-owner of the items it creates, which the
+        # #306 private-by-default then 404s. Real deploys pass `get_user_id`
+        # explicitly (and thread the same callable into make_spec).
+        _default_user = spec.default_user  # UnsetType | str | (() -> str)
+        if isinstance(_default_user, str):
+            _uid = _default_user  # a static id — wrap it in a callable
+            get_user_id = lambda: _uid  # noqa: E731
+        elif callable(_default_user):
+            get_user_id = _default_user  # a per-request callable — use it as-is
+        else:  # UNSET / unexpected — fall back to the single dev tenant
+            get_user_id = lambda: "default-user"  # noqa: E731
     if users is None:
         users = MockUserDirectory()
     # `None` catalog → build one from bundled defaults so test fixtures /
