@@ -136,9 +136,12 @@ def test_profile_config_drives_the_turn_so_its_tools_are_allowed():
         spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=_Capture()
     )
     client = TestClient(app)
+    # Public so the default request user (not the item's created_by) may converse —
+    # this test exercises profile→tools resolution, not access control (that's in
+    # test_item_perm.py); the new private default would otherwise 404 the send.
     item_id = client.post(
         "/a/rca/items",
-        json={"title": "t", "profile": "tool-demo"},
+        json={"title": "t", "profile": "tool-demo", "permission": {"visibility": "public"}},
     ).json()["resource_id"]
     client.post(f"/a/rca/items/{item_id}/messages", json={"content": "q"})
 

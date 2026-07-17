@@ -151,7 +151,12 @@ def _multiuser_client(holder: dict[str, str]) -> TestClient:
 def test_close_notifies_owner_and_watchers_not_the_actor():
     holder = {"id": "alice"}
     client = _multiuser_client(holder)
-    item_id = _create_rca_item(client, title="Reflow drift", members=["bob"])  # owner=alice (auth)
+    # Public so a third party may close it — this test exercises the close
+    # NOTIFICATION fan-out, not access control (that's in test_item_perm.py); the
+    # new private default would otherwise 404 carol before the notify runs.
+    item_id = _create_rca_item(
+        client, title="Reflow drift", members=["bob"], permission={"visibility": "public"}
+    )  # owner=alice (auth)
 
     holder["id"] = "carol"  # a third party closes it
     resp = client.post(f"/a/rca/items/{item_id}/close", json={"status": "resolved"})
