@@ -30,6 +30,12 @@ class WikiSourceRef:
     collection_id: str
     path: str
     text: str
+    #: Whether the underlying SourceDoc is fully indexed (``status == "ready"``).
+    #: A still-``indexing`` doc has no extracted ``text`` yet, so the card-gen /
+    #: wiki-build WRITE paths skip it (and defer to the index-completion hook)
+    #: rather than folding empty text. Defaults True so fakes/readers are
+    #: unaffected. See ``SpecstarWikiSources._ref_from``.
+    ready: bool = True
 
 
 class IWikiSources(abc.ABC):
@@ -128,4 +134,5 @@ class SpecstarWikiSources(IWikiSources):
             collection_id=self._cid,
             path=d.path,
             text=text,
+            ready=d.status == "ready",
         )
