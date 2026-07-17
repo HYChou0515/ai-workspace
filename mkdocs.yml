@@ -121,6 +121,7 @@ nav:
   - 部署與運維:
       - 設定指南: configuration.md
       - 部署與客製化: deployment.md
+      - 資料遷移（Migrations）: migrations.md
   - 使用者手冊: user-guide.md
   - 設計計畫與歷史: design-history.md
 
