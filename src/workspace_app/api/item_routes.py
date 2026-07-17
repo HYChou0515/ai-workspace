@@ -141,7 +141,14 @@ def register_item_routes(
             item = msgspec.convert(payload, type=model)
         except msgspec.ValidationError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        rev = spec.get_resource_manager(model).create(item)
+        # Stamp `created_by` with the CREATOR (the request user), not specstar's
+        # spec-level default_user — so the item's owner (created_by) matches the
+        # `owner` field + the actor, and authorize's owner-bypass keeps the creator's
+        # full access under the private default even when the spec's default_user
+        # diverges from the request user (as it does in many test setups).
+        rm = spec.get_resource_manager(model)
+        with rm.using(get_user_id()):
+            rev = rm.create(item)
         # The item ROW now exists. Seeding its starter files + collections + the
         # activity entry are BEST-EFFORT: if any of them raises, the create must still
         # succeed (return the id) rather than 500 and strand the user on a frozen
