@@ -124,10 +124,12 @@ def test_generate_review_commit_roundtrip():
     assert card.body == "The third reflow zone."
 
 
-def test_generate_opts_the_collection_into_auto_digest():
-    """The manual 'generate cards' action turns on ``auto_digest`` so a doc still
-    indexing at click-time is drafted by the index-completion hook once it's ready
-    (#377) — the run skips not-ready docs rather than digesting empty text."""
+def test_generate_does_not_change_auto_digest():
+    """Generate is a one-shot action over the picked docs — it must NOT silently
+    flip the collection's ``auto_digest``. That flag is a user-owned setting
+    (toggled from the collection settings panel); only the user turns it on, so
+    a single generate can't opt the collection into perpetual auto-generation +
+    proactive questions behind their back."""
     spec, app = _make_app(_ONE_CARD)
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
@@ -140,7 +142,7 @@ def test_generate_opts_the_collection_into_auto_digest():
     assert r.status_code == 200
 
     after = rm.get(cid).data
-    assert isinstance(after, Collection) and after.auto_digest is True  # opted in by the click
+    assert isinstance(after, Collection) and after.auto_digest is False  # untouched by generate
 
 
 def test_pending_queue_lists_a_finalized_run_and_commit_removes_it():

@@ -190,6 +190,7 @@ export const mockKbApi: KbApi = {
       wiki_maintainer_guidance: "",
       wiki_reader_guidance: "",
       is_global: false,
+      auto_digest: false,
     };
     collections.set(c.resource_id, c);
     return c;
@@ -324,6 +325,7 @@ export const mockKbApi: KbApi = {
       wiki_maintainer_guidance: "",
       wiki_reader_guidance: "",
       is_global: false,
+      auto_digest: false,
     };
     collections.set(c.resource_id, c);
     return { collection_id: c.resource_id, document_ids: [], status: "indexing" };

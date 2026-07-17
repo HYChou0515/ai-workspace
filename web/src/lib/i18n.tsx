@@ -623,6 +623,15 @@ export const messages = {
     "zh-TW": "其中 {n} 份仍在索引，完成後會自動生成。",
     en: "{n} still indexing — they'll be generated automatically once ready.",
   },
+  "kb.cards.autogen.pending.manual": {
+    "zh-TW": "其中 {n} 份仍在索引，索引完成後請再生成一次。",
+    en: "{n} still indexing — generate again once they finish indexing.",
+  },
+  "kb.autoDigest.label": { "zh-TW": "自動生成卡片", en: "Auto-generate cards" },
+  "kb.autoDigest.help": {
+    "zh-TW": "文件索引完成後，自動草擬卡片並提出待釐清的問題。",
+    en: "Draft cards and raise clarification questions for each document once it finishes indexing.",
+  },
   // Glossary (Context Cards) tab empty states.
   "kb.cards.empty.none": {
     "zh-TW": "還沒有詞彙卡。詞彙表讓你定義 AI 該照字面使用的詞——例如「COGS 一律指 Cost of Goods Sold」。用左側「＋ 新增」開始。",

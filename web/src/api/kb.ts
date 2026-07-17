@@ -91,6 +91,10 @@ export type KbCollection = {
    * excluded` in every chat. The KB-chat picker pre-checks globals (a "Global"
    * badge); un-checking one EXCLUDES it for that thread. */
   is_global: boolean;
+  /** #377: auto-generate context cards (and raise clarification questions) for
+   * every document as it finishes indexing. User-owned; toggled from the
+   * collection settings panel. Default off. */
+  auto_digest: boolean;
 };
 
 /** #328 findability probe: where a doc's content ranks for a question, and how
@@ -598,6 +602,8 @@ export interface KbApi {
       description?: string;
       use_rag?: boolean;
       use_wiki?: boolean;
+      /** #377: auto-generate cards for every doc as it finishes indexing. */
+      auto_digest?: boolean;
       wiki_maintainer_guidance?: string;
       wiki_reader_guidance?: string;
       /** #105: the per-collection quality rubric (what makes a doc a good/bad

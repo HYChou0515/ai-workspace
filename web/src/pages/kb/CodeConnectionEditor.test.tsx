@@ -27,6 +27,7 @@ function mkColl(over: Partial<KbCollection> = {}): KbCollection {
     wiki_maintainer_guidance: "",
     wiki_reader_guidance: "",
     is_global: false,
+    auto_digest: false,
     ...over,
   };
 }

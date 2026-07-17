@@ -123,6 +123,24 @@ def test_patch_edit_allowed_for_write_meta_grantee():
     assert client.get(f"/collection/{cid}").json()["data"]["name"] == "renamed"
 
 
+def test_patch_can_set_auto_digest():
+    """The 'auto-generate cards' settings toggle sets ``auto_digest`` via the same
+    ``PATCH /collection/{id}`` the FE uses for other field edits — no dedicated
+    endpoint (unlike superuser-only ``is_global``). The owner flips it and it
+    round-trips through the auto-CRUD read."""
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    assert client.get(f"/collection/{cid}").json()["data"]["auto_digest"] is False  # default off
+
+    assert client.patch(f"/collection/{cid}", json={"auto_digest": True}).status_code == 200
+    assert client.get(f"/collection/{cid}").json()["data"]["auto_digest"] is True
+    # …and it surfaces in the /kb/collections list (CollectionOut) the FE reads to
+    # reflect the toggle — guards against a pydantic response-model field drop.
+    row = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert row["auto_digest"] is True
+
+
 def test_patch_cannot_rewire_permission_without_change_permission():
     """write_meta lets a member edit fields, but NOT rewrite the access-control
     object — a PATCH that names `permission` needs change_permission (403)."""

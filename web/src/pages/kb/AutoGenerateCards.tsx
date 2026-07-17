@@ -55,13 +55,18 @@ export function AutoGenerateCards({
     [collectionId, docList, wikiTree],
   );
 
-  // How many picked documents are still indexing — card-gen defers those to the
-  // index-completion hook (generate opted the collection into auto_digest), so
-  // the started view says they'll be generated automatically rather than dropped.
+  // How many picked documents are still indexing — card-gen skips those (never
+  // drafts empty text). Whether they auto-generate once ready depends on the
+  // collection's auto_digest setting, so the deferral note is worded accordingly.
   const pendingCount = useMemo(
     () => pendingIndexingCount(selected, docList ?? []),
     [selected, docList],
   );
+  const { data: collections } = useQuery({
+    queryKey: qk.kb.collections,
+    queryFn: () => client.listCollections(),
+  });
+  const autoDigest = collections?.find((c) => c.resource_id === collectionId)?.auto_digest ?? false;
 
   // Search filters the tree; select-all / invert act on the VISIBLE (filtered)
   // leaves so "搜尋並全選" narrows first, then selects only the matches.
@@ -107,7 +112,10 @@ export function AutoGenerateCards({
             <p>已開始生成卡片，完成後可到「待審核」分頁審核。</p>
             {pendingCount > 0 && (
               <p className="kb-cardgen__pending" data-testid="cardgen-pending">
-                {t("kb.cards.autogen.pending", { n: pendingCount })}
+                {t(
+                  autoDigest ? "kb.cards.autogen.pending" : "kb.cards.autogen.pending.manual",
+                  { n: pendingCount },
+                )}
               </p>
             )}
             <footer className="kb-cardgen__foot">

@@ -63,12 +63,6 @@ def _add_indexing_binary(spec, collection_id: str, path: str) -> str:
     return rev.resource_id
 
 
-def _coll(spec, cid: str) -> Collection:
-    d = spec.get_resource_manager(Collection).get(cid).data
-    assert isinstance(d, Collection)  # rm is Collection-typed; narrows Struct|Unset for ty
-    return d
-
-
 def _add_wiki(spec, collection_id: str, path: str, text: str) -> str:
     """An LLM wiki page with its real ``_rid`` id — what the picker submits when a
     reviewer picks a wiki page as a card-gen source (#415)."""
@@ -193,27 +187,6 @@ async def test_a_still_indexing_doc_is_skipped_not_digested_to_nothing():
     assert coord.status(jid) == TaskStatus.COMPLETED  # the run still closes cleanly
     assert drafter.seen == ["ready.md"]  # the still-indexing doc was never digested
     assert [p.keys for p in coord.proposals(jid).proposals] == [["RZ3"]]  # only the ready doc
-
-
-async def test_manual_enqueue_opts_the_collection_into_auto_digest():
-    """The manual 'generate cards' action opts the collection into ``auto_digest``,
-    so a doc still indexing at click-time gets drafted by the index-completion hook
-    (#377) once it's ready — reusing the existing hook, no pending-intent store. A
-    plain enqueue (e.g. the hook's own) must NOT touch the flag."""
-    spec = make_spec(default_user="u")
-    cid = _collection(spec)
-    doc = _add_source(spec, cid, "a.md", "RZ3")
-    assert _coll(spec, cid).auto_digest is False  # default off
-
-    coord = CardGenCoordinator(spec, _FakeDrafter({}))
-    coord.enqueue(cid, [doc], ensure_auto_digest=True)
-    assert _coll(spec, cid).auto_digest is True  # the manual action opted in
-
-    # a plain enqueue leaves config untouched (idempotent-safe for the hook path)
-    rm = spec.get_resource_manager(Collection)
-    rm.update(cid, msgspec.structs.replace(_coll(spec, cid), auto_digest=False))
-    coord.enqueue(cid, [doc])
-    assert _coll(spec, cid).auto_digest is False
 
 
 def _cards(spec, cid: str):

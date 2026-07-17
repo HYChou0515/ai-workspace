@@ -45,6 +45,7 @@ import { CodeConnectionEditor } from "./CodeConnectionEditor";
 import { CodeSyncStatus } from "./CodeSyncStatus";
 import { CollectionReviewTab } from "./CollectionReviewTab";
 import { ContextCardsTab } from "./ContextCardsTab";
+import { CardGenToggle } from "./CardGenToggle";
 import { GlobalToggle } from "./GlobalToggle";
 import { KbDocIde } from "./KbDocIde";
 import { useCollectionDocs } from "./useCollectionDocs";
@@ -586,9 +587,6 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
                 {selected.description || "Add a description…"}
               </p>
             )}
-            {/* Superuser-only: flag this collection GLOBAL (in every AI chat's
-                baseline scope). Renders nothing for a non-superuser. */}
-            <GlobalToggle collection={selected} client={client} />
           </div>
         </div>
 
@@ -858,6 +856,15 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
               rubric={selected.quality_rubric ?? ""}
               client={client}
             />
+          </div>
+          <div style={{ height: 1, background: "var(--paper-3)", margin: "12px 0" }} />
+          {/* #377: auto-generate cards per indexed doc (user-owned setting). */}
+          <CardGenToggle collection={selected} client={client} />
+          {/* Global collection = part of every AI chat's baseline retrieval
+              scope, so it belongs with "how answers are found". Superuser-only —
+              renders nothing for others (tucked in settings, not the bare header). */}
+          <div style={{ marginTop: 10 }}>
+            <GlobalToggle collection={selected} client={client} />
           </div>
         </div>
       )}
