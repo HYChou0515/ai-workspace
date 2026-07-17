@@ -2658,6 +2658,7 @@
 .kb-cardgen__docs, .kb-cardgen__proposals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 48vh; overflow: auto; }
 .kb-cardgen__docs label { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 0.8125rem; }
 .kb-cardgen__none { color: var(--text-paper-d2); padding: 12px; }
+.kb-cardgen__pending { color: var(--text-paper-d2); font-size: 0.8125rem; margin-top: 6px; }
 /* #415 待審核 inbox: the shared review-queue shell + card-gen run rows. */
 .kb-review { padding: 16px; display: flex; flex-direction: column; gap: 12px; }
 .kb-review__head { display: flex; flex-direction: column; gap: 2px; }

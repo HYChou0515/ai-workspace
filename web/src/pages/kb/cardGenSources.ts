@@ -37,6 +37,22 @@ export type CardGenSources = {
   ids: Map<string, string>;
 };
 
+/** How many of the SELECTED sources are documents still being indexed. A binary
+ * doc (PDF/image/office) carries no extracted text until it reaches
+ * status `"ready"`, so card-gen skips it now and the index-completion hook drafts
+ * it once ready (#377) — the collection was opted into auto_digest on generate.
+ * Wiki-page picks are always ready. The modal surfaces this so the reviewer knows
+ * those sources were deferred, not dropped. Tree paths mirror
+ * {@link buildCardGenSources}: a document leaf is `Documents/<doc.path>`. */
+export function pendingIndexingCount(selected: Set<string>, docs: KbDocument[]): number {
+  const notReady = new Set(
+    docs.filter((d) => d.status !== "ready").map((d) => `Documents/${d.path}`),
+  );
+  let n = 0;
+  for (const path of selected) if (notReady.has(path)) n++;
+  return n;
+}
+
 export function buildCardGenSources(
   collectionId: string,
   docs: KbDocument[],

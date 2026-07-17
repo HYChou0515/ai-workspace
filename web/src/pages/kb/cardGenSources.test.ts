@@ -1,10 +1,38 @@
 import { describe, expect, it } from "vitest";
 
 import type { KbDocument } from "../../api/kb";
-import { WIKI_ID_PREFIX, buildCardGenSources, wikiPageId } from "./cardGenSources";
+import {
+  WIKI_ID_PREFIX,
+  buildCardGenSources,
+  pendingIndexingCount,
+  wikiPageId,
+} from "./cardGenSources";
 
 const doc = (resource_id: string, path: string): KbDocument =>
   ({ resource_id, path }) as KbDocument;
+
+const statusDoc = (path: string, status: string): KbDocument =>
+  ({ resource_id: path, path, status }) as KbDocument;
+
+describe("pendingIndexingCount", () => {
+  it("counts only SELECTED documents still indexing — ready docs and wiki picks don't count", () => {
+    const docs = [
+      statusDoc("a.pdf", "indexing"),
+      statusDoc("b.md", "ready"),
+      statusDoc("c.png", "indexing"),
+    ];
+    // a.pdf is selected + indexing → counts; b.md ready → no; c.png indexing but
+    // NOT selected → no; the Wiki pick is always ready → no.
+    const selected = new Set(["Documents/a.pdf", "Documents/b.md", "Wiki/index.md"]);
+    expect(pendingIndexingCount(selected, docs)).toBe(1);
+  });
+
+  it("is 0 when every selected document is ready", () => {
+    const docs = [statusDoc("a.md", "ready"), statusDoc("b.md", "ready")];
+    const selected = new Set(["Documents/a.md", "Documents/b.md"]);
+    expect(pendingIndexingCount(selected, docs)).toBe(0);
+  });
+});
 
 describe("wikiPageId", () => {
   it("mirrors the backend _rid: {collection}{path} with every / → U+2215", () => {
