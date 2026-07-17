@@ -189,6 +189,7 @@ export const mockKbApi: KbApi = {
       git_last_pulled_at: null,
       wiki_maintainer_guidance: "",
       wiki_reader_guidance: "",
+      is_global: false,
     };
     collections.set(c.resource_id, c);
     return c;
@@ -322,6 +323,7 @@ export const mockKbApi: KbApi = {
       use_wiki: false,
       wiki_maintainer_guidance: "",
       wiki_reader_guidance: "",
+      is_global: false,
     };
     collections.set(c.resource_id, c);
     return { collection_id: c.resource_id, document_ids: [], status: "indexing" };
@@ -437,11 +439,12 @@ export const mockKbApi: KbApi = {
   async listChats() {
     return [...chats.values()].map(summarize);
   },
-  async createChat(title, collectionIds) {
+  async createChat(title, collectionIds, excludedCollectionIds = []) {
     const chat: KbChatDetail = {
       resource_id: nextId("chat"),
       title, // #357: unnamed = "" (labelled by name_hint), not a literal "New chat"
       collection_ids: collectionIds,
+      excluded_collection_ids: excludedCollectionIds,
       messages: [],
     };
     chats.set(chat.resource_id, chat);
@@ -469,6 +472,11 @@ export const mockKbApi: KbApi = {
   async setCollectionPermission(id, perm) {
     collectionPerms.set(id, perm);
     return { visibility: perm.visibility, notified: [] };
+  },
+  async setCollectionGlobal(id, isGlobal) {
+    const c = collections.get(id);
+    if (c) collections.set(id, { ...c, is_global: isGlobal });
+    return { resource_id: id, is_global: isGlobal };
   },
   async requestCollectionAccess(id) {
     return { collection_id: id, requested: true, already_readable: false };

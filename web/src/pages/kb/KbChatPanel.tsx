@@ -85,6 +85,13 @@ export function KbChatPanel({
     queryFn: () => client.listCollections(),
   });
   const collections = useMemo(() => collectionsQ.data ?? [], [collectionsQ.data]);
+  // Global collections are in every chat's baseline scope: pre-checked (a
+  // "Global" badge in the picker), and un-checking one EXCLUDES it for this
+  // thread. See the split into collection_ids / excluded_collection_ids below.
+  const globalIds = useMemo(
+    () => collections.filter((c) => c.is_global).map((c) => c.resource_id),
+    [collections],
+  );
   // #271: the user's past chats rank the collections (most-used first), so the
   // pill shortlist surfaces what they actually reach for.
   const chatsQ = useQuery({ queryKey: qk.kb.chats, queryFn: () => client.listChats() });
@@ -115,14 +122,32 @@ export function KbChatPanel({
     // just succeed: if listing chats fails we still seed, treating it as no
     // history (cold-start ranking) rather than leaving the selection empty.
     if (!seededRef.current && collectionsQ.isSuccess && chatsQ.isFetched && collections.length > 0) {
-      setSelected(new Set(ranked.slice(0, PILL_COUNT).map((c) => c.resource_id)));
+      // Seed = every global (in scope by default) ∪ the user's most-used pills.
+      setSelected(
+        new Set([...globalIds, ...ranked.slice(0, PILL_COUNT).map((c) => c.resource_id)]),
+      );
       seededRef.current = true;
     }
-  }, [collectionsQ.isSuccess, chatsQ.isFetched, collections.length, ranked]);
+  }, [collectionsQ.isSuccess, chatsQ.isFetched, collections.length, ranked, globalIds]);
 
+  // The EFFECTIVE scope actually searched (checked globals + checked non-globals)
+  // — drives the in-scope wiki checks + display. Locked chats bypass the picker.
   const collectionIds = useMemo(
     () => (locked ? fixedCollectionIds! : [...selected]),
     [locked, fixedCollectionIds, selected],
+  );
+  // The create payload split (global collections): `collection_ids` = the checked
+  // NON-global collections (explicitly specified); `excluded_collection_ids` = the
+  // global collections the user un-checked (dropped from this thread). The BE
+  // recombines them as `(specified ∪ global) \ excluded`.
+  const globalIdSet = useMemo(() => new Set(globalIds), [globalIds]);
+  const specifiedCollectionIds = useMemo(
+    () => (locked ? fixedCollectionIds! : [...selected].filter((id) => !globalIdSet.has(id))),
+    [locked, fixedCollectionIds, selected, globalIdSet],
+  );
+  const excludedCollectionIds = useMemo(
+    () => (locked ? [] : globalIds.filter((id) => !selected.has(id))),
+    [locked, globalIds, selected],
   );
   // #397: the in-scope collection whose wiki a correction would target (Q13:
   // only when a wiki is actually on). First wiki collection when several.
@@ -130,7 +155,13 @@ export function KbChatPanel({
     () => collections.find((c) => collectionIds.includes(c.resource_id) && c.use_wiki)?.resource_id,
     [collections, collectionIds],
   );
-  const { log, send, cancel } = useKbChat({ collectionIds, chatId, client, onChatCreated });
+  const { log, send, cancel } = useKbChat({
+    collectionIds: specifiedCollectionIds,
+    excludedCollectionIds,
+    chatId,
+    client,
+    onChatCreated,
+  });
   // Follow the conversation as it streams; back off when the user scrolls up.
   const bodyRef = useStickToBottom<HTMLDivElement>(log);
 

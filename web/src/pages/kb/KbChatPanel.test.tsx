@@ -28,6 +28,7 @@ const coll = (over: Partial<KbCollection>): KbCollection => ({
   use_wiki: false,
   wiki_maintainer_guidance: "",
   wiki_reader_guidance: "",
+  is_global: false,
   ...over,
 });
 
@@ -183,6 +184,77 @@ describe("KbChatPanel collection picker (#271)", () => {
     await waitFor(() => expect(createChat).toHaveBeenCalled());
     const ids = createChat.mock.calls[0][1];
     expect([...ids].sort()).toEqual(["c1", "c2", "c3", "c4", "c5", "c6"]);
+  });
+});
+
+// Global collections (system-wide baseline scope): pre-checked with a "Global"
+// badge; the create payload splits into collection_ids (checked non-globals) +
+// excluded_collection_ids (un-checked globals).
+describe("KbChatPanel global collections", () => {
+  const captureCreate = () =>
+    vi.fn(async (_title: string, ids: string[], excluded: string[] = []) => ({
+      resource_id: "c-new",
+      title: "",
+      collection_ids: ids,
+      excluded_collection_ids: excluded,
+      message_count: 0,
+      owner: "default-user",
+      shared_with: [],
+    }));
+
+  const sendClient = (collections: KbCollection[], createChat: ReturnType<typeof captureCreate>) =>
+    panelClient(collections, [], {
+      createChat,
+      streamMessage: async function* () {},
+      getChat: async () => ({
+        resource_id: "c-new",
+        title: "",
+        collection_ids: [],
+        owner: "default-user",
+        shared_with: [],
+        messages: [],
+      }),
+    });
+
+  const GLOBAL = coll({ resource_id: "g1", name: "Baseline", is_global: true, cited: 100 });
+  const NORMAL = [
+    coll({ resource_id: "c1", name: "Coll 1", cited: 9 }),
+    coll({ resource_id: "c2", name: "Coll 2", cited: 8 }),
+  ];
+
+  const sendHello = () => {
+    fireEvent.change(screen.getByPlaceholderText("Ask the knowledge base…"), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+  };
+
+  it("pre-checks a global and keeps it in scope (not excluded) on create", async () => {
+    const createChat = captureCreate();
+    render(<KbChatPanel chatId={null} client={sendClient([GLOBAL, ...NORMAL], createChat)} />);
+    await screen.findByText("Coll 1");
+    // The global collection starts checked (in the baseline scope).
+    expect(pill("Baseline")).toHaveAttribute("aria-pressed", "true");
+    sendHello();
+    await waitFor(() => expect(createChat).toHaveBeenCalled());
+    const [, ids, excluded] = createChat.mock.calls[0];
+    // collection_ids = the checked NON-global collections only.
+    expect([...ids].sort()).toEqual(["c1", "c2"]);
+    // Nothing excluded — the global stays in scope.
+    expect(excluded).toEqual([]);
+  });
+
+  it("un-checking a global excludes it (→ excluded_collection_ids) on create", async () => {
+    const createChat = captureCreate();
+    render(<KbChatPanel chatId={null} client={sendClient([GLOBAL, ...NORMAL], createChat)} />);
+    await screen.findByText("Coll 1");
+    fireEvent.click(pill("Baseline")); // un-check the global
+    expect(pill("Baseline")).toHaveAttribute("aria-pressed", "false");
+    sendHello();
+    await waitFor(() => expect(createChat).toHaveBeenCalled());
+    const [, ids, excluded] = createChat.mock.calls[0];
+    expect([...ids].sort()).toEqual(["c1", "c2"]);
+    expect(excluded).toEqual(["g1"]);
   });
 });
 

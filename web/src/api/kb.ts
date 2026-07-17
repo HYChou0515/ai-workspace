@@ -86,6 +86,11 @@ export type KbCollection = {
    * prose wiki (stamped on every attempt, success or misconfig). Blank ⇒ never
    * reflected. Optional on the wire (BE defaults to ""). */
   last_reflected_at?: string;
+  /** Global collection (system-wide baseline): a superuser flags a collection
+   * `is_global`, and the AI's effective scope becomes `(specified ∪ global) \
+   * excluded` in every chat. The KB-chat picker pre-checks globals (a "Global"
+   * badge); un-checking one EXCLUDES it for that thread. */
+  is_global: boolean;
 };
 
 /** #328 findability probe: where a doc's content ranks for a question, and how
@@ -378,6 +383,10 @@ export type KbChatDetail = {
   resource_id: string;
   title: string;
   collection_ids: string[];
+  /** Global collections deliberately dropped from THIS thread's scope: the
+   * effective retrieval set is `(collection_ids ∪ global) \ excluded_collection_ids`.
+   * Absent/empty ⇒ every global stays in scope. */
+  excluded_collection_ids?: string[];
   messages: KbChatMessage[];
   owner?: string;
   shared_with?: string[];
@@ -615,6 +624,13 @@ export interface KbApi {
     id: string,
     perm: CollectionPermission,
   ): Promise<{ visibility: string; notified: string[] }>;
+  /** Superuser-only — flag/unflag a collection as GLOBAL (`PUT
+   * …/global`). A global collection joins every AI conversation's baseline
+   * retrieval scope. 403 for a non-superuser. */
+  setCollectionGlobal(
+    id: string,
+    isGlobal: boolean,
+  ): Promise<{ resource_id: string; is_global: boolean }>;
   /** Permission-disclosure — ask a collection's owner for read access (the "🔒
    * request access" chip). Sends one deduped notification to the owner
    * (`POST …/request-access`). Idempotent: a repeat returns `requested:false`. */
@@ -812,7 +828,13 @@ export interface KbApi {
   discardDocQuestion(id: string): Promise<void>;
 
   listChats(): Promise<KbChatSummary[]>;
-  createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
+  /** `excludedCollectionIds` are the GLOBAL collections dropped from this
+   * thread's scope (the picker's un-checked globals). Defaults to none. */
+  createChat(
+    title: string,
+    collectionIds: string[],
+    excludedCollectionIds?: string[],
+  ): Promise<KbChatSummary>;
   getChat(chatId: string): Promise<KbChatDetail>;
   /** #357: owner-only rename. "" clears the title back to the name_hint label. */
   renameChat(chatId: string, title: string): Promise<KbChatSummary>;
@@ -1279,12 +1301,16 @@ export const realKbApi: KbApi = {
   async listChats() {
     return (await ok(await apiFetch("/kb/chats"), "list chats")).json();
   },
-  async createChat(title, collectionIds) {
+  async createChat(title, collectionIds, excludedCollectionIds = []) {
     const resp = await ok(
       await apiFetch("/kb/chats", {
         method: "POST",
         headers: jsonHeaders,
-        body: JSON.stringify({ title, collection_ids: collectionIds }),
+        body: JSON.stringify({
+          title,
+          collection_ids: collectionIds,
+          excluded_collection_ids: excludedCollectionIds,
+        }),
       }),
       "create chat",
     );
@@ -1329,6 +1355,17 @@ export const realKbApi: KbApi = {
       "set collection permission",
     );
     return (await resp.json()) as { visibility: string; notified: string[] };
+  },
+  async setCollectionGlobal(id, isGlobal) {
+    const resp = await ok(
+      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/global`, {
+        method: "PUT",
+        headers: jsonHeaders,
+        body: JSON.stringify({ is_global: isGlobal }),
+      }),
+      "set collection global",
+    );
+    return (await resp.json()) as { resource_id: string; is_global: boolean };
   },
   async requestCollectionAccess(id) {
     const resp = await ok(

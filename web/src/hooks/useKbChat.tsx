@@ -38,11 +38,15 @@ export type UseKbChat = {
 
 export function useKbChat({
   collectionIds,
+  excludedCollectionIds = [],
   chatId: initialChatId = null,
   client = kbApi,
   onChatCreated,
 }: {
+  /** The explicitly-specified (non-global) collections for this thread. */
   collectionIds: string[];
+  /** Global collections the user un-checked — excluded from this thread's scope. */
+  excludedCollectionIds?: string[];
   chatId?: string | null;
   client?: KbApi;
   /** Fired when the first message creates the thread (so the list can refresh). */
@@ -88,7 +92,7 @@ export function useKbChat({
 
       let id = chatId;
       if (id == null) {
-        id = (await client.createChat("", collectionIds)).resource_id;
+        id = (await client.createChat("", collectionIds, excludedCollectionIds)).resource_id;
         setChatId(id);
         onChatCreated?.(id);
         void qc.invalidateQueries({ queryKey: qk.kb.chats });
@@ -138,7 +142,7 @@ export function useKbChat({
         setLog((prev) => ({ ...prev, streaming: false }));
       }
     },
-    [chatId, collectionIds, client, log.streaming, onChatCreated, qc],
+    [chatId, collectionIds, excludedCollectionIds, client, log.streaming, onChatCreated, qc],
   );
 
   const cancel = useCallback(() => {

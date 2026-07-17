@@ -18,6 +18,7 @@ const coll = (over: Partial<KbCollection>): KbCollection => ({
   use_wiki: false,
   wiki_maintainer_guidance: "",
   wiki_reader_guidance: "",
+  is_global: false,
   ...over,
 });
 

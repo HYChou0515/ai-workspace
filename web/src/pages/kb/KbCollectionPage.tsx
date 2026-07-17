@@ -45,6 +45,7 @@ import { CodeConnectionEditor } from "./CodeConnectionEditor";
 import { CodeSyncStatus } from "./CodeSyncStatus";
 import { CollectionReviewTab } from "./CollectionReviewTab";
 import { ContextCardsTab } from "./ContextCardsTab";
+import { GlobalToggle } from "./GlobalToggle";
 import { KbDocIde } from "./KbDocIde";
 import { useCollectionDocs } from "./useCollectionDocs";
 import { useKbOutlet } from "./KbHome";
@@ -585,6 +586,9 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
                 {selected.description || "Add a description…"}
               </p>
             )}
+            {/* Superuser-only: flag this collection GLOBAL (in every AI chat's
+                baseline scope). Renders nothing for a non-superuser. */}
+            <GlobalToggle collection={selected} client={client} />
           </div>
         </div>
 

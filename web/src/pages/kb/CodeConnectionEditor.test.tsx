@@ -26,6 +26,7 @@ function mkColl(over: Partial<KbCollection> = {}): KbCollection {
     git_branch: "main",
     wiki_maintainer_guidance: "",
     wiki_reader_guidance: "",
+    is_global: false,
     ...over,
   };
 }

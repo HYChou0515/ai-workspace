@@ -8,6 +8,9 @@
  */
 export const qk = {
   currentUser: ["currentUser"] as const,
+  // The signed-in user's id + superuser flag (`GET /me`) — gates system-wide
+  // controls like the collection "Global" toggle.
+  me: ["me"] as const,
   users: ["users"] as const,
   notifications: ["notifications"] as const,
 

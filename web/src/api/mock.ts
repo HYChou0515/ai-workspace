@@ -505,6 +505,10 @@ export const mockApi: ApiClient = {
     await delay(10);
     return "default-user";
   },
+  async getMe() {
+    await delay(10);
+    return { id: "default-user", is_superuser: false };
+  },
   async getUsers() {
     await delay(10);
     return [
