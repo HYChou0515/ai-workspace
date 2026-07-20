@@ -572,6 +572,26 @@ export const messages = {
 
   // KB collection page (KbCollectionPage) (#172)
   "kb.reindexAll": { "zh-TW": "全部重新讀取", en: "Re-read all" },
+  // #569: re-reading a collection is accepted, then done in the background, so
+  // the screen looks unchanged for a while. Say plainly that it was sent, how
+  // much it covers, and that leaving is safe — otherwise the silence reads as
+  // failure and the button gets pressed again.
+  "kb.reindexAll.sent": { "zh-TW": "已送出", en: "Sent" },
+  "kb.reindexAll.sentBody": {
+    "zh-TW": "{n} 份文件已排入重新讀取，會在背景陸續完成。你可以關閉這個頁面，進度會保留。",
+    en: "{n} documents are queued to be re-read. This runs in the background — you can close this page and the progress is kept.",
+  },
+  "kb.reindexAll.already": { "zh-TW": "已經在重新讀取", en: "Already running" },
+  "kb.reindexAll.alreadyBody": {
+    "zh-TW": "這個知識庫的重新讀取還在進行中（{n} 份文件），不需要再送一次。",
+    en: "A re-read of this knowledge base is still running ({n} documents). There's no need to send it again.",
+  },
+  "kb.reindexAll.ack": { "zh-TW": "知道了", en: "Got it" },
+  "kb.reindexAll.failed": { "zh-TW": "沒有送出", en: "Not sent" },
+  "kb.reindexAll.failedBody": {
+    "zh-TW": "重新讀取沒有送出去，沒有任何文件被重新讀取。請再試一次。",
+    en: "The re-read wasn't sent — no document was re-read. Please try again.",
+  },
   // Global collection — the superuser-only toggle on the collection page.
   "kb.global.label": { "zh-TW": "全域知識庫", en: "Global collection" },
   "kb.global.help": {

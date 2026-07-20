@@ -41,14 +41,22 @@ class IndexJobPayload(msgspec.Struct):
       :class:`~workspace_app.resources.kb.IndexRun` join state).
     - ``finalize``: once every batch is accounted for, rejoin the staged text
       into ``SourceDoc.text``, flip status, and run the wiki hook — exactly once.
+    - ``collection`` (#569): re-read the WHOLE collection — the worker walks
+      ``collection_id`` and enqueues a ``split`` job per doc. ``doc_id`` is empty
+      (the job targets no single doc) and ``only`` narrows the walk. This kind
+      exists so the "Re-read all" button leaves one row behind and returns
+      instead of doing an N-document walk inside the HTTP request.
     """
 
     doc_id: str
     collection_id: str
-    kind: str = "split"  # split | process | finalize
+    kind: str = "split"  # split | process | finalize | collection
     unit_start: int = 0
     unit_end: int = 0
     batch_index: int = 0
+    # `collection` kind only: "" = every doc, "failed" = only docs in `error`
+    # (#223). Carried on the payload because the WORKER, not the route, applies it.
+    only: str = ""
 
 
 class IndexJob(Job[IndexJobPayload]):

@@ -211,6 +211,8 @@ export const mockKbApi: KbApi = {
       // whole-collection call (no opts) re-indexes everything.
       list.map((d) => (opts?.only === "failed" && d.status !== "error" ? d : { ...d, status: "ready" })),
     );
+    const covered = opts?.only === "failed" ? list.filter((d) => d.status === "error").length : list.length;
+    return { queued: true, documents: covered, status: "indexing" };
   },
   async listDocuments(collectionId, page) {
     const offset = page?.offset ?? 0;

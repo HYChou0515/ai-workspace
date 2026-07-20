@@ -151,6 +151,14 @@ export type WikiTree = { pages: string[] };
 /** One wiki page's raw markdown (rendered read-only client-side). */
 export type WikiPage = { path: string; content: string };
 
+/** #569: result of ASKING for a re-read of a whole collection. The walk runs in
+ * a worker, so this describes what was accepted, not what was done.
+ * - `queued: false` — a run was already pending and this press coalesced onto
+ *   it. Say "already running"; do NOT confirm a second send.
+ * - `documents` — how many docs the run covers, so the confirmation can name a
+ *   number instead of a vague "started". */
+export type ReindexQueued = { queued: boolean; documents: number; status: string };
+
 /** Result of triggering a wiki rebuild — how many sources were queued. */
 export type WikiRebuild = { queued: number; status: string };
 
@@ -657,8 +665,12 @@ export interface KbApi {
   /** Re-chunk + re-embed documents in the collection (recovers `error` docs
    * after an embedder fix). Each re-queued doc flips back to `indexing`.
    * `{ only: "failed" }` re-queues ONLY docs stuck in `error` (issue #223);
-   * omitted re-indexes the whole collection. */
-  reindexCollection(id: string, opts?: { only?: "failed" }): Promise<void>;
+   * omitted re-indexes the whole collection.
+   *
+   * #569: this ACCEPTS and returns — the walk runs in a worker, so nothing
+   * visible has changed by the time the promise settles. Show the result: a
+   * silent success reads as a failure and invites a redundant second press. */
+  reindexCollection(id: string, opts?: { only?: "failed" }): Promise<ReindexQueued>;
   listDocuments(
     collectionId: string,
     page?: { offset?: number; limit?: number; sort?: "recent" | "quality" },
@@ -911,10 +923,10 @@ export const realKbApi: KbApi = {
   },
   async reindexCollection(id, opts) {
     const qs = opts?.only ? `?only=${encodeURIComponent(opts.only)}` : "";
-    await ok(
-      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/reindex${qs}`, { method: "POST" }),
-      "reindex collection",
-    );
+    const resp = await apiFetch(`/kb/collections/${encodeURIComponent(id)}/reindex${qs}`, {
+      method: "POST",
+    });
+    return (await ok(resp, "reindex collection")).json();
   },
   async probeFindability(body) {
     const resp = await apiFetch(`/kb/findability/probe`, {

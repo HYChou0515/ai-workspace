@@ -20,6 +20,7 @@ class _FakeIngestor:
     def __init__(self) -> None:
         self.indexed: list[str] = []
         self.cached: list[str] = []
+        self.invalidated: list[str] = []
 
     def index(
         self, doc_id: str, *, source_doc_rm: object | None = None, reraise: bool = False
@@ -28,6 +29,9 @@ class _FakeIngestor:
 
     def write_cache(self, doc_id: str) -> None:
         self.cached.append(doc_id)
+
+    def invalidate_cache(self, doc_id: str) -> None:
+        self.invalidated.append(doc_id)
 
 
 class _FakeWiki:
@@ -637,3 +641,209 @@ def test_a_processing_job_does_not_block_a_fresh_reindex():
     # A fresh reindex must still enqueue (it can't ride on the in-flight job).
     assert coord.enqueue(doc_id, cid) is True
     assert _pending_jobs(spec) == [doc_id]
+
+
+# ── whole-collection reindex as a JOB (#569) ──────────────────────────────
+# "Re-read all" used to do the whole fan-out INSIDE the HTTP request: it loaded
+# every SourceDoc (blob + extracted text) into memory, flipped each status and
+# enqueued each doc — synchronously, on the event loop, with no `await`. At a
+# thousand docs that froze the entire API pod for minutes and could not be
+# aborted (no await point ⇒ no client-disconnect detection). The fan-out is now
+# its own job kind: the request leaves ONE row behind and returns; a worker
+# claiming that row sends every doc in the collection through.
+
+
+def _pending_kinds(spec) -> list[str]:
+    rm = spec.get_resource_manager(IndexJob)
+    return [
+        j.data.payload.kind for j in rm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())
+    ]
+
+
+def test_enqueue_collection_leaves_exactly_one_job_and_touches_no_doc():
+    """The producer's whole job is to leave a marker behind. It must NOT walk the
+    collection — that walk is what used to block the request path."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1, d2 = _doc(spec, cid, "a.md"), _doc(spec, cid, "b.md")
+    rm = spec.get_resource_manager(SourceDoc)
+    for d in (d1, d2):  # both healthy before the button is pressed
+        rm.update(d, msgspec.structs.replace(rm.get(d).data, status="ready"))
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue_collection(cid) is True
+
+    assert _pending_kinds(spec) == ["collection"]  # ONE job, not one per doc
+    # No doc was read or written by the producer — the worker owns all of that.
+    assert [rm.get(d).data.status for d in (d1, d2)] == ["ready", "ready"]
+
+
+async def test_the_collection_job_sends_every_doc_in_the_collection_through():
+    """A worker claiming the `collection` job re-indexes every doc it holds."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1, d2 = _doc(spec, cid, "a.md"), _doc(spec, cid, "b.md")
+    ing = _FakeIngestor()
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)  # ty: ignore
+
+    coord.enqueue_collection(cid)
+    await coord.aclose()  # drain: collection job → per-doc jobs → indexed
+
+    assert sorted(ing.indexed) == sorted([d1, d2])
+
+
+async def test_the_collection_job_ignores_docs_of_other_collections():
+    spec = make_spec(default_user="u")
+    mine, theirs = _collection(spec), _collection(spec)
+    d1 = _doc(spec, mine, "a.md")
+    _doc(spec, theirs, "b.md")
+    ing = _FakeIngestor()
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)  # ty: ignore
+
+    coord.enqueue_collection(mine)
+    await coord.aclose()
+
+    assert ing.indexed == [d1]
+
+
+async def test_the_collection_job_invalidates_each_docs_cache_before_requeueing():
+    """#390: re-read means FORCE recompute, so the cached result is dropped first.
+    That drop moved into the worker with the rest of the walk."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1, d2 = _doc(spec, cid, "a.md"), _doc(spec, cid, "b.md")
+    ing = _FakeIngestor()
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)  # ty: ignore
+
+    coord.enqueue_collection(cid)
+    await coord.aclose()
+
+    assert sorted(ing.invalidated) == sorted([d1, d2])
+
+
+async def test_only_failed_sends_just_the_errored_docs_through():
+    """#223 survives the move to a job: `only="failed"` rides the payload, and the
+    WORKER (not the route) applies it."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    good, bad = _doc(spec, cid, "good.md"), _doc(spec, cid, "bad.md")
+    rm = spec.get_resource_manager(SourceDoc)
+    rm.update(good, msgspec.structs.replace(rm.get(good).data, status="ready"))
+    rm.update(bad, msgspec.structs.replace(rm.get(bad).data, status="error"))
+    ing = _FakeIngestor()
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)  # ty: ignore
+
+    coord.enqueue_collection(cid, only="failed")
+    await coord.aclose()
+
+    assert ing.indexed == [bad]
+
+
+def test_pressing_re_read_all_again_coalesces_onto_the_pending_run():
+    """The anti-mash guard the per-doc path already has (#134), at collection
+    scope: a second press while one is still queued is a no-op, and says so —
+    that `False` is what the UI turns into 'already running' instead of a second
+    'sent' confirmation."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _doc(spec, cid, "a.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue_collection(cid) is True
+    assert coord.enqueue_collection(cid) is False
+    assert coord.enqueue_collection(cid) is False
+
+    assert _pending_kinds(spec) == ["collection"]
+
+
+def test_two_collections_do_not_coalesce_onto_each_other():
+    spec = make_spec(default_user="u")
+    c1, c2 = _collection(spec), _collection(spec)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue_collection(c1) is True
+    assert coord.enqueue_collection(c2) is True
+    assert _pending_kinds(spec) == ["collection", "collection"]
+
+
+def test_a_pending_doc_job_never_blocks_a_whole_collection_re_read():
+    """The collection job's partition key lives in its OWN namespace, so it can
+    never be mistaken for a doc's key. A doc id is a slash-FREE token (kb.doc_id),
+    so a `/`-bearing key is unforgeable by any doc — without that, a doc whose id
+    happened to match would silently swallow the collection-wide re-read."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid, "a.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue(doc_id, cid) is True  # a single doc is already queued
+    assert coord.enqueue_collection(cid) is True  # …the collection re-read still queues
+    assert sorted(_pending_kinds(spec)) == ["collection", "split"]
+
+
+def test_a_pending_failed_only_recovery_does_not_swallow_a_full_re_read():
+    """The failed-only run covers a strict SUBSET of the collection, so it must
+    not coalesce a whole-collection re-read onto itself. It used to: the key was
+    the collection alone, so clicking "Retry failed" (3 docs) and then "Re-read
+    all" (1000 docs) dropped the second request AND told the user it was already
+    running — the worst combination, a silent loss reported as success."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _doc(spec, cid, "a.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue_collection(cid, only="failed") is True
+    assert coord.enqueue_collection(cid) is True  # the bigger run still gets queued
+
+    assert _pending_kinds(spec) == ["collection", "collection"]
+
+
+def test_each_only_variant_still_coalesces_onto_itself():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _doc(spec, cid, "a.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue_collection(cid, only="failed") is True
+    assert coord.enqueue_collection(cid, only="failed") is False
+    assert coord.enqueue_collection(cid) is True
+    assert coord.enqueue_collection(cid) is False
+
+
+async def test_a_doc_is_never_left_indexing_with_no_job_behind_it():
+    """Per-doc errors are swallowed so one bad doc can't strand the rest — which
+    makes the ORDER load-bearing. Flipping to `indexing` before the enqueue meant
+    a failure in between left the doc `indexing` for ever with nothing queued:
+    permanently stuck, and invisible (the user was already told "sent")."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid, "a.md")
+    rm = spec.get_resource_manager(SourceDoc)
+    rm.update(doc_id, msgspec.structs.replace(rm.get(doc_id).data, status="ready"))
+
+    class _EnqueueBoom(_FakeIngestor):
+        def invalidate_cache(self, doc_id: str) -> None:
+            raise RuntimeError("cache backend down")
+
+    coord = IndexCoordinator(spec, _EnqueueBoom(), wiki_coordinator=None)  # ty: ignore
+    coord.enqueue_collection(cid)
+    await coord.aclose()
+
+    # The doc was not re-read — but it says so, instead of claiming to be busy.
+    assert rm.get(doc_id).data.status == "ready"
+
+
+async def test_an_empty_requester_is_not_replaced_by_the_worker_default():
+    """`requested_by=""` is a real user id in a no-auth deploy. A truthiness
+    check silently swapped it for the worker's own default — the exact
+    miscrediting the parameter exists to prevent (#186)."""
+    spec = make_spec(default_user="worker-default")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid, "a.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    coord.enqueue(doc_id, cid, requested_by="")
+
+    jrm = spec.get_resource_manager(IndexJob)
+    job = next(iter(jrm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())))
+    assert job.info.created_by == ""  # ty: ignore[unresolved-attribute]
