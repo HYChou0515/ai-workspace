@@ -47,6 +47,7 @@ from specstar.types import (
     TaskStatus,
 )
 
+from ...files import rel_path
 from ...resources import AgentConfig, CodeWikiBuildRun, Collection, SourceDoc, WikiBuildState
 from ..code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..job_audit import preserve_job_creator
@@ -121,11 +122,13 @@ def _correction_instruction(payload) -> str:  # payload: WikiJobPayload
         f"\n\nCorrection:\n{payload.correction}",
     ]
     if payload.target_page.strip():
-        parts.append(f"\n\nThe error is on (or near) this page: {payload.target_page}")
+        # The FE and the drafting LLM both hand this over store-shaped
+        # (`/entities/x.md`); show the corrector the form its own tools print.
+        parts.append(f"\n\nThe error is on (or near) this page: {rel_path(payload.target_page)}")
     if payload.reference.strip():
         parts.append(f"\n\nReference document to follow:\n{payload.reference}")
     parts.append(
-        "\n\nThe corrected fact is also on record under /corrections/. Apply it to "
+        "\n\nThe corrected fact is also on record under corrections/. Apply it to "
         "the affected wiki page(s) now."
     )
     return "".join(parts)

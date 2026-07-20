@@ -209,8 +209,8 @@ async def test_apply_steer_writes_edits_deletes_invalidated_and_journals_receipt
     assert rec["instruction"] == "use the a collection"
     assert rec["invalidate"] == ["ingest"]
     assert sorted(rec["deleted"]) == [
-        "/.workflow/collections/step_ingest/a.json",
-        "/.workflow/collections/step_ingest/b.json",
+        ".workflow/collections/step_ingest/a.json",
+        ".workflow/collections/step_ingest/b.json",
     ]
 
 

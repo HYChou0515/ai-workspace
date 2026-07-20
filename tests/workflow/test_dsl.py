@@ -1399,7 +1399,7 @@ async def test_run_map_inner_steps_ref_uses_element_key():
     )
     assert validate_def(d) == []
     assert await build_run(d)(wf, None) == {"status": "done"}
-    assert sorted(ran) == ["handle /uploads/a.txt as big", "handle /uploads/b.txt as big"]
+    assert sorted(ran) == ["handle uploads/a.txt as big", "handle uploads/b.txt as big"]
 
 
 # ─── P2: outputs schema (types + enum + validation) ──────────────────────────

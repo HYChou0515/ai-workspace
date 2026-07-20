@@ -19,10 +19,16 @@ export function resolveUploadDir(
 }
 
 /** The workspace path a chat-attached file lands at: `{upload_dir}/{rel}`, preserving
- * a folder pick's relative path (`webkitRelativePath`) so subtrees keep their shape. */
+ * a folder pick's relative path (`webkitRelativePath`) so subtrees keep their shape.
+ *
+ * Workspace-RELATIVE, with no leading slash. This same string is both the PUT key
+ * (the backend canonicalises it either way) and the path `attachPrompt` shows the
+ * model — and the model's own `list_files` prints `uploads/a.csv`, while its shell
+ * reads a leading `/` as the system root. The draft is the first thing it ever
+ * learns about an attached file, so it has to teach the form that works. */
 export function uploadPathFor(uploadDir: string, file: File): string {
   const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-  return `/${uploadDir}/${rel}`.replace(/\/+/g, "/");
+  return `${uploadDir}/${rel}`.replace(/\/+/g, "/").replace(/^\//, "");
 }
 
 /** The longest shared directory prefix of `paths` (always ends in `/`). */

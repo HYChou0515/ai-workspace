@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Literal
 
 import msgspec
 
+from ...files import rel_path
+
 if TYPE_CHECKING:
     from ..llm import ILlm, OnChunk
 
@@ -68,7 +70,9 @@ the whole page. Respond with ONLY the JSON object.\
 def _pages_block(wiki_pages: list[str]) -> str:
     if not wiki_pages:
         return ""
-    joined = "\n".join(f"- {p}" for p in wiki_pages)
+    # Relative — the same form the corrector's own list_files/search_wiki print,
+    # and the form it will echo back as `target_page`.
+    joined = "\n".join(f"- {rel_path(p)}" for p in wiki_pages)
     return f"\nThe wiki pages this answer cited (likely where the error is):\n{joined}\n"
 
 

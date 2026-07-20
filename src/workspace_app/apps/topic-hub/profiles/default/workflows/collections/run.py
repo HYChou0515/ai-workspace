@@ -128,7 +128,10 @@ async def _convert_uploads(
         if out_path is None:
             skipped.append(dest)
         else:
-            converted.append(f"/{out_path}")
+            # Relative, like every other path a run hands an agent — these end up
+            # in `_classify_prompt`'s "Read the file {f}", where a leading `/`
+            # would point the agent's shell at the system root.
+            converted.append(out_path)
     return converted, skipped
 
 

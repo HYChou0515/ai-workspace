@@ -70,6 +70,19 @@ def _norm(path: str) -> str:
     return p if p.startswith("/") else "/" + p
 
 
+def rel_path(path: str) -> str:
+    """`_norm`'s inverse — the workspace path as an AGENT should ever see it.
+
+    The store's key is absolute-looking (`/brief.md`) and the file tools take it
+    back happily, but `exec` runs a real process whose cwd is the workspace and
+    which has no chroot: there, `/brief.md` is the *system* root. Any path we put
+    in front of a model — a listing, a grep hit, a prompt, a tool's confirmation
+    — therefore goes through here, so the model only ever learns the one form
+    that works in every surface it can use a path in. Input stays permissive;
+    this is about what we TEACH, not what we accept."""
+    return path.lstrip("/")
+
+
 class WorkspaceFiles:
     def __init__(
         self,

@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 
 import msgspec
 
+from ...files import rel_path
 from .code_wiki import _first_paragraph_after_h1, _slugify, _unfence
 from .store import (
     MaintainerWikiStore,
@@ -185,7 +186,7 @@ def _render_digest(digest: list[PageDigest]) -> str:
     present) its outgoing links + sources."""
     lines: list[str] = []
     for d in digest:
-        parts = [f'- {d.path} [{d.size}] "{d.title}": {d.summary}']
+        parts = [f'- {rel_path(d.path)} [{d.size}] "{d.title}": {d.summary}']
         if d.links:
             parts.append(f"(links: {', '.join(d.links)})")
         if d.sources:
@@ -342,24 +343,35 @@ class WikiReflector:
         concepts need a title (sources narrowed to known pages); a merge needs a
         known ``keep`` and ≥1 known duplicate that isn't ``keep``; a split needs a
         known, over-threshold page and ≥1 subtopic. Deterministic — the guard rail
-        that makes the LLM's plan safe to execute."""
+        that makes the LLM's plan safe to execute.
+
+        Every page reference the model gives us is canonicalised first: the digest
+        shows relative paths (the same dialect its other tools speak), so that is
+        what it echoes back, while the store is keyed `/entities/x.md`. Comparing
+        the two raw would filter out every action and make reflection a silent
+        no-op — so this matches on the canonical form and emits it too."""
         sizes = {d.path: d.size for d in digest}
         known = set(sizes)
         concepts = [
-            ConceptAction(title=c.title.strip(), sources=[s for s in c.sources if s in known])
+            ConceptAction(
+                title=c.title.strip(),
+                sources=[p for s in c.sources if (p := _norm_path(s)) in known],
+            )
             for c in plan.concepts
             if c.title.strip()
         ]
         merges: list[MergeAction] = []
         for m in plan.merges:
-            dups = [d for d in m.duplicates if d in known and d != m.keep]
-            if m.keep in known and dups:
-                merges.append(MergeAction(keep=m.keep, duplicates=dups))
+            keep = _norm_path(m.keep)
+            dups = [p for d in m.duplicates if (p := _norm_path(d)) in known and p != keep]
+            if keep in known and dups:
+                merges.append(MergeAction(keep=keep, duplicates=dups))
         splits: list[SplitAction] = []
         for s in plan.splits:
             subs = [t.strip() for t in s.subtopics if t.strip()]
-            if s.page in known and sizes[s.page] >= self._split_min and subs:
-                splits.append(SplitAction(page=s.page, subtopics=subs))
+            page = _norm_path(s.page)
+            if page in known and sizes[page] >= self._split_min and subs:
+                splits.append(SplitAction(page=page, subtopics=subs))
         return ReflectPlan(
             concepts=concepts,
             merges=merges,

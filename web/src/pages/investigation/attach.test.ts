@@ -10,45 +10,52 @@ function fileWithRelPath(name: string, rel: string, bytes = 1): File {
 
 describe("uploadPathFor (#198)", () => {
   it("lands a single file at {uploadDir}/{name}", () => {
-    expect(uploadPathFor("uploads", new File(["x"], "a.csv"))).toBe("/uploads/a.csv");
+    expect(uploadPathFor("uploads", new File(["x"], "a.csv"))).toBe("uploads/a.csv");
   });
 
   it("respects the profile's upload_dir, not a hardcoded folder", () => {
-    expect(uploadPathFor("dropbox", new File(["x"], "a.csv"))).toBe("/dropbox/a.csv");
+    expect(uploadPathFor("dropbox", new File(["x"], "a.csv"))).toBe("dropbox/a.csv");
   });
 
   it("preserves a folder pick's relative path (webkitRelativePath)", () => {
     const f = fileWithRelPath("a.csv", "data/sub/a.csv");
-    expect(uploadPathFor("uploads", f)).toBe("/uploads/data/sub/a.csv");
+    expect(uploadPathFor("uploads", f)).toBe("uploads/data/sub/a.csv");
   });
 
   it("collapses duplicate slashes from a trailing-slash upload_dir", () => {
-    expect(uploadPathFor("uploads/", new File(["x"], "a.csv"))).toBe("/uploads/a.csv");
+    expect(uploadPathFor("uploads/", new File(["x"], "a.csv"))).toBe("uploads/a.csv");
   });
 });
 
 describe("attachPrompt (#198, grill Q3)", () => {
+  it("names the file the way the agent's own tools will", () => {
+    // This draft is the FIRST thing the model ever reads about an attached file,
+    // and its `list_files` prints `uploads/a.csv`. A `/uploads/a.csv` here taught
+    // it a path its own shell resolves against the SYSTEM root.
+    expect(attachPrompt(["uploads/a.csv"])).not.toContain("/uploads");
+  });
+
   it("is empty for no files", () => {
     expect(attachPrompt([])).toBe("");
   });
 
   it("a single file → just its path", () => {
-    expect(attachPrompt(["/uploads/a.csv"])).toContain("/uploads/a.csv");
-    expect(attachPrompt(["/uploads/a.csv"])).not.toContain("\n-");
+    expect(attachPrompt(["uploads/a.csv"])).toContain("uploads/a.csv");
+    expect(attachPrompt(["uploads/a.csv"])).not.toContain("\n-");
   });
 
   it("a handful (≤10) → one path per line", () => {
-    const out = attachPrompt(["/uploads/a.csv", "/uploads/b.csv"]);
-    expect(out).toContain("/uploads/a.csv");
-    expect(out).toContain("/uploads/b.csv");
-    expect(out.split("\n").filter((l) => l.includes("/uploads/")).length).toBe(2);
+    const out = attachPrompt(["uploads/a.csv", "uploads/b.csv"]);
+    expect(out).toContain("uploads/a.csv");
+    expect(out).toContain("uploads/b.csv");
+    expect(out.split("\n").filter((l) => l.includes("uploads/")).length).toBe(2);
   });
 
   it("many (>10) → a folder + count summary instead of exploding the draft", () => {
-    const paths = Array.from({ length: 12 }, (_, i) => `/uploads/foo/f${i}.csv`);
+    const paths = Array.from({ length: 12 }, (_, i) => `uploads/foo/f${i}.csv`);
     const out = attachPrompt(paths);
     expect(out).toContain("12");
-    expect(out).toContain("/uploads/foo"); // the common folder
+    expect(out).toContain("uploads/foo"); // the common folder
     expect(out).not.toContain("f11.csv"); // does NOT list every file
   });
 });
@@ -77,7 +84,7 @@ describe("runAttach (#198)", () => {
       uploadDir: "uploads",
       upload,
     });
-    expect(res.uploaded).toEqual(["/uploads/a.csv", "/uploads/b.csv"]);
+    expect(res.uploaded).toEqual(["uploads/a.csv", "uploads/b.csv"]);
     expect(upload).toHaveBeenCalledTimes(2);
     expect(res.tooLarge).toEqual([]);
     expect(res.failed).toEqual([]);
@@ -85,20 +92,20 @@ describe("runAttach (#198)", () => {
 
   it("routes a 413 (over the size cap) to tooLarge and keeps going", async () => {
     const upload = vi.fn(async (path: string) => {
-      if (path === "/uploads/big.bin") throw Object.assign(new Error("too big"), { status: 413 });
+      if (path === "uploads/big.bin") throw Object.assign(new Error("too big"), { status: 413 });
     });
     const res = await runAttach({
       files: [new File(["x"], "big.bin"), new File(["y"], "ok.csv")],
       uploadDir: "uploads",
       upload,
     });
-    expect(res.tooLarge).toEqual(["/uploads/big.bin"]);
-    expect(res.uploaded).toEqual(["/uploads/ok.csv"]);
+    expect(res.tooLarge).toEqual(["uploads/big.bin"]);
+    expect(res.uploaded).toEqual(["uploads/ok.csv"]);
   });
 
   it("routes a 507 (over the workspace quota) to overQuota and keeps going", async () => {
     const upload = vi.fn(async (path: string) => {
-      if (path === "/uploads/big.bin")
+      if (path === "uploads/big.bin")
         throw Object.assign(new Error("out of space"), { status: 507 });
     });
     const res = await runAttach({
@@ -106,22 +113,22 @@ describe("runAttach (#198)", () => {
       uploadDir: "uploads",
       upload,
     });
-    expect(res.overQuota).toEqual(["/uploads/big.bin"]);
+    expect(res.overQuota).toEqual(["uploads/big.bin"]);
     expect(res.tooLarge).toEqual([]);
-    expect(res.uploaded).toEqual(["/uploads/ok.csv"]);
+    expect(res.uploaded).toEqual(["uploads/ok.csv"]);
   });
 
   it("routes a non-413 error to failed and keeps going", async () => {
     const upload = vi.fn(async (path: string) => {
-      if (path === "/uploads/x.csv") throw Object.assign(new Error("boom"), { status: 500 });
+      if (path === "uploads/x.csv") throw Object.assign(new Error("boom"), { status: 500 });
     });
     const res = await runAttach({
       files: [new File(["x"], "x.csv"), new File(["y"], "y.csv")],
       uploadDir: "uploads",
       upload,
     });
-    expect(res.failed).toEqual(["/uploads/x.csv"]);
-    expect(res.uploaded).toEqual(["/uploads/y.csv"]);
+    expect(res.failed).toEqual(["uploads/x.csv"]);
+    expect(res.uploaded).toEqual(["uploads/y.csv"]);
   });
 
   it("reports aggregate byte progress, ending at 100% with all files done", async () => {

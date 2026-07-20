@@ -198,7 +198,10 @@ def test_render_digest_lists_each_page_with_signals():
         PageDigest("/entities/zone-3.md", "Zone 3", "runs at 245 C", ["spec.pdf"], ["voiding"], 300)
     ]
     out = _render_digest(digest)
-    assert "/entities/zone-3.md" in out
+    # relative, like list_files/search_wiki — the planner is told to reply with
+    # "exact page paths from the digest", so this is the dialect it echoes back
+    assert "entities/zone-3.md" in out
+    assert "/entities/zone-3.md" not in out
     assert "Zone 3" in out
     assert "voiding" in out  # link
     assert "245 C" in out  # summary
@@ -323,3 +326,30 @@ def test_render_journal_variants():
     empty = _render_journal("2026-07-06", ReflectPlan(), [], [])
     assert "(nothing to consolidate)" in empty
     assert "Contradictions" not in empty and "Orphan" not in empty
+
+
+def test_plan_validation_accepts_the_relative_paths_the_digest_showed():
+    """The digest the planner reads lists pages relative (`entities/zone-a.md`),
+    and the prompt tells it to reply with the exact paths from that digest — so
+    validation has to recognise that form. Matching only the store's `/`-prefixed
+    key would filter EVERY action out and turn reflection into a silent no-op."""
+    plan_json = (
+        '{"concepts":[{"title":"Thermal","sources":["entities/zone-a.md"]}],'
+        '"merges":[{"keep":"concepts/voiding.md","duplicates":["concepts/voids.md"]}],'
+        '"splits":[{"page":"entities/big.md","subtopics":["Setup"]}],'
+        '"contradictions":[],"notes":""}'
+    )
+    digest = [
+        PageDigest("/entities/zone-a.md", "Zone A", "", [], [], 100),
+        PageDigest("/concepts/voiding.md", "Voiding", "", [], [], 100),
+        PageDigest("/concepts/voids.md", "Voids", "", [], [], 100),
+        PageDigest("/entities/big.md", "Big", "", [], [], 9000),
+    ]
+    r = WikiReflector(make_spec(default_user="u"), _ScriptedLlm([plan_json]), split_min_chars=1)
+    plan = r.plan(digest, collection_name="c")
+
+    assert [c.sources for c in plan.concepts] == [["/entities/zone-a.md"]]
+    assert [(m.keep, m.duplicates) for m in plan.merges] == [
+        ("/concepts/voiding.md", ["/concepts/voids.md"])
+    ]
+    assert [s.page for s in plan.splits] == ["/entities/big.md"]

@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import magic
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
 
-from ..files import WorkspaceFiles, WorkspaceFull
+from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
@@ -376,28 +376,13 @@ async def edit_file_impl(
     )
 
 
-def _agent_path(path: str) -> str:
-    """The workspace path as the AGENT should see it: relative, no leading `/`.
-
-    The store's canonical key is `/notes.txt` (`files.facade._norm`), and the
-    file tools happily take it back. But `exec` runs a real process whose cwd is
-    the workspace and which has NO chroot — there, `/notes.txt` is the *system*
-    root. A listing that prints `/notes.txt` therefore hands the model a string
-    that is only valid in half the surfaces it can use it in, and the model
-    (reasonably) trusts what the tool just showed it over any prompt prose
-    telling it to mentally strip the slash. Relative is the one form that is
-    correct everywhere, so that is the only form we ever print. Input stays
-    permissive — `_norm` still accepts `/x`, `./x` and `x` alike."""
-    return path.lstrip("/")
-
-
 async def list_files_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> list[str]:
     """List files in the workspace, optionally filtered by prefix. This is your
     workspace's directory listing — use it instead of `exec(["ls", ...])`. Paths
     come back relative to the workspace root (`notes.txt`, `data/x.csv`), which
     is exactly the form to pass to the other file tools and to use in `exec`."""
     fs, inv = _workspace(ctx)
-    return [_agent_path(p) for p in await fs.ls(inv, prefix)]
+    return [rel_path(p) for p in await fs.ls(inv, prefix)]
 
 
 async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool:
@@ -476,7 +461,7 @@ async def search_wiki_impl(ctx: RunContextWrapper[AgentToolContext], query: str)
             for m in search_text(text, pattern):
                 # Same dialect as `list_files`: relative to the wiki root, so a
                 # path the agent reads here can be passed straight to read_file.
-                rel = _agent_path(path)
+                rel = rel_path(path)
                 where = f"{cid}/{rel}" if multi else rel
                 hits.append(f"{where}:{m.line}: {m.text}")
 
@@ -1313,7 +1298,8 @@ async def save_skill_impl(
     path = f"/{WORKSPACE_SKILL_DIR}/{slug}/SKILL.md"
     await files.write(inv, path, render_skill_md(slug, description, body).encode("utf-8"))
     return (
-        f"saved skill '{slug}' to {path}. Load it any time with read_skill('{slug}'). "
+        f"saved skill '{slug}' to {rel_path(path)}. Load it any time with "
+        f"read_skill('{slug}'). "
         "To reuse it elsewhere, download the .skill folder from the Skills panel."
     )
 
@@ -1374,7 +1360,8 @@ async def save_workflow_impl(
         )
     path = await save_workspace_workflow(files, inv, slug, workflow)
     return (
-        f"saved workflow '{slug}' to {path}. The user can Run it from this item, or download "
+        f"saved workflow '{slug}' to {rel_path(path)}. The user can Run it from this "
+        "item, or download "
         "the .workflows folder from the Workflows panel to reuse or hand it to the dev team."
     )
 

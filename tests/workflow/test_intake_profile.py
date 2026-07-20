@@ -51,7 +51,7 @@ async def test_approve_classifies_then_ingests():
     await record_decision(wf, phase="review", choice="approve")  # human already approved
     result = await run(wf, {})
     assert result == {"status": "approved", "committed": 1}
-    assert ingested == [("kb-docs", "/uploads/a.txt")]
+    assert ingested == [("kb-docs", "uploads/a.txt")]
 
 
 async def test_reject_commits_nothing():

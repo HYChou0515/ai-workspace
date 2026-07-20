@@ -57,14 +57,28 @@ async def test_glob_matches_patterns_minus_exclude_sorted(wf: WorkflowHandle):
         await wf.write(p, "x")
     # the canonical intake spec: everything under inputs/ except input.json
     files = await wf.glob(["inputs/*"], exclude=["inputs/input.json"])
-    assert files == ["/inputs/a.txt", "/inputs/b.txt"]  # sorted, deterministic
+    assert files == ["inputs/a.txt", "inputs/b.txt"]  # sorted, deterministic
 
 
 async def test_glob_accepts_a_single_pattern_string(wf: WorkflowHandle):
     await wf.write("data/x.csv", "1")
     await wf.write("data/y.csv", "2")
     await wf.write("readme.md", "z")
-    assert await wf.glob("data/*.csv") == ["/data/x.csv", "/data/y.csv"]
+    assert await wf.glob("data/*.csv") == ["data/x.csv", "data/y.csv"]
+
+
+async def test_glob_returns_workspace_relative_paths(wf: WorkflowHandle):
+    """A workflow's glob results are routinely interpolated into an agent prompt
+    ("Read the file {f}"), and that agent's own `list_files` prints relative
+    paths. If glob returned `/uploads/x.csv` the run would hand the agent a path
+    that its shell reads as the SYSTEM root — the same defect `list_files` had.
+    So glob speaks the one dialect too; every `wf.*` op still accepts either."""
+    await wf.write("uploads/x.csv", "1")
+    (only,) = await wf.glob(["uploads/*"])
+    assert only == "uploads/x.csv"
+    # the result feeds straight back into the handle, unchanged
+    assert await wf.read(only) == b"1"
+    assert await wf.exists(only)
 
 
 async def test_upload_dir_defaults_to_uploads(wf: WorkflowHandle):
