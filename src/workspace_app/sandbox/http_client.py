@@ -294,6 +294,15 @@ class HttpSandbox:
         resp = await self._io_request(handle, "GET", "/exists", params={"path": path})
         return bool(resp.json()["exists"])
 
+    async def disk_usage(self, handle: SandboxHandle) -> int:
+        resp = await self._io_request(handle, "GET", "/disk-usage")
+        return int(resp.json()["bytes"])
+
+    async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
+        resp = await self._io_request(handle, "GET", "/size", params={"path": path})
+        size = resp.json()["size"]
+        return None if size is None else int(size)
+
     async def mark_ready(self, handle: SandboxHandle) -> None:
         await self._io_request(handle, "POST", "/mark-ready")
 

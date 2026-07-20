@@ -211,6 +211,33 @@ class Sandbox(Protocol):
         False — mirror FileStore.exists)."""
         ...
 
+    async def disk_usage(self, handle: SandboxHandle) -> int:
+        """#538: total bytes the workspace occupies, as ONE number.
+
+        The quota asks the sandbox how big it is instead of walking it and
+        adding up entries: the answer comes from the thing that owns the disk,
+        so every pod looking at the same sandbox gets the same figure rather
+        than each keeping its own tally in memory, and it dies with the sandbox
+        rather than outliving it in some process.
+
+        Scoped to the walked workspace, NOT the infra area beside it — the
+        `.ready` marker and the per-sandbox `.home` never appear in the file
+        tree, so counting them would charge the user for bytes they cannot see
+        or delete. (The scratch VOLUME is a separate concern with its own cap,
+        `sandbox.max_workspace_bytes`.)
+
+        Apparent bytes, matching what `walk` reports per file, so the usage
+        figure and the file tree's sizes are the same quantity."""
+        ...
+
+    async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
+        """#538: bytes of the regular file at `path`, or None if absent.
+
+        The quota's overwrite credit. It has to come from the same live source
+        as `disk_usage`, or the two halves of "does this write GROW the
+        workspace" disagree about whether a file counts."""
+        ...
+
     async def mark_ready(self, handle: SandboxHandle) -> None:
         """#366: mark this sandbox authoritative — its files are the complete,
         restored state. SandboxSync calls it at the END of `restore`, and the

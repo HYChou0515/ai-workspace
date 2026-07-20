@@ -840,3 +840,38 @@ async def test_unjailed_pip_install_stays_in_home_and_other_sandbox_cannot_see_i
     b = await sb.create(SandboxSpec(), sandbox_id="B")
     rb = await sb.exec(b, ["python", "-c", "import cowsay"])
     assert rb.exit_code != 0
+
+
+async def test_disk_usage_totals_the_workspace(sandbox: LocalProcessSandbox):
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x" * 30, "/a.bin")
+    await sandbox.upload(h, b"y" * 12, "/sub/b.bin")
+    assert await sandbox.disk_usage(h) == 42
+
+
+async def test_disk_usage_excludes_the_infra_area_beside_the_workspace(
+    sandbox: LocalProcessSandbox,
+):
+    """The `.ready` marker and the per-sandbox `.home` are siblings of the
+    walked workspace, not part of it. They never show up in the file tree, so
+    charging the user for them would mean telling someone their workspace is
+    full of bytes they cannot see or delete. (The scratch volume they do sit on
+    has its own cap — `sandbox.max_workspace_bytes`.)"""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x" * 10, "/a.bin")
+    await sandbox.mark_ready(h)
+    # a `pip install --user` lands in the per-sandbox HOME, beside the workspace
+    home = Path(sandbox._require(h)) / ".home" / "lib"
+    home.mkdir(parents=True, exist_ok=True)
+    (home / "big.whl").write_bytes(b"z" * 5000)
+
+    assert await sandbox.disk_usage(h) == 10
+
+
+async def test_size_of_reports_one_file(sandbox: LocalProcessSandbox):
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x" * 30, "/a.bin")
+    assert await sandbox.size_of(h, "/a.bin") == 30
+    assert await sandbox.size_of(h, "/missing.bin") is None
+    await sandbox.mkdir(h, "/adir")
+    assert await sandbox.size_of(h, "/adir") is None  # directories are not files

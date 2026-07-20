@@ -161,6 +161,13 @@ class MockSandbox:
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
         return path in self._require(handle)
 
+    async def disk_usage(self, handle: SandboxHandle) -> int:
+        return sum(len(d) for d in self._require(handle).values())
+
+    async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
+        data = self._require(handle).get(path)
+        return None if data is None else len(data)
+
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         fs = self._require(handle)
         if path not in fs:

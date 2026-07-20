@@ -263,3 +263,39 @@ async def test_kill_clears_readiness_so_a_recreated_sandbox_is_not_ready_366():
     await sandbox.kill(h)
     h2 = await sandbox.create(SandboxSpec(), sandbox_id="item-x")
     assert await sandbox.is_ready(h2) is False
+
+
+async def test_disk_usage_totals_the_workspace():
+    """#538: the quota asks the sandbox how big it is rather than walking it
+    file-by-file — one number instead of an entry per file, and the answer comes
+    from the thing that owns the disk, so every pod reading the same sandbox gets
+    the same answer instead of each keeping its own tally."""
+    sb = MockSandbox()
+    h = await sb.create(SandboxSpec())
+    assert await sb.disk_usage(h) == 0
+    await sb.upload(h, b"x" * 30, "/a.bin")
+    await sb.upload(h, b"y" * 12, "/sub/b.bin")
+    assert await sb.disk_usage(h) == 42
+
+
+async def test_disk_usage_counts_build_output_the_mirror_never_persists():
+    """The quota caps the disk actually being consumed, so regenerable trees
+    count: `node_modules/` really is on the volume, and it is what a runaway
+    install fills it with. The mirror still refuses to persist them — that is a
+    question about the durable archive, not about who is using the disk now."""
+    sb = MockSandbox()
+    h = await sb.create(SandboxSpec())
+    await sb.upload(h, b"x" * 10, "/keep.txt")
+    await sb.upload(h, b"y" * 500, "/node_modules/dep/index.js")
+    assert await sb.disk_usage(h) == 510
+
+
+async def test_size_of_reports_one_file_without_walking():
+    """The quota's overwrite credit: what the file being replaced currently
+    costs. It must come from the same live source as the total, or the two
+    halves of the subtraction disagree about whether a file counts."""
+    sb = MockSandbox()
+    h = await sb.create(SandboxSpec())
+    await sb.upload(h, b"x" * 30, "/a.bin")
+    assert await sb.size_of(h, "/a.bin") == 30
+    assert await sb.size_of(h, "/missing.bin") is None
