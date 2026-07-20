@@ -370,6 +370,10 @@ def get_runner(settings: Settings) -> AgentRunner:
         api_key=settings.llm.api_key or None,
         fallback_chains=chains or None,
         cooldown_registry=get_cooldown_registry() if chains else None,
+        # #493: the ttft/idle budgets used to apply ONLY inside a >=2-endpoint
+        # FallbackModel, so the default single-endpoint deploy had no bound and a
+        # silent provider hung the turn indefinitely. Same numbers, always armed.
+        stream_deadlines=(settings.failover.ttft_timeout_s, settings.failover.idle_timeout_s),
         token_service=PassthroughTokenService(),
     )
 

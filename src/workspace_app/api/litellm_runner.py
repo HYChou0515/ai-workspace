@@ -264,6 +264,7 @@ def _agent_for(
     cooldown_registry: CooldownRegistry | None = None,
     on_failover_switch: Callable[[str, str], None] | None = None,
     resolve_key: Callable[[str | None], str | None] = lambda key: key,
+    stream_deadlines: tuple[float, float] | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
@@ -439,6 +440,17 @@ def _agent_for(
         )
     else:
         model = _build_model(config.model, eff_base_url, eff_api_key)
+        # #493: a turn must always end. FallbackModel carries the ttft/idle
+        # deadlines, but it is only built for a chain of two or more endpoints —
+        # so the DEFAULT single-endpoint deploy had no bound at all, and a
+        # provider that accepted the request then went quiet hung the turn
+        # forever with no event, nothing persisted and no watchdog. Apply the
+        # same two bounds here, without failover's switching/cooldown semantics.
+        if stream_deadlines is not None:
+            from ..agent.deadline_model import DeadlineModel
+
+            ttft_s, idle_s = stream_deadlines
+            model = DeadlineModel(model, ttft_s=ttft_s, idle_s=idle_s)
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,
@@ -717,6 +729,7 @@ class LitellmAgentRunner:
         fallback_chains: FallbackChains | None = None,
         cooldown_registry: CooldownRegistry | None = None,
         token_service: ITokenService | None = None,
+        stream_deadlines: tuple[float, float] | None = None,
     ) -> None:
         # #94: no runner-level default config. Every turn's config arrives on
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
@@ -737,6 +750,11 @@ class LitellmAgentRunner:
         # #196 busy-aware failover (None when no preset declares fallbacks).
         self._fallback_chains = fallback_chains
         self._cooldown_registry = cooldown_registry
+        # #493 (ttft_s, idle_s) applied to a SINGLE-endpoint turn, so a provider
+        # that goes quiet ends the turn with a real error instead of hanging it
+        # forever. The failover path carries its own copies of these. None = no
+        # bound (what every deploy without `fallbacks:` used to get).
+        self._stream_deadlines = stream_deadlines
 
     async def _key_resolver(self, ctx: AgentToolContext) -> Callable[[str | None], str | None]:
         """A SYNC ``key -> key`` mapping for THIS turn's endpoints, resolved through
@@ -890,6 +908,7 @@ class LitellmAgentRunner:
             cooldown_registry=self._cooldown_registry,
             on_failover_switch=_failover_emitter(queue),
             resolve_key=resolve_key,
+            stream_deadlines=self._stream_deadlines,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))
@@ -1040,6 +1059,7 @@ class LitellmAgentRunner:
             fallback_chains=self._fallback_chains,
             cooldown_registry=self._cooldown_registry,
             resolve_key=resolve_key,
+            stream_deadlines=self._stream_deadlines,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))
