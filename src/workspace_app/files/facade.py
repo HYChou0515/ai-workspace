@@ -19,6 +19,7 @@ plain FileStore pass-through — handy for tests + the transitional fallback.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -30,6 +31,14 @@ from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound
 # before giving up and reporting a conflict. A handful is plenty — contention
 # on one wiki page across workers is rare and each retry re-reads fresh.
 _CAS_EDIT_RETRIES = 5
+
+# #538: how long a warm workspace's measured file sizes stay usable before the
+# sandbox is walked again. Matches `create_app`'s default `mirror_interval` —
+# the workspace is already reconciled to the durable snapshot on that cadence,
+# so the quota gains nothing from a finer one, and a user-visible number that
+# trails reality by at most one such window is what the rest of the system
+# already promises.
+_USAGE_WINDOW_S = 5.0
 
 
 def _norm(path: str) -> str:
@@ -48,6 +57,8 @@ class WorkspaceFiles:
         sandbox: Sandbox | None = None,
         handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
         rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
+        usage_window: float = _USAGE_WINDOW_S,
+        now: Callable[[], float] = time.monotonic,
     ) -> None:
         self._fs = filestore
         self._sb = sandbox
@@ -64,6 +75,18 @@ class WorkspaceFiles:
         # Per-(workspace, path) lock so a compare-and-swap (read → check →
         # write) is atomic against other writers going through this facade.
         self._locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
+        # #538: workspace → (measured_at, path → size) for a WARM workspace. The
+        # quota is measured from the live sandbox, and measuring means walking
+        # it; a folder upload asks once per file, so an unmemoised walk would
+        # make an N-file batch cost N traversals. Re-walked at most once per
+        # `usage_window` (the mirror interval — the same granularity the rest of
+        # the system already reconciles at), while writes and deletes made
+        # THROUGH this facade patch the map directly, so a batch stays exact
+        # without re-walking. Bytes that appear behind our back (the shell, a
+        # download) are picked up on the next window.
+        self._window = usage_window
+        self._now = now
+        self._tree: dict[str, tuple[float, dict[str, int]]] = {}
 
     async def _warm(self, workspace_id: str) -> tuple[Sandbox, SandboxHandle] | None:
         """The item's ONE live sandbox, or None when it is globally cold (so the
@@ -117,6 +140,7 @@ class WorkspaceFiles:
             await sb.upload(h, data, path)
         else:
             await self._fs.write(workspace_id, path, data)
+        self._record(workspace_id, path, len(data))
 
     async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
         """Create-if-absent (#419 N1 numbering arbiter): raise `FileExists` if
@@ -133,6 +157,7 @@ class WorkspaceFiles:
             if await sb.exists(h, path):
                 raise FileExists(path)
             await sb.upload(h, data, path)
+            self._record(workspace_id, path, len(data))
             return
         native = getattr(self._fs, "create_exclusive", None)
         if native is not None:
@@ -157,6 +182,7 @@ class WorkspaceFiles:
             await sb.upload_file(h, source, path)
         else:
             await self._fs.write_from_path(workspace_id, path, source, content_type)
+        self._record(workspace_id, path, source.stat().st_size)
 
     async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
         """Like `read`, but stream the bytes out to the on-disk `dest` — RAM-free
@@ -182,33 +208,96 @@ class WorkspaceFiles:
         return await self._fs.exists(workspace_id, path)
 
     async def workspace_usage(self, workspace_id: str) -> int:
-        """Total durable bytes the workspace's files occupy — the #245 quota
-        basis. Always the **durable** store (the disk the quota protects), never
-        the warm sandbox, so the usage bar and the quota agree on one number. A
-        store without usage accounting (e.g. the wiki-page store) reports 0 —
-        duck-typed like the CAS pair."""
+        """Total bytes the workspace's files occupy — the #245 quota basis,
+        measured against the **live** workspace (#538).
+
+        Routed warm/cold exactly like `stat_all`, because it has to answer the
+        same question the file tree does: warm ⇒ summed from the sandbox's own
+        `walk` (a stat, never a read — the same basis `registry._scratch_usage`
+        uses); cold ⇒ the durable store's aggregate.
+
+        Measuring the durable snapshot instead was the #538 bug. The snapshot
+        only catches up on a mirror sweep, so it counted the wrong things in
+        both directions: bytes the agent created in the sandbox (exec output,
+        downloads) were invisible and therefore free, while bytes deleted in
+        the sandbox kept being charged — a workspace could report "full" with
+        room to spare *and* grow without bound. A store without usage
+        accounting (e.g. the wiki-page store) reports 0 — duck-typed like the
+        CAS pair."""
+        tree = await self._live_tree(workspace_id)
+        if tree is not None:
+            return sum(tree.values())
         usage = getattr(self._fs, "workspace_usage", None)
         return await usage(workspace_id) if usage is not None else 0
 
     async def file_size(self, workspace_id: str, path: str) -> int | None:
-        """Durable size of one file (None if absent) — the overwrite credit for a
-        quota check. Durable store, mirroring `workspace_usage`."""
+        """Size of one file (None if absent) — the overwrite credit for a quota
+        check. Warm/cold routed, mirroring `workspace_usage` (#538): the credit
+        MUST come from the same source as `used`, or the two halves of the
+        subtraction disagree and a warm-only file is charged twice."""
+        path = _norm(path)
+        tree = await self._live_tree(workspace_id)
+        if tree is not None:
+            return tree.get(path)
         size = getattr(self._fs, "file_size", None)
-        return await size(workspace_id, _norm(path)) if size is not None else None
+        return await size(workspace_id, path) if size is not None else None
+
+    async def _live_tree(self, workspace_id: str) -> dict[str, int] | None:
+        """``path → size`` for a WARM workspace, walked at most once per usage
+        window; ``None`` when the workspace is cold (the caller falls back to the
+        durable store). Holding the whole map rather than just the total is what
+        lets a write patch the measurement in place instead of re-walking, and it
+        makes the quota's two halves — the workspace total and the size being
+        overwritten — come from one consistent snapshot."""
+        warm = await self._warm(workspace_id)
+        if warm is None:
+            self._tree.pop(workspace_id, None)  # went cold; don't serve stale sizes
+            return None
+        cached = self._tree.get(workspace_id)
+        if cached is not None and self._now() - cached[0] < self._window:
+            return cached[1]
+        sb, h = warm
+        tree = {e.path: e.size for e in await sb.walk(h, "/")}
+        self._tree[workspace_id] = (self._now(), tree)
+        return tree
+
+    def _record(self, workspace_id: str, path: str, size: int | None) -> None:
+        """Fold a write (``size``) or a delete (``None``) this facade just made
+        into the current measurement, so a batch of writes stays exact without
+        re-walking. A no-op when nothing is memoised — the next read measures."""
+        cached = self._tree.get(workspace_id)
+        if cached is None:
+            return
+        if size is None:
+            cached[1].pop(path, None)
+        else:
+            cached[1][path] = size
+
+    async def _usage_and_size(self, workspace_id: str, path: str) -> tuple[int, int]:
+        """``(workspace bytes, bytes at path)`` — the quota subtraction's two
+        halves, from ONE measurement, so they can never disagree about whether a
+        file counts."""
+        path = _norm(path)
+        tree = await self._live_tree(workspace_id)
+        if tree is not None:
+            return sum(tree.values()), tree.get(path, 0)
+        used = await self.workspace_usage(workspace_id)
+        return used, await self.file_size(workspace_id, path) or 0
 
     async def remaining_quota(self, workspace_id: str, path: str, quota: int) -> int | None:
         """Bytes the file at `path` may occupy before the workspace hits `quota`
         — the headroom the upload/edit endpoints gate on (#245). An overwrite is
         a *replace*: the existing file's size is credited back, so re-uploading a
         same-size file never falsely rejects. `quota` of 0 disables the cap →
-        None (no limit). Always measured against the **durable** store (the disk
-        the quota protects), never the warm sandbox — so the sandbox mirror,
-        which writes the raw store directly, is intentionally not gated (#245
-        choice B)."""
+        None (no limit). Measured against the **live** workspace (#538) — warm ⇒
+        the sandbox, cold ⇒ the durable snapshot — so what a user is charged for
+        is what the file tree shows them. The mirror still writes the raw store
+        directly and stays ungated (#245 choice B: never lose work the agent has
+        already done); what changed is that those bytes are now *counted*, so the
+        next gated write is the one that gets refused."""
         if not quota:
             return None
-        used = await self.workspace_usage(workspace_id)
-        old = await self.file_size(workspace_id, path) or 0
+        used, old = await self._usage_and_size(workspace_id, path)
         return quota - (used - old)
 
     async def delete(self, workspace_id: str, path: str) -> None:
@@ -222,6 +311,7 @@ class WorkspaceFiles:
                 raise FileNotFound(path) from exc
         else:
             await self._fs.delete(workspace_id, path)
+        self._record(workspace_id, path, None)
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = _norm(prefix) if prefix else prefix
@@ -275,6 +365,9 @@ class WorkspaceFiles:
                 raise FileNotFound(path) from exc
         else:
             await self._fs.rmdir(workspace_id, path)
+        # A subtree went away — too many paths to patch one by one, so drop the
+        # measurement and let the next read re-walk.
+        self._tree.pop(workspace_id, None)
 
     async def is_dir(self, workspace_id: str, path: str) -> bool:
         path = _norm(path)
