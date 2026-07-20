@@ -29,8 +29,11 @@ class GraphClaim(Struct):  # → resource "graph-claim"
 
     #534 slice 2: the ``collection_*`` / ``doc_*`` fields are a denormalized
     mirror of the READ permission of the deck this claim came from, so
-    ``graph_claim_access_scope`` can hide the row at the storage layer — the only
-    place that also covers the auto-CRUD routes, which no hand-written guard sees.
+    ``graph_claim_access_scope`` can hide the row at the storage layer, which is
+    where the auto-CRUD read routes are covered without a hand-written guard on
+    each. (``GET /{model}/export`` is the exception — it bypasses access scopes for
+    every model in the app, ``source-doc`` and ``collection`` included, so it is a
+    pre-existing hole this does not close.)
     They are written by the extractor and re-pushed by the permission fan-out;
     nothing else may set them. The mirror is the doc's EFFECTIVE permission, both
     layers: its collection's (#303) and its own tightening (#308).
@@ -46,13 +49,21 @@ class GraphClaim(Struct):  # → resource "graph-claim"
     chunk_id: str = ""  # provenance: the chunk / slide
     confidence: float = 1.0
     # --- #534 slice 2: the read-permission mirror (see the class docstring) ---
+    # BOTH grant lists ride along at BOTH levels, because reading a claim needs
+    # both answers: `read_meta` ("may you know this deck exists") and
+    # `read_content` ("may you read it"). The lists are independent, and
+    # "discoverable but not readable" is a state the product models on purpose —
+    # so a claim, which IS content, needs the content grant, and a claim must not
+    # become the one way to learn about a deck you cannot see.
     collection_visibility: str = ""  # the parent collection's visibility (#303)
-    collection_read_meta: list[str] = []  # its read_meta grant list
-    collection_created_by: str = ""  # its owner — the authority both halves match
+    collection_read_meta: list[str] = []
+    collection_read_content: list[str] = []
+    collection_created_by: str = ""  # its owner — the authority every half matches
     # The deck's OWN verdict (#308), stated explicitly: a deck that adds no
     # restriction mirrors "public". "" is NOT "no override" — it is "no mirror was
     # ever written", which the scope reads as invisible. The default has to fail
     # CLOSED: a writer that forgets the mirror then loses rows (loud, someone
     # chases it) instead of publishing them (silent, nobody reports a leak).
     doc_visibility: str = ""
-    doc_read_content: list[str] = []  # the deck's read_content grant list
+    doc_read_meta: list[str] = []
+    doc_read_content: list[str] = []

@@ -94,7 +94,11 @@ def test_tightening_a_collection_hides_the_metrics_extracted_from_it():
 
     r = client.put(
         f"/kb/collections/{_cid}/permission",
-        json={"visibility": "restricted", "read_meta": ["user:amy"]},
+        json={
+            "visibility": "restricted",
+            "read_meta": ["user:amy"],
+            "read_content": ["user:amy"],
+        },
     )
     assert r.status_code == 200
     assert _readable(spec, "alice", claim_id) is False
@@ -123,7 +127,11 @@ def test_tightening_one_deck_hides_only_that_decks_metrics():
 
     r = client.put(
         f"/kb/documents/{doc_id}/permission",
-        json={"visibility": "restricted", "read_content": ["user:amy"]},
+        json={
+            "visibility": "restricted",
+            "read_meta": ["user:amy"],
+            "read_content": ["user:amy"],
+        },
     )
     assert r.status_code == 200
     assert _readable(spec, "alice", claim_id) is False
@@ -166,3 +174,21 @@ def test_deleting_a_deck_takes_its_metrics_with_it():
     except ResourceIDNotFoundError:
         return
     raise AssertionError("the deleted deck's claim is still there")
+
+
+def test_renaming_a_deck_does_not_leave_its_old_metrics_behind():
+    """A rename re-creates the doc under a NEW id, so the old id's claims would
+    dangle forever: never wiped by a re-extraction (which only touches the id it is
+    processing) and counted a second time the next time the deck is read."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _cid, doc_id, claim_id = _seed(spec)
+
+    r = client.post("/kb/documents/move", params={"id": doc_id, "to": "renamed.pptx"})
+    assert r.status_code == 200, r.text
+    grm = spec.get_resource_manager(GraphClaim)
+    try:
+        grm.get(claim_id)
+    except ResourceIDNotFoundError:
+        return
+    raise AssertionError("the renamed deck's old claims are still there")

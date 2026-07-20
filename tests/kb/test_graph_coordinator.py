@@ -1,10 +1,12 @@
 from collections.abc import Iterator
+from types import SimpleNamespace
 
 import msgspec
 from specstar import QB
 from specstar.types import Binary
 
 from workspace_app.kb.graph.coordinator import GraphCoordinator
+from workspace_app.kb.graph.jobs import GraphJob, GraphJobPayload
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim
@@ -120,3 +122,96 @@ async def test_split_reconciles_the_permission_mirror_before_extracting():
     assert got.collection_created_by == "bob"
     assert got.doc_visibility == "restricted"
     assert got.doc_read_content == ["user:amy"]
+
+
+async def test_the_split_job_runs_the_reconcile_before_fanning_out_batches():
+    """The reconcile is only a backfill if the JOB runs it. Calling it directly in
+    a test proves the function works and nothing about whether anything invokes it,
+    so this asserts the wiring: a legacy claim is repaired by handling a split
+    payload, not by a hand call."""
+    from workspace_app.resources.graph import GraphClaim
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "Q3 revenue 1.2M")])
+    grm = spec.get_resource_manager(GraphClaim)
+    with grm.using("bob"):
+        legacy = grm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-A",
+                norm_metric="revenue",
+                metric="Revenue",
+                value="1.2M",
+            )
+        ).resource_id
+    assert _mirror_of(spec, legacy).collection_visibility == ""
+
+    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord._handle(
+        SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="split", collection_id=cid)))
+    )
+
+    assert _mirror_of(spec, legacy).collection_visibility == "public"
+
+
+async def test_the_reconcile_never_publishes_a_tightened_deck():
+    """The un-overridden decks are excluded from the "no override" push rather than
+    reset and re-tightened afterwards, so a restricted deck's claims are never
+    written as public — not even for the instant between two commits. Asserted by
+    watching what the reset is ASKED to touch, since the window it would open is a
+    race no assertion after the fact can catch."""
+    from workspace_app.perm import Permission
+    from workspace_app.resources.graph import GraphClaim
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(
+        spec,
+        "reports",
+        use_graph=True,
+        docs=[("deck-A", "Q3 revenue 1.2M"), ("deck-B", "Q3 revenue 9M")],
+    )
+    drm = spec.get_resource_manager(SourceDoc)
+    doc = drm.get("deck-A").data
+    assert isinstance(doc, SourceDoc)
+    with drm.using("bob"):
+        drm.update(
+            "deck-A",
+            msgspec.structs.replace(doc, permission=Permission(visibility="private")),
+        )
+    grm = spec.get_resource_manager(GraphClaim)
+    with grm.using("bob"):
+        tightened = grm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-A",
+                norm_metric="revenue",
+                metric="Revenue",
+                value="1.2M",
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="private",
+            )
+        ).resource_id
+
+    seen: list[str] = []
+    grm_patch = grm.patch_many
+
+    def spy(query, patch, **kw):
+        if patch.get("doc_visibility") == "public":
+            seen.append("reset")
+            # whatever the reset selects must NOT include the tightened deck
+            assert _mirror_of(spec, tightened).doc_visibility == "private"
+        return grm_patch(query, patch, **kw)
+
+    grm.patch_many = spy  # ty: ignore[invalid-assignment]
+    GraphCoordinator(spec, _FakeLlm(), batch_size=10).reconcile_mirrors(cid)
+    assert seen == ["reset"]
+    assert _mirror_of(spec, tightened).doc_visibility == "private"
+
+
+def _mirror_of(spec, claim_id: str):
+    from workspace_app.resources.graph import GraphClaim
+
+    got = spec.get_resource_manager(GraphClaim).get(claim_id).data
+    assert isinstance(got, GraphClaim)
+    return got

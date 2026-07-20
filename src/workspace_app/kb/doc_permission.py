@@ -11,6 +11,7 @@ visibility / read_meta changes. See ``docs/plan-permissions.md`` (#303).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import Any
 
@@ -19,6 +20,13 @@ from specstar import QB, MergePatch, SpecStar
 from ..perm import Actor, Permission, Verb, authorize
 from ..resources.graph import GraphClaim
 from ..resources.kb import Collection, SourceDoc
+
+_LOGGER = logging.getLogger(__name__)
+
+# A conflict is a lost race against a concurrent writer (indexing). Retrying is
+# nearly free — an idempotent patch that changes nothing writes no revision — so
+# try a few times before giving up and logging.
+_FAN_OUT_ATTEMPTS = 3
 
 
 def collection_mirror_fields(spec: SpecStar, collection_id: str) -> dict[str, Any]:
@@ -45,12 +53,37 @@ def collection_mirror_fields(spec: SpecStar, collection_id: str) -> dict[str, An
     }
 
 
+def collection_claim_mirror(spec: SpecStar, collection_id: str) -> dict[str, Any]:
+    """#534 slice 2 — the ``collection_*`` claim-mirror kwargs, read from the
+    collection's LIVE permission.
+
+    Deliberately NOT taken from the doc's own ``collection_*`` copy, even though a
+    doc carries one: that copy is maintained by a fan-out which can lag or fail, so
+    reading it would let a stale doc mirror overwrite a freshly reconciled claim —
+    the extraction pass would then quietly undo the backfill on every run. The
+    collection is the source of truth; the doc's copy is another cache of it.
+
+    Carries BOTH grant lists (``read_meta`` + ``read_content``): see
+    ``graph_claim_access_scope`` for why a claim needs both answers.
+    """
+    crm = spec.get_resource_manager(Collection)
+    coll = crm.get(collection_id).data
+    assert isinstance(coll, Collection)
+    perm = coll.permission
+    return {
+        "collection_visibility": "public" if perm is None else perm.visibility,
+        "collection_read_meta": [] if perm is None else list(perm.read_meta),
+        "collection_read_content": [] if perm is None else list(perm.read_content),
+        "collection_created_by": crm.get_meta(collection_id).created_by,
+    }
+
+
 def doc_mirror_fields(spec: SpecStar, source_doc_id: str) -> dict[str, Any]:
     """#534 slice 2 — the read-permission mirror kwargs for a row DERIVED from a
     doc (a ``GraphClaim``), read from that doc's LIVE effective permission.
 
-    Both layers travel together: the doc's own copy of its collection's mirror
-    (already maintained by #303, so this never re-reads the collection) plus the
+    Both layers travel together: the collection's LIVE verdict (via
+    ``collection_claim_mirror`` — not the doc's cached copy, see there) plus the
     doc's own tightening (#308). A doc with no override yields the explicit verdict
     ``"public"`` — never ``""``, which the claim scope reads as "no mirror was ever
     written" and hides. Like ``collection_mirror_fields``, every field is set
@@ -64,11 +97,21 @@ def doc_mirror_fields(spec: SpecStar, source_doc_id: str) -> dict[str, Any]:
     assert isinstance(doc, SourceDoc)
     override = doc.permission
     return {
-        "collection_visibility": doc.collection_visibility,
-        "collection_read_meta": list(doc.collection_read_meta),
-        "collection_created_by": doc.collection_created_by,
-        "doc_visibility": "public" if override is None else override.visibility,
-        "doc_read_content": [] if override is None else list(override.read_content),
+        **collection_claim_mirror(spec, doc.collection_id),
+        **_override_fields(override),
+    }
+
+
+def _override_fields(override: Permission | None) -> dict[str, Any]:
+    """The ``doc_*`` half of a claim mirror for one deck's own override (#308).
+    ``None`` ≡ no override ≡ the explicit verdict "public" — never a blank, which
+    the scope reads as "never written" and hides."""
+    if override is None:
+        return {"doc_visibility": "public", "doc_read_meta": [], "doc_read_content": []}
+    return {
+        "doc_visibility": override.visibility,
+        "doc_read_meta": list(override.read_meta),
+        "doc_read_content": list(override.read_content),
     }
 
 
@@ -149,16 +192,26 @@ def _fan_out(
     pre-#434 "read the row, compare, skip" loop, which had to load every row's full
     data blob just to decide it had nothing to do.
 
-    Two outcomes are NOT errors on their own and one is:
+    The two ways a row can be left behind are NOT the same kind of event:
 
-    * A row whose revision moved between selection and write is a CONFLICT and is
-      left alone. Expected here — indexing writes to the same rows — and the patch
-      is idempotent, so re-running picks it up. Hence one retry.
-    * A row that could not be written is a FAILURE. ``patch_many`` collects those
-      instead of raising, which would quietly turn a partial fan-out into a
-      reported success — and a row left on the OLD, looser mirror while the caller
-      believes the tightening landed is a read leak. So anything still unwritten
-      after the retry raises.
+    * A CONFLICT means the row's revision moved between selection and write. That
+      is a race, not a refusal, and it is EXPECTED here — indexing writes to the
+      same rows continuously. The patch is idempotent, so retrying picks it up.
+      A conflict that survives every retry is logged, NOT raised: raising would
+      turn an ordinary "someone was indexing" into a 500, and the caller that
+      re-issues the identical request then finds nothing to do (its own diff gate
+      sees the permission already persisted), which would strand the mirror for
+      good. Logged and left for the next reconcile is recoverable; a 500 here is
+      not.
+    * A FAILURE means the row could not be written at all — a denial, a row deleted
+      mid-fan-out, an encoding error. ``patch_many`` collects those instead of
+      raising, which would quietly report a partial fan-out as success, and a row
+      left on the OLD, looser mirror while the caller believes the tightening
+      landed IS a read leak. So failures raise.
+
+    Failures are accumulated across passes: a row that failed on the first pass and
+    is no longer even selected on the retry (deleted meanwhile) must not vanish
+    from the report just because the last pass looked clean.
 
     Runs as ``as_user`` (the collection owner) so each row keeps its own
     ``created_by`` while ``updated_by`` records the fan-out. Blocking — the caller
@@ -166,16 +219,28 @@ def _fan_out(
     """
     rm = spec.get_resource_manager(model)
     patch = MergePatch(dict(fields))
-    result = rm.patch_many(query, patch, user=as_user)
-    moved = result.patched
-    if result.conflicts:
-        retry = rm.patch_many(query, patch, user=as_user)
-        moved += retry.patched
-        result = retry
-    if result.conflicts or result.failures:
+    moved = 0
+    failures: list[tuple[str, str]] = []
+    conflicts: list[str] = []
+    for _ in range(_FAN_OUT_ATTEMPTS):
+        result = rm.patch_many(query, patch, user=as_user)
+        moved += result.patched
+        failures.extend(result.failures)
+        conflicts = list(result.conflicts)
+        if not conflicts:
+            break
+    if failures:
         raise RuntimeError(
-            f"{subject}: the permission mirror did not reach every row — "
-            f"conflicts={result.conflicts} failures={result.failures}"
+            f"{subject}: the permission mirror could not be written to every row — "
+            f"failures={failures}"
+        )
+    if conflicts:
+        _LOGGER.error(
+            "%s: %d row(s) kept losing a race and still hold the OLD mirror; "
+            "the next reconcile will pick them up: %s",
+            subject,
+            len(conflicts),
+            conflicts,
         )
     return moved
 
@@ -221,6 +286,7 @@ def push_mirror_to_claims(
     *,
     visibility: str,
     read_meta: list[str],
+    read_content: list[str],
     created_by: str,
 ) -> int:
     """#534 slice 2 — the same collection push, one level further down: every
@@ -238,6 +304,7 @@ def push_mirror_to_claims(
         {
             "collection_visibility": visibility,
             "collection_read_meta": list(read_meta),
+            "collection_read_content": list(read_content),
             "collection_created_by": created_by,
         },
         as_user=created_by,
@@ -250,23 +317,33 @@ def reset_doc_override_on_claims(
     collection_id: str,
     *,
     created_by: str,
+    except_docs: Iterable[str] = (),
 ) -> int:
-    """#534 slice 2 — set every claim in a collection to "the deck adds no
-    restriction", the BROAD half of the reconcile's broad-then-narrow pass.
+    """#534 slice 2 — record "this deck adds no restriction" on the claims of every
+    deck in the collection EXCEPT the ones named in ``except_docs``.
 
-    Only the reconcile may call this. It deliberately clobbers the doc half for the
-    whole collection, which is safe there because the narrow pass immediately
-    re-applies each deck that really does carry an override — and is exactly why
-    the collection permission endpoint must NOT use it: that path has no narrow
-    pass, so it would quietly drop every per-deck tightening in the collection.
+    The exclusion is the whole point. Resetting the collection wholesale and then
+    re-tightening the overridden decks one transaction at a time would leave every
+    tightened deck's numbers PUBLIC for the length of the loop — a real window, not
+    a theoretical one, since each push commits on its own — and would leave them
+    public until the next reconcile if the loop stopped partway. Excluding the
+    overridden decks up front means a restricted deck is never, at any instant,
+    written as public.
+
+    Only the reconcile calls this: it is the one caller that knows the full set of
+    overridden decks, which is exactly what makes the exclusion safe.
     """
+    skip = list(except_docs)
+    query = QB["collection_id"] == collection_id
+    if skip:
+        query = query & QB["source_doc_id"].not_in(skip)
     return _fan_out(
         spec,
         GraphClaim,
-        (QB["collection_id"] == collection_id).build(),
-        {"doc_visibility": "public", "doc_read_content": []},
+        query.build(),
+        {"doc_visibility": "public", "doc_read_meta": [], "doc_read_content": []},
         as_user=created_by,
-        subject=f"collection {collection_id} → its claims (doc-override reset)",
+        subject=f"collection {collection_id} → its un-overridden claims",
     )
 
 
@@ -275,6 +352,7 @@ def push_doc_override_to_claims(
     source_doc_id: str,
     *,
     visibility: str,
+    read_meta: list[str],
     read_content: list[str],
     created_by: str,
 ) -> int:
@@ -289,7 +367,11 @@ def push_doc_override_to_claims(
         spec,
         GraphClaim,
         (QB["source_doc_id"] == source_doc_id).build(),
-        {"doc_visibility": visibility, "doc_read_content": list(read_content)},
+        {
+            "doc_visibility": visibility,
+            "doc_read_meta": list(read_meta),
+            "doc_read_content": list(read_content),
+        },
         as_user=created_by,
         subject=f"doc {source_doc_id} → its claims",
     )

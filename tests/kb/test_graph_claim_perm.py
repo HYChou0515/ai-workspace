@@ -40,8 +40,10 @@ def _claim(
     *,
     collection_visibility: str = "public",
     collection_read_meta: list[str] | None = None,
+    collection_read_content: list[str] | None = None,
     collection_created_by: str = "bob",
     doc_visibility: str = "public",
+    doc_read_meta: list[str] | None = None,
     doc_read_content: list[str] | None = None,
     by: str = "bob",
 ) -> str:
@@ -56,8 +58,10 @@ def _claim(
                 value="1.2M",
                 collection_visibility=collection_visibility,
                 collection_read_meta=collection_read_meta or [],
+                collection_read_content=collection_read_content or [],
                 collection_created_by=collection_created_by,
                 doc_visibility=doc_visibility,
+                doc_read_meta=doc_read_meta or [],
                 doc_read_content=doc_read_content or [],
             )
         ).resource_id
@@ -99,7 +103,13 @@ def test_a_restricted_deck_still_shows_its_claims_to_a_granted_reader():
     ``read_content`` reads its claims."""
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
-    claim_id = _claim(spec, cid, doc_visibility="restricted", doc_read_content=["user:alice"])
+    claim_id = _claim(
+        spec,
+        cid,
+        doc_visibility="restricted",
+        doc_read_meta=["user:alice"],
+        doc_read_content=["user:alice"],
+    )
     assert _readable(spec, "alice", claim_id) is True
 
 
@@ -137,19 +147,75 @@ def test_a_claim_whose_mirror_was_never_written_is_hidden():
     assert _readable(spec, "bob", claim_id) is False
 
 
-def test_the_doc_half_gates_on_read_content_not_read_meta():
-    """A reader granted only ``read_meta`` may know the deck exists; that must NOT
-    hand them its numbers. This is the one place the claim scope deliberately
-    differs from ``source_doc_access_scope``."""
+def test_a_deck_reader_granted_only_read_meta_gets_no_numbers():
+    """``read_meta`` answers "may you know this deck exists" and ``read_content``
+    "may you read it"; the two grant lists are independent, and "discoverable but
+    not readable" is a state the product models on purpose. A claim IS content, so
+    the metadata grant alone must not hand it over."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    claim_id = _claim(
+        spec, cid, doc_visibility="restricted", doc_read_meta=["user:alice"], doc_read_content=[]
+    )
+    assert _readable(spec, "alice", claim_id) is False
+
+
+def test_a_deck_reader_granted_only_read_content_gets_no_numbers():
+    """The mirror image: a deck the reader cannot even see is a 404 on every doc
+    route, so its claims must not be the one way to learn it exists — and to read
+    its numbers. Both halves are required, which is what "as visible as the deck"
+    means."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    claim_id = _claim(
+        spec, cid, doc_visibility="restricted", doc_read_meta=[], doc_read_content=["user:alice"]
+    )
+    assert _readable(spec, "alice", claim_id) is False
+
+
+def test_a_deck_reader_granted_both_gets_the_numbers():
+    """Granted both, the claim is readable — otherwise the rule above would just be
+    "deny everyone", which no test above would catch."""
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     claim_id = _claim(
         spec,
         cid,
         doc_visibility="restricted",
-        doc_read_content=[],
+        doc_read_meta=["user:alice"],
+        doc_read_content=["user:alice"],
+    )
+    assert _readable(spec, "alice", claim_id) is True
+
+
+def test_a_collection_reader_granted_only_read_meta_gets_no_numbers():
+    """The SAME rule one level up, and the level that governs EVERY claim rather
+    than the rare tightened deck. A collection shared as "discoverable" — read_meta
+    granted, read_content withheld — must not surrender the metrics of every deck
+    inside it."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    claim_id = _claim(
+        spec,
+        cid,
+        collection_visibility="restricted",
+        collection_read_meta=["user:alice"],
+        collection_read_content=[],
     )
     assert _readable(spec, "alice", claim_id) is False
+
+
+def test_a_collection_reader_granted_both_gets_the_numbers():
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    claim_id = _claim(
+        spec,
+        cid,
+        collection_visibility="restricted",
+        collection_read_meta=["user:alice"],
+        collection_read_content=["user:alice"],
+    )
+    assert _readable(spec, "alice", claim_id) is True
 
 
 @pytest.mark.parametrize("user", ["root"])
@@ -179,7 +245,12 @@ def test_pushing_a_collection_mirror_reaches_its_claims():
     assert _readable(spec, "alice", claim_id) is True
 
     moved = push_mirror_to_claims(
-        spec, cid, visibility="restricted", read_meta=["user:amy"], created_by="bob"
+        spec,
+        cid,
+        visibility="restricted",
+        read_meta=["user:amy"],
+        read_content=["user:amy"],
+        created_by="bob",
     )
     assert moved == 1
     assert _claim_row(spec, claim_id).collection_visibility == "restricted"
@@ -195,7 +266,12 @@ def test_pushing_a_collection_mirror_twice_moves_nothing_the_second_time():
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     _claim(spec, cid)
-    kwargs = {"visibility": "restricted", "read_meta": [], "created_by": "bob"}
+    kwargs = {
+        "visibility": "restricted",
+        "read_meta": [],
+        "read_content": [],
+        "created_by": "bob",
+    }
     assert push_mirror_to_claims(spec, cid, **kwargs) == 1
     assert push_mirror_to_claims(spec, cid, **kwargs) == 0
 
@@ -224,7 +300,7 @@ def test_pushing_a_deck_override_reaches_only_that_decks_claims():
         ).resource_id
 
     push_doc_override_to_claims(
-        spec, "deck-1", visibility="restricted", read_content=[], created_by="bob"
+        spec, "deck-1", visibility="restricted", read_meta=[], read_content=[], created_by="bob"
     )
     assert _readable(spec, "alice", mine) is False
     assert _readable(spec, "alice", other) is True
@@ -242,7 +318,7 @@ def test_clearing_a_deck_override_reopens_its_claims():
     assert _readable(spec, "alice", claim_id) is False
 
     push_doc_override_to_claims(
-        spec, "deck-1", visibility="public", read_content=[], created_by="bob"
+        spec, "deck-1", visibility="public", read_meta=[], read_content=[], created_by="bob"
     )
     assert _claim_row(spec, claim_id).doc_visibility == "public"
     assert _readable(spec, "alice", claim_id) is True

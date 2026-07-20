@@ -902,6 +902,7 @@ def register_kb_routes(
                 collection_id,
                 visibility=new_perm.visibility,
                 read_meta=new_perm.read_meta,
+                read_content=new_perm.read_content,
                 created_by=created_by,
             )
         # Notify users NEWLY granted any access (the actor + already-granted users
@@ -1088,6 +1089,7 @@ def register_kb_routes(
             spec,
             doc_id,
             visibility=new_perm.visibility,
+            read_meta=new_perm.read_meta,
             read_content=new_perm.read_content,
             created_by=owner,
         )
@@ -1123,6 +1125,7 @@ def register_kb_routes(
                 spec,
                 doc_id,
                 visibility="public",
+                read_meta=[],
                 read_content=[],
                 created_by=owner,
             )

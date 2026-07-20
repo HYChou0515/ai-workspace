@@ -196,3 +196,42 @@ def test_write_doc_claims_wipes_and_skips_a_doc_that_no_longer_exists():
     )
     assert n == 0
     assert _claims(spec, "deck-A") == []
+
+
+def test_write_doc_claims_reads_the_collection_verdict_live_not_the_decks_copy():
+    """A deck carries its OWN cached copy of the collection mirror, maintained by a
+    fan-out that can lag or fail. Stamping claims from that copy would let the
+    extraction pass silently undo the reconcile that just ran — every pass, for
+    every doc it touches. The collection is the source of truth."""
+    from specstar.types import Binary
+
+    from workspace_app.perm import Permission
+    from workspace_app.resources.kb import Collection, SourceDoc
+
+    spec = make_spec(default_user=lambda: "bob")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(
+            Collection(name="c", permission=Permission(visibility="private"))
+        ).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    with drm.using("bob"):
+        doc_id = drm.create(
+            SourceDoc(
+                collection_id=cid,
+                path="deck.pptx",
+                content=Binary(data=b"x"),
+                # a STALE copy: the collection is private, this still says public
+                collection_visibility="public",
+                collection_created_by="bob",
+            )
+        ).resource_id
+    write_doc_claims(
+        spec,
+        _FakeLlm('[{"metric": "Revenue", "value": "1.2M"}]'),
+        collection_id=cid,
+        source_doc_id=doc_id,
+        chunks=[(f"{doc_id}#0", "t")],
+    )
+    (claim,) = _claims(spec, doc_id)
+    assert claim.collection_visibility == "private"

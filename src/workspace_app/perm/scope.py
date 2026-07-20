@@ -182,31 +182,44 @@ def graph_claim_access_scope(
     caller against the mirrored collection owner), read off the claim's own
     denormalized copy of that deck's effective permission.
 
-    ONE deliberate difference: the doc half gates on the deck's ``read_content``
-    grant list, not ``read_meta``. ``read_meta`` answers "may you know this deck
-    exists" — the right question for hiding a doc from a LIST, and what the
-    SourceDoc scope asks. But a claim row IS content (a metric and its value), so
-    a reader allowed only to know the deck exists must not receive it.
+    FOUR predicates, not two: at EACH level the reader needs both answers —
+    ``read_meta`` ("may you know this deck exists") and ``read_content`` ("may you
+    read it"). The two grant lists are independent (``Permission`` carries them
+    separately) and "discoverable but not readable" is a state the product models
+    on purpose, so neither implies the other:
+
+    * with only ``read_meta``, a claim would hand over content the reader is not
+      allowed to read;
+    * with only ``read_content``, a claim would become the one way to learn a deck
+      exists that every doc route answers 404 for.
+
+    Both apply at the COLLECTION level too — that is the level governing every
+    claim rather than the rare tightened deck, so getting it wrong there exposes
+    everything, not an exception.
 
     A deck with no override has an absent/empty ``doc_visibility``, which the
-    shared predicate's ``isna()`` clause admits — so the second half only ever
-    HIDES an explicitly tightened deck.
+    shared predicate's ``isna()`` clause admits — so the doc halves only ever HIDE
+    an explicitly tightened deck.
     """
-    collection = _visibility_scope(
-        visibility_field="collection_visibility",
-        read_meta_field="collection_read_meta",
-        owner_field="collection_created_by",
-        superusers=superusers,
-        groups_provider=groups_provider,
-    )
-    doc = _visibility_scope(
-        visibility_field="doc_visibility",
-        read_meta_field="doc_read_content",
-        owner_field="collection_created_by",
-        superusers=superusers,
-        groups_provider=groups_provider,
-    )
-    return _and_scopes(collection, doc)
+    halves = [
+        _visibility_scope(
+            visibility_field=visibility,
+            read_meta_field=grants,
+            owner_field="collection_created_by",
+            superusers=superusers,
+            groups_provider=groups_provider,
+        )
+        for visibility, grants in (
+            ("collection_visibility", "collection_read_meta"),
+            ("collection_visibility", "collection_read_content"),
+            ("doc_visibility", "doc_read_meta"),
+            ("doc_visibility", "doc_read_content"),
+        )
+    ]
+    scope = halves[0]
+    for half in halves[1:]:
+        scope = _and_scopes(scope, half)
+    return scope
 
 
 def kbchat_access_scope(

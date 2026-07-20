@@ -27,7 +27,7 @@ from ...perm import Permission
 from ...resources import Collection, DocChunk
 from ...resources.kb import SourceDoc
 from ..doc_permission import (
-    collection_mirror_fields,
+    collection_claim_mirror,
     push_doc_override_to_claims,
     push_mirror_to_claims,
     reset_doc_override_on_claims,
@@ -110,30 +110,41 @@ class GraphCoordinator:
         operator step and any later drift heals itself, rather than lingering until
         someone notices.
 
-        Broad first, then narrow: one push sets the collection verdict AND the
-        default "no deck override" on every claim, then each deck that actually
-        carries an override re-tightens its own. Overrides are rare, so this is
-        typically two bulk patches for the whole collection — and a patch that
-        changes nothing writes no revision, so the steady-state cost is a read.
+        The overridden decks are identified FIRST and then excluded from the
+        "no override" push, rather than being reset and re-tightened afterwards.
+        Resetting first would publish every tightened deck's numbers for the length
+        of the re-tightening loop — each push commits separately, so that window is
+        real — and would leave them published until the next run if the loop
+        stopped partway. Overrides are rare, so this is typically two bulk patches
+        for the whole collection, and a patch that changes nothing writes no
+        revision, so the steady-state cost is a read.
         """
-        mirror = collection_mirror_fields(self._spec, collection_id)
+        mirror = collection_claim_mirror(self._spec, collection_id)
+        owner = mirror["collection_created_by"]
         push_mirror_to_claims(
             self._spec,
             collection_id,
             visibility=mirror["collection_visibility"],
             read_meta=mirror["collection_read_meta"],
-            created_by=mirror["collection_created_by"],
+            read_content=mirror["collection_read_content"],
+            created_by=owner,
         )
-        owner = mirror["collection_created_by"]
-        reset_doc_override_on_claims(self._spec, collection_id, created_by=owner)
-        for doc_id, override in self._overridden_docs(collection_id):
+        overridden = self._overridden_docs(collection_id)
+        for doc_id, override in overridden:
             push_doc_override_to_claims(
                 self._spec,
                 doc_id,
                 visibility=override.visibility,
+                read_meta=list(override.read_meta),
                 read_content=list(override.read_content),
                 created_by=owner,
             )
+        reset_doc_override_on_claims(
+            self._spec,
+            collection_id,
+            created_by=owner,
+            except_docs=[doc_id for doc_id, _ in overridden],
+        )
 
     def _overridden_docs(self, collection_id: str) -> list[tuple[str, Permission]]:
         """The decks in the collection carrying their OWN read override (#308).
