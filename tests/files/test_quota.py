@@ -15,7 +15,7 @@ from workspace_app.files.facade import WorkspaceFiles, WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.filestore.protocol import FileExists
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+from workspace_app.sandbox.protocol import SandboxBusy, SandboxHandle, SandboxSpec
 
 
 def _files() -> WorkspaceFiles:
@@ -321,6 +321,72 @@ async def test_two_racing_measurements_walk_once_and_do_not_lose_a_write():
 
     await files.write("ws1", "/added.bin", b"y" * 50)
     assert await files.workspace_usage("ws1") == 150  # the write survived
+
+
+async def test_a_swept_measurement_spares_the_request_from_walking():
+    # #538 follow-up: the 5s mirror sweep already walks every warm sandbox, so
+    # the request path should never have to. Measuring lazily "when someone asks
+    # and the window has expired" put the walk — and its failures, and its cost —
+    # on whichever user request happened to arrive first.
+    fs = MemoryFileStore()
+    sb = _WalkCountingSandbox()
+    handle = await sb.create(SandboxSpec())
+
+    async def _resolve(_ws: str) -> SandboxHandle:
+        return handle
+
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, quota=1000)
+    files.record_measurement("ws1", {"/a.bin": 300, "/b.bin": 200})
+
+    assert await files.workspace_usage("ws1") == 500
+    assert sb.walk_calls == 0  # the sweep already answered this
+
+
+async def test_a_swept_measurement_still_tracks_this_process_s_own_writes():
+    # The sweep is the baseline; writes made here move it immediately, so a batch
+    # doesn't spend a whole window charging against a pre-batch number.
+    fs = MemoryFileStore()
+    sb = _WalkCountingSandbox()
+    handle = await sb.create(SandboxSpec())
+
+    async def _resolve(_ws: str) -> SandboxHandle:
+        return handle
+
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, quota=10_000)
+    await sb.upload(handle, b"x" * 300, "/a.bin")
+    files.record_measurement("ws1", {"/a.bin": 300})  # as the sweep would
+    walks = sb.walk_calls
+
+    await files.write("ws1", "/b.bin", b"y" * 200)
+    assert await files.workspace_usage("ws1") == 500
+    await files.delete("ws1", "/a.bin")
+    assert await files.workspace_usage("ws1") == 200
+    assert sb.walk_calls == walks  # still no walk on the request path
+
+
+async def test_an_unreachable_sandbox_degrades_to_the_durable_number():
+    # #538 follow-up (L2): measuring used to be a SQL aggregate — cheap and
+    # infallible. Now it can touch a sandbox that is busy or has just been
+    # reaped, and callers still treat it as a plain read: the usage bar would
+    # turn that into a 500. A stale number beats an error page.
+    fs = MemoryFileStore()
+    await fs.write("ws1", "/archived.bin", b"x" * 700)
+    sb = MockSandbox()
+    handle = await sb.create(SandboxSpec())
+
+    async def _blown_walk(_h: SandboxHandle, _root: str):
+        raise SandboxBusy("still starting up")
+
+    sb.walk = _blown_walk  # ty: ignore[invalid-assignment]
+
+    async def _resolve(_ws: str) -> SandboxHandle:
+        return handle
+
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, quota=1000)
+    assert await files.workspace_usage("ws1") == 700
+    # and a write is still judged, against that fallback, rather than blowing up
+    with pytest.raises(WorkspaceFull):
+        await files.write("ws1", "/more.bin", b"y" * 400)
 
 
 class _NoUsageStore:
