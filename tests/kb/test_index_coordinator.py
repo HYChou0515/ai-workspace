@@ -643,7 +643,7 @@ def test_a_processing_job_does_not_block_a_fresh_reindex():
     assert _pending_jobs(spec) == [doc_id]
 
 
-# ── whole-collection reindex as a JOB (#565) ──────────────────────────────
+# ── whole-collection reindex as a JOB (#569) ──────────────────────────────
 # "Re-read all" used to do the whole fan-out INSIDE the HTTP request: it loaded
 # every SourceDoc (blob + extracted text) into memory, flipped each status and
 # enqueued each doc — synchronously, on the event loop, with no `await`. At a

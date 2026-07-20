@@ -151,7 +151,7 @@ export type WikiTree = { pages: string[] };
 /** One wiki page's raw markdown (rendered read-only client-side). */
 export type WikiPage = { path: string; content: string };
 
-/** #565: result of ASKING for a re-read of a whole collection. The walk runs in
+/** #569: result of ASKING for a re-read of a whole collection. The walk runs in
  * a worker, so this describes what was accepted, not what was done.
  * - `queued: false` — a run was already pending and this press coalesced onto
  *   it. Say "already running"; do NOT confirm a second send.
@@ -667,7 +667,7 @@ export interface KbApi {
    * `{ only: "failed" }` re-queues ONLY docs stuck in `error` (issue #223);
    * omitted re-indexes the whole collection.
    *
-   * #565: this ACCEPTS and returns — the walk runs in a worker, so nothing
+   * #569: this ACCEPTS and returns — the walk runs in a worker, so nothing
    * visible has changed by the time the promise settles. Show the result: a
    * silent success reads as a failure and invites a redundant second press. */
   reindexCollection(id: string, opts?: { only?: "failed" }): Promise<ReindexQueued>;

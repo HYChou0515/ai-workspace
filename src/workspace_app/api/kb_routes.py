@@ -294,7 +294,7 @@ class ReindexOut(BaseModel):
 
 
 class ReindexQueuedOut(BaseModel):
-    """Result of scheduling a WHOLE-collection re-read (#565). The walk itself
+    """Result of scheduling a WHOLE-collection re-read (#569). The walk itself
     runs in a worker, so this reports what was *accepted*, not what was done:
 
     - ``queued`` — ``False`` means a run was already pending and this press
@@ -1399,7 +1399,7 @@ def register_kb_routes(
         """Re-chunk + re-embed a whole collection — the recovery path after
         fixing the embedder (e.g. a missing model), and the "Re-read all" button.
 
-        ACCEPT-AND-RETURN (#565): this queues one `collection` job and answers.
+        ACCEPT-AND-RETURN (#569): this queues one `collection` job and answers.
         It used to do the whole walk inline — load every doc, flip it, drop its
         cache, enqueue it — synchronously, in an `async def` with no `await`. At
         a thousand documents that pinned the event loop for minutes, so the
@@ -1415,15 +1415,21 @@ def register_kb_routes(
         if only is not None and only != "failed":
             raise HTTPException(status_code=400, detail=f"unknown only={only!r}")
         _authorize_collection(collection_id, "edit_content")  # #262
-        queued = index_coordinator.enqueue_collection(collection_id, only=only or "")
         # How many docs the run covers, for the FE's "sent N documents" line.
-        # Both filters are indexed, and `count_resources` is a push-down — no row
-        # is materialised, so naming the number costs nothing near the walk we
-        # just moved off this path.
+        # Both filters are indexed and `count_resources` is a push-down — no row
+        # is materialised, so naming the number costs nothing next to the walk
+        # this route no longer does.
+        #
+        # Counted BEFORE queueing, deliberately: the worker can claim the job and
+        # start flipping docs to `indexing` while this handler is still running,
+        # and `only=failed` counts docs in `error` — so counting afterwards would
+        # race the worker down towards zero and report "sent 0 documents" for a
+        # run that is demonstrably under way.
         q = QB["collection_id"] == collection_id
         if only == "failed":
             q = q & (QB["status"] == "error")
         documents = spec.get_resource_manager(SourceDoc).count_resources(q.build())
+        queued = index_coordinator.enqueue_collection(collection_id, only=only or "")
         return ReindexQueuedOut(queued=queued, documents=documents)
 
     # ── LLM wiki browse (#50 P7) — read-only; the wiki is LLM-owned ──────

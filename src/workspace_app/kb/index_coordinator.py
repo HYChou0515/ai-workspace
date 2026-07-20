@@ -168,7 +168,7 @@ class IndexCoordinator:
             return False
         # #186: stamp the split job with the requester. Usually that IS the
         # current request's user; a worker fanning a collection re-read out has no
-        # request, so it passes the original requester through explicitly (#565)
+        # request, so it passes the original requester through explicitly (#569)
         # — otherwise every doc's chunks would be credited to the bare worker
         # default. specstar preserves it across the whole fan-out lifecycle.
         with self._job_rm.using(user=requested_by or self._get_user_id()):
@@ -192,7 +192,7 @@ class IndexCoordinator:
         """Queue a whole-collection re-read and return immediately. ``True`` if a
         run was queued, ``False`` if one was already pending (coalesced).
 
-        This is the producer for the "Re-read all" button (#565). It deliberately
+        This is the producer for the "Re-read all" button (#569). It deliberately
         does NOT look at a single document: the walk — load each doc, flip it to
         ``indexing``, drop its cached result, enqueue it — is the worker's job
         (:meth:`_handle_collection`). Doing that walk in the request, as this
@@ -359,7 +359,7 @@ class IndexCoordinator:
 
     def _handle_collection(self, payload, requester: str) -> None:
         """Fan a whole-collection re-read out into one ``split`` job per doc —
-        the walk that used to sit inside the HTTP request (#565).
+        the walk that used to sit inside the HTTP request (#569).
 
         The candidate set is chosen by an INDEXED query, not by reading rows:
         ``collection_id`` (and ``status`` for ``only="failed"``) both ride

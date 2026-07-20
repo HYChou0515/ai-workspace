@@ -41,7 +41,7 @@ class IndexJobPayload(msgspec.Struct):
       :class:`~workspace_app.resources.kb.IndexRun` join state).
     - ``finalize``: once every batch is accounted for, rejoin the staged text
       into ``SourceDoc.text``, flip status, and run the wiki hook — exactly once.
-    - ``collection`` (#565): re-read the WHOLE collection — the worker walks
+    - ``collection`` (#569): re-read the WHOLE collection — the worker walks
       ``collection_id`` and enqueues a ``split`` job per doc. ``doc_id`` is empty
       (the job targets no single doc) and ``only`` narrows the walk. This kind
       exists so the "Re-read all" button leaves one row behind and returns

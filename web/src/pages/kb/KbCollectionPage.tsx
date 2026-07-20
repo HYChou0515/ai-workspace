@@ -226,7 +226,7 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
     },
   });
 
-  // #565: the re-read is ACCEPTED here, then walked by a worker — so when this
+  // #569: the re-read is ACCEPTED here, then walked by a worker — so when this
   // resolves the page still looks exactly as it did. Acknowledge explicitly (a
   // dialog, not a fading toast) or the silence reads as "nothing happened" and
   // the user sends the whole collection through again. `queued: false` means the
@@ -266,7 +266,7 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
         // #395: reopen the summary poll gate — the retried docs are indexing.
         void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(cid) });
       }
-      void ackReindex(r);  // #565: same accept-and-return endpoint, same silence
+      void ackReindex(r);  // #569: same accept-and-return endpoint, same silence
     },
   });
 

@@ -895,7 +895,7 @@ def test_reindex_collection_rebuilds_all_docs():
 
     r = client.post(f"/kb/collections/{cid}/reindex")
     assert r.status_code == 200
-    assert r.json()["queued"] is True  # #565: accepted; the worker does the walk
+    assert r.json()["queued"] is True  # #569: accepted; the worker does the walk
     assert r.json()["documents"] == 2
     assert r.json()["status"] == "indexing"
 
@@ -1884,7 +1884,7 @@ def test_reindex_collection_invalidates_the_cache():
     store = IndexCacheStore(spec)
     assert store.get(key) is not None
 
-    # #565: the drop moved into the worker (the request no longer walks the
+    # #569: the drop moved into the worker (the request no longer walks the
     # collection), and by the time the queue drains the rebuild has repopulated
     # the entry — so watch the force-recompute happen at its seam rather than
     # racing the consumer for a momentarily-absent row.
@@ -1900,12 +1900,12 @@ def test_reindex_collection_invalidates_the_cache():
     assert store.get(key) is not None  # …and the rebuild repopulated the entry
 
 
-# ── "Re-read all" returns instead of walking the collection (#565) ─────────
+# ── "Re-read all" returns instead of walking the collection (#569) ─────────
 
 
 def test_reindex_collection_returns_without_touching_a_single_doc():
     """THE behaviour this endpoint exists to have: the request leaves one job
-    behind and returns. Before #565 it walked every doc — loading each one's blob
+    behind and returns. Before #569 it walked every doc — loading each one's blob
     and extracted text, flipping its status and enqueueing it — synchronously on
     the event loop, so a large collection froze the whole pod for minutes with no
     way to abort. Assert the walk has NOT happened when the response arrives."""
@@ -1985,3 +1985,40 @@ def test_reindex_collection_only_failed_reports_just_the_failed_count():
 
     body = client.post(f"/kb/collections/{cid}/reindex", params={"only": "failed"}).json()
     assert body["documents"] == 1  # the healthy doc is not counted, nor re-read
+
+
+def test_the_reported_count_is_not_raced_down_by_a_fast_worker():
+    """The count must be taken BEFORE the job is queued. A worker can claim the
+    run while this handler is still executing and start flipping docs out of
+    `error` into `indexing` — so counting afterwards would report "sent 0
+    documents" for a run that is plainly under way, which is exactly the kind of
+    "nothing happened" signal that makes a user press the button again."""
+    import msgspec
+
+    from workspace_app.resources.kb import SourceDoc
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("bad.md", b"# one two three four", "text/markdown")},
+    )
+    _drain(client)
+    rm = spec.get_resource_manager(SourceDoc)
+    bad_id = encode_doc_id(cid, "bad.md")
+    rm.update(bad_id, msgspec.structs.replace(rm.get(bad_id).data, status="error"))
+
+    # Stand in for a worker that claims the job instantly: queueing the run also
+    # takes the doc out of `error`, the state the count filters on.
+    coord = client.app.state.index_coordinator  # ty: ignore[unresolved-attribute]
+    real_enqueue = coord.enqueue_collection
+
+    def _enqueue_then_race(collection_id: str, only: str = "") -> bool:
+        rm.update(bad_id, msgspec.structs.replace(rm.get(bad_id).data, status="indexing"))
+        return real_enqueue(collection_id, only=only)
+
+    coord.enqueue_collection = _enqueue_then_race
+
+    body = client.post(f"/kb/collections/{cid}/reindex", params={"only": "failed"}).json()
+    assert body["queued"] is True
+    assert body["documents"] == 1  # counted before the worker could move it

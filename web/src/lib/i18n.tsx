@@ -572,7 +572,7 @@ export const messages = {
 
   // KB collection page (KbCollectionPage) (#172)
   "kb.reindexAll": { "zh-TW": "全部重新讀取", en: "Re-read all" },
-  // #565: re-reading a collection is accepted, then done in the background, so
+  // #569: re-reading a collection is accepted, then done in the background, so
   // the screen looks unchanged for a while. Say plainly that it was sent, how
   // much it covers, and that leaving is safe — otherwise the silence reads as
   // failure and the button gets pressed again.

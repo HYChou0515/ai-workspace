@@ -450,7 +450,7 @@ describe("KbCollectionsPage", () => {
     expect(reindexCollection).toHaveBeenCalledWith("c1");
   });
 
-  // #565: "Re-read all" is accept-and-return now — the request leaves a job
+  // #569: "Re-read all" is accept-and-return now — the request leaves a job
   // behind and the walk happens in a worker, so nothing visible changes for a
   // moment. Without an explicit confirmation a user reads that silence as "it
   // didn't work" and presses again, stacking redundant full-collection re-reads.
