@@ -53,10 +53,21 @@ const item = {
   permission: { visibility: "private" },
 } as unknown as AppItem;
 
-function open() {
+function open(override: Partial<Record<string, unknown>> = {}) {
   return renderWithQuery(
-    <EditItemModal manifest={manifest} item={item} onClose={vi.fn()} onSubmit={vi.fn()} />,
+    <EditItemModal
+      manifest={manifest}
+      item={{ ...item, ...override } as AppItem}
+      onClose={vi.fn()}
+      onSubmit={vi.fn()}
+    />,
   );
+}
+
+/** Sign in as someone other than the item's owner (`alice`). */
+function signInAs(id: string, isSuperuser = false) {
+  vi.mocked(api.getCurrentUser).mockResolvedValue(id);
+  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser });
 }
 
 beforeEach(() => {
@@ -90,5 +101,41 @@ describe("EditItemModal — access management", () => {
 
     expect(await screen.findByTestId("stub-error")).toHaveTextContent("not authorized");
     expect(screen.getByTestId("stub-save")).toBeInTheDocument();
+  });
+});
+
+// The UI gated the control on `me === owner`, but the backend has always let a
+// superuser (perm/authorize: superusers short-circuit every verb) and a
+// `change_permission` grantee through. So an admin could enter any item and see
+// its Edit modal, yet had no way to change its access — the button simply wasn't
+// rendered. The affordance must match what the server actually allows.
+describe("EditItemModal — who may manage access", () => {
+  it("shows the control to the owner", async () => {
+    open();
+    expect(await screen.findByTestId("manage-access")).toBeInTheDocument();
+  });
+
+  it("shows the control to a superuser who does not own the item", async () => {
+    signInAs("root", true);
+    open();
+    expect(await screen.findByTestId("manage-access")).toBeInTheDocument();
+  });
+
+  it("shows the control to a change_permission delegate", async () => {
+    signInAs("carol");
+    open({
+      permission: { visibility: "restricted", change_permission: ["user:carol"] },
+    });
+    expect(await screen.findByTestId("manage-access")).toBeInTheDocument();
+  });
+
+  it("hides the control from a plain collaborator", async () => {
+    signInAs("dave");
+    open({
+      permission: { visibility: "restricted", read_chat: ["user:dave"], converse: ["user:dave"] },
+    });
+    // Wait for identity to settle so this isn't just "hasn't rendered yet".
+    await waitFor(() => expect(api.getMe).toHaveBeenCalled());
+    expect(screen.queryByTestId("manage-access")).not.toBeInTheDocument();
   });
 });

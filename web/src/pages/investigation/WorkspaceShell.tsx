@@ -12,7 +12,13 @@ import { api } from "../../api";
 import type { AppItem, AppManifest, CloseStatus, FileInfo } from "../../api/types";
 import { ItemShareDialog } from "../../components/ItemShareDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
-import { canConverse, canReadItemContent, parseItemPermission } from "../../lib/itemPermission";
+import { useIsSuperuser } from "../../hooks/useIsSuperuser";
+import {
+  canChangeItemPermission,
+  canConverse,
+  canReadItemContent,
+  parseItemPermission,
+} from "../../lib/itemPermission";
 import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
@@ -608,12 +614,16 @@ export function EditItemModal({
   onSubmit: (patch: Record<string, unknown>) => void;
 }) {
   const me = useCurrentUser();
+  const isSuperuser = useIsSuperuser();
   const [sharing, setSharing] = useState(false);
   const owner = (item.created_by as string) || (item.owner as string) || "";
-  // #306 PR3: the sharing control (grill D2). Owner-only in the UI; the backend
-  // additionally honours change_permission delegates (it enforces regardless).
-  const canManageAccess = me === owner;
   const perm = parseItemPermission((item as Record<string, unknown>).permission);
+  // #306 PR3: the sharing control (grill D2). This used to be `me === owner`,
+  // which under-served the backend: `perm/authorize` lets a superuser bypass every
+  // verb and honours `change_permission` delegates, so an admin could open any
+  // item's Edit modal yet had no button to change its access. Mirror the server's
+  // rule exactly (public never confers change_permission — see the helper).
+  const canManageAccess = canChangeItemPermission(perm, me, owner, isSuperuser);
   const access = useSetItemPermission(manifest.slug, item.resource_id);
   return (
     <ModalShell
