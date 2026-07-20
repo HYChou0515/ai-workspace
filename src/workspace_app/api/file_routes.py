@@ -464,10 +464,21 @@ def register_file_routes(
         # Every path in `results` matched per-line via search_text, so the
         # same pattern's subn over the full text always replaces ≥1 — no
         # need to guard on n.
+        # #538: rewrite the texts first and check the WHOLE operation's growth
+        # once. Gating each write instead would stop partway through — file 37
+        # of 100 rewritten, the rest untouched, and the `replaced` count thrown
+        # away with the error — leaving a state the user never asked for and
+        # can't see.
+        edits = []
+        growth = 0
         for p, data, _matches in results:
-            text = data.decode("utf-8")
-            new_text, n = pattern.subn(body.replacement, text)
-            await files.write(investigation_id, p, new_text.encode("utf-8"))
+            new_text, n = pattern.subn(body.replacement, data.decode("utf-8"))
+            new_bytes = new_text.encode("utf-8")
+            growth += len(new_bytes) - len(data)
+            edits.append((p, new_bytes, n))
+        await files.ensure_room_for(investigation_id, growth)
+        for p, new_bytes, n in edits:
+            await files.write(investigation_id, p, new_bytes)
             replaced += n
             activity.record(
                 "file_written",

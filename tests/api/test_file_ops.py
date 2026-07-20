@@ -328,3 +328,26 @@ async def test_move_rejects_overwrite_of_existing_target(harness: Harness):
     # both still intact
     assert harness.client.get(harness.wpath("/files/a.md")).content == b"a"
     assert harness.client.get(harness.wpath("/files/b.md")).content == b"b"
+
+
+def test_a_refused_replace_changes_no_files_at_all():
+    # #538 follow-up (M5): the gate turned a loop that could not fail into one
+    # that can, and a search/replace that stops on file 37 of 100 leaves the
+    # workspace in a state the user never asked for and can't see — the response
+    # doesn't even carry how many were rewritten. It has to fail before it
+    # starts, like the folder copy does.
+    app, spec = _quota_app(workspace_quota=200)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    for n in ("a", "b", "c"):
+        client.put(f"/a/rca/items/{iid}/files/{n}.txt", content=b"xx")  # 6 bytes total
+
+    # each "xx" -> 100 bytes, so the three together need 300 against a 200 cap;
+    # per-file gating writes the first and refuses the second.
+    grew = client.post(
+        f"/a/rca/items/{iid}/replace",
+        json={"query": "xx", "replacement": "y" * 100, "regex": False},
+    )
+    assert grew.status_code == 507
+    for n in ("a", "b", "c"):
+        assert client.get(f"/a/rca/items/{iid}/files/{n}.txt").content == b"xx"
