@@ -114,6 +114,7 @@ def rel_path(path: str) -> str:
     this is about what we TEACH, not what we accept."""
     return path.lstrip("/")
 
+
 def _dir_key(path: str) -> str:
     """`path` as a directory key: `""` for the workspace root, else `/a/b`.
 

@@ -720,7 +720,7 @@ async def test_listed_path_works_verbatim_in_a_real_shell(tmp_path):
     await ctx.context.ensure_sandbox()
     await write_file_impl(ctx, "notes.txt", "hello")
 
-    (listed,) = await list_files_impl(ctx)
+    [listed] = (await list_files_impl(ctx)).splitlines()
     out = await exec_impl(ctx, ["cat", listed])  # the EXACT string the agent was shown
     assert "exit_code=0" in out
     assert "hello" in out

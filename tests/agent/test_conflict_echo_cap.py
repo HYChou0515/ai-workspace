@@ -56,3 +56,15 @@ async def test_a_small_file_is_still_echoed_whole_so_the_retry_can_match_it():
 
     assert "alpha\nbeta\n" in out
     assert "omitted" not in out
+
+
+async def test_the_truncation_hint_names_the_file_the_way_the_agent_must_type_it():
+    """The hint tells the agent to re-read the file, so the path in it is a path
+    the agent will use — and every path an agent sees is relative (#549)."""
+    ctx = _ctx(300)
+    await write_file_impl(ctx, "/data/big.txt", "\n".join(f"line{i}" for i in range(2000)))
+
+    out = await edit_file_impl(ctx, "/data/big.txt", "nowhere", "x")
+
+    assert "read_file data/big.txt" in out
+    assert "read_file /data/big.txt" not in out

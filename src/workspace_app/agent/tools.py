@@ -333,7 +333,7 @@ def _conflict_echo(ctx: RunContextWrapper[AgentToolContext], path: str, current:
         current,
         ctx.context.exec_output_max_chars,
         hint=(
-            f"this echo is partial — read_file {path} (offset/limit) to see the exact "
+            f"this echo is partial — read_file {rel_path(path)} (offset/limit) to see the exact "
             "text you need `old_string` to match"
         ),
     )
