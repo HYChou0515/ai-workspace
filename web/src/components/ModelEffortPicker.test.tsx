@@ -177,46 +177,37 @@ describe("ModelEffortPicker", () => {
     expect(screen.getByRole("button", { name: "減少搜尋次數" })).toBeDisabled();
   });
 
-  it("#506: with wikiBudget the wiki is a number picker, not a toggle", async () => {
-    // KB chat greps the wiki as a budgeted in-agent tool (like kb_search), so the
-    // control is a max-searches stepper — the old boolean routing toggle is gone.
-    renderWithQuery(
+  it("#537: the wiki control is an allowance stepper, present only where it applies", async () => {
+    // The old boolean toggle drove a routing flag that no longer exists — opting
+    // into the wiki used to force a document search alongside it. The wiki is now
+    // a source the KB agent picks, with an allowance like document search.
+    const { unmount } = renderWithQuery(
       <ModelEffortPicker
         models={MODELS}
         selectedName={null}
         onSelectModel={() => {}}
         retrieval
-        wikiAvailable
         wikiBudget
       />,
     );
     await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
 
     const wiki = screen.getByLabelText("最多查百科次數");
-    expect(wiki).toHaveTextContent("3"); // default
-    // the boolean routing toggle must NOT be present in budget mode
+    expect(wiki).toHaveTextContent("3");
     expect(screen.queryByText("一併查知識百科")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "增加查百科次數" }));
     expect(wiki).toHaveTextContent("4");
     expect(getKbWikiMax()).toBe(4);
-  });
+    unmount();
 
-  it("#506: without wikiBudget the wiki stays a boolean routing toggle", async () => {
-    // RCA still front-routes the whole-page wiki reader, so its control is the
-    // on/off toggle — the number picker must NOT appear.
+    // An app composer has no wiki control at all: it hands the whole question to
+    // the KB agent, which chooses its own sources (#270).
     renderWithQuery(
-      <ModelEffortPicker
-        models={MODELS}
-        selectedName={null}
-        onSelectModel={() => {}}
-        retrieval
-        wikiAvailable
-      />,
+      <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} retrieval />,
     );
     await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
-
-    expect(screen.getByRole("checkbox", { name: /一併查知識百科/ })).toBeInTheDocument();
     expect(screen.queryByLabelText("最多查百科次數")).not.toBeInTheDocument();
+    expect(screen.queryByText("一併查知識百科")).not.toBeInTheDocument();
   });
 });

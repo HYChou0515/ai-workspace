@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from agents.tracing import set_trace_processors
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.responses import JSONResponse
 from specstar import SpecStar
 
 from ..agent.config_catalog import AgentConfigCatalog
 from ..config.schema import EnhancementSettings
-from ..files import WorkspaceFiles
+from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileStore
 from ..health import CheckRegistry, CheckResult
 from ..health.replay import ReplayService
@@ -267,6 +268,7 @@ def create_app(
     # __main__ threads `settings.kb.retrieval.quality_weight / quality_floor`.
     kb_quality_weight: float = 0.10,
     kb_quality_floor: int | None = None,
+    kb_sparse_corpus_cap: int | None = None,
     # #195: per-turn cap on `kb_search` calls for the KB chat turn + the
     # ask_knowledge_base bridge. `None` ⇒ unlimited (also what other surfaces
     # like Topic Hub use). __main__ threads `settings.kb.max_searches_per_turn`
@@ -431,6 +433,10 @@ def create_app(
         sandbox,
         registry.resolve_io_handle,
         rebuild=registry.rebuild_io_handle if host_managed_durable else None,
+        # #538: the quota lives in the facade, so EVERY way of growing a workspace
+        # is refused by one rule — not just the upload endpoint that used to be
+        # the only checker while the agent, workflows and copy/move went free.
+        quota=workspace_quota,
     )
     kernels = KernelService()
     activity = ActivityLog()
@@ -496,6 +502,26 @@ def create_app(
         openapi_url="/api/openapi.json",
         swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
     )
+
+    @app.exception_handler(WorkspaceFull)
+    async def _workspace_full(_request: Request, exc: WorkspaceFull) -> JSONResponse:
+        """#538: one handler so every route that writes reports a full workspace
+        the same way — 507 with the numbers the FE needs to say "delete
+        something". Registering it here rather than try/except-ing each route is
+        what stops the next write endpoint from silently going ungated, which is
+        exactly how copy/move/the IDE save escaped the original quota."""
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "error": "workspace_quota_exceeded",
+                    "used": exc.used,
+                    "quota": exc.quota,
+                    "attempted": exc.attempted,
+                }
+            },
+        )
+
     # #177: EVERY backend route registers on this prefixed router — specstar's
     # CRUD routes (via apply(router=…)) and all hand-written ones. It's included
     # onto `app` exactly once, just before the SPA mount at the end of create_app.
@@ -565,7 +591,6 @@ def create_app(
     # JobType. The API layer still owns the request-stack wiring below: route
     # registration, the reindex-on-edit trigger, and `app.state` exposure.
     from ..coordinators import build_coordinators, resolve_wiki_config
-    from ..kb.wiki.orchestrator import default_wiki_merge_config
     from ..kb.wiki.reader import default_wiki_reader_config
 
     coordinators = build_coordinators(
@@ -579,6 +604,8 @@ def create_app(
         card_drafter_llm=card_drafter_llm,
         sanity_llm_factory=sanity_llm_factory,  # ty: ignore[invalid-argument-type]
         sanity_judge_llm=sanity_judge_llm,
+        # #535: retrieval-eval question generation runs on the KB llm.
+        eval_llm=kb_llm,
         # #506 P6: the same KB text embedder the ingestor/retriever use, so the
         # card-gen reconcile compares candidates + cards in one vector space.
         embedder=embedder,
@@ -642,7 +669,15 @@ def create_app(
         enhancement_defaults=kb_retrieval_enhancements,
         quality_weight=kb_quality_weight,
         quality_floor=kb_quality_floor,
+        sparse_corpus_cap=kb_sparse_corpus_cap,
     )
+    # #535: wire the retrieval-eval coordinator's retriever (built after
+    # build_coordinators). Its EvalJob model + auto route are already registered;
+    # this lets an all-in-one deploy (run_consumers=true) also consume eval jobs.
+    eval_coordinator = coordinators.eval
+    if eval_coordinator is not None:
+        eval_coordinator.set_retriever(kb_retriever)
+    app.state.eval_coordinator = eval_coordinator
     register_kb_routes(
         api,
         spec,
@@ -688,31 +723,30 @@ def create_app(
     # unless the query opts into the wiki AND a collection has use_wiki, so the
     # default chunk-RAG behaviour is unchanged. Its own engine keeps the RCA
     # turn lifecycle untouched.
-    from ..kb.wiki.orchestrator import WikiAwareRunner
+    from ..kb.wiki.consult import make_wiki_consultant
 
-    kb_runner = WikiAwareRunner(
-        runner,
-        spec,
-        reader_config=resolve_wiki_config(
-            catalog,
-            "wiki_reader",
-            default_wiki_reader_config,
-            wiki_model=wiki_model,
-            wiki_llm_base_url=wiki_llm_base_url,
-            wiki_llm_api_key=wiki_llm_api_key,
-        ),
-        merge_config=resolve_wiki_config(
-            catalog,
-            "wiki_merge",
-            default_wiki_merge_config,
-            wiki_model=wiki_model,
-            wiki_llm_base_url=wiki_llm_base_url,
-            wiki_llm_api_key=wiki_llm_api_key,
-        ),
-        reader_max_turns=wiki_reader_max_turns,
-    )
+    def _wiki_consultant_factory(cids: list[str]):
+        """#537: build a wiki consultant for a turn scoped to `cids`. Shared by the
+        KB chat surface and every ask_knowledge_base sub-agent, so both reach the
+        wiki the same way. Driven by the BASE runner — a reader must never re-enter
+        the KB layer that called it."""
+        return make_wiki_consultant(
+            runner,
+            spec,
+            cids,
+            reader_config=resolve_wiki_config(
+                catalog,
+                "wiki_reader",
+                default_wiki_reader_config,
+                wiki_model=wiki_model,
+                wiki_llm_base_url=wiki_llm_base_url,
+                wiki_llm_api_key=wiki_llm_api_key,
+            ),
+            reader_max_turns=wiki_reader_max_turns,
+        )
+
     kb_turn_engine = ChatTurnEngine(
-        kb_runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
+        runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
     )
     register_kb_chat_routes(
         api,
@@ -734,6 +768,10 @@ def create_app(
         # described into the search query (generic multimodal input). None ⇒ image
         # attachments rejected with a friendly error; text turns unaffected.
         vlm_describer=vlm_describer,
+        # #537: the KB agent's `ask_wiki` tool consults the wiki through a reader
+        # driven per turn over the chat's own collections. Built on the BASE runner
+        # — a reader must never re-enter the KB layer that called it.
+        wiki_consultant_factory=_wiki_consultant_factory,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
@@ -750,7 +788,6 @@ def create_app(
     subagent_bridge = SubagentBridge(
         spec=spec,
         runner=runner,
-        kb_runner=kb_runner,
         retriever=kb_retriever,
         catalog=catalog,
         purpose_fallbacks=_purpose_fallbacks,
@@ -759,6 +796,10 @@ def create_app(
         # #305: the sub-agent's collection scope is filtered to what the speaker
         # can read_content; a superuser speaker bypasses (they could read directly).
         superusers=superusers,
+        # #537: the KB sub-agent gets the same wiki access the KB chat surface has,
+        # so an app asking a question reaches the wiki through it (#270: an app
+        # never holds wiki tools of its own).
+        wiki_consultant_factory=_wiki_consultant_factory,
     )
     _run_subagent = subagent_bridge.run
 

@@ -12,6 +12,7 @@ import type { FileInfo } from "../../api/types";
 import { useOptionalDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
+import { useT } from "../../lib/i18n";
 import { buildFileTree, pruneTree, type TreeNode } from "./fileTree";
 import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
@@ -128,6 +129,7 @@ export function FileTree({
   // capabilities collapse to none (every mutation action hides).
   const svc = useOptionalFileService() ?? NO_SERVICE;
   const caps = svc.caps;
+  const t = useT();
   // Select mode has no confirm prompts (they're on caps-gated mutations), so a
   // no-op stands in when there's no <DialogProvider>.
   const dialog = useOptionalDialog() ?? { confirm: async () => null };
@@ -214,12 +216,13 @@ export function FileTree({
         await svc.writeFile(path, f);
       } catch (err) {
         // #245: a 507 is the workspace quota (out of space), distinct from the
-        // 413 single-file size cap — say which so the fix is obvious.
+        // 413 single-file size cap — say which so the fix is obvious. #538: both
+        // go through i18n, and the full-workspace one names the remedy.
         const status = (err as { status?: number }).status;
         alert(
           status === 507
-            ? `${f.name} could not be uploaded — the workspace is out of space.`
-            : `${f.name} could not be uploaded — it may exceed the size limit.`,
+            ? t("workspace.upload.full", { name: f.name })
+            : t("workspace.upload.failed", { name: f.name }),
         );
         continue;
       }

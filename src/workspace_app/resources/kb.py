@@ -415,7 +415,14 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     seq: int  # 0-based order within the doc (adjacency merge)
     start: int  # inclusive char offset into canonical text
     end: int  # exclusive char offset
-    text: str
+    # TrigramIndex → a pg_trgm GIN over `(indexed_data->>'text')` so the sparse
+    # (BM25) arm can pre-narrow its corpus to the chunks lexically similar to the
+    # query (`.fuzzy(term)`), instead of loading + tokenizing every chunk in the
+    # collection. The GIN is index-only (built at boot); the field must ALSO be an
+    # `indexed_fields` entry so specstar extracts `text` into `indexed_data` — that
+    # extraction is the one real cost (the text is stored a second time in the jsonb)
+    # and needs a migrate backfill for pre-existing rows (Schema v5 step below).
+    text: Annotated[str, TrigramIndex()]
     # #104: NOT a Ref/cascade any more — a chunk is bound to CONTENT
     # (source_file_id), not to one deletable doc. Deletion is governed by a
     # collection-scoped content refcount (`ingest.teardown_doc_chunks`), not the

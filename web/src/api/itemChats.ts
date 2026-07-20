@@ -116,6 +116,11 @@ export const itemChatApi = {
      * ask_knowledge_base lookups — mirrors the item-level `api.sendMessage`. The
      * chat-scoped backend forwards `body.enhancements`. */
     enhancements?: BodyEnhancements;
+    /** #537: how many times this turn's ask_knowledge_base lookups may search the
+     * documents in total. This surface never sent it, so the composer's stepper
+     * was inert here and the operator default always won — including when the
+     * user set 0. */
+    maxKbSearches?: number;
     /** #380: skills the user queued to apply THIS turn (one-shot, hard-preloaded).
      * Mirrors the item-level `api.sendMessage`; the chat endpoint shares the body. */
     applySkills?: string[];
@@ -132,6 +137,7 @@ export const itemChatApi = {
         content: args.content,
         reasoning_effort: args.reasoningEffort,
         enhancements: args.enhancements,
+        max_kb_searches: args.maxKbSearches,
         apply_skills: args.applySkills,
         image_paths: args.imagePaths,
       }),

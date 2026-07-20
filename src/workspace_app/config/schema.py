@@ -381,6 +381,15 @@ class RetrievalSettings:
     # results); null (default) = soft only, never exclude.
     quality_weight: float = 0.10
     quality_floor: int | None = None
+    # The BM25 corpus ceiling. The trigram pre-narrowing collapses a DISTINCTIVE
+    # query to almost nothing, but a query of common domain vocabulary matches
+    # nearly every chunk and narrows nothing — so this bounds how many of those the
+    # store ships back (the most trigram-similar ones), capping the sparse arm's
+    # cost on exactly the queries that hurt. BM25 still does the ranking, and the
+    # dense arm ignores this cap (it still searches every chunk via the vector
+    # index), so a capped-out chunk can still be retrieved. null (default) =
+    # uncapped. Tune against a #535 eval run before lowering it.
+    sparse_corpus_cap: int | None = None
 
 
 @dataclass(frozen=True)
@@ -724,9 +733,17 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         # `lookup_glossary` (#106) is the deterministic context-card path beside
         # kb_search: an unknown TERM resolves instantly from the glossary, only
         # a QUESTION needing document facts falls through to the slow RAG search.
+        #
+        # #537: `search_wiki` is deliberately absent. It greps wiki pages and hands
+        # back isolated `page:line: text` matches; without `read_file` beside it the
+        # holder can never open the page, follow a `[[wikilink]]`, or cite what it
+        # found — the opposite of the index-first navigation the LLM-wiki design
+        # rests on. #270's A/B convention keeps that leaf with the wiki maintainer /
+        # reader; the KB agent consults the wiki through `ask_wiki`, which delegates
+        # the whole navigation to the reader in a throwaway context.
         "allowed_tools": [
             "kb_search",
-            "search_wiki",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],
@@ -750,7 +767,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "allowed_tools": [
             "kb_search",
-            "search_wiki",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],
@@ -766,7 +783,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "allowed_tools": [
             "kb_search",
-            "search_wiki",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],

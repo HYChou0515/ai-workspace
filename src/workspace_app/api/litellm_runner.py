@@ -242,10 +242,12 @@ def _final_tokens(
 
 def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | None:
     """Per-turn additions to the system prompt: the #242 speaker note (who the
-    agent is replying to in a shared workspace) followed by any retry feedback.
-    `None` when neither is present, so `_agent_for` leaves the base prompt
-    unchanged."""
-    parts = [s for s in (speaker_note(ctx.speaker), feedback) if s]
+    agent is replying to in a shared workspace), the #537 knowledge-source
+    allowance (how many times this reply may consult each source — stated up
+    front so the agent budgets deliberately instead of discovering the ceiling
+    by being refused), then any retry feedback. `None` when none is present, so
+    `_agent_for` leaves the base prompt unchanged."""
+    parts = [s for s in (speaker_note(ctx.speaker), ctx.search_allowance_note, feedback) if s]
     return "\n\n".join(parts) if parts else None
 
 

@@ -26,6 +26,12 @@ from workspace_app.sandbox.mock import MockSandbox
 from ._client import TestClient
 
 
+async def _no_op_consultant(question: str, sink=None):
+    """A consultant that answers nothing — enough to prove the tool was GRANTED
+    and the handle wired, without standing up a wiki."""
+    return "", []
+
+
 def _test_kb_cfg() -> AgentConfig:
     """Minimal AgentConfig for the KB sub-agent in answer_question tests —
     just kb_search as allowed_tools. The scripted runners ignore model /
@@ -205,11 +211,13 @@ def _client(runner: object, *, describer: VlmDescriber | None = None) -> TestCli
     return TestClient(app)
 
 
-def test_interactive_kb_turn_wires_a_wiki_store_and_grants_search_wiki():
-    # #506 Task#1: the send path must give the KB agent a wiki store (files) AND the
-    # bundled kb preset must grant `search_wiki`, so it consults the wiki in-agent
-    # (budgeted, multi-collection) instead of the heavy whole-page reader routing.
-    # The grep itself is unit-tested in test_wiki_tools; here we prove the wiring.
+def test_interactive_kb_turn_does_not_grant_the_raw_wiki_grep():
+    # #537: the KB agent must NOT hold `search_wiki`. That tool greps wiki pages and
+    # returns isolated `page:line: text` hits; with no `read_file` alongside it, an
+    # agent holding only the grep can never open the page a hit came from, follow a
+    # `[[wikilink]]`, or produce a citation — so the wiki was reachable in name only.
+    # #270's A/B convention keeps the leaf wiki tools with the maintainer/reader; the
+    # KB agent consults the wiki through the delegating `ask_wiki` (P2) instead.
     captured: dict = {}
 
     class _CaptureRunner:
@@ -223,8 +231,67 @@ def test_interactive_kb_turn_wires_a_wiki_store_and_grants_search_wiki():
     cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
     client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"})
 
-    assert captured["files"] is not None  # a wiki store the agent can grep was wired
-    assert captured["tools"] is not None and "search_wiki" in captured["tools"]  # preset grants it
+    assert captured["tools"] is not None
+    assert "search_wiki" not in captured["tools"]
+    # …it reaches the wiki through the delegating tool instead.
+    assert "ask_wiki" in captured["tools"]
+
+
+def test_a_kb_turn_states_its_allowance_up_front_including_what_is_off():
+    """#537: budgets used to be invisible until a tool refused, so the model
+    planned as if looking things up were free and got cut off mid-thought. The
+    turn now carries the allowance into the prompt — and still NAMES a source
+    that's off (#480), so the agent can say what it would need."""
+    seen: dict = {}
+
+    class _CaptureRunner:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            seen["note"] = ctx.search_allowance_note
+            seen["tools"] = ctx.agent_config.allowed_tools if ctx.agent_config else None
+            yield MessageDelta(text="ok")
+            yield RunDone()
+
+    client = _client(_CaptureRunner())
+    wiki = client.post("/kb/collections", json={"name": "encyclopedia", "use_wiki": True}).json()
+    cid = client.post(
+        "/kb/chats", json={"title": "t", "collection_ids": [wiki["resource_id"]]}
+    ).json()["resource_id"]
+    client.post(
+        f"/kb/chats/{cid}/messages",
+        json={"content": "hi", "max_kb_searches": 0, "max_wiki_searches": 2},
+    )
+
+    # documents off for this reply ⇒ the tool is gone, but the prompt says so.
+    assert "kb_search" not in (seen["tools"] or [])
+    assert "OFF for this reply" in seen["note"]
+    assert "at most 2 times" in seen["note"]
+
+
+def test_a_kb_turn_gets_a_wiki_consultant_only_when_a_scoped_collection_has_one():
+    # #537: `ask_wiki` needs somewhere to delegate TO. The send path builds the
+    # consultant from the chat's own collections, so a chat over documents-only
+    # collections leaves it unset and the tool reports there's no wiki here —
+    # rather than spinning up a reader over an empty page set.
+    seen: dict = {}
+
+    class _CaptureRunner:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            seen["consultant"] = ctx.run_wiki_reader
+            yield MessageDelta(text="ok")
+            yield RunDone()
+
+    client = _client(_CaptureRunner())
+    plain = client.post("/kb/collections", json={"name": "docs", "use_wiki": False}).json()
+    wiki = client.post("/kb/collections", json={"name": "encyclopedia", "use_wiki": True}).json()
+
+    for collection_ids, expected in (
+        ([plain["resource_id"]], False),
+        ([wiki["resource_id"]], True),
+    ):
+        chat = client.post("/kb/chats", json={"title": "t", "collection_ids": collection_ids})
+        cid = chat.json()["resource_id"]
+        client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"})
+        assert (seen["consultant"] is not None) is expected
 
 
 def test_send_message_caps_wiki_search_from_the_composer_pick():
@@ -540,11 +607,18 @@ async def test_answer_question_spec_prompt_overrides_the_sub_agent_instruction()
     assert runner.ctx.agent_config.system_prompt == "Only report what the collection already says."
 
 
-async def test_answer_question_wires_a_wiki_store_when_the_spec_grants_search_wiki():
-    # #506 (drafter sub-agent): a spec that grants search_wiki gets a per-collection
-    # wiki store wired so the tool can grep; a spec with wiki off gets none.
+async def test_a_spec_that_allows_the_wiki_gets_a_consultant_and_the_tool():
+    """#537: the sub-agent's wiki access is a reader it can delegate to, not a
+    grep over pages it can't open. A spec with the wiki off gets neither the
+    consultant nor the tool — off means the tool isn't there, so the model can't
+    spend a call discovering that."""
     spec = make_spec(default_user="u")
     retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+    sentinel = object()
+
+    def factory(collection_ids):
+        assert collection_ids == ["c"]
+        return sentinel
 
     on = _CapturingRunner()
     await answer_question(
@@ -552,11 +626,15 @@ async def test_answer_question_wires_a_wiki_store_when_the_spec_grants_search_wi
         retriever,
         ["c"],
         "q",
-        agent_config=_test_kb_cfg(),
+        agent_config=AgentConfig(name="kb", model="x", allowed_tools=["kb_search", "ask_wiki"]),
         spec=spec,
         ask_kb_spec=AskKbSpec(wiki_search_max=3),
+        wiki_consultant_factory=factory,
     )
-    assert on.ctx is not None and on.ctx.files is not None  # store wired for search_wiki
+    assert on.ctx is not None
+    assert on.ctx.run_wiki_reader is sentinel
+    assert on.ctx.agent_config is not None
+    assert "ask_wiki" in (on.ctx.agent_config.allowed_tools or [])
 
     off = _CapturingRunner()
     await answer_question(
@@ -564,11 +642,35 @@ async def test_answer_question_wires_a_wiki_store_when_the_spec_grants_search_wi
         retriever,
         ["c"],
         "q",
-        agent_config=_test_kb_cfg(),
+        agent_config=AgentConfig(name="kb", model="x", allowed_tools=["kb_search", "ask_wiki"]),
         spec=spec,
         ask_kb_spec=AskKbSpec(wiki_search_max=0),
+        wiki_consultant_factory=factory,
     )
-    assert off.ctx is not None and off.ctx.files is None  # wiki off ⇒ no store
+    assert off.ctx is not None and off.ctx.agent_config is not None
+    assert "ask_wiki" not in (off.ctx.agent_config.allowed_tools or [])
+
+
+async def test_a_spec_with_document_search_off_keeps_only_the_wiki():
+    """The half that was impossible before #537: consult the wiki, leave the
+    documents alone. `kb_search` used to be granted whatever the budgets said."""
+    spec = make_spec(default_user="u")
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+
+    cap = _CapturingRunner()
+    await answer_question(
+        cap,
+        retriever,
+        ["c"],
+        "q",
+        agent_config=AgentConfig(name="kb", model="x", allowed_tools=["kb_search", "ask_wiki"]),
+        spec=spec,
+        ask_kb_spec=AskKbSpec(kb_search_max=0, wiki_search_max=3, glossary=False),
+        wiki_consultant_factory=lambda cids: _no_op_consultant,
+    )
+    assert cap.ctx is not None and cap.ctx.agent_config is not None
+    assert cap.ctx.agent_config.allowed_tools == ["ask_wiki"]
+    assert cap.ctx.kb_search_budget.max_calls == 0
 
 
 class _PlainRunner:

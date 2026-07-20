@@ -602,6 +602,52 @@ def test_operator_can_raise_enhancement_defaults_and_max(tmp_path: Path):
     assert e.rerank.max is True
 
 
+def test_operator_can_set_retrieval_scalar_knobs(tmp_path: Path):
+    """`kb.retrieval`'s scalar leaves must actually reach `RetrievalSettings`.
+
+    The loader's key allowlist accepted these long before the builder read them, so
+    setting `quality_weight` / `quality_floor` in config raised no error and did
+    nothing — the value was dropped and the dataclass default silently won. Anything
+    the operator can write here must land, or the knob is a lie."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            kb:
+              retrieval:
+                quality_weight: 0.42
+                quality_floor: 33
+                sparse_corpus_cap: 750
+        """),
+        encoding="utf-8",
+    )
+    r = load(config_path=cfg, env={}).kb.retrieval
+    assert r.quality_weight == 0.42
+    assert r.quality_floor == 33
+    assert r.sparse_corpus_cap == 750
+    # untouched knobs keep their bundled defaults
+    assert r.enhancements.expand.default == 1
+
+
+def test_retrieval_scalar_knobs_keep_defaults_when_unset(tmp_path: Path):
+    """Omitting them leaves the dataclass defaults — the cap in particular defaults
+    to null (uncapped), so an operator who never sets it gets today's behaviour."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            kb:
+              retrieval:
+                enhancements:
+                  hyde:
+                    default: 1
+        """),
+        encoding="utf-8",
+    )
+    r = load(config_path=cfg, env={}).kb.retrieval
+    assert r.quality_weight == 0.10
+    assert r.quality_floor is None
+    assert r.sparse_corpus_cap is None
+
+
 def test_unknown_enhancement_key_raises_with_path(tmp_path: Path):
     """Typos in the enhancements tree must raise — `default` is the
     correct key, `defualt` is a misspelling and should fail loud."""

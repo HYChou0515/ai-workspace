@@ -29,7 +29,7 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 | `src/workspace_app/api/litellm_runner.py` | `LitellmAgentRunner`：`run()` 重試迴圈（`diagnose_error`/`classify_retry_event`，#26 progress-gated）、`_run_once` fan-in queue（producer 正規化 SDK 事件 + `ctx.on_exec_output` stdout）、`_delta_channel`、`ThinkSplitter`、`_final_tokens`、`_agent_for`。 |
 | `src/workspace_app/api/events.py` | `AgentEvent` dataclass union + `to_sse()`；在 `web/src/events.ts` 鏡像。 |
 | `src/workspace_app/api/registry.py` | `InvestigationRegistry`：只管 per-investigation 的 **SANDBOX** 生命週期（`ensure_handle`、`peek_handle`、`mirror_warm`/`kill_idle`/`close_all`）。 |
-| `src/workspace_app/api/app.py` | `create_app` 組裝根（#54 後精簡為純 composition root，~767 行）：建構 `KernelService`、安裝 monitor、`build_coordinators`、接出兩個 `ChatTurnEngine`（`turn_engine` 套在 `runner`；`kb_turn_engine` 套在 `WikiAwareRunner`），再呼叫每個 `register_*_routes`。**不再**定義路由 handler 或 lifespan body——lifespan→`lifecycle.py:build_lifespan`、`_run_subagent` bridge→`subagent_bridge.py`、RCA send/stream/cancel→`chat_routes.py`（見下方路由模組表）。 |
+| `src/workspace_app/api/app.py` | `create_app` 組裝根（#54 後精簡為純 composition root，~767 行）：建構 `KernelService`、安裝 monitor、`build_coordinators`、接出兩個 `ChatTurnEngine`（`turn_engine` 與 `kb_turn_engine` 都套在 `runner`；#537 後不再有 wiki 路由層），再呼叫每個 `register_*_routes`。**不再**定義路由 handler 或 lifespan body——lifespan→`lifecycle.py:build_lifespan`、`_run_subagent` bridge→`subagent_bridge.py`、RCA send/stream/cancel→`chat_routes.py`（見下方路由模組表）。 |
 | `src/workspace_app/api/kb_chat_routes.py` | KB chat：`KbChat` CRUD + `send_message`（建 KB `AgentToolContext`、持久化帶 `[n]` 引用的 `KbMessage`）+ `answer_question`（給 `ask_knowledge_base` 用的非串流 KB run）+ `kb_progress`。 |
 | `src/workspace_app/api/kb_routes.py` | KB REST（無 turns/SSE）：collections、文件上傳+enqueue、分頁列表、render/reindex/move/delete、wiki、export/import。 |
 | `src/workspace_app/kernels/service.py` | `KernelService`：per-(item, notebook) 的 IPython kernel 管理（`get_or_start`/`execute_cell`→`CellEvent`/`interrupt`/`restart`/`reap_idle`）。是 `AgentEvent` 之外的**第二條 SSE 串流**，由 notebook cell 端點驅動。 |
@@ -56,7 +56,7 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 
 | 接縫 | 定義位置 | 種類 | 實作 |
 | --- | --- | --- | --- |
-| `AgentRunner` | `src/workspace_app/api/runner.py` | Protocol | `LitellmAgentRunner`（正式）、`ScriptedAgentRunner`（測試）、`WikiAwareRunner`（`src/workspace_app/kb/wiki/orchestrator.py`，包在 KB engine 外） |
+| `AgentRunner` | `src/workspace_app/api/runner.py` | Protocol | `LitellmAgentRunner`（正式）、`ScriptedAgentRunner`（測試） |
 | `AgentToolContext` | `src/workspace_app/agent/context.py` | dual-flavour context | RCA：sandbox/filestore/sync（`chat_send.py:ChatSendService.send` + `turn_context.py:build_chat_turn`）；KB：retriever + collection_ids、無 sandbox（`kb_chat_routes` + `answer_question`） |
 | `_SyncHook` | `src/workspace_app/api/registry.py` | Protocol | `src/workspace_app/sync/sandbox_sync.py:SandboxSync` |
 | `AgentEvent` | `src/workspace_app/api/events.py` | tagged dataclass union | `web/src/events.ts`（FE 鏡像） |
@@ -71,7 +71,7 @@ flowchart TD
   KBC["kb_chat_routes.send_message"] -->|"engine.stream(on_complete=persist KbMessage)"| ENG2["kb_turn_engine"]
   RCA["chat_routes.py items send/stream"] -->|"enqueue + publish + subscribe_sse"| ENG1["turn_engine"]
   ENG1 --> RUN["runner (AgentRunner)"]
-  ENG2 --> WRUN["WikiAwareRunner"] --> RUN
+  ENG2 --> RUN
   RUN --> LIT["LitellmAgentRunner.run (retry loop)"]
   RUN -. tests .-> SCR["ScriptedAgentRunner"]
   LIT --> ONCE["_run_once fan-in queue"]
@@ -146,7 +146,7 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 
 ## 與其他子系統的關係
 
-- **上游組裝**：[啟動與組裝根](boot-and-config.md) 的 `create_app` 接出兩個 engine、`runner`、`WikiAwareRunner`、`InvestigationRegistry`，並注冊 KB / KB-chat / RCA 路由。
+- **上游組裝**：[啟動與組裝根](boot-and-config.md) 的 `create_app` 接出兩個 engine、`runner`、`InvestigationRegistry`，並注冊 KB / KB-chat / RCA 路由。
 - **下游 agent 執行**：[Agent 執行時](agent-runtime.md) 提供 `AgentToolContext`、`build_tools`/`tooling.registry`、以及 `_agent_for._build_model` 換進的 Model 包裝（`RepairingModel`/`DecideThenActModel`/`FallbackModel`），底層走 OpenAI Agents SDK + LiteLLM/Ollama。
 - **Sandbox/檔案**：[Sandbox、FileStore 與同步](sandbox-and-filestore.md) — `InvestigationRegistry.peek_handle` 決定檔案操作走 warm sandbox 或 FileStore 快照；`_SyncHook` 即 `SandboxSync`。
 - **KB 攝取/檢索**：`kb_routes` 的上傳把文件 enqueue 給 [知識庫:攝取與索引](kb-ingest-index.md)（#312 `build_coordinators`）；`kb_chat_routes` + `answer_question` 走 [知識庫:檢索與 Agent](kb-retrieval-agent.md) 的 retriever 與 `[n]` 解析。
@@ -169,4 +169,4 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 - `src/workspace_app/api/kb_routes.py` — `register_kb_routes`（純 REST，無 turns/SSE）。
 - `src/workspace_app/kernels/service.py` — `KernelService`（notebook cell 的第二條 SSE；`execute_cell` → `CellEvent`、`reap_idle`）；`KernelService` 仍在 `api/app.py` 建構（~line 293），但驅動它的 cell 端點（execute/interrupt/restart）#54 後在 `api/file_routes.py:register_file_routes`。
 
-> 部分細節（`agent/context.py` 的 `AgentToolContext` 欄位全集、`repetition_guard.py` 的 `RepetitionStopped` 內部邏輯、`kb/wiki/orchestrator.py:WikiAwareRunner` 的路由）以原始碼為準；`_run_once` / `_run_once_nonstream` 標了 `# pragma: no cover`，只有 live-Ollama 整合測試會走到。
+> 部分細節（`agent/context.py` 的 `AgentToolContext` 欄位全集、`repetition_guard.py` 的 `RepetitionStopped` 內部邏輯）以原始碼為準；`_run_once` / `_run_once_nonstream` 標了 `# pragma: no cover`，只有 live-Ollama 整合測試會走到。

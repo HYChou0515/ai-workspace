@@ -37,6 +37,13 @@ from .agent_config import AgentConfig
 from .check_run import CheckRun
 from .citation_event import CitationEvent
 from .conversation import Conversation, Message
+from .eval import (
+    EvalBatchStat,
+    EvalResult,
+    EvalRun,
+    eval_batch_stat_id,
+    eval_run_id,
+)
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
@@ -82,6 +89,11 @@ __all__ = [
     "KbChat",
     "Message",
     "Notification",
+    "EvalBatchStat",
+    "EvalResult",
+    "EvalRun",
+    "eval_batch_stat_id",
+    "eval_run_id",
     "SanityResult",
     "SanityVerdict",
     "SourceDoc",
@@ -405,7 +417,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # real hash onto old chunks is a reindex (denormalize-from-parent), not this
     # migrate — see #104 plan P4.
     spec.add_model(
-        Schema(DocChunk, "v5")
+        Schema(DocChunk, "v6")
         .step(None, _reindex_only, to="v3", source_type=DocChunk)
         .step("v2", _reindex_only, to="v3", source_type=DocChunk)
         .step("v3", _reindex_only, to="v4", source_type=DocChunk)
@@ -417,11 +429,25 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
         # no-op reindex gives every v4 row a v5 delta: `POST /doc-chunk/migrate/
         # execute` then re-extracts + re-saves each, and 0.12.1 strips the vectors
         # on the way out. Operator then `REINDEX`es the GIN to reclaim the space.
-        .step("v4", _reindex_only, to="v5", source_type=DocChunk),
+        .step("v4", _reindex_only, to="v5", source_type=DocChunk)
+        # v6: `text` becomes an indexed field (its `TrigramIndex` GIN backs the
+        # sparse arm's `.fuzzy()` corpus pre-narrowing). specstar extracts an indexed
+        # field into `indexed_data` at WRITE time only, so pre-v6 rows have no
+        # `indexed_data->>'text'` and are invisible to `.fuzzy()` until re-extracted.
+        # This no-op reindex gives every v5 row a v6 delta; `POST /doc-chunk/migrate/
+        # execute` then re-extracts + re-saves each (folding `text` into indexed_data),
+        # after which an operator builds/`REINDEX`es the pg_trgm GIN. NOT a
+        # reparse/reembed — the text is already on each row.
+        .step("v5", _reindex_only, to="v6", source_type=DocChunk),
         indexed_fields=[
             "source_doc_id",
             "source_file_id",
             "collection_id",
+            # The chunk text, extracted into `indexed_data` so its `TrigramIndex` GIN
+            # (declared on the field) can serve the sparse arm's `.fuzzy(term)` corpus
+            # narrowing. Duplicates the text into the jsonb — the accepted cost of
+            # keyword-narrowing without loading the whole collection (2a).
+            "text",
             IndexableField("provenance.page", int, index_key="page"),
             IndexableField("provenance.slide", int, index_key="slide"),
             IndexableField("provenance.sheet", str, index_key="sheet"),
@@ -563,6 +589,16 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     spec.add_model(CheckRun, indexed_fields=["check_id"])
     # Model-sanity matrix cells (current-only). model indexed so the FE lists
     # one model's grid without a full scan; auto routes serve GET /sanity-result.
+    # #535: retrieval-eval. `EvalResult` is the durable per-(collection, run)
+    # baseline — `collection_id` + `run_label` indexed so the FE lists a
+    # collection's runs. `EvalRun` is the fan-out join state (mirror `IndexRun`):
+    # `status` + `collection_id` indexed for the safety sweep / per-collection
+    # lookup; the per-run reads are point gets by id. `EvalBatchStat` is transient
+    # per-batch staging (mirror `IndexUnitText`), indexed by (collection, run) so
+    # finalize lists a run's batches to rejoin, then deletes them.
+    spec.add_model(EvalResult, indexed_fields=["collection_id", "run_label"])
+    spec.add_model(EvalRun, indexed_fields=["status", "collection_id"])
+    spec.add_model(EvalBatchStat, indexed_fields=["collection_id", "run_label"])
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a
     # verdict get/list is a query; auto routes serve GET /sanity-verdict.

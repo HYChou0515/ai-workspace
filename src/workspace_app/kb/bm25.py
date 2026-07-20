@@ -16,7 +16,10 @@ _WORD = re.compile(r"\w+")
 logger = logging.getLogger(__name__)
 
 
-def _tokens(text: str) -> list[str]:
+def tokenize(text: str) -> list[str]:
+    """Lowercase word tokens (``\\w+``) — the BM25 term surface. Exposed so the
+    retriever's trigram corpus pre-narrowing (2a) fuzzy-matches on the SAME terms
+    BM25 will score, keeping the candidate set a superset of BM25's scored docs."""
     return _WORD.findall(text.lower())
 
 
@@ -25,11 +28,11 @@ def bm25_rank(
 ) -> list[str]:
     """Rank ``(id, text)`` docs against ``query`` by BM25; ids by descending
     score, ties broken by id. Docs scoring 0 (no query term) are excluded."""
-    q_terms = set(_tokens(query))
+    q_terms = set(tokenize(query))
     if not q_terms or not corpus:
         logger.debug("bm25: no query terms or empty corpus, 0 ranked")
         return []
-    docs = [(doc_id, _tokens(text)) for doc_id, text in corpus]
+    docs = [(doc_id, tokenize(text)) for doc_id, text in corpus]
     n = len(docs)
     avgdl = sum(len(toks) for _, toks in docs) / n
     # document frequency per query term

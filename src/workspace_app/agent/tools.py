@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import csv
+import functools
+import inspect
 import io
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import magic
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
 
-from ..files import WorkspaceFiles
+from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
@@ -282,6 +285,55 @@ async def make_deck_impl(
         style=style,
         length=length,
         out_path=out_path,
+    )
+
+
+def _guard_workspace_full(impl: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a tool impl so a full workspace reaches the model as instructions.
+
+    Applied once where tools are built rather than at each write, so it covers
+    every tool that can reach the store — `write_file` and `edit_file`, but
+    equally `make_deck`, `save_skill`, `infer_modules`, `create_entity`, and
+    whatever is added next. Left to individual `try`/`except`s this was already
+    wrong for four of them: `WorkspaceFull` reached the SDK's default handler,
+    the model was told only "an error occurred", and it retried the same write.
+
+    Not every impl is a coroutine — `kb_search`, `lookup_glossary`,
+    `resolve_collection` and the context-card pair are plain functions — so the
+    wrapper has to preserve each one's calling convention. Wrapping a sync impl
+    in an `async def` would hand `function_tool` a coroutine where it expects a
+    value and break tools that never touch the workspace at all."""
+    if inspect.iscoroutinefunction(impl):
+
+        @functools.wraps(impl)
+        async def _guarded_async(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await impl(*args, **kwargs)
+            except WorkspaceFull as exc:
+                return _workspace_full_msg(exc)
+
+        return _guarded_async
+
+    @functools.wraps(impl)
+    def _guarded_sync(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return impl(*args, **kwargs)
+        except WorkspaceFull as exc:
+            return _workspace_full_msg(exc)
+
+    return _guarded_sync
+
+
+def _workspace_full_msg(exc: WorkspaceFull) -> str:
+    """#538: what the agent is told when a write is refused for space. The agent
+    can't make more room appear, so the message names the ONE action that helps
+    and the tool that does it — otherwise a model retries the same write, or
+    invents a workaround like writing somewhere else."""
+    return (
+        f"error: the workspace is full ({exc.used} of {exc.quota} bytes used) — "
+        f"writing {exc.attempted} more bytes would exceed it. Delete files that are "
+        f"no longer needed with delete_file, then retry. Tell the user what you "
+        f"deleted, or ask them which files they want to keep."
     )
 
 
@@ -887,6 +939,68 @@ async def ask_knowledge_base_impl(
     return banner + answer
 
 
+async def ask_wiki_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:
+    """Ask the wiki what it knows about something.
+
+    The wiki is this knowledge base's encyclopedia: pages that consolidate what
+    many documents say about one entity or concept, cross-linked and kept current
+    as documents arrive. Reach for it when the question is about **understanding**
+    — what something is, how it relates to other things, the shape of a topic,
+    the background you would want before opening any single document.
+
+    A wiki reader works through it for you — the index, then the pages the index
+    points at, then the source documents behind those pages — and returns a
+    written answer with `[n]` markers citing the underlying documents. Ask one
+    focused question in natural language; it is a reader, not a search box.
+
+    Prefer this over `kb_search` for anything conceptual or broad: the wiki has
+    already done the cross-document synthesis, so one call here often replaces
+    several searches. Use `kb_search` instead when you need an exact figure, a
+    specific step, or the verbatim wording of one particular document.
+    """
+    from ..kb.citations import parse_citations, shift_markers
+
+    # One bucket entry per call, early returns included — persist() pairs the Nth
+    # entry with the Nth `ask_wiki` tool message, so a skipped append drifts every
+    # later pairing (same contract as ask_knowledge_base above).
+    bucket = ctx.context.subagent_citations.setdefault("ask_wiki", [])
+
+    consult = ctx.context.run_wiki_reader
+    if consult is None:
+        bucket.append([])
+        return (
+            "There is no wiki in scope for this conversation, so there is nothing "
+            "to consult. Answer from the documents and what you already have."
+        )
+
+    budget = ctx.context.wiki_search_budget
+    if budget.exhausted:
+        bucket.append([])
+        cap = budget.max_calls
+        return (
+            f"Wiki budget spent for this reply ({cap} of {cap} used). Answer now "
+            "from what the wiki already told you; do not call ask_wiki again."
+        )
+
+    answer, passages = await consult(question, ctx.context.on_exec_output)
+    budget.used += 1  # every completed consultation costs one, answer or not
+
+    # The reader numbered its sources from [1]; move them to their slice of THIS
+    # turn's registry before appending, so the caller can quote them verbatim and
+    # every marker still resolves to the document it was written against.
+    shifted = shift_markers(answer, len(ctx.context.kb_passages))
+    ctx.context.kb_passages.extend(passages)
+    bucket.append(parse_citations(shifted, ctx.context.kb_passages))
+
+    if budget.max_calls is not None:
+        shifted += (
+            f"\n\n(Wiki budget: {budget.used} of {budget.max_calls} used, "
+            f"{budget.remaining} left. Consult again only for a genuinely "
+            "different question.)"
+        )
+    return shifted
+
+
 def _read_step_names(text: str, column: str) -> list[str]:
     """Unique step names (input order) from `text`. If it parses as CSV
     whose header contains `column`, read that column; otherwise treat each
@@ -1058,6 +1172,8 @@ async def infer_modules_impl(
     # Overwrite: re-running a build replaces the map. create() refuses an
     # existing path (returns its content), so delete first when present.
     if await fs.create(inv, out, csv_bytes) is not None:
+        # The delete comes first, so the replacement can only be smaller than
+        # what it frees — the quota cannot refuse it.
         await fs.delete(inv, out)
         await fs.create(inv, out, csv_bytes)
 
@@ -1685,6 +1801,11 @@ _IMPLS = {
     "ask_knowledge_base": ask_knowledge_base_impl,
     "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
+    # #537: the KB agent's wiki entry point. Delegating like ask_knowledge_base —
+    # the index-first navigation runs in a throwaway context and only the answer
+    # comes back — NOT a leaf like `search_wiki`, which is why granting it to a KB
+    # agent doesn't recurse: the wiki reader it spawns holds the leaves, not this.
+    "ask_wiki": ask_wiki_impl,
     # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
     "resolve_collection": resolve_collection_impl,
     "lookup_glossary": lookup_glossary_impl,
@@ -1791,7 +1912,11 @@ def build_tools(
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
     tools = [
-        function_tool(_IMPLS[n], name_override=n, strict_mode=n not in _NONSTRICT_TOOLS)
+        function_tool(
+            _guard_workspace_full(_IMPLS[n]),
+            name_override=n,
+            strict_mode=n not in _NONSTRICT_TOOLS,
+        )
         for n in names
         if n in _IMPLS
     ]
@@ -1804,7 +1929,11 @@ def build_tools(
         # that opts into author-skill always has at least that, so this covers
         # the authoring entry point too.
         if merged_profile_skills(app_slug, profile, _declared_shared_skills(app_slug)):
-            tools.append(function_tool(_IMPLS["read_skill"], name_override="read_skill"))
+            tools.append(
+                function_tool(
+                    _guard_workspace_full(_IMPLS["read_skill"]), name_override="read_skill"
+                )
+            )
     return tools
 
 

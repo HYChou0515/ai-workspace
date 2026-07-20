@@ -81,12 +81,13 @@ replica** with the `Recreate` strategy — it does not horizontally scale as-is.
 The base splits the job runner out of the API. `deployment.yaml` (`rca-app`)
 serves HTTP and **enqueues** jobs but, with `RUN_CONSUMERS="false"` (configmap),
 does NOT drain the queues. `workers.yaml` adds one Deployment per JobType —
-`rca-worker-{index,wiki,card-gen,sanity}`, each running
+`rca-worker-{index,wiki,card-gen,sanity,eval}`, each running
 `python -m workspace_app.worker <jobtype>` — so a heavy embed backlog scales the
 **index** workers (HPA, CPU-target) without touching the API. `wiki`/`card-gen`
 also get HPAs (but are IO-bound on the LLM, so tune min/max replicas rather than
-trusting the CPU target — KEDA queue-depth scaling is out of scope); `sanity` is
-a fixed 1-replica Deployment (manual, infrequent). Workers trap SIGTERM and
+trusting the CPU target — KEDA queue-depth scaling is out of scope); `sanity` and
+`eval` are fixed 1-replica Deployments (infrequent — `eval` is enqueued nightly
+by `cronjob-eval.yaml`, #535). Workers trap SIGTERM and
 drain in-flight work (`terminationGracePeriodSeconds: 60`); pending jobs are
 durable, so a killed pod's work is redelivered.
 

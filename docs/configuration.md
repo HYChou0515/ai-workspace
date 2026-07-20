@@ -329,6 +329,8 @@ kb:
       hyde:   { default: 0, max: 1 }     # 假設文件探測；0=關
       rerank: { default: true, max: true }
     quality_weight: 0.10        # #105 文件品質先驗強度（很小是刻意的）；0=關
+    quality_floor: null         # #105 絕對門檻：分數低於此的文件直接剔除；null=只降權不剔除
+    sparse_corpus_cap: null     # 關鍵字（BM25）一次最多撈回幾個 chunk；null=不封頂（見下）
   max_searches_per_turn: 3      # 每則 KB 回覆的 kb_search 次數上限（#195）；null=不限
   max_searches_ceiling: 10      # FE per-message 次數 picker 的上限（#334）
   vlm_llm:   { preset: kb-vlm } # 圖片/PDF 視覺頁；null=圖片上傳存 0 chunk 直到設好再重索引
@@ -339,6 +341,35 @@ kb:
 - **改嵌入維度 = 重建索引**：`DocChunk` 的向量欄寬在 class 定義時綁死，改了要重跑索引。
 - `vlm_format_llm` / `deck_vlm` / `quality_judge` 省略時各自 fallback（`retrieval_llm` / `vlm_llm` / `retrieval_llm`）；
   細節與 off-switch 見 example 第 292 行起。
+
+### `sparse_corpus_cap` —— 關鍵字檢索的封頂
+
+檢索有**兩條各自獨立的路**：語意（向量）與關鍵字（BM25）。這個設定**只管關鍵字那條**。
+
+關鍵字那條會先用 `text` 的三連字索引挑出「字面上像」的 chunk 再排序。問題是這個過濾**只對罕見詞
+有效**：查 `quibblezorp` 可能只挑出 1 個，但查 `temperature` 這種常見詞，幾乎整個 collection
+都「像」，等於沒縮 —— 而真實問句幾乎一定含常見詞。
+
+`sparse_corpus_cap` 就是那條路的上限：**一次最多只從資料庫撈回這麼多個 chunk**（取最相似的），
+不管有多少個命中。
+
+| 設定 | 效果 |
+| --- | --- |
+| `null`（預設） | 不封頂。常見詞查詢可能把整個 collection 撈回來 |
+| `1000` | 保守起步；幾乎不影響結果，但最壞情況大幅收斂 |
+| `200` | 更快，但 BM25 看得到的範圍變窄，漏掉的機會上升 |
+
+**為什麼封頂相對安全**：語意那條路**完全不受這個上限影響**，照樣搜遍每一個 chunk。所以某個 chunk
+就算掉出關鍵字的前 N 名，語意搜尋仍可能找到它，兩邊結果最後會合併。剩下的風險很窄 —— 只有
+「**只能靠字面完全比對才找得到**（例如料號、型號這種語意上沒特徵的字串）」**而且**又剛好掉出前 N 名，
+兩個條件同時成立才會漏。
+
+**調整前請先量**：用 #535 的檢索評測跑一次不封頂的 baseline，設了之後再跑一次，比 recall@k / MRR，
+確認沒退步再往下調。評測需要真實 collection 與可用的 LLM。
+
+> `quality_weight` / `quality_floor` 在此版之前**設了不會生效**（loader 接受該 key 但建構時被丟掉）。
+> 現已修正 —— 若你的 `config.yaml` 早就寫了這兩個值，升級後它們會**開始真的作用**，
+> `quality_floor` 尤其會開始剔除低分文件。
 
 ---
 

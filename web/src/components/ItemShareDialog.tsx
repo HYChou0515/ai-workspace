@@ -27,6 +27,7 @@ export function ItemShareDialog({
   owner,
   value,
   busy = false,
+  error = null,
   onSubmit,
   onClose,
 }: {
@@ -34,6 +35,10 @@ export function ItemShareDialog({
   owner: string;
   value: ItemPermission;
   busy?: boolean;
+  /** Why the last save failed (e.g. a 403 for a revoked delegate). Rendered in
+   * the dialog, which stays open — a silent failure is indistinguishable from
+   * "the setting didn't stick". */
+  error?: string | null;
   onSubmit: (perm: ItemPermission) => void;
   onClose: () => void;
 }) {
@@ -164,6 +169,12 @@ export function ItemShareDialog({
         </div>
       )}
 
+      {error && (
+        <p data-testid="item-share-error" role="alert" style={errorText}>
+          {error}
+        </p>
+      )}
+
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
         <button type="button" data-testid="item-share-cancel" onClick={onClose} className="btn" data-variant="secondary" data-size="sm">
           Cancel
@@ -192,6 +203,7 @@ const VISIBILITIES: { id: ItemVisibility; label: string; hint: string }[] = [
 
 const panel: React.CSSProperties = { padding: 18, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 };
 const caption: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 };
+const errorText: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: "var(--err)", lineHeight: 1.5 };
 const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const customBox: React.CSSProperties = {

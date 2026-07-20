@@ -341,9 +341,23 @@ def register_file_routes(
             if occupied:
                 raise HTTPException(status_code=409, detail=f"target exists: {dst}")
             under = src + "/"
-            for p in sorted(await files.ls(investigation_id, under)):
-                data = await files.read(investigation_id, p)
-                await files.write(investigation_id, dst + p[len(src) :], data)
+            # #538: a COPY grows the workspace by the whole subtree, so it is
+            # checked once up front — per-write gating alone could only fail
+            # halfway, leaving a partial folder behind AND the workspace further
+            # over quota than when the user asked. A MOVE is net-zero, so it is
+            # not pre-checked; instead each source file is removed as soon as its
+            # destination lands, which keeps the peak growth at one file rather
+            # than a second copy of the entire tree.
+            entries = await files.stat_all(investigation_id, under)
+            if copy:
+                await files.ensure_room_for(investigation_id, sum(size for _, size in entries))
+            for p in sorted(p for p, _ in entries):
+                if copy:
+                    await files.write(
+                        investigation_id, dst + p[len(src) :], await files.read(investigation_id, p)
+                    )
+                else:
+                    await files.move(investigation_id, p, dst + p[len(src) :])
             await files.mkdir(investigation_id, dst)
             for d in await files.listdir(investigation_id, under):
                 await files.mkdir(investigation_id, dst + d[len(src) :])
@@ -356,9 +370,10 @@ def register_file_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if await files.exists(investigation_id, dst) or await files.is_dir(investigation_id, dst):
             raise HTTPException(status_code=409, detail=f"target exists: {dst}")
-        await files.write(investigation_id, dst, data)
-        if not copy:
-            await files.delete(investigation_id, src)
+        if copy:
+            await files.write(investigation_id, dst, data)
+        else:
+            await files.move(investigation_id, src, dst)
 
     @app.post(
         "/a/{slug}/items/{item_id}/files/move",

@@ -10,19 +10,29 @@ from workspace_app.agent import AgentToolContext
 from workspace_app.agent.ask_kb import AskKbSpec, build_ask_kb_context, make_ask_knowledge_base
 
 
-def test_default_spec_grants_kb_search_wiki_and_glossary():
-    # kb_search is always granted (a KB agent must search); the default spec caps
-    # both searches and keeps the cheap glossary.
-    assert AskKbSpec().allowed_tools() == ["kb_search", "search_wiki", "lookup_glossary"]
+def test_default_spec_grants_both_sources_and_the_glossary():
+    assert AskKbSpec().allowed_tools() == ["kb_search", "ask_wiki", "lookup_glossary"]
 
 
-def test_wiki_max_zero_omits_search_wiki():
-    # wiki off ⇒ the tool isn't granted (there's no wiki_mode enum; 0 = off).
+def test_wiki_max_zero_omits_the_wiki_tool():
+    # 0 = off ⇒ not granted at all (there's no wiki_mode enum).
     assert AskKbSpec(wiki_search_max=0).allowed_tools() == ["kb_search", "lookup_glossary"]
 
 
+def test_kb_max_zero_omits_document_search():
+    """#537: the mirror of the wiki knob, and the one that was missing. kb_search
+    used to be granted unconditionally, so a caller could switch the wiki off but
+    never the documents — "consult the wiki, not the documents" was unexpressible
+    however the budgets were set."""
+    assert AskKbSpec(kb_search_max=0).allowed_tools() == ["ask_wiki", "lookup_glossary"]
+
+
+def test_both_sources_off_leaves_only_the_free_lookup():
+    assert AskKbSpec(kb_search_max=0, wiki_search_max=0).allowed_tools() == ["lookup_glossary"]
+
+
 def test_glossary_false_omits_lookup_glossary():
-    assert AskKbSpec(glossary=False).allowed_tools() == ["kb_search", "search_wiki"]
+    assert AskKbSpec(glossary=False).allowed_tools() == ["kb_search", "ask_wiki"]
 
 
 def test_build_stamps_budgets_from_spec():

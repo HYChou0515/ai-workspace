@@ -254,16 +254,24 @@ def test_bundled_presets_include_qwen3_claude_openai_and_kb_default():
     assert presets["openai-mini"].model == "openai/gpt-4o-mini"
     assert presets["kb-default"].model == "ollama_chat/qwen3:14b"
     # kb-default ships kb_search so the KB chat works out of the box, plus
-    # search_wiki (#506 P4 — the budgeted in-agent wiki grep), plus lookup_glossary
-    # (#106) so an unknown term resolves from the glossary before the slow kb_search,
-    # plus request_wiki_update (#397) so the user can report a wrong answer for the
-    # wiki to correct.
+    # lookup_glossary (#106) so an unknown term resolves from the glossary before
+    # the slow kb_search, plus request_wiki_update (#397) so the user can report a
+    # wrong answer for the wiki to correct.
+    #
+    # #537: `search_wiki` is NOT here. It is a raw wiki-page grep, and #270's A/B
+    # convention (CLAUDE.md) reserves the leaf wiki tools — `search_wiki` /
+    # `read_source` — for the wiki maintainer + reader agents. #506 granted it here
+    # anyway, which left the KB agent able to grep single wiki LINES but never open
+    # a page, follow a `[[wikilink]]`, or cite one — a degenerate stub of the
+    # index-first navigation the LLM-wiki design (docs/plan-llm-wiki.md §2.4) calls
+    # for. The KB agent reaches the wiki through `ask_wiki` instead (P2).
     assert presets["kb-default"].allowed_tools == [
         "kb_search",
-        "search_wiki",
+        "ask_wiki",
         "lookup_glossary",
         "request_wiki_update",
     ]
+    assert "search_wiki" not in (presets["kb-default"].allowed_tools or [])
 
 
 def test_bundled_kb_retrieval_preset_has_only_model():

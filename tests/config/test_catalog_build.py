@@ -104,20 +104,33 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
     """Locks in the contract previously asserted by the old
     `default_kb_agent_config` test: the kb_chat config must carry
     a knowledge-base prompt with the `[n]` citation convention,
-    `kb_search` plus the `search_wiki` (#506) budgeted wiki-grep tool, the
-    `lookup_glossary` (#106) context-card tool and the `request_wiki_update`
-    (#397) correction tool, and non-empty quick-prompt suggestions."""
+    `kb_search`, the `lookup_glossary` (#106) context-card tool and the
+    `request_wiki_update` (#397) correction tool, and non-empty quick-prompt
+    suggestions.
+
+    #537: the raw `search_wiki` grep is NOT among them — #270's A/B convention
+    keeps the leaf wiki tools with the wiki maintainer / reader, and a grep with
+    no `read_file` beside it could never open the page it matched anyway."""
     settings = load(config_path=None, env={})
     cat = build_catalog(settings, config_dir=None)
     kb = cat.kb_chat()
     assert kb.allowed_tools == [  # ty: ignore[unresolved-attribute]
         "kb_search",
-        "search_wiki",
+        "ask_wiki",
         "lookup_glossary",
         "request_wiki_update",
     ]
-    assert "knowledge base" in kb.system_prompt.lower()  # ty: ignore[unresolved-attribute]
-    assert "[n]" in kb.system_prompt  # ty: ignore[unresolved-attribute]
+    prompt = kb.system_prompt  # ty: ignore[unresolved-attribute]
+    assert "knowledge base" in prompt.lower()
+    assert "[n]" in prompt
+    # #537: the prompt must NAME all three sources and say when each one is right.
+    # It previously opened with "the knowledge base, reachable through the
+    # `kb_search` tool" and never mentioned the wiki in 99 lines — so the agent
+    # had no reason to consult it however generous its allowance was, and a
+    # granted wiki tool went permanently unused.
+    for tool in ("lookup_glossary", "ask_wiki", "kb_search"):
+        assert tool in prompt, tool
+    assert "Stop as soon as you can answer" in prompt  # cheap first, don't over-search
     assert kb.suggestions  # quick-prompt chips ship with the config  # ty: ignore
 
 

@@ -362,12 +362,12 @@ export function KbChatPanel({
               selectedName={pickedAgent}
               onSelectModel={setPickedAgent}
               retrieval
-              wikiAvailable={collections.some(
+              // #537: the wiki allowance only means something when a collection in
+              // scope actually keeps a wiki — otherwise there is nothing to spend
+              // it on, and the agent is told as much.
+              wikiBudget={collections.some(
                 (c) => collectionIds.includes(c.resource_id) && c.use_wiki,
               )}
-              // #506: KB chat searches the wiki as a budgeted in-agent tool → the
-              // number picker, not the routing toggle.
-              wikiBudget
             />
             {log.streaming ? (
               <button type="button" className="kb-btn kb-btn--stop" onClick={cancel}>

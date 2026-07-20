@@ -63,6 +63,8 @@ def build_bundle(
         card_drafter_llm=card_drafter_llm,
         sanity_llm_factory=f.get_sanity_llm_factory(settings),
         sanity_judge_llm=f.get_sanity_judge_llm(settings),
+        # #535: retrieval-eval question generation runs on the KB llm.
+        eval_llm=kb_llm,
         # #506 P6: the card-gen reconcile embeds candidates + cards with the same
         # embedder the ingestor uses (a worker pod builds one at line ~30).
         embedder=embedder,
@@ -100,10 +102,29 @@ def build_bundle(
                 enhancement_defaults=settings.kb.retrieval.enhancements,
                 quality_weight=settings.kb.retrieval.quality_weight,
                 quality_floor=settings.kb.retrieval.quality_floor,
+                sparse_corpus_cap=settings.kb.retrieval.sparse_corpus_cap,
             ),
             catalog=catalog,
             kb_agent_config=kb_chats[0],
             max_searches=settings.kb.max_searches_per_turn,
+        )
+    # #535: the eval batch handler retrieves via the SAME embedder + kb_llm the
+    # ingestor uses, so query and document vectors are comparable. Injected here
+    # because the Retriever is built after build_coordinators.
+    if bundle.eval is not None:
+        from ..kb.retriever import Retriever
+
+        bundle.eval.set_retriever(
+            Retriever(
+                spec,
+                embedder=embedder,
+                llm=kb_llm,
+                code_embedder=f.get_code_embedder(settings),
+                enhancement_defaults=settings.kb.retrieval.enhancements,
+                quality_weight=settings.kb.retrieval.quality_weight,
+                quality_floor=settings.kb.retrieval.quality_floor,
+                sparse_corpus_cap=settings.kb.retrieval.sparse_corpus_cap,
+            )
         )
     return bundle
 

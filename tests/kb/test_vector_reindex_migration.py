@@ -33,10 +33,13 @@ def _rm(name: str):
 
 
 def test_doc_chunk_schema_advanced_so_existing_rows_get_a_migrate_delta():
-    # v4 rows (every existing chunk) must now be a version behind the latest, or
-    # `migrate/execute` would report them "skipped" and never strip the vector.
+    # Existing rows must stay a version behind the latest, or `migrate/execute`
+    # reports them "skipped" and the re-extraction never runs. v5 stripped the
+    # vectors from indexed_data; v6 folds `text` INTO indexed_data (its new
+    # TrigramIndex backs the sparse arm's `.fuzzy()` corpus narrowing), so pre-v6
+    # rows need the same migrate to become trigram-searchable.
     rm = _rm("doc-chunk")
-    assert rm.schema_version == "v5"
+    assert rm.schema_version == "v6"
 
 
 def test_cluster_member_is_now_migratable():
