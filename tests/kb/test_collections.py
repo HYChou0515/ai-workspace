@@ -132,3 +132,35 @@ def test_resolve_collection_miss_returns_available():
     got = resolve_collection(spec, "nonexistent")
     assert got["status"] == "not_found"
     assert {c["id"] for c in got["available"]} == {cid}
+
+
+def test_resolve_collection_miss_suggests_the_closest_names_not_the_whole_catalog():
+    """A miss used to answer with every collection in the deployment — one typo
+    dumped the catalog into the turn. The useful part of that answer was always
+    the handful of names near what was asked for."""
+    spec = make_spec(default_user="u")
+    for i in range(80):
+        _coll(spec, f"Unrelated {i}")
+    wanted = _coll(spec, "Defect Log")
+
+    got = resolve_collection(spec, "Defect Logs")
+
+    assert got["status"] == "not_found"
+    assert len(got["available"]) < 80
+    assert wanted in {c["id"] for c in got["available"]}  # the near miss survives the cut
+    assert got["total"] == 81  # the agent can still tell how many exist
+
+
+def test_an_ambiguous_name_lists_candidates_but_not_without_end():
+    """`ambiguous` is the same unbounded shape `not_found` was — a name shared
+    by hundreds of collections is unusual but not impossible, and the branch
+    exists precisely for the case where many rows collide."""
+    spec = make_spec(default_user="u")
+    for _ in range(60):
+        _coll(spec, "Logs")
+
+    got = resolve_collection(spec, "logs")
+
+    assert got["status"] == "ambiguous"
+    assert 0 < len(got["candidates"]) < 60
+    assert got["total"] == 60

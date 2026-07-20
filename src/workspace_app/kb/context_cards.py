@@ -155,6 +155,66 @@ def match_with_ids(
     return [(id_by_identity[id(c)], c) for c in match(text, build_vocab(cards), cap=cap)]
 
 
+# A glossary entry is a definition read in passing, not a document: long enough
+# for a paragraph or two of curated meaning, short enough that a whole block of
+# them still leaves room for the passages they annotate.
+CARD_BODY_MAX_CHARS = 2_000
+CARD_BLOCK_MAX_CHARS = 20_000
+
+
+def _capped_body(body: str) -> str:
+    """One card's definition, trimmed at a sentence-agnostic boundary with a
+    marker — the term stays defined, it just stops being a document."""
+    if len(body) <= CARD_BODY_MAX_CHARS:
+        return body
+    return body[:CARD_BODY_MAX_CHARS] + "\n[definition truncated — open the card to read the rest]"
+
+
+def _entries(cards: list[ContextCard], ids: list[str] | None) -> list[str]:
+    """One rendered entry per card, in order.
+
+    ``ids`` marks the READ-BEFORE-WRITE surface (``lookup_glossary``), and there
+    the body is rendered IN FULL. ``update_context_card``'s ``expected_body``
+    guard is an exact string compare, so handing back a trimmed body would make
+    every card over the budget permanently un-updatable — and its conflict error
+    says "re-read it and retry", which would loop forever. Truncation belongs to
+    the path where the block is injected *unasked*, not to the one where the
+    agent went and looked the card up."""
+    out: list[str] = []
+    for i, c in enumerate(cards):
+        label = c.title or (c.keys[0] if c.keys else "")
+        aliases = ", ".join(c.keys)
+        header = f"### {label}"
+        if aliases and aliases != label:
+            header += f" ({aliases})"
+        if ids is not None:
+            header += f" [card_id: {ids[i]}]"
+        out.append(f"{header}\n{c.body if ids is not None else _capped_body(c.body)}")
+    return out
+
+
+def _fits(entries: list[str]) -> int:
+    """How many leading entries fit the block budget (at least one)."""
+    used = 0
+    shown = 0
+    for entry in entries:
+        if used + len(entry) > CARD_BLOCK_MAX_CHARS and shown:
+            break
+        used += len(entry)
+        shown += 1
+    return shown
+
+
+def shown_card_count(cards: list[ContextCard], *, ids: list[str] | None = None) -> int:
+    """How many of `cards` ``card_context_block`` would actually render.
+
+    Callers record the cards they injected so a term isn't defined twice in one
+    turn — and marking one the block DROPPED would silence that term for the
+    rest of the turn, so the definition would never arrive at all. Same helpers
+    as the renderer, so the two can't drift."""
+    return _fits(_entries(cards, ids))
+
+
 def card_context_block(cards: list[ContextCard], *, ids: list[str] | None = None) -> str:
     """Render matched cards as a labelled context block to inject into the KB
     chat agent's turn — empty string when nothing matched (so the caller adds
@@ -165,20 +225,26 @@ def card_context_block(cards: list[ContextCard], *, ids: list[str] | None = None
     When ``ids`` (a list parallel to ``cards``) is given, each entry's heading also
     carries ``[card_id: <rid>]`` (#111) so the agent's ``lookup_glossary`` output is a
     read-before-write surface — it can target a card for ``update_context_card``. The
-    route-injection path passes no ids and stays id-less."""
+    route-injection path passes no ids and stays id-less.
+
+    Both budgets below exist because this block is injected *automatically* —
+    on every ``kb_search``, up to ``cap`` cards at a time, without the agent
+    asking for it. The match count was capped from the start; the LENGTH never
+    was, so one card someone pasted a spec into became a tax on every search of
+    that collection. A definition is meant to be read in passing, so a long one
+    is truncated rather than allowed to crowd out the passages it annotates."""
     if not cards:
         return ""
+    entries = _entries(cards, ids)
+    shown = _fits(entries)
     parts = [
         "Internal glossary entries relevant to the question — treat them as "
-        "authoritative and do not search the knowledge base for these terms:"
+        "authoritative and do not search the knowledge base for these terms:",
+        *entries[:shown],
     ]
-    for i, c in enumerate(cards):
-        label = c.title or (c.keys[0] if c.keys else "")
-        aliases = ", ".join(c.keys)
-        header = f"### {label}"
-        if aliases and aliases != label:
-            header += f" ({aliases})"
-        if ids is not None:
-            header += f" [card_id: {ids[i]}]"
-        parts.append(f"{header}\n{c.body}")
+    if shown < len(cards):
+        parts.append(
+            f"[{shown} of {len(cards)} matching glossary entries shown — "
+            f"look the rest up by term with lookup_glossary]"
+        )
     return "\n\n".join(parts)

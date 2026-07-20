@@ -73,6 +73,10 @@ async def read_wiki(
     agent_config: AgentConfig,
     max_turns: int = _DEFAULT_READER_MAX_TURNS,
     on_event: Callable[[AgentEvent], None] | None = None,
+    # The deploy's output ceilings, inherited from the turn that asked — the
+    # reader navigates with the same listing/echo budgets as any other agent.
+    tool_output_max_chars: int = 200_000,
+    exec_output_max_chars: int = 30_000,
 ) -> tuple[str, list[RetrievedPassage]]:
     """Run one wiki-reader turn to completion and return its answer + the source
     passages it grounded on, numbered from ``[1]`` in the answer.
@@ -89,6 +93,8 @@ async def read_wiki(
     from ...api.events import MessageDelta, RunError
 
     ctx = AgentToolContext(
+        tool_output_max_chars=tool_output_max_chars,
+        exec_output_max_chars=exec_output_max_chars,
         investigation_id=collection_id,  # WikiFileStore is keyed by collection id
         filestore=wiki_store,
         files=WorkspaceFiles(wiki_store),
@@ -122,6 +128,10 @@ async def answer_from_wiki(
     agent_config: AgentConfig,
     max_turns: int = _DEFAULT_READER_MAX_TURNS,
     on_event: Callable[[AgentEvent], None] | None = None,
+    # The deploy's output ceilings, inherited from the turn that asked — the
+    # reader navigates with the same listing/echo budgets as any other agent.
+    tool_output_max_chars: int = 200_000,
+    exec_output_max_chars: int = 30_000,
 ) -> tuple[str, list[Citation]]:
     """``read_wiki`` with its passages already resolved into Citations — for
     callers that present the reader's answer as-is rather than folding it into
@@ -135,5 +145,7 @@ async def answer_from_wiki(
         agent_config=agent_config,
         max_turns=max_turns,
         on_event=on_event,
+        tool_output_max_chars=tool_output_max_chars,
+        exec_output_max_chars=exec_output_max_chars,
     )
     return answer, parse_citations(answer, passages)

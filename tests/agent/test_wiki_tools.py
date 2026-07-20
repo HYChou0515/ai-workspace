@@ -272,3 +272,28 @@ async def test_reader_cites_the_source_it_read():
     (p,) = ctx.context.kb_passages
     assert p.filename == "report.md"
     assert p.document_id == encode_doc_id(cid, "report.md")
+
+
+async def test_list_sources_caps_a_big_collection_and_reports_the_total():
+    """A collection's document count isn't something the agent chose — listing
+    5000 sources verbatim is the same context bomb `list_files` was."""
+    sources = _FakeSources({f"doc-{i:04d}.md": "x" for i in range(500)})
+    ctx = _ctx(wiki_sources=sources, exec_output_max_chars=400)
+
+    out = await list_sources_impl(ctx)
+
+    assert len(out) < 800
+    assert "500" in out
+    assert "prefix" in out  # how to narrow it
+
+
+async def test_list_sources_filters_by_prefix():
+    sources = _FakeSources({"spec/a.md": "x", "spec/b.md": "x", "qual/c.md": "x"})
+    ctx = _ctx(wiki_sources=sources)
+
+    assert (await list_sources_impl(ctx, "spec/")).splitlines() == ["spec/a.md", "spec/b.md"]
+    assert "no sources match" in await list_sources_impl(ctx, "nope/")
+
+
+async def test_list_sources_says_so_when_no_sources_are_wired():
+    assert "no sources" in await list_sources_impl(_ctx())

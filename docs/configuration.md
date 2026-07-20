@@ -379,7 +379,12 @@ kb:
 runner:  { max_retries: 2, max_turns: 10 }                 # RCA agent loop
 history: { max_messages: 40, max_context_tokens: 24000 }   # 跨回合記憶（預設吃本地 qwen3 ~32K；換大模型調高）
 read_file: { max_lines: 2000, max_chars: 200000 }          # 讀檔工具上限
-exec:    { output_max_chars: 30000 }                       # 單一指令輸出上限（比 read_file 小，因會跨回合累積）
+exec:    { output_max_chars: 30000, tool_output_max_chars: 200000 }
+#          ↑ 單一指令輸出上限（比 read_file 小，因會跨回合累積）；同一預算也管
+#            列表工具（list_files / list_sources）與寫入被拒時回吐的檔案內容。
+#          tool_output_max_chars 是「任何一個工具單次結果」的絕對天花板，對每個
+#            工具一律套用（不倚賴各工具自己記得節制）。它是保險絲，所以設在合理
+#            單次答案的最寬處（一次完整 read_file）；小 context 模型請調低。
 ```
 
 ---

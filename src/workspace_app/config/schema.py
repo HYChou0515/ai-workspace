@@ -255,7 +255,15 @@ class ReadFileSettings:
 class ExecSettings:
     # A tool command whose stdout+stderr exceeds this is truncated head+tail
     # with a notice, so one `grep` over a big file can't flood the context.
+    # It also bounds the LISTING tools (list_files / list_sources) and the
+    # content a rejected write/edit echoes back — same reason, same budget.
     output_max_chars: int = 30_000
+    # The ABSOLUTE ceiling on any ONE tool result, applied to every tool by
+    # `agent/output_cap.py` instead of relying on each tool to cap itself.
+    # A backstop, so it sits at the widest legitimate single answer (a full
+    # `read_file`); the per-tool caps above are deliberately tighter. Lower it
+    # for a small-context model — nothing a tool returns can then exceed it.
+    tool_output_max_chars: int = 200_000
 
 
 # ─── cross-turn memory ──────────────────────────────────────────────────

@@ -252,7 +252,7 @@ async def test_file_ops_do_not_create_sandbox(
 async def test_list_files_after_writes(ctx: RunContextWrapper[AgentToolContext]):
     await write_file_impl(ctx, "/a", "1")
     await write_file_impl(ctx, "/b", "2")
-    assert sorted(await list_files_impl(ctx)) == ["a", "b"]
+    assert (await list_files_impl(ctx)).splitlines() == ["a", "b"]
 
 
 async def test_list_files_emits_shell_usable_relative_paths(
@@ -266,15 +266,16 @@ async def test_list_files_emits_shell_usable_relative_paths(
     await write_file_impl(ctx, "/a.txt", "1")
     await write_file_impl(ctx, "data/x.csv", "2")
 
-    listed = sorted(await list_files_impl(ctx))
-    assert listed == ["a.txt", "data/x.csv"]
+    listed = (await list_files_impl(ctx)).splitlines()
+    assert listed == ["data/", "a.txt"]  # one level, directories first
     assert not any(p.startswith("/") for p in listed)
 
     # …and every string it emits still round-trips through the file tools, which
-    # stay permissive about the form (`/a.txt` / `./a.txt` / `a.txt` all work).
-    for path in listed:
-        assert await exists_impl(ctx, path) is True
+    # stay permissive about the form (`/a.txt` / `./a.txt` / `a.txt` all work) —
+    # including the sub-directory, which is what the agent passes back in.
+    assert await exists_impl(ctx, "a.txt") is True
     assert await read_file_impl(ctx, "a.txt") == "1"
+    assert (await list_files_impl(ctx, "data/")).splitlines() == ["data/x.csv"]
 
 
 async def test_list_files_prefix_filter_accepts_either_form(
@@ -284,8 +285,8 @@ async def test_list_files_prefix_filter_accepts_either_form(
     accepted — while the output is relative either way."""
     await write_file_impl(ctx, "data/x.csv", "1")
     await write_file_impl(ctx, "other.txt", "2")
-    assert await list_files_impl(ctx, "/data") == ["data/x.csv"]
-    assert await list_files_impl(ctx, "data") == ["data/x.csv"]
+    assert (await list_files_impl(ctx, "/data")).splitlines() == ["data/x.csv"]
+    assert (await list_files_impl(ctx, "data")).splitlines() == ["data/x.csv"]
 
 
 async def test_exists_returns_bool(ctx: RunContextWrapper[AgentToolContext]):
@@ -719,7 +720,7 @@ async def test_listed_path_works_verbatim_in_a_real_shell(tmp_path):
     await ctx.context.ensure_sandbox()
     await write_file_impl(ctx, "notes.txt", "hello")
 
-    (listed,) = await list_files_impl(ctx)
+    [listed] = (await list_files_impl(ctx)).splitlines()
     out = await exec_impl(ctx, ["cat", listed])  # the EXACT string the agent was shown
     assert "exit_code=0" in out
     assert "hello" in out

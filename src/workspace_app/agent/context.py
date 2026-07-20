@@ -140,6 +140,12 @@ class AgentToolContext:
     # notice, so one tool call can't flood the model's context. Smaller than
     # the read_file cap because tool outputs accumulate across turns.
     exec_output_max_chars: int = 30_000
+    # The ABSOLUTE ceiling on any one tool result, enforced for every tool by
+    # `agent/output_cap.py` rather than by each tool remembering to cap itself.
+    # It is a backstop: the per-tool caps above are deliberately tighter, and a
+    # tool that can page (read_file, list_files) should page instead of relying
+    # on this. Sized at the widest legitimate single answer (a full read_file).
+    tool_output_max_chars: int = 200_000
     # Prior-turn dialogue as SDK input items ({role, content}) for cross-turn
     # memory (#17). Set per-turn by the API layer from the persisted thread; the
     # runner prepends it to this turn's message. Empty for a fresh thread.

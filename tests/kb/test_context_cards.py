@@ -7,6 +7,7 @@ from workspace_app.kb.context_cards import (
     lookup,
     match,
     norm,
+    shown_card_count,
 )
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, ContextCard
@@ -232,3 +233,56 @@ def test_find_cards_by_key_is_membership_not_substring_and_scoped():
     assert find_cards_by_key(spec, a, "M4") == []  # "m4" is not the element "m40"
     _card(spec, a, ["M4"], body="in-a")
     assert find_cards_by_key(spec, b, "m4") == []  # other collection excluded
+
+
+def test_a_long_card_body_is_truncated_rather_than_injected_whole():
+    """Cards are injected automatically — on every kb_search, up to 50 at a time,
+    without the agent asking. So one card someone pasted a spec into becomes a
+    tax on every search of that collection, not a one-off cost."""
+    block = card_context_block([_mkcard(["M4"], "x" * 50_000)])
+
+    assert len(block) < 5_000
+    assert "M4" in block  # the term is still defined, just not at full length
+
+
+def test_the_injected_block_stops_at_a_total_budget_and_says_how_many_it_dropped():
+    cards = [_mkcard([f"TERM{i}"], "y" * 1_500) for i in range(50)]
+
+    block = card_context_block(cards)
+
+    assert len(block) < 20_000 + 2_000  # the block budget plus its notice
+    assert "TERM0" in block
+    assert "50" in block  # how many matched, so the omission is visible
+
+
+def test_a_short_glossary_block_is_untouched():
+    block = card_context_block([_mkcard(["M4"], "the cap layer over metal 4")])
+
+    assert block.endswith("the cap layer over metal 4")
+
+
+def test_the_read_before_write_surface_shows_the_body_in_full():
+    """`lookup_glossary` passes `ids=` precisely so the agent can then call
+    `update_context_card(expected_body=<what it just read>)`, and that guard is
+    an exact string compare. Truncating THIS path would make every card over
+    the body budget permanently un-updatable — and the conflict error tells the
+    agent to re-read and retry, so it would loop forever."""
+    body = "D" * 5_000
+    block = card_context_block([_mkcard(["M4"], body)], ids=["card-1"])
+
+    assert body in block
+    assert "truncated" not in block
+
+
+def test_the_count_of_shown_cards_matches_what_the_block_rendered():
+    """Callers mark the cards they injected so a term isn't defined twice in a
+    turn. Marking one the block dropped would silence that term for the rest of
+    the turn — the definition would never arrive."""
+    cards = [_mkcard([f"TERM{i}"], "y" * 1_500) for i in range(50)]
+
+    block = card_context_block(cards)
+    shown = shown_card_count(cards)
+
+    assert 0 < shown < 50
+    assert f"TERM{shown - 1}" in block
+    assert f"TERM{shown}" not in block

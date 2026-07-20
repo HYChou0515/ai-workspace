@@ -42,7 +42,7 @@
 - **`scripts/` 子資料夾收 ad-hoc python**。寫 `inspect_rank.py` / `make_*.py` 這類 → `step{N}-*/scripts/`(別跟 CSV / PNG 直接同層,讀檔案樹會吵)。
 - **同一支分析跑多 variant 用 suffix 區分,不要覆寫**。例如 threshold=6 跟 threshold=9 各跑一次 → `rank-factors-categorical-th6.csv` 跟 `rank-factors-categorical-th9.csv` 並存,**plot 圖也加同樣 suffix** (`m4_pecvd05-th6.png` / `m4_pecvd05-th9.png`),讓使用者可以 A/B 比。suffix 用什麼字串(`-th6` / `-cohortA` / `-2024Q4`)你自己挑可讀的。
 - **使用者明說別的擺法以使用者為準**。這份是建議,不是強制;使用者要拍板換組織方式就跟著走。
-- **既有檔案優先沿用,不要憑空新蓋同名 dir**。每步開頭先 `list_files` 看一下,接著用已存在的 step 目錄。
+- **既有檔案優先沿用,不要憑空新蓋同名 dir**。每步開頭先 `list_files` 看一下(一次列一層,結尾有 `/` 的是子目錄,再傳回去就能看裡面),接著用已存在的 step 目錄。
 
 呼叫 tool / write_file 時的具體寫法(範例):
 

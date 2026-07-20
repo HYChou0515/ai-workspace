@@ -49,6 +49,7 @@ from ..kb.context_cards import (
     card_context_block,
     cards_with_ids_for_collections,
     match_with_ids,
+    shown_card_count,
 )
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
@@ -107,6 +108,11 @@ async def answer_question(
     discoverable_collection_ids: list[str] | None = None,
     on_withheld: Callable[[list[str]], None] | None = None,
     wiki_consultant_factory: Callable[[list[str]], WikiConsultant | None] | None = None,
+    # The turn's output ceilings. A sub-agent INHERITS its caller's, so an
+    # operator who lowers them doesn't find the KB sub-agent — the biggest
+    # producer of tool output on the path — still running at the default.
+    tool_output_max_chars: int = 200_000,
+    exec_output_max_chars: int = 30_000,
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
     with a compact sources footer. This is how the RCA agent's
@@ -175,6 +181,8 @@ async def answer_question(
         retriever=retriever,
         collection_ids=collection_ids,
         agent_config=agent_config,
+        tool_output_max_chars=tool_output_max_chars,
+        exec_output_max_chars=exec_output_max_chars,
         # #537: how this sub-agent reaches the wiki — a reader that navigates it in
         # its own context and hands back an answer. `None` when the caller wires no
         # factory or nothing in scope keeps a wiki; `ask_wiki` then says so.
@@ -420,6 +428,9 @@ def register_kb_chat_routes(
     # #334: upper bound a per-message pick (`_MsgBody.max_kb_searches`) may
     # request — the composer's value is clamped to [0, this].
     max_searches_ceiling: int = 10,
+    # The KB chat turn's output ceilings (same knobs the RCA turn gets).
+    tool_output_max_chars: int = 200_000,
+    exec_output_max_chars: int = 30_000,
     # #397: lets the KB chat's request_wiki_update tool submit a wiki correction.
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     # #304: superusers bypass the per-verb chat ACL (must match make_spec's set).
@@ -766,6 +777,8 @@ def register_kb_chat_routes(
         )
         _discoverable = set(_disc.discoverable)
         ctx = AgentToolContext(
+            tool_output_max_chars=tool_output_max_chars,
+            exec_output_max_chars=exec_output_max_chars,
             retriever=retriever,
             collection_ids=[c for c in _effective if c not in _discoverable],
             discoverable_collection_ids=_disc.discoverable,
@@ -867,10 +880,14 @@ def register_kb_chat_routes(
         if chat.collection_ids:
             pairs = cards_with_ids_for_collections(spec, chat.collection_ids)
             hits = match_with_ids(body.content, pairs)
-            block = card_context_block([card for _, card in hits])
+            cards = [card for _, card in hits]
+            block = card_context_block(cards)
             if block:
                 agent_content = f"{block}\n\n{body.content}"
-            ctx.injected_card_ids.update(rid for rid, _ in hits)
+            # Only what the block actually carried — a card the budget dropped
+            # was never defined for the model, and marking it would keep a later
+            # kb_search this turn from defining it either.
+            ctx.injected_card_ids.update(rid for rid, _ in hits[: shown_card_count(cards)])
 
         # #513 P10: a transient image attached to this message is VLM-described and
         # its caption folded into the query the agent searches with — the same

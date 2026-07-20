@@ -67,6 +67,10 @@ def make_wiki_consultant(
     *,
     reader_config: AgentConfig | None = None,
     reader_max_turns: int = _DEFAULT_READER_MAX_TURNS,
+    # The deploy's output ceilings, passed down so the reader navigates under
+    # the same budgets as the turn that consulted it.
+    tool_output_max_chars: int = 200_000,
+    exec_output_max_chars: int = 30_000,
 ) -> WikiConsultant | None:
     """Build the `ask_wiki` closure for a turn scoped to `collection_ids`, or
     `None` when none of them keeps a wiki.
@@ -118,6 +122,8 @@ def make_wiki_consultant(
                 question=question,
                 agent_config=_config_for(cid),
                 max_turns=reader_max_turns,
+                tool_output_max_chars=tool_output_max_chars,
+                exec_output_max_chars=exec_output_max_chars,
             )
             if not answer.strip():
                 continue  # this wiki had nothing to say; the others may
