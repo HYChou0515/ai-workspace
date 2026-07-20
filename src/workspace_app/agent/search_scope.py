@@ -97,3 +97,29 @@ def describe_budgets(
         "allowance is a ceiling, not a target.",
     ]
     return "\n".join(lines)
+
+
+def allowance_note(
+    allowed: list[str] | None,
+    *,
+    kb: KbSearchBudget,
+    wiki: WikiSearchBudget,
+    has_wiki: bool,
+) -> str:
+    """The prompt block for a turn, or `""` when this agent has no search tools.
+
+    `allowed` is the grant BEFORE `tools_within_budget` trimmed it — once a tool
+    has been removed, "off for this reply" and "this agent never had it" look
+    identical, and only the first should be disclosed (#480). So the note is
+    built where the trimming happens, not re-derived downstream.
+    """
+    if not allowed:
+        return ""
+    if KB_SEARCH_TOOL not in allowed and WIKI_TOOL not in allowed:
+        return ""  # not a knowledge-searching agent; it has no allowance to state
+    return describe_budgets(
+        kb=kb,
+        wiki=wiki,
+        glossary="lookup_glossary" in allowed,
+        has_wiki=has_wiki and WIKI_TOOL in allowed,
+    )

@@ -10,7 +10,11 @@ cut off mid-thought.
 from __future__ import annotations
 
 from workspace_app.agent.context import KbSearchBudget, WikiSearchBudget
-from workspace_app.agent.search_scope import describe_budgets, tools_within_budget
+from workspace_app.agent.search_scope import (
+    allowance_note,
+    describe_budgets,
+    tools_within_budget,
+)
 
 ALL = ["kb_search", "ask_wiki", "lookup_glossary", "request_wiki_update"]
 
@@ -97,3 +101,38 @@ def test_the_glossary_is_omitted_when_the_agent_does_not_have_it():
 def test_the_allowance_is_framed_as_a_ceiling_not_a_target():
     # Without this, a model reads "3 searches" as "do 3 searches".
     assert "ceiling, not a target" in _describe(kb=3)
+
+
+def _note(allowed, kb=None, wiki=None, has_wiki=True):
+    return allowance_note(
+        allowed,
+        kb=KbSearchBudget(max_calls=kb),
+        wiki=WikiSearchBudget(max_calls=wiki),
+        has_wiki=has_wiki,
+    )
+
+
+def test_an_agent_with_no_search_tools_gets_no_allowance_block():
+    # A workspace agent, or the wiki reader itself — nothing to budget, so the
+    # prompt stays exactly as it was.
+    assert _note(None) == ""
+    assert _note([]) == ""
+    assert _note(["read_file", "exec"]) == ""
+
+
+def test_a_kb_agent_gets_the_block():
+    assert "What you may use for this reply" in _note(["kb_search", "ask_wiki"], kb=2, wiki=1)
+
+
+def test_a_source_dropped_for_this_reply_is_still_disclosed():
+    """The note is built from the grant BEFORE budgets trim it. Derived after the
+    trim, "off for this reply" would be indistinguishable from "this agent never
+    had it", and the agent could no longer tell the user what it's missing."""
+    text = _note(["kb_search", "ask_wiki", "lookup_glossary"], kb=0, wiki=3)
+    assert "OFF for this reply" in text
+    assert "turn it back on" in text
+
+
+def test_no_wiki_in_scope_reads_differently_from_a_wiki_switched_off():
+    text = _note(["kb_search", "ask_wiki"], wiki=3, has_wiki=False)
+    assert "none of the collections in scope keeps one" in text

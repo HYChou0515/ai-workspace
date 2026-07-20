@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 from ..agent.ask_kb import AskKbSpec
 from ..agent.context import AgentToolContext, KbSearchBudget, WikiSearchBudget
-from ..agent.search_scope import tools_within_budget
+from ..agent.search_scope import allowance_note, tools_within_budget
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
@@ -159,6 +159,17 @@ async def answer_question(
     # granted — not granted-and-then-refused. A refusing tool costs a round-trip
     # to learn what the prompt already knew, and its "answer now" reply reads as
     # "stop searching", which is how a 0 on documents used to silence the wiki too.
+    consultant = (
+        wiki_consultant_factory(list(collection_ids))
+        if wiki_consultant_factory is not None
+        else None
+    )
+    note = allowance_note(
+        agent_config.allowed_tools,
+        kb=kb_budget,
+        wiki=turn_wiki_budget,
+        has_wiki=consultant is not None,
+    )
     agent_config = msgspec.structs.replace(
         agent_config,
         allowed_tools=tools_within_budget(
@@ -172,11 +183,8 @@ async def answer_question(
         # #537: how this sub-agent reaches the wiki — a reader that navigates it in
         # its own context and hands back an answer. `None` when the caller wires no
         # factory or nothing in scope keeps a wiki; `ask_wiki` then says so.
-        run_wiki_reader=(
-            wiki_consultant_factory(list(collection_ids))
-            if wiki_consultant_factory is not None
-            else None
-        ),
+        run_wiki_reader=consultant,
+        search_allowance_note=note,
         # specstar handle so a kb_chat agent granted `lookup_glossary` can read
         # context cards on the bridge path too (RCA → ask_knowledge_base → KB
         # sub-agent). None when the caller can't supply one (degrades to the
@@ -752,6 +760,15 @@ def register_kb_chat_routes(
                 ceiling=max_searches_ceiling,
             )
         )
+        turn_consultant = (
+            wiki_consultant_factory(list(_effective)) if wiki_consultant_factory else None
+        )
+        turn_note = allowance_note(
+            agent_config.allowed_tools,
+            kb=turn_kb_budget,
+            wiki=turn_wiki_budget,
+            has_wiki=turn_consultant is not None,
+        )
         agent_config = msgspec.structs.replace(
             agent_config,
             allowed_tools=tools_within_budget(
@@ -781,11 +798,8 @@ def register_kb_chat_routes(
             # navigates it runs in its own context, so nothing here holds wiki pages
             # — this is just the handle that lets the tool reach a reader at all.
             # Unset when no collection in scope keeps a wiki.
-            run_wiki_reader=(
-                wiki_consultant_factory(list(_effective))
-                if wiki_consultant_factory is not None
-                else None
-            ),
+            run_wiki_reader=turn_consultant,
+            search_allowance_note=turn_note,
             # specstar handle so the agent's `lookup_glossary` tool (when granted)
             # can read this collection's context cards — deterministic glossary
             # path beside kb_search (unknown term → glossary, question → search).

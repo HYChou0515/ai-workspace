@@ -231,6 +231,36 @@ def test_interactive_kb_turn_does_not_grant_the_raw_wiki_grep():
     assert "ask_wiki" in captured["tools"]
 
 
+def test_a_kb_turn_states_its_allowance_up_front_including_what_is_off():
+    """#537: budgets used to be invisible until a tool refused, so the model
+    planned as if looking things up were free and got cut off mid-thought. The
+    turn now carries the allowance into the prompt — and still NAMES a source
+    that's off (#480), so the agent can say what it would need."""
+    seen: dict = {}
+
+    class _CaptureRunner:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            seen["note"] = ctx.search_allowance_note
+            seen["tools"] = ctx.agent_config.allowed_tools if ctx.agent_config else None
+            yield MessageDelta(text="ok")
+            yield RunDone()
+
+    client = _client(_CaptureRunner())
+    wiki = client.post("/kb/collections", json={"name": "encyclopedia", "use_wiki": True}).json()
+    cid = client.post(
+        "/kb/chats", json={"title": "t", "collection_ids": [wiki["resource_id"]]}
+    ).json()["resource_id"]
+    client.post(
+        f"/kb/chats/{cid}/messages",
+        json={"content": "hi", "max_kb_searches": 0, "max_wiki_searches": 2},
+    )
+
+    # documents off for this reply ⇒ the tool is gone, but the prompt says so.
+    assert "kb_search" not in (seen["tools"] or [])
+    assert "OFF for this reply" in seen["note"]
+    assert "at most 2 times" in seen["note"]
+
+
 def test_a_kb_turn_gets_a_wiki_consultant_only_when_a_scoped_collection_has_one():
     # #537: `ask_wiki` needs somewhere to delegate TO. The send path builds the
     # consultant from the chat's own collections, so a chat over documents-only

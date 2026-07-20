@@ -343,6 +343,11 @@ class AgentToolContext:
     # the call id; the SDK runs tools sequentially within a turn, so
     # per-purpose order pairing is unambiguous.)
     subagent_citations: dict[str, list[list[Citation]]] = field(default_factory=dict)
+    # #537: this turn's knowledge-source allowance, rendered for the prompt. Set
+    # where the budgets are resolved (that's the only place that still knows a
+    # tool was dropped because its allowance was 0, rather than never granted).
+    # The runner appends it to the system prompt; "" ⇒ nothing appended.
+    search_allowance_note: str = ""
     # #62: a per-turn map from an exec tool's LLM-facing result (the cleaned
     # `_format_exec`, which IS the ToolEnd.output) to the FULL display result
     # (stderr kept even on success). The runner keys off ToolEnd.output to
