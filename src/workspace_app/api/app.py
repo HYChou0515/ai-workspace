@@ -565,7 +565,6 @@ def create_app(
     # JobType. The API layer still owns the request-stack wiring below: route
     # registration, the reindex-on-edit trigger, and `app.state` exposure.
     from ..coordinators import build_coordinators, resolve_wiki_config
-    from ..kb.wiki.orchestrator import default_wiki_merge_config
     from ..kb.wiki.reader import default_wiki_reader_config
 
     coordinators = build_coordinators(
@@ -698,29 +697,6 @@ def create_app(
     # default chunk-RAG behaviour is unchanged. Its own engine keeps the RCA
     # turn lifecycle untouched.
     from ..kb.wiki.consult import make_wiki_consultant
-    from ..kb.wiki.orchestrator import WikiAwareRunner
-
-    kb_runner = WikiAwareRunner(
-        runner,
-        spec,
-        reader_config=resolve_wiki_config(
-            catalog,
-            "wiki_reader",
-            default_wiki_reader_config,
-            wiki_model=wiki_model,
-            wiki_llm_base_url=wiki_llm_base_url,
-            wiki_llm_api_key=wiki_llm_api_key,
-        ),
-        merge_config=resolve_wiki_config(
-            catalog,
-            "wiki_merge",
-            default_wiki_merge_config,
-            wiki_model=wiki_model,
-            wiki_llm_base_url=wiki_llm_base_url,
-            wiki_llm_api_key=wiki_llm_api_key,
-        ),
-        reader_max_turns=wiki_reader_max_turns,
-    )
 
     def _wiki_consultant_factory(cids: list[str]):
         """#537: build a wiki consultant for a turn scoped to `cids`. Shared by the
@@ -743,7 +719,7 @@ def create_app(
         )
 
     kb_turn_engine = ChatTurnEngine(
-        kb_runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
+        runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
     )
     register_kb_chat_routes(
         api,
@@ -785,7 +761,6 @@ def create_app(
     subagent_bridge = SubagentBridge(
         spec=spec,
         runner=runner,
-        kb_runner=kb_runner,
         retriever=kb_retriever,
         catalog=catalog,
         purpose_fallbacks=_purpose_fallbacks,

@@ -296,12 +296,6 @@ class AgentToolContext:
     # win over this; this wins over the operator default. `None` = no
     # caller override.
     kb_enhancements: Enhancements | None = None
-    # Per-query opt-in to the LLM-wiki retrieval path (#50 P6, the depth
-    # picker's "Search the wiki" advanced toggle). The WikiAwareRunner reads
-    # this together with each collection's use_rag/use_wiki to route the turn:
-    # off ⇒ pure chunk-RAG (unchanged); on + a use_wiki collection ⇒ wiki
-    # reader, and both ⇒ chunk + wiki answers merged.
-    wiki_query: bool = False
     # RCA → sub-agent bridge: when set (by the API layer), the RCA
     # agent's sub-agent-facing tools (`ask_knowledge_base`,
     # `infer_modules`, future) reach their sub-agent via this single

@@ -26,6 +26,12 @@ from workspace_app.sandbox.mock import MockSandbox
 from ._client import TestClient
 
 
+async def _no_op_consultant(question: str, sink=None):
+    """A consultant that answers nothing — enough to prove the tool was GRANTED
+    and the handle wired, without standing up a wiki."""
+    return "", []
+
+
 def _test_kb_cfg() -> AgentConfig:
     """Minimal AgentConfig for the KB sub-agent in answer_question tests —
     just kb_search as allowed_tools. The scripted runners ignore model /
@@ -660,7 +666,7 @@ async def test_a_spec_with_document_search_off_keeps_only_the_wiki():
         agent_config=AgentConfig(name="kb", model="x", allowed_tools=["kb_search", "ask_wiki"]),
         spec=spec,
         ask_kb_spec=AskKbSpec(kb_search_max=0, wiki_search_max=3, glossary=False),
-        wiki_consultant_factory=lambda cids: object(),
+        wiki_consultant_factory=lambda cids: _no_op_consultant,
     )
     assert cap.ctx is not None and cap.ctx.agent_config is not None
     assert cap.ctx.agent_config.allowed_tools == ["ask_wiki"]

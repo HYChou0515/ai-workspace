@@ -97,7 +97,6 @@ async def answer_question(
     spec: SpecStar | None = None,
     enhancements: Enhancements | None = None,
     reasoning_effort: str | None = None,
-    wiki: bool = False,
     on_event: Callable[[AgentEvent], None] | None = None,
     on_citations: Callable[[list[Citation]], None] | None = None,
     max_searches: int | None = None,
@@ -121,10 +120,6 @@ async def answer_question(
     `on_citations` (when given) receives the resolved citations so the caller
     can log them (this path doesn't persist a KbMessage). The return value is
     unchanged.
-
-    `wiki` opts the lookup into the LLM-wiki path (the caller passes a
-    wiki-aware runner) — the RCA composer's "Search the wiki" toggle forwarded
-    over the bridge.
 
     `ask_kb_spec` (#506) is the configured-`ask_knowledge_base` factory's spec: when
     set, the sub-agent's tool set becomes `spec.allowed_tools()` (authoritative — a
@@ -197,9 +192,6 @@ async def answer_question(
         # the bridge so the KB sub-agent thinks at the depth the user chose,
         # not its config default. None ⇒ the model/config default.
         reasoning_effort=reasoning_effort,
-        # Route through the wiki/both path when the caller (a wiki-aware runner)
-        # opted in. Harmless when the runner isn't wiki-aware.
-        wiki_query=wiki,
         kb_search_budget=kb_budget,
         wiki_search_budget=turn_wiki_budget,
         # #308: the caller (the ask_knowledge_base bridge) resolves which docs the
@@ -315,11 +307,6 @@ class EnhancementsInput(BaseModel):
     expand: int | None = None
     hyde: int | None = None
     rerank: bool | None = None
-    # Issue #50 P6: opt this query into the LLM-wiki path (depth picker's
-    # "Search the wiki" advanced toggle). NOT a retriever knob — it routes the
-    # turn (chunk / wiki / both), so it's read separately from the three
-    # retriever enhancements above (see to_caller_enhancements, which ignores it).
-    wiki: bool | None = None
 
 
 def to_caller_enhancements(body_enh: EnhancementsInput | None):
@@ -327,8 +314,7 @@ def to_caller_enhancements(body_enh: EnhancementsInput | None):
     the operator default). Shared by the KB chat turn and the RCA turn
     (whose ask_knowledge_base bridge forwards it to the KB sub-agent).
 
-    Only the three retriever knobs (expand/hyde/rerank) map here; the `wiki`
-    routing flag is handled at the turn level, not by the retriever."""
+    Only the three retriever knobs (expand/hyde/rerank) map here."""
     if body_enh is None:
         return None
     return Enhancements(expand=body_enh.expand, hyde=body_enh.hyde, rerank=body_enh.rerank)
@@ -826,9 +812,6 @@ def register_kb_chat_routes(
             # Per-message reasoning effort from the UI selector.
             reasoning_effort=body.reasoning_effort,
             kb_enhancements=caller_enh,
-            # Per-query opt-in to the wiki path (depth picker). The
-            # WikiAwareRunner gates it on the collections' use_wiki/use_rag.
-            wiki_query=bool(body.enhancements and body.enhancements.wiki),
             # #195/#334: cap how many times this reply may run kb_search — the
             # composer's per-message pick (clamped to [0, ceiling]) or, absent
             # one, the operator default.

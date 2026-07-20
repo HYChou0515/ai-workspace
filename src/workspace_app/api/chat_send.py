@@ -180,10 +180,6 @@ class ChatSendService:
         # sub-agent only — infer_modules' focused classification probe
         # keeps the operator defaults.
         caller_enh = to_caller_enhancements(body.enhancements)
-        # The composer's "Search the wiki" toggle — a routing flag (not a depth
-        # knob), so it's read off the body separately and only applies to the
-        # kb_chat sub-agent (infer_modules stays chunk-only).
-        caller_wiki = bool(body.enhancements and body.enhancements.wiki)
         # #66: resolve infer_modules' configured collection NAME → ids ONCE for
         # this whole turn (not per step). "" ⇒ None ⇒ the bridge searches all
         # collections (backward-compatible). A configured-but-missing name → []
@@ -222,19 +218,17 @@ class ChatSendService:
             if purpose == "kb_chat":
                 enh = caller_enh
                 reff = body.reasoning_effort
-                wiki = caller_wiki
                 colls = collection_ids
                 bud = kb_budget
             elif purpose == "infer_modules":
-                enh, reff, wiki = (
+                enh, reff = (
                     self._infer_modules_enhancements,
                     self._infer_modules_reasoning_effort,
-                    False,
                 )
                 colls = infer_coll_ids
                 bud = None
             else:  # pragma: no cover
-                enh, reff, wiki, colls, bud = None, None, False, None, None
+                enh, reff, colls, bud = None, None, None, None
             return await self._subagent_bridge.run(
                 purpose,
                 payload,
@@ -242,7 +236,6 @@ class ChatSendService:
                 origin_id,
                 enhancements=enh,
                 reasoning_effort=reff,
-                wiki_query=wiki,
                 collection_ids=colls,
                 budget=bud,
                 # Permission-disclosure: forward the parent turn's withheld

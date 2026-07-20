@@ -44,7 +44,6 @@ class SubagentBridge:
         *,
         spec: SpecStar,
         runner: AgentRunner,
-        kb_runner: AgentRunner,
         retriever: Retriever,
         catalog: AgentConfigCatalog,
         purpose_fallbacks: dict[str, AgentConfig],
@@ -59,7 +58,6 @@ class SubagentBridge:
     ) -> None:
         self._spec = spec
         self._runner = runner
-        self._kb_runner = kb_runner
         self._retriever = retriever
         self._catalog = catalog
         self._purpose_fallbacks = purpose_fallbacks
@@ -76,7 +74,6 @@ class SubagentBridge:
         origin_id: str | None = None,
         enhancements: Enhancements | None = None,
         reasoning_effort: str | None = None,
-        wiki_query: bool = False,
         collection_ids: list[str] | None = None,
         budget: KbSearchBudget | None = None,
         wiki_budget: WikiSearchBudget | None = None,
@@ -184,17 +181,13 @@ class SubagentBridge:
             captured.extend(cites)
 
         logger.info(
-            "subagent_bridge: running %s sub-agent for origin %s (speaker %s, wiki=%s)",
+            "subagent_bridge: running %s sub-agent for origin %s (speaker %s)",
             purpose,
             origin_id,
             speaker,
-            wiki_query,
         )
-        # When the query opted into the wiki, drive the lookup with the
-        # wiki-aware runner (chunk / wiki / both routing); otherwise the plain
-        # base runner (chunk-RAG only).
         answer = await answer_question(
-            self._kb_runner if wiki_query else self._runner,
+            self._runner,
             self._retriever,
             ids,
             payload,
@@ -202,7 +195,6 @@ class SubagentBridge:
             spec=self._spec,
             enhancements=enhancements,
             reasoning_effort=reasoning_effort,
-            wiki=wiki_query,
             on_event=relay,
             on_citations=log_cites,
             # #537: how the KB sub-agent consults the wiki, over the collections

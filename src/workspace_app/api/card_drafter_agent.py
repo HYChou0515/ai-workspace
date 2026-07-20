@@ -198,7 +198,7 @@ def wire_agentic_card_drafter(
     identity so the #305 collection-read gate passes ``[collection_id]`` through (a
     background job carries no request speaker); safe because the drafter's spec
     FORCES scope to the document's collection, so superuser status can't widen the
-    search. wiki delegation is via the base runner (``kb_runner=runner``) — the
+    search. The wiki is reached by delegation (`ask_wiki`), so the base runner is
     wiki-aware runner is never taken."""
     from ..kb.help_collection import HELP_SYSTEM_USER
     from .subagent_bridge import SubagentBridge
@@ -206,7 +206,6 @@ def wire_agentic_card_drafter(
     bridge = SubagentBridge(
         spec=spec,
         runner=runner,
-        kb_runner=runner,  # wiki off ⇒ the wiki-aware runner is never taken
         retriever=retriever,
         catalog=catalog,
         purpose_fallbacks={"kb_chat": kb_agent_config},
