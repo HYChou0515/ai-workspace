@@ -26,6 +26,14 @@ class GraphClaim(Struct):  # → resource "graph-claim"
     (so a re-extraction can wipe + rewrite one doc's claims). ``norm_metric`` is
     the server-computed normalised key; ``metric`` keeps the raw surface form for
     display.
+
+    #534 slice 2: the ``collection_*`` / ``doc_*`` fields are a denormalized
+    mirror of the READ permission of the deck this claim came from, so
+    ``graph_claim_access_scope`` can hide the row at the storage layer — the only
+    place that also covers the auto-CRUD routes, which no hand-written guard sees.
+    They are written by the extractor and re-pushed by the permission fan-out;
+    nothing else may set them. The mirror is the doc's EFFECTIVE permission, both
+    layers: its collection's (#303) and its own tightening (#308).
     """
 
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
@@ -37,3 +45,14 @@ class GraphClaim(Struct):  # → resource "graph-claim"
     unit: str = ""
     chunk_id: str = ""  # provenance: the chunk / slide
     confidence: float = 1.0
+    # --- #534 slice 2: the read-permission mirror (see the class docstring) ---
+    collection_visibility: str = ""  # the parent collection's visibility (#303)
+    collection_read_meta: list[str] = []  # its read_meta grant list
+    collection_created_by: str = ""  # its owner — the authority both halves match
+    # The deck's OWN verdict (#308), stated explicitly: a deck that adds no
+    # restriction mirrors "public". "" is NOT "no override" — it is "no mirror was
+    # ever written", which the scope reads as invisible. The default has to fail
+    # CLOSED: a writer that forgets the mirror then loses rows (loud, someone
+    # chases it) instead of publishing them (silent, nobody reports a leak).
+    doc_visibility: str = ""
+    doc_read_content: list[str] = []  # the deck's read_content grant list

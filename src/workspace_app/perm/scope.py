@@ -172,6 +172,43 @@ def source_doc_access_scope(
     return _and_scopes(collection, source_doc_override_scope(superusers, groups_provider))
 
 
+def graph_claim_access_scope(
+    superusers: frozenset[str] = frozenset(),
+    groups_provider: GroupsProvider | None = None,
+) -> AccessScope:
+    """#534 slice 2 — a metric claim is visible iff the DECK it was extracted from
+    is. Same two-half shape as ``source_doc_access_scope`` (collection mirror AND
+    per-doc tightening, ANDed so an override can only tighten, both matching the
+    caller against the mirrored collection owner), read off the claim's own
+    denormalized copy of that deck's effective permission.
+
+    ONE deliberate difference: the doc half gates on the deck's ``read_content``
+    grant list, not ``read_meta``. ``read_meta`` answers "may you know this deck
+    exists" — the right question for hiding a doc from a LIST, and what the
+    SourceDoc scope asks. But a claim row IS content (a metric and its value), so
+    a reader allowed only to know the deck exists must not receive it.
+
+    A deck with no override has an absent/empty ``doc_visibility``, which the
+    shared predicate's ``isna()`` clause admits — so the second half only ever
+    HIDES an explicitly tightened deck.
+    """
+    collection = _visibility_scope(
+        visibility_field="collection_visibility",
+        read_meta_field="collection_read_meta",
+        owner_field="collection_created_by",
+        superusers=superusers,
+        groups_provider=groups_provider,
+    )
+    doc = _visibility_scope(
+        visibility_field="doc_visibility",
+        read_meta_field="doc_read_content",
+        owner_field="collection_created_by",
+        superusers=superusers,
+        groups_provider=groups_provider,
+    )
+    return _and_scopes(collection, doc)
+
+
 def kbchat_access_scope(
     superusers: frozenset[str] = frozenset(),
 ) -> AccessScope:
