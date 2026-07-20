@@ -318,6 +318,27 @@ def _workspace_full_msg(exc: WorkspaceFull) -> str:
     )
 
 
+def _conflict_echo(ctx: RunContextWrapper[AgentToolContext], path: str, current: str) -> str:
+    """The current content a rejected write/edit hands back so the agent can
+    retry — capped like any other tool output.
+
+    The echo exists to make the retry possible, so cutting it costs something
+    real: `old_string` has to match EXACTLY, and a truncated echo can't be
+    copied from. That's why the marker names the way back (`read_file` with
+    offset/limit) instead of leaving the agent to guess why its next edit also
+    failed. Uncapped it was the widest hole in the toolset — the size of the
+    echo is whatever the user uploaded, and a missed match on a big file is an
+    everyday event."""
+    return truncate_middle(
+        current,
+        ctx.context.exec_output_max_chars,
+        hint=(
+            f"this echo is partial — read_file {path} (offset/limit) to see the exact "
+            "text you need `old_string` to match"
+        ),
+    )
+
+
 async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, content: str) -> str:
     """Create a NEW file. This never overwrites: if the file already exists it
     is rejected and the current content is returned — use `edit_file` to change
@@ -331,7 +352,8 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
         return f"wrote {len(content)} bytes to {path}"
     return (
         f"error: {path} already exists — use edit_file to modify it (or delete "
-        f"it first). Current content:\n{current.decode('utf-8', errors='replace')}"
+        f"it first). Current content:\n"
+        f"{_conflict_echo(ctx, path, current.decode('utf-8', errors='replace'))}"
     )
 
 
@@ -353,7 +375,8 @@ async def edit_file_impl(
         return f"edited {path}"
     return (
         f"error: could not apply the edit to {path} — `old_string` was not found "
-        f"exactly once (the file may have changed). Current content:\n{current}"
+        f"exactly once (the file may have changed). Current content:\n"
+        f"{_conflict_echo(ctx, path, current)}"
     )
 
 
@@ -516,11 +539,26 @@ async def read_new_source_impl(ctx: RunContextWrapper[AgentToolContext]) -> str:
     return _truncate_middle(src, cap) if len(src) > cap else src
 
 
-async def list_sources_impl(ctx: RunContextWrapper[AgentToolContext]) -> list[str]:
-    """List the collection's raw source documents (read-only) so you can
-    re-read or cross-reference any of them while maintaining the wiki."""
+async def list_sources_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> str:
+    """List the collection's raw source documents (read-only) so you can re-read
+    or cross-reference any of them while maintaining the wiki. Pass `prefix` to
+    list only the paths starting with it; the listing reports the total so you
+    can tell a narrowed view from the whole collection."""
     sources = ctx.context.wiki_sources
-    return sources.list() if sources is not None else []
+    if sources is None:
+        return "no sources are attached to this run"
+    # A collection's document count is not something the agent chose, so the
+    # listing is capped the same way `list_files` is — with the true total, and
+    # a filter the agent can actually steer.
+    paths = [p for p in sources.list() if p.startswith(prefix)]
+    if not paths:
+        return f"no sources match {prefix!r}" if prefix else "this collection has no sources"
+    return _capped_listing(
+        paths,
+        ctx.context.exec_output_max_chars,
+        noun="sources",
+        hint="pass a longer `prefix` to narrow the listing",
+    )
 
 
 _WIKI_SNIPPET_MAX = 1200  # citation snippet cap (the FE reference card excerpt)
@@ -1774,21 +1812,52 @@ async def update_entity_impl(
     return f"Updated {type_name} #{number}.{_entity_diag_suffix(updated)}"
 
 
-async def query_entity_impl(ctx: RunContextWrapper[AgentToolContext], type_name: str) -> str:
-    """List every record of a type with its fields (relational fields like
+# One page of records, when the caller doesn't say. Sized so a typical page is
+# a few thousand characters; the character budget below is what actually binds
+# when records are wide rather than numerous.
+_ENTITY_PAGE_DEFAULT = 50
+
+
+async def query_entity_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    type_name: str,
+    offset: int = 1,
+    limit: int | None = None,
+) -> str:
+    """List the records of a type with their fields (relational fields like
     back-references and roll-ups are resolved for you). Use this to see what
-    exists before creating or updating. Returns JSON: `entities` (the readable
-    records) plus `invalid` (numbers of records whose file couldn't be parsed)."""
+    exists before creating or updating. Reads ONE page: `offset` is the 1-based
+    first record (default 1) and `limit` the number of records (default: the
+    configured page). Returns JSON: `entities` (the readable records), `total`
+    (how many records the type has), `invalid` (numbers of records whose file
+    couldn't be parsed), and `next_offset` when more records remain."""
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err
     result = await store.query(type_name)
-    payload = {
-        "entities": [
-            {"number": e.number, "version": e.version, "fields": e.fields} for e in result.entities
-        ],
+    start = max(offset, 1) - 1
+    count = limit if limit is not None else _ENTITY_PAGE_DEFAULT
+    # A page is bounded twice: by record count, and by the characters those
+    # records render to. Neither alone is enough — 2000 records overflow a
+    # context by being many, five records with a pasted log in a field overflow
+    # it by being wide. `total` is always the true count, so a paged answer can
+    # never read as "this is everything".
+    budget = ctx.context.exec_output_max_chars
+    entities: list[dict[str, Any]] = []
+    used = 0
+    for entity in result.entities[start : start + count]:
+        record = {"number": entity.number, "version": entity.version, "fields": entity.fields}
+        used += len(json.dumps(record, ensure_ascii=False, default=str))
+        if used > budget and entities:
+            break
+        entities.append(record)
+    payload: dict[str, Any] = {
+        "entities": entities,
+        "total": len(result.entities),
         "invalid": [e.number for e in result.invalid],
     }
+    if start + len(entities) < len(result.entities):
+        payload["next_offset"] = start + len(entities) + 1
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
