@@ -205,11 +205,13 @@ def _client(runner: object, *, describer: VlmDescriber | None = None) -> TestCli
     return TestClient(app)
 
 
-def test_interactive_kb_turn_wires_a_wiki_store_and_grants_search_wiki():
-    # #506 Task#1: the send path must give the KB agent a wiki store (files) AND the
-    # bundled kb preset must grant `search_wiki`, so it consults the wiki in-agent
-    # (budgeted, multi-collection) instead of the heavy whole-page reader routing.
-    # The grep itself is unit-tested in test_wiki_tools; here we prove the wiring.
+def test_interactive_kb_turn_does_not_grant_the_raw_wiki_grep():
+    # #537: the KB agent must NOT hold `search_wiki`. That tool greps wiki pages and
+    # returns isolated `page:line: text` hits; with no `read_file` alongside it, an
+    # agent holding only the grep can never open the page a hit came from, follow a
+    # `[[wikilink]]`, or produce a citation — so the wiki was reachable in name only.
+    # #270's A/B convention keeps the leaf wiki tools with the maintainer/reader; the
+    # KB agent consults the wiki through the delegating `ask_wiki` (P2) instead.
     captured: dict = {}
 
     class _CaptureRunner:
@@ -223,8 +225,8 @@ def test_interactive_kb_turn_wires_a_wiki_store_and_grants_search_wiki():
     cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
     client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"})
 
-    assert captured["files"] is not None  # a wiki store the agent can grep was wired
-    assert captured["tools"] is not None and "search_wiki" in captured["tools"]  # preset grants it
+    assert captured["tools"] is not None
+    assert "search_wiki" not in captured["tools"]
 
 
 def test_send_message_caps_wiki_search_from_the_composer_pick():
