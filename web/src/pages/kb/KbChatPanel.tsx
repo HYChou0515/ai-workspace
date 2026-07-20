@@ -362,7 +362,12 @@ export function KbChatPanel({
               selectedName={pickedAgent}
               onSelectModel={setPickedAgent}
               retrieval
-              wikiBudget
+              // #537: the wiki allowance only means something when a collection in
+              // scope actually keeps a wiki — otherwise there is nothing to spend
+              // it on, and the agent is told as much.
+              wikiBudget={collections.some(
+                (c) => collectionIds.includes(c.resource_id) && c.use_wiki,
+              )}
             />
             {log.streaming ? (
               <button type="button" className="kb-btn kb-btn--stop" onClick={cancel}>
