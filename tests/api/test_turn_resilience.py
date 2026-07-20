@@ -293,6 +293,14 @@ async def test_close_streams_is_a_no_op_for_a_key_nobody_watches():
     engine.close_streams("never-subscribed")  # must not raise or create noise
 
 
+class _RoomAlways:
+    """`send` checks for space before it persists anything (#538). These tests
+    stub the service down to the shield, so they stub that out too."""
+
+    async def ensure_room_for(self, _workspace_id: str, _extra: int) -> None:
+        return None
+
+
 async def test_a_send_survives_its_request_being_cancelled():
     """A dead connection must not leave a message with no turn.
 
@@ -310,6 +318,7 @@ async def test_a_send_survives_its_request_being_cancelled():
 
     service = object.__new__(ChatSendService)  # the protection, not the wiring
     service._inflight = set()
+    service._files = _RoomAlways()
 
     async def _slow(*_a, **_k) -> None:  # noqa: ANN002, ANN003
         started.set()
@@ -334,6 +343,7 @@ async def test_a_send_still_reports_its_own_failure_to_a_live_request():
 
     service = object.__new__(ChatSendService)
     service._inflight = set()
+    service._files = _RoomAlways()
 
     async def _boom(*_a, **_k) -> None:  # noqa: ANN002, ANN003
         raise RuntimeError("bad request")

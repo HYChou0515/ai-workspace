@@ -69,9 +69,15 @@ def _workspace(ctx: RunContextWrapper[AgentToolContext]) -> tuple[WorkspaceFiles
     caller didn't inject a facade, wrap the bare filestore (transitional)."""
     inv = ctx.context.investigation_id
     files = ctx.context.files
-    if files is None:
-        assert ctx.context.filestore is not None  # file tools imply an RCA context
-        files = WorkspaceFiles(ctx.context.filestore)
+    # #538: NOT a fallback to `WorkspaceFiles(ctx.context.filestore)`. That
+    # facade would carry no quota and no sandbox, so every write through it
+    # would bypass the workspace cap and land straight in the durable store.
+    # Every production context injects the app's one gated facade; a context
+    # that reaches a file tool without it is a wiring bug, and failing here is
+    # how it stays a bug instead of becoming a hole. `files` stays optional on
+    # the context itself because the retrieval-only contexts (wiki chunk/merge,
+    # the card drafter) legitimately have no file tools at all.
+    assert files is not None
     assert inv is not None
     return files, inv
 
@@ -315,14 +321,24 @@ def _guard_workspace_full(impl: Callable[..., Any]) -> Callable[..., Any]:
 
 def _workspace_full_msg(exc: WorkspaceFull) -> str:
     """#538: what the agent is told when a write is refused for space. The agent
-    can't make more room appear, so the message names the ONE action that helps
-    and the tool that does it — otherwise a model retries the same write, or
-    invents a workaround like writing somewhere else."""
+    can't make more room appear, so the message names the actions that help —
+    otherwise a model retries the same write, or invents a workaround like
+    writing somewhere else.
+
+    Both remedies are named on purpose. The quota counts what the user put in
+    this sandbox, and that includes the package cache under `$HOME` that a
+    `pip install --user` filled — which `delete_file` cannot reach, because it
+    is outside the workspace and never appears in the file tree. Naming only
+    `delete_file` would leave a model deleting its own work, over and over,
+    while the bytes that actually filled the quota sat somewhere it never
+    looked."""
     return (
         f"error: the workspace is full ({exc.used} of {exc.quota} bytes used) — "
-        f"writing {exc.attempted} more bytes would exceed it. Delete files that are "
-        f"no longer needed with delete_file, then retry. Tell the user what you "
-        f"deleted, or ask them which files they want to keep."
+        f"writing {exc.attempted} more bytes would exceed it. Free space, then retry: "
+        f"delete_file removes workspace files; installed packages and caches under "
+        f"$HOME (pip/npm) are counted too and are cleared with exec, e.g. "
+        f"`rm -rf $HOME/.cache`. Tell the user what you removed, or ask them which "
+        f"files they want to keep."
     )
 
 

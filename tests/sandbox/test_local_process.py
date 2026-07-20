@@ -842,30 +842,68 @@ async def test_unjailed_pip_install_stays_in_home_and_other_sandbox_cannot_see_i
     assert rb.exit_code != 0
 
 
-async def test_disk_usage_totals_the_workspace(sandbox: LocalProcessSandbox):
+async def test_disk_usage_grows_by_exactly_what_was_added(sandbox: LocalProcessSandbox):
+    """`du` counts the directory entries too, so the absolute figure sits a few
+    KB above the sum of file sizes — real disk, and noise against a GiB quota.
+    What has to be exact is the DELTA: adding n bytes costs n."""
     h = await sandbox.create(SandboxSpec())
-    await sandbox.upload(h, b"x" * 30, "/a.bin")
-    await sandbox.upload(h, b"y" * 12, "/sub/b.bin")
-    assert await sandbox.disk_usage(h) == 42
+    before = await sandbox.disk_usage(h)
+    await sandbox.upload(h, b"x" * 4096, "/a.bin")
+    assert await sandbox.disk_usage(h) - before == 4096
 
 
-async def test_disk_usage_excludes_the_infra_area_beside_the_workspace(
+async def test_disk_usage_counts_the_per_sandbox_home_but_not_system_files(
     sandbox: LocalProcessSandbox,
 ):
-    """The `.ready` marker and the per-sandbox `.home` are siblings of the
-    walked workspace, not part of it. They never show up in the file tree, so
-    charging the user for them would mean telling someone their workspace is
-    full of bytes they cannot see or delete. (The scratch volume they do sit on
-    has its own cap — `sandbox.max_workspace_bytes`.)"""
+    """What the USER put here counts, wherever they put it. A
+    `pip install --user` lands in the per-sandbox `.home` and really does occupy
+    the volume, so it is theirs even though the file tree never shows it. The
+    rest of the item dir is not: the readiness marker and the jail launcher are
+    system, and `.tools` is a symlink to a tree every sandbox shares — charging
+    that to each of them would bill the same bytes over and over."""
     h = await sandbox.create(SandboxSpec())
-    await sandbox.upload(h, b"x" * 10, "/a.bin")
     await sandbox.mark_ready(h)
-    # a `pip install --user` lands in the per-sandbox HOME, beside the workspace
-    home = Path(sandbox._require(h)) / ".home" / "lib"
-    home.mkdir(parents=True, exist_ok=True)
-    (home / "big.whl").write_bytes(b"z" * 5000)
+    before = await sandbox.disk_usage(h)
 
-    assert await sandbox.disk_usage(h) == 10
+    item = Path(sandbox._require(h))
+    (item / ".home" / "lib").mkdir(parents=True, exist_ok=True)
+    (item / ".home" / "lib" / "big.whl").write_bytes(b"z" * 4096)
+    assert await sandbox.disk_usage(h) - before >= 4096  # HOME is charged
+
+    after_home = await sandbox.disk_usage(h)
+    (item / ".jailbin").mkdir(exist_ok=True)
+    (item / ".jailbin" / "launcher").write_bytes(b"s" * 4096)
+    assert await sandbox.disk_usage(h) == after_home  # system files are not
+
+
+async def test_disk_usage_does_not_follow_a_symlink_out_of_the_workspace(
+    sandbox: LocalProcessSandbox, tmp_path: Path
+):
+    """Otherwise dropping one link into the workspace charges an entire tree the
+    agent doesn't own — or the same bytes twice."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "huge.bin").write_bytes(b"q" * 100_000)
+    h = await sandbox.create(SandboxSpec())
+    before = await sandbox.disk_usage(h)
+    (Path(sandbox._require(h)) / "root" / "link").symlink_to(elsewhere)
+
+    assert await sandbox.disk_usage(h) - before < 1000  # the link itself, not its target
+
+
+async def test_disk_usage_falls_back_to_walking_when_du_is_unavailable(
+    sandbox: LocalProcessSandbox, monkeypatch
+):
+    """A minimal image may ship no coreutils. Reporting 0 there would silently
+    disable the quota, so the traversal stays as a fallback."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x" * 4096, "/a.bin")
+
+    async def _no_du(_targets):
+        return None
+
+    monkeypatch.setattr(sandbox, "_du", _no_du)
+    assert await sandbox.disk_usage(h) == 4096  # the walk counts files only
 
 
 async def test_size_of_reports_one_file(sandbox: LocalProcessSandbox):

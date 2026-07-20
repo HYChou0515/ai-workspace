@@ -105,21 +105,32 @@ async def test_file_tools_use_injected_files_facade():
     assert await exists_impl(ctx, "/a.txt") is True
 
 
-async def test_fallbacks_when_no_facade_and_no_ensure_via():
-    """No injected facade → file tools wrap the bare filestore; no
-    ensure_sandbox_via → exec creates the sandbox directly."""
+async def test_exec_creates_the_sandbox_directly_when_no_ensure_via():
+    """No ensure_sandbox_via → exec creates the sandbox itself."""
     from workspace_app.sandbox.mock import MockSandbox
 
     ctx = RunContextWrapper(
         AgentToolContext(
-            investigation_id="inv-1", sandbox=MockSandbox(), filestore=MemoryFileStore()
+            investigation_id="inv-1",
+            sandbox=MockSandbox(),
+            filestore=MemoryFileStore(),
+            files=WorkspaceFiles(MemoryFileStore()),
         )
     )
-    await write_file_impl(ctx, "/a.txt", "hi")  # _workspace fallback (files is None)
+    await write_file_impl(ctx, "/a.txt", "hi")
     assert await read_file_impl(ctx, "/a.txt") == "hi"
     assert ctx.context.handle is None
     await exec_impl(ctx, ["echo", "x"])  # ensure_sandbox direct-create branch
     assert ctx.context.handle is not None
+
+
+async def test_a_file_tool_without_a_facade_fails_instead_of_bypassing_the_quota():
+    """#538: the missing-facade case used to wrap the bare filestore, producing
+    an unquota'd facade that wrote straight to the durable store. A context that
+    reaches a file tool without the app's gated facade is a wiring bug."""
+    ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", filestore=MemoryFileStore()))
+    with pytest.raises(AssertionError):
+        await write_file_impl(ctx, "/a.txt", "hi")
 
 
 async def test_exec_lazy_creates_sandbox_on_first_call(

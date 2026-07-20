@@ -115,10 +115,16 @@ class WorkflowExecutor:
         ctx, narrows the tool ceiling to the step's subset, enqueues + awaits, persists
         the produced messages under the captured user, and returns the assistant text.
 
+        #538: a workspace with no room left refuses the node before the agent
+        runs, for the same reason a chat turn does — an agent that cannot write
+        will spend the turn discovering that one refused write at a time. The
+        `StepFailed` surfaces on the run rather than a wall of tool errors.
+
         ``lane`` (#429 P5) overrides the ENQUEUE key only — a per-element sub-lane so
         map elements' turns run on their own FIFO worker (real parallel) — while the
         conversation lookup + persist stay on ``chat_key`` (no orphan conversations). A
         transient sub-lane is forgotten after its turn so its session doesn't leak."""
+        await self._files.ensure_room_for(item_id, 1)
         try:
             rid = chat_key
             got = self._conv_rm.get(rid).data

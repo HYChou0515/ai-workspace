@@ -195,7 +195,6 @@ sandbox:
   exec_timeout: 60.0    # 單一指令的「總」牆鐘上限；0 = 不限
   log_timeout: 60.0     # 「閒置」上限（#70）：這麼久沒任何 stdout/stderr 就當卡死砍掉；0 = 關
   isolate: null         # null = 自動偵測 userns jail（與下面的 isolation 是兩回事）
-  max_workspace_bytes: 0  # 單一 item 暫存目錄硬上限（bytes；0=不限）。防單一工作區塞爆共享卷
 ```
 
 > **長任務**：把 `exec_timeout: 0`（不限總時間）＋設一個 `log_timeout`（只要還在吐 log 就不砍）。

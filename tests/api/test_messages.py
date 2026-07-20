@@ -1185,3 +1185,41 @@ def test_user_message_records_its_sender():
     )
     user_msg = next(m for m in conv.messages if m.role == "user")
     assert user_msg.author == "alice"
+
+
+def test_a_full_workspace_refuses_the_turn_before_the_agent_runs():
+    """#538: refusing each write individually still let the whole turn run — the
+    agent planned, wrote, was refused, retried, wrote somewhere else. Every
+    instruction the user gave an already-full workspace burned a turn to
+    discover the same thing. The check happens before the message is persisted,
+    so the composer doesn't sit waiting for a reply that will never come; the
+    user clears space from the file tree, which is never quota-gated."""
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    ran: list[str] = []
+
+    class _Runner:
+        async def run(self, prompt, ctx):
+            ran.append(prompt)
+            yield RunDone()
+
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        workspace_quota=100,
+    )
+    client = TestClient(app)
+    assert client.put(f"/a/rca/items/{iid}/files/big.bin", content=b"x" * 100).status_code == 204
+
+    resp = client.post(f"/a/rca/items/{iid}/messages", json={"content": "do something"})
+
+    assert resp.status_code == 507
+    assert resp.json()["detail"]["error"] == "workspace_quota_exceeded"
+    assert ran == []  # the agent never ran
+    # ... and nothing was persisted, so the composer isn't left waiting on a
+    # reply that will never be produced.
+    chats = client.get(f"/a/rca/items/{iid}/chats").json()
+    assert all(not c.get("messages") for c in chats) if isinstance(chats, list) else True
+    assert client.get(f"/a/rca/items/{iid}/export-chat").text.count("do something") == 0

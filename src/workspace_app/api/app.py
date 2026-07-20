@@ -32,7 +32,7 @@ from ..resources import (
     CheckRun,
 )
 from ..resources.kb import EMBED_DIM, Collection
-from ..sandbox.protocol import Sandbox, SandboxSpec
+from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxNotFound, SandboxSpec
 from ..sync import SandboxSync
 from ..tooling.registry import PackageInfo
 from ..turn_control import SpecstarTurnControl
@@ -190,8 +190,6 @@ def create_app(
     # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
     # du-sweep recycles any item over it so a runaway workspace can't fill the
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
-    # Threaded from settings.sandbox.max_workspace_bytes.
-    max_workspace_bytes: int = 0,
     # #492: when the HTTP sandbox-host owns durable via an NFS archive (it rsyncs
     # each item's working dir to/from a shared PVC host-side), the app must NOT run
     # its own restore/mirror — write-back goes through `sandbox.persist` and the
@@ -485,7 +483,7 @@ def create_app(
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,
         mirror_interval=mirror_interval,
-        max_workspace_bytes=max_workspace_bytes,
+        workspace_quota=workspace_quota,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,
@@ -530,6 +528,34 @@ def create_app(
                     "attempted": exc.attempted,
                 }
             },
+        )
+
+    @app.exception_handler(SandboxBusy)
+    async def _sandbox_busy(_request: Request, exc: SandboxBusy) -> JSONResponse:
+        """#538: a sandbox that is reachable but not answering yet.
+
+        `SandboxBusy` propagates on purpose (#366: failing beats rebuilding into
+        a second sandbox or cold-writing), but nothing mapped it to a status, so
+        "your workspace is still starting" surfaced as an internal error. It is
+        transient and worth retrying, and saying so is the difference between a
+        spinner and a bug report."""
+        return JSONResponse(
+            status_code=503,
+            content={"detail": {"error": "sandbox_busy", "message": str(exc)}},
+            headers={"Retry-After": "2"},
+        )
+
+    @app.exception_handler(SandboxNotFound)
+    async def _sandbox_gone(_request: Request, exc: SandboxNotFound) -> JSONResponse:
+        """#538: the sandbox was reaped under a request. The file facade already
+        rebuilds or falls back for its own ops, so this only escapes from a raw
+        sandbox operation — and the next attempt re-creates it lazily, which
+        makes this a retry, not a 404. The ITEM is very much still there, and
+        saying "not found" about it would be a lie."""
+        return JSONResponse(
+            status_code=503,
+            content={"detail": {"error": "sandbox_gone", "message": str(exc)}},
+            headers={"Retry-After": "1"},
         )
 
     # #177: EVERY backend route registers on this prefixed router — specstar's

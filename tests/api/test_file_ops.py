@@ -10,6 +10,7 @@ from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
+from workspace_app.sandbox.protocol import SandboxBusy
 
 from ._client import TestClient as ApiTestClient
 from .conftest import Harness, register_rca_item
@@ -351,3 +352,45 @@ def test_a_refused_replace_changes_no_files_at_all():
     assert grew.status_code == 507
     for n in ("a", "b", "c"):
         assert client.get(f"/a/rca/items/{iid}/files/{n}.txt").content == b"xx"
+
+
+class _BusySandbox(MockSandbox):
+    """A sandbox that is reachable but not answering yet — what a hosted host
+    reports while a container is still coming up."""
+
+    busy = False
+
+    async def walk(self, handle, root):  # type: ignore[no-untyped-def]
+        if self.busy:
+            raise SandboxBusy("still starting up")
+        return await super().walk(handle, root)
+
+    async def exists(self, handle, path):  # type: ignore[no-untyped-def]
+        if self.busy:
+            raise SandboxBusy("still starting up")
+        return await super().exists(handle, path)
+
+
+def test_a_busy_sandbox_is_a_503_not_a_500():
+    """#538: `SandboxBusy` propagates on purpose (#366 — failing beats writing
+    into a second sandbox), but nothing mapped it to a status, so "your
+    workspace is still starting" reached the user as an internal error. It is
+    transient and worth retrying, and saying so is the difference between a
+    spinner and a bug report."""
+    spec = make_spec()
+    sandbox = _BusySandbox()
+    app = create_app(
+        spec=spec,
+        sandbox=sandbox,
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+    )
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    client.post(f"/a/rca/items/{iid}/exec", json={"cmd": ["echo", "hi"]})  # wake it
+
+    sandbox.busy = True
+    resp = client.get(f"/a/rca/items/{iid}/files")
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "sandbox_busy"
+    assert resp.headers.get("retry-after")

@@ -90,7 +90,7 @@ def _make_components(
     idle_timeout: timedelta,
     idle_check_interval: timedelta,
     mirror_interval: timedelta = timedelta(seconds=60),
-    max_workspace_bytes: int = 0,
+    workspace_quota: int = 0,
     runner=None,
 ):
     spec = make_spec(default_user="u")
@@ -104,7 +104,7 @@ def _make_components(
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,
         mirror_interval=mirror_interval,
-        max_workspace_bytes=max_workspace_bytes,
+        workspace_quota=workspace_quota,
     )
     return app, sandbox, filestore, spec
 
@@ -201,12 +201,12 @@ async def test_mirror_sweeper_persists_warm_sandbox_to_snapshot():
 
 
 async def test_quota_sweeper_recycles_over_quota_workspace():
-    """#345: a workspace over `max_workspace_bytes` is recycled by the sweeper
+    """#345/#538: a workspace over `workspace_quota` is recycled by the sweeper
     even though it is NOT idle — the only relief from scratch-vol disk pressure."""
     app, sandbox, _, spec = _make_components(
         idle_timeout=timedelta(seconds=60),  # NOT idle — only the quota can reap it
         idle_check_interval=timedelta(seconds=0.05),
-        max_workspace_bytes=100,
+        workspace_quota=100,
         runner=_BigWritingRunner(500),  # 500 bytes > 100-byte cap
     )
     iid = register_rca_item(spec)
@@ -222,12 +222,12 @@ async def test_quota_sweeper_recycles_over_quota_workspace():
 
 
 async def test_quota_sweeper_off_by_default_leaves_big_workspace():
-    """With `max_workspace_bytes` 0 (default) the sweeper never measures or
+    """With `workspace_quota` 0 (unlimited) the sweeper never measures or
     reaps — a big-but-not-idle workspace is left alone."""
     app, sandbox, _, spec = _make_components(
         idle_timeout=timedelta(seconds=60),
         idle_check_interval=timedelta(seconds=0.05),
-        max_workspace_bytes=0,  # disabled
+        workspace_quota=0,  # unlimited
         runner=_BigWritingRunner(500),
     )
     iid = register_rca_item(spec)

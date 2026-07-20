@@ -37,8 +37,6 @@ data:
   # #345: hard cap on one item's scratch usage (bytes; 0 = unlimited). The idle
   # reaper's du-sweeper recycles + frees any item that blows past it, so a single
   # runaway workspace can't fill the shared scratch volume. Map in config.yaml as
-  #   sandbox: { max_workspace_bytes: ${SANDBOX_MAX_WORKSPACE_BYTES} }
-  SANDBOX_MAX_WORKSPACE_BYTES: "0"
 
   # File store. "memory" = volatile (resets on restart). For durable
   # investigations/conversations/KB data, see the README note on persistence.

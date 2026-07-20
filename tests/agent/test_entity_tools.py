@@ -19,6 +19,7 @@ from workspace_app.agent import (
     query_entity_impl,
     update_entity_impl,
 )
+from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 
 _SCHEMA = (
@@ -43,7 +44,9 @@ async def _ctx_with_issue_schema() -> tuple[RunContextWrapper, MemoryFileStore]:
     await fs.write("ws", "/.entity/issue/schema.yaml", _SCHEMA)
     await fs.write("ws", "/.entity/issue/skeleton.md", _SKELETON)
     ctx = RunContextWrapper(
-        AgentToolContext(investigation_id="ws", filestore=fs, acting_user="alice")
+        AgentToolContext(
+            investigation_id="ws", filestore=fs, files=WorkspaceFiles(fs), acting_user="alice"
+        )
     )
     return ctx, fs
 

@@ -55,7 +55,6 @@ def test_sandbox_isolation_and_scratch_quota_defaults_345():
     # scratch vol. Both default OFF/auto so existing single-pod deploys are
     # unchanged.
     s = Settings().sandbox
-    assert s.max_workspace_bytes == 0  # 0 ⇒ no scratch-vol cap (du sweep off)
     iso = s.isolation
     assert iso.enabled is None  # auto: on iff CAP_SETUID + delegated cgroup v2
     assert iso.uid_base == 1_000_000

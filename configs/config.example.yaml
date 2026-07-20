@@ -89,11 +89,6 @@
 #                              # for this long (assumed hung); 0 = disabled.
 #                              # Long jobs: set exec_timeout: 0 + a log_timeout.
 #   isolate: null              # null = auto-detect userns
-#   max_workspace_bytes: 0     # #345: hard cap on ONE item's scratch dir (bytes;
-#                              # 0 = unlimited). The idle reaper's du-sweeper
-#                              # recycles + frees any item over it, so a single
-#                              # runaway workspace can't fill the shared scratch
-#                              # volume the whole fleet shares.
 #   # #345 per-item OS-user + cgroup isolation (ported from the HTTP sandbox host).
 #   # Off by default — needs CAP_SETUID/SETGID + a writable cgroup v2 tree, which
 #   # most clusters forbid; the shared-dir fix above cures the data loss without

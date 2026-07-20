@@ -12,6 +12,7 @@ import json
 from agents import RunContextWrapper
 
 from workspace_app.agent import AgentToolContext, create_entity_impl, query_entity_impl
+from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 
 _SCHEMA = b"path: issues\nfields:\n  title: { role: text, required: true }\n"
@@ -24,7 +25,11 @@ async def _ctx(cap: int = 30_000) -> RunContextWrapper[AgentToolContext]:
     await fs.write("ws", "/.entity/issue/skeleton.md", _SKELETON)
     return RunContextWrapper(
         AgentToolContext(
-            investigation_id="ws", filestore=fs, acting_user="alice", exec_output_max_chars=cap
+            investigation_id="ws",
+            filestore=fs,
+            files=WorkspaceFiles(fs),
+            acting_user="alice",
+            exec_output_max_chars=cap,
         )
     )
 
