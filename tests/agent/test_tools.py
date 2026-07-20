@@ -1,3 +1,4 @@
+import pytest
 from agents import FunctionTool, RunContextWrapper
 
 from workspace_app.agent import (
@@ -200,7 +201,7 @@ async def test_no_drift_between_file_tools_and_exec():
     # (c) THE fix: a file the shell created in the sandbox is visible to read_file/list_files
     await sandbox.upload(handle["inv-1"], b"from-shell", "/z.txt")  # simulate exec output
     assert await read_file_impl(ctx, "/z.txt") == "from-shell"
-    assert "/z.txt" in await list_files_impl(ctx)
+    assert "z.txt" in await list_files_impl(ctx)
 
 
 async def test_exec_returns_formatted_output(ctx: RunContextWrapper[AgentToolContext]):
@@ -251,7 +252,40 @@ async def test_file_ops_do_not_create_sandbox(
 async def test_list_files_after_writes(ctx: RunContextWrapper[AgentToolContext]):
     await write_file_impl(ctx, "/a", "1")
     await write_file_impl(ctx, "/b", "2")
-    assert sorted(await list_files_impl(ctx)) == ["/a", "/b"]
+    assert sorted(await list_files_impl(ctx)) == ["a", "b"]
+
+
+async def test_list_files_emits_shell_usable_relative_paths(
+    ctx: RunContextWrapper[AgentToolContext],
+):
+    """`list_files` is the agent's ONLY source of truth for "what files exist",
+    so the strings it prints must be the ones that work EVERYWHERE. The internal
+    key is `/a.txt`, but in the shell `/` is the system root, not the workspace —
+    an agent that copies `/a.txt` into `exec` or a python script misses the file.
+    So the listing speaks the one dialect valid in both: relative."""
+    await write_file_impl(ctx, "/a.txt", "1")
+    await write_file_impl(ctx, "data/x.csv", "2")
+
+    listed = sorted(await list_files_impl(ctx))
+    assert listed == ["a.txt", "data/x.csv"]
+    assert not any(p.startswith("/") for p in listed)
+
+    # …and every string it emits still round-trips through the file tools, which
+    # stay permissive about the form (`/a.txt` / `./a.txt` / `a.txt` all work).
+    for path in listed:
+        assert await exists_impl(ctx, path) is True
+    assert await read_file_impl(ctx, "a.txt") == "1"
+
+
+async def test_list_files_prefix_filter_accepts_either_form(
+    ctx: RunContextWrapper[AgentToolContext],
+):
+    """The prefix argument stays permissive on input — a leading slash is still
+    accepted — while the output is relative either way."""
+    await write_file_impl(ctx, "data/x.csv", "1")
+    await write_file_impl(ctx, "other.txt", "2")
+    assert await list_files_impl(ctx, "/data") == ["data/x.csv"]
+    assert await list_files_impl(ctx, "data") == ["data/x.csv"]
 
 
 async def test_exists_returns_bool(ctx: RunContextWrapper[AgentToolContext]):
@@ -667,3 +701,41 @@ async def test_exec_output_is_capped_by_the_context_budget(
     assert len(out) < 1000
     assert "omitted" in out
     assert "exit_code=0" in out
+
+
+@pytest.mark.integration
+async def test_listed_path_works_verbatim_in_a_real_shell(tmp_path):
+    """THE defect, end to end, against a REAL shell (the mock sandbox stores
+    paths verbatim in a dict, so only a real process can prove this): whatever
+    `list_files` prints must be runnable as-is via `exec`. With the old
+    `/`-prefixed listing the agent copied `/notes.txt` into a command and hit
+    the system root, so `cat` failed — and no amount of prompt prose beat what
+    the tool had just shown it."""
+    from workspace_app.sandbox.local_process import LocalProcessSandbox
+    from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+
+    sandbox = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    holder: dict[str, SandboxHandle] = {}
+
+    async def _resolve(ws: str) -> SandboxHandle | None:
+        return holder.get(ws)
+
+    files = WorkspaceFiles(MemoryFileStore(), sandbox, _resolve)
+
+    async def wake(on_progress=None) -> SandboxHandle:
+        h = await sandbox.create(SandboxSpec())
+        holder["inv-1"] = h
+        return h
+
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1", sandbox=sandbox, files=files, ensure_sandbox_via=wake
+        )
+    )
+    await ctx.context.ensure_sandbox()
+    await write_file_impl(ctx, "notes.txt", "hello")
+
+    (listed,) = await list_files_impl(ctx)
+    out = await exec_impl(ctx, ["cat", listed])  # the EXACT string the agent was shown
+    assert "exit_code=0" in out
+    assert "hello" in out

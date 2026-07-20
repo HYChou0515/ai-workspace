@@ -376,11 +376,28 @@ async def edit_file_impl(
     )
 
 
+def _agent_path(path: str) -> str:
+    """The workspace path as the AGENT should see it: relative, no leading `/`.
+
+    The store's canonical key is `/notes.txt` (`files.facade._norm`), and the
+    file tools happily take it back. But `exec` runs a real process whose cwd is
+    the workspace and which has NO chroot — there, `/notes.txt` is the *system*
+    root. A listing that prints `/notes.txt` therefore hands the model a string
+    that is only valid in half the surfaces it can use it in, and the model
+    (reasonably) trusts what the tool just showed it over any prompt prose
+    telling it to mentally strip the slash. Relative is the one form that is
+    correct everywhere, so that is the only form we ever print. Input stays
+    permissive — `_norm` still accepts `/x`, `./x` and `x` alike."""
+    return path.lstrip("/")
+
+
 async def list_files_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> list[str]:
     """List files in the workspace, optionally filtered by prefix. This is your
-    workspace's directory listing — use it instead of `exec(["ls", ...])`."""
+    workspace's directory listing — use it instead of `exec(["ls", ...])`. Paths
+    come back relative to the workspace root (`notes.txt`, `data/x.csv`), which
+    is exactly the form to pass to the other file tools and to use in `exec`."""
     fs, inv = _workspace(ctx)
-    return await fs.ls(inv, prefix)
+    return [_agent_path(p) for p in await fs.ls(inv, prefix)]
 
 
 async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool:
