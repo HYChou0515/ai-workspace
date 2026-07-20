@@ -245,19 +245,33 @@ class WorkflowExecutor:
         )
 
     async def upsert_card(
-        self, captured_user: str, collection: str, keys: list[str], title: str, body: str
+        self,
+        captured_user: str,
+        collection: str,
+        keys: list[str],
+        title: str,
+        body: str,
+        reference_doc_ids: list[str] | None = None,
     ) -> str:
         """The upsert-context-card capability (§8, #111) bound to this run's captured
         user — create-or-update by key, so re-classifying a term updates its card
-        instead of duplicating it."""
+        instead of duplicating it. #518: ``reference_doc_ids`` anchors the card to the
+        documents backing it (``None`` ⇒ leave existing links untouched)."""
         logger.info(
-            "workflow_exec: upsert context card in %s (keys=%s) for user %s",
+            "workflow_exec: upsert context card in %s (keys=%s, links=%d) for user %s",
             collection,
             keys,
+            len(reference_doc_ids or []),
             captured_user,
         )
         return upsert_context_card(
-            self._spec, collection=collection, keys=keys, title=title, body=body, user=captured_user
+            self._spec,
+            collection=collection,
+            keys=keys,
+            title=title,
+            body=body,
+            user=captured_user,
+            reference_doc_ids=reference_doc_ids,
         )
 
     async def find_card(
@@ -351,8 +365,8 @@ class WorkflowExecutor:
         )
         wf._convert = lambda src, dest: self.convert(item_id, src, dest)
         wf._collection_has = self.collection_has
-        wf._upsert_card = lambda collection, keys, title, body: self.upsert_card(
-            captured_user, collection, keys, title, body
+        wf._upsert_card = lambda collection, keys, title, body, refs: self.upsert_card(
+            captured_user, collection, keys, title, body, refs
         )
         wf._find_card = self.find_card
         wf._notify = lambda recipient, title, body, dedup_key: self.send_notification(

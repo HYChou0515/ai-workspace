@@ -439,7 +439,7 @@ async def test_wf_upsert_context_card_is_idempotent_on_rerun(spec_instance: Spec
     ``step_card/<key>`` receipt) — the capability runs once (manual §8/§9)."""
     calls: list[tuple] = []
 
-    async def fake_upsert(collection, keys, title, body):
+    async def fake_upsert(collection, keys, title, body, refs=None):
         calls.append((collection, tuple(keys), title))
         return f"context-card:{len(calls)}"
 

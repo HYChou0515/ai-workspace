@@ -202,7 +202,7 @@ def _commit_handle(plan: dict, *, landed: bool = True):
         ingested.append((coll, path))
         return f"doc:{coll}:{path}"
 
-    async def upsert_card(coll, keys, title, body):
+    async def upsert_card(coll, keys, title, body, refs=None):
         cards.append((coll, list(keys), title, body))
         return f"card:{title}"
 

@@ -57,7 +57,9 @@ CollectionChecker = Callable[[str, str], Awaitable[bool]]
 # The upsert-context-card capability (manual §8, #111): (collection, keys, title, body)
 # -> the card's id. Create-or-update by key (‘有就更新、沒才新增’). Wired by the driver;
 # faked in tests.
-UpsertCardCapability = Callable[[str, list[str], str, str], Awaitable[str]]
+# (collection, keys, title, body, reference_doc_ids) → card id. The last arg is #518's
+# tri-state link list: None ⇒ leave the card's existing links alone.
+UpsertCardCapability = Callable[[str, list[str], str, str, list[str] | None], Awaitable[str]]
 # The find-overwrite-target capability (#205): (collection, keys, title) -> the EXISTING
 # card a commit-time upsert would overwrite, as {keys, title, body, ambiguity}, or None for
 # a new card. Read-only — backs the review "before" snapshot. Wired by the driver; faked
@@ -279,29 +281,44 @@ class WorkflowHandle:
         return sorted(out)
 
     async def ingest_to_collection(
-        self, collection: str, path: str, *, phase: str = "ingest", cache: bool = True
+        self,
+        collection: str,
+        path: str,
+        *,
+        phase: str = "ingest",
+        cache: bool = True,
+        name: str = "",
+        key: str = "",
     ) -> str:
         """Deterministic node (manual §8): ingest a workspace file into an existing
         KB collection as the captured user. Journaled + skipped on re-run (§9);
         idempotent (the SourceDoc id is the natural key, so a re-ingest upserts).
-        Returns the SourceDoc id."""
+        Returns the SourceDoc id.
+
+        #518: passing ``name`` publishes the created id as ``{steps.<name>.doc_id}``.
+        Doing so changes WHERE the receipt lives (``step_<name>/<scope key>`` with a
+        ``fields`` payload, the shape ``_lookup_step`` reads) — which is also this
+        step's skip-on-re-run identity. Anonymous calls keep the original
+        ``step_ingest/<path>`` receipt byte-for-byte, so a workflow written before this
+        existed still skips the ingests it already did instead of redoing them."""
         if self._ingest is None:
             raise RuntimeError("ingest_to_collection needs a capability (wired by the run driver)")
         ingest = self._ingest
 
-        async def execute(_feedback: str | None) -> dict[str, str]:
-            return {"doc_id": await ingest(collection, path)}
+        async def execute(_feedback: str | None) -> dict[str, Any]:
+            doc_id = await ingest(collection, path)
+            return {"fields": {"doc_id": doc_id}} if name else {"doc_id": doc_id}
 
         result = await run_step(
             self,
-            name="ingest",
-            key=path.lstrip("/").replace("/", "_"),
+            name=name or "ingest",
+            key=key if name else path.lstrip("/").replace("/", "_"),
             phase=phase,
             args={"collection": collection, "path": path},
             execute=execute,
             cache=cache,
         )
-        return result["doc_id"]
+        return result["fields"]["doc_id"] if name else result["doc_id"]
 
     @property
     def entity_origin(self) -> EntityOrigin | None:
@@ -674,30 +691,47 @@ class WorkflowHandle:
         body: str = "",
         phase: str = "commit",
         cache: bool = True,
+        reference_doc_ids: list[str] | None = None,
+        name: str = "",
+        key: str = "",
     ) -> str:
         """Deterministic node (manual §8, #111): create-or-update a ``ContextCard`` on an
         existing KB collection as the captured user — the ``→collections`` workflow's
         commit of a filled glossary entry. An existing card for the key is overwritten
         (‘有就更新、沒才新增’), so re-classifying the same term doesn't duplicate it.
         Journaled + skipped on re-run (§9); the ``step_card`` receipt key is the card's
-        identity, so a re-run with the same content is a no-op. Returns the card id."""
+        identity, so a re-run with the same content is a no-op. Returns the card id.
+
+        #518: ``reference_doc_ids`` links the documents that back the card (``None`` ⇒
+        say nothing, keeping whatever the card already carries). ``name`` publishes the
+        id as ``{steps.<name>.card_id}`` and, as with ingest, moves the receipt to the
+        named/scope-keyed location; anonymous calls keep the original content-hashed
+        ``step_card`` receipt so existing workflows re-run identically."""
         if self._upsert_card is None:
             raise RuntimeError("upsert_context_card needs a capability (wired by the run driver)")
         upsert_card = self._upsert_card
 
-        async def execute(_feedback: str | None) -> dict[str, str]:
-            return {"card_id": await upsert_card(collection, keys, title, body)}
+        async def execute(_feedback: str | None) -> dict[str, Any]:
+            card_id = await upsert_card(collection, keys, title, body, reference_doc_ids)
+            return {"fields": {"card_id": card_id}} if name else {"card_id": card_id}
 
         result = await run_step(
             self,
-            name="card",
-            key=_card_step_key(keys, title, body),
+            name=name or "card",
+            key=key if name else _card_step_key(keys, title, body),
             phase=phase,
-            args={"collection": collection, "keys": list(keys), "title": title},
+            args={
+                "collection": collection,
+                "keys": list(keys),
+                "title": title,
+                # #518: part of the cache key — re-pointing a card's evidence must re-fire
+                # the step rather than be masked as already-done.
+                "reference_doc_ids": reference_doc_ids,
+            },
             execute=execute,
             cache=cache,
         )
-        return result["card_id"]
+        return result["fields"]["card_id"] if name else result["card_id"]
 
     async def find_overwrite_card(
         self, collection: str, keys: list[str], *, title: str = ""
