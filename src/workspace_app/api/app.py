@@ -483,7 +483,6 @@ def create_app(
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,
         mirror_interval=mirror_interval,
-        workspace_quota=workspace_quota,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
         wiki_reflect_daily=wiki_reflect_daily,

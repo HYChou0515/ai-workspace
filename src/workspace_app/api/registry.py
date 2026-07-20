@@ -403,68 +403,6 @@ class InvestigationRegistry:
                 continue
         return killed
 
-    async def enforce_quota(self, max_bytes: int) -> list[str]:
-        """#345: recycle any live item whose shared scratch working dir has grown
-        past ``max_bytes``, so one runaway workspace can't fill the scratch volume
-        the whole fleet shares. 0 ⇒ disabled (the lenient default). Same recycle
-        as the idle reaper — mirror→kill→forget — so nothing is lost: the dir is
-        written back to the durable snapshot before the rmtree and restored on the
-        item's next turn.
-
-        Unlike idle-kill this is NOT gated on global idleness: an over-quota dir
-        is reaped even while busy (it's the only relief from disk pressure), and
-        because the sweep iterates THIS pod's sessions it naturally targets items
-        this pod is serving — the sticky-routed owner is the one that reaps its own
-        runaway, and the mirror-before-kill keeps a concurrent pod's view durable."""
-        if max_bytes <= 0:
-            return []
-        recycled: list[str] = []
-        for inv_id in list(self._sessions):
-            s = self._sessions.get(inv_id)
-            if s is None or s.handle is None:
-                continue
-            try:
-                if await self._scratch_usage(s.handle) <= max_bytes:
-                    continue
-                logger.warning(
-                    "registry: enforce_quota recycling item %s (scratch dir over %d bytes)",
-                    inv_id,
-                    max_bytes,
-                )
-                if self._has_durable:
-                    # write-back before rmtree (reconcile — the dir is settled)
-                    await self._writeback(inv_id, s.handle, delete=True)
-                with contextlib.suppress(SandboxNotFound):  # #366: already-reaped is fine
-                    await self.sandbox.kill(s.handle)
-                if self.activity is not None:
-                    await self.activity.forget(inv_id)
-                del self._sessions[inv_id]
-                recycled.append(inv_id)
-            except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
-                logger.warning(
-                    "registry: enforce_quota skipped item %s (recycle failed)",
-                    inv_id,
-                    exc_info=True,
-                )
-                continue
-        return recycled
-
-    async def _scratch_usage(self, handle: SandboxHandle) -> int:
-        """Bytes the item occupies — the SAME measurement the quota gates on
-        (`Sandbox.disk_usage`), not a second one of our own.
-
-        It used to sum `walk`, "so it works for every backend without a new
-        Protocol method". That method exists now, and the hand-rolled sum was
-        wrong for this job anyway: `walk` only sees the workspace, so the sweep
-        never counted the per-sandbox `$HOME` — exactly where a runaway
-        `pip install --user` lands, which is the runaway it exists to catch.
-
-        A cold/absent dir reports 0 (nothing to reap)."""
-        try:
-            return await self.sandbox.disk_usage(handle)
-        except SandboxNotFound:
-            return 0
-
     async def _globally_idle(self, investigation_id: str, cutoff_ms: int) -> bool:
         """True when no pod has touched the item's shared dir since ``cutoff_ms``.
         No heartbeat wired ⇒ True (single-process: pod-local idleness is global)."""

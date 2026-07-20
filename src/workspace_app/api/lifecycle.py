@@ -80,7 +80,6 @@ def build_lifespan(
     idle_timeout: timedelta,
     idle_check_interval: timedelta,
     mirror_interval: timedelta,
-    workspace_quota: int,
     code_sync_check_interval: timedelta | None,
     code_daily_sync: str | None = None,
     wiki_reflect_daily: str | None = None,
@@ -101,16 +100,16 @@ def build_lifespan(
         threshold. The reaper sleeps the check_interval between sweeps
         — short for tests, ~60 s in production.
 
-        #345: the same tick also enforces the scratch-vol soft quota — any item
-        whose working dir grew past ``workspace_quota`` is recycled (even if
-        not idle), so one runaway workspace can't fill the shared scratch volume.
-        Gated on a positive cap (0 ⇒ no measurement, no overhead)."""
+        #538: this tick used to ALSO recycle any item whose dir had grown past a
+        size cap. That was a second quota — capacity management dressed as a
+        policy limit — and reaping a busy item is a blunt answer to a question
+        the write gate already answers precisely. Idleness reaps the whole item
+        dir anyway, `.home` included, so a runaway is reclaimed the moment it
+        stops being used."""
         try:
             while True:
                 await asyncio.sleep(idle_check_interval.total_seconds())
                 await registry.kill_idle(idle_timeout)
-                if workspace_quota > 0:
-                    await registry.enforce_quota(workspace_quota)
         except asyncio.CancelledError:
             return
 
