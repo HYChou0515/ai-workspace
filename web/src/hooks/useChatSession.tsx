@@ -1,5 +1,5 @@
 import { useQueryClient, type QueryKey } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentEvent } from "../events";
 import { isTerminal } from "../events";
@@ -48,8 +48,29 @@ export type BroadcastChatTransport = {
   addMention: (userIds: string[], note: string) => Promise<void>;
 };
 
+/** Whether this viewer is actually receiving live events.
+ *
+ * Losing the stream used to be completely invisible: the subscription's `catch`
+ * swallowed every non-abort error — no banner, no state, not even a
+ * `console.error` — so an idle-proxy cut or a pod rollover looked exactly like a
+ * chat where nothing was happening, while the answer on screen quietly stopped
+ * growing (live events are dropped when nobody is attached; there is no replay).
+ *
+ * The content is not at risk — the turn is persisted and re-read — so what is
+ * left is entirely a matter of TELLING the user. A frozen answer labelled
+ * "reconnecting" is a wait; the same frozen answer in silence is a hang they can
+ * only read as broken. `attempts` separates a blip from an outage. */
+export type ChatConnection = {
+  state: "connecting" | "live" | "reconnecting";
+  /** Why the stream last dropped; null while healthy. */
+  error: string | null;
+  /** Consecutive failed reconnects (0 while healthy). */
+  attempts: number;
+};
+
 export type ChatSession = {
   log: AgentLog;
+  connection: ChatConnection;
   send: (content: string, opts?: ChatSendOpts) => Promise<void>;
   mention: (userIds: string[], note: string) => Promise<void>;
   cancel: () => void;
@@ -71,6 +92,11 @@ export function useChatSession(
   // Epoch ms of the last live event (or send) — gates the #202 store-poll so a
   // healthy same-pod stream is never polled over.
   const lastEventAtRef = useRef(0);
+  const [connection, setConnection] = useState<ChatConnection>({
+    state: "connecting",
+    error: null,
+    attempts: 0,
+  });
   const { log, setLog, snapshot, reconcile } = useChatLog({
     threadKey: transport.threadKey,
     queryKey: transport.queryKey,
@@ -90,8 +116,20 @@ export function useChatSession(
       let backoff = 1000;
       while (!stopped) {
         try {
+          // Opening the stream clears the error, but NOT the attempt count: being
+          // subscribed is not the same as receiving, and a socket that opens and
+          // immediately dies would otherwise reset the counter every cycle and
+          // make a sustained outage look like an endless first blip.
+          setConnection((c) => (c.state === "live" ? c : { ...c, state: "live", error: null }));
           for await (const ev of transport.subscribe(controller.signal)) {
             backoff = 1000; // a healthy stream resets the backoff
+            // An actual event is the proof the stream works — only now is the
+            // outage over.
+            setConnection((c) =>
+              c.state === "live" && c.attempts === 0
+                ? c
+                : { state: "live", error: null, attempts: 0 },
+            );
             // A live event means this viewer IS on the turn's pod — record it so
             // the #202 store-poll stays dormant while the stream flows.
             lastEventAtRef.current = Date.now();
@@ -118,8 +156,21 @@ export function useChatSession(
           }
         } catch (err: unknown) {
           if (isAbort(err)) return; // unmount / thread switch
-          // Anything else → fall through to the reconnect delay.
+          // Anything else → say so, then fall through to the reconnect delay.
+          // Swallowing this is what made a dropped stream indistinguishable from
+          // a quiet one.
+          const why = err instanceof Error ? err.message : String(err);
+          setConnection((c) => ({
+            state: "reconnecting",
+            error: why,
+            attempts: c.attempts + 1,
+          }));
         }
+        // A stream that ENDS without throwing (the server closed it) is also a
+        // lost connection, not a finished chat.
+        setConnection((c) =>
+          c.state === "reconnecting" ? c : { state: "reconnecting", error: null, attempts: c.attempts + 1 },
+        );
         if (stopped) return;
         await sleep(backoff);
         if (stopped) return;
@@ -234,5 +285,5 @@ export function useChatSession(
     [transport, currentUser],
   );
 
-  return { log, send, mention, cancel, undo };
+  return { log, connection, send, mention, cancel, undo };
 }

@@ -14,6 +14,7 @@ function stubAgent(): AgentState {
   return {
     investigationId: "it1",
     log: { entries: [], streaming: false } as unknown as AgentState["log"],
+    connection: { state: "live", error: null, attempts: 0 },
     send: vi.fn(async () => {}),
     mention: vi.fn(async () => {}),
     cancel: vi.fn(),

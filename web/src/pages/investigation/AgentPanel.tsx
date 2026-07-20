@@ -34,6 +34,7 @@ import { chatEmptyHint } from "../../lib/chatCopy";
 import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
+import { ConnectionNotice } from "../../components/ConnectionNotice";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnsFromEntry } from "./agentLog";
 import { pxToRem } from "../../lib/pxToRem";
@@ -152,7 +153,7 @@ export function AgentPanel({
   const ctxAgent = useOptionalAgent();
   const agent = agentProp ?? ctxAgent;
   if (!agent) throw new Error("AgentPanel needs an agent (prop or <AgentProvider>)");
-  const { log, send, mention, cancel, undo } = agent;
+  const { log, connection, send, mention, cancel, undo } = agent;
   const dialog = useDialog();
 
   // #38: "undo to here" on the user prompt at entry `i` — drop that turn
@@ -471,6 +472,7 @@ export function AgentPanel({
             fileUrl={(p) => api.fileContentUrl(slug, investigationId, p)}
           />
         ))}
+        <ConnectionNotice connection={connection} />
         <TurnStatus log={log} />
         {log.error && (
           <div
