@@ -256,3 +256,38 @@ async def test_aclose_is_bounded_and_gives_up_on_a_wedged_turn():
     t0 = loop.time()
     await engine.aclose(timeout=0.2)
     assert loop.time() - t0 < 2.0  # returned on its own deadline, not never
+
+
+async def test_close_streams_lets_a_key_change_be_recovered():
+    """A chat's engine key is not stable for its whole life.
+
+    The DEFAULT chat keys on the ITEM id (so item-level endpoints, the workflow
+    drive path and file-change broadcasts share its stream); every other chat
+    keys on its own id. Delete the current default and another chat BECOMES the
+    default — its key flips from `chat_id` to `item_id` while viewers are still
+    subscribed under the old one, so every later turn publishes into a session
+    they are not listening to. Deaf, with a healthy-looking heartbeat.
+
+    `close_streams` is how the caller repairs that: end those responses, and the
+    client's reconnect re-subscribes under the key that is now correct.
+    """
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+    ended = asyncio.Event()
+
+    async def read() -> None:
+        async for _frame in engine.subscribe_sse("chat-b", heartbeat_interval=5.0):
+            pass
+        ended.set()
+
+    reader = asyncio.create_task(read())
+    await asyncio.sleep(0.05)
+
+    engine.close_streams("chat-b")  # the key just became the item id
+
+    await asyncio.wait_for(ended.wait(), 3)
+    reader.cancel()
+
+
+async def test_close_streams_is_a_no_op_for_a_key_nobody_watches():
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+    engine.close_streams("never-subscribed")  # must not raise or create noise

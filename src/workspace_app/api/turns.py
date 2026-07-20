@@ -474,6 +474,19 @@ class ChatTurnEngine:
     def _ws_session(self, key: str) -> _WorkspaceSession:
         return self._ws_sessions.setdefault(key, _WorkspaceSession())
 
+    def close_streams(self, key: str) -> None:
+        """End the live SSE responses for `key` without touching the turn itself.
+
+        For when a chat's ENGINE KEY changes under its viewers: the default chat
+        keys on the item id and every other chat on its own id, so deleting the
+        default promotes another chat and flips its key. Subscribers attached to
+        the old key would then hear nothing more, with the heartbeat still
+        flowing — indistinguishable from a quiet chat, so they never reconnect.
+        Closing the response makes the client reconnect under the correct key."""
+        session = self._ws_sessions.get(key)
+        if session is not None:
+            session.close_subscribers()
+
     async def forget(self, key: str) -> None:
         """Drop a conversation's turn session (on close / delete) so the
         registry doesn't grow without bound. Also tears down the collaborative

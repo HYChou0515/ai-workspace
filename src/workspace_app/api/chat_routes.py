@@ -198,6 +198,14 @@ def register_chat_routes(
             await workflow_orchestrator.cancel(conv.run_id, investigation_id)
         await turn_engine.forget(locator.engine_key(investigation_id, rid))
         conv_rm.delete(rid)
+        # Deleting the DEFAULT chat promotes another one, and the default keys on
+        # the ITEM id while every other chat keys on its own — so the promoted
+        # chat's engine key just changed under anyone watching it. Their stream
+        # would stay open, heartbeating, and never hear another turn. End it so
+        # they reconnect under the key that is now correct.
+        promoted = locator.default_chat_id(investigation_id)
+        if promoted is not None:
+            turn_engine.close_streams(promoted)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
