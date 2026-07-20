@@ -13,9 +13,11 @@
  * turns resolve right (the backend already routes new items through AppCatalog).
  */
 
+import { useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useParams } from "react-router-dom";
 
+import { qk } from "../api/queryKeys";
 import { useFiles } from "../hooks/useInvestigation";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
@@ -40,6 +42,15 @@ function AppWorkspaceInner({ slug, itemId }: { slug: string; itemId: string }) {
   const manifest = useAppManifest(slug);
   const item = useAppItem(slug, manifest?.resource_route, id);
   const files = useFiles(id);
+  const queryClient = useQueryClient();
+  // #538: anything that changes the file list changes how full the workspace is,
+  // so the usage bar is refreshed on the same signal. Without this the bar only
+  // tracked uploads made from the chat composer — a file tree upload or delete
+  // left it showing a number the user could see was wrong.
+  const onFilesChanged = () => {
+    if (files.kind !== "loading") files.refresh();
+    queryClient.invalidateQueries({ queryKey: qk.workspaceUsage(slug, id) });
+  };
 
   if (!manifest || !item || files.kind === "loading") {
     return <Msg>Loading…</Msg>;
@@ -54,7 +65,7 @@ function AppWorkspaceInner({ slug, itemId }: { slug: string; itemId: string }) {
       manifest={manifest}
       files={files.items}
       dirs={files.dirs}
-      onFilesChanged={files.refresh}
+      onFilesChanged={onFilesChanged}
       onInvestigationChanged={() => {}}
     />
   );

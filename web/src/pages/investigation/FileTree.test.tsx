@@ -322,7 +322,28 @@ describe("<FileTree /> upload target", () => {
     const file = new File(["x"], "up.md", { type: "text/markdown" });
     fireEvent.change(filesInput(), { target: { files: [file] } });
     await waitFor(() => expect(alertSpy).toHaveBeenCalled());
-    expect(alertSpy.mock.calls[0]![0]).toMatch(/size limit/i);
+    expect(alertSpy.mock.calls[0]![0]).toMatch(/大小上限/);
+    vi.unstubAllGlobals();
+  });
+
+  it("a full workspace (507) tells the user to delete files, in their language (#538)", async () => {
+    // The out-of-space message was hardcoded English and said only that the
+    // workspace was out of space. Being full is the one upload failure the user
+    // can actually fix, so the message has to name the remedy — and be readable.
+    const alertSpy = vi.fn();
+    vi.stubGlobal("alert", alertSpy);
+    const writeFile = vi.fn(async () => {
+      throw Object.assign(new Error("507"), { status: 507 });
+    });
+    renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
+    fireEvent.change(filesInput(), {
+      target: { files: [new File(["x"], "up.md", { type: "text/markdown" })] },
+    });
+    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+    const msg = alertSpy.mock.calls[0]![0] as string;
+    expect(msg).toContain("up.md");
+    expect(msg).toContain("空間已滿");
+    expect(msg).toContain("刪除");
     vi.unstubAllGlobals();
   });
 });
