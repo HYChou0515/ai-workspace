@@ -579,3 +579,48 @@ GET /api/eval-result/{id}                  # 單筆（含 recall@{1,3,5,10} + MR
 ```
 
 `run_label` 保留歷史，所以同一 collection 不同日期的數字可以直接比較看趨勢。
+
+---
+
+## 14. 知識圖譜：指標抽取排程（#534）
+
+從投影片的 VLM 文字裡把**指標數字**（指標 / 期別 / 數字 / 單位）挖出來，存成一張扁平、
+可查的 `GraphClaim` 表——之後就能「列出某指標跨所有 deck 的所有值」。這是知識圖譜（#534）
+的第一步；矛盾偵測、實體消歧等是後續 slice。
+
+### 前提與開關
+
+- **要設定 KB LLM**（抽取要用）——沒有就不會建 graph coordinator，`/api/graph-job` route
+  也不存在。
+- **per-collection opt-in**：抽取是**貴的 VLM/LLM 工**,只對「有指標」的 collection 才有意義,
+  所以擁有者要在 collection 設定把 **`use_graph`** 打開（default OFF，跟 `auto_digest` 同理，
+  不會偷偷對全部開）。dispatch **只跑 `use_graph` 開的 collection**。
+- **要有東西消費 `graph` JobType**：all-in-one（`RUN_CONSUMERS=true`）→ API 自己消費；split
+  部署 → `kubernetes/base/workers.yaml` 的 **`rca-worker-graph`**。split 需共用 Postgres。
+
+### 觸發
+
+k8s 由 **`kubernetes/base/cronjob-graph.yaml`**（`rca-graph-weekly`）負責——**每週六**
+`POST /api/graph-job` 送一個 dispatch job（排週末,對上閒置 GPU;抽取是冪等 wipe+rewrite,
+每晚全量重抽會浪費）：
+
+```bash
+curl -fsS -X POST http://rca-app/api/graph-job \
+  -H 'Content-Type: application/json' \
+  -d '{"payload":{"kind":"dispatch"}}'
+```
+
+送出後自動 fan-out（每個 opted-in collection → 每批 doc → 抽取 → 寫 `GraphClaim`）。手動測
+一輪就是跑上面這個 `curl`。
+
+> 排程可調：CronJob 的 `schedule`（例如 `0 3 * * *` 改每晚）。若部署對 create route 有鎖權限,
+> 在 `curl` 補驗證 header。
+
+### 看結果
+
+specstar 自帶 CRUD route,不用自訂 endpoint：
+
+```
+GET /api/graph-claim?qb=norm_metric==<指標>   # 列出某指標在所有 deck / 期別的值
+GET /api/graph-claim/{id}                      # 單筆（含 provenance:來自哪個 deck/chunk）
+```
