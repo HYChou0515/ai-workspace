@@ -159,9 +159,11 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
   // summary — the full list is fetched once and refetched only when the
   // summary's stamp moves, so the old poll-the-whole-collection-per-tick
   // behaviour is gone on every tab.
-  const { docs: statusDocs, indexingCount } = useCollectionDocs(cid ?? "__none__", client, {
-    enabled: cid != null,
-  });
+  const { docs: statusDocs, indexingCount, watchForQueuedWork } = useCollectionDocs(
+    cid ?? "__none__",
+    client,
+    { enabled: cid != null },
+  );
   const erroredDocs = statusDocs.filter((d) => d.status === "error");
   const erroredCount = erroredDocs.length;
 
@@ -232,6 +234,17 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
   // the user sends the whole collection through again. `queued: false` means the
   // backend coalesced this press onto a run already in flight; say so instead of
   // confirming a send that didn't happen.
+  // A send that fails must not be the one silent path left: without this the
+  // button simply re-enables and the user is back to guessing (a 403 from
+  // `edit_content` and a 500 look identical to "nothing happened").
+  const ackReindexFailure = async () => {
+    await dialog.confirm({
+      title: t("kb.reindexAll.failed"),
+      body: t("kb.reindexAll.failedBody"),
+      actions: [{ id: "ok", label: t("kb.reindexAll.ack"), variant: "primary" }],
+    });
+  };
+
   const ackReindex = async (r: ReindexQueued) => {
     await dialog.confirm({
       title: r.queued ? t("kb.reindexAll.sent") : t("kb.reindexAll.already"),
@@ -247,13 +260,16 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
     onSuccess: (r) => {
       if (cid) {
         void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
-        // The docs don't flip to `indexing` in the request any more — the worker
-        // does it moments later. Reopen the status poll gate too, or the strip
-        // sits idle until something else happens to invalidate it.
         void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(cid) });
       }
+      // Invalidating is NOT enough on its own: the docs no longer flip to
+      // `indexing` inside the request, so the one refetch it buys still sees a
+      // quiet collection and the 1.5s poll never engages. Arm the watch window
+      // so the progress strip appears while the worker gets going.
+      if (r.queued) watchForQueuedWork();
       void ackReindex(r);
     },
+    onError: () => void ackReindexFailure(),
   });
 
   // #223: recover only the failed docs (the failure strip's one-click retry),
@@ -266,8 +282,10 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
         // #395: reopen the summary poll gate — the retried docs are indexing.
         void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(cid) });
       }
+      if (r.queued) watchForQueuedWork();  // #569: same delay before anything looks busy
       void ackReindex(r);  // #569: same accept-and-return endpoint, same silence
     },
+    onError: () => void ackReindexFailure(),
   });
 
   // #101: two-step download — prepare (build the zip server-side) then stream it

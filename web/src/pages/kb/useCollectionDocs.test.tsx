@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -158,5 +158,55 @@ describe("useCollectionDocs polling gate (#395)", () => {
     );
     // status says idle but a listed row is still indexing → keep polling.
     await waitFor(() => expect(result.current.shouldPoll).toBe(true));
+  });
+});
+
+describe("useCollectionDocs — polling for work that is queued but not yet visible (#569)", () => {
+  const wrap =
+    (client = makeTestQueryClient()) =>
+    ({ children }: { children: ReactNode }) => <QueryWrap client={client}>{children}</QueryWrap>;
+
+  it("keeps polling after a re-read is queued, even though nothing looks busy yet", async () => {
+    // "Re-read all" hands the walk to a worker, so when the request answers not
+    // one doc has flipped to `indexing`. `refetchInterval` is evaluated against
+    // the data already in hand — so on a quiet collection it returns false and
+    // the progress strip would stay dead until the user navigated away.
+    vi.useFakeTimers();
+    try {
+      const client = stubClient([doc({ path: "/a.md" })], emptyStatus());
+      const { result } = renderHook(() => useCollectionDocs("c1", client), { wrapper: wrap() });
+      await vi.waitFor(() => expect(client.documentsStatus).toHaveBeenCalled());
+      const quiet = vi.mocked(client.documentsStatus).mock.calls.length;
+
+      // Nothing is indexing: without arming the window, ticks change nothing.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(client.documentsStatus).toHaveBeenCalledTimes(quiet);
+
+      act(() => result.current.watchForQueuedWork());
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(vi.mocked(client.documentsStatus).mock.calls.length).toBeGreaterThan(quiet);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling again once the watch window lapses without work appearing", async () => {
+    // A run that never surfaces must not poll for ever.
+    vi.useFakeTimers();
+    try {
+      const client = stubClient([doc({ path: "/a.md" })], emptyStatus());
+      const { result } = renderHook(() => useCollectionDocs("c1", client), { wrapper: wrap() });
+      await vi.waitFor(() => expect(client.documentsStatus).toHaveBeenCalled());
+
+      act(() => result.current.watchForQueuedWork());
+      await vi.advanceTimersByTimeAsync(31_000);
+      const afterWindow = vi.mocked(client.documentsStatus).mock.calls.length;
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(client.documentsStatus).toHaveBeenCalledTimes(afterWindow);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

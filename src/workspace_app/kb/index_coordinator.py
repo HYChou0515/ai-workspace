@@ -171,7 +171,7 @@ class IndexCoordinator:
         # request, so it passes the original requester through explicitly (#569)
         # — otherwise every doc's chunks would be credited to the bare worker
         # default. specstar preserves it across the whole fan-out lifecycle.
-        with self._job_rm.using(user=requested_by or self._get_user_id()):
+        with self._job_rm.using(user=self._get_user_id() if requested_by is None else requested_by):
             self._job_rm.create(
                 IndexJob(
                     payload=IndexJobPayload(doc_id=doc_id, collection_id=collection_id),
@@ -186,7 +186,11 @@ class IndexCoordinator:
     # construction (`kb.doc_id` percent-encodes the `{collection}/{user}/{path}`
     # natural key precisely because specstar ids can't hold `/`), so a `/`-bearing
     # key is unforgeable by any doc — the two namespaces cannot collide.
-    _COLLECTION_KEY = "reindex-collection/{}"
+    # The `only` variant is PART of the key. Keying on the collection alone made
+    # a pending "retry failed" run (3 docs) swallow a subsequent "re-read all"
+    # (1000 docs) — and, worse, report it as already running, so the whole-
+    # collection re-read vanished while the UI said it was under way.
+    _COLLECTION_KEY = "reindex-collection/{}/{}"
 
     def enqueue_collection(self, collection_id: str, only: str = "") -> bool:
         """Queue a whole-collection re-read and return immediately. ``True`` if a
@@ -205,7 +209,7 @@ class IndexCoordinator:
         press while a run is still PENDING is a no-op. The caller turns that
         ``False`` into "already running" so a user who doesn't see progress yet
         can't stack up redundant full-collection re-reads."""
-        if self._has_pending_collection_job(collection_id):
+        if self._has_pending_collection_job(collection_id, only):
             return False
         with self._job_rm.using(user=self._get_user_id()):
             self._job_rm.create(
@@ -216,18 +220,22 @@ class IndexCoordinator:
                         kind="collection",
                         only=only,
                     ),
-                    partition_key=self._COLLECTION_KEY.format(collection_id),
+                    partition_key=self._COLLECTION_KEY.format(collection_id, only or "all"),
                     max_retries=self._job_max_retries,
                 )
             )
         return True
 
-    def _has_pending_collection_job(self, collection_id: str) -> bool:
-        """True if an unclaimed whole-collection re-read already targets this
-        collection — the same indexed ``(status, partition_key)`` point lookup
-        the per-doc coalesce uses, just in the collection key namespace."""
+    def _has_pending_collection_job(self, collection_id: str, only: str = "") -> bool:
+        """True if an unclaimed re-read of this collection AND this ``only``
+        variant is already queued — the same indexed ``(status, partition_key)``
+        point lookup the per-doc coalesce uses, in the collection key namespace.
+
+        Scoped to the variant on purpose: a queued failed-only recovery covers a
+        strict SUBSET of the collection, so treating it as equivalent to a full
+        re-read would drop the bigger request entirely."""
         pending = QB["status"].eq(TaskStatus.PENDING) & (
-            QB["partition_key"] == self._COLLECTION_KEY.format(collection_id)
+            QB["partition_key"] == self._COLLECTION_KEY.format(collection_id, only or "all")
         )
         return self._job_rm.count_resources(pending.build()) > 0
 
@@ -391,16 +399,21 @@ class IndexCoordinator:
         recompute, so the rebuild must miss and repopulate — then queue it."""
         doc = doc_rm.get(doc_id).data
         assert isinstance(doc, SourceDoc)
-        # `update`, never `patch`: the reindex-on-edit trigger is scoped to patch
-        # (see `install_reindex_on_edit`), so patching here would enqueue a second
-        # index for every doc. Credited to the requester, as the route was when it
-        # ran this same update inside their request.
-        with doc_rm.using(user=requester):
-            doc_rm.update(doc_id, msgspec.structs.replace(doc, status="indexing"))
         self._ingestor.invalidate_cache(doc_id)
         # Reuse the per-doc producer so this path inherits its coalescing (#134):
         # a doc already queued by an upload or an edit isn't indexed twice.
         self.enqueue(doc_id, cid, requested_by=requester)
+        # Flip LAST, and only once a job is guaranteed to exist. The caller
+        # swallows per-doc errors so one bad doc can't strand the rest — but if
+        # the flip came first, a failure between it and the enqueue would leave
+        # the doc at `indexing` with nothing queued, i.e. stuck for ever with the
+        # failure visible only in a log line (the ack already said "sent").
+        # `update`, never `patch`: the reindex-on-edit trigger is scoped to patch
+        # (see `install_reindex_on_edit`), so patching would enqueue a SECOND
+        # index for every doc. Credited to the requester, as the route was when
+        # it ran this same update inside their request.
+        with doc_rm.using(user=requester):
+            doc_rm.update(doc_id, msgspec.structs.replace(doc, status="indexing"))
 
     def _last_updater(self, doc_id: str) -> str | None:
         """The doc's last updater (#83): a job pod has no request user, so the

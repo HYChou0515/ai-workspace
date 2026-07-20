@@ -779,3 +779,71 @@ def test_a_pending_doc_job_never_blocks_a_whole_collection_re_read():
     assert coord.enqueue(doc_id, cid) is True  # a single doc is already queued
     assert coord.enqueue_collection(cid) is True  # …the collection re-read still queues
     assert sorted(_pending_kinds(spec)) == ["collection", "split"]
+
+
+def test_a_pending_failed_only_recovery_does_not_swallow_a_full_re_read():
+    """The failed-only run covers a strict SUBSET of the collection, so it must
+    not coalesce a whole-collection re-read onto itself. It used to: the key was
+    the collection alone, so clicking "Retry failed" (3 docs) and then "Re-read
+    all" (1000 docs) dropped the second request AND told the user it was already
+    running — the worst combination, a silent loss reported as success."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _doc(spec, cid, "a.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue_collection(cid, only="failed") is True
+    assert coord.enqueue_collection(cid) is True  # the bigger run still gets queued
+
+    assert _pending_kinds(spec) == ["collection", "collection"]
+
+
+def test_each_only_variant_still_coalesces_onto_itself():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _doc(spec, cid, "a.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue_collection(cid, only="failed") is True
+    assert coord.enqueue_collection(cid, only="failed") is False
+    assert coord.enqueue_collection(cid) is True
+    assert coord.enqueue_collection(cid) is False
+
+
+async def test_a_doc_is_never_left_indexing_with_no_job_behind_it():
+    """Per-doc errors are swallowed so one bad doc can't strand the rest — which
+    makes the ORDER load-bearing. Flipping to `indexing` before the enqueue meant
+    a failure in between left the doc `indexing` for ever with nothing queued:
+    permanently stuck, and invisible (the user was already told "sent")."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid, "a.md")
+    rm = spec.get_resource_manager(SourceDoc)
+    rm.update(doc_id, msgspec.structs.replace(rm.get(doc_id).data, status="ready"))
+
+    class _EnqueueBoom(_FakeIngestor):
+        def invalidate_cache(self, doc_id: str) -> None:
+            raise RuntimeError("cache backend down")
+
+    coord = IndexCoordinator(spec, _EnqueueBoom(), wiki_coordinator=None)  # ty: ignore
+    coord.enqueue_collection(cid)
+    await coord.aclose()
+
+    # The doc was not re-read — but it says so, instead of claiming to be busy.
+    assert rm.get(doc_id).data.status == "ready"
+
+
+async def test_an_empty_requester_is_not_replaced_by_the_worker_default():
+    """`requested_by=""` is a real user id in a no-auth deploy. A truthiness
+    check silently swapped it for the worker's own default — the exact
+    miscrediting the parameter exists to prevent (#186)."""
+    spec = make_spec(default_user="worker-default")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid, "a.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    coord.enqueue(doc_id, cid, requested_by="")
+
+    jrm = spec.get_resource_manager(IndexJob)
+    job = next(iter(jrm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())))
+    assert job.info.created_by == ""  # ty: ignore[unresolved-attribute]

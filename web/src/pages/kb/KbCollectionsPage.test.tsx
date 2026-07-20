@@ -491,6 +491,27 @@ describe("KbCollectionsPage", () => {
     expect(screen.queryByRole("dialog", { name: "已送出" })).not.toBeInTheDocument();
   });
 
+  it("says so when the re-read could not be sent at all", async () => {
+    // The point of #569 is that the user never has to guess what happened. A
+    // failed send that shows nothing is the same defect as a silent success.
+    const reindexCollection = vi.fn(async () => {
+      throw new Error("reindex collection: 500");
+    });
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 3 })],
+      listDocuments: async () => page([]),
+      reindexCollection,
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(await screen.findByTestId("kb-reindex-all"));
+    const confirm = await screen.findByRole("dialog", { name: "Re-read all documents" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "全部重新讀取" }));
+
+    expect(await screen.findByRole("dialog", { name: "沒有送出" })).toBeInTheDocument();
+  });
+
   it("does not re-index all when the confirm is cancelled", async () => {
     const reindexCollection = vi.fn(async () => ({ queued: true, documents: 1, status: "indexing" }));
     const client = {

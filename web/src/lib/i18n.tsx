@@ -587,6 +587,11 @@ export const messages = {
     en: "A re-read of this knowledge base is still running ({n} documents). There's no need to send it again.",
   },
   "kb.reindexAll.ack": { "zh-TW": "知道了", en: "Got it" },
+  "kb.reindexAll.failed": { "zh-TW": "沒有送出", en: "Not sent" },
+  "kb.reindexAll.failedBody": {
+    "zh-TW": "重新讀取沒有送出去，沒有任何文件被重新讀取。請再試一次。",
+    en: "The re-read wasn't sent — no document was re-read. Please try again.",
+  },
   // Global collection — the superuser-only toggle on the collection page.
   "kb.global.label": { "zh-TW": "全域知識庫", en: "Global collection" },
   "kb.global.help": {

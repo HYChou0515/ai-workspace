@@ -16,7 +16,7 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type KbApi, type KbDocument, type KbDocumentsStatus, kbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
@@ -39,6 +39,11 @@ export async function fetchAllDocs(
 
 /** The "did the list change?" digest of a status summary — counts keyed in a
  * stable order so two identical summaries always stringify identically. */
+/** How long to keep polling after work was QUEUED but hasn't surfaced yet
+ * (#569). Long enough for a worker on another pod to claim the job and flip the
+ * first doc; short enough that a dropped run doesn't poll forever. */
+const WATCH_FOR_QUEUED_MS = 30_000;
+
 function stampOf(s: KbDocumentsStatus): string {
   const counts = Object.entries(s.counts)
     .sort(([a], [b]) => a.localeCompare(b))
@@ -66,13 +71,28 @@ export function useCollectionDocs(
     () => (baseDocs ?? []).some((d) => d.status === "indexing"),
     [baseDocs],
   );
+  // #569: work can be QUEUED without anything looking busy yet. "Re-read all"
+  // hands the walk to a worker, so when the request answers not one doc has
+  // flipped to `indexing` — and `refetchInterval` is evaluated against the data
+  // already in hand, so invalidating only buys ONE refetch: it sees a quiet
+  // collection, returns false, and the poll never starts. The progress strip
+  // then stays dead until the user navigates away. A caller that just queued
+  // work arms this window instead; the poll runs through it and hands over to
+  // the real counts as soon as the worker flips the first doc.
+  const [watchUntil, setWatchUntil] = useState(0);
+  const watchForQueuedWork = useCallback(
+    () => setWatchUntil(Date.now() + WATCH_FOR_QUEUED_MS),
+    [],
+  );
+  useEffect(() => setWatchUntil(0), [collectionId]);
   const statusQuery = useQuery({
     queryKey: qk.kb.documentsStatus(collectionId),
     queryFn: () => client.documentsStatus(collectionId),
     enabled,
     refetchInterval: (q) => {
       const s = q.state.data as KbDocumentsStatus | undefined;
-      return (s?.counts["indexing"] ?? 0) > 0 || docsSayIndexing ? 1500 : false;
+      const busy = (s?.counts["indexing"] ?? 0) > 0 || docsSayIndexing;
+      return busy || Date.now() < watchUntil ? 1500 : false;
     },
   });
   const status = statusQuery.data;
@@ -108,5 +128,5 @@ export function useCollectionDocs(
     status?.counts["indexing"] ?? (baseDocs ?? []).filter((d) => d.status === "indexing").length;
   const shouldPoll = (status?.counts["indexing"] ?? 0) > 0 || docsSayIndexing;
 
-  return { docs, docsQuery, status, indexingCount, shouldPoll };
+  return { docs, docsQuery, status, indexingCount, shouldPoll, watchForQueuedWork };
 }

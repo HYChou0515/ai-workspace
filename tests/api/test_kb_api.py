@@ -177,6 +177,13 @@ def _new_collection(client: TestClient) -> str:
     return client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
 
 
+def _pause_consumer(client: TestClient) -> None:
+    """Stop the index consumer so an assertion about what the REQUEST did isn't
+    racing a worker that is free to claim the job between two HTTP calls. The
+    next `_drain` restarts it (`wait_idle` → `_ensure_consuming`)."""
+    client.app.state.index_coordinator._stop_consuming()  # noqa: SLF001  # ty: ignore[unresolved-attribute]
+
+
 def _drain(client: TestClient) -> None:
     """#82: indexing now runs on a background job-queue consumer (not a
     TestClient-run BackgroundTask), so block until it drains before asserting
@@ -1917,6 +1924,7 @@ def test_reindex_collection_returns_without_touching_a_single_doc():
             files={"file": (name, f"# {name} one two three four".encode(), "text/markdown")},
         )
     _drain(client)  # both land ready
+    _pause_consumer(client)  # pin the window: assert on the REQUEST, not a race
 
     r = client.post(f"/kb/collections/{cid}/reindex")
     assert r.status_code == 200
@@ -1957,6 +1965,7 @@ def test_pressing_reindex_all_again_reports_the_run_already_queued():
         files={"file": ("a.md", b"# a one two three", "text/markdown")},
     )
     _drain(client)
+    _pause_consumer(client)  # the first job must still be PENDING for press two
 
     assert client.post(f"/kb/collections/{cid}/reindex").json()["queued"] is True
     again = client.post(f"/kb/collections/{cid}/reindex").json()
