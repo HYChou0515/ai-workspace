@@ -222,8 +222,14 @@ def register_workflow_routes(
         )
         # #538: the docstring above promises nothing is half-written, and gating
         # each write would break that — a quota trip mid-loop would leave some
-        # inputs staged and no run started. Check the whole staging set once.
-        await files.ensure_room_for(investigation_id, sum(len(data) for _, data in staged))
+        # inputs staged and no run started. Check the whole staging set once,
+        # against what it actually ADDS: re-triggering a run with the same input
+        # files overwrites them, and counting those as new bytes would refuse a
+        # perfectly ordinary re-run.
+        growth = 0
+        for norm, data in staged:
+            growth += len(data) - (await files.file_size(investigation_id, norm) or 0)
+        await files.ensure_room_for(investigation_id, growth)
         for norm, data in staged:
             await files.write(investigation_id, norm, data)
             activity.record(
