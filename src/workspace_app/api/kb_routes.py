@@ -293,6 +293,25 @@ class ReindexOut(BaseModel):
     status: str = "indexing"
 
 
+class ReindexQueuedOut(BaseModel):
+    """Result of scheduling a WHOLE-collection re-read (#565). The walk itself
+    runs in a worker, so this reports what was *accepted*, not what was done:
+
+    - ``queued`` — ``False`` means a run was already pending and this press
+      coalesced onto it (#134). The UI says "already running" instead of
+      confirming a second send, so a user who sees no progress yet can't stack
+      up redundant full-collection re-reads.
+    - ``documents`` — how many documents the run covers, so the confirmation can
+      name a number. A count push-down over the indexed filter (no rows are
+      materialised); it's a snapshot at accept time, since the worker re-reads
+      the collection when it runs.
+    """
+
+    queued: bool
+    documents: int
+    status: str = "indexing"
+
+
 class _ProbeBody(BaseModel):
     """#328 findability probe request. ``guidance`` is the modal's CANDIDATE
     parser_guidance: ``None`` ⇒ report current ranks only; a string (incl. ``""``)
@@ -1376,35 +1395,36 @@ def register_kb_routes(
     @app.post("/kb/collections/{collection_id}/reindex")
     async def reindex_collection(
         collection_id: str, only: str | None = Query(default=None)
-    ) -> ReindexOut:
-        # Re-chunk + re-embed the collection — the recovery path after fixing the
-        # embedder (e.g. a missing model). Flip each doc back to `indexing`
-        # synchronously (so the UI shows progress + polls), then run the blocking
-        # rebuild off the loop, same as upload.
-        #
-        # `?only=failed` (issue #223) re-queues ONLY docs stuck in `error`, so a
-        # transient outage can be recovered without re-embedding every doc that
-        # already indexed. `only` is a closed vocabulary: anything else is a 400
-        # rather than a silent fall-through to "re-index everything".
+    ) -> ReindexQueuedOut:
+        """Re-chunk + re-embed a whole collection — the recovery path after
+        fixing the embedder (e.g. a missing model), and the "Re-read all" button.
+
+        ACCEPT-AND-RETURN (#565): this queues one `collection` job and answers.
+        It used to do the whole walk inline — load every doc, flip it, drop its
+        cache, enqueue it — synchronously, in an `async def` with no `await`. At
+        a thousand documents that pinned the event loop for minutes, so the
+        entire pod stopped serving anyone, and since nothing ever awaited, a
+        client that gave up and closed the tab couldn't stop it. The walk now
+        belongs to `IndexCoordinator._handle_collection`, off the request path.
+
+        `?only=failed` (#223) re-reads ONLY docs stuck in `error`, so a transient
+        outage is recoverable without re-embedding every doc that already
+        indexed; it rides the job payload and the worker applies it. `only` is a
+        closed vocabulary — anything else is a 400 rather than a silent
+        fall-through to "re-read everything"."""
         if only is not None and only != "failed":
             raise HTTPException(status_code=400, detail=f"unknown only={only!r}")
         _authorize_collection(collection_id, "edit_content")  # #262
-        rm = spec.get_resource_manager(SourceDoc)
-        count = 0
-        for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
-            doc = r.data
-            assert isinstance(doc, SourceDoc)
-            if only == "failed" and doc.status != "error":
-                continue
-            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-            rm.update(rid, msgspec.structs.replace(doc, status="indexing"))
-            # #390: reindex = force recompute. Drop the cached result first so the
-            # rebuild misses and repopulates it (refreshing the shared entry after
-            # a parser/prompt change the key doesn't capture).
-            ingestor.invalidate_cache(rid)
-            index_coordinator.enqueue(rid, collection_id)
-            count += 1
-        return ReindexOut(reindexed=count)
+        queued = index_coordinator.enqueue_collection(collection_id, only=only or "")
+        # How many docs the run covers, for the FE's "sent N documents" line.
+        # Both filters are indexed, and `count_resources` is a push-down — no row
+        # is materialised, so naming the number costs nothing near the walk we
+        # just moved off this path.
+        q = QB["collection_id"] == collection_id
+        if only == "failed":
+            q = q & (QB["status"] == "error")
+        documents = spec.get_resource_manager(SourceDoc).count_resources(q.build())
+        return ReindexQueuedOut(queued=queued, documents=documents)
 
     # ── LLM wiki browse (#50 P7) — read-only; the wiki is LLM-owned ──────
     @app.get("/kb/collections/{collection_id}/wiki")

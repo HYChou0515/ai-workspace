@@ -895,7 +895,8 @@ def test_reindex_collection_rebuilds_all_docs():
 
     r = client.post(f"/kb/collections/{cid}/reindex")
     assert r.status_code == 200
-    assert r.json()["reindexed"] == 2
+    assert r.json()["queued"] is True  # #565: accepted; the worker does the walk
+    assert r.json()["documents"] == 2
     assert r.json()["status"] == "indexing"
 
     _drain(client)  # background re-index consumer → docs ready, chunks rebuilt
@@ -931,7 +932,7 @@ def test_reindex_collection_only_failed_requeues_only_error_docs():
 
     r = client.post(f"/kb/collections/{cid}/reindex", params={"only": "failed"})
     assert r.status_code == 200
-    assert r.json()["reindexed"] == 1  # only the failed doc was queued, not both
+    assert r.json()["documents"] == 1  # only the failed doc was queued, not both
 
     _drain(client)
     docs = {d["path"]: d for d in client.get(f"/kb/collections/{cid}/documents").json()["items"]}
@@ -1883,6 +1884,104 @@ def test_reindex_collection_invalidates_the_cache():
     store = IndexCacheStore(spec)
     assert store.get(key) is not None
 
+    # #565: the drop moved into the worker (the request no longer walks the
+    # collection), and by the time the queue drains the rebuild has repopulated
+    # the entry — so watch the force-recompute happen at its seam rather than
+    # racing the consumer for a momentarily-absent row.
+    dropped: list[str] = []
+    real_invalidate = ingestor.invalidate_cache
+    ingestor.invalidate_cache = lambda d: (dropped.append(d), real_invalidate(d))[1]
+
     r = client.post(f"/kb/collections/{cid}/reindex")
     assert r.status_code == 200
-    assert store.get(key) is None  # collection reindex dropped it too
+    _drain(client)
+
+    assert dropped == [doc_id]  # the re-read forced a recompute for the doc
+    assert store.get(key) is not None  # …and the rebuild repopulated the entry
+
+
+# ── "Re-read all" returns instead of walking the collection (#565) ─────────
+
+
+def test_reindex_collection_returns_without_touching_a_single_doc():
+    """THE behaviour this endpoint exists to have: the request leaves one job
+    behind and returns. Before #565 it walked every doc — loading each one's blob
+    and extracted text, flipping its status and enqueueing it — synchronously on
+    the event loop, so a large collection froze the whole pod for minutes with no
+    way to abort. Assert the walk has NOT happened when the response arrives."""
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    for name in ("a.md", "b.md"):
+        client.post(
+            f"/kb/collections/{cid}/documents",
+            files={"file": (name, f"# {name} one two three four".encode(), "text/markdown")},
+        )
+    _drain(client)  # both land ready
+
+    r = client.post(f"/kb/collections/{cid}/reindex")
+    assert r.status_code == 200
+
+    # Not one document has been re-queued yet — the worker owns that walk now.
+    docs = client.get(f"/kb/collections/{cid}/documents").json()["items"]
+    assert [d["status"] for d in docs] == ["ready", "ready"]
+
+    _drain(client)  # …and once the worker runs, every doc really is re-read
+    docs = client.get(f"/kb/collections/{cid}/documents").json()["items"]
+    assert all(d["status"] == "ready" and d["chunks"] > 0 for d in docs)
+
+
+def test_reindex_collection_reports_how_many_docs_were_sent():
+    """The FE turns this into an explicit "sent N documents" confirmation, so a
+    user who sees no progress yet doesn't press the button again."""
+    client = _client()
+    cid = _new_collection(client)
+    for name in ("a.md", "b.md", "c.md"):
+        client.post(
+            f"/kb/collections/{cid}/documents",
+            files={"file": (name, f"# {name} one two three".encode(), "text/markdown")},
+        )
+    _drain(client)
+
+    body = client.post(f"/kb/collections/{cid}/reindex").json()
+    assert body["queued"] is True
+    assert body["documents"] == 3
+
+
+def test_pressing_reindex_all_again_reports_the_run_already_queued():
+    """#134 at collection scope: the second press must not stack a second
+    full-collection re-read, and must say so rather than claiming a fresh send."""
+    client = _client()
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("a.md", b"# a one two three", "text/markdown")},
+    )
+    _drain(client)
+
+    assert client.post(f"/kb/collections/{cid}/reindex").json()["queued"] is True
+    again = client.post(f"/kb/collections/{cid}/reindex").json()
+    assert again["queued"] is False  # coalesced onto the pending run
+    assert again["documents"] == 1
+
+
+def test_reindex_collection_only_failed_reports_just_the_failed_count():
+    import msgspec
+
+    from workspace_app.resources.kb import SourceDoc
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    for name in ("good.md", "bad.md"):
+        client.post(
+            f"/kb/collections/{cid}/documents",
+            files={"file": (name, b"# one two three four", "text/markdown")},
+        )
+    _drain(client)
+    rm = spec.get_resource_manager(SourceDoc)
+    bad_id = encode_doc_id(cid, "bad.md")
+    bad = rm.get(bad_id).data
+    assert isinstance(bad, SourceDoc)
+    rm.update(bad_id, msgspec.structs.replace(bad, status="error", status_detail="boom"))
+
+    body = client.post(f"/kb/collections/{cid}/reindex", params={"only": "failed"}).json()
+    assert body["documents"] == 1  # the healthy doc is not counted, nor re-read

@@ -656,8 +656,7 @@ def test_a_processing_job_does_not_block_a_fresh_reindex():
 def _pending_kinds(spec) -> list[str]:
     rm = spec.get_resource_manager(IndexJob)
     return [
-        j.data.payload.kind
-        for j in rm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())
+        j.data.payload.kind for j in rm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())
     ]
 
 
