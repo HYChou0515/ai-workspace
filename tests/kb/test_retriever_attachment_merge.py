@@ -104,3 +104,37 @@ def test_parent_not_duplicated_when_independently_hit(spec: SpecStar):
     att_id = encode_doc_id(cid, "d.md/.att/img.local/x.png")
     assert att_id in ids
     assert ids.count(parent_id) == 1  # present once — not duplicated by the merge
+
+
+def test_two_attachment_hits_pull_their_shared_parent_in_once(spec: SpecStar):
+    # Two figures in ONE document both match, so both attachments are primary hits
+    # and BOTH resolve to the same parent. The parent must ride along exactly once —
+    # the second attachment finds it already present and skips it.
+    url_a, url_b = "http://img.local/a.png", "http://img.local/b.png"
+    embedder = HashEmbedder(dim=EMBED_DIM)
+    registry = ParserRegistry().register(
+        VlmImageParser(VlmDescriber(_CannedVlm("solder ball void bright anomaly")))
+    )
+    ingestor = Ingestor(
+        spec,
+        pipeline=build_doc_pipeline(embedder=embedder),
+        embedder=embedder,
+        parser_registry=registry,
+        # Distinct bytes per image, or #104 content-dedup would collapse them into
+        # a single attachment and there would be no second hit to skip.
+        image_fetcher=_FakeFetcher(
+            {
+                url_a: (b"\x89PNG\r\n\x1a\n px", "image/png"),
+                url_b: (b"\x89PNG\r\n\x1a\n qx", "image/png"),
+            }
+        ),
+    )
+    cid = _collection(spec)
+    md = f"# Ring Defect\n\nMorphology: concentric halos.\n\n![a]({url_a})\n\n![b]({url_b})\n"
+    ingestor.ingest(collection_id=cid, user="u", filename="d.md", data=md.encode())
+
+    passages = Retriever(spec, embedder=embedder, top_k=2).search("solder ball void anomaly", [cid])
+
+    ids = [p.document_id for p in passages]
+    parent_id = encode_doc_id(cid, "d.md")
+    assert ids.count(parent_id) == 1  # pulled in once, not once per attachment hit

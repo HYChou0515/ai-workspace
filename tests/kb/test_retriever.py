@@ -183,6 +183,86 @@ def test_search_with_no_query_terms_runs_dense_only(
     assert all(isinstance(p.document_id, str) for p in passages)
 
 
+def test_search_round_trips_do_not_scale_with_candidate_count(
+    spec: SpecStar,
+    chunker: FixedTokenChunker,
+    embedder: HashEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Phase 3: the ranking tail — chunk hydration, chunk→doc resolution, and the
+    # doc path / quality / text joins — must BATCH its store reads instead of
+    # issuing one (or several) per candidate. So the number of store round trips
+    # stays ~flat as the candidate pool grows. The in-memory test backend makes
+    # per-candidate reads look free; on Postgres each is a network round trip, so
+    # an N+1 here is what a search pays after the bulk loads are gone.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    for i in range(30):
+        ing.ingest(
+            collection_id=cid,
+            user="u",
+            filename=f"d{i}.md",
+            data=f"reflow oven temperature zone {i} thermal profile solder paste stencil".encode(),
+        )
+
+    managers = [spec.get_resource_manager(DocChunk), spec.get_resource_manager(SourceDoc)]
+    # Capture the REAL methods once, so each measured run wraps the originals
+    # rather than stacking a wrapper on a wrapper.
+    originals = [(rm, rm.get, rm.list_resources) for rm in managers]
+
+    def trips(candidates: int) -> int:
+        counter = {"n": 0}
+
+        def counted(orig: object):
+            def call(*args: object, **kwargs: object) -> object:
+                counter["n"] += 1
+                return orig(*args, **kwargs)  # ty: ignore[call-non-callable]
+
+            return call
+
+        for rm, orig_get, orig_list in originals:
+            monkeypatch.setattr(rm, "get", counted(orig_get))
+            monkeypatch.setattr(rm, "list_resources", counted(orig_list))
+        Retriever(spec, embedder=embedder, candidates=candidates, top_k=5).search(
+            "reflow temperature profile", [cid]
+        )
+        return counter["n"]
+
+    few = trips(5)
+    many = trips(25)
+    # A 5× bigger candidate pool must not cost 5× the round trips.
+    assert many - few <= 5, (
+        f"store round trips grew {few} → {many} as candidates went 5 → 25 — "
+        "the ranking tail is issuing per-candidate queries instead of batching"
+    )
+
+
+def test_collection_of_only_orphaned_chunks_returns_no_passages(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104: when EVERY candidate is a true orphan (neither its content file_id nor
+    # its owner id resolves to a live doc), nothing is citable — the search returns
+    # an empty result rather than rendering uncitable passages, and never asks the
+    # store for the text of zero documents.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid, user="u", filename="ghost.md", data=b"reflow oven temperature zone three"
+    )
+    chrm = spec.get_resource_manager(DocChunk)
+    for r in chrm.list_resources((QB["collection_id"] == cid).build()):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        chrm.update(
+            r.info.resource_id,  # ty: ignore[unresolved-attribute]
+            msgspec.structs.replace(
+                chunk, source_doc_id="gone-doc", source_file_id="no-such-content"
+            ),
+        )
+
+    assert Retriever(spec, embedder=embedder).search("reflow temperature", [cid]) == []
+
+
 def test_search_drops_a_chunk_whose_source_doc_is_gone(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
@@ -711,3 +791,27 @@ def test_search_excludes_denied_docs(
     got = r.search("reflow temperature", [cid], exclude_doc_ids=frozenset({blocked}))
     assert got, "the non-excluded doc should still return passages"
     assert all(p.document_id != blocked for p in got)
+
+
+def test_doc_join_batch_loads_docs_outside_the_candidate_set(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # `_DocJoin` is built from the CANDIDATE chunks, but the attachment merge (#513
+    # P9) discovers parent docs only AFTER ranking — a parent whose own chunks never
+    # made the candidate cut is not in the join yet, so `load` batches it in. That
+    # end-to-end shape needs a parent that loses to its own attachment, which the
+    # hash embedder can't be made to produce reliably, so the contract is pinned
+    # directly: unknown ids are fetched, already-known ids cost nothing.
+    from workspace_app.kb.retriever import _DocJoin
+
+    cid = _ingest(spec, chunker, embedder, "a.md", "reflow oven temperature zone three")
+    doc_id = encode_doc_id(cid, "a.md")
+
+    join = _DocJoin(spec, [])  # built over no candidates — knows nothing yet
+    assert join.path_of(doc_id) is None
+
+    join.load([doc_id])
+    assert join.path_of(doc_id) == "a.md"
+
+    join.load([doc_id])  # already known — the no-op path, no second fetch
+    assert join.path_of(doc_id) == "a.md"

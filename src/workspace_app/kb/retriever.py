@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import posixpath
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import cast
 
@@ -197,6 +198,134 @@ def _saturate(x: float) -> float:
     this reason; smoothstep is the dependency-free stand-in."""
     x = max(0.0, min(1.0, x))
     return x * x * (3.0 - 2.0 * x)
+
+
+class _DocJoin:
+    """Batched SourceDoc joins for ONE search — the ranking tail's N+1 cure.
+
+    For every candidate chunk the tail needs three things: the chunk's RESOLVED
+    (content→canonical) doc id, that doc's display ``path``, and its
+    ``quality_score``. Resolved one chunk at a time that is several store round
+    trips PER CANDIDATE — free-looking on the in-memory backend, brutal over a
+    Postgres connection, and the dominant cost once the bulk loads are gone. This
+    resolves the whole candidate set up front in at most TWO queries and then
+    answers every lookup from memory.
+
+    Resolution is exactly the coalescing rule it replaces (#104): a chunk carrying a
+    content ``source_file_id`` resolves to the earliest-created live doc sharing
+    ``(collection_id, file_id)`` (``resource_id`` as the deterministic tiebreak); a
+    legacy chunk — or content whose docs are all gone — falls back to the chunk's own
+    ``source_doc_id``. A doc that no longer exists has no ``path``, and the caller
+    drops that hit as a true orphan.
+
+    Only small scalar fields are fetched, never ``text``: a doc's canonical text can
+    be megabytes and is needed only for the handful of docs that actually render
+    (:meth:`texts_for`, itself one batched query)."""
+
+    # Everything the tail reads off a SourceDoc except `text` (see above).
+    _META_FIELDS = ["/path", "/quality_score", "/collection_id", "/content/file_id"]
+
+    def __init__(self, spec: SpecStar, chunks: Iterable[DocChunk]) -> None:
+        self._spec = spec
+        chunk_list = list(chunks)
+        rm = spec.get_resource_manager(SourceDoc)
+        self._canonical: dict[tuple[str, str], str] = {}
+        self._path: dict[str, str] = {}
+        self._quality: dict[str, int | None] = {}
+
+        pairs = {(c.collection_id, c.source_file_id) for c in chunk_list if c.source_file_id}
+        if pairs:
+            # ONE query for every content key at once. `in_` × `in_` is a CROSS
+            # PRODUCT, so it can also return (collection, file_id) combinations no
+            # candidate asked for — harmless: resolution keys on the exact PAIR, so
+            # an unrequested combination lands under its own key and is never looked
+            # up (and identical content in two collections still resolves per
+            # collection, never bleeding across).
+            best: dict[tuple[str, str], tuple[float, str]] = {}
+            query = (
+                QB["collection_id"].in_(sorted({c for c, _ in pairs}))
+                & QB["file_id"].in_(sorted({f for _, f in pairs}))
+            ).build()
+            for r in rm.list_resources(query, returns=["data", "info"], partial=self._META_FIELDS):
+                rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+                doc = cast(SourceDoc, r.data)
+                self._remember(rid, doc)
+                key = (doc.collection_id, _content_file_id(doc))
+                stamp = (r.info.created_time.timestamp(), rid)  # ty: ignore[unresolved-attribute]
+                if key not in best or stamp < best[key]:
+                    best[key] = stamp
+                    self._canonical[key] = rid
+
+        # The fallback owners (legacy chunks, and content whose docs are all gone) —
+        # one more query so those resolve without a per-chunk point get either.
+        fallback = {c.source_doc_id for c in chunk_list if c.source_doc_id} - set(self._path)
+        if fallback:
+            query = QB.resource_id().in_(sorted(fallback)).build()
+            for r in rm.list_resources(query, returns=["data", "info"], partial=self._META_FIELDS):
+                self._remember(
+                    r.info.resource_id,  # ty: ignore[unresolved-attribute]
+                    cast(SourceDoc, r.data),
+                )
+
+    def _remember(self, resource_id: str, doc: SourceDoc) -> None:
+        self._path[resource_id] = doc.path
+        self._quality[resource_id] = doc.quality_score
+
+    def doc_id_for(self, chunk: DocChunk) -> str | None:
+        """The chunk's live SourceDoc id by CONTENT, falling back to its own
+        ``source_doc_id``; ``None`` when there is no id to try."""
+        if chunk.source_file_id:
+            canonical = self._canonical.get((chunk.collection_id, chunk.source_file_id))
+            if canonical is not None:
+                return canonical
+        return chunk.source_doc_id or None
+
+    def load(self, doc_ids: Iterable[str]) -> None:
+        """Batch-load metadata for docs OUTSIDE the candidate set — the attachment
+        parents (#513 P9), which are discovered only after ranking. One query for
+        the ids not already known; a no-op when they all are."""
+        missing = sorted(set(doc_ids) - set(self._path))
+        if not missing:
+            return
+        rm = self._spec.get_resource_manager(SourceDoc)
+        query = QB.resource_id().in_(missing).build()
+        for r in rm.list_resources(query, returns=["data", "info"], partial=self._META_FIELDS):
+            self._remember(
+                r.info.resource_id,  # ty: ignore[unresolved-attribute]
+                cast(SourceDoc, r.data),
+            )
+
+    def path_of(self, doc_id: str) -> str | None:
+        """The doc's stored path (the display filename's source), or ``None`` when
+        the doc is gone — never derived by parsing the opaque id."""
+        return self._path.get(doc_id)
+
+    def quality_of(self, doc_id: str) -> int | None:
+        """The doc's ``quality_score``; ``None`` = un-scored = neutral (#105)."""
+        return self._quality.get(doc_id)
+
+    def texts_for(self, doc_ids: Iterable[str]) -> dict[str, str]:
+        """Canonical text for the docs about to render, in ONE query. Chunk offsets
+        index into the parser's extracted ``text``, so that is the canonical source.
+        A legacy row with no stored ``text`` is omitted — the caller falls back to
+        the per-doc byte decode, rare enough to stay a point read."""
+        wanted = sorted(set(doc_ids))
+        if not wanted:
+            return {}
+        rm = self._spec.get_resource_manager(SourceDoc)
+        query = QB.resource_id().in_(wanted).build()
+        out: dict[str, str] = {}
+        for r in rm.list_resources(query, returns=["data", "info"], partial=["/text"]):
+            text = cast(SourceDoc, r.data).text
+            if text is not None:
+                out[r.info.resource_id] = text  # ty: ignore[unresolved-attribute]
+        return out
+
+
+def _content_file_id(doc: SourceDoc) -> str:
+    """A doc's content hash, or ``""`` when unset — the content key chunks join on."""
+    fid = getattr(doc.content, "file_id", None)
+    return fid if isinstance(fid, str) else ""
 
 
 def _chunk_vec(chunk: DocChunk) -> list[float]:
@@ -495,16 +624,22 @@ class Retriever:
             k=mmr_k,
         )
 
+        # Resolve every candidate's doc (id → path / quality) in two batched queries
+        # instead of several point reads per candidate — see `_DocJoin`.
+        join = _DocJoin(self._spec, cand_chunks.values())
+
         # #105: second-phase document-quality prior. Recall (RRF + MMR above) is
         # unchanged; this only re-scores the surviving candidates.
-        order, score_of = self._apply_quality_prior(order, cand_chunks, relevance, fused_score)
+        order, score_of = self._apply_quality_prior(
+            order, cand_chunks, relevance, fused_score, join
+        )
 
         # The display filename is the basename of the SourceDoc's stored path —
         # the id is opaque and must not be parsed for it.
         scored = []
         for cid in order:
-            doc_id = self._resolve_doc_id(cand_chunks[cid])
-            path = None if doc_id is None else self._doc_path(doc_id)
+            doc_id = join.doc_id_for(cand_chunks[cid])
+            path = None if doc_id is None else join.path_of(doc_id)
             if doc_id is None or path is None:
                 continue  # #104: true orphan (neither file_id nor owner resolves) — drop
             scored.append(
@@ -520,16 +655,18 @@ class Retriever:
                     provenance=cand_chunks[cid].provenance,
                 )
             )
-        # #328: for the overlay's shadowed doc, slice the re-parsed `virtual_text`
-        # (the offsets index into it) instead of the stale persisted SourceDoc.text.
-        if overlay is not None:
+        # One batched read for the texts the passages slice, rather than a get per
+        # rendered doc. A legacy row with no stored `text` falls through to the
+        # per-doc byte decode (`_canonical_text`), and #328's shadowed doc reads the
+        # re-parsed `virtual_text` its offsets index into.
+        texts = join.texts_for(c.document_id for c in scored)
 
-            def text_of(doc_id: str) -> str:
-                if doc_id == overlay.shadow_doc_id:
-                    return overlay.virtual_text
-                return self._canonical_text(doc_id)
-        else:
-            text_of = self._canonical_text
+        def text_of(doc_id: str) -> str:
+            if overlay is not None and doc_id == overlay.shadow_doc_id:
+                return overlay.virtual_text
+            cached = texts.get(doc_id)
+            return cached if cached is not None else self._canonical_text(doc_id)
+
         passages = merge_passages(scored, text_of=text_of)
         # Final LLM rerank over the merged passages — bool knob.
         if resolved.rerank:
@@ -540,9 +677,11 @@ class Retriever:
         logger.info("retriever: search complete, ranked=%d limit=%d", len(passages), limit)
         # #513 P9: pull in the parent of any attachment hit — AFTER the top_k cut,
         # so the parent context rides along without displacing a primary result.
-        return self._augment_with_parents(passages[:limit])
+        return self._augment_with_parents(passages[:limit], join)
 
-    def _augment_with_parents(self, passages: list[RetrievedPassage]) -> list[RetrievedPassage]:
+    def _augment_with_parents(
+        self, passages: list[RetrievedPassage], join: _DocJoin
+    ) -> list[RetrievedPassage]:
         """#513 P9 — attachment-aware parent merge. A hit on an attachment's chunk
         (often a thin image figure) is semantically thin on its own: the
         surrounding explanation lives in the PARENT document's text. So each
@@ -550,17 +689,32 @@ class Retriever:
         passage, inheriting the attachment's score so it sits alongside). Deduped:
         a parent already present — independently hit, or shared by two attachment
         hits — is never appended twice. Non-attachment passages are untouched, so
-        an attachment-free collection returns byte-for-byte the same list."""
+        an attachment-free collection returns byte-for-byte the same list.
+
+        One batched read resolves every passage's `parent_doc_id` (an
+        attachment-free collection stops right there), so this stays a fixed couple
+        of round trips rather than one per rendered passage."""
         present = {p.document_id for p in passages}
+        parents = self._parent_doc_ids([p.document_id for p in passages])
+        wanted = [
+            (p, parents[p.document_id])
+            for p in passages
+            if parents.get(p.document_id) and parents[p.document_id] not in present
+        ]
+        if not wanted:
+            return passages
+        # Reuses the search's join: a parent that was itself a candidate is already
+        # loaded, so this costs a query only for parents outside the candidate set.
+        join.load(pid for _, pid in wanted)
+        texts = join.texts_for(pid for _, pid in wanted)
         extra: list[RetrievedPassage] = []
-        for p in passages:
-            parent_id = self._parent_doc_id(p.document_id)
-            if not parent_id or parent_id in present:
+        for p, parent_id in wanted:
+            if parent_id in present:
+                continue  # a second attachment hit sharing the same parent
+            text = texts.get(parent_id)
+            path = join.path_of(parent_id)
+            if text is None or path is None:  # pragma: no cover — a live parent has both
                 continue
-            path = self._doc_path(parent_id)
-            if path is None:  # pragma: no cover — parent-of-live-attachment is live
-                continue
-            text = self._canonical_text(parent_id)
             extra.append(
                 RetrievedPassage(
                     collection_id=p.collection_id,
@@ -576,16 +730,18 @@ class Retriever:
             present.add(parent_id)
         return passages + extra
 
-    def _parent_doc_id(self, doc_id: str) -> str:
-        """The `parent_doc_id` of a doc — non-empty iff it is an attachment (#513
-        P7). ``""`` for a top-level doc or a doc that has since been deleted."""
+    def _parent_doc_ids(self, doc_ids: list[str]) -> dict[str, str]:
+        """``doc_id -> parent_doc_id`` for the given docs in ONE query — non-empty
+        iff the doc is an attachment (#513 P7). A doc that has since been deleted
+        simply doesn't come back, and reads as no parent."""
+        if not doc_ids:
+            return {}
         rm = self._spec.get_resource_manager(SourceDoc)
-        try:
-            doc = rm.get(doc_id).data
-        except ResourceIDNotFoundError:  # pragma: no cover — resolved id is live here
-            return ""
-        assert isinstance(doc, SourceDoc)
-        return doc.parent_doc_id
+        query = QB.resource_id().in_(sorted(set(doc_ids))).build()
+        out: dict[str, str] = {}
+        for r in rm.list_resources(query, returns=["data", "info"], partial=["/parent_doc_id"]):
+            out[r.info.resource_id] = cast(SourceDoc, r.data).parent_doc_id  # ty: ignore[unresolved-attribute]
+        return out
 
     def _apply_quality_prior(
         self,
@@ -593,6 +749,7 @@ class Retriever:
         chunks: dict[str, DocChunk],
         relevance: dict[str, float],
         fused_score: dict[str, float],
+        join: _DocJoin,
     ) -> tuple[list[str], dict[str, float]]:
         """#105 — fold each candidate's document-quality score into its final score
         as a **second-phase additive document prior**, the form the IR
@@ -620,17 +777,14 @@ class Retriever:
           byte-for-byte as before (the existing rank-based ``relevance``), so
           collections without a rubric are unaffected.
         """
-        cache: dict[str, int | None] = {}
 
         def q_of(cid: str) -> int | None:
             # #104: score by the chunk's RESOLVED (content→canonical) doc, so
-            # quality follows content exactly like citation resolution does.
-            doc_id = self._resolve_doc_id(chunks[cid])
-            if doc_id is None:
-                return None
-            if doc_id not in cache:
-                cache[doc_id] = self._doc_quality(doc_id)
-            return cache[doc_id]
+            # quality follows content exactly like citation resolution does. Both
+            # lookups are served from the batched `_DocJoin`, never a per-candidate
+            # store read.
+            doc_id = join.doc_id_for(chunks[cid])
+            return None if doc_id is None else join.quality_of(doc_id)
 
         if not any(q_of(cid) is not None for cid in order):
             return order, {cid: relevance[cid] for cid in order}
@@ -644,17 +798,6 @@ class Retriever:
             prior = 0.0 if q is None else self._quality_weight * (_saturate(q / 100.0) - 0.5)
             score_of[cid] = fused_score[cid] / norm + prior
         return order, score_of
-
-    def _doc_quality(self, doc_id: str) -> int | None:
-        """The doc's stored ``quality_score`` (``None`` = un-scored = neutral). A
-        deleted doc reads as un-scored."""
-        rm = self._spec.get_resource_manager(SourceDoc)
-        try:
-            doc = rm.get(doc_id).data
-        except ResourceIDNotFoundError:  # pragma: no cover — a candidate chunk's
-            return None  # doc was deleted mid-query (cascade keeps them in sync, so defensive)
-        assert isinstance(doc, SourceDoc)
-        return doc.quality_score
 
     def _dense(
         self,
@@ -829,19 +972,17 @@ class Retriever:
     def _hydrate_chunks(self, chunk_ids: list[str]) -> dict[str, DocChunk]:
         """The FULL chunk (metadata + vector) for each of the given fused-candidate
         ids — the ONLY chunks the ranking tail reads (MMR similarity, quality prior,
-        passage/citation metadata). A point read per id, so the normal path never
-        loads the whole collection: both text I/O (sparse corpus) and vector I/O
-        (this) scale with the candidate count, not collection size. An id whose chunk
-        vanished mid-query is skipped (a deleted chunk is dropped from the results)."""
+        passage/citation metadata). ONE batched read by id — not a point get per
+        candidate — so the normal path never loads the whole collection and its round
+        trips stay flat as the candidate pool grows. An id whose chunk vanished
+        mid-query simply doesn't come back (a deleted chunk is dropped from the
+        results)."""
         rm = self._spec.get_resource_manager(DocChunk)
         out: dict[str, DocChunk] = {}
-        for cid in chunk_ids:
-            try:
-                data = rm.get(cid).data
-            except ResourceIDNotFoundError:  # pragma: no cover — fused id came from a live query
-                continue
-            assert isinstance(data, DocChunk)  # a full point get, not a partial projection
-            out[cid] = data
+        for r in rm.list_resources(QB.resource_id().in_(sorted(set(chunk_ids))).build()):
+            data = r.data
+            assert isinstance(data, DocChunk)  # full records — MMR needs the vectors
+            out[r.info.resource_id] = data  # ty: ignore[unresolved-attribute]
         return out
 
     def _sparse_corpus(
@@ -878,25 +1019,6 @@ class Retriever:
                 out[r.info.resource_id] = cast(DocChunk, r.data).text  # ty: ignore[unresolved-attribute]
         return list(out.items())
 
-    def _resolve_doc_id(self, chunk: DocChunk) -> str | None:
-        """#104 P1 — resolve a chunk to its live SourceDoc id by CONTENT, not by a
-        single (deletable) ``source_doc_id``. A COALESCING resolver:
-
-        - When the chunk carries a content ``source_file_id``, return the
-          canonical doc sharing that content in the same collection (see
-          ``_canonical_doc_id``) — so a dangling / stale ``source_doc_id`` no
-          longer drops the hit while the content still lives at a real path.
-        - Legacy chunks predating #104 (``source_file_id == ""``), or content
-          whose docs are all gone, fall back to the chunk's own ``source_doc_id``.
-
-        Returns the resolved id (its liveness is confirmed by the caller's
-        ``_doc_path`` guard) or ``None`` only when there is no id to try."""
-        if chunk.source_file_id:
-            canon = self._canonical_doc_id(chunk.collection_id, chunk.source_file_id)
-            if canon is not None:
-                return canon
-        return chunk.source_doc_id or None
-
     def _doc_file_id(self, doc_id: str) -> str:
         """A doc's content hash (``content.file_id``), or ``""`` if the doc is
         gone / unset — used to match its content-addressed chunks (#104)."""
@@ -910,50 +1032,18 @@ class Retriever:
         fid = doc.content.file_id
         return fid if isinstance(fid, str) else ""
 
-    def _canonical_doc_id(self, collection_id: str, file_id: str) -> str | None:
-        """The canonical live SourceDoc for a piece of content in a collection:
-        the earliest-created doc sharing ``(collection_id, content.file_id)``,
-        ``resource_id`` as a deterministic tiebreak. ``None`` when the content
-        has no live doc (every path deleted) — the chunk is then a true orphan."""
-        rm = self._spec.get_resource_manager(SourceDoc)
-        best_id: str | None = None
-        best_key: tuple[float, str] | None = None
-        for r in rm.list_resources(
-            ((QB["collection_id"] == collection_id) & (QB["file_id"] == file_id)).build()
-        ):
-            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-            key = (r.info.created_time.timestamp(), rid)  # ty: ignore[unresolved-attribute]
-            if best_key is None or key < best_key:
-                best_key, best_id = key, rid
-        return best_id
-
-    def _doc_path(self, doc_id: str) -> str | None:
-        """The SourceDoc's stored path (a record field) — for the display
-        filename. Never derived by parsing the opaque id. Returns ``None`` when
-        the doc is gone: an ORPHAN chunk whose owner was deleted (#104 re-home
-        keeps source_doc_id valid, but defend in depth — a dangling ref must drop
-        the hit here, not crash the whole search)."""
-        rm = self._spec.get_resource_manager(SourceDoc)
-        try:
-            doc = rm.get(doc_id).data
-        except ResourceIDNotFoundError:
-            logger.debug("retriever: doc %s path unresolved (deleted), dropping hit", doc_id)
-            return None
-        assert isinstance(doc, SourceDoc)
-        return doc.path
-
     def _canonical_text(self, doc_id: str) -> str:
+        """The fallback for a doc the batched `texts_for` read could not serve: a
+        LEGACY row predating stored `text`, or one deleted mid-query. Chunk offsets
+        index into the parser's extracted text, so a row that HAS `text` is always
+        served by the batch and never reaches here."""
         rm = self._spec.get_resource_manager(SourceDoc)
         try:
             doc = rm.get(doc_id).data
         except ResourceIDNotFoundError:  # pragma: no cover — chunk implies its doc exists
             return ""
         assert isinstance(doc, SourceDoc)
-        # Chunk offsets index into the parser's extracted text (persisted on
-        # `doc.text`), so THAT is the canonical text — never the raw bytes.
-        # Decoding `content` for an image / pdf / docx yields binary garbage
-        # (U+FFFD) that would poison the LLM's context with gibberish (#114).
-        if doc.text is not None:
+        if doc.text is not None:  # pragma: no cover — the batch already served these
             return doc.text
         # Legacy rows predating stored `text`: decode the raw bytes only when
         # they are clean UTF-8 (a plain-text upload). A binary blob with no
