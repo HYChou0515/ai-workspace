@@ -278,24 +278,31 @@ async def test_close_app_item_schedules_background_promote():
             ],
         )
     )
-    resp = client.post(f"/a/rca/items/{item_id}/close", json={"status": "resolved"})
-    assert resp.status_code == 204
-    # Poll the background promote with a generous, bounded budget. The insight
-    # write runs on a fire-and-forget background task (now GC-safe — item_routes
-    # holds a strong ref, so it can no longer vanish mid-flight), but a sharded,
-    # heavily-loaded 2-core CI runner schedules that task's thread slowly, so the
-    # old 10s budget still flaked. 30s absorbs the scheduling latency, breaks
-    # early on success, and fails fast enough when the promote is genuinely broken.
-    for _ in range(600):
-        ids = [
-            r.info.resource_id  # ty: ignore[unresolved-attribute]
-            for r in spec.get_resource_manager(SourceDoc).list_resources(
-                (QB["collection_id"] == insights_cid).build()  # type: ignore[arg-type]
-            )
-        ]
-        if ids:
-            break
-        await asyncio.sleep(0.05)
+    # `with client:` is load-bearing, not tidiness. The insight write is a
+    # fire-and-forget background task on the APP's event loop, and a bare TestClient
+    # opens a portal per request and tears it down when the response returns — so the
+    # task only ever completes if it happens to finish inside the request. That is a
+    # race, and it is why this test flaked on loaded CI runners. Entering the client
+    # keeps one portal alive for the whole block, so the task keeps running while we
+    # poll and the wait below actually does something.
+    #
+    # Measured before this fix: the poll loop ran ZERO iterations — the promote always
+    # completed before the POST returned on an idle machine, so the "30s budget"
+    # absorbed nothing. It could not have helped under load either: with the loop torn
+    # down there is nothing left to make progress, however long you wait.
+    with client:
+        resp = client.post(f"/a/rca/items/{item_id}/close", json={"status": "resolved"})
+        assert resp.status_code == 204
+        for _ in range(600):  # ≤30s, breaks as soon as the insight lands
+            ids = [
+                r.info.resource_id  # ty: ignore[unresolved-attribute]
+                for r in spec.get_resource_manager(SourceDoc).list_resources(
+                    (QB["collection_id"] == insights_cid).build()  # type: ignore[arg-type]
+                )
+            ]
+            if ids:
+                break
+            await asyncio.sleep(0.05)
     assert ids, "expected the background promote to have written an insight"
 
 
