@@ -157,8 +157,8 @@ class WorkspaceFiles:
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         path = _norm(path)
-        await self._ensure_headroom(workspace_id, path, len(data))
         warm = await self._warm(workspace_id)
+        await self._ensure_headroom(workspace_id, path, len(data), warm)
         if warm is not None:
             sb, h = warm
             await sb.upload(h, data, path)
@@ -175,8 +175,8 @@ class WorkspaceFiles:
         serialises claimants there — the durable path is where cross-pod atomicity
         matters, and it has it."""
         path = _norm(path)
-        await self._ensure_headroom(workspace_id, path, len(data))
         warm = await self._warm(workspace_id)
+        await self._ensure_headroom(workspace_id, path, len(data), warm)
         if warm is not None:
             sb, h = warm
             if await sb.exists(h, path):
@@ -204,8 +204,8 @@ class WorkspaceFiles:
         # The streaming upload route also checks mid-stream so an over-quota body
         # is rejected before it's staged; this is the backstop that keeps the rule
         # true for any future caller that doesn't.
-        await self._ensure_headroom(workspace_id, path, source.stat().st_size)
         warm = await self._warm(workspace_id)
+        await self._ensure_headroom(workspace_id, path, source.stat().st_size, warm)
         if warm is not None:
             sb, h = warm
             await sb.upload_file(h, source, path)
@@ -253,7 +253,7 @@ class WorkspaceFiles:
         room to spare *and* grow without bound. A store without usage
         accounting (e.g. the wiki-page store) reports 0 — duck-typed like the
         CAS pair."""
-        tree = await self._live_tree(workspace_id)
+        tree = await self._live_tree(workspace_id, await self._warm(workspace_id))
         if tree is not None:
             return sum(tree.values())
         usage = getattr(self._fs, "workspace_usage", None)
@@ -265,20 +265,25 @@ class WorkspaceFiles:
         MUST come from the same source as `used`, or the two halves of the
         subtraction disagree and a warm-only file is charged twice."""
         path = _norm(path)
-        tree = await self._live_tree(workspace_id)
+        tree = await self._live_tree(workspace_id, await self._warm(workspace_id))
         if tree is not None:
             return tree.get(path)
         size = getattr(self._fs, "file_size", None)
         return await size(workspace_id, path) if size is not None else None
 
-    async def _live_tree(self, workspace_id: str) -> dict[str, int] | None:
+    async def _live_tree(
+        self, workspace_id: str, warm: tuple[Sandbox, SandboxHandle] | None
+    ) -> dict[str, int] | None:
         """``path → size`` for a WARM workspace, walked at most once per usage
         window; ``None`` when the workspace is cold (the caller falls back to the
         durable store). Holding the whole map rather than just the total is what
         lets a write patch the measurement in place instead of re-walking, and it
         makes the quota's two halves — the workspace total and the size being
-        overwritten — come from one consistent snapshot."""
-        warm = await self._warm(workspace_id)
+        overwritten — come from one consistent snapshot.
+
+        `warm` is passed in rather than resolved here so a gated write probes
+        sandbox liveness ONCE: the gate and the write that follows it share one
+        answer instead of each paying a round-trip."""
         if warm is None:
             self._tree.pop(workspace_id, None)  # went cold; don't serve stale sizes
             return None
@@ -310,7 +315,13 @@ class WorkspaceFiles:
         else:
             cached[1][path] = size
 
-    async def _ensure_headroom(self, workspace_id: str, path: str, new_size: int) -> None:
+    async def _ensure_headroom(
+        self,
+        workspace_id: str,
+        path: str,
+        new_size: int,
+        warm: tuple[Sandbox, SandboxHandle] | None,
+    ) -> None:
         """Refuse a write that would push the workspace past its quota (#538).
 
         The rule is about GROWTH, not about being over: a write that doesn't make
@@ -321,17 +332,19 @@ class WorkspaceFiles:
         tidy up are refused too. Deletes are never gated for the same reason."""
         if not self._quota:
             return
-        used, old = await self._usage_and_size(workspace_id, path)
+        used, old = await self._usage_and_size(workspace_id, path, warm)
         growth = new_size - old
         if growth > 0 and used + growth > self._quota:
             raise WorkspaceFull(used=used, quota=self._quota, attempted=new_size)
 
-    async def _usage_and_size(self, workspace_id: str, path: str) -> tuple[int, int]:
+    async def _usage_and_size(
+        self, workspace_id: str, path: str, warm: tuple[Sandbox, SandboxHandle] | None
+    ) -> tuple[int, int]:
         """``(workspace bytes, bytes at path)`` — the quota subtraction's two
         halves, from ONE measurement, so they can never disagree about whether a
         file counts."""
         path = _norm(path)
-        tree = await self._live_tree(workspace_id)
+        tree = await self._live_tree(workspace_id, warm)
         if tree is not None:
             return sum(tree.values()), tree.get(path, 0)
         used = await self.workspace_usage(workspace_id)
@@ -350,7 +363,7 @@ class WorkspaceFiles:
         next gated write is the one that gets refused."""
         if not quota:
             return None
-        used, old = await self._usage_and_size(workspace_id, path)
+        used, old = await self._usage_and_size(workspace_id, path, await self._warm(workspace_id))
         return quota - (used - old)
 
     async def delete(self, workspace_id: str, path: str) -> None:
@@ -511,7 +524,7 @@ class WorkspaceFiles:
             # so it needs the quota check of its own — otherwise "every write is
             # gated" would quietly stop being true for whichever store grows a
             # `write_cas`. Today only the (unquota'd) wiki store has one.
-            await self._ensure_headroom(workspace_id, path, len(updated))
+            await self._ensure_headroom(workspace_id, path, len(updated), None)
             applied = await write_cas(workspace_id, path, updated, etag)
             if applied:
                 return None

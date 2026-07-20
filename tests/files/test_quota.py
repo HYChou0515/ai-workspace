@@ -20,16 +20,41 @@ def _files() -> WorkspaceFiles:
 
 
 class _WalkCountingSandbox(MockSandbox):
-    """Counts `walk` calls, so a test can assert the quota re-measures on a
-    window boundary rather than on every question asked of it."""
+    """Counts `walk` calls and root liveness probes, so a test can assert the
+    quota re-measures on a window boundary rather than on every question asked
+    of it, and that gating a write doesn't double the probing it costs."""
 
     def __init__(self) -> None:
         super().__init__()
         self.walk_calls = 0
+        self.liveness_probes = 0
 
     async def walk(self, handle: SandboxHandle, root: str):  # type: ignore[no-untyped-def]
         self.walk_calls += 1
         return await super().walk(handle, root)
+
+    async def exists(self, handle: SandboxHandle, path: str) -> bool:
+        if path == "/":  # WorkspaceFiles._warm's liveness probe
+            self.liveness_probes += 1
+        return await super().exists(handle, path)
+
+
+async def test_gating_a_write_costs_one_liveness_probe_not_two():
+    # The gate has to know whether the workspace is warm, and so does the write
+    # that follows it. Resolving that twice would put an extra sandbox
+    # round-trip on every single write — invisible on the mock, a real cost
+    # against the hosted (http) sandbox.
+    fs = MemoryFileStore()
+    sb = _WalkCountingSandbox()
+    handle = await sb.create(SandboxSpec())
+
+    async def _resolve(_ws: str) -> SandboxHandle:
+        return handle
+
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, quota=1000)
+    sb.liveness_probes = 0
+    await files.write("ws1", "/a", b"x" * 10)
+    assert sb.liveness_probes == 1
 
 
 async def test_usage_is_remeasured_once_per_window_not_once_per_question():
