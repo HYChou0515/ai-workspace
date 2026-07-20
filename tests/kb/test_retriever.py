@@ -129,9 +129,9 @@ def test_sparse_corpus_is_capped_when_a_common_term_matches_everything(
     monkeypatch.setattr(rm, "list_resources", counting_list)
 
     cap = 20
-    Retriever(
-        spec, embedder=embedder, candidates=5, top_k=3, sparse_corpus_cap=cap
-    ).search("reflow oven temperature profile", [cid])
+    Retriever(spec, embedder=embedder, candidates=5, top_k=3, sparse_corpus_cap=cap).search(
+        "reflow oven temperature profile", [cid]
+    )
 
     # Bounded by the cap (plus the small fused hydration), NOT by the >60 chunks
     # that all match the query's common terms.
