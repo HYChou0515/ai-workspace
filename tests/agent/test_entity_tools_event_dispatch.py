@@ -26,6 +26,7 @@ from workspace_app.agent import (
     update_entity_impl,
 )
 from workspace_app.entity.events import EntityOrigin, EntityWriteEvent
+from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.event_dispatch import EventTriggerDispatcher, IEventWatermark
 from workspace_app.workflow.triggers import EventTrigger, trigger_key
@@ -66,6 +67,7 @@ async def _ctx(
         AgentToolContext(
             investigation_id="ws",
             filestore=fs,
+            files=WorkspaceFiles(fs),
             acting_user="alice",
             entity_write_sink=sink,
             entity_write_origin=origin,

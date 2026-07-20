@@ -43,6 +43,7 @@ from workspace_app.api.litellm_runner import (
     classify_retry_event,
     diagnose_error,
 )
+from workspace_app.files import WorkspaceFiles
 from workspace_app.resources import AgentConfig, make_spec
 
 
@@ -877,6 +878,7 @@ def _ctx() -> AgentToolContext:
         agent_config=AgentConfig(name="t"),
         sandbox=sandbox,
         filestore=filestore,
+        files=WorkspaceFiles(filestore),
         sync=SandboxSync(filestore=filestore, sandbox=sandbox),
     )
 
@@ -990,6 +992,7 @@ async def test_live_run_against_ollama_emits_at_least_one_event():
         agent_config=AgentConfig(name="workspace-agent"),
         sandbox=sandbox,
         filestore=filestore,
+        files=WorkspaceFiles(filestore),
         sync=SandboxSync(filestore=filestore, sandbox=sandbox),
     )
     runner = LitellmAgentRunner()

@@ -68,9 +68,15 @@ def _workspace(ctx: RunContextWrapper[AgentToolContext]) -> tuple[WorkspaceFiles
     caller didn't inject a facade, wrap the bare filestore (transitional)."""
     inv = ctx.context.investigation_id
     files = ctx.context.files
-    if files is None:
-        assert ctx.context.filestore is not None  # file tools imply an RCA context
-        files = WorkspaceFiles(ctx.context.filestore)
+    # #538: NOT a fallback to `WorkspaceFiles(ctx.context.filestore)`. That
+    # facade would carry no quota and no sandbox, so every write through it
+    # would bypass the workspace cap and land straight in the durable store.
+    # Every production context injects the app's one gated facade; a context
+    # that reaches a file tool without it is a wiring bug, and failing here is
+    # how it stays a bug instead of becoming a hole. `files` stays optional on
+    # the context itself because the retrieval-only contexts (wiki chunk/merge,
+    # the card drafter) legitimately have no file tools at all.
+    assert files is not None
     assert inv is not None
     return files, inv
 
