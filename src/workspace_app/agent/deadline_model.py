@@ -9,10 +9,21 @@ went quiet (a busy Ollama is the common case here), the turn waited forever. No
 event was emitted, nothing was persisted, and there is no turn watchdog — the
 user got a spinner and a climbing counter with no way to learn why.
 
-``DeadlineModel`` is the orthogonal piece: the same two bounds, applied to any
-model, with none of failover's switching / cooldown / retry semantics. Exceeding
-one raises, which the runner already turns into a terminal error event plus a
+``DeadlineModel`` is the orthogonal piece: a give-up bound applied to any model,
+with none of failover's switching / cooldown / retry semantics. Exceeding it
+raises, which the runner already turns into a terminal error event plus a
 persisted error message — so the turn ENDS and says so.
+
+The bound here is deliberately NOT ``ttft_timeout_s``. That 8s figure is a
+SWITCHING signal — "this endpoint is busy, try the next one" — which is cheap and
+recoverable only when there IS a next one. With a single endpoint there is
+nowhere to switch, so reusing it would just kill turns for being slow: measured
+call latency on this deploy is a 14.7s median and a 28.5s p90, and a long blank
+window is usually the provider being busy, not dead. Being slow is not being
+dead. What always has to exist is the give-up bound —
+``total_deadline_s`` ("caps the whole turn so it fails readably instead of
+hanging forever") — so a turn that produced NOTHING for that long ends and says
+why, rather than hanging silently for an hour.
 
 The exception types are failover's (``TtftTimeout`` / ``StreamStalled``) on
 purpose: a stall means the same thing to everything downstream regardless of
@@ -31,8 +42,12 @@ from ..failover.core import StreamStalled, TtftTimeout
 
 
 class DeadlineModel(Model):
-    """Wrap ``inner`` so its stream must produce a first event within ``ttft_s``
-    and never go quiet for longer than ``idle_s``.
+    """Wrap ``inner`` so its stream must produce a first event within
+    ``first_event_s`` and never go quiet for longer than ``idle_s``.
+
+    ``first_event_s`` is a GIVE-UP bound, not a switching one — pass the turn
+    deadline, never the (much shorter) failover ttft. ``idle_s`` is the genuine
+    death signal: output started and then stopped.
 
     A non-positive bound disables that bound, so an operator can opt out of
     either without the wiring changing shape. A stream that finishes without
@@ -40,9 +55,9 @@ class DeadlineModel(Model):
     ``FallbackModel``.
     """
 
-    def __init__(self, inner: Model, *, ttft_s: float, idle_s: float) -> None:
+    def __init__(self, inner: Model, *, first_event_s: float, idle_s: float) -> None:
         self._inner = inner
-        self._ttft_s = ttft_s
+        self._first_event_s = first_event_s
         self._idle_s = idle_s
 
     def __getattr__(self, name: str) -> Any:
@@ -58,11 +73,11 @@ class DeadlineModel(Model):
         it = stream.__aiter__()
         try:
             try:
-                first = await self._next(it, self._ttft_s)
+                first = await self._next(it, self._first_event_s)
             except StopAsyncIteration:
                 return  # empty stream — a finish, not a stall
             except TimeoutError as exc:
-                raise TtftTimeout(f"no first token within {self._ttft_s}s") from exc
+                raise TtftTimeout(f"no output at all within {self._first_event_s}s") from exc
             yield first
             while True:
                 try:

@@ -440,17 +440,23 @@ def _agent_for(
         )
     else:
         model = _build_model(config.model, eff_base_url, eff_api_key)
-        # #493: a turn must always end. FallbackModel carries the ttft/idle
-        # deadlines, but it is only built for a chain of two or more endpoints —
-        # so the DEFAULT single-endpoint deploy had no bound at all, and a
-        # provider that accepted the request then went quiet hung the turn
-        # forever with no event, nothing persisted and no watchdog. Apply the
-        # same two bounds here, without failover's switching/cooldown semantics.
+        # #493: a turn must always end. FallbackModel carries deadlines, but it
+        # is only built for a chain of two or more endpoints — so the DEFAULT
+        # single-endpoint deploy had no bound at all, and a provider that
+        # accepted the request then went quiet hung the turn forever with no
+        # event, nothing persisted and no watchdog.
+        #
+        # The first-event bound is the turn GIVE-UP deadline, NOT the failover
+        # ttft: 8s is a "this endpoint is busy, switch" signal, and with a single
+        # endpoint there is nowhere to switch, so applying it would only kill
+        # turns for being slow (14.7s median / 28.5s p90 on this deploy). Slow is
+        # not dead. `idle_s` stays the real death signal — output started, then
+        # stopped.
         if stream_deadlines is not None:
             from ..agent.deadline_model import DeadlineModel
 
-            ttft_s, idle_s = stream_deadlines
-            model = DeadlineModel(model, ttft_s=ttft_s, idle_s=idle_s)
+            give_up_s, idle_s = stream_deadlines
+            model = DeadlineModel(model, first_event_s=give_up_s, idle_s=idle_s)
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,
@@ -750,9 +756,10 @@ class LitellmAgentRunner:
         # #196 busy-aware failover (None when no preset declares fallbacks).
         self._fallback_chains = fallback_chains
         self._cooldown_registry = cooldown_registry
-        # #493 (ttft_s, idle_s) applied to a SINGLE-endpoint turn, so a provider
-        # that goes quiet ends the turn with a real error instead of hanging it
-        # forever. The failover path carries its own copies of these. None = no
+        # #493 (give_up_s, idle_s) for a SINGLE-endpoint turn, so a provider that
+        # goes quiet ends the turn with a real error instead of hanging forever.
+        # `give_up_s` is the turn deadline, NOT the failover ttft — see the note
+        # at the wiring site. The failover path carries its own bounds. None = no
         # bound (what every deploy without `fallbacks:` used to get).
         self._stream_deadlines = stream_deadlines
 
