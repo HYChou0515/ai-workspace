@@ -1,0 +1,38 @@
+# #535: nightly retrieval-quality eval. Enqueues ONE dispatch EvalJob via the
+# API's specstar auto route; the EvalCoordinator fans it out (dispatch → split →
+# batch → finalize) and the eval worker (workers.yaml: rca-worker-eval) drains
+# it, writing one EvalResult per collection. That is the "did retrieval get
+# better / regress" baseline for #533 / #534 — read it at GET /api/eval-result.
+#
+# Requirements: a KB LLM must be wired (question generation) so the coordinator +
+# route exist, and the eval worker (or an all-in-one API with RUN_CONSUMERS=true)
+# must be consuming the `eval` JobType.
+#
+# Tune: `schedule` (cron, UTC — e.g. "0 2 * * 6" for Saturdays only), the
+# `sample_size`, and the `run_label`. Auth: this POSTs unauthenticated to the
+# in-cluster ClusterIP service; if the deploy gates the create route, add the
+# appropriate auth header to the curl below.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: rca-eval-nightly
+spec:
+  schedule: "0 2 * * *" # 02:00 UTC daily
+  concurrencyPolicy: Forbid # never overlap two eval runs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: enqueue
+              image: curlimages/curl:8.11.1
+              command: ["sh", "-c"]
+              args:
+                - >
+                  curl -fsS -X POST http://rca-app/api/eval-job
+                  -H 'Content-Type: application/json'
+                  -d "{\"payload\":{\"kind\":\"dispatch\",\"run_label\":\"$(date +%F)\",\"sample_size\":300}}"
