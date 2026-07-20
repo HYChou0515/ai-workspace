@@ -9,4 +9,5 @@ resources:
   - service.yaml
   - deployment.yaml
   - workers.yaml # #312: per-JobType job-worker Deployments + HPAs
+  - cronjob-eval.yaml # #535: nightly retrieval-quality eval trigger
   - ingress.yaml

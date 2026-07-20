@@ -222,3 +222,45 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: rca-data
+---
+# ── retrieval-eval baseline (#535): drains the EvalJob fan-out (dispatch →
+#    split → batch → finalize). Enqueued nightly by the eval CronJob
+#    (cronjob-eval.yaml), so it is idle between runs — fixed 1 replica, no HPA,
+#    like the sanity battery. Needs a KB LLM wired (question generation) and the
+#    SHARED Postgres backend so it sees the same queue as the API producer. ────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-eval
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-eval
+  template:
+    metadata:
+      labels:
+        app: rca-worker-eval
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "eval"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data

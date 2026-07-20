@@ -513,3 +513,55 @@ pnpm run dev          # 開發伺服器（5173，proxy 後端）
 pnpm run build        # 打包 web/dist（後端自動掛載）
 pnpm run typecheck
 ```
+
+---
+
+## 13. 檢索品質 eval 排程（#535）
+
+一套**離線、零 domain knowledge** 的檢索品質量測：從每個 collection 抽樣 chunk，用 LLM
+反向生一個「這段能回答的問題」（Promptagator），丟進**現況** retriever，量原本那個 chunk
+有沒有回到 top-k（`recall@k` / `MRR`）。語料本身就是標準答案——不需要人工標註。它是
+KG（#534）/ enrichment（#533）動工前的 **baseline**：之後任何改動有沒有變好、有沒有回歸，
+都靠這個數字。
+
+運作方式是一條 specstar fan-out job（`dispatch → split → batch → finalize`，同 #227 索引
+fan-out），結果寫成 `EvalResult` resource，multipod-safe（數字在 DB，不是某個 pod 的 stdout）。
+
+### 前提
+
+- **要設定 KB LLM**（`kb_llm`）——問題生成需要它；沒有就不會建 eval coordinator，`/api/eval-job`
+  route 也不存在。
+- **要有東西在消費 `eval` JobType**：
+  - all-in-one（`RUN_CONSUMERS=true`）→ API 進程自己消費，不用另起 pod；
+  - split 部署（`RUN_CONSUMERS=false`）→ 用 `kubernetes/base/workers.yaml` 裡的
+    **`rca-worker-eval`**（`python -m workspace_app.worker eval`）。
+- split 部署需**共用 Postgres backend**（producer 與 worker 看到同一個 queue）。
+
+### 觸發一輪
+
+k8s 定時觸發由 **`kubernetes/base/cronjob-eval.yaml`** 的 CronJob（`rca-eval-nightly`）負責——
+每晚 `POST /api/eval-job` 送一個 dispatch job：
+
+```bash
+curl -fsS -X POST http://rca-app/api/eval-job \
+  -H 'Content-Type: application/json' \
+  -d '{"payload":{"kind":"dispatch","run_label":"'"$(date +%F)"'","sample_size":300}}'
+```
+
+送出後自動 fan-out（拉所有 collection → 抽樣 → 分批算分 → 彙總），**每個 collection 寫一份**
+`EvalResult`。手動測一輪就是直接跑上面這個 `curl`（要有 worker/all-in-one 在消費）。
+
+> 排程與樣本可調：CronJob 的 `schedule`（cron，UTC；例如 `0 2 * * 6` 只在週六跑）、`sample_size`、
+> `run_label`。若部署對 create route 有鎖權限，在該 `curl` 補上對應的驗證 header。
+
+### 看結果
+
+specstar 自帶 CRUD route，不需自訂 endpoint：
+
+```
+GET /api/eval-result                       # 列全部
+GET /api/eval-result?qb=...                # 依 collection_id / run_label 過濾
+GET /api/eval-result/{id}                  # 單筆（含 recall@{1,3,5,10} + MRR，chunk 與 doc 兩級）
+```
+
+`run_label` 保留歷史，所以同一 collection 不同日期的數字可以直接比較看趨勢。
