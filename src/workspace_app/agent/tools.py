@@ -19,6 +19,7 @@ from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
+from .output_cap import cap_tool_outputs, truncate_middle
 from .tool_authz import authorize_tool
 
 if TYPE_CHECKING:
@@ -27,33 +28,9 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 
 
-def _truncate_middle(text: str, max_chars: int) -> str:
-    """Cap `text` at `max_chars` keeping the HEAD and the TAIL (issue #44).
-
-    A `grep`/log dump's useful bits cluster at both ends — the first
-    matches up top, the count / error / summary at the bottom — so a
-    head-only cut throws away the punchline. We keep ~2/3 of the budget
-    for the head, ~1/3 for the tail, trim each to a line boundary, and
-    drop a marker in between that tells the agent to narrow its command.
-    """
-    if len(text) <= max_chars:
-        return text
-    head_budget = max_chars * 2 // 3
-    tail_budget = max_chars - head_budget
-    head = text[:head_budget]
-    nl = head.rfind("\n")
-    if nl > 0:  # cut on a line boundary so we don't split a line mid-token
-        head = head[:nl]
-    tail = text[len(text) - tail_budget :]
-    nl = tail.find("\n")
-    if nl != -1:
-        tail = tail[nl + 1 :]
-    omitted = len(text) - len(head) - len(tail)
-    marker = (
-        f"\n\n… [{omitted} chars omitted — narrow the command "
-        f"(e.g. grep/head/tail/wc) to see the part you need] …\n\n"
-    )
-    return head + marker + tail
+# The head+tail truncator lives with the toolset-wide ceiling now (#44 kept its
+# shape; `output_cap` owns it so the backstop and the per-tool caps cut alike).
+_truncate_middle = truncate_middle
 
 
 def _format_exec(
@@ -1947,7 +1924,8 @@ def build_tools(
                     _guard_workspace_full(_IMPLS["read_skill"]), name_override="read_skill"
                 )
             )
-    return tools
+    # Nothing leaves here without a ceiling on what it can put in the context.
+    return cap_tool_outputs(tools)
 
 
 def _declared_shared_skills(app_slug: str) -> list[str]:

@@ -33,6 +33,7 @@ from agents import FunctionTool
 from agents.tool_context import ToolContext
 
 from ..agent.context import AgentToolContext
+from ..agent.output_cap import cap_tool_outputs
 from ..agent.plot_review import run_review
 from ..agent.tools import _exec_result_text
 from ..sandbox.protocol import ExecResult, SandboxHandle
@@ -170,7 +171,10 @@ def build_function_tools(
         selected = _select_commands(packages, allowed)
     _check_collisions(selected)
     logger.debug("registry: %d function tool(s) selected (allowed=%s)", len(selected), allowed)
-    return [_to_function_tool(pkg, cmd) for pkg, cmd in selected]
+    # The same ceiling the built-ins get: a package command's stdout already
+    # goes through `_exec_result_text`, but nothing structurally stops a future
+    # command from answering with something bigger by another route.
+    return cap_tool_outputs([_to_function_tool(pkg, cmd) for pkg, cmd in selected])
 
 
 def _select_commands(
