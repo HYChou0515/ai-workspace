@@ -3,6 +3,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { AgentEvent } from "../events";
+import { HttpError } from "../api/http";
 import type { ItemChat, ItemChatApi } from "../api/itemChats";
 import { QueryWrap } from "../test/queryWrapper";
 import { useItemChat } from "./useItemChat";
@@ -217,5 +218,86 @@ describe("useItemChat", () => {
         ),
       ).toBe(true),
     );
+  });
+});
+
+/**
+ * These two behaviours existed only in `useAgent` (#493). `useItemChat` is its
+ * twin — same broadcast transport, same state machine — but the fixes never
+ * crossed over, so a WorkItem chat went permanently deaf on one dropped stream
+ * and showed a hard error for a gateway cut that hadn't actually failed the turn.
+ * They are the reason the two hooks are being merged rather than kept in sync
+ * by hand.
+ */
+describe("useItemChat — recovery parity with useAgent (#493)", () => {
+  it("auto-reconnects and re-hydrates after the stream drops", async () => {
+    let subCalls = 0;
+    const recovered = {
+      ...CHAT,
+      messages: [
+        { role: "user" as const, content: "q" },
+        { role: "assistant" as const, content: "recovered after reconnect" },
+      ],
+    };
+    const client = fakeClient({
+      // eslint-disable-next-line require-yield
+      subscribe: async function* () {
+        subCalls += 1;
+        if (subCalls === 1) throw new Error("stream failed: 504"); // first stream drops
+        await new Promise(() => {}); // the reconnected stream stays open
+      },
+      getChat: vi
+        .fn()
+        .mockResolvedValueOnce({ ...CHAT, messages: [{ role: "user", content: "q" }] })
+        .mockResolvedValue(recovered),
+    });
+
+    const { result } = render(client);
+
+    await waitFor(() => expect(subCalls).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await waitFor(() =>
+      expect(
+        result.current.log.entries.some(
+          (e) => e.kind === "message" && e.message.content.includes("recovered after reconnect"),
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("a 504 on send does not fail the turn — it stays streaming", async () => {
+    const client = fakeClient({
+      getChat: vi
+        .fn()
+        .mockResolvedValue({ ...CHAT, messages: [{ role: "user", content: "earlier" }] }),
+      // The gateway cut the POST; the turn may well be running server-side.
+      sendMessage: vi.fn().mockRejectedValue(new HttpError(504, "send failed: 504")),
+    });
+
+    const { result } = render(client);
+    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0));
+    await act(async () => {
+      await result.current.send("q");
+    });
+
+    expect(result.current.log.streaming).toBe(true);
+    expect(result.current.log.error).toBeNull();
+  });
+
+  it("a non-gateway send error surfaces as a turn error", async () => {
+    const client = fakeClient({
+      getChat: vi
+        .fn()
+        .mockResolvedValue({ ...CHAT, messages: [{ role: "user", content: "earlier" }] }),
+      sendMessage: vi.fn().mockRejectedValue(new HttpError(403, "send failed: 403")),
+    });
+
+    const { result } = render(client);
+    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0));
+    await act(async () => {
+      await result.current.send("q");
+    });
+
+    expect(result.current.log.streaming).toBe(false);
+    expect(result.current.log.error).toContain("403");
   });
 });

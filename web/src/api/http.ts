@@ -19,3 +19,23 @@ export const API_PREFIX = `${API_BASE}/api`;
 export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(API_PREFIX + path, init);
 }
+
+/**
+ * A failed backend response, carrying its HTTP status.
+ *
+ * The status is load-bearing, not decoration: the chat send path treats
+ * 502/503/504 as "an idle gateway cut the request while the turn keeps running"
+ * and stays in the streaming state so the stream / store-poll can still surface
+ * the reply. A client that throws a bare `Error` silently opts out of that —
+ * which is how the WorkItem chat came to show a hard "send failed: 504" while
+ * the answer streamed in underneath it. Every client throws this one.
+ */
+export class HttpError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HttpError";
+  }
+}

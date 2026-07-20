@@ -370,6 +370,16 @@ def get_runner(settings: Settings) -> AgentRunner:
         api_key=settings.llm.api_key or None,
         fallback_chains=chains or None,
         cooldown_registry=get_cooldown_registry() if chains else None,
+        # #493: bounds used to exist ONLY inside a >=2-endpoint FallbackModel, so
+        # the default single-endpoint deploy had none and a silent provider hung
+        # the turn indefinitely. The first-event bound is `total_deadline_s` (the
+        # declared "fail readably instead of hanging forever" budget), NOT
+        # `ttft_timeout_s` — that 8s is a SWITCH signal and there is nothing to
+        # switch to here, so it would only kill turns for being slow.
+        stream_deadlines=(
+            settings.failover.total_deadline_s,
+            settings.failover.idle_timeout_s,
+        ),
         token_service=PassthroughTokenService(),
     )
 

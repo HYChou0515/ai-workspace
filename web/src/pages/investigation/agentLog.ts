@@ -132,6 +132,58 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
   return { entries, streaming: false, error: null, metrics: null, failover: null, restore: null };
 }
 
+/** Entries that carry the conversation itself — the ones the backend persists.
+ * `step` / `phase` / live banners are stream-only chrome and are deliberately
+ * NOT counted, so their presence can't disguise a store that is behind. */
+const CONTENT_KINDS = new Set(["message", "tool_call", "mention"]);
+
+const contentCount = (entries: readonly AgentEntry[]) =>
+  entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;
+
+/**
+ * Fold a persisted thread into the live log WITHOUT deleting what only the
+ * stream knows.
+ *
+ * A turn is persisted ONCE, at its end, so mid-turn the stored thread holds
+ * nothing of the answer being streamed. Replacing the log with it — which every
+ * re-hydrate used to do — therefore deleted exactly what the user was reading.
+ * That is the "the response disappears" report, and it bites hardest on a STUCK
+ * turn: a long silence is precisely when a connection gets cut and a re-hydrate
+ * runs. The same wholesale replace also nulled `error` and dropped the
+ * cancelled / max-turns / repetition banners, so the explanation for why a turn
+ * stopped survived about one frame.
+ *
+ * Two rules:
+ *  - the store wins only once it has caught up (it is authoritative for a
+ *    FINISHED turn — it alone carries the BE-attached citations);
+ *  - state the store cannot express — the turn error and stream-only banners —
+ *    is carried across either way.
+ *
+ * Use {@link logFromMessages} directly only where a smaller thread is the POINT
+ * (initial hydration, undo).
+ */
+export function reconcileSnapshot(
+  prev: AgentLog,
+  thread: { messages: readonly Message[] },
+): AgentLog {
+  const snap = logFromMessages(thread.messages);
+  // The store is behind: keep the screen, and let a later event or poll settle it.
+  if (contentCount(snap.entries) < contentCount(prev.entries)) {
+    return { ...prev, error: prev.error };
+  }
+  // Re-attach stream-only banners the persisted thread has no way to hold.
+  const carried = prev.entries.filter(
+    (e) =>
+      e.kind === "banner" &&
+      !snap.entries.some((s) => s.kind === "banner" && s.text === e.text),
+  );
+  return {
+    ...snap,
+    entries: [...snap.entries, ...carried],
+    error: prev.error ?? snap.error,
+  };
+}
+
 /** How many whole turns to undo to remove everything from `entries[index]`
  * onward (issue #38) = the count of user-prompt entries at or after it. A
  * turn is delimited by a user message; this matches the BE's turn-count

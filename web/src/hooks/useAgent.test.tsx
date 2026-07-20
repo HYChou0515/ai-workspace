@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 
 import { api } from "../api";
 import { QueryWrap } from "../test/queryWrapper";
-import { useAgentInternal } from "./useAgent";
+import { AgentProvider, useAgent, useAgentInternal } from "./useAgent";
 import { WorkspaceSlugProvider } from "./useWorkspaceSlug";
 
 const Wrap = ({ children }: { children: ReactNode }) => (
@@ -217,5 +217,68 @@ describe("useAgent — stop / cancel (#49)", () => {
         (e) => e.kind === "message" && e.message.content === "kept",
       ),
     ).toBe(true);
+  });
+});
+
+/** The context wrapper + the transport's mention leg — the parts `useAgentInternal`
+ * tests never reach, since they call the hook directly. */
+describe("useAgent — provider + mention", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("throws a directed error when used outside its provider", () => {
+    // Rendering with no <AgentProvider> is a wiring mistake; failing loudly with
+    // the fix in the message beats a null-deref deep in a panel.
+    expect(() => rtlRenderHook(() => useAgent())).toThrow(/inside <AgentProvider>/);
+  });
+
+  it("exposes the same session through the provider", async () => {
+    vi.spyOn(api, "getCurrentUser").mockResolvedValue("tester");
+    vi.spyOn(api, "getConversation").mockResolvedValue({
+      resource_id: "c",
+      investigation_id: "inv-p",
+      messages: [{ role: "user", content: "seed" }],
+    });
+    vi.spyOn(api, "subscribeInvestigation").mockImplementation(
+      // eslint-disable-next-line require-yield
+      async function* () {
+        await new Promise(() => {});
+      },
+    );
+    const { result } = rtlRenderHook(() => useAgent(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <Wrap>
+          <AgentProvider investigationId="inv-p">{children}</AgentProvider>
+        </Wrap>
+      ),
+    });
+    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0));
+    expect(result.current.investigationId).toBe("inv-p");
+  });
+
+  it("mention notifies the item and adds an optimistic entry", async () => {
+    vi.spyOn(api, "getCurrentUser").mockResolvedValue("tester");
+    vi.spyOn(api, "getConversation").mockResolvedValue({
+      resource_id: "c",
+      investigation_id: "inv-m",
+      // Seeded so the test can wait for hydration to land first: a hydrate that
+      // arrives AFTER the mention would replace the log and drop the optimistic
+      // entry (which is what the real app avoids by hydrating on mount).
+      messages: [{ role: "user", content: "seed" }],
+    });
+    vi.spyOn(api, "subscribeInvestigation").mockImplementation(
+      // eslint-disable-next-line require-yield
+      async function* () {
+        await new Promise(() => {});
+      },
+    );
+    const spy = vi.spyOn(api, "addMention").mockResolvedValue(undefined);
+
+    const { result } = renderHook(() => useAgentInternal("inv-m"));
+    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0));
+    await act(async () => {
+      await result.current.mention(["bob"], "come look");
+    });
+    expect(spy).toHaveBeenCalledWith("rca", "inv-m", ["bob"], "come look");
+    expect(result.current.log.entries.some((e) => e.kind === "mention")).toBe(true);
   });
 });

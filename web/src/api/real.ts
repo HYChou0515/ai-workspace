@@ -14,7 +14,7 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { API_PREFIX, apiFetch } from "./http";
+import { API_PREFIX, apiFetch, HttpError } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -85,13 +85,6 @@ function toQuery(params?: SearchParams): string {
   }
   const s = sp.toString();
   return s ? `?${s}` : "";
-}
-
-class HttpError extends Error {
-  constructor(public status: number, message: string) {
-    super(message);
-    this.name = "HttpError";
-  }
 }
 
 function encodePath(path: string): string {

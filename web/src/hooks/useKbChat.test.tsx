@@ -119,3 +119,46 @@ describe("useKbChat", () => {
     spy.mockRestore();
   });
 });
+
+describe("useKbChat — send failure", () => {
+  beforeEach(() => _resetKbMock());
+
+  // A failing stream must land in the log as a turn error. Swallowing it leaves
+  // the composer unlocked with no explanation, which is indistinguishable from
+  // "the model had nothing to say".
+  it("surfaces a stream failure as a turn error and unlocks the composer", async () => {
+    const client = {
+      ...mockKbApi,
+      createChat: vi.fn().mockResolvedValue({ resource_id: "kb-1" }),
+      streamMessage: async function* () {
+        throw new Error("stream failed: 503");
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() => useKbChat({ collectionIds: ["c1"], client }));
+    await act(async () => {
+      await result.current.send("q");
+    });
+
+    expect(result.current.log.error).toContain("503");
+    expect(result.current.log.streaming).toBe(false);
+  });
+
+  // An abort is the user pressing Stop or navigating away — not a failure.
+  it("treats an abort as a cancellation, not an error", async () => {
+    const client = {
+      ...mockKbApi,
+      createChat: vi.fn().mockResolvedValue({ resource_id: "kb-2" }),
+      streamMessage: async function* () {
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      },
+    } as unknown as typeof mockKbApi;
+
+    const { result } = renderHook(() => useKbChat({ collectionIds: ["c1"], client }));
+    await act(async () => {
+      await result.current.send("q");
+    });
+
+    expect(result.current.log.error).toBeNull();
+  });
+});
