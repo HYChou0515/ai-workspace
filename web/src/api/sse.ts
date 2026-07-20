@@ -27,7 +27,10 @@ export async function* parseSseStream<T = AgentEvent>(
       try {
         yield JSON.parse(payload) as T;
       } catch {
-        // swallow malformed event
+        // Dropping the frame is right — one bad event must not kill the stream —
+        // but doing it silently means a server/client schema drift produces
+        // "some events just don't arrive" with nothing anywhere to explain it.
+        console.warn("sse: dropped a malformed frame", payload.slice(0, 200));
       }
     }
   }

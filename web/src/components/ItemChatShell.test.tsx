@@ -161,6 +161,31 @@ describe("ItemChatShell", () => {
     await waitFor(() => expect(screen.getByTestId("agent-panel-stub")).toBeInTheDocument());
   });
 
+  it("offers a retry when auto-opening the first chat fails", async () => {
+    // `reopening` is what stops a double-create across the create→refetch gap,
+    // and it only clears once a chat is actually LISTED — so a rejected create
+    // latched it forever: the effect early-returned on every later render and
+    // the item sat on the placeholder permanently, with no error and no way out.
+    stubChatApi([]);
+    const created = summary({ chat_id: "conversation:late", is_default: true });
+    const create = vi
+      .spyOn(itemChatApi, "createChat")
+      .mockRejectedValueOnce(new Error("create chat failed: 503"))
+      .mockResolvedValue(created);
+    render();
+
+    // The placeholder is on screen from the first paint, so wait for the FAILURE
+    // to land on it rather than for the element itself.
+    await waitFor(() => expect(screen.getByTestId("no-chat")).toHaveTextContent("503"));
+
+    vi.spyOn(itemChatApi, "listChats").mockResolvedValue([created]);
+    vi.spyOn(itemChatApi, "getChat").mockResolvedValue(thread({ chatId: "conversation:late" }));
+    fireEvent.click(screen.getByTestId("retry-open-chat"));
+
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId("agent-panel-stub")).toBeInTheDocument());
+  });
+
   it("opens a free chat via the New picker (createChat) and selects it", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     const created = summary({ chat_id: "conversation:free2", title: "side", is_default: false });

@@ -117,6 +117,8 @@ export function ItemChatShell({
   // opens a workflow chat) happens only on confirm.
   const [pendingWorkflow, setPendingWorkflow] = useState<string | null>(null);
   const reopening = useRef(false);
+  /** Why auto-opening the item's first chat failed, if it did. */
+  const [openFailed, setOpenFailed] = useState<string | null>(null);
 
   // The item's collection set (topic-hub §5, #142) is a workspace file shared by
   // every chat + the agent, so the picker lives at the shell level, not per chat.
@@ -145,7 +147,21 @@ export function ItemChatShell({
     }
     if (isLoading || reopening.current) return;
     reopening.current = true;
-    void createFreeChat().then((c) => setActiveChatId(c.chat_id));
+    setOpenFailed(null);
+    void createFreeChat().then(
+      (c) => setActiveChatId(c.chat_id),
+      (err: unknown) => {
+        // The latch STAYS closed. `createFreeChat` is a fresh closure each
+        // render, so this effect re-runs on every render — releasing the latch
+        // here would turn a failing create into one attempt per render, i.e. a
+        // flood aimed at a server that is already unhappy.
+        //
+        // Auto-open gets exactly one try; recovery is the explicit Retry below.
+        // What was actually broken was that a rejection left NO error and NO way
+        // out, so the item sat on the placeholder permanently.
+        setOpenFailed(err instanceof Error ? err.message : String(err));
+      },
+    );
   }, [isLoading, chats.length, createFreeChat]);
 
   const onFreeChat = async () => {
@@ -253,9 +269,35 @@ export function ItemChatShell({
           uploadDir={uploadDir}
         />
       ) : (
-        <p className="item-chat-panel__empty" data-testid="no-chat">
-          No conversation open yet — start one from the menu above to begin.
-        </p>
+        <div className="item-chat-panel__empty" data-testid="no-chat">
+          {openFailed ? (
+            <>
+              <p>對話開啟失敗：{openFailed}</p>
+              <button
+                type="button"
+                className="btn"
+                data-variant="secondary"
+                data-size="sm"
+                data-testid="retry-open-chat"
+                onClick={() => {
+                  setOpenFailed(null);
+                  reopening.current = true;
+                  void createFreeChat().then(
+                    (c) => setActiveChatId(c.chat_id),
+                    (err: unknown) => {
+                      reopening.current = false;
+                      setOpenFailed(err instanceof Error ? err.message : String(err));
+                    },
+                  );
+                }}
+              >
+                重試
+              </button>
+            </>
+          ) : (
+            <p>No conversation open yet — start one from the menu above to begin.</p>
+          )}
+        </div>
       )}
     </div>
   );

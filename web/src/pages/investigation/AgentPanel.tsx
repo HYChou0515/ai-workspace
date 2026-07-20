@@ -154,6 +154,10 @@ export function AgentPanel({
   const agent = agentProp ?? ctxAgent;
   if (!agent) throw new Error("AgentPanel needs an agent (prop or <AgentProvider>)");
   const { log, connection, send, mention, cancel, undo } = agent;
+  // A one-line answer to "I just did something and nothing happened" — the
+  // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
+  // next successful send.
+  const [composerHint, setComposerHint] = useState<string | null>(null);
   const dialog = useDialog();
 
   // #38: "undo to here" on the user prompt at entry `i` — drop that turn
@@ -328,7 +332,16 @@ export function AgentPanel({
 
   const submit = () => {
     const text = draft.trim();
-    if (log.streaming) return;
+    if (log.streaming) {
+      // Pressing Enter mid-turn used to do NOTHING — the textarea stays enabled,
+      // so the user types a whole message, hits Enter, and gets no reaction at
+      // all. During any of the stuck states that is indistinguishable from the
+      // app being dead. Keep the draft (retyping it is the insult on top) and say
+      // why.
+      setComposerHint("回覆還在進行中。等它完成，或按 Stop 中止後再送出。");
+      return;
+    }
+    setComposerHint(null);
     // #288: in a workflow run chat the composer steers the run — the text is a
     // free-text instruction, not an interactive turn. (Stop the run from the
     // progress bar above (#331); the composer is inert while a turn streams.)
@@ -491,6 +504,20 @@ export function AgentPanel({
         </div>
       </div>
 
+      {composerHint && (
+        <div
+          data-testid="composer-hint"
+          role="status"
+          style={{
+            padding: "6px 12px 0",
+            fontSize: pxToRem(12),
+            color: "var(--text-paper-d)",
+          }}
+        >
+          {composerHint}
+        </div>
+      )}
+
       {chips.length > 0 && (
         <div style={{ padding: "8px 12px", borderTop: "1px solid var(--paper-3)" }}>
           <div style={{ ...chatColumn, display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -499,7 +526,10 @@ export function AgentPanel({
             key={s.label}
             type="button"
             onClick={() => onChip(s.prompt)}
-            disabled={log.streaming}
+            // A read-only viewer could still fire a chip, and got a raw
+            // "send failed: 403" for it — the textarea beside it was already
+            // disabled for exactly this reason.
+            disabled={log.streaming || readOnly}
             style={{
               display: "inline-flex",
               alignItems: "center",
@@ -882,7 +912,12 @@ export function AgentPanel({
           {log.streaming ? (
             <button
               type="button"
-              onClick={cancel}
+              onClick={() => {
+                cancel();
+                // Stop's ENTIRE feedback used to be the spinner disappearing,
+                // which reads the same as the turn finishing on its own.
+                setComposerHint("已中止這一輪。已產生的內容保留在上面。");
+              }}
               style={{
                 padding: "6px 14px",
                 borderRadius: "var(--radius-btn)",
