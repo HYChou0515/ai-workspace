@@ -606,6 +606,7 @@ def create_app(
         sanity_judge_llm=sanity_judge_llm,
         # #535: retrieval-eval question generation runs on the KB llm.
         eval_llm=kb_llm,
+        graph_llm=kb_llm,
         # #506 P6: the same KB text embedder the ingestor/retriever use, so the
         # card-gen reconcile compares candidates + cards in one vector space.
         embedder=embedder,
@@ -678,6 +679,8 @@ def create_app(
     if eval_coordinator is not None:
         eval_coordinator.set_retriever(kb_retriever)
     app.state.eval_coordinator = eval_coordinator
+    # #534: metric-extraction coordinator (no retriever needed — LLM only).
+    app.state.graph_coordinator = coordinators.graph
     register_kb_routes(
         api,
         spec,

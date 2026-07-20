@@ -33,6 +33,7 @@ _JOBTYPE_ATTR = {
     "card-gen": "card_gen",
     "sanity": "sanity",
     "eval": "eval",
+    "graph": "graph",
 }
 
 

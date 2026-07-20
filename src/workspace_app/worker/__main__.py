@@ -65,6 +65,8 @@ def build_bundle(
         sanity_judge_llm=f.get_sanity_judge_llm(settings),
         # #535: retrieval-eval question generation runs on the KB llm.
         eval_llm=kb_llm,
+        # #534: metric extraction runs on the KB llm.
+        graph_llm=kb_llm,
         # #506 P6: the card-gen reconcile embeds candidates + cards with the same
         # embedder the ingestor uses (a worker pod builds one at line ~30).
         embedder=embedder,
