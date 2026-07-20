@@ -19,18 +19,22 @@ plain FileStore pass-through — handy for tests + the transitional fallback.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
-from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound
+from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound
 from ..sync.ignore import DEFAULT_IGNORES, should_ignore
 
 # How many times an etag-guarded edit re-bases against a concurrent writer
 # before giving up and reporting a conflict. A handful is plenty — contention
 # on one wiki page across workers is rare and each retry re-reads fresh.
+logger = logging.getLogger(__name__)
+
+# How many times an etag-guarded edit re-bases…
 _CAS_EDIT_RETRIES = 5
 
 # #538: how long a warm workspace's measured file sizes stay usable before the
@@ -40,6 +44,34 @@ _CAS_EDIT_RETRIES = 5
 # trails reality by at most one such window is what the rest of the system
 # already promises.
 _USAGE_WINDOW_S = 5.0
+
+
+class _Measurement:
+    """A workspace's file sizes and their total, kept in step.
+
+    The total is maintained rather than re-summed because the quota is asked on
+    every gated write; and it lives HERE, next to the map it summarises, so the
+    two cannot drift — the reason not to keep a running total was the risk of
+    maintaining it in several places, which this removes rather than accepts.
+
+    The map is not an optimisation: the quota needs both the workspace's total
+    AND the size of the file being overwritten, and taking those from different
+    sources is what once made a warm-only file count against the workspace but
+    credit back as zero."""
+
+    __slots__ = ("at", "sizes", "total")
+
+    def __init__(self, at: float, sizes: dict[str, int]) -> None:
+        self.at = at
+        self.sizes = sizes
+        self.total = sum(sizes.values())
+
+    def set(self, path: str, size: int) -> None:
+        self.total += size - self.sizes.get(path, 0)
+        self.sizes[path] = size
+
+    def drop(self, path: str) -> None:
+        self.total -= self.sizes.pop(path, 0)
 
 
 class WorkspaceFull(Exception):
@@ -120,7 +152,7 @@ class WorkspaceFiles:
         # download) are picked up on the next window.
         self._window = usage_window
         self._now = now
-        self._tree: dict[str, tuple[float, dict[str, int]]] = {}
+        self._tree: dict[str, _Measurement] = {}
         # One walk per workspace at a time. Without this, two coroutines that
         # both miss the memo both walk, and whichever finishes LAST installs its
         # map — silently discarding any write the other recorded in between, so
@@ -210,6 +242,24 @@ class WorkspaceFiles:
         data = await self.read(workspace_id, src)
         await self._write_unchecked(workspace_id, dst, data, await self._warm(workspace_id))
         await self.delete(workspace_id, src)
+
+    async def write_record(self, workspace_id: str, path: str, data: bytes) -> None:
+        """Write a record of something that has ALREADY happened. **Not** quota
+        gated, and deliberately so (#538).
+
+        A quota check is a precondition: it is only meaningful where the caller
+        can still abandon the operation. This write comes AFTER the effect it
+        describes — a workflow step that has already created its entities and
+        sent its notifications — so refusing it undoes nothing. It only loses
+        the record, and the re-run then finds no record and does the whole step
+        again. Duplicated side effects are worse than a few dozen bytes of
+        bookkeeping past the cap.
+
+        Exemptions stay NAMED operations, like `move` (which cannot grow the
+        workspace at all), rather than a flag any caller can pass — an
+        ungated write anyone can reach for is not a quota."""
+        path = _norm(path)
+        await self._write_unchecked(workspace_id, path, data, await self._warm(workspace_id))
 
     async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
         """Create-if-absent (#419 N1 numbering arbiter): raise `FileExists` if
@@ -304,9 +354,9 @@ class WorkspaceFiles:
         room to spare *and* grow without bound. A store without usage
         accounting (e.g. the wiki-page store) reports 0 — duck-typed like the
         CAS pair."""
-        tree = await self._live_tree(workspace_id, await self._warm(workspace_id))
-        if tree is not None:
-            return sum(tree.values())
+        measured = await self._measurement(workspace_id, await self._warm(workspace_id))
+        if measured is not None:
+            return measured.total
         usage = getattr(self._fs, "workspace_usage", None)
         return await usage(workspace_id) if usage is not None else 0
 
@@ -316,21 +366,24 @@ class WorkspaceFiles:
         MUST come from the same source as `used`, or the two halves of the
         subtraction disagree and a warm-only file is charged twice."""
         path = _norm(path)
-        tree = await self._live_tree(workspace_id, await self._warm(workspace_id))
-        if tree is not None:
-            return tree.get(path)
+        measured = await self._measurement(workspace_id, await self._warm(workspace_id))
+        if measured is not None:
+            return measured.sizes.get(path)
         size = getattr(self._fs, "file_size", None)
         return await size(workspace_id, path) if size is not None else None
 
-    async def _live_tree(
+    async def _measurement(
         self, workspace_id: str, warm: tuple[Sandbox, SandboxHandle] | None
-    ) -> dict[str, int] | None:
-        """``path → size`` for a WARM workspace, walked at most once per usage
-        window; ``None`` when the workspace is cold (the caller falls back to the
-        durable store). Holding the whole map rather than just the total is what
-        lets a write patch the measurement in place instead of re-walking, and it
-        makes the quota's two halves — the workspace total and the size being
-        overwritten — come from one consistent snapshot.
+    ) -> _Measurement | None:
+        """The workspace's current measurement, or ``None`` when it is cold (the
+        caller falls back to the durable store).
+
+        Normally this is whatever the mirror sweep last installed
+        (`record_measurement`) — the sweep walks every warm sandbox anyway, so
+        nobody's request has to. Walking here is the COLD-START fallback, for a
+        pod that has no session on this item and therefore never swept it: it is
+        better to pay one traversal than to answer from the durable snapshot,
+        whose additive-only reconciliation is what #538 was about.
 
         `warm` is passed in rather than resolved here so a gated write probes
         sandbox liveness ONCE: the gate and the write that follows it share one
@@ -339,48 +392,75 @@ class WorkspaceFiles:
             self._tree.pop(workspace_id, None)  # went cold; don't serve stale sizes
             return None
         cached = self._tree.get(workspace_id)
-        if cached is not None and self._now() - cached[0] < self._window:
-            return cached[1]
+        if cached is not None and self._now() - cached.at < self._window:
+            return cached
         async with self._walk_locks[workspace_id]:
-            # Re-check: whoever held the lock has just installed a fresh map, and
-            # taking it is the point — a second walk would overwrite their
-            # measurement along with any write recorded against it.
+            # Re-check: whoever held the lock has just installed a fresh
+            # measurement, and taking it is the point — a second walk would
+            # overwrite theirs along with any write recorded against it.
             cached = self._tree.get(workspace_id)
-            if cached is not None and self._now() - cached[0] < self._window:
-                return cached[1]
+            if cached is not None and self._now() - cached.at < self._window:
+                return cached
             return await self._walk_into_memo(workspace_id, warm)
 
     async def _walk_into_memo(
         self, workspace_id: str, warm: tuple[Sandbox, SandboxHandle]
-    ) -> dict[str, int]:
+    ) -> _Measurement | None:
+        """Measure by walking. Returns ``None`` when the sandbox cannot be read —
+        the caller then answers from the durable store rather than failing, so a
+        busy or just-reaped sandbox degrades the number's freshness instead of
+        turning a usage read into a 500 or refusing a write outright."""
         now = self._now()
         sb, h = warm
-        tree = {
-            e.path: e.size
-            for e in await sb.walk(h, "/")
-            if not should_ignore(e.path, self._ignores)
-        }
-        # A pod serves many items over its life and each map is the size of a
-        # file tree, so expired entries are dropped rather than left to
-        # accumulate. Piggy-backed on the walk, which happens at most once per
-        # window per workspace, so the sweep can't become the hot path.
-        for other, (measured_at, _) in list(self._tree.items()):
-            if now - measured_at >= self._window:
+        try:
+            entries = await sb.walk(h, "/")
+        except (SandboxNotFound, SandboxBusy):
+            logger.warning(
+                "files: cannot measure workspace %s (sandbox unreachable) — "
+                "falling back to the durable snapshot",
+                workspace_id,
+            )
+            return None
+        sizes = {e.path: e.size for e in entries if not should_ignore(e.path, self._ignores)}
+        measured = _Measurement(now, sizes)
+        self._install(workspace_id, measured)
+        return measured
+
+    def record_measurement(self, workspace_id: str, sizes: dict[str, int]) -> None:
+        """Install a measurement taken elsewhere — by the mirror sweep, which
+        already walks every warm sandbox on its own cadence (#538 follow-up).
+
+        This is what keeps the walk OFF the request path: without it the
+        measurement is taken lazily by whichever request first finds the window
+        expired, so that user pays for the traversal and sees its errors. The
+        sweep filters the same ignore set it mirrors with, so the quota counts
+        exactly the bytes that reach the durable store."""
+        self._install(workspace_id, _Measurement(self._now(), sizes))
+
+    def _install(self, workspace_id: str, measured: _Measurement) -> None:
+        """Store a measurement, dropping any that have expired.
+
+        The expiry rides along with EVERY install, not just the walking one: a
+        pod serves many items over its life and each measurement is the size of
+        a file tree, so once the sweep became the normal source and walks became
+        rare, cleanup that only happened on a walk stopped happening at all."""
+        for other, previous in list(self._tree.items()):
+            if measured.at - previous.at >= self._window:
                 del self._tree[other]
-        self._tree[workspace_id] = (now, tree)
-        return tree
+        self._tree[workspace_id] = measured
 
     def _record(self, workspace_id: str, path: str, size: int | None) -> None:
         """Fold a write (``size``) or a delete (``None``) this facade just made
-        into the current measurement, so a batch of writes stays exact without
-        re-walking. A no-op when nothing is memoised — the next read measures."""
-        cached = self._tree.get(workspace_id)
-        if cached is None:
+        into the current measurement, so a batch of writes stays exact instead of
+        charging against a pre-batch number for a whole window. A no-op when
+        nothing is measured — the next read measures."""
+        measured = self._tree.get(workspace_id)
+        if measured is None:
             return
         if size is None:
-            cached[1].pop(path, None)
+            measured.drop(path)
         else:
-            cached[1][path] = size
+            measured.set(path, size)
 
     async def _ensure_headroom(
         self,
@@ -425,9 +505,9 @@ class WorkspaceFiles:
         halves, from ONE measurement, so they can never disagree about whether a
         file counts."""
         path = _norm(path)
-        tree = await self._live_tree(workspace_id, warm)
-        if tree is not None:
-            return sum(tree.values()), tree.get(path, 0)
+        measured = await self._measurement(workspace_id, warm)
+        if measured is not None:
+            return measured.total, measured.sizes.get(path, 0)
         # Cold. Read the durable store DIRECTLY rather than via the public
         # `workspace_usage`/`file_size`, which would each re-resolve liveness —
         # turning one gated write into several sandbox round-trips, and letting

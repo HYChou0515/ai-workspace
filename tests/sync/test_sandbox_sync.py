@@ -364,3 +364,42 @@ async def test_mirror_skips_deletion_when_sandbox_vanishes_mid_walk_366(
     sb.arm = True
     await sync.mirror("ws", h)  # sandbox vanishes mid-walk → gate 2 re-check raises → skip
     assert await fs.exists("ws", "/keep.txt") is True
+
+
+async def test_mirror_hands_the_quota_the_sizes_it_just_walked(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    # #538 follow-up: the sweep already walks the whole workspace every few
+    # seconds, so the quota takes its measurement from here instead of walking
+    # again on somebody's request. The set it reports is the one it PERSISTS —
+    # post-`should_ignore` — so the quota counts exactly the bytes that reach
+    # the durable store, and can't be filled up by regenerable build junk.
+    measured: dict[str, dict[str, int]] = {}
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(
+        filestore=fs, sandbox=sandbox, on_measured=lambda ws, sizes: measured.update({ws: sizes})
+    )
+    await sandbox.upload(h, b"x" * 10, "/keep.txt")
+    await sandbox.upload(h, b"y" * 5000, "/node_modules/dep/index.js")
+    await sandbox.mark_ready(h)
+
+    await sync.mirror("ws", h)
+
+    assert measured["ws"] == {"/keep.txt": 10}
+
+
+async def test_mirror_publishes_no_measurement_from_a_half_restored_sandbox(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    # A sandbox that isn't ready is mid-restore: its file set is partial, so
+    # measuring it would under-report and let writes through that shouldn't be.
+    measured: dict[str, dict[str, int]] = {}
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(
+        filestore=fs, sandbox=sandbox, on_measured=lambda ws, sizes: measured.update({ws: sizes})
+    )
+    await sandbox.upload(h, b"x" * 10, "/partial.txt")
+
+    await sync.mirror("ws", h)  # never marked ready
+
+    assert measured == {}

@@ -377,7 +377,16 @@ def create_app(
     # lands in the same sink as the agent/LLM traces. The trace-processor is
     # registered a few lines down once the app-level wiring is complete.
     monitor = monitor if monitor is not None else InMemoryMonitor()
-    sync = SandboxSync(filestore=filestore, sandbox=sandbox, monitor=monitor)
+    # #538: the mirror sweep already walks every warm sandbox every few seconds,
+    # so it hands the sizes it saw to the quota — that is what keeps the walk off
+    # the request path. `files` is built further down and the sweep only runs once
+    # the lifespan starts, so the name is resolved at call time, not now.
+    sync = SandboxSync(
+        filestore=filestore,
+        sandbox=sandbox,
+        monitor=monitor,
+        on_measured=lambda ws, sizes: files.record_measurement(ws, sizes),
+    )
     # #345: only the local process sandbox keeps an item's working dir on a
     # shared volume across pods, so only it needs the GLOBAL activity heartbeat
     # that lets the idle reaper recycle a dir solely when no pod is using it.

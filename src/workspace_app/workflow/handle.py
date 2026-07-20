@@ -258,6 +258,18 @@ class WorkflowHandle:
     async def write_json(self, path: str, obj: Any) -> None:
         await self.write(path, json.dumps(obj, sort_keys=True).encode())
 
+    async def write_record_json(self, path: str, obj: Any) -> None:
+        """Journal a completed step. Unlike `write_json` this is never refused
+        for space (#538): the step's side effects have already happened, so
+        losing the record only makes the re-run repeat them. Stores that don't
+        distinguish the two (a plain FileStore in tests) just get a write."""
+        data = json.dumps(obj, sort_keys=True).encode()
+        record = getattr(self._store, "write_record", None)
+        if record is not None:
+            await record(self._workspace_id, _abs(path), data)
+        else:
+            await self._store.write(self._workspace_id, _abs(path), data)
+
     async def exists(self, path: str) -> bool:
         return await self._store.exists(self._workspace_id, _abs(path))
 

@@ -56,6 +56,7 @@ class SandboxSync:
         *,
         ignores: list[str] | None = None,
         monitor: IMonitor | None = None,
+        on_measured: Callable[[str, dict[str, int]], None] | None = None,
     ) -> None:
         self._fs = filestore
         self._sb = sandbox
@@ -68,6 +69,13 @@ class SandboxSync:
         # we can measure durable-store cost (file counts + I/O) before deciding
         # whether the per-file model needs a cheaper (archive/batched) rewrite.
         self._monitor = monitor
+        # #538: the quota's measurement sink. `mirror` already walks the whole
+        # workspace on its own cadence, so handing the sizes over is free — and
+        # it is what keeps the walk off the request path, where a lazily-measured
+        # quota made whichever user asked first pay for the traversal and see its
+        # errors. The sizes are the post-`should_ignore` set this mirror actually
+        # persists, so the quota counts exactly what reaches the durable store.
+        self._on_measured = on_measured
 
     def _record(self, kind: str, group_id: str, started: float, **fields: int) -> None:
         """Emit one telemetry summary event for a just-finished sync op. A no-op
@@ -160,12 +168,14 @@ class SandboxSync:
         )
         prev = self._versions.get(workspace_id, {})
         seen: dict[str, str] = {}
+        sizes: dict[str, int] = {}
         n_uploaded = 0
         n_bytes = 0
         for entry in entries:
             if should_ignore(entry.path, self._ignores):
                 continue
             seen[entry.path] = entry.version
+            sizes[entry.path] = entry.size
             if prev.get(entry.path) == entry.version:
                 continue  # unchanged since last mirror
             # Stream sandbox → FileStore through a staging file so a big file
@@ -185,6 +195,10 @@ class SandboxSync:
                     await self._fs.delete(workspace_id, path)
                     n_deleted += 1
         self._versions[workspace_id] = seen
+        # Only publish a measurement of a COMPLETE sandbox: a not-yet-ready one is
+        # mid-restore, so its file set is partial and would under-report.
+        if ready_before and self._on_measured is not None:
+            self._on_measured(workspace_id, sizes)
         # #407: n_files = the whole (non-ignored) file count in the workspace —
         # the per-workspace cardinality signal; n_uploaded/n_deleted/bytes are
         # this mirror's actual I/O.
