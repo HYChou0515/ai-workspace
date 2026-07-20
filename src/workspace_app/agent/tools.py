@@ -242,7 +242,7 @@ async def make_deck_impl(
       chart `.png`s). Their text is read in; images are used as figures. Optional.
     - `notes` / `style` / `length`: extra guidance — key points, brand/tone,
       "one-pager" vs "full deck". All optional.
-    - `out_path`: where to write it (default `./deck.pptx`).
+    - `out_path`: where to write it (default `deck.pptx`).
 
     Returns the path written plus a short note, or an `error:` line if the deck
     tool isn't configured. Building runs several render+review passes, so it
@@ -284,7 +284,11 @@ async def make_deck_impl(
         notes=notes,
         style=style,
         length=length,
-        out_path=out_path,
+        # Relative — this string is interpolated into the JS the deck sub-agent
+        # writes (`pptx.writeFile({fileName: …})`) and passed to the render
+        # script, both of which run as real processes whose `/` is the SYSTEM
+        # root. A rooted out_path would write the deck outside the workspace.
+        out_path=rel_path(out_path).removeprefix("./") or "deck.pptx",
     )
 
 

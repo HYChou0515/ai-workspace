@@ -198,3 +198,23 @@ async def test_make_deck_impl_builds_via_sandbox_and_streams_progress():
     # the review call saw the rendered slide image (read via the workspace facade)
     assert vlm.calls[1]["images"] == [(PNG, "image/jpeg")]
     assert chunks  # progress relayed to the exec-output sink
+
+
+async def test_make_deck_impl_normalises_a_rooted_out_path():
+    """`out_path` is not just a store key — it is interpolated into the JS the
+    deck sub-agent writes (`pptx.writeFile({fileName: …})`) and passed to the
+    render script, both of which run as real processes in the sandbox. A model
+    that says `/deck.pptx` would write to the SYSTEM root, and the deck would
+    then be missing from the workspace. Relative is the only form that means the
+    same thing to node and to the file tools."""
+    vlm = ScriptedVlm([CODE, "DECK_OK"])
+    ctx = _make_ctx(deck_vlm=vlm, sandbox=_RenderSandbox(), sink=None)
+    out = await make_deck_impl(ctx, goal="a deck", out_path="/deck.pptx")
+    assert "error:" not in out
+    # the path handed to the model in its own instructions carries no leading
+    # slash (matched as a whole token — the sample code legitimately contains
+    # "./deck.pptx", which merely *contains* the string "/deck.pptx")
+    instructions = "\n".join(str(c["prompt"]) for c in vlm.calls)
+    assert "`deck.pptx`" in instructions
+    assert "`/deck.pptx`" not in instructions
+    assert "fileName: 'deck.pptx'" in instructions
