@@ -697,6 +697,7 @@ def create_app(
     # unless the query opts into the wiki AND a collection has use_wiki, so the
     # default chunk-RAG behaviour is unchanged. Its own engine keeps the RCA
     # turn lifecycle untouched.
+    from ..kb.wiki.consult import make_wiki_consultant
     from ..kb.wiki.orchestrator import WikiAwareRunner
 
     kb_runner = WikiAwareRunner(
@@ -743,6 +744,23 @@ def create_app(
         # described into the search query (generic multimodal input). None ⇒ image
         # attachments rejected with a friendly error; text turns unaffected.
         vlm_describer=vlm_describer,
+        # #537: the KB agent's `ask_wiki` tool consults the wiki through a reader
+        # driven per turn over the chat's own collections. Built on the BASE runner
+        # — a reader must never re-enter the KB layer that called it.
+        wiki_consultant_factory=lambda cids: make_wiki_consultant(
+            runner,
+            spec,
+            cids,
+            reader_config=resolve_wiki_config(
+                catalog,
+                "wiki_reader",
+                default_wiki_reader_config,
+                wiki_model=wiki_model,
+                wiki_llm_base_url=wiki_llm_base_url,
+                wiki_llm_api_key=wiki_llm_api_key,
+            ),
+            reader_max_turns=wiki_reader_max_turns,
+        ),
     )
 
     # Cached fallback configs per sub-agent purpose, used when the

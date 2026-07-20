@@ -53,6 +53,7 @@ from ..kb.context_cards import (
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import VlmDescriber
+from ..kb.wiki.consult import WikiConsultant
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
 from ..kb.wiki.store import WikiFileStore
 from ..perm import Actor, Permission, authorize
@@ -416,6 +417,11 @@ def register_kb_chat_routes(
     # same describer as read_image / ingestion). None ⇒ image attachments are
     # rejected with a friendly error, text turns are unaffected.
     vlm_describer: VlmDescriber | None = None,
+    # #537: builds this turn's `ask_wiki` consultant for the chat's collections —
+    # `None` back when none of them keeps a wiki, so the tool can say so instead of
+    # pretending. Injected (not built here) because the reader it drives needs the
+    # base runner + the operator's wiki model, which the composition root owns.
+    wiki_consultant_factory: Callable[[list[str]], WikiConsultant | None] | None = None,
 ) -> None:
     """Register the KB chat surface.
 
@@ -730,11 +736,15 @@ def register_kb_chat_routes(
                 superusers=superusers,
             ),
             agent_config=agent_config,
-            # #506: the wiki store the agent's `search_wiki` tool greps. One shared
-            # WikiFileStore keyed per-collection; search_wiki iterates this turn's
-            # `collection_ids` and merges hits (the in-agent, budgeted replacement
-            # for the heavy whole-page reader routing).
-            files=WorkspaceFiles(WikiFileStore(spec)),
+            # #537: the wiki the agent's `ask_wiki` tool consults. The reader that
+            # navigates it runs in its own context, so nothing here holds wiki pages
+            # — this is just the handle that lets the tool reach a reader at all.
+            # Unset when no collection in scope keeps a wiki.
+            run_wiki_reader=(
+                wiki_consultant_factory(list(_effective))
+                if wiki_consultant_factory is not None
+                else None
+            ),
             # specstar handle so the agent's `lookup_glossary` tool (when granted)
             # can read this collection's context cards — deterministic glossary
             # path beside kb_search (unknown term → glossary, question → search).

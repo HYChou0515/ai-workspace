@@ -227,6 +227,35 @@ def test_interactive_kb_turn_does_not_grant_the_raw_wiki_grep():
 
     assert captured["tools"] is not None
     assert "search_wiki" not in captured["tools"]
+    # …it reaches the wiki through the delegating tool instead.
+    assert "ask_wiki" in captured["tools"]
+
+
+def test_a_kb_turn_gets_a_wiki_consultant_only_when_a_scoped_collection_has_one():
+    # #537: `ask_wiki` needs somewhere to delegate TO. The send path builds the
+    # consultant from the chat's own collections, so a chat over documents-only
+    # collections leaves it unset and the tool reports there's no wiki here —
+    # rather than spinning up a reader over an empty page set.
+    seen: dict = {}
+
+    class _CaptureRunner:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            seen["consultant"] = ctx.run_wiki_reader
+            yield MessageDelta(text="ok")
+            yield RunDone()
+
+    client = _client(_CaptureRunner())
+    plain = client.post("/kb/collections", json={"name": "docs", "use_wiki": False}).json()
+    wiki = client.post("/kb/collections", json={"name": "encyclopedia", "use_wiki": True}).json()
+
+    for collection_ids, expected in (
+        ([plain["resource_id"]], False),
+        ([wiki["resource_id"]], True),
+    ):
+        chat = client.post("/kb/chats", json={"title": "t", "collection_ids": collection_ids})
+        cid = chat.json()["resource_id"]
+        client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"})
+        assert (seen["consultant"] is not None) is expected
 
 
 def test_send_message_caps_wiki_search_from_the_composer_pick():

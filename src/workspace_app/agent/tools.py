@@ -835,6 +835,68 @@ async def ask_knowledge_base_impl(
     return banner + answer
 
 
+async def ask_wiki_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:
+    """Ask the wiki what it knows about something.
+
+    The wiki is this knowledge base's encyclopedia: pages that consolidate what
+    many documents say about one entity or concept, cross-linked and kept current
+    as documents arrive. Reach for it when the question is about **understanding**
+    — what something is, how it relates to other things, the shape of a topic,
+    the background you would want before opening any single document.
+
+    A wiki reader works through it for you — the index, then the pages the index
+    points at, then the source documents behind those pages — and returns a
+    written answer with `[n]` markers citing the underlying documents. Ask one
+    focused question in natural language; it is a reader, not a search box.
+
+    Prefer this over `kb_search` for anything conceptual or broad: the wiki has
+    already done the cross-document synthesis, so one call here often replaces
+    several searches. Use `kb_search` instead when you need an exact figure, a
+    specific step, or the verbatim wording of one particular document.
+    """
+    from ..kb.citations import parse_citations, shift_markers
+
+    # One bucket entry per call, early returns included — persist() pairs the Nth
+    # entry with the Nth `ask_wiki` tool message, so a skipped append drifts every
+    # later pairing (same contract as ask_knowledge_base above).
+    bucket = ctx.context.subagent_citations.setdefault("ask_wiki", [])
+
+    consult = ctx.context.run_wiki_reader
+    if consult is None:
+        bucket.append([])
+        return (
+            "There is no wiki in scope for this conversation, so there is nothing "
+            "to consult. Answer from the documents and what you already have."
+        )
+
+    budget = ctx.context.wiki_search_budget
+    if budget.exhausted:
+        bucket.append([])
+        cap = budget.max_calls
+        return (
+            f"Wiki budget spent for this reply ({cap} of {cap} used). Answer now "
+            "from what the wiki already told you; do not call ask_wiki again."
+        )
+
+    answer, passages = await consult(question, ctx.context.on_exec_output)
+    budget.used += 1  # every completed consultation costs one, answer or not
+
+    # The reader numbered its sources from [1]; move them to their slice of THIS
+    # turn's registry before appending, so the caller can quote them verbatim and
+    # every marker still resolves to the document it was written against.
+    shifted = shift_markers(answer, len(ctx.context.kb_passages))
+    ctx.context.kb_passages.extend(passages)
+    bucket.append(parse_citations(shifted, ctx.context.kb_passages))
+
+    if budget.max_calls is not None:
+        shifted += (
+            f"\n\n(Wiki budget: {budget.used} of {budget.max_calls} used, "
+            f"{budget.remaining} left. Consult again only for a genuinely "
+            "different question.)"
+        )
+    return shifted
+
+
 def _read_step_names(text: str, column: str) -> list[str]:
     """Unique step names (input order) from `text`. If it parses as CSV
     whose header contains `column`, read that column; otherwise treat each
@@ -1633,6 +1695,11 @@ _IMPLS = {
     "ask_knowledge_base": ask_knowledge_base_impl,
     "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
+    # #537: the KB agent's wiki entry point. Delegating like ask_knowledge_base —
+    # the index-first navigation runs in a throwaway context and only the answer
+    # comes back — NOT a leaf like `search_wiki`, which is why granting it to a KB
+    # agent doesn't recurse: the wiki reader it spawns holds the leaves, not this.
+    "ask_wiki": ask_wiki_impl,
     # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
     "resolve_collection": resolve_collection_impl,
     "lookup_glossary": lookup_glossary_impl,

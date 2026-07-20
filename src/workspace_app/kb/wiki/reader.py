@@ -25,6 +25,7 @@ from ...agent.context import AgentToolContext
 from ...files import WorkspaceFiles
 from ...resources import AgentConfig
 from ...resources.conversation import Citation
+from ...resources.kb import RetrievedPassage
 from ..citations import parse_citations
 from .sources import IWikiSources
 from .store import WikiFileStore
@@ -62,7 +63,7 @@ def default_wiki_reader_config() -> AgentConfig:
     )
 
 
-async def answer_from_wiki(
+async def read_wiki(
     runner: AgentRunner,
     *,
     wiki_store: WikiFileStore,
@@ -72,11 +73,18 @@ async def answer_from_wiki(
     agent_config: AgentConfig,
     max_turns: int = _DEFAULT_READER_MAX_TURNS,
     on_event: Callable[[AgentEvent], None] | None = None,
-) -> tuple[str, list[Citation]]:
-    """Run one wiki-reader turn to completion and return its answer + the
-    citations (resolved against the sources it grounded on). ``on_event`` (when
-    given) fires for every reader event so a caller can relay the navigation
-    into a parent stream. ``max_turns`` (operator-configured via
+) -> tuple[str, list[RetrievedPassage]]:
+    """Run one wiki-reader turn to completion and return its answer + the source
+    passages it grounded on, numbered from ``[1]`` in the answer.
+
+    This is the raw form (#537): a caller folding the reader's answer into a
+    larger one needs the PASSAGES, so it can renumber the markers onto its own
+    registry — Citations are already bound to their marker numbers and can't be
+    re-based. ``answer_from_wiki`` wraps this for callers that just want
+    citations.
+
+    ``on_event`` (when given) fires for every reader event so a caller can relay
+    the navigation into a parent stream. ``max_turns`` (operator-configured via
     settings.kb.wiki.reader_max_turns) must cover navigating + grounding."""
     from ...api.events import MessageDelta, RunError
 
@@ -101,5 +109,31 @@ async def answer_from_wiki(
             run_error = ev.message
     if run_error is not None:
         return f"Wiki reader failed: {run_error}", []
-    answer = "".join(parts)
-    return answer, parse_citations(answer, ctx.kb_passages)
+    return "".join(parts), list(ctx.kb_passages)
+
+
+async def answer_from_wiki(
+    runner: AgentRunner,
+    *,
+    wiki_store: WikiFileStore,
+    wiki_sources: IWikiSources,
+    collection_id: str,
+    question: str,
+    agent_config: AgentConfig,
+    max_turns: int = _DEFAULT_READER_MAX_TURNS,
+    on_event: Callable[[AgentEvent], None] | None = None,
+) -> tuple[str, list[Citation]]:
+    """``read_wiki`` with its passages already resolved into Citations — for
+    callers that present the reader's answer as-is rather than folding it into
+    a larger one."""
+    answer, passages = await read_wiki(
+        runner,
+        wiki_store=wiki_store,
+        wiki_sources=wiki_sources,
+        collection_id=collection_id,
+        question=question,
+        agent_config=agent_config,
+        max_turns=max_turns,
+        on_event=on_event,
+    )
+    return answer, parse_citations(answer, passages)

@@ -15,6 +15,21 @@ from ..resources.kb import Citation, RetrievedPassage
 _MARKER = re.compile(r"[\[［【]\s*(\d+)\s*[\]］】]")
 
 
+def shift_markers(text: str, offset: int) -> str:
+    """Renumber every ``[n]`` in `text` by `offset`.
+
+    A sub-agent numbers its own sources from ``[1]``. Folding its answer into a
+    caller that already holds passages means its markers must move to their slice
+    of the shared registry, or ``[1]`` silently repoints at the caller's first
+    passage — a citation that looks right and cites the wrong document. Callers
+    that append the sub-agent's passages to their registry shift by the length the
+    registry had BEFORE appending. Wide/CJK bracket forms renumber to ASCII.
+    """
+    if offset == 0:
+        return text
+    return _MARKER.sub(lambda m: f"[{int(m.group(1)) + offset}]", text)
+
+
 def parse_citations(answer: str, passages: list[RetrievedPassage]) -> list[Citation]:
     """Each distinct in-range ``[n]`` in `answer` → a Citation built from
     `passages[n-1]`. Deduped, ascending; out-of-range markers are dropped."""

@@ -734,6 +734,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         # the whole navigation to the reader in a throwaway context.
         "allowed_tools": [
             "kb_search",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],
@@ -757,6 +758,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "allowed_tools": [
             "kb_search",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],
@@ -772,6 +774,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "allowed_tools": [
             "kb_search",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],

@@ -116,6 +116,7 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
     kb = cat.kb_chat()
     assert kb.allowed_tools == [  # ty: ignore[unresolved-attribute]
         "kb_search",
+        "ask_wiki",
         "lookup_glossary",
         "request_wiki_update",
     ]

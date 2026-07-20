@@ -267,6 +267,7 @@ def test_bundled_presets_include_qwen3_claude_openai_and_kb_default():
     # for. The KB agent reaches the wiki through `ask_wiki` instead (P2).
     assert presets["kb-default"].allowed_tools == [
         "kb_search",
+        "ask_wiki",
         "lookup_glossary",
         "request_wiki_update",
     ]

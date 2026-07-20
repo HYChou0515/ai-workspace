@@ -323,6 +323,19 @@ class AgentToolContext:
     # KB. The type is `Callable[..., …]` because that override is keyword-default
     # (not expressible in a positional `Callable[[...], …]` signature).
     run_subagent: Callable[..., Awaitable[tuple[str, list[Citation]]]] | None = None
+    # #537: the KB agent's SECOND knowledge source — consult the wiki. Given a
+    # question, a wiki reader navigates the wiki index-first (index → the pages the
+    # index points at → the source documents behind them) and returns its answer
+    # plus the passages it grounded on. The navigation runs in a THROWAWAY context,
+    # so whole wiki pages never land in the caller's window — the same
+    # context-economy reason `ask_knowledge_base` delegates (#270), and the reason
+    # the caller is NOT simply handed the wiki's file tools.
+    #
+    # Wired by the API layer for turns that scope a wiki-backed collection; `None`
+    # ⇒ `ask_wiki` reports there is no wiki here rather than failing.
+    run_wiki_reader: (
+        Callable[[str, OutputSink | None], Awaitable[tuple[str, list[RetrievedPassage]]]] | None
+    ) = None
     # Per-call citation lists from this turn's sub-agent invocations,
     # keyed by purpose. Per purpose, lists are in CALL ORDER — the
     # persist step pairs the Nth list with the Nth tool message of
