@@ -551,11 +551,51 @@ class LocalProcessSandbox:
         await asyncio.to_thread(shutil.copyfile, target, local_path)
 
     async def disk_usage(self, handle: SandboxHandle) -> int:
-        return await asyncio.to_thread(self._du_sync, self._require(handle))
+        item = self._require(handle)
+        targets = [p for p in (item / _WORKSPACE, item / _HOME) if p.exists()]
+        if not targets:
+            return 0
+        total = await self._du(targets)
+        return total if total is not None else await asyncio.to_thread(self._du_sync, item)
+
+    @staticmethod
+    async def _du(targets: list[Path]) -> int | None:
+        """`du -sb` over the dirs the user is charged for, or None if `du` can't
+        answer (a minimal image without coreutils, a permissions failure) — the
+        caller then falls back to walking in Python.
+
+        `-b` is apparent bytes, so the figure is comparable with the sizes the
+        file tree shows; `du` does not follow symlinks without `-L`, so a link
+        the agent drops in can't charge someone else's tree here; and it
+        counts a hardlinked inode once per invocation, which a naive walk
+        double-counts. It DOES include the directory entries themselves, so the
+        total runs a few KB above the sum of file sizes — that overhead is real
+        disk, and it is noise against a quota measured in GiB."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "du",
+                "-sb",
+                "--",
+                *(str(p) for p in targets),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+        except (OSError, ValueError):
+            return None
+        if proc.returncode != 0:
+            return None
+        total = 0
+        for line in out.decode(errors="replace").splitlines():
+            head = line.split("\t", 1)[0].strip()
+            if not head.isdigit():
+                return None
+            total += int(head)
+        return total
 
     @staticmethod
     def _du_sync(item_dir: Path) -> int:
-        """Apparent bytes the USER put in this sandbox.
+        """Fallback for when `du` isn't available: the same total, walked here.
 
         Two dirs count: the workspace, and the per-sandbox `.home` — a
         `pip install --user` really does occupy the volume, and it is the user's
