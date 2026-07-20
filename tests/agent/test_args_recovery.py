@@ -457,3 +457,89 @@ async def test_a_schema_validation_failure_is_logged_with_the_offending_args(cap
     assert "kb_search" in logged
     assert "page_from" in logged  # WHICH argument
     assert "None" in logged  # and what it actually sent
+
+
+async def test_never_nulls_a_value_the_validator_would_have_accepted():
+    """The guard is only allowed to be WRONG in one direction.
+
+    Missing a case costs an error message the model was getting anyway. Nulling a
+    value the validator WOULD have taken silently replaces the model's choice with
+    the operator's default — `rerank="off"` becoming `null` turns reranking back
+    ON, which is the opposite of what was asked, with nothing to show for it. So
+    the accepted-token set must mirror the validator's, not a hand-picked subset
+    of it: pydantic's lax bool parser takes on/off, y/n, t/f as well as
+    true/false, yes/no and 1/0."""
+    seen: list[dict[str, Any]] = []
+    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
+    for value in ("on", "off", "y", "n", "t", "f", "TRUE", "No", "1", "0"):
+        seen.clear()
+        await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"query": "x", "rerank": value}))
+        assert seen[0]["rerank"] == value, f"{value!r} was second-guessed"
+
+
+async def test_non_finite_numbers_are_read_as_unset():
+    """`float()` accepts `NaN` and `inf`, so they used to slip through to the very
+    validation error this guard exists to remove — no integer is ever any of
+    them. Closing this is safe in a way tightening the numeric check generally is
+    not: there is no page 'inf' a user could have meant."""
+    seen: list[dict[str, Any]] = []
+    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
+    for value in ("NaN", "nan", "inf", "-inf", "Infinity"):
+        seen.clear()
+        await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"query": "x", "page_from": value}))
+        assert seen[0]["page_from"] is None, f"{value!r} should read as unset"
+
+
+async def test_tool_output_that_merely_quotes_the_error_phrase_is_not_logged(caplog):
+    """The detector matches the SDK's error text against the tool RESULT, and for
+    `read_file` / `exec` / `list_files` that result is arbitrary workspace content.
+    A file that happens to quote the phrase — a log of this very defect, say —
+    would otherwise raise a false operator warning. Only a result that is actually
+    shaped like the SDK's failure counts."""
+
+    async def echo_content(_ctx: ToolContext[Any], _args: str) -> str:
+        return "docs say: Invalid JSON input for tool foo — beware of that error."
+
+    tool = FunctionTool(
+        name="read_file",
+        description="d",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=echo_content,
+        strict_json_schema=True,
+    )
+    wrapped = wrap_with_args_recovery(tool)
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.args_recovery"):
+        await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"path": "notes.md"}))
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def test_the_rejection_log_names_the_args_without_dumping_their_content(caplog):
+    """Operator logs are not a place to spill workspace data. Every other log line
+    in this module deliberately keeps raw payloads out; this one records WHICH
+    arguments were sent and their types — enough to identify the offending
+    spelling — without copying a `write_file` body or an `exec` command line into
+    the log."""
+
+    async def sdk_failure(_ctx: ToolContext[Any], _args: str) -> str:
+        return (
+            "An error occurred while running the tool. Please try again. Error: "
+            "Invalid JSON input for tool write_file: 1 validation error"
+        )
+
+    tool = FunctionTool(
+        name="write_file",
+        description="d",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=sdk_failure,
+        strict_json_schema=True,
+    )
+    wrapped = wrap_with_args_recovery(tool)
+    secret = "AWS_SECRET=hunter2"
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.args_recovery"):
+        await wrapped.on_invoke_tool(
+            _tool_ctx(), json.dumps({"path": "notes.md", "content": secret})
+        )
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "write_file" in logged
+    assert "content" in logged  # which argument
+    assert secret not in logged  # but never its value

@@ -165,24 +165,39 @@ def _nullable_non_string_types(schema: dict[str, Any], name: str) -> set[str] | 
     return types - {"null"}
 
 
-def _impossible(value: object, types: set[str]) -> bool:
-    """Whether ``value`` cannot be any of ``types`` under JSON's own rules.
+# The tokens pydantic's lax bool parser accepts. This MUST stay a superset of
+# whatever the validator takes: missing one here means nulling a value the model
+# deliberately set (``rerank="off"`` silently becoming the operator's default,
+# i.e. the opposite of the request), which is far worse than the error this guard
+# removes. Being too generous only costs an error message the model was getting
+# anyway.
+_BOOLISH = frozenset({"true", "false", "1", "0", "yes", "no", "on", "off", "y", "n", "t", "f"})
 
-    Deliberately narrow: only a STRING that no reading could parse into the
-    declared type counts. A numeric string like ``"30"`` is left alone — pydantic
-    already coerces it, and silently nulling a page the user asked for would be
-    far worse than the error this guard exists to remove."""
+
+def _impossible(value: object, types: set[str]) -> bool:
+    """Whether ``value`` cannot be any of ``types`` under the validator's rules.
+
+    The guard is only allowed to be wrong in ONE direction. Failing to recognise
+    an impossible value costs nothing — the validation error still reaches the
+    model, exactly as today. Nulling a POSSIBLE value silently discards what the
+    model asked for. So every check below is deliberately generous, and only
+    values with no plausible reading are reported.
+
+    That is why ``"30"`` and ``"3.7"`` are left for pydantic to judge, while
+    non-finite floats are not: ``float()`` happily returns ``nan``/``inf``, so
+    without naming them they slipped through to the very error this exists to
+    remove — and no page number can be ``inf``."""
     if not isinstance(value, str):
         return False
     text = value.strip()
     if "integer" in types or "number" in types:
         try:
-            float(text)
+            parsed = float(text)
         except ValueError:
             return True
-        return False
+        return parsed != parsed or parsed in (float("inf"), float("-inf"))
     if "boolean" in types:
-        return text.lower() not in {"true", "false", "1", "0", "yes", "no"}
+        return text.lower() not in _BOOLISH
     return False
 
 
@@ -222,25 +237,51 @@ def _null_impossible_values(args: dict[str, Any], schema: dict[str, Any]) -> dic
 # the model just retries in-band and the turn looks merely slow.
 _SDK_VALIDATION_ERROR = "Invalid JSON input for tool"
 
+# The SDK's `default_tool_error_function` always opens with this. Requiring it —
+# rather than matching the phrase above anywhere — is what keeps a tool whose
+# OUTPUT happens to quote the error (a `read_file` of a log about this very
+# defect) from raising a false operator warning.
+_SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool."
+
+
+def _arg_shapes(args: dict[str, Any]) -> str:
+    """``name=type`` per argument — enough to identify which one the model got
+    wrong and in what spelling, with none of its content.
+
+    The values themselves are workspace data: a ``write_file`` body, an ``exec``
+    command line, a KB query. Every other log line in this module keeps raw
+    payloads out (see the comments on the parse-error paths), and an operator
+    diagnosing a schema rejection needs the SHAPE, not the secret. Strings short
+    enough to be a stand-in for "nothing" are shown verbatim, because that is
+    precisely the spelling we are trying to learn."""
+    parts: list[str] = []
+    for name, value in args.items():
+        if isinstance(value, str) and len(value) <= 8:
+            parts.append(f"{name}={value!r}")
+        else:
+            parts.append(f"{name}=<{type(value).__name__}>")
+    return ", ".join(parts)
+
 
 def _log_if_schema_rejected(tool_name: str, args: dict[str, Any], result: str) -> None:
-    """Record a schema rejection the SDK swallowed, with the args that caused it.
+    """Record a schema rejection the SDK swallowed, naming the offending argument.
 
     We cannot intercept the exception — it is caught before control returns to us —
     but the result carries the SDK's own signature, so this recognises it and logs
-    what the model actually sent. Without this the only symptom is "the first call
-    is always slow", with no way to tell WHICH argument or WHICH spelling was at
-    fault, which is exactly how this defect survived unnoticed in production.
+    which arguments were sent and in what shape. Without this the only symptom is
+    "the first call is always slow", with no way to tell WHICH argument or WHICH
+    spelling was at fault, which is how this defect survived unnoticed in
+    production.
 
     The result itself is returned to the model unchanged: the feedback it needs to
     self-correct is not ours to edit."""
-    if _SDK_VALIDATION_ERROR not in result:
+    if not result.startswith(_SDK_TOOL_ERROR_PREFIX) or _SDK_VALIDATION_ERROR not in result:
         return
     _LOGGER.warning(
-        "args_recovery: %s rejected the model's args by schema; args=%s reason=%s",
+        "args_recovery: %s rejected the model's args by schema; args=(%s) reason=%s",
         tool_name,
-        json.dumps(args, ensure_ascii=False)[:500],
-        result.split(_SDK_VALIDATION_ERROR, 1)[1][:500],
+        _arg_shapes(args),
+        result.split(_SDK_VALIDATION_ERROR, 1)[1][:300],
     )
 
 
