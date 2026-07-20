@@ -60,6 +60,33 @@ export function TurnStatus({
   // state a user reads as "it's broken". So a long one offers the obvious
   // action. Absent `onRetry` there is nothing to offer — someone else's turn is
   // not yours to restart.
+  // A send can be rejected by a gateway BEFORE it reaches the app: no turn runs,
+  // nothing is persisted, and no terminal event can ever arrive — so the
+  // deliberate "stay streaming, the turn may be running" tolerance waits
+  // forever. Past the point where any real turn would have produced SOMETHING,
+  // stop claiming to be waiting and say so. Visible output means the turn is
+  // real; length alone is never the reason.
+  // "No sign of life" is the real test, not the phase: a delta can arrive before
+  // any metrics do, which still reads as `prep`. Any assistant text or tool call
+  // means the turn is real and running.
+  const producedSomething = log.entries.some(
+    (e) =>
+      e.kind === "tool_call" ||
+      (e.kind === "message" && e.message.role === "assistant" && !!e.message.content),
+  );
+  if (phase === "prep" && !producedSomething && elapsedSec >= ABANDONED_AFTER_S) {
+    return (
+      <div className={className} style={box} data-testid="turn-abandoned">
+        這一輪似乎沒有開始 — 可能在送出時就中斷了。
+        {onRetry && (
+          <button type="button" data-testid="turn-retry" onClick={onRetry} style={retryBtn}>
+            重新問一次
+          </button>
+        )}
+      </div>
+    );
+  }
+
   const retry =
     onRetry && elapsedSec >= RETRY_AFTER_S ? (
       <button
@@ -109,6 +136,8 @@ export function TurnStatus({
 }
 
 const RETRY_AFTER_S = 60;
+// Past this with no sign of life at all, a turn is not slow — it never began.
+const ABANDONED_AFTER_S = 10 * 60;
 
 const retryBtn: React.CSSProperties = {
   marginLeft: 8,

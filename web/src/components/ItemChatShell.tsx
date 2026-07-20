@@ -1,3 +1,4 @@
+import { pxToRem } from "../lib/pxToRem";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -168,13 +169,24 @@ export function ItemChatShell({
     setActiveChatId((await createFreeChat()).chat_id);
   };
   const onWorkflow = (workflowId: string) => setPendingWorkflow(workflowId);
+  /** Why the last workflow launch failed, if it did. A launch that throws left
+   * the dialog closed and nothing else — indistinguishable from a launch that
+   * worked but is slow to show up, so the user waits for a run that never
+   * started. */
+  const [launchFailed, setLaunchFailed] = useState<string | null>(null);
+
   const confirmWorkflow = async () => {
     if (pendingWorkflow == null) return;
     const workflowId = pendingWorkflow;
     setPendingWorkflow(null);
-    const { chat_id } = await workflowApi.startRun(slug, itemId, workflowId);
-    void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
-    setActiveChatId(chat_id);
+    setLaunchFailed(null);
+    try {
+      const { chat_id } = await workflowApi.startRun(slug, itemId, workflowId);
+      void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
+      setActiveChatId(chat_id);
+    } catch (err: unknown) {
+      setLaunchFailed(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const active = chats.find((c) => c.chat_id === activeChatId) ?? null;
@@ -244,6 +256,15 @@ export function ItemChatShell({
           onConfirm={confirmWorkflow}
           onClose={() => setPendingWorkflow(null)}
         />
+      )}
+      {launchFailed && (
+        <p
+          data-testid="launch-failed"
+          role="alert"
+          style={{ margin: 0, padding: "6px 12px", fontSize: pxToRem(12), color: "var(--err)" }}
+        >
+          工作流程沒有啟動:{launchFailed}
+        </p>
       )}
       {active ? (
         <ItemChatPanel

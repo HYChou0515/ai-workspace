@@ -23,7 +23,11 @@ vi.mock("../api", () => ({ api: { getCurrentUser: vi.fn().mockResolvedValue("tes
  * hang they can only interpret as broken.
  */
 
-const THREAD = { messages: [{ role: "user" as const, content: "q" }] };
+// A just-asked question: hydration reads this as "a turn is running", which is
+// the state every one of these tests is about.
+const THREAD = {
+  messages: [{ role: "user" as const, content: "q", created_at: Date.now() }],
+};
 
 function transport(over: Partial<BroadcastChatTransport> = {}): BroadcastChatTransport {
   return {
@@ -182,5 +186,40 @@ describe("useChatSession — the recovery path can fail too", () => {
       timeout: 3000,
     });
     expect(result.current.connection.error).toContain("store unreachable");
+  });
+});
+
+/**
+ * Two states that were still unbounded or unmarked after everything above.
+ */
+describe("useChatSession — a gap in the answer, and a turn that never began", () => {
+  // Events published while nobody is attached are dropped and never replayed,
+  // so an answer that resumes after a reconnect is missing a piece — and it
+  // rejoined mid-sentence with nothing to show that. Silently splicing two
+  // halves together presents a mutilated answer as a whole one.
+  it("marks the answer as having a hole after a reconnect mid-turn", async () => {
+    let attempt = 0;
+    const { result } = render(
+      transport({
+        subscribe: async function* () {
+          attempt += 1;
+          if (attempt === 1) {
+            yield { type: "message_delta", text: "the first half" } as AgentEvent;
+            throw new Error("stream failed: 504");
+          }
+          yield { type: "message_delta", text: "the second half" } as AgentEvent;
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+
+    await waitFor(() => expect(attempt).toBeGreaterThanOrEqual(2), { timeout: 4000 });
+    await waitFor(
+      () =>
+        expect(
+          result.current.log.entries.map((e) => `${e.kind}:${e.kind === "message" ? e.message.role : ""}`),
+        ).toContain("banner:"),
+      { timeout: 4000 },
+    );
   });
 });
