@@ -180,3 +180,50 @@ describe("TurnStatus — a way out of a long wait", () => {
     expect(screen.queryByTestId("turn-retry")).not.toBeInTheDocument();
   });
 });
+
+/**
+ * A send can be rejected by a gateway BEFORE it reaches the app. No turn ever
+ * runs, so nothing is persisted and no terminal event can arrive — the deliberate
+ * "stay streaming, the turn may be running" tolerance then waits forever. The
+ * retry button is an exit, but only if the user thinks to press it; the wait
+ * itself has to stop claiming to be a wait.
+ */
+describe("TurnStatus — a wait that gave up", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("keeps waiting for as long as a turn plausibly takes", async () => {
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} />);
+    await act(async () => {
+      vi.advanceTimersByTime(120_000);
+    });
+    expect(screen.queryByTestId("turn-abandoned")).not.toBeInTheDocument();
+  });
+
+  it("stops claiming to be waiting once nothing has happened for far too long", async () => {
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.getByTestId("turn-abandoned")).toBeInTheDocument();
+  });
+
+  // Output means the turn is real and running; length is not a reason to
+  // declare it lost.
+  it("does not give up on a turn that is visibly producing output", async () => {
+    vi.useFakeTimers();
+    const answering = fold(
+      [{ type: "message_delta", text: "still going" } as AgentEvent],
+      streaming(),
+    );
+    render(<TurnStatus log={answering} />);
+    await act(async () => {
+      vi.advanceTimersByTime(11 * 60_000);
+    });
+    expect(screen.queryByTestId("turn-abandoned")).not.toBeInTheDocument();
+  });
+});

@@ -502,8 +502,18 @@ export function AgentPanel({
               window.open(docHref(c.document_id, c.snippet), "_blank", "noopener,noreferrer")
             }
             // Permission-disclosure: ask the withheld collection's owner for access.
+            // Asking for access is a request to a PERSON — the one action here
+            // with a human on the other end. Firing it into the void gave no way
+            // to tell "sent" from "silently failed", so the user's only recourse
+            // was to press it again and hope.
             onRequestAccess={(w) => {
-              void kbApi.requestCollectionAccess(w.collection_id);
+              void kbApi.requestCollectionAccess(w.collection_id).then(
+                () => setComposerHint("已送出存取申請,等待對方回覆。"),
+                (err: unknown) =>
+                  setComposerHint(
+                    `申請存取失敗:${err instanceof Error ? err.message : String(err)}`,
+                  ),
+              );
             }}
             // #51 P6: hydrated entries map 1:1 onto the persisted
             // conversation (logFromMessages), so the entry index IS the

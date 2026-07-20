@@ -77,11 +77,23 @@ export function useChatLog({
   }, [threadKey]);
 
   // Seed from the persisted thread, once per thread.
+  //
+  // The subscription starts at mount and this query resolves later, so events
+  // can already have arrived. Seeding with the authoritative replace would then
+  // delete them — the same "the answer vanished" failure as any other
+  // re-hydrate, just racing at mount instead of mid-turn. Reconcile whenever
+  // there is anything on screen to protect.
   useEffect(() => {
     if (threadKey == null || hydrated === undefined || hydratedFor.current === threadKey) return;
     hydratedFor.current = threadKey;
-    snapshot(hydrated);
-  }, [hydrated, threadKey, snapshot]);
+    setLog((prev) =>
+      prev.entries.length === 0
+        ? hydrated
+          ? logFromMessages(hydrated.messages)
+          : EMPTY_LOG
+        : reconcileSnapshot(prev, hydrated ?? { messages: [] }),
+    );
+  }, [hydrated, threadKey]);
 
   return { log, setLog, snapshot, reconcile };
 }

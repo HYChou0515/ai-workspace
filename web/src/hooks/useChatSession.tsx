@@ -192,6 +192,27 @@ export function useChatSession(
             : { state: "reconnecting", receiving: false, error: null, attempts: c.attempts + 1 },
         );
         if (stopped) return;
+        // Events published while nobody is attached are dropped and never
+        // replayed, so an answer that resumes after this gap is missing a piece
+        // and rejoins mid-sentence. Splicing the two halves together silently
+        // presents a mutilated answer as a whole one — say where the hole is.
+        // Gate on "an answer was being written", not on `streaming`: the
+        // subscription starts before hydration resolves, so the flag can still
+        // be false while text is visibly arriving. A hole only matters where
+        // there was something to interrupt.
+        setLog((prev) => {
+          const last = prev.entries[prev.entries.length - 1];
+          const midAnswer = last?.kind === "message" && last.message.role === "assistant";
+          return midAnswer
+            ? {
+                ...prev,
+                entries: [
+                  ...prev.entries,
+                  { kind: "banner", at: Date.now(), text: "連線中斷,這裡可能少了一段" },
+                ],
+              }
+            : prev;
+        });
         await sleep(backoff);
         if (stopped) return;
         const fresh = await transport.getThread().catch(() => null);
