@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbImageInput } from "../api/kb";
@@ -11,12 +11,8 @@ import {
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import { getKbSearchMax } from "../lib/kbSearchMax";
 import { getKbWikiMax } from "../lib/kbWikiMax";
-import {
-  EMPTY_LOG,
-  type AgentLog,
-  logFromMessages,
-  reduceAgent,
-} from "../pages/investigation/agentLog";
+import { EMPTY_LOG, type AgentLog, reduceAgent } from "../pages/investigation/agentLog";
+import { useChatLog } from "./useChatLog";
 
 /**
  * Drives one KB chat thread, reusing the RCA agent-log machinery so the KB chat
@@ -54,34 +50,23 @@ export function useKbChat({
 }): UseKbChat {
   const qc = useQueryClient();
   const [chatId, setChatId] = useState<string | null>(initialChatId);
-  const [log, setLog] = useState<AgentLog>(EMPTY_LOG);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Hydrate an existing thread (shares the cache with KbChatView's title
-  // query). A new thread (initialChatId == null) builds its log from the stream.
-  const { data: hydrated } = useQuery({
+  // Log state + hydration are shared with the broadcast chats (useChatLog); only
+  // the TRANSPORT below differs — here the POST *is* the stream, so there is no
+  // separate subscription (and therefore no reconnect / cross-pod poll to run).
+  const { log, setLog, snapshot } = useChatLog({
+    threadKey: initialChatId,
+    // Shares the cache with KbChatView's title query.
     queryKey: qk.kb.chat(initialChatId ?? "__new__"),
-    queryFn: () => client.getChat(initialChatId as string),
-    enabled: initialChatId != null,
-    staleTime: 0,
+    getThread: () => client.getChat(initialChatId as string),
   });
 
-  // Reset + abort the running stream when the mounted thread changes.
-  const hydratedFor = useRef<string | null>(null);
+  // Abort the running stream when the mounted thread changes.
   useEffect(() => {
     setChatId(initialChatId);
-    hydratedFor.current = null;
-    if (initialChatId == null) setLog(EMPTY_LOG);
     return () => abortRef.current?.abort();
   }, [initialChatId]);
-
-  // Seed the log from the hydrated thread, once per thread id.
-  useEffect(() => {
-    if (initialChatId == null || hydrated === undefined) return;
-    if (hydratedFor.current === initialChatId) return;
-    hydratedFor.current = initialChatId;
-    setLog(logFromMessages(hydrated.messages));
-  }, [hydrated, initialChatId]);
 
   const send = useCallback(
     async (content: string, image?: KbImageInput) => {
@@ -132,7 +117,7 @@ export function useKbChat({
         // Push it into the cache too so KbChatView's title query stays in sync.
         const fresh = await client.getChat(id);
         qc.setQueryData(qk.kb.chat(id), fresh);
-        setLog(logFromMessages(fresh.messages));
+        snapshot(fresh);
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;
         const msg = err instanceof Error ? err.message : String(err);
@@ -142,7 +127,7 @@ export function useKbChat({
         setLog((prev) => ({ ...prev, streaming: false }));
       }
     },
-    [chatId, collectionIds, excludedCollectionIds, client, log.streaming, onChatCreated, qc],
+    [chatId, collectionIds, excludedCollectionIds, client, log.streaming, onChatCreated, qc, setLog, snapshot],
   );
 
   const cancel = useCallback(() => {

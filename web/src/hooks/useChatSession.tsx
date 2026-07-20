@@ -1,19 +1,15 @@
-import { useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef } from "react";
 
 import type { AgentEvent } from "../events";
 import { isTerminal } from "../events";
-import {
-  EMPTY_LOG,
-  type AgentLog,
-  logFromMessages,
-  reduceAgent,
-} from "../pages/investigation/agentLog";
-import type { Message } from "../api/types";
+import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
+import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
 import { STORE_POLL_MS, useStorePollFallback } from "./useStorePollFallback";
 
 export { STORE_POLL_MS };
+export type { ChatThread };
 
 /**
  * The chat-turn state machine for a #43 BROADCAST chat, written once.
@@ -30,8 +26,6 @@ export { STORE_POLL_MS };
  * viewers see the turn, and nothing is pushed optimistically here (that would
  * double it).
  */
-
-export type ChatThread = { messages: readonly Message[] };
 
 export type ChatSendOpts = { applySkills?: string[]; imagePaths?: string[] };
 
@@ -74,38 +68,14 @@ export function useChatSession(
 ): ChatSession {
   const qc = useQueryClient();
   const currentUser = useCurrentUser();
-  const [log, setLog] = useState<AgentLog>(EMPTY_LOG);
   // Epoch ms of the last live event (or send) — gates the #202 store-poll so a
   // healthy same-pod stream is never polled over.
   const lastEventAtRef = useRef(0);
-  const { threadKey } = transport;
-
-  // Hydrate the persisted thread. staleTime 0 so each mount sees the turns the
-  // backend persisted after the last stream.
-  const { data: hydrated } = useQuery({
+  const { log, setLog, snapshot } = useChatLog({
+    threadKey: transport.threadKey,
     queryKey: transport.queryKey,
-    queryFn: () => transport.getThread(),
-    staleTime: 0,
+    getThread: transport.getThread,
   });
-
-  const snapshot = useCallback((thread: ChatThread | null | undefined) => {
-    setLog(thread ? logFromMessages(thread.messages) : EMPTY_LOG);
-  }, []);
-
-  // Reset when the thread changes; the subscription effect tears its own
-  // controller down via cleanup, keyed on the same id.
-  const hydratedFor = useRef<string | null>(null);
-  useEffect(() => {
-    hydratedFor.current = null;
-    setLog(EMPTY_LOG);
-  }, [threadKey]);
-
-  // Seed from the hydrated thread, once per thread.
-  useEffect(() => {
-    if (hydrated === undefined || hydratedFor.current === threadKey) return;
-    hydratedFor.current = threadKey;
-    snapshot(hydrated);
-  }, [hydrated, threadKey, snapshot]);
 
   // The long-lived broadcast subscription (#43) with the #493 auto-reconnect:
   // the stream can drop mid-turn (an idle ingress cut, a pod rollover). A dropped
