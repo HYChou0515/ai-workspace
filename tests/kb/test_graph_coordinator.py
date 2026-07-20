@@ -1,5 +1,6 @@
 from collections.abc import Iterator
 
+import msgspec
 from specstar import QB
 from specstar.types import Binary
 
@@ -70,3 +71,52 @@ async def test_graph_fan_out_extracts_only_opted_in_collections():
     assert on_claims[0].source_doc_id == "deck-A"
     assert on_claims[0].norm_metric == "revenue"
     assert _claims(spec, off) == []  # use_graph=False collection is skipped
+
+
+async def test_split_reconciles_the_permission_mirror_before_extracting():
+    """#534 slice 2: claims written before the mirror existed carry no verdict at
+    all, and the scope hides a claim whose mirror was never written. The split step
+    re-pushes the collection's verdict — and each deck's own override on top — onto
+    every claim it already holds, so the backfill rides the job that already runs
+    weekly instead of a one-shot operator step, and any later drift heals itself.
+
+    Cheap by construction: two bulk patches per collection, no LLM, and a patch
+    that changes nothing writes no revision."""
+    from workspace_app.perm import Permission
+    from workspace_app.resources.graph import GraphClaim
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "Q3 revenue 1.2M")])
+    # a deck tightened below its collection
+    drm = spec.get_resource_manager(SourceDoc)
+    doc = drm.get("deck-A").data
+    assert isinstance(doc, SourceDoc)
+    with drm.using("bob"):
+        drm.update(
+            "deck-A",
+            msgspec.structs.replace(
+                doc, permission=Permission(visibility="restricted", read_content=["user:amy"])
+            ),
+        )
+    # a pre-slice-2 claim: no mirror at all
+    grm = spec.get_resource_manager(GraphClaim)
+    with grm.using("bob"):
+        legacy = grm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-A",
+                norm_metric="revenue",
+                metric="Revenue",
+                value="1.2M",
+            )
+        ).resource_id
+
+    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord.reconcile_mirrors(cid)
+
+    got = grm.get(legacy).data
+    assert isinstance(got, GraphClaim)
+    assert got.collection_visibility == "public"
+    assert got.collection_created_by == "bob"
+    assert got.doc_visibility == "restricted"
+    assert got.doc_read_content == ["user:amy"]

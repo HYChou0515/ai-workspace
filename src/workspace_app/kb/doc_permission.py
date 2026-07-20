@@ -245,6 +245,31 @@ def push_mirror_to_claims(
     )
 
 
+def reset_doc_override_on_claims(
+    spec: SpecStar,
+    collection_id: str,
+    *,
+    created_by: str,
+) -> int:
+    """#534 slice 2 — set every claim in a collection to "the deck adds no
+    restriction", the BROAD half of the reconcile's broad-then-narrow pass.
+
+    Only the reconcile may call this. It deliberately clobbers the doc half for the
+    whole collection, which is safe there because the narrow pass immediately
+    re-applies each deck that really does carry an override — and is exactly why
+    the collection permission endpoint must NOT use it: that path has no narrow
+    pass, so it would quietly drop every per-deck tightening in the collection.
+    """
+    return _fan_out(
+        spec,
+        GraphClaim,
+        (QB["collection_id"] == collection_id).build(),
+        {"doc_visibility": "public", "doc_read_content": []},
+        as_user=created_by,
+        subject=f"collection {collection_id} → its claims (doc-override reset)",
+    )
+
+
 def push_doc_override_to_claims(
     spec: SpecStar,
     source_doc_id: str,
