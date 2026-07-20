@@ -27,6 +27,7 @@ export function useStorePollFallback<T>({
   isLive,
   fetchThread,
   onSnapshot,
+  onError,
   pollMs = STORE_POLL_MS,
 }: {
   /** A turn is in flight — poll only while this holds (e.g. `log.streaming`). */
@@ -38,10 +39,14 @@ export function useStorePollFallback<T>({
   fetchThread: () => Promise<T>;
   /** Receive each silent-poll snapshot of the persisted thread. */
   onSnapshot: (snapshot: T) => void;
+  /** Called when a poll read fails. Retrying is still correct — this is so a
+   * SUSTAINED failure (the recovery path itself being dead) can be reported
+   * rather than looking identical to "nothing has changed yet". */
+  onError?: (err: unknown) => void;
   pollMs?: number;
 }): void {
-  const ref = useRef({ isLive, fetchThread, onSnapshot });
-  ref.current = { isLive, fetchThread, onSnapshot };
+  const ref = useRef({ isLive, fetchThread, onSnapshot, onError });
+  ref.current = { isLive, fetchThread, onSnapshot, onError };
 
   useEffect(() => {
     if (!active) return;
@@ -51,8 +56,11 @@ export function useStorePollFallback<T>({
       try {
         const snapshot = await ref.current.fetchThread();
         if (!cancelled) ref.current.onSnapshot(snapshot);
-      } catch {
-        // Transient store-read failure — just retry on the next tick.
+      } catch (err: unknown) {
+        // Transient store-read failure — retry on the next tick, but say so:
+        // silently, a dead store read is indistinguishable from a quiet chat.
+        console.warn("store-poll: read failed", err);
+        ref.current.onError?.(err);
       }
     }, pollMs);
     return () => {

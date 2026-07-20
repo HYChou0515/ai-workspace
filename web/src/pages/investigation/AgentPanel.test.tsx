@@ -470,3 +470,54 @@ describe("AgentPanel — permission-disclosure readOnly composer", () => {
     expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
   });
 });
+
+/**
+ * "I did something and nothing happened" is the worst state the chat can be in,
+ * because it is indistinguishable from the app being dead. These are the three
+ * places it used to happen in silence.
+ */
+describe("AgentPanel — the composer always answers back", () => {
+  function panelWith(over: Partial<AgentState>) {
+    const agent = { ...stubAgent(), ...over } as AgentState;
+    return {
+      agent,
+      ...renderWithQuery(
+        <DialogProvider>
+          <AgentPanel
+            investigationId="it1"
+            agent={agent}
+            picker={[]}
+            suggestions={[{ label: "chip", prompt: "hello" }]}
+            attachedPreset=""
+            onAttachPreset={() => {}}
+            uploadDir="uploads"
+          />
+        </DialogProvider>,
+      ),
+    };
+  }
+
+  it("explains why Enter did nothing while a turn is running", async () => {
+    const streaming = { entries: [], streaming: true } as unknown as AgentState["log"];
+    const { agent } = panelWith({ log: streaming });
+
+    const box = screen.getByRole("textbox");
+    fireEvent.change(box, { target: { value: "my next question" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("回覆還在進行中");
+    // The draft is KEPT — retyping it would be the insult on top of the injury.
+    expect(box).toHaveValue("my next question");
+    expect(agent.send).not.toHaveBeenCalled();
+  });
+
+  it("confirms a Stop instead of just making the spinner vanish", async () => {
+    const streaming = { entries: [], streaming: true } as unknown as AgentState["log"];
+    const { agent } = panelWith({ log: streaming });
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(agent.cancel).toHaveBeenCalled();
+    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("已中止");
+  });
+});
