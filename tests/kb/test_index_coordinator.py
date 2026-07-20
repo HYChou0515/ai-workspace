@@ -7,6 +7,9 @@ own thread, then chains the wiki hook. A bad doc must not wedge the partition.
 
 from __future__ import annotations
 
+import asyncio
+import datetime as dt
+
 import msgspec
 from specstar import QB
 from specstar.types import Binary, MergePatch, TaskStatus
@@ -14,6 +17,10 @@ from specstar.types import Binary, MergePatch, TaskStatus
 from workspace_app.kb.index_coordinator import IndexCoordinator
 from workspace_app.kb.index_jobs import IndexJob
 from workspace_app.resources import Collection, SourceDoc, make_spec
+
+
+def _utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
 
 
 class _FakeIngestor:
@@ -852,10 +859,36 @@ async def test_an_empty_requester_is_not_replaced_by_the_worker_default():
 # ── stuck-doc reconciliation (#573) ──────────────────────────────────
 
 
+# The two time-sensitive tests below need "the doc is stale but its job just
+# moved" — a distinction a single grace cannot express when both rows are written
+# in the same instant, and specstar stamps `updated_time` in the store (a `now=`
+# argument does NOT backdate it). So they let the doc age for real: _TICK is well
+# past _GRACE, and anything written just before the sweep is well inside it.
+_TICK = 0.5
+_GRACE = 0.2
+
+
 def _status(spec, doc_id: str) -> tuple[str, str]:
     doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
     assert isinstance(doc, SourceDoc)
     return doc.status, doc.status_detail
+
+
+def _job_for(spec, doc_id: str):
+    rm = spec.get_resource_manager(IndexJob)
+    return next(iter(rm.list_resources((QB["partition_key"] == doc_id).build())))
+
+
+def _set_job(spec, doc_id: str, **fields) -> str:
+    """Put the doc's queued job into a given queue state, as the queue itself would."""
+    rm = spec.get_resource_manager(IndexJob)
+    job = _job_for(spec, doc_id)
+    data = job.data
+    assert isinstance(data, IndexJob)
+    rid = job.info.resource_id
+    with rm.using(user=job.info.created_by):
+        rm.update(rid, msgspec.structs.replace(data, **fields))
+    return rid
 
 
 async def test_sweep_fails_a_doc_whose_worker_was_killed_mid_index():
@@ -893,26 +926,62 @@ async def test_sweep_leaves_a_doc_whose_job_is_still_queued():
     assert _status(spec, doc_id)[0] == "indexing"
 
 
-async def test_sweep_leaves_a_doc_whose_job_is_being_worked_on():
-    """PROCESSING means a worker holds it. If that worker is dead, specstar's own
-    stale-job reaper reclaims the job first (it heartbeats); racing that reaper
-    from here would fail docs that are about to be retried."""
+async def test_sweep_leaves_a_doc_whose_worker_is_still_heartbeating():
+    """A claim is only proof of life while the holder keeps stamping it. A single
+    doc can legitimately index for hours (a big PDF), so age alone must never
+    condemn it — the live heartbeat is what says a worker is really on it."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc_id = _doc(spec, cid)
     coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
     coord.enqueue(doc_id, cid)
-    jrm = spec.get_resource_manager(IndexJob)
-    job = next(iter(jrm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())))
-    data = job.data
-    assert isinstance(data, IndexJob)
-    with jrm.using(user=job.info.created_by):  # ty: ignore[unresolved-attribute]
-        jrm.update(
-            job.info.resource_id,  # ty: ignore[unresolved-attribute]
-            msgspec.structs.replace(data, status=TaskStatus.PROCESSING),
-        )
+    await asyncio.sleep(_TICK)  # the doc is now well past the grace
+    _set_job(spec, doc_id, status=TaskStatus.PROCESSING, last_heartbeat_at=_utcnow())
 
-    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == []
+    assert coord.sweep_stuck_docs(stuck_after_seconds=_GRACE) == []
+    assert _status(spec, doc_id)[0] == "indexing"
+
+
+async def test_sweep_gives_a_verdict_when_the_claim_stopped_heartbeating():
+    """The claim that outlives its holder. specstar's own reaper would reclaim a
+    heartbeat-less PROCESSING job — but that reaper only runs inside a CONSUMING
+    process, so in a pod-split deploy whose index workers are down (scaled to
+    zero, or crashlooping on the very doc that killed them) nothing reclaims it.
+    Trusting PROCESSING unconditionally would disable the backstop in exactly the
+    incident it exists for."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+    coord.enqueue(doc_id, cid)
+    await asyncio.sleep(_TICK)
+    # The claim row itself is written NOW — only the heartbeat is old, so a rule
+    # reading the row's timestamp instead of the heartbeat would call this alive.
+    _set_job(
+        spec,
+        doc_id,
+        status=TaskStatus.PROCESSING,
+        last_heartbeat_at=_utcnow() - dt.timedelta(hours=1),
+    )
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=_GRACE) == [doc_id]
+    assert _status(spec, doc_id)[0] == "error"
+
+
+async def test_sweep_leaves_a_doc_whose_failed_job_is_still_being_retried():
+    """FAILED is not a verdict on every backend: RabbitMQ persists a job as FAILED
+    while the broker is still re-delivering it (`_stale_retry_status`), so reading
+    the status name alone would condemn a doc mid-retry — and the retry button
+    would then start a SECOND index racing the first over the same chunk set."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+    coord.enqueue(doc_id, cid)
+    await asyncio.sleep(_TICK)
+    _set_job(spec, doc_id, status=TaskStatus.FAILED)  # written just now → still churning
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=_GRACE) == []
     assert _status(spec, doc_id)[0] == "indexing"
 
 
@@ -926,9 +995,44 @@ async def test_sweep_defers_to_the_run_sweep_while_a_fanout_is_joining():
     doc_id = _doc(spec, cid)
     coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
     coord._runs.start(doc_id, cid, total=2)  # noqa: SLF001 — test drives the guard directly
+    await asyncio.sleep(_TICK)
+    coord._runs.mark_done(doc_id, 0)  # noqa: SLF001 — a batch just landed: the run is moving
 
-    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == []
+    assert coord.sweep_stuck_docs(stuck_after_seconds=_GRACE) == []
     assert _status(spec, doc_id)[0] == "indexing"
+
+
+async def test_sweep_gives_a_verdict_when_the_fanout_run_stopped_moving():
+    """A run pins the doc only while it is progressing. `sweep_stuck_runs` never
+    leaves `running` when its finalize keeps failing — it just re-enqueues for
+    ever — so an unbounded "a run exists" guard would recreate the exact
+    永遠沒有終點 this sweep exists to end, one level up."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+    coord._runs.start(doc_id, cid, total=2)  # noqa: SLF001 — test drives the guard directly
+    await asyncio.sleep(_TICK)  # …and then nothing else ever happens to it
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=_GRACE) == [doc_id]
+    assert _status(spec, doc_id)[0] == "error"
+
+
+async def test_sweep_keeps_the_docs_own_owner():
+    """#83: a doc's `updated_by` is its real owner, which every reader trusts. A
+    background sweep has no user of its own, so writing the verdict as the worker
+    default would silently reassign every abandoned doc to the machine."""
+    spec = make_spec(default_user="sweeper")
+    cid = _collection(spec)
+    rm = spec.get_resource_manager(SourceDoc)
+    with rm.using(user="alice"):
+        doc_id = rm.create(
+            SourceDoc(collection_id=cid, path="a.md", content=Binary(data=b"x"), status="indexing")
+        ).resource_id
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == [doc_id]
+    assert rm.get(doc_id).info.updated_by == "alice"
 
 
 async def test_sweep_ignores_docs_that_already_have_a_verdict():
@@ -969,3 +1073,32 @@ async def test_one_undecidable_doc_does_not_strand_the_rest(monkeypatch):
 
     assert coord.sweep_stuck_docs(stuck_after_seconds=0) == [good]
     assert _status(spec, bad)[0] == "indexing"
+
+
+async def test_the_walk_never_reverts_a_doc_another_pod_just_finished():
+    """The re-read walk enqueues BEFORE it flips (so no doc is ever left `indexing`
+    with nothing queued) — but that leaves a window in which another pod pops the
+    job, indexes the doc and writes `ready`, and the walk then writes `indexing`
+    back over it from the snapshot it read before the enqueue. That lost the fresh
+    `text` too, and with a doc-keyed sweep in place it no longer merely looks stuck:
+    an hour later the doc is declared FAILED while its content is perfectly indexed.
+    The flip must never overwrite a verdict written after we looked."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rm = spec.get_resource_manager(SourceDoc)
+    doc_id = _doc(spec, cid, "a.md")
+
+    class _FinishesMidWalk(_FakeIngestor):
+        def invalidate_cache(self, doc_id: str) -> None:
+            # Stands in for the other pod: between the walk's read and its flip,
+            # the index completes and writes the terminal status + text.
+            doc = rm.get(doc_id).data
+            assert isinstance(doc, SourceDoc)
+            rm.update(doc_id, msgspec.structs.replace(doc, status="ready", text="indexed body"))
+
+    coord = IndexCoordinator(spec, _FinishesMidWalk(), wiki_coordinator=None)  # ty: ignore
+    coord._requeue_one(doc_id, cid, "u", rm)  # noqa: SLF001 — the walk's per-doc step
+
+    doc = rm.get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    assert (doc.status, doc.text) == ("ready", "indexed body")

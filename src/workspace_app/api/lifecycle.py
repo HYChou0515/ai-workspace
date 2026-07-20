@@ -205,14 +205,18 @@ def build_lifespan(
 
     async def index_sweeper(app: FastAPI) -> None:
         """Periodically make sure no doc is left claiming to be busy. Two passes,
-        in this order, because they answer different questions:
+        answering different questions:
 
         - #227 ``sweep_stuck_runs`` RECOVERS a stuck fan-out — a lost finalize
           trigger (winner crashed) or a dead-lettered batch — salvaging the batches
           that did finish.
-        - #573 ``sweep_stuck_docs`` gives up honestly on a doc with nothing alive
-          behind it at all. It runs SECOND so a run the first pass just re-drove is
-          seen as alive rather than failed.
+        - #573 ``sweep_stuck_docs`` gives up honestly on a doc with nothing moving
+          behind it at all, including the single-job path a run never covers.
+
+        Each pass is suppressed SEPARATELY: they are independent backstops, so one
+        blowing up must not cost the other its tick — and the whole body, coordinator
+        lookup included, stays inside the guard, because an escape kills the task
+        and silently ends BOTH sweeps for the life of the process.
 
         Both are queue-agnostic, idempotent, and cheap (indexed queries), run off
         the loop since they do blocking specstar I/O. ``app`` is passed in (vs
@@ -221,9 +225,9 @@ def build_lifespan(
         try:
             while True:
                 await asyncio.sleep(INDEX_SWEEP_INTERVAL_S)
-                coordinator = app.state.index_coordinator
-                for sweep in (coordinator.sweep_stuck_runs, coordinator.sweep_stuck_docs):
+                for pass_name in ("sweep_stuck_runs", "sweep_stuck_docs"):
                     with contextlib.suppress(Exception):
+                        sweep = getattr(app.state.index_coordinator, pass_name)
                         await asyncio.to_thread(sweep, stuck_after_seconds=INDEX_STUCK_AFTER_S)
         except asyncio.CancelledError:
             return
