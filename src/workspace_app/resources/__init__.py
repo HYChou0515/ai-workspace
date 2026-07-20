@@ -37,6 +37,13 @@ from .agent_config import AgentConfig
 from .check_run import CheckRun
 from .citation_event import CitationEvent
 from .conversation import Conversation, Message
+from .eval import (
+    EvalBatchStat,
+    EvalResult,
+    EvalRun,
+    eval_batch_stat_id,
+    eval_run_id,
+)
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
@@ -82,6 +89,11 @@ __all__ = [
     "KbChat",
     "Message",
     "Notification",
+    "EvalBatchStat",
+    "EvalResult",
+    "EvalRun",
+    "eval_batch_stat_id",
+    "eval_run_id",
     "SanityResult",
     "SanityVerdict",
     "SourceDoc",
@@ -563,6 +575,16 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     spec.add_model(CheckRun, indexed_fields=["check_id"])
     # Model-sanity matrix cells (current-only). model indexed so the FE lists
     # one model's grid without a full scan; auto routes serve GET /sanity-result.
+    # #535: retrieval-eval. `EvalResult` is the durable per-(collection, run)
+    # baseline — `collection_id` + `run_label` indexed so the FE lists a
+    # collection's runs. `EvalRun` is the fan-out join state (mirror `IndexRun`):
+    # `status` + `collection_id` indexed for the safety sweep / per-collection
+    # lookup; the per-run reads are point gets by id. `EvalBatchStat` is transient
+    # per-batch staging (mirror `IndexUnitText`), indexed by (collection, run) so
+    # finalize lists a run's batches to rejoin, then deletes them.
+    spec.add_model(EvalResult, indexed_fields=["collection_id", "run_label"])
+    spec.add_model(EvalRun, indexed_fields=["status", "collection_id"])
+    spec.add_model(EvalBatchStat, indexed_fields=["collection_id", "run_label"])
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a
     # verdict get/list is a query; auto routes serve GET /sanity-verdict.
