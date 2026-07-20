@@ -212,6 +212,11 @@ async def test_apply_steer_writes_edits_deletes_invalidated_and_journals_receipt
         ".workflow/collections/step_ingest/a.json",
         ".workflow/collections/step_ingest/b.json",
     ]
+    # ONE dialect per record: `applied` is derived from the steerer's own edit
+    # paths and `deleted` from glob, so without normalising both the audit
+    # receipt would carry the two forms side by side — the very thing that made
+    # the agent misread paths in the first place.
+    assert rec["applied"] and not any(p.startswith("/") for p in rec["applied"])
 
 
 async def test_apply_steer_receipts_are_sequential():
