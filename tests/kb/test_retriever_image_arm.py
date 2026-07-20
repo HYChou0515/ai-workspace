@@ -39,11 +39,11 @@ def _spy_fields(r: Retriever, query: str, cids: list[str]) -> dict[str, int]:
     calls: list[tuple[str, int]] = []
     real = r._dense_order
 
-    def spy(collection_ids, vec, *, field="embedding", location=None, exclude_doc_ids=frozenset()):
+    def spy(collection_ids, vec, *, field="embedding", **kw):
+        # **kw so the spy records the fan-out without pinning the scope kwargs — a new
+        # retrieval filter is a change to the query, not to what this test asserts.
         calls.append((field, len(vec)))
-        return real(
-            collection_ids, vec, field=field, location=location, exclude_doc_ids=exclude_doc_ids
-        )
+        return real(collection_ids, vec, field=field, **kw)
 
     r._dense_order = spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     r.search(query, collection_ids=cids)

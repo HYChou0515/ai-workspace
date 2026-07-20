@@ -526,6 +526,71 @@ def test_empty_llm_replies_fall_back_to_the_plain_query(
     assert passages[0].document_id == encode_doc_id(cid, "reflow.md")
 
 
+def test_search_restricted_to_doc_ids_returns_only_those_docs(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#518: the positive mirror of `exclude_doc_ids` — scope the whole search (dense
+    AND BM25) to a named set of documents. This is what a context card's linked
+    documents narrow the vector top-k to."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="reflow.md",
+        data=b"reflow oven temperature drifted in zone three causing solder voids",
+    )
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="second.md",
+        data=b"reflow temperature also matters greatly for this second document here",
+    )
+    wanted = encode_doc_id(cid, "reflow.md")
+    r = Retriever(spec, embedder=embedder)
+    # baseline: both docs are reachable
+    assert {p.document_id for p in r.search("reflow temperature", [cid])} == {
+        wanted,
+        encode_doc_id(cid, "second.md"),
+    }
+
+    got = r.search("reflow temperature", [cid], restrict_to_doc_ids=frozenset({wanted}))
+    assert got, "the restricted doc should still return passages"
+    assert all(p.document_id == wanted for p in got)
+
+
+def test_restriction_finds_content_shared_with_a_sibling_document(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#518 × #104: identical bytes at two paths share ONE chunk set, and those chunks
+    carry only ONE holder in `source_doc_id`. Restricting to the OTHER holder must still
+    reach them — otherwise linking a card to the 'wrong' duplicate silently retrieves
+    nothing. This is why the restriction matches on the content hash first."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    shared = b"reflow oven temperature drifted in zone three causing solder voids"
+    ing.ingest(collection_id=cid, user="u", filename="first.md", data=shared)
+    ing.ingest(collection_id=cid, user="u", filename="copy.md", data=shared)
+
+    r = Retriever(spec, embedder=embedder)
+    for path in ("first.md", "copy.md"):
+        got = r.search(
+            "reflow temperature", [cid], restrict_to_doc_ids=frozenset({encode_doc_id(cid, path)})
+        )
+        assert got, f"restricting to {path} found nothing — the shared chunk set was missed"
+
+
+def test_restriction_to_an_unknown_doc_matches_nothing(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """A dangling link resolves to no content, so the restricted search is empty. The
+    retriever does NOT paper over it — deciding that an empty scope should fall back to
+    an open search is the caller's call (see the card-anchored path)."""
+    cid = _ingest(spec, chunker, embedder, "a.md", "reflow oven temperature zone three")
+    r = Retriever(spec, embedder=embedder)
+    assert r.search("reflow", [cid], restrict_to_doc_ids=frozenset({"no-such-doc"})) == []
+
+
 def test_search_excludes_denied_docs(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
