@@ -218,6 +218,7 @@ def create_app(
     wiki_reflect_daily: str | None = None,
     read_file_max_lines: int = 2000,
     read_file_max_chars: int = 200_000,
+    tool_output_max_chars: int = 200_000,
     exec_output_max_chars: int = 30_000,
     # #219: single-file upload cap in bytes (0 ⇒ no cap). Streaming keeps RAM
     # flat, so this guards disk + sandbox-wake cost. Threaded from
@@ -860,6 +861,7 @@ def create_app(
         prebuilt_dir=prebuilt_dir,
         read_file_max_lines=read_file_max_lines,
         read_file_max_chars=read_file_max_chars,
+        tool_output_max_chars=tool_output_max_chars,
         exec_output_max_chars=exec_output_max_chars,
         infer_modules_parallelism=infer_modules_parallelism,
         history_max_messages=history_max_messages,

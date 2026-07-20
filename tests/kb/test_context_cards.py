@@ -232,3 +232,29 @@ def test_find_cards_by_key_is_membership_not_substring_and_scoped():
     assert find_cards_by_key(spec, a, "M4") == []  # "m4" is not the element "m40"
     _card(spec, a, ["M4"], body="in-a")
     assert find_cards_by_key(spec, b, "m4") == []  # other collection excluded
+
+
+def test_a_long_card_body_is_truncated_rather_than_injected_whole():
+    """Cards are injected automatically — on every kb_search, up to 50 at a time,
+    without the agent asking. So one card someone pasted a spec into becomes a
+    tax on every search of that collection, not a one-off cost."""
+    block = card_context_block([_mkcard(["M4"], "x" * 50_000)])
+
+    assert len(block) < 5_000
+    assert "M4" in block  # the term is still defined, just not at full length
+
+
+def test_the_injected_block_stops_at_a_total_budget_and_says_how_many_it_dropped():
+    cards = [_mkcard([f"TERM{i}"], "y" * 1_500) for i in range(50)]
+
+    block = card_context_block(cards)
+
+    assert len(block) < 30_000
+    assert "TERM0" in block
+    assert "50" in block  # how many matched, so the omission is visible
+
+
+def test_a_short_glossary_block_is_untouched():
+    block = card_context_block([_mkcard(["M4"], "the cap layer over metal 4")])
+
+    assert block.endswith("the cap layer over metal 4")

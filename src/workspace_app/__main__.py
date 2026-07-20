@@ -289,6 +289,7 @@ def main() -> None:
             root_path=settings.server.root_path,
             read_file_max_lines=settings.read_file.max_lines,
             read_file_max_chars=settings.read_file.max_chars,
+            tool_output_max_chars=settings.exec.tool_output_max_chars,
             exec_output_max_chars=settings.exec.output_max_chars,
             wiki_maintainer_max_turns=settings.kb.wiki.maintainer_max_turns,
             wiki_reader_max_turns=settings.kb.wiki.reader_max_turns,

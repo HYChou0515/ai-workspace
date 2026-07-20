@@ -342,9 +342,16 @@
 # A tool command (e.g. `grep` over a big file) whose stdout+stderr
 # exceeds this is truncated head+tail with a notice, so one call can't
 # flood the model's context. Smaller than read_file's cap because tool
-# outputs accumulate across turns.
+# outputs accumulate across turns. The same budget bounds the listing
+# tools (list_files / list_sources) and the content a rejected
+# write/edit echoes back.
+# `tool_output_max_chars` is the ABSOLUTE ceiling on any one tool
+# result, applied to EVERY tool rather than trusting each to cap
+# itself — a backstop, so it sits at the widest legitimate single
+# answer (a full read_file). Lower it for a small-context model.
 # exec:
 #   output_max_chars: 30000
+#   tool_output_max_chars: 200000
 
 # ─── cross-turn memory (chat history replay) ──── [OPT] ─────────────
 # `max_context_tokens` (issue #45): after the message-count window,

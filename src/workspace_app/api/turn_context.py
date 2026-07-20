@@ -79,6 +79,7 @@ class TurnContextBuilder:
         prebuilt_dir: Path | None,
         read_file_max_lines: int,
         read_file_max_chars: int,
+        tool_output_max_chars: int,
         exec_output_max_chars: int,
         infer_modules_parallelism: int,
         history_max_messages: int,
@@ -100,6 +101,7 @@ class TurnContextBuilder:
         self._prebuilt_dir = prebuilt_dir
         self._read_file_max_lines = read_file_max_lines
         self._read_file_max_chars = read_file_max_chars
+        self._tool_output_max_chars = tool_output_max_chars
         self._exec_output_max_chars = exec_output_max_chars
         self._infer_modules_parallelism = infer_modules_parallelism
         self._history_max_messages = history_max_messages
@@ -144,6 +146,7 @@ class TurnContextBuilder:
             deck_vlm=self._deck_vlm,
             read_file_max_lines=self._read_file_max_lines,
             read_file_max_chars=self._read_file_max_chars,
+            tool_output_max_chars=self._tool_output_max_chars,
             exec_output_max_chars=self._exec_output_max_chars,
             history=history_items(
                 history_messages,

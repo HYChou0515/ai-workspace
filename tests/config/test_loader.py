@@ -1008,3 +1008,21 @@ def test_sandbox_durable_defaults_to_following_the_api_filestore_501(tmp_path: P
     assert s.sandbox.durable.kind == ""
     assert s.sandbox.durable.nfs_root == ""
     assert s.sandbox.durable.migrate_from == ""
+
+
+def test_tool_output_ceiling_is_operator_tunable(tmp_path: Path):
+    """The ceiling every tool's answer passes under is a deploy decision: a
+    small-context model needs it far below the default. A knob nothing reads is
+    worse than no knob, so this pins the YAML → Settings half and
+    `tests/api/test_tool_output_cap_wiring.py` pins Settings → the turn."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            exec:
+              tool_output_max_chars: 12000
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.exec.tool_output_max_chars == 12000
+    assert s.exec.output_max_chars == 30_000  # the sibling knob keeps its default

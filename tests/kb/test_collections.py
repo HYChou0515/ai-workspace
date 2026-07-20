@@ -132,3 +132,20 @@ def test_resolve_collection_miss_returns_available():
     got = resolve_collection(spec, "nonexistent")
     assert got["status"] == "not_found"
     assert {c["id"] for c in got["available"]} == {cid}
+
+
+def test_resolve_collection_miss_suggests_the_closest_names_not_the_whole_catalog():
+    """A miss used to answer with every collection in the deployment — one typo
+    dumped the catalog into the turn. The useful part of that answer was always
+    the handful of names near what was asked for."""
+    spec = make_spec(default_user="u")
+    for i in range(80):
+        _coll(spec, f"Unrelated {i}")
+    wanted = _coll(spec, "Defect Log")
+
+    got = resolve_collection(spec, "Defect Logs")
+
+    assert got["status"] == "not_found"
+    assert len(got["available"]) < 80
+    assert wanted in {c["id"] for c in got["available"]}  # the near miss survives the cut
+    assert got["total"] == 81  # the agent can still tell how many exist

@@ -12,9 +12,13 @@ from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 
 
-def _ctx(**kw: object) -> RunContextWrapper[AgentToolContext]:
+def _ctx(exec_output_max_chars: int = 30_000) -> RunContextWrapper[AgentToolContext]:
     return RunContextWrapper(
-        AgentToolContext(investigation_id="inv-1", files=WorkspaceFiles(MemoryFileStore()), **kw)
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=WorkspaceFiles(MemoryFileStore()),
+            exec_output_max_chars=exec_output_max_chars,
+        )
     )
 
 
@@ -53,7 +57,7 @@ async def test_a_huge_directory_is_cut_to_the_budget_with_a_countable_notice():
     """One directory can still hold more entries than the context can take, so
     the listing itself is capped — and says what it held so the agent knows the
     listing is partial rather than believing it saw everything."""
-    ctx = _ctx(exec_output_max_chars=400)
+    ctx = _ctx(400)
     for i in range(500):
         await write_file_impl(ctx, f"/data/f{i:04d}.txt", "x")
 

@@ -155,6 +155,21 @@ def match_with_ids(
     return [(id_by_identity[id(c)], c) for c in match(text, build_vocab(cards), cap=cap)]
 
 
+# A glossary entry is a definition read in passing, not a document: long enough
+# for a paragraph or two of curated meaning, short enough that a whole block of
+# them still leaves room for the passages they annotate.
+CARD_BODY_MAX_CHARS = 2_000
+CARD_BLOCK_MAX_CHARS = 20_000
+
+
+def _capped_body(body: str) -> str:
+    """One card's definition, trimmed at a sentence-agnostic boundary with a
+    marker — the term stays defined, it just stops being a document."""
+    if len(body) <= CARD_BODY_MAX_CHARS:
+        return body
+    return body[:CARD_BODY_MAX_CHARS] + "\n[definition truncated — open the card to read the rest]"
+
+
 def card_context_block(cards: list[ContextCard], *, ids: list[str] | None = None) -> str:
     """Render matched cards as a labelled context block to inject into the KB
     chat agent's turn — empty string when nothing matched (so the caller adds
@@ -165,13 +180,22 @@ def card_context_block(cards: list[ContextCard], *, ids: list[str] | None = None
     When ``ids`` (a list parallel to ``cards``) is given, each entry's heading also
     carries ``[card_id: <rid>]`` (#111) so the agent's ``lookup_glossary`` output is a
     read-before-write surface — it can target a card for ``update_context_card``. The
-    route-injection path passes no ids and stays id-less."""
+    route-injection path passes no ids and stays id-less.
+
+    Both budgets below exist because this block is injected *automatically* —
+    on every ``kb_search``, up to ``cap`` cards at a time, without the agent
+    asking for it. The match count was capped from the start; the LENGTH never
+    was, so one card someone pasted a spec into became a tax on every search of
+    that collection. A definition is meant to be read in passing, so a long one
+    is truncated rather than allowed to crowd out the passages it annotates."""
     if not cards:
         return ""
     parts = [
         "Internal glossary entries relevant to the question — treat them as "
         "authoritative and do not search the knowledge base for these terms:"
     ]
+    used = 0
+    shown = 0
     for i, c in enumerate(cards):
         label = c.title or (c.keys[0] if c.keys else "")
         aliases = ", ".join(c.keys)
@@ -180,5 +204,15 @@ def card_context_block(cards: list[ContextCard], *, ids: list[str] | None = None
             header += f" ({aliases})"
         if ids is not None:
             header += f" [card_id: {ids[i]}]"
-        parts.append(f"{header}\n{c.body}")
+        entry = f"{header}\n{_capped_body(c.body)}"
+        if used + len(entry) > CARD_BLOCK_MAX_CHARS and shown:
+            break
+        used += len(entry)
+        shown += 1
+        parts.append(entry)
+    if shown < len(cards):
+        parts.append(
+            f"[{shown} of {len(cards)} matching glossary entries shown — "
+            f"look the rest up by term with lookup_glossary]"
+        )
     return "\n\n".join(parts)

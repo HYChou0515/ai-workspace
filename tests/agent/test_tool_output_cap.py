@@ -1,7 +1,7 @@
 """Every tool the agent can call has a ceiling on what it puts in the model's
 context — enforced by the toolset, not by each tool's author remembering."""
 
-from agents import FunctionTool, RunContextWrapper, ToolOutputImage
+from agents import Agent, FunctionTool, RunContextWrapper, ToolOutputImage
 from agents.tool_context import ToolContext
 from agents.tool_guardrails import ToolOutputGuardrailData
 
@@ -22,7 +22,8 @@ async def _run_cap(tool: FunctionTool, output: object, *, cap: int = 100) -> obj
         RunContextWrapper(actx), tool_name=tool.name, tool_call_id="call-1", tool_arguments="{}"
     )
     guardrail = (tool.tool_output_guardrails or [])[0]
-    result = await guardrail.run(ToolOutputGuardrailData(context=tctx, agent=None, output=output))
+    data = ToolOutputGuardrailData(context=tctx, agent=Agent(name="probe"), output=output)
+    result = await guardrail.run(data)
     if result.behavior["type"] == "reject_content":
         return result.behavior["message"]
     return output

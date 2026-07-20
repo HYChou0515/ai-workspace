@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Iterable
+from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any
 
 from specstar import QB
@@ -227,13 +228,39 @@ def _all_collections(spec: SpecStar) -> list[tuple[str, Collection]]:
     ]
 
 
+# How many names a miss suggests. A miss is a typo or a half-remembered name,
+# so what helps is the few names NEAR what was asked for — the rest of the
+# catalog is noise the agent pays for in context on every fat-fingered lookup.
+_NEAREST_MAX = 20
+
+
+def _nearest(ref: str, colls: list[tuple[str, Collection]]) -> list[dict[str, str]]:
+    """The collections closest to `ref`, best first, at most `_NEAREST_MAX`.
+
+    Substring hits rank above fuzzy ones (a user who typed half a name means
+    that name); ties break alphabetically so the same miss always suggests the
+    same list."""
+    folded = ref.casefold()
+
+    def rank(item: tuple[str, Collection]) -> tuple[int, float, str]:
+        name = item[1].name
+        contains = 0 if folded in name.casefold() else 1
+        ratio = SequenceMatcher(None, folded, name.casefold()).ratio()
+        return (contains, -ratio, name)
+
+    return [{"id": cid, "name": c.name} for cid, c in sorted(colls, key=rank)[:_NEAREST_MAX]]
+
+
 def resolve_collection(spec: SpecStar, ref: str) -> dict[str, Any]:
     """Resolve a user-given collection ``ref`` (an id **or** a name) to its
     canonical ``{id, name}``. **Resolve only — never writes.** Returns one of:
 
     - ``{"status": "ok", "id", "name"}`` — a unique match (id, or case-insensitive name);
     - ``{"status": "ambiguous", "candidates": [{id, name}, …]}`` — the name hit several;
-    - ``{"status": "not_found", "available": [{id, name}, …]}`` — no match; lists all.
+    - ``{"status": "not_found", "available": [{id, name}, …], "total": N}`` — no
+      match; ``available`` is the closest names (not the whole catalog, which on
+      a real deployment is hundreds of rows the agent never asked for), and
+      ``total`` says how many exist so a short list can't read as "that's all".
     """
     colls = _all_collections(spec)
     for cid, c in colls:
@@ -248,7 +275,11 @@ def resolve_collection(spec: SpecStar, ref: str) -> dict[str, Any]:
             "status": "ambiguous",
             "candidates": [{"id": cid, "name": c.name} for cid, c in matches],
         }
-    return {"status": "not_found", "available": [{"id": cid, "name": c.name} for cid, c in colls]}
+    return {
+        "status": "not_found",
+        "available": _nearest(ref, colls),
+        "total": len(colls),
+    }
 
 
 def resolve_profile_collections(

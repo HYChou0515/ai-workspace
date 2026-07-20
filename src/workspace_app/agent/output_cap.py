@@ -88,7 +88,11 @@ def _rendered(output: Any) -> str | None:
     """
     if isinstance(output, _STRUCTURED):
         return None
-    if isinstance(output, list | tuple) and output and all(isinstance(i, _STRUCTURED) for i in output):
+    if (
+        isinstance(output, list | tuple)
+        and output
+        and all(isinstance(i, _STRUCTURED) for i in output)
+    ):
         return None
     return str(output)
 
