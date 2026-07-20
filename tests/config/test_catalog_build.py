@@ -120,8 +120,17 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
         "lookup_glossary",
         "request_wiki_update",
     ]
-    assert "knowledge base" in kb.system_prompt.lower()  # ty: ignore[unresolved-attribute]
-    assert "[n]" in kb.system_prompt  # ty: ignore[unresolved-attribute]
+    prompt = kb.system_prompt  # ty: ignore[unresolved-attribute]
+    assert "knowledge base" in prompt.lower()
+    assert "[n]" in prompt
+    # #537: the prompt must NAME all three sources and say when each one is right.
+    # It previously opened with "the knowledge base, reachable through the
+    # `kb_search` tool" and never mentioned the wiki in 99 lines — so the agent
+    # had no reason to consult it however generous its allowance was, and a
+    # granted wiki tool went permanently unused.
+    for tool in ("lookup_glossary", "ask_wiki", "kb_search"):
+        assert tool in prompt, tool
+    assert "Stop as soon as you can answer" in prompt  # cheap first, don't over-search
     assert kb.suggestions  # quick-prompt chips ship with the config  # ty: ignore
 
 
