@@ -23,7 +23,7 @@ def _files() -> WorkspaceFiles:
 
 
 class _WalkCountingSandbox(MockSandbox):
-    """Counts `walk` calls and root liveness probes, so a test can assert the
+    """Counts measurements and root liveness probes, so a test can assert the
     quota re-measures on a window boundary rather than on every question asked
     of it, and that gating a write doesn't double the probing it costs."""
 
@@ -32,9 +32,9 @@ class _WalkCountingSandbox(MockSandbox):
         self.walk_calls = 0
         self.liveness_probes = 0
 
-    async def walk(self, handle: SandboxHandle, root: str):  # type: ignore[no-untyped-def]
+    async def disk_usage(self, handle: SandboxHandle) -> int:
         self.walk_calls += 1
-        return await super().walk(handle, root)
+        return await super().disk_usage(handle)
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
         if path == "/":  # WorkspaceFiles._warm's liveness probe
@@ -87,6 +87,13 @@ async def test_usage_is_remeasured_once_per_window_not_once_per_question():
     assert await files.workspace_usage("ws1") == 400  # still the window's answer
     clock["t"] += 5.0
     assert await files.workspace_usage("ws1") == 500  # window elapsed → re-measured
+
+
+def _always(handle: SandboxHandle):
+    async def _resolve(_ws: str) -> SandboxHandle:
+        return handle
+
+    return _resolve
 
 
 async def _warm(
@@ -204,22 +211,6 @@ async def test_an_over_quota_workspace_can_still_be_tidied_up():
     assert await files.workspace_usage("ws1") == 0
 
 
-async def test_regenerable_build_junk_is_not_charged_to_the_quota():
-    # The mirror filters `should_ignore` paths out before writing the durable
-    # store, so those bytes never reach the disk this quota protects. Charging
-    # for them would let one `npm install` inside the workspace consume a 20 GiB
-    # quota with content that is never persisted — and would make the number
-    # drop discontinuously when the sandbox is reaped and the measurement falls
-    # back to the durable side. (`registry._scratch_usage` counting them IS
-    # right: that cap guards the scratch volume, which really does hold them.)
-    files, _fs, sb, handle = await _warm()
-    await sb.upload(handle, b"x" * 100, "/keep.bin")
-    await sb.upload(handle, b"y" * 5000, "/node_modules/left-pad/index.js")
-    await sb.upload(handle, b"z" * 5000, "/.venv/lib/thing.py")
-    await sb.upload(handle, b"w" * 5000, "/src/__pycache__/mod.cpython-312.pyc")
-    assert await files.workspace_usage("ws1") == 100
-
-
 async def test_warm_file_size_reads_the_sandbox_not_the_snapshot():
     files, fs, sb, handle = await _warm()
     await sb.upload(handle, b"z" * 250, "/only-in-sandbox.bin")
@@ -299,13 +290,13 @@ async def test_two_racing_measurements_walk_once_and_do_not_lose_a_write():
     handle = await sb.create(SandboxSpec())
     gate = asyncio.Event()
 
-    inner_walk = sb.walk
+    inner = sb.disk_usage
 
-    async def _slow_walk(h: SandboxHandle, root: str):
+    async def _slow(h: SandboxHandle):
         await gate.wait()
-        return await inner_walk(h, root)
+        return await inner(h)
 
-    sb.walk = _slow_walk  # ty: ignore[invalid-assignment]
+    sb.disk_usage = _slow  # ty: ignore[invalid-assignment]
 
     async def _resolve(_ws: str) -> SandboxHandle:
         return handle
@@ -336,7 +327,7 @@ async def test_a_swept_measurement_spares_the_request_from_walking():
         return handle
 
     files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, quota=1000)
-    files.record_measurement("ws1", {"/a.bin": 300, "/b.bin": 200})
+    files.record_measurement("ws1", 500)
 
     assert await files.workspace_usage("ws1") == 500
     assert sb.walk_calls == 0  # the sweep already answered this
@@ -354,7 +345,7 @@ async def test_a_swept_measurement_still_tracks_this_process_s_own_writes():
 
     files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, quota=10_000)
     await sb.upload(handle, b"x" * 300, "/a.bin")
-    files.record_measurement("ws1", {"/a.bin": 300})  # as the sweep would
+    files.record_measurement("ws1", 300)  # as the sweep would
     walks = sb.walk_calls
 
     await files.write("ws1", "/b.bin", b"y" * 200)
@@ -374,10 +365,10 @@ async def test_an_unreachable_sandbox_degrades_to_the_durable_number():
     sb = MockSandbox()
     handle = await sb.create(SandboxSpec())
 
-    async def _blown_walk(_h: SandboxHandle, _root: str):
+    async def _blown(_h: SandboxHandle):
         raise SandboxBusy("still starting up")
 
-    sb.walk = _blown_walk  # ty: ignore[invalid-assignment]
+    sb.disk_usage = _blown  # ty: ignore[invalid-assignment]
 
     async def _resolve(_ws: str) -> SandboxHandle:
         return handle
@@ -397,11 +388,41 @@ async def test_measurements_from_the_sweep_are_also_expired():
     # this reads the store directly.
     clock = {"t": 0.0}
     files = WorkspaceFiles(MemoryFileStore(), usage_window=5.0, now=lambda: clock["t"])
-    files.record_measurement("gone-1", {"/a": 1})
-    files.record_measurement("gone-2", {"/a": 1})
+    files.record_measurement("gone-1", 1)
+    files.record_measurement("gone-2", 1)
     clock["t"] = 6.0
-    files.record_measurement("still-here", {"/a": 1})
+    files.record_measurement("still-here", 1)
     assert set(files._tree) == {"still-here"}  # noqa: SLF001 — no public surface
+
+
+async def test_usage_comes_from_the_sandbox_not_from_a_local_tally():
+    # #538 follow-up: the measurement lived in this process — one map per warm
+    # item, per pod. Two pods serving the same sandbox each kept their own, so
+    # the usage bar could disagree with itself depending on which one answered,
+    # and the overshoot multiplied by the number of pods. Asking the sandbox
+    # makes the number a property of the workspace instead of of the process.
+    files, _fs, sb, handle = await _warm()
+    await sb.upload(handle, b"z" * 400, "/generated.bin")
+    await sb.upload(handle, b"y" * 500, "/node_modules/dep/index.js")
+
+    # counted: it is on the disk, and the file tree shows it
+    assert await files.workspace_usage("ws1") == 900
+    # a SECOND facade — a different pod — sees the same number with no shared state
+    other_pod = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_always(handle))
+    assert await other_pod.workspace_usage("ws1") == 900
+
+
+async def test_build_output_counts_because_the_file_tree_shows_it():
+    # #541 filtered `should_ignore` paths out of the measurement, on the grounds
+    # that the mirror never persists them. But the file tree lists them, so that
+    # left the two views disagreeing — which is the whole of #538, in reverse.
+    # The quota caps the disk being consumed; `node_modules/` is consuming it.
+    files, _fs, sb, handle = await _warm()
+    await sb.upload(handle, b"x" * 100, "/keep.txt")
+    await sb.upload(handle, b"y" * 5000, "/node_modules/dep/index.js")
+    tree = dict(await files.stat_all("ws1"))
+    assert "/node_modules/dep/index.js" in tree  # the user can see it
+    assert await files.workspace_usage("ws1") == sum(tree.values())  # ... and is charged for it
 
 
 class _NoUsageStore:

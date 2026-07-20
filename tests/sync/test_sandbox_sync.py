@@ -366,18 +366,18 @@ async def test_mirror_skips_deletion_when_sandbox_vanishes_mid_walk_366(
     assert await fs.exists("ws", "/keep.txt") is True
 
 
-async def test_mirror_hands_the_quota_the_sizes_it_just_walked(
+async def test_mirror_hands_the_quota_the_size_it_just_walked(
     fs: SpecstarFileStore, sandbox: MockSandbox
 ):
-    # #538 follow-up: the sweep already walks the whole workspace every few
-    # seconds, so the quota takes its measurement from here instead of walking
-    # again on somebody's request. The set it reports is the one it PERSISTS —
-    # post-`should_ignore` — so the quota counts exactly the bytes that reach
-    # the durable store, and can't be filled up by regenerable build junk.
-    measured: dict[str, dict[str, int]] = {}
+    # #538 follow-up: the sweep already traverses the whole workspace every few
+    # seconds, so the quota takes its number from here instead of measuring
+    # again on somebody's request. It reports the WHOLE walk, not the subset it
+    # persists: the quota caps the disk being used, the file tree shows every
+    # one of those bytes, and filtering here would leave the two disagreeing.
+    measured: dict[str, int] = {}
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(
-        filestore=fs, sandbox=sandbox, on_measured=lambda ws, sizes: measured.update({ws: sizes})
+        filestore=fs, sandbox=sandbox, on_measured=lambda ws, total: measured.update({ws: total})
     )
     await sandbox.upload(h, b"x" * 10, "/keep.txt")
     await sandbox.upload(h, b"y" * 5000, "/node_modules/dep/index.js")
@@ -385,7 +385,9 @@ async def test_mirror_hands_the_quota_the_sizes_it_just_walked(
 
     await sync.mirror("ws", h)
 
-    assert measured["ws"] == {"/keep.txt": 10}
+    assert measured["ws"] == 5010
+    assert await fs.exists("ws", "/keep.txt")  # ... but only this one is persisted
+    assert not await fs.exists("ws", "/node_modules/dep/index.js")
 
 
 async def test_mirror_publishes_no_measurement_from_a_half_restored_sandbox(
@@ -393,10 +395,10 @@ async def test_mirror_publishes_no_measurement_from_a_half_restored_sandbox(
 ):
     # A sandbox that isn't ready is mid-restore: its file set is partial, so
     # measuring it would under-report and let writes through that shouldn't be.
-    measured: dict[str, dict[str, int]] = {}
+    measured: dict[str, int] = {}
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(
-        filestore=fs, sandbox=sandbox, on_measured=lambda ws, sizes: measured.update({ws: sizes})
+        filestore=fs, sandbox=sandbox, on_measured=lambda ws, total: measured.update({ws: total})
     )
     await sandbox.upload(h, b"x" * 10, "/partial.txt")
 
