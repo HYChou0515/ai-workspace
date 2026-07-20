@@ -785,3 +785,45 @@ artifact 路徑清單）。跳過的元素留 `null` 佔位，讓下游 `map ove
 gate `revise`）已全數落地並 merge（schema 維持 `1` 原地擴充）。**仍延後：** per-element
 真平行 sub-handle（引擎能力、非語法 → #429）；promote 時 transpile 成 Python；
 per-user quota。
+
+### 22.9 現成範本：從範本起步而不是從空白起步（#520）
+
+`sample-workflows/` 是**共用範本庫**，形狀與既有的 `sample-tools/`（`PACKAGES`）、
+`sample-skills/`（`SHARED_SKILLS`）完全一致——repo 根目錄一個來源資料夾，加一個
+`SHARED_WORKFLOWS` 登錄表；正式部署換掉那個 dict 就好。
+
+**範本與 skill 的差別在「之後發生什麼事」**：skill 是**授權**給 App、在 prompt 組裝時就地
+讀取；範本是**複製**進 item 的 `.workflows/`。複製完那份就是一般的 workspace workflow，
+使用者隨便改，原範本再也不會被讀到——所以平台日後更新範本，不會蓋掉別人已經調過的版本。
+
+**沒有 per-App opt-in 名單**，這是刻意的。範本只需要「相容」，而相容與否 `validate_def`
+已經對著 profile 的工具上限判得精準（跟 `save_workflow` 同一套檢查）。在 `app.json` 再開一
+個 `workflows:` 授權清單，只會是同一件事的第二份、而且更弱的副本。
+
+- **列出**：`GET /a/{slug}/items/{item_id}/workflow-templates` —— 每個範本帶
+  `compatible` 與 `problems`。**不相容的照樣列出**並附原因；藏起來的話使用者永遠不會知道
+  它存在，也不會知道只差一個 profile 設定就能用。
+- **複製**：`POST .../workflow-templates/{name}/copy`。同名回 **409**（與 file / document
+  路由一致），FE 問過才帶 `overwrite=true` 重打——因為工作區那份可能已經有使用者的修改。
+  profile 跑不動的範本回 **422** 並附原因，好過放一個按下 Run 才爆的 workflow。
+
+v1 出貨 `image-to-knowledge`：VLM 讀圖 → 把圖說的話存成可搜尋文件 → 建一張
+`reference_doc_ids` 指回那份文件的 context card（#518）。一張圖在被轉成文字之前，語意檢索
+搆不到；在被建索引鍵之前，精確查表也搆不到——範本一次補上這兩條路。
+
+### 22.10 從範本到可放手跑：先驗證，再人看，最後才無人值守
+
+`save_workflow` **寫入前先驗證**，無效就把原因**退回**讓 AI 修（§22.8 Q8）；它**不**自動試跑。
+所以「這份 workflow 可以放著自己跑了嗎」這個問題，要靠下面這條遞進來回答，而不是靠感覺：
+
+1. **靜態關**——`save_workflow` / 複製範本的 422。schema、phase 一致、`tools` ⊆ profile 上限、
+   capability 在允許清單、`check` / `outputs` / `switch` / `revise_to` 格式。過不了就根本存不進去。
+2. **人閘關**——在寫進 collection 之前放一個 `gate`（`summary_from` 指向前一步的 fan-in
+   `outputs`），run 會停在那裡等人。出貨的 `image-to-knowledge` 就是這樣：`read` → **`review`
+   gate** → `commit`。先跑幾份真資料，把 gate 的摘要當成 diff 看。
+3. **產出關**——commit 之後去看實際生出來的東西：文件進了對的 collection 嗎、卡片的鍵是人會
+   打的字嗎、卡片有沒有真的連到那份文件。卡片提案走待審 inbox，可以逐筆核。
+4. **放手**——上面三關都穩了，再把 gate 拿掉（或改成只在低信心時才擋），讓它排程或被事件觸發。
+
+反過來省略第 2、3 關的代價很具體：agent step 會照著 prompt 對**每一個**上傳檔產出東西，
+所以一個爛 prompt 不是產生一個爛結果，是產生一整批——而且是寫進共用 collection 的那種。

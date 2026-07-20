@@ -737,7 +737,7 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
     async def drive_turn(prompt: str, tools: list[str] | None) -> str:
         return "content"  # channel P: the reply IS the artifact content
 
-    async def upsert(collection: str, keys: list[str], title: str, body: str) -> str:
+    async def upsert(collection: str, keys: list[str], title: str, body: str, refs=None) -> str:
         cards.append((collection, keys))
         return "card1"
 

@@ -279,8 +279,12 @@ def land_term_answer(
     card_rm = spec.get_resource_manager(ContextCard)
     existing = find_cards_by_key(spec, q.collection_id, q.term)
     if existing:
-        card_id = existing[0][0]
-        card_rm.create_or_update(card_id, card)  # overwrite in place, not a duplicate
+        card_id, prior = existing[0]
+        # #518: a full-struct overwrite — carry the prior card's curated links across, so
+        # answering a follow-up question doesn't strip the evidence off the card.
+        card_rm.create_or_update(  # overwrite in place, not a duplicate
+            card_id, msgspec.structs.replace(card, reference_doc_ids=list(prior.reference_doc_ids))
+        )
     else:
         card_id = card_rm.create(card).resource_id
     answer_question(spec, qid, answer=answer, result_ref=card_id)

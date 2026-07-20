@@ -159,6 +159,79 @@ def register_workflow_routes(
         metas = await workspace_workflow_metas(files, investigation_id)
         return [msgspec.to_builtins(m) for m in metas]
 
+    @app.get("/a/{slug}/items/{item_id}/workflow-templates")
+    async def list_workflow_templates(slug: str, item_id: str) -> list[dict]:
+        """#520: the shipped starter templates, each flagged for whether THIS item can
+        run it. Incompatible ones are listed too, with the reason — hiding them means
+        nobody learns the template exists, or that one profile setting away it would
+        work. Compatibility is the ordinary DSL validation against the profile's tool
+        ceiling; there is no separate grant list to keep in sync."""
+        from ..agent.tools import _profile_tool_ceiling
+        from ..workflow.dsl import build_manifest, validate_def
+        from ..workflow.shared import SHARED_WORKFLOWS, load_shared_workflow
+
+        investigation_id = locator.require_access(slug, item_id, "read_meta")
+        profile = locator.profile_of(investigation_id)
+        ceiling = _profile_tool_ceiling(slug, profile)
+        out: list[dict] = []
+        for name in sorted(SHARED_WORKFLOWS):
+            d = load_shared_workflow(name)
+            problems = validate_def(d, tool_ceiling=ceiling)
+            entry = msgspec.to_builtins(build_manifest(d))
+            assert isinstance(entry, dict)  # narrow for ty
+            out.append({**entry, "compatible": not problems, "problems": problems})
+        return out
+
+    @app.post("/a/{slug}/items/{item_id}/workflow-templates/{name}/copy")
+    async def copy_workflow_template(
+        slug: str, item_id: str, name: str, overwrite: bool = False
+    ) -> dict:
+        """#520: pull a shipped template into this item's ``.workflows/``.
+
+        A COPY, not a reference: afterwards the item owns an ordinary workspace workflow
+        that the user edits freely, and the template is never consulted again — so a
+        later platform update can't rewrite what someone has since tuned.
+
+        Refuses with 409 when the id is taken (the same answer the file and document
+        routes give), because a second copy would otherwise silently discard those edits;
+        the FE confirms and retries with ``overwrite=true``. An incompatible template is
+        422 with the validation problems rather than a workflow that fails at Run time.
+        """
+        from ..agent.tools import _profile_tool_ceiling
+        from ..workflow.dsl import DslError, validate_def
+        from ..workflow.shared import load_shared_workflow
+        from ..workflow.workspace_store import (
+            save_workspace_workflow,
+            workspace_workflow_path,
+        )
+
+        # Copying adds a file; overwriting REPLACES one someone may have edited, so the
+        # two are different permissions rather than one blanket "may write".
+        investigation_id = locator.require_access(
+            slug, item_id, "edit_content" if overwrite else "add_content"
+        )
+        try:
+            d = load_shared_workflow(name)
+        except DslError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        profile = locator.profile_of(investigation_id)
+        problems = validate_def(d, tool_ceiling=_profile_tool_ceiling(slug, profile))
+        if problems:
+            raise HTTPException(
+                status_code=422,
+                detail=f"template {name!r} can't run in profile {profile!r}: "
+                + "; ".join(problems),
+            )
+        path = workspace_workflow_path(name)
+        if not overwrite and await files.exists(investigation_id, path):
+            raise HTTPException(
+                status_code=409,
+                detail=f"this item already has a workflow named {name!r}",
+            )
+        await save_workspace_workflow(files, investigation_id, name, d)
+        return {"workflow_id": name, "path": path}
+
     @app.get("/a/{slug}/profiles")
     async def list_app_profiles(slug: str) -> list[dict]:
         """#100 (manual §4 & §14): the App's profiles, each with its list of workflow

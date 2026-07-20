@@ -139,13 +139,12 @@ def test_dense_pass_fans_out_to_both_vector_fields(spec: SpecStar):
         vec: list[float],
         *,
         field: str = "embedding",
-        location=None,
-        exclude_doc_ids=frozenset(),
+        **kw,
     ) -> list[str]:
+        # **kw so the spy records the fan-out without pinning the scope kwargs — a new
+        # retrieval filter is a change to the query, not to what this test asserts.
         calls.append((field, len(vec)))
-        return real(
-            collection_ids, vec, field=field, location=location, exclude_doc_ids=exclude_doc_ids
-        )
+        return real(collection_ids, vec, field=field, **kw)
 
     retriever._dense_order = spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     retriever.search("authenticate user", collection_ids=[cid])

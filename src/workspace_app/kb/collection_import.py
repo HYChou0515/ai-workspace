@@ -89,6 +89,13 @@ def _restore_cards(spec: SpecStar, collection_id: str, cards: list[dict[str, Any
                 norm_keys=derive_norm_keys(keys),
                 title=title,
                 body=card.get("body", ""),
+                # #518: the manifest carries links as paths (see collection_export), so
+                # re-mint them as ids in the collection we are importing INTO — a doc id
+                # encodes its collection, so replaying the source's ids would land every
+                # link dangling.
+                reference_doc_ids=[
+                    encode_doc_id(collection_id, p) for p in card.get("reference_paths", [])
+                ],
             )
         )
 

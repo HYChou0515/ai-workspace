@@ -76,7 +76,17 @@ _CAP_WINDOW: dict[str, tuple[str, ...]] = {
 _CAP_OUTPUTS: dict[str, dict[str, Any]] = {
     "create_entity": {"number": "int", "created": "bool", "action": "str"},
     "send_notification": {"sent": "bool", "action": "str", "notification_id": "str"},
+    # #518: the id of the resource each creating capability just made, so a later step
+    # can point at it — e.g. link a context card to the document this run just filed.
+    "ingest_to_collection": {"doc_id": "str"},
+    "upsert_context_card": {"card_id": "str"},
 }
+# The capabilities whose ``name`` is MANDATORY: the non-idempotent ones, where the name
+# IS the dedup identity (#435 §P2). Deliberately NOT ``_CAP_OUTPUTS`` — an idempotent
+# capability publishes outputs when named, but naming it stays optional, so an existing
+# workflow with an anonymous ``ingest_to_collection`` step keeps validating and keeps its
+# journal receipt exactly where it was.
+_CAP_NEEDS_NAME = frozenset({"create_entity", "send_notification"})
 # The deterministic gate builders a check spec may name (manual §6).
 _CHECKS = ("file_nonempty", "choice_in", "collection_has")
 _CHECK_REQUIRED: dict[str, tuple[str, ...]] = {
@@ -181,6 +191,10 @@ class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
     keys: list[str] = field(default_factory=list)
     title: str = ""
     body: str = ""
+    # #518 upsert_context_card: the documents that back the card. Usually an
+    # interpolation of a document an earlier step created — ``["{steps.ingest.doc_id}"]``
+    # — which is the whole point of the capability-output chaining.
+    reference_doc_ids: list[str] = field(default_factory=list)
     # #419 create_entity: which entity type + the field args (values may interpolate).
     # #429 P2 update_entity: ``type_name`` + ``number`` identify the record, ``args`` is
     # the merge-patch. ``number`` is a literal int or an interpolation ref (``{q.n}``).
@@ -639,6 +653,10 @@ async def _exec_capability(
             await _resolve(step.collection, ns, wf),
             await _resolve(step.path, ns, wf),
             phase=step.phase,
+            # #518: a name opts the step into publishing {steps.<name>.doc_id}; without
+            # one the receipt stays exactly where it always was (see the handle).
+            name=step.name,
+            key=key,
         )
     elif step.call == "create_entity":  # #419/#435 — same numbering pipeline, no raw write
         resolved = {
@@ -680,12 +698,18 @@ async def _exec_capability(
             phase=step.phase,
         )
     else:  # upsert_context_card (the only other allowed call; validated upstream)
+        refs = [await _resolve(r, ns, wf) for r in step.reference_doc_ids]
         await wf.upsert_context_card(
             await _resolve(step.collection, ns, wf),
             [await _resolve(k, ns, wf) for k in step.keys],
             title=await _resolve(step.title, ns, wf),
             body=await _resolve(step.body, ns, wf),
             phase=step.phase,
+            # #518: absent ⇒ None, so an upsert that says nothing about links keeps the
+            # ones already curated on the card rather than clearing them.
+            reference_doc_ids=[str(r) for r in refs] if step.reference_doc_ids else None,
+            name=step.name,
+            key=key,
         )
 
 
@@ -1073,9 +1097,14 @@ def _validate_step(
             for areq in _CAP_REQUIRED_ARGS.get(step.call, ()):  # #435 P5: args-carried reqs
                 if not step.args.get(areq):
                     errs.append(f"{where}: capability {step.call!r} needs {areq!r} in 'args'")
-            # #435: a non-idempotent capability (one with a fixed output schema) needs a
-            # ``name`` — its stable dedup identity — else two sites would collide.
-            if step.call in _CAP_OUTPUTS and not step.name:
+            # #435: a NON-IDEMPOTENT capability needs a ``name`` — its stable dedup
+            # identity — else two sites would collide. #518 split this out of
+            # ``_CAP_OUTPUTS`` membership: publishing outputs and requiring a name were
+            # the same set only because the first two capabilities happened to need both.
+            # An idempotent capability publishes outputs too (a name opts it in) but must
+            # stay nameable-or-not, or every shipped workflow with an anonymous ingest
+            # step would fail validation.
+            if step.call in _CAP_NEEDS_NAME and not step.name:
                 errs.append(
                     f"{where}: capability {step.call!r} needs a 'name' (#435 dedup identity)"
                 )

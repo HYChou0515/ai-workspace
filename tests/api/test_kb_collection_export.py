@@ -22,6 +22,7 @@ from workspace_app.files.zip_download import downloads_dir, sweep_stale_download
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.collection_export import collection_zip_filename
+from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
@@ -155,6 +156,31 @@ def test_manifest_carries_context_cards():
     assert cards[0]["keys"] == ["M4", "Metal 4"]
     assert cards[0]["title"] == "M4"
     assert cards[0]["body"] == "the 4th metal layer"
+
+
+def test_manifest_carries_card_links_as_paths_not_ids():
+    """#518: a doc id encodes its collection, so exporting raw ids would guarantee a
+    dangling link on import into a different collection. The manifest carries the
+    linked documents by PATH — the same currency the members are stored under — so the
+    importer can re-mint ids against the target collection."""
+    client = _client()
+    cid = client.post("/kb/collections", json={"name": "Glossary"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("spec.md", b"the metal 4 spec", "text/markdown")},
+    )
+    doc_id = encode_doc_id(cid, "spec.md")
+    client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "reference_doc_ids": [doc_id, "gone"]},
+    )
+
+    did = client.post(f"/kb/collections/{cid}/download/prepare").json()["download_id"]
+    zf = _zip(client.get(f"/kb/collections/{cid}/download/{did}").content)
+
+    (card,) = json.loads(zf.read(".kb-collection/manifest.json"))["context_cards"]
+    # the live link travels as a path; the dangling one is dropped (it names no document)
+    assert card["reference_paths"] == ["spec.md"]
 
 
 def test_prepare_unknown_collection_is_404():

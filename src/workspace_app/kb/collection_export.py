@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from specstar import QB
+from specstar.types import ResourceIDNotFoundError
 
 from ..files.zip_download import safe_zip_filename, subtree_arcname
 from ..resources.kb import Collection, ContextCard, SourceDoc
@@ -101,6 +102,22 @@ def build_collection_zip(
     doc_rm = spec.get_resource_manager(SourceDoc)
     card_rm = spec.get_resource_manager(ContextCard)
 
+    def _link_paths(card: ContextCard) -> list[str]:
+        """#518: a card's linked documents, exported by PATH rather than by id. A doc id
+        encodes its collection, so shipping raw ids would guarantee dangling links the
+        moment the zip is imported anywhere else; the path is the same currency the
+        members travel under, so the importer can re-mint ids against ITS collection. An
+        id that no longer resolves is dropped rather than exported as a dead path."""
+        out: list[str] = []
+        for did in card.reference_doc_ids:
+            try:
+                doc = doc_rm.get(did).data
+            except ResourceIDNotFoundError:
+                continue
+            assert isinstance(doc, SourceDoc)  # narrow Struct|Unset for ty
+            out.append(doc.path)
+        return out
+
     cards: list[dict[str, Any]] = []
     for rev in card_rm.list_resources((QB["collection_id"] == collection_id).build()):
         card = rev.data
@@ -112,6 +129,7 @@ def build_collection_zip(
                 "keys": card.keys,
                 "title": card.title,
                 "body": card.body,
+                "reference_paths": _link_paths(card),
                 "created_by": rev.meta.created_by,  # ty: ignore[unresolved-attribute]  # informational
             }
         )

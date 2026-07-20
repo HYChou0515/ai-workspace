@@ -25,16 +25,9 @@ def test_ask_knowledge_base_depth_reaches_kb_search():
     recorded: dict[str, object] = {}
 
     class _RecordingRetriever:
-        def search(
-            self,
-            query,
-            collection_ids,
-            on_progress,
-            *,
-            enhancements=None,
-            location=None,
-            exclude_doc_ids=frozenset(),
-        ):
+        # **kw: these doubles assert the DEPTH/budget plumbing, not the query's scope,
+        # so they shouldn't break every time retrieval gains a filter.
+        def search(self, query, collection_ids, on_progress, *, enhancements=None, **kw):
             recorded["enh"] = enhancements
             return []
 
@@ -69,16 +62,9 @@ def test_ask_knowledge_base_caps_kb_search_calls():
     captured: dict[str, str] = {}
 
     class _CountingRetriever:
-        def search(
-            self,
-            query,
-            collection_ids,
-            on_progress,
-            *,
-            enhancements=None,
-            location=None,
-            exclude_doc_ids=frozenset(),
-        ):
+        # **kw: these doubles assert the DEPTH/budget plumbing, not the query's scope,
+        # so they shouldn't break every time retrieval gains a filter.
+        def search(self, query, collection_ids, on_progress, *, enhancements=None, **kw):
             calls["n"] += 1
             return []
 
@@ -116,16 +102,9 @@ def test_shared_budget_spans_multiple_ask_knowledge_base_calls():
     captured: dict[str, str] = {}
 
     class _CountingRetriever:
-        def search(
-            self,
-            query,
-            collection_ids,
-            on_progress,
-            *,
-            enhancements=None,
-            location=None,
-            exclude_doc_ids=frozenset(),
-        ):
+        # **kw: these doubles assert the DEPTH/budget plumbing, not the query's scope,
+        # so they shouldn't break every time retrieval gains a filter.
+        def search(self, query, collection_ids, on_progress, *, enhancements=None, **kw):
             calls["n"] += 1
             return []
 

@@ -620,6 +620,21 @@ class ContextCard(Struct):  # → resource "context-card"
     norm_keys: Annotated[list[str], TrigramIndex()] = field(default_factory=list)
     title: str = ""  # display name (FE list/detail); "" → keys[0]
     body: str = ""  # markdown explanation
+    # #518: the SourceDocs that BACK this card — the curated evidence a human (or a
+    # workflow, via ``upsert_context_card``) attached. OPTIONAL and never required:
+    # empty (the default) ⇒ retrieval behaves exactly as before, so the field is
+    # additive with zero regression. When non-empty it powers the card-anchored
+    # precision path: a key hit on this card scopes the vector top-k to these docs
+    # instead of the whole collection. Ids are OPAQUE ``kb.doc_id`` tokens — never
+    # parsed; read ``SourceDoc.collection_id``/``path`` off the record instead.
+    #
+    # NOT a Ref/cascade, deliberately: a SourceDoc delete (or a ``move_document``,
+    # which mints a NEW id) leaves the entry dangling, exactly like the ``[n]``
+    # citations that already dangle for the same reason. Retrieval tolerates it —
+    # dead / unreadable / out-of-scope ids intersect away and an empty residual set
+    # falls back to an open search, so a stale link can only make the precision path
+    # not fire, never make a search return nothing.
+    reference_doc_ids: list[str] = field(default_factory=list)
 
 
 class DocQuestion(Struct):  # → resource "doc-question"

@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "id": "image-to-knowledge",
+  "title": "Image → document + linked card",
+  "tag": "batch",
+  "description": "Read each uploaded image, file what it says as a searchable document, and add a context card pointing back at that document.",
+  "hint": "Drop images into uploads/, then pick the collection in config.",
+  "config": {
+    "collection": "notes"
+  },
+  "phases": [
+    { "id": "read", "title": "Read the images" },
+    { "id": "review", "title": "Review" },
+    { "id": "commit", "title": "File into the collection" }
+  ],
+  "steps": [
+    {
+      "type": "map",
+      "name": "read",
+      "over": "uploads/*",
+      "as": "image",
+      "phase": "read",
+      "do": [
+        {
+          "type": "agent",
+          "name": "note",
+          "phase": "read",
+          "tools": ["read_image"],
+          "prompt": "Look at the image {image} and write a markdown note capturing what it actually says. Transcribe any text, labels, axis titles, table cells and callouts verbatim — this note is the ONLY thing that will be searchable later, because the image itself cannot be. Describe the structure (what kind of chart/diagram/screenshot it is, what it is comparing) and state plainly what a reader should take away. Do not speculate beyond what is visible; if part of the image is unreadable, say so.",
+          "out": "notes/{image}.md",
+          "kind": "markdown",
+          "retries": 2
+        },
+        {
+          "type": "agent",
+          "name": "index",
+          "phase": "read",
+          "reads": ["notes/{image}.md"],
+          "prompt": "Read notes/{image}.md. Pick the ONE term a colleague would type when looking for this — a part number, tool id, step name, or the subject's proper name — and write a two-sentence summary of the note. Reply with a JSON object holding: term (that lookup term), title (a short display name), summary (the two sentences), and source (set it to exactly notes/{image}.md).",
+          "outputs": {
+            "term": "str",
+            "title": "str",
+            "summary": "str",
+            "source": "str"
+          },
+          "retries": 2
+        }
+      ]
+    },
+    {
+      "type": "gate",
+      "phase": "review",
+      "title": "File these images into the collection?",
+      "summary_from": "{steps.read.outputs}",
+      "allow": ["approve", "reject"]
+    },
+    {
+      "type": "map",
+      "over": "{steps.read.outputs}",
+      "as": "p",
+      "phase": "commit",
+      "do": [
+        {
+          "type": "capability",
+          "call": "ingest_to_collection",
+          "phase": "commit",
+          "name": "ingest",
+          "collection": "{config.collection}",
+          "path": "{p.source}"
+        },
+        {
+          "type": "capability",
+          "call": "upsert_context_card",
+          "phase": "commit",
+          "collection": "{config.collection}",
+          "keys": ["{p.term}"],
+          "title": "{p.title}",
+          "body": "{p.summary}",
+          "reference_doc_ids": ["{steps.ingest.doc_id}"]
+        }
+      ]
+    }
+  ]
+}

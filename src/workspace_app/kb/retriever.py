@@ -173,20 +173,48 @@ def _resolve_enhancements(
     )
 
 
+@dataclass(frozen=True)
+class _Restriction:
+    """#518: a resolved positive document scope — "search only inside these docs".
+
+    Carries BOTH addressing surfaces because #104 made a chunk content-addressed:
+    ``source_file_id`` (the content hash) is the real key, and one chunk set is shared
+    by every path holding identical bytes, so its ``source_doc_id`` names only ONE of
+    those holders. Restricting on ``source_doc_id`` alone would therefore miss the
+    chunks whenever the card happens to link a sibling — and ``source_doc_id`` is on
+    its way out (its ``""`` default is the retirement surface). Matching content first
+    and falling back to the doc id keeps pre-#104 rows (``source_file_id == ""``)
+    reachable, the same pairing the #328 overlay already uses.
+    """
+
+    doc_ids: tuple[str, ...]
+    file_ids: tuple[str, ...]
+
+    def condition(self) -> ConditionBuilder:
+        by_doc = QB["source_doc_id"].in_(list(self.doc_ids))
+        if not self.file_ids:  # every referenced doc is gone / pre-#104 with no hash
+            return by_doc
+        return QB["source_file_id"].in_(list(self.file_ids)) | by_doc
+
+
 def _scoped(
     base: ConditionBuilder,
     location: LocationFilter | None,
     exclude_doc_ids: frozenset[str] = frozenset(),
+    restrict: _Restriction | None = None,
 ) -> ConditionBuilder:
     """AND the location filter's predicates onto a base query, then EXCLUDE any
-    denied docs (#308 — the per-doc read override the speaker can't see). `None`/
-    empty location + empty exclusion ⇒ the base unchanged (unscoped)."""
+    denied docs (#308 — the per-doc read override the speaker can't see), then
+    RESTRICT to a positive document set (#518). `None`/empty location + empty
+    exclusion + no restriction ⇒ the base unchanged (unscoped)."""
     out = base
     if location is not None:
         for cond in location.conditions():
             out = out & cond
     if exclude_doc_ids:
         out = out & QB["source_doc_id"].not_in(list(exclude_doc_ids))
+    if restrict is not None:
+        out = out & restrict.condition()
     return out
 
 
@@ -415,6 +443,7 @@ class Retriever:
         overlay: Overlay | None = None,
         depth: int | None = None,
         exclude_doc_ids: frozenset[str] = frozenset(),
+        restrict_to_doc_ids: frozenset[str] = frozenset(),
     ) -> list[RetrievedPassage]:
         """`enhancements` is the per-call override: any field set to a
         concrete value wins over the operator default for that knob,
@@ -434,6 +463,13 @@ class Retriever:
         set, the dense order is recomputed in-memory (same cosine metric);
         everything else runs unchanged over the overlaid chunk set.
 
+        `restrict_to_doc_ids` (#518) is the positive mirror of `exclude_doc_ids`: a
+        document allow-list pushed into BOTH the dense query and the BM25 corpus, so
+        ranking happens inside the scope. Empty (the default) ⇒ unscoped, exactly as
+        before. Ids that name no live document are simply absent from the resolved
+        content set — the CALLER decides what an empty intersection means (the
+        card-anchored path falls back to an open search rather than returning nothing).
+
         `depth` (#328) widens the result: when set, the candidate pool and the
         MMR window grow to `depth` and the full ranked passage list (up to
         `depth`) is returned instead of the `top_k` slice — the findability probe
@@ -449,6 +485,10 @@ class Retriever:
             collection_ids,
             cand,
         )
+        # #518: resolve the positive document scope ONCE. Both the dense query and the
+        # sparse corpus must see the SAME restriction — if only one arm is bounded, the
+        # other quietly reintroduces out-of-scope chunks into the fusion pool.
+        restrict = self._restriction(restrict_to_doc_ids)
         # The overlay path (#328) rebuilds the whole candidate set in memory (drop the
         # shadowed doc's chunks, add the virtual ones) and recomputes the dense order
         # over it, so it alone loads every chunk WITH its vector. The NORMAL path never
@@ -459,7 +499,9 @@ class Retriever:
         # doc never reaches ranking/answer.
         overlay_chunks: dict[str, DocChunk] = {}
         if overlay is not None:
-            overlay_chunks = self._load_chunks(collection_ids, loc, exclude_doc_ids)
+            # #518: the overlay path ranks in-memory over THIS set, so the restriction
+            # has to bound it here — the dense/sparse pushdowns below don't apply.
+            overlay_chunks = self._load_chunks(collection_ids, loc, exclude_doc_ids, restrict)
             # #104: the shadowed doc's REAL chunks are its CONTENT chunks — match
             # by the shadow doc's file_id (an aliased doc's content is owned by a
             # canonical sibling, so a source_doc_id match alone would miss them),
@@ -508,51 +550,43 @@ class Retriever:
         if overlay is not None:
             corpus = [(cid, ch.text) for cid, ch in overlay_chunks.items()]
         else:
-            corpus = self._sparse_corpus(queries, query, collection_ids, loc, exclude_doc_ids)
+            corpus = self._sparse_corpus(
+                queries, query, collection_ids, loc, exclude_doc_ids, restrict
+            )
+
+        def dense(vec: list[float], field: str = "embedding") -> list[str]:
+            """One dense arm, with the query scope bound once.
+
+            Every arm must see the SAME scope — the #308 exclusion and the #518
+            restriction alike. Binding it here instead of repeating it per call site is
+            what stops an arm from silently skipping a filter: the code / image / HyDE
+            arms below all used to omit ``exclude_doc_ids``, which let a denied doc's
+            chunk into the fusion pool on any deployment with those embedders wired."""
+            return self._dense(
+                vec=vec,
+                field=field,
+                chunks=overlay_chunks,
+                cids=collection_ids,
+                loc=loc,
+                overlay=overlay,
+                exclude_doc_ids=exclude_doc_ids,
+                restrict=restrict,
+            )
+
         ranked_lists: list[list[str]] = []
         for q in queries:
-            qv = self._embedder.embed_query(q)
-            ranked_lists.append(
-                self._dense(
-                    vec=qv,
-                    field="embedding",
-                    chunks=overlay_chunks,
-                    cids=collection_ids,
-                    loc=loc,
-                    overlay=overlay,
-                    exclude_doc_ids=exclude_doc_ids,
-                )
-            )
+            ranked_lists.append(dense(self._embedder.embed_query(q)))
             # P3.0 fan-out: a separate dense pass for the code-vector field
             # (when wired). Each field uses its own embedder, so the query
             # vector is in the right geometry.
             if self._code_embedder is not None:
-                qv_alt = self._code_embedder.embed_query(q)
-                ranked_lists.append(
-                    self._dense(
-                        vec=qv_alt,
-                        field="embedding_alt",
-                        chunks=overlay_chunks,
-                        cids=collection_ids,
-                        loc=loc,
-                        overlay=overlay,
-                    )
-                )
+                ranked_lists.append(dense(self._code_embedder.embed_query(q), "embedding_alt"))
             # #513 text→image arm: only for a shared-space image model. Image-only
             # (embed_query_text → None) or no image embedder ⇒ nothing appended.
             if self._image_embedder is not None:
                 qv_img = self._image_embedder.embed_query_text(q)
                 if qv_img is not None:
-                    ranked_lists.append(
-                        self._dense(
-                            vec=qv_img,
-                            field="embedding_img",
-                            chunks=overlay_chunks,
-                            cids=collection_ids,
-                            loc=loc,
-                            overlay=overlay,
-                        )
-                    )
+                    ranked_lists.append(dense(qv_img, "embedding_img"))
             ranked_lists.append(bm25_rank(q, corpus))
 
         # HyDE: embed N hypothetical answers (as pseudo-documents); each
@@ -572,28 +606,10 @@ class Retriever:
                 if doc
             ]
             for doc in hyde_docs:
-                hv = self._embedder.embed_documents([doc])[0]
-                ranked_lists.append(
-                    self._dense(
-                        vec=hv,
-                        field="embedding",
-                        chunks=overlay_chunks,
-                        cids=collection_ids,
-                        loc=loc,
-                        overlay=overlay,
-                    )
-                )
+                ranked_lists.append(dense(self._embedder.embed_documents([doc])[0]))
                 if self._code_embedder is not None:
-                    hv_alt = self._code_embedder.embed_documents([doc])[0]
                     ranked_lists.append(
-                        self._dense(
-                            vec=hv_alt,
-                            field="embedding_alt",
-                            chunks=overlay_chunks,
-                            cids=collection_ids,
-                            loc=loc,
-                            overlay=overlay,
-                        )
+                        dense(self._code_embedder.embed_documents([doc])[0], "embedding_alt")
                     )
 
         fused_score = rrf_scores(ranked_lists)
@@ -818,16 +834,22 @@ class Retriever:
         loc: LocationFilter | None,
         overlay: Overlay | None,
         exclude_doc_ids: frozenset[str] = frozenset(),
+        restrict: _Restriction | None = None,
     ) -> list[str]:
         """Dense ranking for one query vector. Normal path pushes the cosine sort
         into the store (pgvector). The #328 overlay path recomputes it in-memory
         over the overlaid chunk set — the virtual chunks aren't in the store — with
         the SAME cosine metric, so only the candidate set differs, not the order's
-        geometry."""
+        geometry (the overlaid set is already scoped by ``_load_chunks``)."""
         if overlay is not None:
             return self._dense_order_mem(chunks, vec, field=field)
         return self._dense_order(
-            cids, vec, field=field, location=loc, exclude_doc_ids=exclude_doc_ids
+            cids,
+            vec,
+            field=field,
+            location=loc,
+            exclude_doc_ids=exclude_doc_ids,
+            restrict=restrict,
         )
 
     def probe_withheld(
@@ -931,6 +953,7 @@ class Retriever:
         field: str = "embedding",
         location: LocationFilter | None = None,
         exclude_doc_ids: frozenset[str] = frozenset(),
+        restrict: _Restriction | None = None,
     ) -> list[str]:
         """Top candidate chunk ids nearest `vec` in the given vector `field`
         (``embedding`` or ``embedding_alt``), via specstar's native vector
@@ -940,7 +963,9 @@ class Retriever:
         the vector sort — index filter + vector order in ONE query, the same
         way `collection_id` already scopes it."""
         rm = self._spec.get_resource_manager(DocChunk)
-        scope = _scoped(QB["collection_id"].in_(collection_ids), location, exclude_doc_ids)
+        scope = _scoped(
+            QB["collection_id"].in_(collection_ids), location, exclude_doc_ids, restrict
+        )
         query = (
             scope
             # specstar's order_by type union omits VectorDistanceSort (works at runtime)
@@ -961,6 +986,7 @@ class Retriever:
         collection_ids: list[str],
         location: LocationFilter | None = None,
         exclude_doc_ids: frozenset[str] = frozenset(),
+        restrict: _Restriction | None = None,
     ) -> dict[str, DocChunk]:
         """The FULL in-memory chunk set (with vectors) for the #328 overlay path,
         which rebuilds the candidate set (drop the shadowed doc's chunks, add the
@@ -971,7 +997,7 @@ class Retriever:
         rm = self._spec.get_resource_manager(DocChunk)
         out: dict[str, DocChunk] = {}
         for cid in collection_ids:
-            scope = _scoped(QB["collection_id"] == cid, location, exclude_doc_ids)
+            scope = _scoped(QB["collection_id"] == cid, location, exclude_doc_ids, restrict)
             for r in rm.list_resources(scope.build()):
                 data = r.data
                 assert isinstance(data, DocChunk)
@@ -1001,6 +1027,7 @@ class Retriever:
         collection_ids: list[str],
         location: LocationFilter | None,
         exclude_doc_ids: frozenset[str],
+        restrict: _Restriction | None = None,
     ) -> list[tuple[str, str]]:
         """The BM25 corpus, narrowed to the chunks trigram-similar to a query term
         (2a). Instead of loading + tokenizing every chunk's text, `.fuzzy(term)` (a
@@ -1034,7 +1061,13 @@ class Retriever:
                 cond = QB["text"].fuzzy(t)
                 fuzzy = cond if fuzzy is None else (fuzzy | cond)
             assert fuzzy is not None  # `terms` is non-empty
-            scope = _scoped((QB["collection_id"] == cid) & fuzzy, location, exclude_doc_ids)
+            # #518: the restriction rides the SPARSE arm too. Bounding only the dense
+            # query would let BM25 pull in chunks from outside the card's documents, so
+            # the "search inside these docs" promise would hold for one arm and not the
+            # other — and the fusion step can't tell the difference.
+            scope = _scoped(
+                (QB["collection_id"] == cid) & fuzzy, location, exclude_doc_ids, restrict
+            )
             if cap is not None:
                 # specstar's order_by union omits TrigramSimilaritySort (works at runtime)
                 query = (
@@ -1047,6 +1080,18 @@ class Retriever:
             for r in rm.list_resources(query, returns=["data", "info"], partial=["/text"]):
                 out[r.info.resource_id] = cast(DocChunk, r.data).text  # ty: ignore[unresolved-attribute]
         return list(out.items())
+
+    def _restriction(self, doc_ids: frozenset[str]) -> _Restriction | None:
+        """#518: resolve a positive document scope to the pair of keys the chunk store
+        is addressable by. ``None`` when nothing was asked for — the unscoped path.
+
+        Dead ids simply contribute no content hash; they stay in ``doc_ids`` so a
+        pre-#104 chunk that only carries ``source_doc_id`` is still reachable."""
+        if not doc_ids:
+            return None
+        ordered = tuple(sorted(doc_ids))
+        fids = {fid for fid in (self._doc_file_id(d) for d in ordered) if fid}
+        return _Restriction(doc_ids=ordered, file_ids=tuple(sorted(fids)))
 
     def _doc_file_id(self, doc_id: str) -> str:
         """A doc's content hash (``content.file_id``), or ``""`` if the doc is

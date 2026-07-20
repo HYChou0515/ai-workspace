@@ -10,6 +10,8 @@ import json
 import zipfile
 from collections.abc import AsyncIterator
 
+from specstar import QB, SpecStar
+
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent
@@ -29,7 +31,9 @@ class _Runner:
             yield  # pragma: no cover
 
 
-def _client() -> TestClient:
+def _client_with_spec() -> tuple[TestClient, SpecStar]:
+    """A client plus the spec behind it, for the few assertions about stored fields the
+    read API deliberately doesn't expose (e.g. a card's `reference_doc_ids`)."""
     spec = make_spec()
     app = create_app(
         spec=spec,
@@ -39,7 +43,11 @@ def _client() -> TestClient:
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
     )
-    return TestClient(app)
+    return TestClient(app), spec
+
+
+def _client() -> TestClient:
+    return _client_with_spec()[0]
 
 
 def _export_zip(client: TestClient, cid: str) -> bytes:
@@ -244,6 +252,30 @@ def test_overwrite_identical_bytes_is_a_noop():
     assert r.status_code == 200
     # identical bytes → no new revision, so nothing is reported as (re)imported
     assert r.json()["document_ids"] == []
+
+
+def test_import_remints_card_links_against_the_target_collection():
+    """#518: the manifest carries a card's links as PATHS, so importing re-mints them as
+    ids in the collection being imported INTO. Without this a round-trip would restore
+    links pointing at the source collection's documents — dangling on arrival."""
+    from workspace_app.kb.doc_id import encode_doc_id
+    from workspace_app.resources.kb import ContextCard
+
+    client, spec = _client_with_spec()
+    manifest = {
+        "version": 1,
+        "collection": {"name": "G"},
+        "documents": [{"path": "spec.md"}],
+        "context_cards": [
+            {"keys": ["M4"], "title": "M4", "body": "b", "reference_paths": ["spec.md"]}
+        ],
+    }
+    new_cid = _import_new(client, _make_zip({"spec.md": b"the metal 4 spec"}, manifest=manifest))
+
+    rm = spec.get_resource_manager(ContextCard)
+    (card,) = [r.data for r in rm.list_resources((QB["collection_id"] == new_cid).build())]
+    assert isinstance(card, ContextCard)  # narrow Struct|Unset for ty
+    assert card.reference_doc_ids == [encode_doc_id(new_cid, "spec.md")]
 
 
 def test_import_restores_only_keyable_cards():
