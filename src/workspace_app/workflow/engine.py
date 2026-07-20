@@ -114,7 +114,10 @@ async def run_step(
         result = await execute(feedback)
         verdict = await check(wf, result) if check is not None else CheckResult(True)
         if verdict.ok:
-            await wf.write_json(path, {"hash": h, "result": result})
+            # The step's effects are already done; this only records that. See
+            # `write_record_json` — it is not refused for space, because losing
+            # the record makes the re-run repeat those effects (#538).
+            await wf.write_record_json(path, {"hash": h, "result": result})
             _emit(wf, StepPassed(phase=phase, name=name, key=key))
             logger.info("step: pass %s/%s", name, key)
             return result

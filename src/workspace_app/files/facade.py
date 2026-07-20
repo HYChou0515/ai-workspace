@@ -243,6 +243,24 @@ class WorkspaceFiles:
         await self._write_unchecked(workspace_id, dst, data, await self._warm(workspace_id))
         await self.delete(workspace_id, src)
 
+    async def write_record(self, workspace_id: str, path: str, data: bytes) -> None:
+        """Write a record of something that has ALREADY happened. **Not** quota
+        gated, and deliberately so (#538).
+
+        A quota check is a precondition: it is only meaningful where the caller
+        can still abandon the operation. This write comes AFTER the effect it
+        describes — a workflow step that has already created its entities and
+        sent its notifications — so refusing it undoes nothing. It only loses
+        the record, and the re-run then finds no record and does the whole step
+        again. Duplicated side effects are worse than a few dozen bytes of
+        bookkeeping past the cap.
+
+        Exemptions stay NAMED operations, like `move` (which cannot grow the
+        workspace at all), rather than a flag any caller can pass — an
+        ungated write anyone can reach for is not a quota."""
+        path = _norm(path)
+        await self._write_unchecked(workspace_id, path, data, await self._warm(workspace_id))
+
     async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
         """Create-if-absent (#419 N1 numbering arbiter): raise `FileExists` if
         `path` is taken, else create it. Cold ⇒ the durable store's atomic

@@ -5,6 +5,7 @@ import asyncio
 
 import pytest
 
+from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.checks import choice_in, file_nonempty
 from workspace_app.workflow.engine import StepFailed, fail, run_step
@@ -174,3 +175,23 @@ async def test_cancel_before_journal_reruns_and_idempotent_side_effects_self_hea
     # the re-run re-executes (the cancelled attempt left no journal) and now commits
     assert await run_step(wf, name="commit", args={"a": 1}, execute=execute) == {"n": 2}
     assert await wf.exists("/.workflow/pm/step_commit/main.json")
+
+
+async def test_a_full_workspace_still_records_that_a_step_finished():
+    """#538: the step's side effects have ALREADY happened when the journal entry
+    is written — entities created, notifications sent. Refusing that write for
+    space doesn't undo any of it; it only loses the record, so the re-run finds
+    no entry and does the whole step again. Duplicated side effects are exactly
+    what the journal exists to prevent, so this write is not quota-gated."""
+    store = MemoryFileStore()
+    files = WorkspaceFiles(store, quota=100)
+    wf = WorkflowHandle(store=files, workspace_id="ws", user="alice")
+    await files.write("ws", "/filler.bin", b"x" * 100)  # workspace now exactly full
+
+    calls, execute = _counter()
+    r1 = await run_step(wf, name="s", args={"a": 1}, execute=execute)
+    r2 = await run_step(wf, name="s", args={"a": 1}, execute=execute)
+
+    assert r1 == {"n": 1}
+    assert r2 == {"n": 1}  # the journal survived, so the re-run SKIPPED
+    assert len(calls) == 1  # ... and the side effects happened exactly once
