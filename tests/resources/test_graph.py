@@ -1,6 +1,15 @@
-from specstar import SpecStar
+from specstar import QB, SpecStar
 
 from workspace_app.resources.graph import GraphClaim
+from workspace_app.resources.kb import Collection
+
+
+def test_use_graph_defaults_off_and_the_opted_in_set_is_queryable(spec_instance: SpecStar):
+    rm = spec_instance.get_resource_manager(Collection)
+    rm.create(Collection(name="reports", use_graph=True))
+    rm.create(Collection(name="photos"))  # default off
+    on = [r.data.name for r in rm.list_resources(QB["use_graph"].eq(True).build())]
+    assert on == ["reports"]
 
 
 def test_make_spec_registers_graph_claim(spec_instance: SpecStar):

@@ -255,6 +255,8 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             ("permission.read_meta", list),
             # Global-collection concept: the baseline scope is a query over this.
             ("is_global", bool),
+            # #534: the graph dispatch queries the metric-extraction opt-in set.
+            ("use_graph", bool),
         ],
         access_scope=collection_access_scope(superusers, groups),
         event_handlers=[collection_permission_event_handler(superusers, groups)],
