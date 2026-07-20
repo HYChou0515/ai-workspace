@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 from ..agent.ask_kb import AskKbSpec
 from ..agent.context import AgentToolContext, KbSearchBudget, WikiSearchBudget
-from ..files import WorkspaceFiles
+from ..agent.search_scope import tools_within_budget
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
@@ -55,7 +55,6 @@ from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import VlmDescriber
 from ..kb.wiki.consult import WikiConsultant
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
-from ..kb.wiki.store import WikiFileStore
 from ..perm import Actor, Permission, authorize
 from ..perm.model import Verb, user_subject
 from ..resources import AgentConfig
@@ -108,6 +107,7 @@ async def answer_question(
     exclude_doc_ids: frozenset[str] = frozenset(),
     discoverable_collection_ids: list[str] | None = None,
     on_withheld: Callable[[list[str]], None] | None = None,
+    wiki_consultant_factory: Callable[[list[str]], WikiConsultant | None] | None = None,
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
     with a compact sources footer. This is how the RCA agent's
@@ -141,17 +141,42 @@ async def answer_question(
             if ask_kb_spec.prompt is not None
             else agent_config.system_prompt,
         )
-    # #506: when this sub-agent is granted `search_wiki` (e.g. the card drafter's
-    # spec, or a kb_chat preset), wire the per-collection wiki store it greps over
-    # `collection_ids` — the same store the interactive KB turn wires. Needs a spec
-    # handle; absent one, search_wiki degrades to its "no wiki available" note.
-    grants_wiki = bool(agent_config.allowed_tools and "search_wiki" in agent_config.allowed_tools)
-    wiki_files = WorkspaceFiles(WikiFileStore(spec)) if (grants_wiki and spec is not None) else None
+    # #195/#334 + #506: this sub-agent's two search allowances. A caller passing a
+    # shared `budget` (an app turn spanning several ask_knowledge_base calls, #334
+    # Q6) wins — all its sub-agents then draw from the one budget; otherwise seed a
+    # fresh one from `max_searches`.
+    # An explicit budget from the caller wins (a shared, turn-wide allotment).
+    # Otherwise the spec's own caps seed them: a spec that says "no document
+    # search" must not hand out an unlimited document budget just because the
+    # caller didn't restate it — the tool set and the budgets come from ONE knob.
+    kb_budget = budget or KbSearchBudget(
+        max_calls=ask_kb_spec.kb_search_max if ask_kb_spec is not None else max_searches
+    )
+    turn_wiki_budget = wiki_budget or WikiSearchBudget(
+        max_calls=ask_kb_spec.wiki_search_max if ask_kb_spec is not None else None
+    )
+    # #537: a source whose allowance is 0 is OFF, which means its tool is not
+    # granted — not granted-and-then-refused. A refusing tool costs a round-trip
+    # to learn what the prompt already knew, and its "answer now" reply reads as
+    # "stop searching", which is how a 0 on documents used to silence the wiki too.
+    agent_config = msgspec.structs.replace(
+        agent_config,
+        allowed_tools=tools_within_budget(
+            agent_config.allowed_tools, kb=kb_budget, wiki=turn_wiki_budget
+        ),
+    )
     ctx = AgentToolContext(
         retriever=retriever,
         collection_ids=collection_ids,
         agent_config=agent_config,
-        files=wiki_files,
+        # #537: how this sub-agent reaches the wiki — a reader that navigates it in
+        # its own context and hands back an answer. `None` when the caller wires no
+        # factory or nothing in scope keeps a wiki; `ask_wiki` then says so.
+        run_wiki_reader=(
+            wiki_consultant_factory(list(collection_ids))
+            if wiki_consultant_factory is not None
+            else None
+        ),
         # specstar handle so a kb_chat agent granted `lookup_glossary` can read
         # context cards on the bridge path too (RCA → ask_knowledge_base → KB
         # sub-agent). None when the caller can't supply one (degrades to the
@@ -167,15 +192,8 @@ async def answer_question(
         # Route through the wiki/both path when the caller (a wiki-aware runner)
         # opted in. Harmless when the runner isn't wiki-aware.
         wiki_query=wiki,
-        # #195/#334: cap the bridge's kb_search calls (same KB agent). A caller
-        # that passes a shared `budget` (an app turn spanning several
-        # ask_knowledge_base calls, #334 Q6) wins — all its sub-agents then draw
-        # from the one budget; otherwise seed a fresh one from `max_searches`.
-        kb_search_budget=budget if budget is not None else KbSearchBudget(max_calls=max_searches),
-        # #506: the configured ask_knowledge_base seeds a search_wiki cap here the
-        # same way it seeds kb_search's budget above; absent one, wiki search stays
-        # unlimited-but-counted (the interactive path is unchanged).
-        wiki_search_budget=wiki_budget if wiki_budget is not None else WikiSearchBudget(),
+        kb_search_budget=kb_budget,
+        wiki_search_budget=turn_wiki_budget,
         # #308: the caller (the ask_knowledge_base bridge) resolves which docs the
         # ORIGINAL speaker's per-doc override blocks, so this sub-agent's retriever
         # can't surface a doc the speaker can't read — even though the KB ctx itself
@@ -717,6 +735,29 @@ def register_kb_chat_routes(
         _effective = resolve_effective_scope(
             spec, chat.collection_ids, excluded=chat.excluded_collection_ids
         )
+        # #537: this reply's two allowances, and the tool set they imply. A source
+        # capped at 0 is OFF — its tool isn't granted, so the model never spends a
+        # round-trip being refused and never reads a refusal as "stop searching".
+        turn_kb_budget = KbSearchBudget(
+            max_calls=resolve_max_searches(
+                body.max_kb_searches,
+                default=max_searches_per_turn,
+                ceiling=max_searches_ceiling,
+            )
+        )
+        turn_wiki_budget = WikiSearchBudget(
+            max_calls=resolve_max_searches(
+                body.max_wiki_searches,
+                default=max_searches_per_turn,
+                ceiling=max_searches_ceiling,
+            )
+        )
+        agent_config = msgspec.structs.replace(
+            agent_config,
+            allowed_tools=tools_within_budget(
+                agent_config.allowed_tools, kb=turn_kb_budget, wiki=turn_wiki_budget
+            ),
+        )
         _disc = partition_collection_disclosure(
             spec, _effective, get_user_id(), superusers=superusers
         )
@@ -777,23 +818,8 @@ def register_kb_chat_routes(
             # #195/#334: cap how many times this reply may run kb_search — the
             # composer's per-message pick (clamped to [0, ceiling]) or, absent
             # one, the operator default.
-            kb_search_budget=KbSearchBudget(
-                max_calls=resolve_max_searches(
-                    body.max_kb_searches,
-                    default=max_searches_per_turn,
-                    ceiling=max_searches_ceiling,
-                )
-            ),
-            # #506: cap how many times this reply may grep the wiki — the composer's
-            # per-message pick (the number picker that replaced the wiki toggle),
-            # clamped like kb_search's. Reuses the kb operator default/ceiling.
-            wiki_search_budget=WikiSearchBudget(
-                max_calls=resolve_max_searches(
-                    body.max_wiki_searches,
-                    default=max_searches_per_turn,
-                    ceiling=max_searches_ceiling,
-                )
-            ),
+            kb_search_budget=turn_kb_budget,
+            wiki_search_budget=turn_wiki_budget,
         )
 
         def persist(produced: list[TurnMessage]) -> None:

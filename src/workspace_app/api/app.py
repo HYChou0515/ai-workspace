@@ -721,6 +721,27 @@ def create_app(
         ),
         reader_max_turns=wiki_reader_max_turns,
     )
+
+    def _wiki_consultant_factory(cids: list[str]):
+        """#537: build a wiki consultant for a turn scoped to `cids`. Shared by the
+        KB chat surface and every ask_knowledge_base sub-agent, so both reach the
+        wiki the same way. Driven by the BASE runner — a reader must never re-enter
+        the KB layer that called it."""
+        return make_wiki_consultant(
+            runner,
+            spec,
+            cids,
+            reader_config=resolve_wiki_config(
+                catalog,
+                "wiki_reader",
+                default_wiki_reader_config,
+                wiki_model=wiki_model,
+                wiki_llm_base_url=wiki_llm_base_url,
+                wiki_llm_api_key=wiki_llm_api_key,
+            ),
+            reader_max_turns=wiki_reader_max_turns,
+        )
+
     kb_turn_engine = ChatTurnEngine(
         kb_runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
     )
@@ -747,20 +768,7 @@ def create_app(
         # #537: the KB agent's `ask_wiki` tool consults the wiki through a reader
         # driven per turn over the chat's own collections. Built on the BASE runner
         # — a reader must never re-enter the KB layer that called it.
-        wiki_consultant_factory=lambda cids: make_wiki_consultant(
-            runner,
-            spec,
-            cids,
-            reader_config=resolve_wiki_config(
-                catalog,
-                "wiki_reader",
-                default_wiki_reader_config,
-                wiki_model=wiki_model,
-                wiki_llm_base_url=wiki_llm_base_url,
-                wiki_llm_api_key=wiki_llm_api_key,
-            ),
-            reader_max_turns=wiki_reader_max_turns,
-        ),
+        wiki_consultant_factory=_wiki_consultant_factory,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
@@ -786,6 +794,10 @@ def create_app(
         # #305: the sub-agent's collection scope is filtered to what the speaker
         # can read_content; a superuser speaker bypasses (they could read directly).
         superusers=superusers,
+        # #537: the KB sub-agent gets the same wiki access the KB chat surface has,
+        # so an app asking a question reaches the wiki through it (#270: an app
+        # never holds wiki tools of its own).
+        wiki_consultant_factory=_wiki_consultant_factory,
     )
     _run_subagent = subagent_bridge.run
 
