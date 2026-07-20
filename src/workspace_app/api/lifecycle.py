@@ -391,6 +391,15 @@ def build_lifespan(
             for t in bg:
                 with contextlib.suppress(BaseException):
                     await t
+            # Turns first, and BEFORE kernels/sandboxes go away — an in-flight
+            # turn needs them to finish. Anything not yet persisted would
+            # otherwise leave with the process, silently and with no terminal
+            # event. Bounded, so a wedged turn can't hold the pod past its grace
+            # period (SIGKILL is strictly worse: nothing runs its teardown).
+            for engine in getattr(app.state, "turn_engines", ()):
+                logger.debug("lifespan: draining in-flight turns")
+                with contextlib.suppress(BaseException):
+                    await engine.aclose()
             logger.debug("lifespan: draining coordinators + kernels")
             # Drain in-flight wiki maintenance before exit (bounded). Pending
             # jobs are durable — they survive to be picked up after restart.

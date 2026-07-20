@@ -791,6 +791,10 @@ def create_app(
         exec_output_max_chars=exec_output_max_chars,
     )
 
+    # Drained on shutdown (see build_lifespan): an in-flight turn gets a bounded
+    # chance to finish and persist instead of leaving with the process.
+    app.state.turn_engines = (turn_engine, kb_turn_engine)
+
     # Cached fallback configs per sub-agent purpose, used when the
     # catalog the caller supplied didn't wire that purpose (legacy
     # positional-list tests). Bundled always populates kb_chat /

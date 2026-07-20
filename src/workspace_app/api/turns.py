@@ -17,10 +17,10 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi.responses import StreamingResponse
 
@@ -369,6 +369,13 @@ _QueueItem = tuple[
 ]
 
 
+# Pushed into a subscriber's queue to END its SSE response (`forget`). A live
+# stream cannot be "dropped" by discarding the session: the subscriber holds its
+# own queue, so it would simply never hear anything again — while the heartbeat
+# kept flowing, which the client cannot tell apart from a quiet chat.
+_CLOSE_STREAM = object()
+
+
 @dataclass
 class _WorkspaceSession:
     """#43 collaborative turn state for one investigation: a FIFO queue of
@@ -388,6 +395,16 @@ class _WorkspaceSession:
         """Fan one event out to every live subscriber (#43 broadcast)."""
         for q in self.subscribers:
             q.put_nowait(event)
+
+    def close_subscribers(self) -> None:
+        """End every live SSE response attached to this session.
+
+        Used when the session itself is going away (`forget`): the client sees the
+        stream close, which its reconnect path already handles by re-hydrating —
+        the one outcome that leaves it consistent with a conversation that was
+        just closed or deleted."""
+        for q in list(self.subscribers):
+            q.put_nowait(cast("AgentEvent", _CLOSE_STREAM))
 
     def roster(self) -> list[str]:
         """The distinct, non-anonymous viewers currently subscribed (#455 presence)."""
@@ -413,6 +430,8 @@ class ChatTurnEngine:
         # #43: collaborative per-investigation queue/worker sessions, separate
         # from the per-requester `stream()` sessions KB chat uses.
         self._ws_sessions: dict[str, _WorkspaceSession] = {}
+        # Strong references to fire-and-forget drains (see `_spawn_detached`).
+        self._detached: set[asyncio.Task[None]] = set()
         # #349: the cross-pod cancel epoch. Each in-flight turn stamps the epoch
         # it started at; `_watch_epoch` aborts it once the shared epoch advances
         # past that stamp from ANOTHER pod. Defaults to an in-memory backend, so
@@ -455,6 +474,19 @@ class ChatTurnEngine:
     def _ws_session(self, key: str) -> _WorkspaceSession:
         return self._ws_sessions.setdefault(key, _WorkspaceSession())
 
+    def close_streams(self, key: str) -> None:
+        """End the live SSE responses for `key` without touching the turn itself.
+
+        For when a chat's ENGINE KEY changes under its viewers: the default chat
+        keys on the item id and every other chat on its own id, so deleting the
+        default promotes another chat and flips its key. Subscribers attached to
+        the old key would then hear nothing more, with the heartbeat still
+        flowing — indistinguishable from a quiet chat, so they never reconnect.
+        Closing the response makes the client reconnect under the correct key."""
+        session = self._ws_sessions.get(key)
+        if session is not None:
+            session.close_subscribers()
+
     async def forget(self, key: str) -> None:
         """Drop a conversation's turn session (on close / delete) so the
         registry doesn't grow without bound. Also tears down the collaborative
@@ -469,6 +501,10 @@ class ChatTurnEngine:
         ws = self._ws_sessions.pop(key, None)
         if ws is None:
             return
+        # End the live responses BEFORE tearing the turn down: the in-flight turn
+        # publishes into THIS (now unreachable) session object, so anything it
+        # emits from here on can never be seen anyway.
+        ws.close_subscribers()
         # Cancel the in-flight turn (if any) + the parked worker. `cancel()` on an
         # already-finished task is a harmless no-op, so no done-guard is needed.
         for task in (ws.current_turn, ws.worker):
@@ -523,12 +559,22 @@ class ChatTurnEngine:
             logger.info("turns: worker %s turn started (epoch %d)", key, my_epoch)
             # The turn persists its own (partial) result via on_complete even
             # when cancelled; swallow the cancellation here so the worker lives.
-            with contextlib.suppress(asyncio.CancelledError):
-                await turn
-            session.current_turn = None
-            fut.set_result(None)  # wake the POST awaiting this message's turn
+            # Anything ELSE that escapes a turn is swallowed for the same reason:
+            # one bad turn must not take the conversation's worker with it, or
+            # every later message queues behind a task that will never run again.
+            try:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await turn
+            except Exception:  # noqa: BLE001 — a turn's failure is not the worker's
+                logger.exception("turns: worker %s turn raised", key)
+            finally:
+                session.current_turn = None
+                # Always wake the POST awaiting this message, whatever happened —
+                # otherwise the request hangs to its detach timeout for nothing.
+                if not fut.done():
+                    fut.set_result(None)
+                session.queue.task_done()
             logger.debug("turns: worker %s turn finished", key)
-            session.queue.task_done()
 
     async def _run_turn(
         self,
@@ -559,7 +605,20 @@ class ChatTurnEngine:
             reducer.add(err)
             publish(err)
         finally:
-            on_complete(reducer.produced)
+            # Persisting is guarded for the same reason the flush below is, but
+            # NOT silently: an unguarded raise here escaped `_run_turn`, and
+            # `_worker` suppresses only CancelledError — so the worker died before
+            # resolving the waiting POST and before `task_done()`, stranding every
+            # LATER message on this conversation behind a worker that no longer
+            # existed. Tell the viewer too: a turn that streamed live and then
+            # could not be saved otherwise vanishes on the next reload with no
+            # explanation at all.
+            try:
+                on_complete(reducer.produced)
+            except Exception as exc:  # noqa: BLE001 — persistence is best-effort here
+                logger.exception("turns: failed to persist turn for %s", ctx.investigation_id)
+                with contextlib.suppress(Exception):
+                    publish(_terminal_error(exc))
             # #492: flush the item's live sandbox to durable at turn-end — the
             # turn-end reconcile of guarantee (2). Runs on completion and on error
             # (the partial work is real). Guarded so best-effort durability never
@@ -653,6 +712,8 @@ class ChatTurnEngine:
                     except TimeoutError:
                         yield ": heartbeat\n\n"  # SSE comment — keeps the stream warm
                         continue
+                    if ev is _CLOSE_STREAM:
+                        return  # the session went away — end the response, don't hang
                     yield to_sse(ev)
             finally:
                 session.subscribers.pop(q, None)
@@ -719,16 +780,107 @@ class ChatTurnEngine:
 
         async def gen() -> AsyncIterator[str]:
             reducer = _TurnReducer()
+            finished = False
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        finished = True
+                        logger.info("turns: stream turn complete for %s", key)
+                        _persist(reducer)
+                        return
+                    reducer.add(item)  # build the persistable shape
+                    yield to_sse(item)  # stream the raw event to this requester
+            finally:
+                # Starlette CLOSES this generator when the client disconnects, so
+                # persisting only at the sentinel above meant closing the tab
+                # mid-answer lost the ENTIRE turn — while the driver kept running
+                # to completion, producing an answer nobody could ever see. The
+                # turn is the user's whether or not they are still listening, so
+                # keep draining it to the end off to the side.
+                if not finished:
+                    logger.info("turns: requester left %s — draining the turn anyway", key)
+                    self._spawn_detached(self._drain_and_persist(queue, reducer, _persist, key))
+
+        def _persist(reducer: _TurnReducer) -> None:
+            """Save the turn, never letting a persistence failure escape into the
+            response (or into a detached drain, where nothing would catch it)."""
+            try:
+                on_complete(reducer.produced)
+            except Exception:  # noqa: BLE001 — best-effort, already logged
+                logger.exception("turns: failed to persist stream turn for %s", key)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    async def aclose(self, timeout: float = 10.0) -> None:
+        """Give in-flight turns a bounded chance to finish and persist.
+
+        Shutdown cancelled the registered background tasks and tore down
+        sandboxes, but nothing tracked or awaited the turn workers — so a turn
+        seconds from done went with the process, silently, with no terminal event
+        and nothing in the store. Draining first means the common rollover keeps
+        the answer.
+
+        Bounded on purpose: a wedged turn must not hold the pod past its grace
+        period, because the alternative is SIGKILL, where nothing gets to run its
+        teardown at all. Whatever is still running when the deadline passes is
+        cancelled — which each turn already handles by persisting its partial
+        result — and given a short moment to do so."""
+        live = [
+            t
+            for t in (
+                *(s.current_turn for s in self._ws_sessions.values()),
+                *(s.current_turn for s in self._sessions.values()),
+                *self._detached,
+            )
+            if t is not None and not t.done()
+        ]
+        if live:
+            logger.info("turns: draining %d in-flight turn(s) (<=%.1fs)", len(live), timeout)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout)
+        # Past the deadline: cancel, then let each turn's teardown persist what it
+        # has (that path is the same one Stop uses).
+        stragglers = [t for t in live if not t.done()]
+        for task in stragglers:
+            task.cancel()
+        if stragglers:
+            logger.warning("turns: %d turn(s) did not drain — cancelled", len(stragglers))
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(asyncio.gather(*stragglers, return_exceptions=True), 2.0)
+        for session in self._ws_sessions.values():
+            if session.worker is not None:
+                session.worker.cancel()
+
+    def _spawn_detached(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Run a fire-and-forget coroutine, holding a STRONG reference until it
+        finishes. asyncio keeps only a weak reference to a bare ``create_task``
+        result, so an un-referenced task can be garbage-collected mid-flight —
+        which here would silently drop the very turn we are trying to save."""
+        task = asyncio.create_task(coro)
+        self._detached.add(task)
+        task.add_done_callback(self._detached.discard)
+
+    async def _drain_and_persist(
+        self,
+        queue: asyncio.Queue[AgentEvent | None],
+        reducer: _TurnReducer,
+        persist: Callable[[_TurnReducer], None],
+        key: str,
+    ) -> None:
+        """Consume a turn to its end after its requester has gone, then save it."""
+        try:
             while True:
                 item = await queue.get()
                 if item is None:
-                    logger.info("turns: stream turn complete for %s", key)
-                    on_complete(reducer.produced)
-                    return
-                reducer.add(item)  # build the persistable shape
-                yield to_sse(item)  # stream the raw event to this requester
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
+                    break
+                reducer.add(item)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — save whatever the turn produced
+            logger.exception("turns: detached drain failed for %s", key)
+        finally:
+            persist(reducer)
 
     async def cancel(self, key: str) -> None:
         """Interrupt the conversation's in-flight turn (its stream gets

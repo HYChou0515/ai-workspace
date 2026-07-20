@@ -142,6 +142,13 @@ class ItemLocator:
             return item_id
         return chat_id
 
+    def default_chat_id(self, item_id: str) -> str | None:
+        """The id of the item's current default chat, or None when it has none.
+        Read-only — never materialises one. Used to find the chat whose engine key
+        just changed after a delete promoted it."""
+        default = find_default_conversation(self._conv_rm, item_id)
+        return None if default is None else default[0]
+
     def require_chat(self, slug: str, item_id: str, chat_id: str) -> tuple[str, Conversation]:
         """Validate slug→item AND that ``chat_id`` is a chat OF that item; return
         ``(chat_id, Conversation)`` or 404. Guards the chat-scoped endpoints (manual §3)."""
