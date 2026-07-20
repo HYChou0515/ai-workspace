@@ -394,6 +394,18 @@
 #     # quality_floor: 20                   #   optional ABSOLUTE hard cutoff: drop docs scored
 #                                           #   below this. null (default) = soft only, never
 #                                           #   exclude (un-scored docs are never dropped).
+#     # sparse_corpus_cap: 1000             #   ceiling on the BM25 corpus. The trigram
+#                                           #   pre-narrowing collapses a DISTINCTIVE query to
+#                                           #   almost nothing, but a query of common domain
+#                                           #   vocabulary matches nearly every chunk and
+#                                           #   narrows nothing — this bounds how many of those
+#                                           #   the store ships back (the most trigram-similar),
+#                                           #   capping the sparse arm on exactly the queries
+#                                           #   that hurt. BM25 still ranks; the DENSE arm
+#                                           #   ignores this cap (it still searches every chunk
+#                                           #   via the vector index), so a capped-out chunk can
+#                                           #   still be retrieved. null (default) = uncapped.
+#                                           #   Measure with a #535 eval run before lowering.
 # # Resolution: LLM tool args > caller (context) > default; clamped to max.
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde
 # # when recall trumps latency. Setting max below default is fine — `min(...)`

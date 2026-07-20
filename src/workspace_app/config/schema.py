@@ -381,6 +381,15 @@ class RetrievalSettings:
     # results); null (default) = soft only, never exclude.
     quality_weight: float = 0.10
     quality_floor: int | None = None
+    # The BM25 corpus ceiling. The trigram pre-narrowing collapses a DISTINCTIVE
+    # query to almost nothing, but a query of common domain vocabulary matches
+    # nearly every chunk and narrows nothing — so this bounds how many of those the
+    # store ships back (the most trigram-similar ones), capping the sparse arm's
+    # cost on exactly the queries that hurt. BM25 still does the ranking, and the
+    # dense arm ignores this cap (it still searches every chunk via the vector
+    # index), so a capped-out chunk can still be retrieved. null (default) =
+    # uncapped. Tune against a #535 eval run before lowering it.
+    sparse_corpus_cap: int | None = None
 
 
 @dataclass(frozen=True)

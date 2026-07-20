@@ -412,6 +412,8 @@ _TOP_SCHEMA: dict[str, Any] = {
             # their non-dict values, like `max_searches_per_turn` below.
             "quality_weight": set(),
             "quality_floor": set(),
+            # The BM25 corpus ceiling — another scalar leaf (int or null).
+            "sparse_corpus_cap": set(),
         },
         # #506: reconcile / cluster-sweeper thresholds (all scalar float leaves).
         "cluster": _dataclass_keys(ClusterSettings),
@@ -768,13 +770,24 @@ def _normalize_usage_list(raw: Any) -> list[dict[str, Any]]:
 
 
 def _build_retrieval(d: dict[str, Any]) -> RetrievalSettings:
+    """Build `RetrievalSettings`, including the SCALAR leaves.
+
+    The key allowlist has accepted `quality_weight` / `quality_floor` since #105,
+    but this builder only ever read `enhancements` — so setting them in config
+    raised no error and had no effect, the dataclass default silently winning. Each
+    scalar is forwarded only when the operator actually supplied it, which keeps the
+    dataclass the single source of the defaults (no value duplicated here)."""
     e = d["enhancements"]
+    scalars = {
+        key: d[key] for key in ("quality_weight", "quality_floor", "sparse_corpus_cap") if key in d
+    }
     return RetrievalSettings(
         enhancements=EnhancementSettings(
             expand=_build(EnhancementInt, e["expand"]),
             hyde=_build(EnhancementInt, e["hyde"]),
             rerank=_build(EnhancementBool, e["rerank"]),
         ),
+        **scalars,
     )
 
 
