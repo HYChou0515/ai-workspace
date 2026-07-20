@@ -123,3 +123,20 @@ def test_the_single_endpoint_bound_is_the_give_up_budget_not_the_switch_signal()
     assert first_event_s == settings.failover.total_deadline_s
     assert first_event_s != settings.failover.ttft_timeout_s
     assert idle_s == settings.failover.idle_timeout_s
+
+
+@pytest.mark.asyncio
+async def test_unrelated_attributes_reach_the_wrapped_model() -> None:
+    """The wrapper is transparent for everything that isn't streaming.
+
+    The SDK reads incidental attributes off the model it was handed, so a wrapper
+    that swallowed them would break the turn in a way none of the streaming tests
+    above would notice. ``RepairingModel`` forwards for the same reason.
+    """
+    inner = _Stream([])
+    inner.tracing_label = "ollama/qwen"  # ty: ignore[unresolved-attribute]
+    model = DeadlineModel(inner, first_event_s=1.0, idle_s=1.0)
+
+    assert model.tracing_label == "ollama/qwen"
+    with pytest.raises(AttributeError):
+        _ = model.no_such_attribute
