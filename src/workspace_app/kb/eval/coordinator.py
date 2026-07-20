@@ -46,14 +46,19 @@ class EvalCoordinator:
         self,
         spec: SpecStar,
         llm: ILlm,
-        retriever: Retriever,
         *,
+        retriever: Retriever | None = None,
         sample_size: int = 300,
         batch_size: int = 25,
         depth: int = 20,
         ks: tuple[int, ...] = (1, 3, 5, 10),
         message_queue_factory: object | None = None,
     ) -> None:
+        # ``retriever`` is injected post-construction (``set_retriever``) because
+        # it is built after ``build_coordinators`` — same as the agentic
+        # card-drafter. The producer side (enqueue + model registration) needs
+        # only ``spec``; the consumer side (``batch``) needs the retriever, and
+        # the worker/all-in-one wires it before it starts consuming.
         self._spec = spec
         self._llm = llm
         self._retriever = retriever
@@ -78,6 +83,11 @@ class EvalCoordinator:
         )
         self._job_rm = spec.get_resource_manager(EvalJob)
         self._consuming = False
+
+    def set_retriever(self, retriever: Retriever) -> None:
+        """Inject the retriever post-construction (built after the coordinator).
+        Must be called before this coordinator starts consuming ``batch`` jobs."""
+        self._retriever = retriever
 
     # ── producer (the cronjob / route enqueues this one job) ─────────
     def enqueue_dispatch(self, run_label: str, *, seed: str = "", sample_size: int = 0) -> None:
@@ -235,6 +245,7 @@ class EvalCoordinator:
         return out
 
     def _search(self, query: str, collection_ids: list[str]):
+        assert self._retriever is not None, "retriever not wired (call set_retriever)"
         return self._retriever.search(query, collection_ids, depth=self._depth)
 
     # ── consumption machinery (mirrors sanity / index) ───────────────

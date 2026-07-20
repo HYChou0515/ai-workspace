@@ -59,6 +59,9 @@ class CoordinatorBundle:
     card_gen: CardGenCoordinator
     quality: QualityCoordinator | None
     sanity: SanityBatteryCoordinator | None
+    # #535: the retrieval-eval fan-out. None when no KB LLM is wired (question
+    # generation needs one). Its retriever is injected post-build (set_retriever).
+    eval: EvalCoordinator | None
 
 
 def build_ingestor(
@@ -134,6 +137,7 @@ def build_coordinators(
     card_drafter_llm: ILlm | None,
     sanity_llm_factory: LlmFactory | None,
     sanity_judge_llm: ILlm | None,
+    eval_llm: ILlm | None = None,
     embedder: Embedder | None = None,
     cluster_tau: float = 0.9,
     suppress_tau: float = 0.92,
@@ -243,11 +247,28 @@ def build_coordinators(
             message_queue_factory=message_queue_factory,
         )
         logger.info("coordinators: sanity battery coordinator wired")
+    # #535: retrieval-eval fan-out. Built (registers the EvalJob model + its auto
+    # route) whenever a KB LLM is wired; the retriever is injected post-build by
+    # the caller (create_app / worker) once it exists.
+    eval_coordinator = None
+    if eval_llm is not None:
+        from .kb.eval.coordinator import EvalCoordinator
+
+        eval_coordinator = EvalCoordinator(
+            spec, eval_llm, message_queue_factory=message_queue_factory
+        )
+        logger.info("coordinators: retrieval-eval coordinator wired")
     logger.info("coordinators: built wiki/index/card_gen coordinators")
     return CoordinatorBundle(
-        wiki=wiki, index=index, card_gen=card_gen, quality=quality, sanity=sanity
+        wiki=wiki,
+        index=index,
+        card_gen=card_gen,
+        quality=quality,
+        sanity=sanity,
+        eval=eval_coordinator,
     )
 
 
 if TYPE_CHECKING:
     from .health.sanity.coordinator import SanityBatteryCoordinator
+    from .kb.eval.coordinator import EvalCoordinator

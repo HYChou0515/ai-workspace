@@ -32,6 +32,7 @@ _JOBTYPE_ATTR = {
     "wiki": "wiki",
     "card-gen": "card_gen",
     "sanity": "sanity",
+    "eval": "eval",
 }
 
 

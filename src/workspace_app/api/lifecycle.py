@@ -307,6 +307,10 @@ def build_lifespan(
             if app.state.sanity_coordinator is not None:
                 with boot_step("start model-sanity consumer"):
                     app.state.sanity_coordinator.start_consuming()
+            # #535: retrieval-eval consumer (when wired) — drains EvalJob jobs.
+            if app.state.eval_coordinator is not None:
+                with boot_step("start retrieval-eval consumer"):
+                    app.state.eval_coordinator.start_consuming()
             # #175: context-card generation consumer.
             with boot_step("start context-card generation consumer"):
                 app.state.card_gen_coordinator.start_consuming()
@@ -393,6 +397,9 @@ def build_lifespan(
             if app.state.sanity_coordinator is not None:
                 with contextlib.suppress(BaseException):
                     await app.state.sanity_coordinator.aclose()
+            if app.state.eval_coordinator is not None:
+                with contextlib.suppress(BaseException):
+                    await app.state.eval_coordinator.aclose()
             with contextlib.suppress(BaseException):
                 await app.state.card_gen_coordinator.aclose()
             await kernels.shutdown_all()
