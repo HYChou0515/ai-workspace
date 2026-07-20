@@ -724,3 +724,45 @@ async def test_listed_path_works_verbatim_in_a_real_shell(tmp_path):
     out = await exec_impl(ctx, ["cat", listed])  # the EXACT string the agent was shown
     assert "exit_code=0" in out
     assert "hello" in out
+
+
+def _tool_named(name: str):
+    for t in build_tools([name]):
+        if t.name == name:
+            return t
+    raise AssertionError(f"{name} not built")
+
+
+def test_a_tool_with_optional_args_states_what_absent_looks_like():
+    """Nothing ever told the model how to say "I don't want to set this".
+
+    Strict mode lists EVERY property in `required` and strips the `null` default,
+    so a tool like `kb_search` (one required arg, seven optional) presents seven
+    slots the model must fill on its very first call, with no stated convention
+    for leaving one empty. It has to invent one — and a model that thinks in
+    Python invents `None`, which is not JSON. The first call then fails, and the
+    validation error becomes the only spec it ever receives; that is why the
+    second or third attempt works.
+
+    This is NOT the case of prose contradicting the schema — the schema says
+    nothing on the subject. It is a sentence the interface was missing."""
+    desc = _tool_named("kb_search").description or ""
+    assert "null" in desc.lower()
+    # and it names the actual optional args, so the convention is not abstract
+    assert "page_from" in desc
+
+
+def test_the_note_is_generic_not_written_for_one_tool():
+    """The same gap exists for every tool with optional args, so the sentence is
+    derived from the schema rather than hand-written into one docstring — a tool
+    that grows an optional arg tomorrow is covered without anyone remembering."""
+    desc = _tool_named("make_deck").description or ""
+    assert "null" in desc.lower()
+    assert "out_path" in desc
+
+
+def test_a_tool_with_no_optional_args_is_left_alone():
+    """No optional args ⇒ nothing to leave unset ⇒ no note. The addition must not
+    become boilerplate stapled to every tool."""
+    desc = _tool_named("link_entity").description or ""
+    assert "null" not in desc.lower()
