@@ -799,6 +799,50 @@ class ChatTurnEngine:
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    async def aclose(self, timeout: float = 10.0) -> None:
+        """Give in-flight turns a bounded chance to finish and persist.
+
+        Shutdown cancelled the registered background tasks and tore down
+        sandboxes, but nothing tracked or awaited the turn workers — so a turn
+        seconds from done went with the process, silently, with no terminal event
+        and nothing in the store. Draining first means the common rollover keeps
+        the answer.
+
+        Bounded on purpose: a wedged turn must not hold the pod past its grace
+        period, because the alternative is SIGKILL, where nothing gets to run its
+        teardown at all. Whatever is still running when the deadline passes is
+        cancelled — which each turn already handles by persisting its partial
+        result — and given a short moment to do so."""
+        live = [
+            t
+            for t in (
+                *(s.current_turn for s in self._ws_sessions.values()),
+                *(s.current_turn for s in self._sessions.values()),
+                *self._detached,
+            )
+            if t is not None and not t.done()
+        ]
+        if live:
+            logger.info("turns: draining %d in-flight turn(s) (<=%.1fs)", len(live), timeout)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.gather(*live, return_exceptions=True), timeout
+                )
+        # Past the deadline: cancel, then let each turn's teardown persist what it
+        # has (that path is the same one Stop uses).
+        stragglers = [t for t in live if not t.done()]
+        for task in stragglers:
+            task.cancel()
+        if stragglers:
+            logger.warning("turns: %d turn(s) did not drain — cancelled", len(stragglers))
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    asyncio.gather(*stragglers, return_exceptions=True), 2.0
+                )
+        for session in self._ws_sessions.values():
+            if session.worker is not None:
+                session.worker.cancel()
+
     def _spawn_detached(self, coro: Coroutine[Any, Any, None]) -> None:
         """Run a fire-and-forget coroutine, holding a STRONG reference until it
         finishes. asyncio keeps only a weak reference to a bare ``create_task``

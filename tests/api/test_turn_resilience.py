@@ -209,3 +209,50 @@ async def test_a_disconnected_requester_does_not_lose_the_whole_turn():
 
     assert saved, "the turn was dropped when the requester disconnected"
     assert "and the rest" in saved[0][0].content
+
+
+async def test_aclose_lets_an_in_flight_turn_finish_and_save():
+    """A pod rollover must not eat a turn that was seconds from done.
+
+    Shutdown cancelled the registered background tasks and tore down sandboxes,
+    but nothing tracked or awaited the turn workers — so anything not yet
+    persisted went with the process, silently and with no terminal event.
+    """
+    release = asyncio.Event()
+    saved: list[list] = []
+
+    class _Slow:
+        async def run(self, content, ctx):  # noqa: ANN001, ANN201
+            await release.wait()
+            yield MessageDelta(text="finished during shutdown")
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Slow())  # ty: ignore[invalid-argument-type]
+    engine.enqueue("inv7", "a", AgentToolContext(), on_complete=lambda m: saved.append(m))
+    await asyncio.sleep(0.05)  # the turn is running
+
+    release.set()
+    await engine.aclose(timeout=3.0)
+
+    assert saved, "the in-flight turn was dropped by shutdown"
+    assert "finished during shutdown" in saved[0][0].content
+
+
+async def test_aclose_is_bounded_and_gives_up_on_a_wedged_turn():
+    """Draining is best-effort: a turn that will never finish must not hold the
+    pod open past its grace period (k8s would SIGKILL it anyway, which is
+    strictly worse — nothing gets to run its teardown)."""
+
+    class _Wedged:
+        async def run(self, content, ctx):  # noqa: ANN001, ANN201
+            await asyncio.Event().wait()  # never returns
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Wedged())  # ty: ignore[invalid-argument-type]
+    engine.enqueue("inv8", "a", AgentToolContext(), on_complete=lambda _m: None)
+    await asyncio.sleep(0.05)
+
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await engine.aclose(timeout=0.2)
+    assert loop.time() - t0 < 2.0  # returned on its own deadline, not never
