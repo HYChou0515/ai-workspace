@@ -57,6 +57,9 @@ _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while waiting for the queue to d
 # independent process jobs never collide on `seq` (which is cosmetic ordering —
 # merge adjacency uses char offsets). Far above any realistic chunks-per-batch.
 _SEQ_STRIDE = 1_000_000
+# The verdict the stuck-doc sweep writes. Phrased as what happened + what to do,
+# because it lands in the user-facing failure list next to real parser errors.
+_INTERRUPTED = "processing was interrupted before it finished — re-read to try again"
 
 
 class IndexCoordinator:
@@ -246,6 +249,17 @@ class IndexCoordinator:
         upload route enqueues one job per archive member on the event loop)."""
         pending_for_doc = QB["status"].eq(TaskStatus.PENDING) & (QB["partition_key"] == doc_id)
         return self._job_rm.count_resources(pending_for_doc.build()) > 0
+
+    def _has_live_job(self, doc_id: str) -> bool:
+        """True if a job targeting ``doc_id`` is still queued OR claimed — the
+        "is anyone working on this?" question, as opposed to ``_has_pending_job``'s
+        "is a rerun already queued?" (deliberately PENDING-only: a claimed job may
+        have read pre-edit content, so it must never swallow a fresh reindex, #134).
+        Only the stuck-doc sweep needs the wider window: PROCESSING is a live claim
+        while its worker heartbeats, and a worker that died holding it is specstar's
+        stale-job reaper's to reclaim — not ours to overrule."""
+        live_for_doc = QB["status"].in_(_ACTIVE) & (QB["partition_key"] == doc_id)
+        return self._job_rm.count_resources(live_for_doc.build()) > 0
 
     # ── reindex-on-edit trigger (#87) ────────────────────────────────
     def install_reindex_on_edit(self) -> None:
@@ -688,6 +702,53 @@ class IndexCoordinator:
                 self._enqueue_finalize(doc_id, run.collection_id, requester)
                 acted.append(doc_id)
         return acted
+
+    # ── stuck-doc reconciliation (#573) ──────────────────────────────
+    def sweep_stuck_docs(self, *, stuck_after_seconds: float = 3600.0) -> list[str]:
+        """Give a verdict to every doc left ``indexing`` with nothing alive behind
+        it, and return the doc ids failed.
+
+        `SourceDoc.status` used to depend on an assumption the queue does not make:
+        that the handler always runs to the end. It does not — a SIGKILLed worker
+        (OOM, eviction, rolling restart) stops heartbeating, and specstar's own
+        stale-job reaper spends the retries and retires the job WITHOUT ever calling
+        the handler again. Every line that writes ``ready``/``error`` lives in that
+        handler, so the doc stayed ``indexing`` for ever: the UI claimed progress
+        while the content was silently absent from retrieval.
+
+        This is the doc-keyed backstop that closes it. ``sweep_stuck_runs`` (#227)
+        cannot: it is keyed on ``IndexRun``, which a single-job doc never creates —
+        and neither does a split job killed before ``_runs.start``.
+
+        A doc is only judged when nothing owns it: no running ``IndexRun`` (that
+        branch belongs to the run sweep, which RECOVERS the finished batches rather
+        than discarding them) and no queued/claimed job. The grace — the doc's own
+        ``updated_time``, no new state — must exceed a legitimately slow index, so
+        it shares #227's constant.
+
+        The verdict is ``error``, never an automatic requeue: the most common way to
+        lose a worker is a doc big enough to OOM it, and re-queueing that walks the
+        pod into the same wall for ever, quietly. Failing it puts the doc in the
+        already-existing failure list with its already-existing retry button, and
+        names which docs are doing the damage."""
+        cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=stuck_after_seconds)
+        doc_rm = self._spec.get_resource_manager(SourceDoc)
+        # Metas-only + indexed on both terms: no row (and no multi-KB extracted
+        # `text`) is materialised just to decide whether a doc is abandoned.
+        stuck = (QB["status"] == "indexing") & (QB.updated_time() < cutoff)
+        failed: list[str] = []
+        for meta in doc_rm.search_resources(stuck.build()):
+            doc_id = meta.resource_id
+            try:
+                if self._runs.is_active(doc_id) or self._has_live_job(doc_id):
+                    continue
+                # #83: the doc keeps its own owner — a sweep must not rewrite
+                # `updated_by` to the worker. The meta already carries it.
+                self._set_doc_status(doc_id, meta.updated_by, status="error", detail=_INTERRUPTED)
+                failed.append(doc_id)
+            except Exception:  # noqa: BLE001 — one bad doc must not strand the rest
+                _LOGGER.exception("IndexCoordinator: stuck-doc sweep failed for %s", doc_id)
+        return failed
 
     def _cache_hook(self, doc_id: str) -> None:
         # #390: snapshot the freshly-indexed result into the cross-path cache so a

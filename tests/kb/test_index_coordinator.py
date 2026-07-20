@@ -847,3 +847,125 @@ async def test_an_empty_requester_is_not_replaced_by_the_worker_default():
     jrm = spec.get_resource_manager(IndexJob)
     job = next(iter(jrm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())))
     assert job.info.created_by == ""  # ty: ignore[unresolved-attribute]
+
+
+# ── stuck-doc reconciliation (#573) ──────────────────────────────────
+
+
+def _status(spec, doc_id: str) -> tuple[str, str]:
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    return doc.status, doc.status_detail
+
+
+async def test_sweep_fails_a_doc_whose_worker_was_killed_mid_index():
+    """The failure mode nothing owned: specstar's queue can retire a job WITHOUT
+    the handler ever running — a SIGKILLed worker stops heartbeating, the stale-job
+    reaper spends its retries and writes it FAILED. Every line that flips a doc to
+    ready/error lives in that handler, so the doc stayed `indexing` for ever: the
+    banner claimed progress and the content was silently missing from retrieval."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)  # flipped to `indexing`, and its job is gone
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    # Within the grace it might still be a slow-but-live index — untouched.
+    assert coord.sweep_stuck_docs(stuck_after_seconds=99999) == []
+    assert _status(spec, doc_id)[0] == "indexing"
+
+    # Past it, with nothing alive behind the doc, the run is declared over.
+    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == [doc_id]
+    status, detail = _status(spec, doc_id)
+    assert status == "error"
+    assert detail  # says it was interrupted — not a bare, unexplained failure
+
+
+async def test_sweep_leaves_a_doc_whose_job_is_still_queued():
+    """A doc waiting on a PENDING job is not stuck — it hasn't started. Failing it
+    would make a backlog (or a worker scaled to zero) look like data loss."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+    coord.enqueue(doc_id, cid)
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == []
+    assert _status(spec, doc_id)[0] == "indexing"
+
+
+async def test_sweep_leaves_a_doc_whose_job_is_being_worked_on():
+    """PROCESSING means a worker holds it. If that worker is dead, specstar's own
+    stale-job reaper reclaims the job first (it heartbeats); racing that reaper
+    from here would fail docs that are about to be retried."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+    coord.enqueue(doc_id, cid)
+    jrm = spec.get_resource_manager(IndexJob)
+    job = next(iter(jrm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())))
+    data = job.data
+    assert isinstance(data, IndexJob)
+    with jrm.using(user=job.info.created_by):  # ty: ignore[unresolved-attribute]
+        jrm.update(
+            job.info.resource_id,  # ty: ignore[unresolved-attribute]
+            msgspec.structs.replace(data, status=TaskStatus.PROCESSING),
+        )
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == []
+    assert _status(spec, doc_id)[0] == "indexing"
+
+
+async def test_sweep_defers_to_the_run_sweep_while_a_fanout_is_joining():
+    """A fan-out's `process`/`finalize` jobs carry no partition key, so they are
+    unfindable by doc id — the running IndexRun is what proves the doc is alive.
+    That branch already has an owner (`sweep_stuck_runs`, #227), which RECOVERS
+    the work; failing the doc here would steal it and lose the finished batches."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+    coord._runs.start(doc_id, cid, total=2)  # noqa: SLF001 — test drives the guard directly
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == []
+    assert _status(spec, doc_id)[0] == "indexing"
+
+
+async def test_sweep_ignores_docs_that_already_have_a_verdict():
+    """Only `indexing` is unowned. A ready doc must never be re-judged, and an
+    errored one must keep the REAL reason it failed."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rm = spec.get_resource_manager(SourceDoc)
+    ready = _doc(spec, cid, "ready.md")
+    errored = _doc(spec, cid, "bad.md")
+    for rid, status, detail in ((ready, "ready", ""), (errored, "error", "ValueError: nope")):
+        doc = rm.get(rid).data
+        assert isinstance(doc, SourceDoc)
+        rm.update(rid, msgspec.structs.replace(doc, status=status, status_detail=detail))
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == []
+    assert _status(spec, ready) == ("ready", "")
+    assert _status(spec, errored) == ("error", "ValueError: nope")
+
+
+async def test_one_undecidable_doc_does_not_strand_the_rest(monkeypatch):
+    """Per-doc resilience, same rule as the collection walk: one doc whose write
+    blows up must not abort the sweep and leave every other stuck doc unjudged."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    bad = _doc(spec, cid, "bad.md")
+    good = _doc(spec, cid, "good.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+    real = coord._set_doc_status  # noqa: SLF001 — inject a per-doc failure
+
+    def _boom(doc_id: str, updater: str, *, status: str, detail: str) -> None:
+        if doc_id == bad:
+            raise RuntimeError("meta store down")
+        real(doc_id, updater, status=status, detail=detail)
+
+    monkeypatch.setattr(coord, "_set_doc_status", _boom)
+
+    assert coord.sweep_stuck_docs(stuck_after_seconds=0) == [good]
+    assert _status(spec, bad)[0] == "indexing"
