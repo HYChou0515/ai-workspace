@@ -55,6 +55,10 @@ class SubagentBridge:
         # itself (#270) — it asks the KB agent, which decides whether the wiki or
         # the documents answer this question.
         wiki_consultant_factory: Callable[[list[str]], WikiConsultant | None] | None = None,
+        # The deploy's output ceilings, handed to every KB sub-agent this bridge
+        # spawns so a sub-agent can't run wider than the turn that asked it.
+        tool_output_max_chars: int = 200_000,
+        exec_output_max_chars: int = 30_000,
     ) -> None:
         self._spec = spec
         self._runner = runner
@@ -65,6 +69,8 @@ class SubagentBridge:
         self._max_searches = max_searches
         self._superusers = superusers
         self._wiki_consultant_factory = wiki_consultant_factory
+        self._tool_output_max_chars = tool_output_max_chars
+        self._exec_output_max_chars = exec_output_max_chars
 
     async def run(
         self,
@@ -212,6 +218,8 @@ class SubagentBridge:
             # its AskKbSpec (the sub-agent's authoritative tool set + prompt) and its
             # wiki-search cap through here; both None ⇒ the interactive path unchanged.
             wiki_budget=wiki_budget,
+            tool_output_max_chars=self._tool_output_max_chars,
+            exec_output_max_chars=self._exec_output_max_chars,
             ask_kb_spec=ask_kb_spec,
             # #308: the speaker's per-doc-override exclusion (resolved above).
             exclude_doc_ids=exclude_doc_ids,

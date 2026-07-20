@@ -81,3 +81,31 @@ async def test_a_page_that_is_wide_rather_than_long_still_fits_the_budget():
     assert 0 < len(payload["entities"]) < 20
     assert payload["total"] == 20
     assert payload["next_offset"] == len(payload["entities"]) + 1
+
+
+async def test_a_zero_or_negative_limit_still_makes_progress():
+    """The generated schema REQUIRES the model to emit `limit` and gives it no
+    default, so a small model emitting 0 is an ordinary failure — and an empty
+    page whose next_offset points back at itself is a loop with no exit."""
+    ctx = await _ctx()
+    await _seed(ctx, 5)
+
+    for bad in (0, -3):
+        payload = json.loads(await query_entity_impl(ctx, "issue", limit=bad))
+        assert payload["entities"], f"limit={bad} returned nothing"
+        assert payload["entities"][0]["number"] == 1
+
+
+async def test_the_invalid_list_is_bounded_too():
+    """`invalid` is one number per unparseable record — the same
+    grows-with-the-store shape as `entities`, in the very tool that pages."""
+    ctx = await _ctx()
+    fs = ctx.context.filestore
+    assert fs is not None
+    for i in range(1, 400):
+        await fs.write("ws", f"/issues/{i}.md", b"---\nnot: [valid\n")
+
+    payload = json.loads(await query_entity_impl(ctx, "issue"))
+
+    assert len(payload["invalid"]) < 399
+    assert payload["invalid_total"] == 399

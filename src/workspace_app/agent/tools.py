@@ -380,56 +380,77 @@ async def edit_file_impl(
     )
 
 
-def _capped_listing(entries: list[str], cap: int, *, noun: str, hint: str) -> str:
-    """Render `entries` one per line, stopping at `cap` characters and saying
-    how many there were in total.
+def _capped_listing(entries: list[str], cap: int, *, offset: int = 1, noun: str, hint: str) -> str:
+    """Render the window of `entries` starting at 1-based `offset`, one per
+    line, stopping at `cap` characters and saying how many there were in total.
 
     A listing tool's answer is as big as whatever it is listing, so it needs a
     ceiling of its own — and a cut listing has to SAY it was cut, with the true
-    count. An agent that silently receives half a directory believes it has
-    seen the whole thing and reasons from an absence that isn't real."""
+    count and the offset that resumes it. An agent that silently receives half
+    a directory believes it has seen the whole thing and reasons from an
+    absence that isn't real; an agent that is told it saw half, with no way to
+    ask for the other half, is merely stuck."""
+    start = max(offset, 1) - 1
+    window = entries[start:]
     kept: list[str] = []
     used = 0
-    for entry in entries:
+    for entry in window:
         used += len(entry) + 1
-        if used > cap:
+        # Always keep one: a notice with no entry at all teaches the agent
+        # nothing and leaves it nothing to narrow with.
+        if used > cap and kept:
             break
         kept.append(entry)
-    if len(kept) == len(entries):
+    if start == 0 and len(kept) == len(entries):
         return "\n".join(entries)
+    shown_to = start + len(kept)
+    more = (
+        f"pass offset={shown_to + 1} to continue, or {hint}"
+        if shown_to < len(entries)
+        else "this is the end of the listing"
+    )
     return "\n".join(
-        [*kept, f"\n[showing {len(kept)} of {len(entries)} {noun} — {hint}]"],
+        [*kept, f"\n[{noun} {start + 1}-{shown_to} of {len(entries)} — {more}]"],
     )
 
 
-async def list_files_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> str:
-    """List ONE directory of the workspace — like `ls`, not like `find`. Returns
-    the files in it plus its sub-directories (each shown with a trailing `/`);
+async def list_files_impl(
+    ctx: RunContextWrapper[AgentToolContext], prefix: str = "", offset: int = 1
+) -> str:
+    """List ONE level of the workspace — like `ls`, not like `find`. Returns the
+    sub-directories there (each shown with a trailing `/`) followed by the files;
     pass a sub-directory back in to look inside it. `prefix` defaults to the
-    workspace root. Paths come back relative to that root (`notes.txt`,
-    `data/`), which is the form the other file tools and `exec` both take. Use
-    this instead of `exec(["ls", ...])`."""
+    workspace root, and also accepts a file (lists just that file) or the start
+    of a name (lists what begins with it). Paths come back relative to the
+    workspace root (`notes.txt`, `data/`), which is the form the other file
+    tools and `exec` both take. A long listing is cut with a notice — pass
+    `offset` to read on from there. Use this instead of `exec(["ls", ...])`."""
     fs, inv = _workspace(ctx)
     files, dirs = await fs.list_dir(inv, prefix)
     if not files and not dirs:
         return f"no files under {_shown_prefix(prefix)}"
-    # #549: every path an agent SEES is relative — the store's `/x` key is the
-    # system root once it reaches `exec`, and a listing is the strongest
-    # evidence the model has about what a path here looks like.
+    # Directories first: they are how the agent gets to everything not shown, so
+    # a cut that removes them turns a big directory into a dead end. And every
+    # path an agent SEES is relative (#549) — the store's `/x` key is the system
+    # root once it reaches `exec`, and a listing is the strongest evidence the
+    # model has about what a path here looks like.
     return _capped_listing(
         [rel_path(p) for p in (*dirs, *files)],
         ctx.context.exec_output_max_chars,
+        offset=offset,
         noun="entries",
-        hint="list a sub-directory to see the rest",
+        hint="list a sub-directory",
     )
 
 
 def _shown_prefix(prefix: str) -> str:
-    """The directory `list_files` was asked about, in the form the agent should
-    use — so an empty listing names something it can act on, in the one path
-    dialect that works everywhere (#549)."""
-    shown = rel_path(prefix.strip()).removeprefix("./")
-    return f"{shown.rstrip('/')}/" if shown not in ("", ".") else "the workspace root"
+    """The path `list_files` was asked about, in the form the agent should use —
+    so an empty listing names something it can act on, in the one path dialect
+    that works everywhere (#549)."""
+    from ..files.facade import _dir_key
+
+    key = _dir_key(prefix)
+    return f"{rel_path(key)}/" if key else "the workspace root"
 
 
 async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool:
@@ -539,11 +560,14 @@ async def read_new_source_impl(ctx: RunContextWrapper[AgentToolContext]) -> str:
     return _truncate_middle(src, cap) if len(src) > cap else src
 
 
-async def list_sources_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> str:
+async def list_sources_impl(
+    ctx: RunContextWrapper[AgentToolContext], prefix: str = "", offset: int = 1
+) -> str:
     """List the collection's raw source documents (read-only) so you can re-read
     or cross-reference any of them while maintaining the wiki. Pass `prefix` to
-    list only the paths starting with it; the listing reports the total so you
-    can tell a narrowed view from the whole collection."""
+    list only the paths starting with it, and `offset` to read on from where a
+    cut listing stopped; the listing reports the total so you can tell a
+    narrowed view from the whole collection."""
     sources = ctx.context.wiki_sources
     if sources is None:
         return "no sources are attached to this run"
@@ -556,6 +580,7 @@ async def list_sources_impl(ctx: RunContextWrapper[AgentToolContext], prefix: st
     return _capped_listing(
         paths,
         ctx.context.exec_output_max_chars,
+        offset=offset,
         noun="sources",
         hint="pass a longer `prefix` to narrow the listing",
     )
@@ -678,10 +703,16 @@ def _glossary_for_passages(ctx: AgentToolContext, passage_texts: list[str]) -> s
     pairs = cards_with_ids_for_collections(spec, ctx.collection_ids)
     hits = match_with_ids("\n".join(passage_texts), pairs, cap=_GLOSSARY_INJECT_CAP)
     fresh = [(rid, card) for rid, card in hits if rid not in ctx.injected_card_ids]
-    block = card_context_block([card for _, card in fresh])
+    cards = [card for _, card in fresh]
+    block = card_context_block(cards)
     if not block:
         return ""
-    ctx.injected_card_ids.update(rid for rid, _ in fresh)
+    # Mark only what the block actually carried: a card the budget dropped was
+    # never defined for the model, so marking it would silence that term for the
+    # whole turn — including a later search that matches it alone.
+    from ..kb.context_cards import shown_card_count
+
+    ctx.injected_card_ids.update(rid for rid, _ in fresh[: shown_card_count(cards)])
     return f"\n\n{block}"
 
 
@@ -1830,13 +1861,18 @@ async def query_entity_impl(
     first record (default 1) and `limit` the number of records (default: the
     configured page). Returns JSON: `entities` (the readable records), `total`
     (how many records the type has), `invalid` (numbers of records whose file
-    couldn't be parsed), and `next_offset` when more records remain."""
+    couldn't be parsed, itself a page — `invalid_total` is how many there are),
+    and `next_offset` when more records remain."""
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err
     result = await store.query(type_name)
     start = max(offset, 1) - 1
-    count = limit if limit is not None else _ENTITY_PAGE_DEFAULT
+    # A page of zero records whose `next_offset` points back at itself is a loop
+    # with no exit, and the generated schema REQUIRES the model to emit `limit`
+    # with no default — so a small model answering 0 is an ordinary failure, not
+    # an abuse. Clamp rather than trust (a negative would slice from the end).
+    count = max(limit, 1) if limit is not None else _ENTITY_PAGE_DEFAULT
     # A page is bounded twice: by record count, and by the characters those
     # records render to. Neither alone is enough — 2000 records overflow a
     # context by being many, five records with a pasted log in a field overflow
@@ -1854,7 +1890,11 @@ async def query_entity_impl(
     payload: dict[str, Any] = {
         "entities": entities,
         "total": len(result.entities),
-        "invalid": [e.number for e in result.invalid],
+        # `invalid` grows with the store exactly like `entities` does — a
+        # workspace where a bad template broke every record would otherwise
+        # dump every number from the one tool that pages.
+        "invalid": [e.number for e in result.invalid[:_ENTITY_PAGE_DEFAULT]],
+        "invalid_total": len(result.invalid),
     }
     if start + len(entities) < len(result.entities):
         payload["next_offset"] = start + len(entities) + 1

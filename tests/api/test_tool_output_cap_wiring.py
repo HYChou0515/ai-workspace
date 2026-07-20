@@ -35,3 +35,37 @@ def test_create_app_threads_the_ceiling_into_the_turn_context_builder(monkeypatc
     )
 
     assert captured["tool_output_max_chars"] == 12_345
+
+
+def test_the_ceiling_reaches_the_kb_surfaces_too(monkeypatch):
+    """The KB chat turn and every ask_knowledge_base sub-agent build their own
+    AgentToolContext, so threading the knob only into the RCA turn would leave
+    the biggest producer of tool output running at the default whatever the
+    operator configured."""
+    import workspace_app.api.kb_chat_routes as kb_mod
+
+    seen: dict[str, object] = {}
+    real_routes = app_mod.register_kb_chat_routes
+    real_bridge = app_mod.SubagentBridge
+
+    def _routes(*a, **kw):
+        seen["routes"] = kw.get("tool_output_max_chars")
+        return real_routes(*a, **kw)
+
+    def _bridge(**kw):
+        seen["bridge"] = kw.get("tool_output_max_chars")
+        return real_bridge(**kw)
+
+    monkeypatch.setattr(app_mod, "register_kb_chat_routes", _routes)
+    monkeypatch.setattr(app_mod, "SubagentBridge", _bridge)
+    spec = make_spec()
+    create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        tool_output_max_chars=12_345,
+    )
+
+    assert seen == {"routes": 12_345, "bridge": 12_345}
+    assert kb_mod.answer_question is not None  # the sub-agent path takes it as a kwarg

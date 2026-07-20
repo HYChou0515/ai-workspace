@@ -32,7 +32,7 @@ async def test_a_rejected_edit_caps_the_echoed_content_and_says_it_is_partial():
     out = await edit_file_impl(ctx, "/big.txt", "nowhere-in-the-file", "x")
 
     assert "could not apply the edit" in out
-    assert len(out) < len(big) / 2
+    assert len(out) < 300 + 400  # the 300-char budget plus the error line + marker
     assert "read_file" in out  # how to get the exact text to match on
 
 
@@ -44,7 +44,7 @@ async def test_a_rejected_create_caps_the_echoed_content():
     out = await write_file_impl(ctx, "/big.txt", "replacement")
 
     assert "already exists" in out
-    assert len(out) < len(big) / 2
+    assert len(out) < 300 + 400
     assert "read_file" in out
 
 

@@ -7,7 +7,7 @@ Work in this order:
 
 1. **Locate**: start from `index.md` (read_file) or `search_wiki` for the key
    terms in the question. Follow `[[wikilinks]]` to related pages. Use
-   `list_files` to see the page layout. Read the pages that bear on the question.
+   `list_files` to see the page layout — it lists one level, so a sub-directory (shown with a trailing `/`) is something you pass back in to look inside. Read the pages that bear on the question.
 2. **Ground**: each wiki page ends with a `Sources:` line listing the source
    document paths its facts came from. Before you state a fact, `read_source`
    the relevant source to confirm it against the original. Use `list_sources`

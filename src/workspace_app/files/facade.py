@@ -114,6 +114,35 @@ def rel_path(path: str) -> str:
     this is about what we TEACH, not what we accept."""
     return path.lstrip("/")
 
+def _dir_key(path: str) -> str:
+    """`path` as a directory key: `""` for the workspace root, else `/a/b`.
+
+    `.` and `./` mean the root here for the same reason `./x` means `/x` in
+    `_norm` — the agent is told the three spellings are interchangeable, so a
+    bare `.` must not resolve to a directory literally named `.`."""
+    p = path.strip()
+    if p in ("", ".", "./", "/"):
+        return ""
+    return _norm(p).rstrip("/")
+
+
+def _split_level(entries: list[str], prefix: str) -> tuple[list[str], list[str]]:
+    """Split recursive `entries` into (files, dirs) at one level below `prefix`."""
+    files: list[str] = []
+    dirs: set[str] = set()
+    for entry in entries:
+        if not entry.startswith(prefix):
+            continue
+        rest = entry[len(prefix) :]
+        if not rest:
+            continue
+        head, slash, _ = rest.partition("/")
+        if slash:
+            dirs.add(prefix + head + "/")
+        else:
+            files.append(entry)
+    return sorted(files), sorted(dirs)
+
 
 class WorkspaceFiles:
     def __init__(
@@ -580,35 +609,41 @@ class WorkspaceFiles:
         return await self._fs.ls(workspace_id, prefix)
 
     async def list_dir(self, workspace_id: str, path: str = "") -> tuple[list[str], list[str]]:
-        """ONE directory level: the files directly in `path`, and its immediate
+        """ONE level of the tree at `path`: its files, and its immediate
         subdirectories — `ls`, not `find`. Both lists are sorted `/`-rooted
         paths; a subdirectory carries a trailing `/`.
 
         A recursive listing's size is whatever the workspace happens to hold,
         which is why the agent-facing `list_files` reads a level at a time and
-        descends. The split itself is derived from the recursive walk, since
-        neither the Sandbox `walk` nor a FileStore key scan takes a depth —
-        so this bounds what the MODEL sees, not yet what the backend scans.
-        Pushing the depth down into both backends is the follow-up.
+        descends. The split is derived from the recursive walk, since neither
+        the Sandbox `walk` nor a FileStore key scan takes a depth — so this
+        bounds what the MODEL sees, not yet what the backend scans. Pushing
+        depth into both backends is the follow-up.
+
+        `path` is resolved the way a person would mean it, in order:
+
+        - a FILE ⇒ that file alone (answering "does this exist" honestly,
+          rather than "no files under /a.txt", which reads as "it's gone");
+        - a DIRECTORY ⇒ its level;
+        - otherwise a partial NAME ⇒ the entries in its parent that start with
+          it. `list_files`'s parameter has always been called `prefix` and used
+          to filter by string prefix, so half a name has to keep working — and
+          it only ever worked on the cold path anyway (a FileStore key scan is
+          a string prefix; `walk` on a non-directory yields nothing), so this
+          also makes warm and cold agree for the first time.
 
         Directories are inferred from the paths of the files under them: an
         empty directory has no files to infer from, so it does not appear —
         the same blind spot `walk` (regular files only) already has."""
-        prefix = _norm(path) if path else "/"
-        if not prefix.endswith("/"):
-            prefix += "/"
-        files: list[str] = []
-        dirs: set[str] = set()
-        for entry in await self.ls(workspace_id, prefix.rstrip("/")):
-            rest = entry[len(prefix) :] if entry.startswith(prefix) else None
-            if not rest:
-                continue
-            head, slash, _ = rest.partition("/")
-            if slash:
-                dirs.add(prefix + head + "/")
-            else:
-                files.append(entry)
-        return sorted(files), sorted(dirs)
+        key = _dir_key(path)
+        if key and await self.exists(workspace_id, key):
+            return [key], []
+        files, dirs = _split_level(await self.ls(workspace_id, key), key + "/")
+        if files or dirs or not key:
+            return files, dirs
+        parent = key.rsplit("/", 1)[0]
+        siblings = [p for p in await self.ls(workspace_id, parent) if p.startswith(key)]
+        return _split_level(siblings, parent + "/")
 
     async def stat_all(self, workspace_id: str, prefix: str = "") -> list[tuple[str, int]]:
         """Every file under ``prefix`` as ``(path, size)`` — WITHOUT reading a

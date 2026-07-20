@@ -271,9 +271,12 @@ def resolve_collection(spec: SpecStar, ref: str) -> dict[str, Any]:
         cid, c = matches[0]
         return {"status": "ok", "id": cid, "name": c.name}
     if len(matches) > 1:
+        # Same grows-with-the-data shape as `not_found` below: this branch
+        # exists for the case where MANY rows collide on one name.
         return {
             "status": "ambiguous",
-            "candidates": [{"id": cid, "name": c.name} for cid, c in matches],
+            "candidates": [{"id": cid, "name": c.name} for cid, c in matches[:_NEAREST_MAX]],
+            "total": len(matches),
         }
     return {
         "status": "not_found",

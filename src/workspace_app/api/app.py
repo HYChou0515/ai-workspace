@@ -753,6 +753,8 @@ def create_app(
                 wiki_llm_api_key=wiki_llm_api_key,
             ),
             reader_max_turns=wiki_reader_max_turns,
+            tool_output_max_chars=tool_output_max_chars,
+            exec_output_max_chars=exec_output_max_chars,
         )
 
     kb_turn_engine = ChatTurnEngine(
@@ -782,6 +784,8 @@ def create_app(
         # driven per turn over the chat's own collections. Built on the BASE runner
         # — a reader must never re-enter the KB layer that called it.
         wiki_consultant_factory=_wiki_consultant_factory,
+        tool_output_max_chars=tool_output_max_chars,
+        exec_output_max_chars=exec_output_max_chars,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
@@ -810,6 +814,8 @@ def create_app(
         # so an app asking a question reaches the wiki through it (#270: an app
         # never holds wiki tools of its own).
         wiki_consultant_factory=_wiki_consultant_factory,
+        tool_output_max_chars=tool_output_max_chars,
+        exec_output_max_chars=exec_output_max_chars,
     )
     _run_subagent = subagent_bridge.run
 

@@ -30,7 +30,13 @@ async def _run_cap(tool: FunctionTool, output: object, *, cap: int = 100) -> obj
 
 
 def test_every_builtin_tool_carries_the_output_cap():
-    for tool in build_tools():
+    """EVERY registered built-in, not just the default workspace dozen — the
+    claim is that a tool cannot be handed out without a ceiling."""
+    from workspace_app.agent.tools import _IMPLS
+
+    tools = build_tools(sorted(_IMPLS))
+    assert len(tools) == len(_IMPLS)
+    for tool in tools:
         assert TOOL_OUTPUT_CAP_NAME in _guardrail_names(tool), tool.name
 
 
@@ -66,8 +72,8 @@ async def test_oversized_text_is_truncated_head_and_tail_with_a_notice():
 
 
 async def test_a_list_returning_tool_is_capped_on_what_the_model_actually_sees():
-    """`list_files` returns list[str]; the SDK stringifies it into the history,
-    so the cap has to measure that rendering, not len(list)."""
+    """A tool that answers with a list (`str()`-ed into the history by the SDK)
+    is capped on that rendering, not on the number of entries."""
     [tool] = build_tools(["list_files"])
     out = await _run_cap(tool, [f"/dir/file{i}.txt" for i in range(200)])
     assert isinstance(out, str)
@@ -81,3 +87,28 @@ async def test_a_structured_image_output_is_never_truncated():
     image = ToolOutputImage(image_url="data:image/png;base64," + "A" * 5000)
     assert await _run_cap(tool, image) is image
     assert await _run_cap(tool, [image]) == [image]
+
+
+def test_the_tail_survives_when_the_text_is_a_single_long_line():
+    """head+tail is the whole point (#44): the punchline — a count, an error, a
+    summary — sits at the end. A one-line body with a trailing newline used to
+    lose its tail entirely and silently degrade to head-only."""
+    from workspace_app.agent.output_cap import truncate_middle
+
+    out = truncate_middle("START" + "X" * 1000 + "END\n", 100)
+
+    assert out.startswith("START")
+    assert "END" in out
+
+
+async def test_a_text_tool_output_object_is_capped_like_any_other_text():
+    """ToolOutputText IS text in the context window. Exempting it would leave
+    the backstop depending on tool authors again — the thing it exists to
+    replace."""
+    from agents import ToolOutputText
+
+    [tool] = build_tools(["read_file"])
+    out = await _run_cap(tool, ToolOutputText(text="Z" * 5_000))
+
+    assert isinstance(out, str)
+    assert len(out) < 400

@@ -9,6 +9,7 @@ thing that becomes the model's next-turn context.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 from agents import Agent, ModelSettings, Runner
@@ -48,8 +49,9 @@ class _CallsOnceThenAnswers(Model):
             return ModelResponse(output=[call], usage=Usage(), response_id=None)
         return ModelResponse(output=[_text_message()], usage=Usage(), response_id=None)
 
-    async def stream_response(self, *args: Any, **kwargs: Any):  # pragma: no cover — unused
-        raise AssertionError
+    async def stream_response(self, *args: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        raise AssertionError("this probe answers through get_response only")
+        yield  # pragma: no cover — only here to make this an async generator
 
 
 async def test_a_real_run_never_lets_an_oversized_tool_result_into_the_context():
@@ -71,7 +73,7 @@ async def test_a_real_run_never_lets_an_oversized_tool_result_into_the_context()
 
     agent = Agent[AgentToolContext](
         name="probe",
-        tools=build_tools(["list_files"]),
+        tools=list(build_tools(["list_files"])),
         model=_CallsOnceThenAnswers(),
         model_settings=ModelSettings(),
     )

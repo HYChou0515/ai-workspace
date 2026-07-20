@@ -41,11 +41,12 @@ from .context import AgentToolContext
 
 TOOL_OUTPUT_CAP_NAME = "tool_output_cap"
 
-# Structured payloads (an image from `read_image`, a file attachment) are not
-# text in the context window, and slicing one corrupts it. The ceiling is about
-# text, so these pass through untouched — their own tools cap the text they
-# carry alongside.
-_STRUCTURED = (ToolOutputText, ToolOutputImage, ToolOutputFileContent)
+# Binary payloads (an image from `read_image`, a file attachment) are not text
+# in the context window, and slicing one corrupts it — so the ceiling leaves
+# them alone. `ToolOutputText` is deliberately NOT here: it IS text, and
+# exempting it would put the backstop back at the mercy of the next tool
+# author, which is the thing it exists to replace.
+_STRUCTURED = (ToolOutputImage, ToolOutputFileContent)
 
 _NARROW_HINT = "narrow the command (e.g. grep/head/tail/wc) to see the part you need"
 
@@ -69,7 +70,10 @@ def truncate_middle(text: str, max_chars: int, *, hint: str = _NARROW_HINT) -> s
         head = head[:nl]
     tail = text[len(text) - tail_budget :]
     nl = tail.find("\n")
-    if nl != -1:
+    # Trim the partial first line — unless that would eat the tail whole, which
+    # is exactly what a one-line body with a trailing newline does. head+tail is
+    # the point (#44): the punchline lives at the end.
+    if nl != -1 and nl + 1 < len(tail):
         tail = tail[nl + 1 :]
     omitted = len(text) - len(head) - len(tail)
     marker = f"\n\n… [{omitted} chars omitted — {hint}] …\n\n"
@@ -86,6 +90,8 @@ def _rendered(output: Any) -> str | None:
     entries a listing tool returned — the repr of a 20k-element list is what
     reaches the model.
     """
+    if isinstance(output, ToolOutputText):
+        return output.text
     if isinstance(output, _STRUCTURED):
         return None
     if (
