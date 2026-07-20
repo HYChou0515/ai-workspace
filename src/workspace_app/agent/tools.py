@@ -564,6 +564,41 @@ def _glossary_for_passages(ctx: AgentToolContext, passage_texts: list[str]) -> s
     return f"\n\n{block}"
 
 
+def _card_anchor_doc_ids(ctx: AgentToolContext, query: str) -> frozenset[str]:
+    """#518: the documents a card matched by THIS query says are the good ones.
+
+    The deterministic half of the card-anchored precision path: pre-scan the query
+    against the collection's card keys (the same `match_with_ids` the glossary
+    injection uses, so a term can't count as a hit for one and a miss for the other),
+    and union the linked documents of every card that hit. `keys` are term surface
+    forms, not sentences, so matching is substring-with-word-boundary — "M4 etch
+    recipe?" hits the `M4` card, `M40` does not. Several cards may hit at once (key ↔
+    card is many-to-many), and the union is deliberate: a second matched term should
+    widen the curated evidence, never narrow it to whichever key sorts first.
+
+    Denied documents are dropped here rather than left to collide with #308's
+    exclusion downstream — an AND of "only these" and "not that" could otherwise
+    empty the scope for a reason that has nothing to do with the query.
+
+    Empty result ⇒ no anchoring (no spec, no cards, no hit, or no links). Note this
+    does NOT check the ids are live: `search` reports an empty scope by returning
+    nothing, and the CALLER widens. That keeps one fallback path for every reason a
+    scope can come up empty — deleted, renamed, cross-collection, denied.
+    """
+    spec = ctx.spec
+    if spec is None or not ctx.collection_ids or not query.strip():
+        return frozenset()
+    from ..kb.context_cards import cards_with_ids_for_collections, match_with_ids
+
+    pairs = cards_with_ids_for_collections(spec, ctx.collection_ids)
+    linked = {
+        doc_id
+        for _rid, card in match_with_ids(query, pairs, cap=_GLOSSARY_INJECT_CAP)
+        for doc_id in card.reference_doc_ids
+    }
+    return frozenset(linked - ctx.exclude_doc_ids)
+
+
 def kb_search_impl(
     ctx: RunContextWrapper[AgentToolContext],
     query: str,
@@ -692,14 +727,31 @@ def kb_search_impl(
     lines: list[str] = []
     passage_texts: list[str] = []
     try:
-        for passage in retriever.search(
-            query,
-            ctx.context.collection_ids,
-            on_progress,
-            enhancements=effective,
-            location=location,
-            exclude_doc_ids=ctx.context.exclude_doc_ids,  # #308: per-doc override
-        ):
+        # #518 card-anchored two-stage retrieval. Stage 1 searches only inside the
+        # documents a card matched by this query vouches for; stage 2 is the ordinary
+        # open search. We widen whenever the scoped pass yields nothing, so every way a
+        # scope can be empty — a link to a deleted or renamed doc, a doc in a collection
+        # this search isn't covering, one the speaker can't read — degrades to today's
+        # behaviour. Curating a card can then only ever help: at worst it costs one
+        # extra scoped query, never an answer the user was entitled to.
+        anchor = _card_anchor_doc_ids(ctx.context, query)
+
+        def run(restrict: frozenset[str]):
+            return retriever.search(
+                query,
+                ctx.context.collection_ids,
+                on_progress,
+                enhancements=effective,
+                location=location,
+                exclude_doc_ids=ctx.context.exclude_doc_ids,  # #308: per-doc override
+                restrict_to_doc_ids=restrict,
+            )
+
+        passages = list(run(anchor))
+        if anchor and not passages:
+            _LOGGER.info("kb_search: card-anchored scope was empty, widening to an open search")
+            passages = list(run(frozenset()))
+        for passage in passages:
             key = (passage.document_id, passage.start, passage.end)
             idx = seen.get(key)
             if idx is None:

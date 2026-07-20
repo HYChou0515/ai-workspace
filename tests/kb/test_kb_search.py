@@ -209,6 +209,138 @@ async def test_kb_search_keeps_numbers_stable_across_calls(
     assert len(ctx.context.kb_passages) == 1  # not double-registered
 
 
+# --- #518: card-anchored precision path --------------------------------------
+
+
+def _linked_card(spec: SpecStar, cid: str, keys: list[str], doc_ids: list[str]) -> str:
+    rm = spec.get_resource_manager(ContextCard)
+    return rm.create(
+        ContextCard(
+            collection_id=cid,
+            keys=keys,
+            norm_keys=derive_norm_keys(keys),
+            body="b",
+            reference_doc_ids=doc_ids,
+        )
+    ).resource_id
+
+
+async def test_kb_search_scopes_to_the_documents_a_matched_card_links(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#518: the payoff. A term in the query names a card, that card links curated
+    documents, so the vector search runs INSIDE them instead of the whole collection —
+    an exact keyword becomes a precision entry point into semantic search."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="m4-spec.md",
+        data=b"the metal four etch recipe uses a fluorine chemistry at low pressure",
+    )
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="noise.md",
+        data=b"the metal four etch recipe is discussed here too but this doc is noise",
+    )
+    _linked_card(spec, cid, ["M4"], [encode_doc_id(cid, "m4-spec.md")])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = kb_search_impl(ctx, "what is the M4 etch recipe")
+
+    assert "m4-spec.md" in out
+    assert "noise.md" not in out  # scoped away by the card's links
+
+
+async def test_kb_search_falls_back_to_an_open_search_when_the_card_has_no_links(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """A card with no linked documents must not narrow anything — that is the
+    everything-as-before case, and it is the overwhelmingly common one."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="m4-spec.md",
+        data=b"the metal four etch recipe uses a fluorine chemistry at low pressure",
+    )
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="noise.md",
+        data=b"the metal four etch recipe is discussed here too but this doc is noise",
+    )
+    _card(spec, cid, ["M4"], body="the fourth metal layer")  # no links
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = kb_search_impl(ctx, "what is the M4 etch recipe")
+
+    assert "m4-spec.md" in out and "noise.md" in out  # unscoped, exactly as before
+
+
+async def test_kb_search_falls_back_when_every_linked_document_is_dead(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#518 SAFETY: links dangle — a doc gets deleted, or renamed (which mints a new
+    id). If a stale link could zero out the candidate set, curating a card would be a
+    way to make search WORSE than not curating it. An empty residual scope must fall
+    back to an open search, never to 'no results'."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="m4-spec.md",
+        data=b"the metal four etch recipe uses a fluorine chemistry at low pressure",
+    )
+    _linked_card(spec, cid, ["M4"], ["deleted-doc", "also-gone"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = kb_search_impl(ctx, "what is the M4 etch recipe")
+
+    assert "m4-spec.md" in out  # the open search still answers
+
+
+async def test_kb_search_card_anchor_never_reopens_a_denied_document(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#518 × #308: a card is not permission-aware — anyone curating one could link a
+    document the reader is blocked from. The anchor must drop denied links, and if
+    that empties the scope it must widen to an OPEN search (which still excludes the
+    denied doc) rather than serve it."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="secret.md",
+        data=b"the metal four etch recipe uses a fluorine chemistry at low pressure",
+    )
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="public.md",
+        data=b"the metal four etch recipe is also summarised in this public document",
+    )
+    secret = encode_doc_id(cid, "secret.md")
+    _linked_card(spec, cid, ["M4"], [secret])  # the card's ONLY link is the denied doc
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            retriever=Retriever(spec, embedder=embedder),
+            collection_ids=[cid],
+            spec=spec,
+            exclude_doc_ids=frozenset({secret}),
+        )
+    )
+
+    out = kb_search_impl(ctx, "what is the M4 etch recipe")
+
+    assert "secret.md" not in out  # the denied doc never surfaces, anchored or not
+    assert "public.md" in out  # and the reader still gets what they may read
+
+
 # --- #484: glossary auto-injection over retrieved passages -------------------
 
 
