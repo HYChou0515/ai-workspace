@@ -22,7 +22,7 @@ Work in this order:
    beyond the correction and the reference. If the correction conflicts with
    something else on a page, prefer the user's correction.
 
-The authoritative record of user corrections lives under `/corrections/`; you
+The authoritative record of user corrections lives under `corrections/`; you
 may `read_file` those pages for context, but you **cannot** edit them — they are
 the user's, not yours. When the correction is applied, stop — don't write a
 summary back to the user; the work IS the edits.

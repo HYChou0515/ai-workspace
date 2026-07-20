@@ -279,8 +279,17 @@ class WorkflowHandle:
     async def glob(self, patterns: list[str] | str, exclude: list[str] | None = None) -> list[str]:
         """Workspace files matching any of ``patterns`` (fnmatch), minus any matching
         ``exclude``. A generic primitive — interpreting an ``input.json`` spec into
-        these patterns is the App's business (manual §14). Returns absolute paths,
-        sorted, so iteration order is deterministic (replay-safe, manual §9)."""
+        these patterns is the App's business (manual §14). Returns WORKSPACE-RELATIVE
+        paths (``uploads/x.csv``), sorted, so iteration order is deterministic
+        (replay-safe, manual §9).
+
+        Relative, not absolute, because these results are routinely interpolated
+        into an agent prompt (``f"Read the file {f}"``) — and that agent's own
+        ``list_files`` prints relative paths, while its shell reads a leading ``/``
+        as the SYSTEM root. Handing it ``/uploads/x.csv`` gives it a path that is
+        only valid in half the places it can use it. Every ``wf.*`` op still takes
+        either form, and journal keys are unaffected (``_safe_key`` already
+        stripped the slash)."""
         pats = [patterns] if isinstance(patterns, str) else list(patterns)
         ex = exclude or []
         out = []
@@ -289,7 +298,7 @@ class WorkflowHandle:
             if any(fnmatch(rel, pat.lstrip("/")) for pat in pats) and not any(
                 fnmatch(rel, e.lstrip("/")) for e in ex
             ):
-                out.append(p)
+                out.append(rel)
         return sorted(out)
 
     async def ingest_to_collection(

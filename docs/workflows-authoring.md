@@ -299,6 +299,11 @@ await wf.exists(path) / delete(path)
 await wf.glob(patterns, exclude=None) -> [paths]      # 已排序、deterministic
 ```
 
+`glob` 回傳的是 **workspace 相對路徑**（`uploads/x.csv`，開頭沒有 `/`）。這些結果常常
+被直接內插進 agent 的提示（`f"Read the file {f}"`），而那個 agent 的 `list_files` 印的
+也是相對路徑、它的 shell 又會把開頭的 `/` 當成**系統根目錄**——所以整條路徑鏈只講一種
+方言。輸入端不受影響：`wf.*` 每個操作兩種寫法都收。
+
 平行 for-each(手冊 §11):
 
 ```python

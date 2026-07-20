@@ -20,7 +20,7 @@ Work in this order:
      named nothing else), `delete_file` the whole page.
    - If a specific fact came only from the removed source, delete or rephrase
      that sentence; keep facts that other remaining sources still support.
-4. **Fix dangling links**: if you deleted a page, `edit_file` `/index.md` (and
+4. **Fix dangling links**: if you deleted a page, `edit_file` `index.md` (and
    any page) to drop `[[links]]` that now point nowhere.
 
 Be conservative: when you cannot tell whether a fact had other support, leave

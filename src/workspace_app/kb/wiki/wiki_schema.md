@@ -7,13 +7,13 @@ re-derive everything from raw sources every time.
 
 ## Layout
 
-- `/index.md` — the home page. A short orientation + links to the main entity
+- `index.md` — the home page. A short orientation + links to the main entity
   and concept pages. Keep it current as pages are added.
-- `/entities/<name>.md` — one page per concrete thing (a tool, a lot, a part, a
+- `entities/<name>.md` — one page per concrete thing (a tool, a lot, a part, a
   process step, a person, a machine). Facts about that entity.
-- `/concepts/<name>.md` — one page per idea/topic that spans entities (a failure
+- `concepts/<name>.md` — one page per idea/topic that spans entities (a failure
   mode, a method, a metric, a standard).
-- `/log.md` — an append-only ingest log. One line per source you process, with a
+- `log.md` — an append-only ingest log. One line per source you process, with a
   **consistent prefix** so it stays greppable, e.g.:
   `## [ingest] <source path> — <one-line summary>`
 

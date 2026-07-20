@@ -151,7 +151,10 @@ async def test_submit_correction_records_the_immune_page_and_runs_the_corrector(
     # (b) the corrector received the directive with the correction, target + reference
     directive = "\n".join(runner.prompts)
     assert "Foo was founded in 1998, not 1989." in directive
-    assert "/entities/foo.md" in directive
+    # relative — the corrector's own list_files/search_wiki speak this dialect,
+    # so the directive must not hand it a `/`-prefixed page it can't cross-check
+    assert "entities/foo.md" in directive
+    assert "/entities/foo.md" not in directive
     assert "Annual report p.3" in directive  # the reference rides the pass (Q9)
 
 

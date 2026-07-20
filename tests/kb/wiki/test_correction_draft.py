@@ -94,3 +94,22 @@ def test_malformed_json_object_falls_back_to_a_best_effort_draft():
     out = draft_correction(llm, question="q", answer="a")
     assert out.action == "draft"
     assert out.instruction == "{not: valid json,}"
+
+
+def test_page_list_in_the_prompt_uses_the_dialect_the_corrector_will_speak():
+    """The drafting LLM is shown the cited wiki pages and echoes one back as
+    `target_page`, which is then handed to the CORRECTOR agent — whose own
+    `list_files` / `search_wiki` print relative paths. Showing the store's
+    `/entities/foo.md` here would teach it a form it cannot cross-check against
+    its own tools, so the block is rendered relative."""
+    llm = _FakeLlm('{"action": "draft", "instruction": "i", "target_page": "entities/foo.md"}')
+    draft_correction(
+        llm,
+        question="q",
+        answer="a",
+        wiki_pages=["/entities/foo.md", "/concepts/bar.md"],
+    )
+    (prompt,) = llm.prompts
+    assert "- entities/foo.md" in prompt
+    assert "- concepts/bar.md" in prompt
+    assert "/entities/foo.md" not in prompt

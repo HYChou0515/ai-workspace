@@ -82,13 +82,13 @@ describe("AgentPanel attach (#198)", () => {
       expect(upload).toHaveBeenCalledWith(
         "", // useWorkspaceSlug default in tests (no provider)
         "it1",
-        "/dropbox/report.csv",
+        "dropbox/report.csv",
         expect.any(File),
         expect.anything(),
       ),
     );
     const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
-    await waitFor(() => expect(composer.value).toContain("/dropbox/report.csv"));
+    await waitFor(() => expect(composer.value).toContain("dropbox/report.csv"));
   });
 
   it("attaches a non-text, larger-than-256KB file (the old gate is gone)", async () => {
@@ -103,7 +103,7 @@ describe("AgentPanel attach (#198)", () => {
       expect(upload).toHaveBeenCalledWith(
         "",
         "it1",
-        "/uploads/scan.bin",
+        "uploads/scan.bin",
         expect.any(File),
         expect.anything(),
       ),
@@ -114,7 +114,7 @@ describe("AgentPanel attach (#198)", () => {
     const alertSpy = vi.fn();
     vi.stubGlobal("alert", alertSpy);
     vi.spyOn(api, "uploadFile").mockImplementation(async (_s, _i, path) => {
-      if (path === "/uploads/big.bin") throw Object.assign(new Error("413"), { status: 413 });
+      if (path === "uploads/big.bin") throw Object.assign(new Error("413"), { status: 413 });
     });
     const { container } = renderPanel();
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
@@ -123,7 +123,7 @@ describe("AgentPanel attach (#198)", () => {
     });
 
     const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
-    await waitFor(() => expect(composer.value).toContain("/uploads/ok.csv"));
+    await waitFor(() => expect(composer.value).toContain("uploads/ok.csv"));
     expect(composer.value).not.toContain("big.bin");
     await waitFor(() => expect(alertSpy).toHaveBeenCalled());
     expect(alertSpy.mock.calls[0][0]).toContain("size limit");
@@ -179,7 +179,7 @@ describe("AgentPanel image chip (#364)", () => {
     fireEvent.change(composer, { target: { value: "what is this" } });
     fireEvent.keyDown(composer, { key: "Enter" });
     await waitFor(() => expect(agent.send).toHaveBeenCalled());
-    expect(sentText(agent)).toContain("/uploads/shot.png");
+    expect(sentText(agent)).toContain("uploads/shot.png");
     expect(sentText(agent)).toContain("what is this");
     expect(screen.queryByTestId("image-chip")).not.toBeInTheDocument();
   });
@@ -196,7 +196,7 @@ describe("AgentPanel image chip (#364)", () => {
     const opts = (agent.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as {
       imagePaths?: string[];
     };
-    expect(opts.imagePaths).toEqual(["/uploads/shot.png"]);
+    expect(opts.imagePaths).toEqual(["uploads/shot.png"]);
   });
 
   it("can send with only an image and no typed text", async () => {
@@ -207,7 +207,7 @@ describe("AgentPanel image chip (#364)", () => {
     const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
     fireEvent.keyDown(composer, { key: "Enter" });
     await waitFor(() => expect(agent.send).toHaveBeenCalled());
-    expect(sentText(agent)).toContain("/uploads/shot.png");
+    expect(sentText(agent)).toContain("uploads/shot.png");
   });
 
   it("removing the chip drops the image so an empty message won't send", async () => {
@@ -244,7 +244,7 @@ describe("AgentPanel image chip (#364)", () => {
     fireEvent.paste(composer, {
       clipboardData: fileClip(new File(["x"], "data.csv", { type: "text/csv" })),
     });
-    await waitFor(() => expect(composer.value).toContain("/uploads/data.csv"));
+    await waitFor(() => expect(composer.value).toContain("uploads/data.csv"));
     expect(screen.queryByTestId("image-chip")).not.toBeInTheDocument();
     expect(upload).toHaveBeenCalled();
   });
@@ -266,7 +266,7 @@ describe("AgentPanel image chip (#364)", () => {
     const form = document.querySelector("form") as HTMLFormElement;
     fireEvent.drop(form, { dataTransfer: { items: [], files: [new File(["x"], "d.csv")] } });
     const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
-    await waitFor(() => expect(composer.value).toContain("/uploads/d.csv"));
+    await waitFor(() => expect(composer.value).toContain("uploads/d.csv"));
   });
 });
 

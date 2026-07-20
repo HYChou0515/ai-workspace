@@ -256,7 +256,7 @@ async def test_convert_true_files_the_converted_artifact_not_the_raw_upload():
     assert result == {"status": "approved", "ingested": 1, "cards": 1}
     assert ingested == [("Defects", "deck.pptx.md")]  # the CONVERTED artifact, bare name
     # converted once, BEFORE filing, and journaled (the second run() replays the cache)
-    assert converted == [("/uploads/deck.pptx", "deck.pptx")]
+    assert converted == [("uploads/deck.pptx", "deck.pptx")]
 
 
 async def test_convert_off_by_default_files_the_raw_upload_unchanged():

@@ -372,3 +372,28 @@ async def test_warm_op_propagates_busy_and_never_cold_writes_or_rebuilds_492():
 
     assert rebuilt["n"] == 0  # never rebuilt a live (busy) sandbox
     assert await fs.exists(WS, "/x.txt") is False  # never cold-wrote
+
+
+def test_rel_path_is_the_exact_inverse_of_norm():
+    """`rel_path` is the ONE place the whole "agents only ever see relative
+    paths" rule is implemented, so it gets its own guard rather than being
+    covered incidentally by whoever calls it.
+
+    It must be `_norm`'s inverse: whatever form a path arrives in, `rel_path`
+    yields the workspace-relative one, and feeding that back through `_norm`
+    returns the canonical store key unchanged. The round-trip is the property
+    that makes it safe to show a model — the string it is handed is the string
+    the store resolves."""
+    from workspace_app.files.facade import _norm, rel_path
+
+    assert rel_path("/brief.md") == "brief.md"
+    assert rel_path("/data/x.csv") == "data/x.csv"
+    # already relative → untouched (idempotent, so double-application is safe)
+    assert rel_path("brief.md") == "brief.md"
+    assert rel_path(rel_path("/brief.md")) == "brief.md"
+    # a dotfile keeps its dot — only the leading slash goes
+    assert rel_path("/.skill/x/SKILL.md") == ".skill/x/SKILL.md"
+
+    # round-trip: rel_path ∘ _norm and _norm ∘ rel_path both land on the key
+    for form in ("./brief.md", "/brief.md", "brief.md", "/data/x.csv", "/.workflows/a.json"):
+        assert _norm(rel_path(_norm(form))) == _norm(form)

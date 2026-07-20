@@ -15,6 +15,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any
 
+from ..files import rel_path
 from .run import SteerInputEdit, SteerPlan
 
 if TYPE_CHECKING:
@@ -180,10 +181,6 @@ async def propose_steer(
     raise SteerProposalFailed(error or "the steerer returned no usable plan")
 
 
-def _norm(path: str) -> str:
-    return path if path.startswith("/") else "/" + path
-
-
 async def _next_receipt_path(wf: WorkflowHandle) -> str:
     """The next ``steer/<seq>.json`` audit slot under the run's journal home, so each
     steer leaves its own receipt (a run's steer history is auditable)."""
@@ -203,7 +200,7 @@ async def apply_steer(wf: WorkflowHandle, plan: SteerPlan, *, decided_by: str = 
             raise ValueError(f"refusing to write into the journal: {edit.path!r}")
         await wf.write(edit.path, edit.content)
         logger.debug("steer: wrote input edit %s", edit.path)
-        applied.append(_norm(edit.path))
+        applied.append(rel_path(edit.path))
     deleted: list[str] = []
     for name in plan.invalidate:
         for p in await wf.glob([f"{wf.journal_dir.lstrip('/')}/step_{name}/*"]):

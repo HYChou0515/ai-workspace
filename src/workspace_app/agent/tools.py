@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 import magic
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
 
-from ..files import WorkspaceFiles, WorkspaceFull
+from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
@@ -242,7 +242,7 @@ async def make_deck_impl(
       chart `.png`s). Their text is read in; images are used as figures. Optional.
     - `notes` / `style` / `length`: extra guidance — key points, brand/tone,
       "one-pager" vs "full deck". All optional.
-    - `out_path`: where to write it (default `./deck.pptx`).
+    - `out_path`: where to write it (default `deck.pptx`).
 
     Returns the path written plus a short note, or an `error:` line if the deck
     tool isn't configured. Building runs several render+review passes, so it
@@ -284,7 +284,11 @@ async def make_deck_impl(
         notes=notes,
         style=style,
         length=length,
-        out_path=out_path,
+        # Relative — this string is interpolated into the JS the deck sub-agent
+        # writes (`pptx.writeFile({fileName: …})`) and passed to the render
+        # script, both of which run as real processes whose `/` is the SYSTEM
+        # root. A rooted out_path would write the deck outside the workspace.
+        out_path=rel_path(out_path).removeprefix("./") or "deck.pptx",
     )
 
 
@@ -378,9 +382,11 @@ async def edit_file_impl(
 
 async def list_files_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> list[str]:
     """List files in the workspace, optionally filtered by prefix. This is your
-    workspace's directory listing — use it instead of `exec(["ls", ...])`."""
+    workspace's directory listing — use it instead of `exec(["ls", ...])`. Paths
+    come back relative to the workspace root (`notes.txt`, `data/x.csv`), which
+    is exactly the form to pass to the other file tools and to use in `exec`."""
     fs, inv = _workspace(ctx)
-    return await fs.ls(inv, prefix)
+    return [rel_path(p) for p in await fs.ls(inv, prefix)]
 
 
 async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool:
@@ -457,7 +463,10 @@ async def search_wiki_impl(ctx: RunContextWrapper[AgentToolContext], query: str)
             except UnicodeDecodeError:
                 continue
             for m in search_text(text, pattern):
-                where = f"{cid}{path}" if multi else path
+                # Same dialect as `list_files`: relative to the wiki root, so a
+                # path the agent reads here can be passed straight to read_file.
+                rel = rel_path(path)
+                where = f"{cid}/{rel}" if multi else rel
                 hits.append(f"{where}:{m.line}: {m.text}")
 
     budget.used += 1  # every completed grep costs one unit, even a no-match
@@ -499,13 +508,15 @@ _WIKI_SNIPPET_MAX = 1200  # citation snippet cap (the FE reference card excerpt)
 
 def _coerce_source_path(path: str) -> str:
     """Recover a SOURCE path from a code-wiki CARD path (#281 P7). A small reader
-    model often hands ``read_source`` the wiki page path (``/files/<src>.md``)
-    instead of the source path it documents; ``/files/app/queue.py.md`` →
-    ``app/queue.py``. Leading ``/files/`` is unambiguous (source paths are
-    repo-relative, never start with it), so this only ever fires on the card
-    form. Used as a fallback, so a real source is always tried first."""
-    if path.startswith("/files/"):
-        path = path[len("/files/") :]
+    model often hands ``read_source`` the wiki page path (``files/<src>.md``)
+    instead of the source path it documents; ``files/app/queue.py.md`` →
+    ``app/queue.py``. Both the relative form the agent is shown (`list_files` /
+    `search_wiki`) and the store's own ``/files/…`` key are accepted, so the
+    fallback keeps firing on whichever the model copied. Used as a fallback, so
+    a real source is always tried first — a genuine source that happens to live
+    under ``files/`` resolves before this is ever consulted."""
+    if (body := path.lstrip("/")).startswith("files/"):
+        path = body[len("files/") :]
         if path.endswith(".md"):
             path = path[: -len(".md")]
     return path
@@ -514,7 +525,7 @@ def _coerce_source_path(path: str) -> str:
 async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> str:
     """Read one raw source document's text by its path (read-only). Pass the
     SOURCE path (e.g. ``app/queue.py``); a code-wiki card path
-    (``/files/app/queue.py.md``) is also accepted and resolved to its source. Use
+    (``files/app/queue.py.md``) is also accepted and resolved to its source. Use
     it to verify a fact before writing it into a wiki page, to record a page's
     ``Sources:`` provenance, and (as the reader) to ground an answer in the
     real document — cite the returned [n].
@@ -1343,7 +1354,8 @@ async def save_skill_impl(
     path = f"/{WORKSPACE_SKILL_DIR}/{slug}/SKILL.md"
     await files.write(inv, path, render_skill_md(slug, description, body).encode("utf-8"))
     return (
-        f"saved skill '{slug}' to {path}. Load it any time with read_skill('{slug}'). "
+        f"saved skill '{slug}' to {rel_path(path)}. Load it any time with "
+        f"read_skill('{slug}'). "
         "To reuse it elsewhere, download the .skill folder from the Skills panel."
     )
 
@@ -1404,7 +1416,8 @@ async def save_workflow_impl(
         )
     path = await save_workspace_workflow(files, inv, slug, workflow)
     return (
-        f"saved workflow '{slug}' to {path}. The user can Run it from this item, or download "
+        f"saved workflow '{slug}' to {rel_path(path)}. The user can Run it from this "
+        "item, or download "
         "the .workflows folder from the Workflows panel to reuse or hand it to the dev team."
     )
 
