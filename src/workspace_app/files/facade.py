@@ -506,9 +506,13 @@ class WorkspaceFiles:
             current = data.decode("utf-8", errors="replace")
             if current.count(old) != 1:
                 return current  # text conflict — caller re-reads and re-bases
-            applied = await write_cas(
-                workspace_id, path, current.replace(old, new, 1).encode("utf-8"), etag
-            )
+            updated = current.replace(old, new, 1).encode("utf-8")
+            # This branch reaches the store directly rather than through `write`,
+            # so it needs the quota check of its own — otherwise "every write is
+            # gated" would quietly stop being true for whichever store grows a
+            # `write_cas`. Today only the (unquota'd) wiki store has one.
+            await self._ensure_headroom(workspace_id, path, len(updated))
+            applied = await write_cas(workspace_id, path, updated, etag)
             if applied:
                 return None
             # A concurrent writer bumped the etag between our read and write —
