@@ -4,6 +4,8 @@ right-click menu (Delete / Rename / Move).
 
 from __future__ import annotations
 
+import asyncio
+
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
@@ -78,6 +80,71 @@ def test_overwrite_credits_old_bytes_so_same_size_replace_is_allowed():
     assert client.put(f"/a/rca/items/{iid}/files/b.bin", content=b"z").status_code == 507
 
 
+def test_an_over_quota_workspace_can_still_shrink_a_file_through_the_upload_route():
+    # #538: a workspace CAN sit over quota — the mirror writes the durable store
+    # directly and is deliberately ungated. The whole point of gating on GROWTH
+    # rather than on "already over" is that such a workspace can be tidied up;
+    # if the route that IS the IDE save and the file-tree upload refuses a
+    # shrink, that guarantee is worth nothing and only `delete` gets you out.
+    spec = make_spec()
+    store = SpecstarFileStore(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=store,
+        runner=ScriptedAgentRunner([]),
+        workspace_quota=100,
+    )
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    # as the ungated mirror would leave it: over the quota, and — this is what
+    # makes the two rules disagree — the excess is spread over MORE than the file
+    # being shrunk, so `quota - (used - old)` is negative while the growth is not.
+    asyncio.run(store.write(iid, "/other.bin", b"x" * 150))
+    asyncio.run(store.write(iid, "/huge.bin", b"x" * 200))  # used = 350, quota = 100
+
+    shrink = client.put(f"/a/rca/items/{iid}/files/huge.bin", content=b"y" * 50)
+    assert shrink.status_code == 204
+    assert client.get(f"/a/rca/items/{iid}/files/huge.bin").content == b"y" * 50
+    # still over (200), so anything that grows the workspace is still refused
+    assert client.put(f"/a/rca/items/{iid}/files/new.bin", content=b"z").status_code == 507
+
+
+def test_renaming_a_folder_does_not_need_room_for_a_second_copy():
+    # #538: `_transfer` copies the subtree then removes the source, so a RENAME —
+    # which changes the workspace's size by zero — was asking for headroom the
+    # size of the whole tree, and a mid-loop refusal left a half-copied folder
+    # behind, leaving the user MORE over quota than before they asked.
+    app, spec = _quota_app(workspace_quota=150)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    for name in ("one", "two", "three"):
+        assert (
+            client.put(f"/a/rca/items/{iid}/files/d/{name}.bin", content=b"x" * 30).status_code
+            == 204
+        )
+
+    moved = client.post(f"/a/rca/items/{iid}/files/move", json={"from": "/d", "to": "/e"})
+    assert moved.status_code == 204
+    listing = {f["path"] for f in client.get(f"/a/rca/items/{iid}/files").json()}
+    assert listing == {"/e/one.bin", "/e/two.bin", "/e/three.bin"}
+
+
+def test_a_refused_folder_copy_leaves_nothing_behind():
+    # The gate turned a loop that could not fail into one that can, so it has to
+    # fail BEFORE it starts: a partially-copied folder is worse than a refusal.
+    app, spec = _quota_app(workspace_quota=150)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    for name in ("one", "two", "three"):
+        client.put(f"/a/rca/items/{iid}/files/d/{name}.bin", content=b"x" * 30)
+
+    dup = client.post(f"/a/rca/items/{iid}/files/copy", json={"from": "/d", "to": "/e"})
+    assert dup.status_code == 507
+    listing = {f["path"] for f in client.get(f"/a/rca/items/{iid}/files").json()}
+    assert listing == {"/d/one.bin", "/d/two.bin", "/d/three.bin"}
+
+
 def test_copying_a_file_past_the_quota_returns_507():
     # #538: the quota lived in the upload endpoint's streaming loop, so every OTHER
     # way of growing a workspace — copy, move, the IDE save, a workflow — was free.
@@ -87,10 +154,7 @@ def test_copying_a_file_past_the_quota_returns_507():
     client = ApiTestClient(app)
     assert client.put(f"/a/rca/items/{iid}/files/a.bin", content=b"x" * 80).status_code == 204
 
-    dup = client.post(
-        f"/a/rca/items/{iid}/files/move",
-        json={"from": "/a.bin", "to": "/b.bin", "copy": True},
-    )
+    dup = client.post(f"/a/rca/items/{iid}/files/copy", json={"from": "/a.bin", "to": "/b.bin"})
     assert dup.status_code == 507
     assert dup.json()["detail"]["error"] == "workspace_quota_exceeded"
     assert client.get(f"/a/rca/items/{iid}/files/b.bin").status_code == 404

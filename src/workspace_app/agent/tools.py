@@ -268,21 +268,26 @@ async def make_deck_impl(
         return result.exit_code, (result.stdout + result.stderr).decode("utf-8", errors="replace")
 
     progress = (lambda text: sink(text.encode("utf-8"))) if sink is not None else None
-    return await run_make_deck(
-        vlm=ctx.context.deck_vlm,
-        write_text=write_text,
-        read_bytes=read_bytes,
-        list_dir=list_dir,
-        exec_run=exec_run,
-        progress=progress,
-        goal=goal,
-        audience=audience,
-        source=source,
-        notes=notes,
-        style=style,
-        length=length,
-        out_path=out_path,
-    )
+    try:
+        return await run_make_deck(
+            vlm=ctx.context.deck_vlm,
+            write_text=write_text,
+            read_bytes=read_bytes,
+            list_dir=list_dir,
+            exec_run=exec_run,
+            progress=progress,
+            goal=goal,
+            audience=audience,
+            source=source,
+            notes=notes,
+            style=style,
+            length=length,
+            out_path=out_path,
+        )
+    except WorkspaceFull as exc:
+        # A deck build writes several intermediate files; without this the model
+        # sees only the SDK's generic tool failure and retries the same build.
+        return _workspace_full_msg(exc)
 
 
 def _workspace_full_msg(exc: WorkspaceFull) -> str:
@@ -1024,7 +1029,13 @@ async def infer_modules_impl(
     csv_bytes = _module_map_csv(rows)
     # Overwrite: re-running a build replaces the map. create() refuses an
     # existing path (returns its content), so delete first when present.
-    if await fs.create(inv, out, csv_bytes) is not None:
+    try:
+        existed = await fs.create(inv, out, csv_bytes) is not None
+    except WorkspaceFull as exc:
+        return _workspace_full_msg(exc)
+    if existed:
+        # The delete comes first, so the replacement can only be smaller than
+        # what it frees — the quota cannot refuse it.
         await fs.delete(inv, out)
         await fs.create(inv, out, csv_bytes)
 
@@ -1192,7 +1203,10 @@ async def save_skill_impl(
             "split it into smaller skills"
         )
     path = f"/{WORKSPACE_SKILL_DIR}/{slug}/SKILL.md"
-    await files.write(inv, path, render_skill_md(slug, description, body).encode("utf-8"))
+    try:
+        await files.write(inv, path, render_skill_md(slug, description, body).encode("utf-8"))
+    except WorkspaceFull as exc:
+        return _workspace_full_msg(exc)
     return (
         f"saved skill '{slug}' to {path}. Load it any time with read_skill('{slug}'). "
         "To reuse it elsewhere, download the .skill folder from the Skills panel."

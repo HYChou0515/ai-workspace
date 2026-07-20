@@ -125,10 +125,15 @@ async def test_quota_zero_disables_the_cap():
     assert await files.remaining_quota("ws1", "/a", quota=0) is None
 
 
-async def test_headroom_goes_negative_when_already_over():
+async def test_headroom_bottoms_out_at_the_file_s_current_size_when_already_over():
+    # #538: this used to report negative headroom, which made the upload endpoint
+    # refuse EVERY write to an over-quota workspace — including the shrinks the
+    # user was being told to perform. The floor is the path's current size, so a
+    # replace that doesn't grow the workspace always fits.
     files = _files()
     await files.write("ws1", "/a", b"x" * 1500)
-    assert await files.remaining_quota("ws1", "/b", quota=1000) == -500
+    assert await files.remaining_quota("ws1", "/b", quota=1000) == 0  # a new file: nothing fits
+    assert await files.remaining_quota("ws1", "/a", quota=1000) == 1500  # but /a may stay /a's size
 
 
 async def test_warm_usage_counts_bytes_the_agent_created_in_the_sandbox():
@@ -192,6 +197,22 @@ async def test_an_over_quota_workspace_can_still_be_tidied_up():
         await files.write("ws1", "/huge", b"x" * 1600)  # growth: still refused
     await files.delete("ws1", "/huge")
     assert await files.workspace_usage("ws1") == 0
+
+
+async def test_regenerable_build_junk_is_not_charged_to_the_quota():
+    # The mirror filters `should_ignore` paths out before writing the durable
+    # store, so those bytes never reach the disk this quota protects. Charging
+    # for them would let one `npm install` inside the workspace consume a 20 GiB
+    # quota with content that is never persisted — and would make the number
+    # drop discontinuously when the sandbox is reaped and the measurement falls
+    # back to the durable side. (`registry._scratch_usage` counting them IS
+    # right: that cap guards the scratch volume, which really does hold them.)
+    files, _fs, sb, handle = await _warm()
+    await sb.upload(handle, b"x" * 100, "/keep.bin")
+    await sb.upload(handle, b"y" * 5000, "/node_modules/left-pad/index.js")
+    await sb.upload(handle, b"z" * 5000, "/.venv/lib/thing.py")
+    await sb.upload(handle, b"w" * 5000, "/src/__pycache__/mod.cpython-312.pyc")
+    assert await files.workspace_usage("ws1") == 100
 
 
 async def test_warm_file_size_reads_the_sandbox_not_the_snapshot():

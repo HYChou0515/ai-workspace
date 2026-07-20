@@ -26,6 +26,7 @@ from pathlib import Path
 
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound
+from ..sync.ignore import DEFAULT_IGNORES, should_ignore
 
 # How many times an etag-guarded edit re-bases against a concurrent writer
 # before giving up and reporting a conflict. A handful is plenty — contention
@@ -77,6 +78,7 @@ class WorkspaceFiles:
         handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
         rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
         quota: int = 0,
+        ignores: list[str] | None = None,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -85,6 +87,15 @@ class WorkspaceFiles:
         # #538: bytes one workspace may occupy; 0 ⇒ unlimited (the default, so the
         # wiki-page stores and other non-workspace uses are never gated).
         self._quota = quota
+        # #538: the paths the measurement skips — the SAME set `SandboxSync.mirror`
+        # filters out before writing the durable store. The quota protects that
+        # durable disk, so charging for bytes the mirror deliberately never sends
+        # there would let one `npm install` inside the workspace eat the whole
+        # quota with content that is never persisted, and would make the number
+        # jump the moment a reap moved the measurement to the durable side.
+        # (`registry._scratch_usage` counting them is correct — its cap guards the
+        # scratch volume, which really does hold them.)
+        self._ignores = DEFAULT_IGNORES if ignores is None else ignores
         # Async resolver: item → the handle its ONE live sandbox is reachable at,
         # or None when the item is globally cold (#492 same-source resolution).
         self._handle_for = handle_for
@@ -159,12 +170,40 @@ class WorkspaceFiles:
         path = _norm(path)
         warm = await self._warm(workspace_id)
         await self._ensure_headroom(workspace_id, path, len(data), warm)
+        await self._write_unchecked(workspace_id, path, data, warm)
+
+    async def _write_unchecked(
+        self,
+        workspace_id: str,
+        path: str,
+        data: bytes,
+        warm: tuple[Sandbox, SandboxHandle] | None,
+    ) -> None:
+        """The write itself, without the quota gate — for callers that have
+        already established the operation cannot grow the workspace."""
         if warm is not None:
             sb, h = warm
             await sb.upload(h, data, path)
         else:
             await self._fs.write(workspace_id, path, data)
         self._record(workspace_id, path, len(data))
+
+    async def move(self, workspace_id: str, src: str, dst: str) -> None:
+        """Relocate one file. **Not** quota-gated, and deliberately so: the bytes
+        land under a new name and leave the old one, so the workspace's size is
+        unchanged (#538).
+
+        Gating it per-write would mean a rename needs headroom for a second copy
+        of the file — so renaming anything in a workspace that is more than half
+        full would be refused, and renaming a folder would need room for the
+        whole tree. Worse, the rename a user reaches for to tidy up is exactly
+        the operation an over-quota workspace must not refuse. The source is
+        removed immediately after the destination lands, so a failure can only
+        leave a harmless duplicate, never a hole."""
+        src, dst = _norm(src), _norm(dst)
+        data = await self.read(workspace_id, src)
+        await self._write_unchecked(workspace_id, dst, data, await self._warm(workspace_id))
+        await self.delete(workspace_id, src)
 
     async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
         """Create-if-absent (#419 N1 numbering arbiter): raise `FileExists` if
@@ -173,23 +212,29 @@ class WorkspaceFiles:
         upload against the live sandbox; that pair isn't a single atomic op, but a
         warm sandbox is single-pod (§N5) so the caller's per-type lock already
         serialises claimants there — the durable path is where cross-pod atomicity
-        matters, and it has it."""
+        matters, and it has it.
+
+        The quota is checked only AFTER the name is found free: `FileExists` is
+        an answer callers act on — `entity/store.py` walks to the next free
+        number on it — so reporting "full" for a name that was taken anyway
+        would abort a search that had nothing to do with space."""
         path = _norm(path)
         warm = await self._warm(workspace_id)
-        await self._ensure_headroom(workspace_id, path, len(data), warm)
         if warm is not None:
             sb, h = warm
             if await sb.exists(h, path):
                 raise FileExists(path)
+            await self._ensure_headroom(workspace_id, path, len(data), warm)
             await sb.upload(h, data, path)
             self._record(workspace_id, path, len(data))
             return
+        if await self._fs.exists(workspace_id, path):
+            raise FileExists(path)
+        await self._ensure_headroom(workspace_id, path, len(data), warm)
         native = getattr(self._fs, "create_exclusive", None)
         if native is not None:
             await native(workspace_id, path, data)
             return
-        if await self._fs.exists(workspace_id, path):
-            raise FileExists(path)
         await self._fs.write(workspace_id, path, data)
 
     async def write_from_path(
@@ -292,7 +337,11 @@ class WorkspaceFiles:
         if cached is not None and now - cached[0] < self._window:
             return cached[1]
         sb, h = warm
-        tree = {e.path: e.size for e in await sb.walk(h, "/")}
+        tree = {
+            e.path: e.size
+            for e in await sb.walk(h, "/")
+            if not should_ignore(e.path, self._ignores)
+        }
         # A pod serves many items over its life and each map is the size of a
         # file tree, so expired entries are dropped rather than left to
         # accumulate. Piggy-backed on the walk, which happens at most once per
@@ -337,6 +386,20 @@ class WorkspaceFiles:
         if growth > 0 and used + growth > self._quota:
             raise WorkspaceFull(used=used, quota=self._quota, attempted=new_size)
 
+    async def ensure_room_for(self, workspace_id: str, extra_bytes: int) -> None:
+        """Refuse up front if `extra_bytes` more would not fit (#538).
+
+        For a caller that grows the workspace across SEVERAL writes — copying a
+        directory subtree — checking once before starting is the difference
+        between a clean refusal and a half-copied folder the user now has to
+        clean up while over quota. Per-write gating alone can only fail in the
+        middle."""
+        if not self._quota or extra_bytes <= 0:
+            return
+        used = await self.workspace_usage(workspace_id)
+        if used + extra_bytes > self._quota:
+            raise WorkspaceFull(used=used, quota=self._quota, attempted=extra_bytes)
+
     async def _usage_and_size(
         self, workspace_id: str, path: str, warm: tuple[Sandbox, SandboxHandle] | None
     ) -> tuple[int, int]:
@@ -347,8 +410,16 @@ class WorkspaceFiles:
         tree = await self._live_tree(workspace_id, warm)
         if tree is not None:
             return sum(tree.values()), tree.get(path, 0)
-        used = await self.workspace_usage(workspace_id)
-        return used, await self.file_size(workspace_id, path) or 0
+        # Cold. Read the durable store DIRECTLY rather than via the public
+        # `workspace_usage`/`file_size`, which would each re-resolve liveness —
+        # turning one gated write into several sandbox round-trips, and letting
+        # the workspace warm up between the two halves so `used` came from the
+        # snapshot while `old` came from the sandbox.
+        usage = getattr(self._fs, "workspace_usage", None)
+        size = getattr(self._fs, "file_size", None)
+        used = await usage(workspace_id) if usage is not None else 0
+        old = (await size(workspace_id, path) if size is not None else None) or 0
+        return used, old
 
     async def remaining_quota(self, workspace_id: str, path: str, quota: int) -> int | None:
         """Bytes the file at `path` may occupy before the workspace hits `quota`
@@ -360,11 +431,21 @@ class WorkspaceFiles:
         is what the file tree shows them. The mirror still writes the raw store
         directly and stays ungated (#245 choice B: never lose work the agent has
         already done); what changed is that those bytes are now *counted*, so the
-        next gated write is the one that gets refused."""
+        next gated write is the one that gets refused.
+
+        Never less than the file's CURRENT size: the gate is about growth, so a
+        path may always keep the bytes it already has. Without that floor this
+        arithmetic goes negative as soon as the workspace is over quota — which
+        the ungated mirror makes an expected state — and the endpoint would
+        refuse even a shrink, wedging the very workspace we are telling the user
+        to tidy up. That divergence between this number and `_ensure_headroom`
+        is what made the "an over-quota workspace can still be tidied" guarantee
+        false on `PUT /files/{path}`, which IS the IDE save and the file-tree
+        upload."""
         if not quota:
             return None
         used, old = await self._usage_and_size(workspace_id, path, await self._warm(workspace_id))
-        return quota - (used - old)
+        return max(quota - (used - old), old)
 
     async def delete(self, workspace_id: str, path: str) -> None:
         path = _norm(path)
