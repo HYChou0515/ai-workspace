@@ -366,57 +366,6 @@ def _kb_shaped_tool(seen: list[dict[str, Any]]) -> FunctionTool:
     )
 
 
-async def test_impossible_string_for_a_nullable_number_or_bool_becomes_null():
-    """A `"None"` that reaches a param typed `integer | null` cannot be what the
-    model meant — no integer is ever spelled "None" — so it is read as "not set"
-    instead of being bounced back as a validation error the model has to guess
-    its way out of.
-
-    This is deliberately a SECOND line of defence. `arg_repair` already
-    translates a bare Python `None`; this catches the case where the quoted form
-    arrives instead, which we cannot observe from here because the model that
-    does it runs in production. Making the fix correct for BOTH spellings is what
-    lets it ship without first reproducing the exact one."""
-    seen: list[dict[str, Any]] = []
-    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
-    await wrapped.on_invoke_tool(
-        _tool_ctx(),
-        json.dumps({"query": "x", "page_from": "None", "rerank": "None", "document": "None"}),
-    )
-    assert seen[0]["page_from"] is None
-    assert seen[0]["rerank"] is None
-
-
-async def test_a_nullable_string_param_is_never_second_guessed():
-    """`document` is `string | null`, so `"None"` is a value the model may have
-    chosen on purpose — a file really can be called that. Coercing it would swap
-    one silent wrong answer for another, so it is passed through untouched and
-    the ambiguity stays with the caller who can actually resolve it."""
-    seen: list[dict[str, Any]] = []
-    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
-    await wrapped.on_invoke_tool(
-        _tool_ctx(), json.dumps({"query": "x", "page_from": None, "document": "None"})
-    )
-    assert seen[0]["document"] == "None"
-
-
-async def test_real_values_for_nullable_params_survive():
-    """The guard must only fire on values that CANNOT be the declared type. A
-    genuine page number — including the numeric string pydantic would coerce
-    anyway — has to reach the tool unchanged."""
-    seen: list[dict[str, Any]] = []
-    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
-    await wrapped.on_invoke_tool(
-        _tool_ctx(),
-        json.dumps({"query": "x", "page_from": 30, "rerank": True, "document": "report.pdf"}),
-    )
-    assert seen[0] == {"query": "x", "page_from": 30, "rerank": True, "document": "report.pdf"}
-
-    seen.clear()
-    await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"query": "x", "page_from": "30"}))
-    assert seen[0]["page_from"] == "30"  # left for pydantic's own int coercion
-
-
 async def test_a_schema_validation_failure_is_logged_with_the_offending_args(caplog):
     """This failure is invisible today, and that is why it survived in production.
 
@@ -457,37 +406,6 @@ async def test_a_schema_validation_failure_is_logged_with_the_offending_args(cap
     assert "kb_search" in logged
     assert "page_from" in logged  # WHICH argument
     assert "None" in logged  # and what it actually sent
-
-
-async def test_never_nulls_a_value_the_validator_would_have_accepted():
-    """The guard is only allowed to be WRONG in one direction.
-
-    Missing a case costs an error message the model was getting anyway. Nulling a
-    value the validator WOULD have taken silently replaces the model's choice with
-    the operator's default — `rerank="off"` becoming `null` turns reranking back
-    ON, which is the opposite of what was asked, with nothing to show for it. So
-    the accepted-token set must mirror the validator's, not a hand-picked subset
-    of it: pydantic's lax bool parser takes on/off, y/n, t/f as well as
-    true/false, yes/no and 1/0."""
-    seen: list[dict[str, Any]] = []
-    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
-    for value in ("on", "off", "y", "n", "t", "f", "TRUE", "No", "1", "0"):
-        seen.clear()
-        await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"query": "x", "rerank": value}))
-        assert seen[0]["rerank"] == value, f"{value!r} was second-guessed"
-
-
-async def test_non_finite_numbers_are_read_as_unset():
-    """`float()` accepts `NaN` and `inf`, so they used to slip through to the very
-    validation error this guard exists to remove — no integer is ever any of
-    them. Closing this is safe in a way tightening the numeric check generally is
-    not: there is no page 'inf' a user could have meant."""
-    seen: list[dict[str, Any]] = []
-    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
-    for value in ("NaN", "nan", "inf", "-inf", "Infinity"):
-        seen.clear()
-        await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"query": "x", "page_from": value}))
-        assert seen[0]["page_from"] is None, f"{value!r} should read as unset"
 
 
 async def test_tool_output_that_merely_quotes_the_error_phrase_is_not_logged(caplog):

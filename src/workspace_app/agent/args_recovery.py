@@ -132,109 +132,6 @@ def peel_first_json(args_json: str) -> tuple[object, str]:
     return value, leftover
 
 
-# ─── nullable-arg coercion ────────────────────────────────────────────
-
-
-def _nullable_non_string_types(schema: dict[str, Any], name: str) -> set[str] | None:
-    """The non-null JSON types declared for ``name``, IF the param is nullable and
-    none of its types is ``string``; else ``None`` (meaning: hands off).
-
-    Only nullable params qualify, because turning a value into ``null`` has to be
-    a legal outcome for that param. And a param that can be a string is excluded
-    on purpose — for `document: string | null` the text ``"None"`` is a value the
-    model may have meant (a file really can be called that), so second-guessing it
-    would trade a loud error for a silent wrong answer."""
-    prop = (schema.get("properties") or {}).get(name)
-    if not isinstance(prop, dict):
-        return None
-    variants = prop.get("anyOf") or prop.get("oneOf")
-    types: set[str] = set()
-    if isinstance(variants, list):
-        for v in variants:
-            t = v.get("type") if isinstance(v, dict) else None
-            if isinstance(t, str):
-                types.add(t)
-    else:
-        t = prop.get("type")
-        if isinstance(t, str):
-            types.add(t)
-        elif isinstance(t, list):
-            types.update(x for x in t if isinstance(x, str))
-    if "null" not in types or "string" in types:
-        return None
-    return types - {"null"}
-
-
-# The tokens pydantic's lax bool parser accepts. This MUST stay a superset of
-# whatever the validator takes: missing one here means nulling a value the model
-# deliberately set (``rerank="off"`` silently becoming the operator's default,
-# i.e. the opposite of the request), which is far worse than the error this guard
-# removes. Being too generous only costs an error message the model was getting
-# anyway.
-_BOOLISH = frozenset({"true", "false", "1", "0", "yes", "no", "on", "off", "y", "n", "t", "f"})
-
-
-def _impossible(value: object, types: set[str]) -> bool:
-    """Whether ``value`` cannot be any of ``types`` under the validator's rules.
-
-    The guard is only allowed to be wrong in ONE direction. Failing to recognise
-    an impossible value costs nothing — the validation error still reaches the
-    model, exactly as today. Nulling a POSSIBLE value silently discards what the
-    model asked for. So every check below is deliberately generous, and only
-    values with no plausible reading are reported.
-
-    That is why ``"30"`` and ``"3.7"`` are left for pydantic to judge, while
-    non-finite floats are not: ``float()`` happily returns ``nan``/``inf``, so
-    without naming them they slipped through to the very error this exists to
-    remove — and no page number can be ``inf``."""
-    if not isinstance(value, str):
-        return False
-    text = value.strip()
-    if "integer" in types or "number" in types:
-        try:
-            parsed = float(text)
-        except ValueError:
-            return True
-        return parsed != parsed or parsed in (float("inf"), float("-inf"))
-    if "boolean" in types:
-        return text.lower() not in _BOOLISH
-    return False
-
-
-def _null_impossible_values(args: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
-    """Read a value that CANNOT be its declared type as "not set" (#kb-search).
-
-    Strict mode marks every property required, so a model calling a tool with
-    seven optional params must put something in each one. When what it puts is a
-    stand-in for "nothing" — `"None"`, `"null"`, `""` — bouncing it back as a
-    validation error tells the model only that it was wrong, not what to do, and
-    it burns turns guessing. Since no integer is ever spelled "None", reading it
-    as absent is the only interpretation available, and it is the one the model
-    meant.
-
-    `arg_repair` already handles the bare Python `None` upstream; this covers the
-    quoted spelling, which we cannot observe locally because the model producing
-    it runs in production. Being correct for both is what makes the fix shippable
-    without first reproducing the exact one."""
-    out = dict(args)
-    for name, value in args.items():
-        types = _nullable_non_string_types(schema, name)
-        if types and _impossible(value, types):
-            _LOGGER.info(
-                "args_recovery: %s=%r cannot be %s; reading it as null",
-                name,
-                value,
-                "/".join(sorted(types)),
-            )
-            out[name] = None
-    return out
-
-
-# The agents-SDK catches a pydantic ValidationError inside its tool invoker and
-# returns this shape as a tool RESULT (see `default_tool_error_function`). That
-# is why an argument the model got wrong never reaches our runner's error path,
-# never becomes a `ToolCallParseError`, and never lands in an operator's log —
-# the model just retries in-band and the turn looks merely slow.
 _SDK_VALIDATION_ERROR = "Invalid JSON input for tool"
 
 # The SDK's `default_tool_error_function` always opens with this. Requiring it —
@@ -300,7 +197,6 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     than return a tool-result string.
     """
     original = tool.on_invoke_tool
-    schema = tool.params_json_schema or {}
 
     # Annotate as `ToolContext` (NOT the narrower `RunContextWrapper`):
     # agents-SDK introspects the annotation on `on_invoke_tool` to decide
@@ -378,9 +274,8 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
         # `peel_first_json` returns `object`; the non-dict case raised above, so
         # this cast records what the control flow already guarantees.
         args = cast("dict[str, Any]", value)
-        coerced = _null_impossible_values(args, schema)
-        result = await original(ctx, json.dumps(coerced))
-        _log_if_schema_rejected(tool.name, coerced, result)
+        result = await original(ctx, json.dumps(args))
+        _log_if_schema_rejected(tool.name, args, result)
         return result
 
     # `FunctionTool` is a dataclass with ~20 fields (including private
