@@ -71,7 +71,7 @@ export function useItemChat({
           // Attached image workspace paths — a VLM main model reads them inline.
           imagePaths: opts?.imagePaths,
         }),
-      requestCancel: () => void client.cancelMessage(slug, itemId, chatId),
+      requestCancel: () => client.cancelMessage(slug, itemId, chatId),
       undoTurns: (turns) => client.undoTurns(slug, itemId, chatId, turns),
       // A mention notifies the ITEM, not the chat.
       addMention: (userIds, note) => client.mention(slug, itemId, userIds, note),

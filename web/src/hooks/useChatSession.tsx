@@ -42,8 +42,9 @@ export type BroadcastChatTransport = {
   subscribe: (signal: AbortSignal) => AsyncIterable<AgentEvent>;
   /** Enqueue a turn (202; the events arrive on the subscription). */
   post: (content: string, opts?: ChatSendOpts) => Promise<void>;
-  /** Tell the backend to tear down the in-flight turn. */
-  requestCancel: () => void;
+  /** Tell the backend to tear down the in-flight turn. Returning the promise
+   * lets a FAILED stop be surfaced — the UI has already said it stopped. */
+  requestCancel: () => void | Promise<unknown>;
   undoTurns: (turns: number) => Promise<void>;
   addMention: (userIds: string[], note: string) => Promise<void>;
 };
@@ -235,6 +236,18 @@ export function useChatSession(
         snap.entries.length > prev.entries.length ? { ...snap, streaming: true } : prev,
       );
     },
+    // The poll IS the safety net for a cross-pod viewer. If it is failing too,
+    // there is no live stream AND no fallback — the worst state available, and
+    // it used to look identical to "nothing has happened yet".
+    onError: (err) => {
+      const why = err instanceof Error ? err.message : String(err);
+      setConnection((c) => ({
+        state: "reconnecting",
+        receiving: false,
+        error: why,
+        attempts: c.attempts + 1,
+      }));
+    },
     pollMs,
   });
 
@@ -271,7 +284,14 @@ export function useChatSession(
     // The turn runs server-side over the broadcast — there's no local fetch to
     // abort. Tell the BE to tear it down, and flip out of "streaming" right now
     // (#49): teardown can lag on a long exec, and the user pressed Stop.
-    transport.requestCancel();
+    // Flip out of "streaming" right now (#49) — the user pressed Stop and
+    // teardown can lag on a long exec. But if the request to stop never lands,
+    // saying nothing means the turn runs on invisibly and the UI has already
+    // told them it stopped.
+    void Promise.resolve(transport.requestCancel()).catch((err: unknown) => {
+      const why = err instanceof Error ? err.message : String(err);
+      setLog((prev) => ({ ...prev, error: `停止失敗,這一輪可能仍在進行:${why}` }));
+    });
     setLog((prev) => ({ ...prev, streaming: false }));
   }, [transport]);
 
