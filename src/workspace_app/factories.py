@@ -18,6 +18,7 @@ import Settings`). The legacy flat `Settings.from_env(...)` is gone — use
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,6 +66,8 @@ from .sandbox.local_process import LocalProcessSandbox
 from .sandbox.mock import MockSandbox
 from .sandbox.protocol import Sandbox
 from .tokens import PassthroughTokenService
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "Settings",
@@ -280,6 +283,23 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
                     "sandbox host's Service URL)"
                 )
             from .sandbox.http_client import HttpSandbox, IoRetryPolicy
+
+            # `sandbox.exec_timeout` / `log_timeout` look like they apply to every
+            # backend, but the command runs inside the sandbox-host SERVICE here,
+            # which enforces its own SANDBOX_HOST_EXEC_TIMEOUT (60s by default).
+            # An operator who raises exec_timeout for a long job is still killed
+            # at 60s with nothing anywhere saying why — silence about an ignored
+            # setting is worse than the setting not existing.
+            defaults = SandboxSettings()
+            if sb.exec_timeout != defaults.exec_timeout or sb.log_timeout != defaults.log_timeout:
+                logger.warning(
+                    "sandbox.kind=http ignores sandbox.exec_timeout/%.0fs and "
+                    "sandbox.log_timeout/%.0fs — the command runs in the sandbox-host "
+                    "service, which enforces SANDBOX_HOST_EXEC_TIMEOUT / "
+                    "SANDBOX_HOST_LOG_TIMEOUT. Set those on the host instead.",
+                    sb.exec_timeout,
+                    sb.log_timeout,
+                )
 
             return HttpSandbox(
                 base_url=sb.http.base_url,

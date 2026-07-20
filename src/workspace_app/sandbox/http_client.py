@@ -262,6 +262,14 @@ class HttpSandbox:
                             stdout=base64.b64decode(frame["out"]),
                             stderr=base64.b64decode(frame["err"]),
                         )
+        except httpx.TimeoutException as exc:  # subclass of TransportError — catch FIRST
+            # A read timeout means the command is still RUNNING on a busy host,
+            # not that the sandbox is gone. Mapping it to SandboxNotFound made
+            # `registry` rebuild the sandbox while the original command ran on to
+            # completion in the old one — the split-brain SandboxBusy exists to
+            # forbid. (`_request` has always had this ordering; exec did not.)
+            logger.warning("sandbox-http: exec sandbox %s timed out -> SandboxBusy", handle.id)
+            raise SandboxBusy(handle.id) from exc
         except httpx.TransportError as exc:
             logger.warning(
                 "sandbox-http: exec sandbox %s transport error -> SandboxNotFound", handle.id

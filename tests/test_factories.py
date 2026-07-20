@@ -1007,3 +1007,30 @@ def test_get_designed_pptx_vlm_reuses_vlm_llm_then_off(monkeypatch):
         kb=replace(Settings().kb, deck_vlm=RetrievalLlmRef(preset="deck-multi")),
     )
     assert isinstance(get_designed_pptx_vlm(multi), FallbackVlm)
+
+
+def test_http_sandbox_warns_that_exec_timeout_is_not_its_to_enforce(caplog):
+    """`sandbox.exec_timeout` looks like it applies to every backend. For
+    `kind: http` it does not: the command runs in the sandbox-host service, which
+    enforces its OWN `SANDBOX_HOST_EXEC_TIMEOUT` (60s by default). An operator who
+    raises `exec_timeout` to 3600 for a long job still gets killed at 60s, with
+    nothing anywhere saying why. Silence about an ignored setting is worse than
+    the setting not existing.
+    """
+    import logging
+
+    from workspace_app.config.schema import HttpSandboxSettings, Settings
+
+    settings = Settings()
+    object.__setattr__(settings.sandbox, "kind", "http")
+    object.__setattr__(settings.sandbox, "exec_timeout", 3600.0)
+    object.__setattr__(
+        settings.sandbox, "http", HttpSandboxSettings(base_url="http://sandbox-host:8000")
+    )
+
+    with caplog.at_level(logging.WARNING):
+        get_sandbox(settings)
+
+    assert any("SANDBOX_HOST_EXEC_TIMEOUT" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]

@@ -76,11 +76,18 @@ def _workspace(ctx: RunContextWrapper[AgentToolContext]) -> tuple[WorkspaceFiles
 
 
 async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) -> str:
-    """Run a shell command inside the workspace sandbox. This is the only thing
-    that wakes a cold sandbox: ensure_sandbox creates it and restores the
-    snapshot into it, so any file writes the agent made while cold are present;
-    from here on the sandbox IS the source of truth and the file tools route to
-    it directly (no flush needed)."""
+    """Run a shell command inside the workspace sandbox.
+
+    The command is killed if it runs too long overall, or goes too long without
+    producing any output; you then get exit_code=124 along with whatever it had
+    printed so far. So for anything long-running, print progress as you go, and
+    prefer starting it in the background and polling over blocking on one call.
+
+    This is also the only thing that wakes a cold sandbox: ensure_sandbox creates
+    it and restores the snapshot into it, so any file writes the agent made while
+    cold are present; from here on the sandbox IS the source of truth and the
+    file tools route to it directly (no flush needed).
+    """
     if (denied := authorize_tool(ctx.context, "execute")) is not None:
         return denied
     assert ctx.context.sandbox is not None
