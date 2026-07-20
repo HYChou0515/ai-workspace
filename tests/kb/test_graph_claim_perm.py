@@ -159,3 +159,90 @@ def test_a_superuser_sees_every_claim(user: str):
     cid = _collection(spec, permission=Permission(visibility="private"))
     claim_id = _claim(spec, cid, collection_visibility="private", doc_visibility="restricted")
     assert _readable(spec, user, claim_id) is True
+
+
+def _claim_row(spec: SpecStar, claim_id: str) -> GraphClaim:
+    got = spec.get_resource_manager(GraphClaim).get(claim_id).data
+    assert isinstance(got, GraphClaim)
+    return got
+
+
+def test_pushing_a_collection_mirror_reaches_its_claims():
+    """A collection's permission change has to travel all the way down. The claim
+    mirror is a COPY, so a collection tightened after extraction leaves every claim
+    on the old, looser verdict until the fan-out re-pushes it."""
+    from workspace_app.kb.doc_permission import push_mirror_to_claims
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    claim_id = _claim(spec, cid)
+    assert _readable(spec, "alice", claim_id) is True
+
+    moved = push_mirror_to_claims(
+        spec, cid, visibility="restricted", read_meta=["user:amy"], created_by="bob"
+    )
+    assert moved == 1
+    assert _claim_row(spec, claim_id).collection_visibility == "restricted"
+    assert _readable(spec, "alice", claim_id) is False
+    assert _readable(spec, "amy", claim_id) is True
+
+
+def test_pushing_a_collection_mirror_twice_moves_nothing_the_second_time():
+    """A merge patch that changes nothing creates no revision, so re-running the
+    fan-out is cheap and reports honestly that it moved no rows."""
+    from workspace_app.kb.doc_permission import push_mirror_to_claims
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _claim(spec, cid)
+    kwargs = {"visibility": "restricted", "read_meta": [], "created_by": "bob"}
+    assert push_mirror_to_claims(spec, cid, **kwargs) == 1
+    assert push_mirror_to_claims(spec, cid, **kwargs) == 0
+
+
+def test_pushing_a_deck_override_reaches_only_that_decks_claims():
+    """The doc half is keyed on the deck, not the collection: tightening one deck
+    must not touch its neighbours' metrics."""
+    from workspace_app.kb.doc_permission import push_doc_override_to_claims
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    mine = _claim(spec, cid)
+    rm = spec.get_resource_manager(GraphClaim)
+    with rm.using("bob"):
+        other = rm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-2",
+                norm_metric="revenue",
+                metric="Revenue",
+                value="9M",
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            )
+        ).resource_id
+
+    push_doc_override_to_claims(
+        spec, "deck-1", visibility="restricted", read_content=[], created_by="bob"
+    )
+    assert _readable(spec, "alice", mine) is False
+    assert _readable(spec, "alice", other) is True
+
+
+def test_clearing_a_deck_override_reopens_its_claims():
+    """Clearing an override reverts the deck to pure inheritance, so the mirror has
+    to be rewritten to the explicit "public" verdict — not left on the old value,
+    and not blanked (blank hides the row)."""
+    from workspace_app.kb.doc_permission import push_doc_override_to_claims
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    claim_id = _claim(spec, cid, doc_visibility="restricted", doc_read_content=[])
+    assert _readable(spec, "alice", claim_id) is False
+
+    push_doc_override_to_claims(
+        spec, "deck-1", visibility="public", read_content=[], created_by="bob"
+    )
+    assert _claim_row(spec, claim_id).doc_visibility == "public"
+    assert _readable(spec, "alice", claim_id) is True

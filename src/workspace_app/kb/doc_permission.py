@@ -17,6 +17,7 @@ from typing import Any
 from specstar import QB, MergePatch, SpecStar
 
 from ..perm import Actor, Permission, Verb, authorize
+from ..resources.graph import GraphClaim
 from ..resources.kb import Collection, SourceDoc
 
 
@@ -131,6 +132,54 @@ def denied_doc_ids(
     return frozenset(denied)
 
 
+def _fan_out(
+    spec: SpecStar,
+    model: type,
+    query: Any,
+    fields: dict[str, Any],
+    *,
+    as_user: str,
+    subject: str,
+) -> int:
+    """Push one set of mirror fields onto every row a query selects — ONE
+    ``patch_many`` (specstar #434) — and return how many rows actually moved.
+
+    The fields are named rather than diffed first: a merge patch that changes
+    nothing creates no revision, so specstar's own no-op detection replaces the
+    pre-#434 "read the row, compare, skip" loop, which had to load every row's full
+    data blob just to decide it had nothing to do.
+
+    Two outcomes are NOT errors on their own and one is:
+
+    * A row whose revision moved between selection and write is a CONFLICT and is
+      left alone. Expected here — indexing writes to the same rows — and the patch
+      is idempotent, so re-running picks it up. Hence one retry.
+    * A row that could not be written is a FAILURE. ``patch_many`` collects those
+      instead of raising, which would quietly turn a partial fan-out into a
+      reported success — and a row left on the OLD, looser mirror while the caller
+      believes the tightening landed is a read leak. So anything still unwritten
+      after the retry raises.
+
+    Runs as ``as_user`` (the collection owner) so each row keeps its own
+    ``created_by`` while ``updated_by`` records the fan-out. Blocking — the caller
+    runs it off the event loop.
+    """
+    rm = spec.get_resource_manager(model)
+    patch = MergePatch(dict(fields))
+    result = rm.patch_many(query, patch, user=as_user)
+    moved = result.patched
+    if result.conflicts:
+        retry = rm.patch_many(query, patch, user=as_user)
+        moved += retry.patched
+        result = retry
+    if result.conflicts or result.failures:
+        raise RuntimeError(
+            f"{subject}: the permission mirror did not reach every row — "
+            f"conflicts={result.conflicts} failures={result.failures}"
+        )
+    return moved
+
+
 def push_mirror_to_docs(
     spec: SpecStar,
     collection_id: str,
@@ -151,31 +200,71 @@ def push_mirror_to_docs(
     every doc's full data blob (multi-KB of extracted text) just to decide it had
     nothing to do.
 
-    A row whose revision moved between selection and write is reported as a
-    CONFLICT and left alone; that is expected here because indexing writes to the
-    same rows. The patch is idempotent, so we simply re-run once for those. What
-    must NOT happen is a quiet under-count: ``patch_many`` collects an unwritable
-    row instead of raising, and a doc left on the OLD (looser) mirror while the
-    caller is told the tightening succeeded is a read leak. So anything still
-    unwritten after the retry raises."""
-    drm = spec.get_resource_manager(SourceDoc)
-    query = (QB["collection_id"] == collection_id).build()
-    patch = MergePatch(
+    See ``_fan_out`` for the conflict / failure rule every mirror push shares."""
+    return _fan_out(
+        spec,
+        SourceDoc,
+        (QB["collection_id"] == collection_id).build(),
         {
             "collection_visibility": visibility,
             "collection_read_meta": list(read_meta),
             "collection_created_by": created_by,
-        }
+        },
+        as_user=created_by,
+        subject=f"collection {collection_id} → its docs",
     )
-    result = drm.patch_many(query, patch, user=created_by)
-    updated = result.patched
-    if result.conflicts:
-        retry = drm.patch_many(query, patch, user=created_by)
-        updated += retry.patched
-        result = retry
-    if result.conflicts or result.failures:
-        raise RuntimeError(
-            f"collection {collection_id}: the permission mirror did not reach every doc — "
-            f"conflicts={result.conflicts} failures={result.failures}"
-        )
-    return updated
+
+
+def push_mirror_to_claims(
+    spec: SpecStar,
+    collection_id: str,
+    *,
+    visibility: str,
+    read_meta: list[str],
+    created_by: str,
+) -> int:
+    """#534 slice 2 — the same collection push, one level further down: every
+    ``GraphClaim`` extracted out of this collection carries its own copy of the
+    collection verdict, so a collection tightened AFTER extraction leaves every
+    claim on the old, looser mirror until this runs.
+
+    Keyed on the collection, not on each doc, so a collection with thousands of
+    claims is still one query. The doc half of a claim's mirror is untouched here —
+    a collection change never alters a deck's own override."""
+    return _fan_out(
+        spec,
+        GraphClaim,
+        (QB["collection_id"] == collection_id).build(),
+        {
+            "collection_visibility": visibility,
+            "collection_read_meta": list(read_meta),
+            "collection_created_by": created_by,
+        },
+        as_user=created_by,
+        subject=f"collection {collection_id} → its claims",
+    )
+
+
+def push_doc_override_to_claims(
+    spec: SpecStar,
+    source_doc_id: str,
+    *,
+    visibility: str,
+    read_content: list[str],
+    created_by: str,
+) -> int:
+    """#534 slice 2 — push ONE deck's own tightening (#308) onto the claims
+    extracted from it. Keyed on the deck, so tightening one deck never touches its
+    neighbours' metrics.
+
+    ``visibility="public"`` is how an override is CLEARED: the mirror always states
+    the verdict outright, because a blank reads as "never written" and hides the
+    row. Callers pass the deck's effective verdict, not a flag."""
+    return _fan_out(
+        spec,
+        GraphClaim,
+        (QB["source_doc_id"] == source_doc_id).build(),
+        {"doc_visibility": visibility, "doc_read_content": list(read_content)},
+        as_user=created_by,
+        subject=f"doc {source_doc_id} → its claims",
+    )
