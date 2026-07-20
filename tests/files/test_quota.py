@@ -11,6 +11,7 @@ import pytest
 
 from workspace_app.files.facade import WorkspaceFiles, WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.filestore.protocol import FileExists
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
@@ -86,7 +87,9 @@ async def test_usage_is_remeasured_once_per_window_not_once_per_question():
     assert await files.workspace_usage("ws1") == 500  # window elapsed → re-measured
 
 
-async def _warm() -> tuple[WorkspaceFiles, MemoryFileStore, MockSandbox, SandboxHandle]:
+async def _warm(
+    quota: int = 0,
+) -> tuple[WorkspaceFiles, MemoryFileStore, MockSandbox, SandboxHandle]:
     """A facade whose workspace has a live sandbox — the state a real item is in
     while the agent works, and the one the durable-snapshot measurement got wrong."""
     fs = MemoryFileStore()
@@ -96,7 +99,7 @@ async def _warm() -> tuple[WorkspaceFiles, MemoryFileStore, MockSandbox, Sandbox
     async def _resolve(_ws: str) -> SandboxHandle:
         return handle
 
-    return WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve), fs, sb, handle
+    return WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, quota=quota), fs, sb, handle
 
 
 async def test_empty_workspace_has_full_headroom():
@@ -253,6 +256,35 @@ async def test_measuring_one_workspace_keeps_another_freshly_measured_one():
     walks = sb.walk_calls
     await files.workspace_usage("ws2")
     assert sb.walk_calls == walks  # ws2 answered from its surviving measurement
+
+
+async def test_create_exclusive_reports_a_taken_name_even_when_full():
+    # `FileExists` is an answer callers act on — the entity numbering walk moves
+    # to the next free number on it. Reporting "full" for a name that was taken
+    # anyway would abort a search that had nothing to do with space.
+    files = WorkspaceFiles(MemoryFileStore(), quota=1000)
+    await files.create_exclusive("ws1", "/claim", b"x" * 990)
+    with pytest.raises(FileExists):
+        await files.create_exclusive("ws1", "/claim", b"y" * 500)
+
+
+async def test_create_exclusive_warm_reports_a_taken_name_even_when_full():
+    files, _fs, _sb, _handle = await _warm(quota=1000)
+    await files.create_exclusive("ws1", "/claim", b"x" * 990)
+    with pytest.raises(FileExists):
+        await files.create_exclusive("ws1", "/claim", b"y" * 500)
+
+
+async def test_room_for_nothing_is_always_available():
+    # A copy of an empty subtree, and any facade with no quota, must not be
+    # refused — and must not pay for a measurement to find that out.
+    files = WorkspaceFiles(MemoryFileStore(), quota=100)
+    await files.write("ws1", "/a", b"x" * 100)
+    await files.ensure_room_for("ws1", 0)
+    with pytest.raises(WorkspaceFull):
+        await files.ensure_room_for("ws1", 1)
+    unlimited = WorkspaceFiles(MemoryFileStore())
+    await unlimited.ensure_room_for("ws1", 10**9)
 
 
 class _NoUsageStore:
