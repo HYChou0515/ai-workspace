@@ -1,8 +1,9 @@
 """Background-task lifecycle for the FastAPI app (#54 app.py split).
 
 Lifts the server's startup/shutdown orchestration out of ``create_app``: the
-five background sweepers (idle reaper, code-sync, FileStore mirror, #227 index
-fan-out recovery, #245 blob GC) plus the ``lifespan`` asynccontextmanager that
+five background sweepers (idle reaper, code-sync, FileStore mirror, index
+recovery — #227 fan-out + #573 abandoned docs, #245 blob GC) plus the
+``lifespan`` asynccontextmanager that
 runs the fast health probes, starts the in-process queue consumers (when
 ``run_consumers`` is on), launches the gated background tasks, and drains them
 (plus the coordinators and kernels) on shutdown.
@@ -44,6 +45,8 @@ if TYPE_CHECKING:
 # how long a run may go without progress before its missing batches are declared
 # failed. The grace must exceed one batch's worst case (≈ the broker's 30-min
 # consumer-ack timeout) so a slow-but-live run is never falsely failed.
+# #573: the doc-keyed pass shares both — the same question ("has this been
+# abandoned?") must not get two different answers depending on which pass asks.
 INDEX_SWEEP_INTERVAL_S = 300.0
 INDEX_STUCK_AFTER_S = 3600.0
 # #479: how often the daily-reflection sweeper wakes to check whether any prose
@@ -200,20 +203,31 @@ def build_lifespan(
             return
 
     async def index_sweeper(app: FastAPI) -> None:
-        """#227: periodically recover stuck index fan-outs — a lost finalize
-        trigger (winner crashed) or a dead-lettered batch — so a doc never wedges
-        in 'indexing'. Queue-agnostic (CAS), idempotent, and cheap (one indexed
-        query), run off the loop since it does blocking specstar I/O. ``app`` is
-        passed in (vs captured) since the FastAPI app is created after this
-        builder; ``app.state.index_coordinator`` is wired post-construction."""
+        """Periodically make sure no doc is left claiming to be busy. Two passes,
+        answering different questions:
+
+        - #227 ``sweep_stuck_runs`` RECOVERS a stuck fan-out — a lost finalize
+          trigger (winner crashed) or a dead-lettered batch — salvaging the batches
+          that did finish.
+        - #573 ``sweep_stuck_docs`` gives up honestly on a doc with nothing moving
+          behind it at all, including the single-job path a run never covers.
+
+        Each pass is suppressed SEPARATELY: they are independent backstops, so one
+        blowing up must not cost the other its tick — and the whole body, coordinator
+        lookup included, stays inside the guard, because an escape kills the task
+        and silently ends BOTH sweeps for the life of the process.
+
+        Both are queue-agnostic, idempotent, and cheap (indexed queries), run off
+        the loop since they do blocking specstar I/O. ``app`` is passed in (vs
+        captured) since the FastAPI app is created after this builder;
+        ``app.state.index_coordinator`` is wired post-construction."""
         try:
             while True:
                 await asyncio.sleep(INDEX_SWEEP_INTERVAL_S)
-                with contextlib.suppress(Exception):
-                    await asyncio.to_thread(
-                        app.state.index_coordinator.sweep_stuck_runs,
-                        stuck_after_seconds=INDEX_STUCK_AFTER_S,
-                    )
+                for pass_name in ("sweep_stuck_runs", "sweep_stuck_docs"):
+                    with contextlib.suppress(Exception):
+                        sweep = getattr(app.state.index_coordinator, pass_name)
+                        await asyncio.to_thread(sweep, stuck_after_seconds=INDEX_STUCK_AFTER_S)
         except asyncio.CancelledError:
             return
 

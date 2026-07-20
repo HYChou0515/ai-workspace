@@ -149,6 +149,41 @@ async def test_index_sweeper_ticks_sweep_stuck_runs(monkeypatch):
     assert swept.is_set()
 
 
+async def test_index_sweeper_also_ticks_sweep_stuck_docs(monkeypatch):
+    """#573: the run-keyed sweep only recovers fan-outs, so a doc abandoned with no
+    ``IndexRun`` (single-job path, or a worker killed before the run was seeded)
+    needed the doc-keyed sweep — which is worthless unless the same tick calls it.
+
+    The run pass is stubbed to RAISE: the two are independent backstops, so a
+    failure in one must not cost the other its tick (a single shared `suppress`
+    around both would swallow the first and skip the second, for ever)."""
+    spec = make_spec(default_user="u")
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+    )
+    swept = threading.Event()
+
+    def _boom(**kw):
+        raise RuntimeError("the run sweep is having a bad day")
+
+    monkeypatch.setattr(app.state.index_coordinator, "sweep_stuck_runs", _boom)
+    monkeypatch.setattr(
+        app.state.index_coordinator,
+        "sweep_stuck_docs",
+        lambda **kw: swept.set(),
+    )
+    monkeypatch.setattr("workspace_app.api.lifecycle.INDEX_SWEEP_INTERVAL_S", 0.01)
+    async with LifespanManager(app):
+        for _ in range(100):
+            if swept.is_set():
+                break
+            await asyncio.sleep(0.05)
+    assert swept.is_set()
+
+
 # ── 3) replay_loaders.py: load_turn (config None) + load_doc (unknown id) ──────
 
 

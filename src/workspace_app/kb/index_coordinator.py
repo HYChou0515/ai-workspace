@@ -32,7 +32,12 @@ import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.events import OnSuccessPatch, do
 from specstar.message_queue import NoRetry
-from specstar.types import ResourceAction, ResourceIDNotFoundError, TaskStatus
+from specstar.types import (
+    PreconditionFailedError,
+    ResourceAction,
+    ResourceIDNotFoundError,
+    TaskStatus,
+)
 
 from ..failover.retry import is_transient
 from ..resources import Collection, DocChunk, IndexRun, IndexUnitText, SourceDoc
@@ -57,6 +62,9 @@ _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while waiting for the queue to d
 # independent process jobs never collide on `seq` (which is cosmetic ordering —
 # merge adjacency uses char offsets). Far above any realistic chunks-per-batch.
 _SEQ_STRIDE = 1_000_000
+# The verdict the stuck-doc sweep writes. Phrased as what happened + what to do,
+# because it lands in the user-facing failure list next to real parser errors.
+_INTERRUPTED = "processing was interrupted before it finished — re-read to try again"
 
 
 class IndexCoordinator:
@@ -247,6 +255,50 @@ class IndexCoordinator:
         pending_for_doc = QB["status"].eq(TaskStatus.PENDING) & (QB["partition_key"] == doc_id)
         return self._job_rm.count_resources(pending_for_doc.build()) > 0
 
+    def _still_moving(self, doc_id: str, cutoff: dt.datetime) -> bool:
+        """True while SOMETHING behind ``doc_id`` is still moving — the question the
+        stuck-doc sweep must answer before declaring a doc abandoned.
+
+        Liveness is proven by MOVEMENT, never by a status name, because no status
+        name means the same thing on every backend or in every deploy:
+
+        - ``PENDING`` is alive at any age. A backlog, or a worker fleet scaled to
+          zero, is a queue waiting to be drained — not data loss to report.
+        - ``PROCESSING`` is alive only while its holder keeps stamping the
+          heartbeat. specstar's own stale-job reaper reads it the same way — but
+          that reaper only runs inside a CONSUMING process, so when the index
+          workers are down (the very incident this sweep exists for) nobody
+          reclaims the claim and it would otherwise shield the doc for ever.
+        - Anything else — including ``FAILED``, which the RabbitMQ backend writes
+          on a job it is STILL re-delivering — is alive only if the row itself
+          moved within the grace. That is what tells a retry cycle in progress
+          from a job that gave up hours ago.
+
+        A fan-out is judged the same way: its ``process``/``finalize`` jobs carry no
+        partition key (they parallelize across pods), so the ``IndexRun`` is the
+        only handle on them — and it counts only while it is progressing, since
+        ``sweep_stuck_runs`` leaves a run ``running`` for ever when its finalize
+        keeps failing."""
+        run_rm = self._spec.get_resource_manager(IndexRun)
+        try:
+            res = run_rm.get(doc_id)  # the run's id IS the doc id
+        except ResourceIDNotFoundError:
+            pass
+        else:
+            run = res.data
+            assert isinstance(run, IndexRun)  # narrow Struct | Unset for ty
+            if run.status == "running" and res.info.updated_time >= cutoff:
+                return True
+        for res in self._job_rm.list_resources((QB["partition_key"] == doc_id).build()):
+            job = res.data
+            assert isinstance(job, IndexJob)
+            if job.status == TaskStatus.PENDING:
+                return True
+            beat = job.last_heartbeat_at if job.status == TaskStatus.PROCESSING else None
+            if (beat or res.info.updated_time) >= cutoff:  # ty: ignore[unresolved-attribute]
+                return True
+        return False
+
     # ── reindex-on-edit trigger (#87) ────────────────────────────────
     def install_reindex_on_edit(self) -> None:
         """Wire a ``SourceDoc`` ``on_success(patch)`` handler so a content edit —
@@ -397,7 +449,8 @@ class IndexCoordinator:
         """Flip one doc back to ``indexing`` (so the UI shows progress while the
         queue drains), drop its cached result — #390: a re-read is a FORCE
         recompute, so the rebuild must miss and repopulate — then queue it."""
-        doc = doc_rm.get(doc_id).data
+        rev = doc_rm.get(doc_id)
+        doc = rev.data
         assert isinstance(doc, SourceDoc)
         self._ingestor.invalidate_cache(doc_id)
         # Reuse the per-doc producer so this path inherits its coalescing (#134):
@@ -412,8 +465,24 @@ class IndexCoordinator:
         # (see `install_reindex_on_edit`), so patching would enqueue a SECOND
         # index for every doc. Credited to the requester, as the route was when
         # it ran this same update inside their request.
-        with doc_rm.using(user=requester):
-            doc_rm.update(doc_id, msgspec.structs.replace(doc, status="indexing"))
+        #
+        # #573: CAS on the revision we read. That enqueue is a real yield point —
+        # another pod can pop the job, index the doc and write `ready` + the fresh
+        # `text` before this line runs — and a blind write would resurrect the
+        # pre-index snapshot: status back to `indexing`, `text` gone, and (now that
+        # an abandoned doc gets a verdict) FAILED an hour later while its content
+        # is perfectly indexed. Losing the CAS means someone finished the doc while
+        # we queued it — the flip has nothing left to announce, so it is dropped
+        # quietly (a normal outcome of the race, not a failure to report).
+        try:
+            with doc_rm.using(user=requester):
+                doc_rm.update(
+                    doc_id,
+                    msgspec.structs.replace(doc, status="indexing"),
+                    expected_revision_id=rev.info.revision_id,
+                )
+        except PreconditionFailedError:
+            _LOGGER.debug("IndexCoordinator: %s was written while queueing; flip skipped", doc_id)
 
     def _last_updater(self, doc_id: str) -> str | None:
         """The doc's last updater (#83): a job pod has no request user, so the
@@ -688,6 +757,54 @@ class IndexCoordinator:
                 self._enqueue_finalize(doc_id, run.collection_id, requester)
                 acted.append(doc_id)
         return acted
+
+    # ── stuck-doc reconciliation (#573) ──────────────────────────────
+    def sweep_stuck_docs(self, *, stuck_after_seconds: float = 3600.0) -> list[str]:
+        """Give a verdict to every doc left ``indexing`` with nothing alive behind
+        it, and return the doc ids failed.
+
+        `SourceDoc.status` used to depend on an assumption the queue does not make:
+        that the handler always runs to the end. It does not — a SIGKILLed worker
+        (OOM, eviction, rolling restart) stops heartbeating, and specstar's own
+        stale-job reaper spends the retries and retires the job WITHOUT ever calling
+        the handler again. Every line that writes ``ready``/``error`` lives in that
+        handler, so the doc stayed ``indexing`` for ever: the UI claimed progress
+        while the content was silently absent from retrieval.
+
+        This is the doc-keyed backstop that closes it. ``sweep_stuck_runs`` (#227)
+        cannot: it is keyed on ``IndexRun``, which a single-job doc never creates —
+        and neither does a split job killed before ``_runs.start``.
+
+        A doc is only judged when nothing behind it is still moving — see
+        ``_still_moving`` for what counts as movement and why a status name alone
+        never does. The grace is measured on the doc's own ``updated_time``, so no
+        new state is introduced, and it must exceed a legitimately slow index, so
+        it shares #227's constant.
+
+        The verdict is ``error``, never an automatic requeue: the most common way to
+        lose a worker is a doc big enough to OOM it, and re-queueing that walks the
+        pod into the same wall for ever, quietly. Failing it puts the doc in the
+        already-existing failure list with its already-existing retry button, and
+        names which docs are doing the damage."""
+        cutoff = dt.datetime.now(dt.UTC) - dt.timedelta(seconds=stuck_after_seconds)
+        doc_rm = self._spec.get_resource_manager(SourceDoc)
+        # Metas-only: no row (and no multi-KB extracted `text`) is materialised
+        # just to decide whether a doc is abandoned. `status` rides indexed_data;
+        # `updated_time` is a native meta column.
+        stuck = (QB["status"] == "indexing") & (QB.updated_time() < cutoff)
+        failed: list[str] = []
+        for meta in doc_rm.search_resources(stuck.build()):
+            doc_id = meta.resource_id
+            try:
+                if self._still_moving(doc_id, cutoff):
+                    continue
+                # #83: the doc keeps its own owner — a sweep must not rewrite
+                # `updated_by` to the worker. The meta already carries it.
+                self._set_doc_status(doc_id, meta.updated_by, status="error", detail=_INTERRUPTED)
+                failed.append(doc_id)
+            except Exception:  # noqa: BLE001 — one bad doc must not strand the rest
+                _LOGGER.exception("IndexCoordinator: stuck-doc sweep failed for %s", doc_id)
+        return failed
 
     def _cache_hook(self, doc_id: str) -> None:
         # #390: snapshot the freshly-indexed result into the cross-path cache so a
