@@ -49,7 +49,7 @@ import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
-import { useUpdateItemField } from "../../hooks/useResources";
+import { useSetItemPermission, useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
 import { useIsNarrow } from "../../hooks/useMediaQuery";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
@@ -614,6 +614,7 @@ export function EditItemModal({
   // additionally honours change_permission delegates (it enforces regardless).
   const canManageAccess = me === owner;
   const perm = parseItemPermission((item as Record<string, unknown>).permission);
+  const access = useSetItemPermission(manifest.slug, item.resource_id);
   return (
     <ModalShell
       onClose={onClose}
@@ -649,9 +650,17 @@ export function EditItemModal({
           itemName={(item.title as string) || manifest.item.noun}
           owner={owner}
           value={perm ?? { visibility: "private" }}
-          onSubmit={async (next) => {
-            await api.setItemPermission(manifest.slug, item.resource_id, next);
-            setSharing(false);
+          busy={access.isPending}
+          error={access.error}
+          // Close ONLY on success: a 403 (e.g. a delegate whose grant was just
+          // revoked) keeps the dialog up with the reason, instead of the old
+          // `await` inside a `() => void` prop, which turned the rejection into
+          // an unhandled promise and left the dialog hanging silently.
+          onSubmit={(next) => {
+            void access.setPermissionAsync(next).then(
+              () => setSharing(false),
+              () => {},
+            );
           }}
           onClose={() => setSharing(false)}
         />
