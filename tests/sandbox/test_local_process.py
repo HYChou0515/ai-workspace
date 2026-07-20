@@ -852,28 +852,25 @@ async def test_disk_usage_grows_by_exactly_what_was_added(sandbox: LocalProcessS
     assert await sandbox.disk_usage(h) - before == 4096
 
 
-async def test_disk_usage_counts_the_per_sandbox_home_but_not_system_files(
-    sandbox: LocalProcessSandbox,
-):
-    """What the USER put here counts, wherever they put it. A
-    `pip install --user` lands in the per-sandbox `.home` and really does occupy
-    the volume, so it is theirs even though the file tree never shows it. The
-    rest of the item dir is not: the readiness marker and the jail launcher are
-    system, and `.tools` is a symlink to a tree every sandbox shares — charging
-    that to each of them would bill the same bytes over and over."""
+async def test_disk_usage_is_scoped_to_the_workspace(sandbox: LocalProcessSandbox):
+    """The quota measures what the user can SEE and DELETE. The per-sandbox
+    `.home`, the readiness marker and the jail launcher are all siblings of the
+    workspace, none of them appear in the file tree, and `delete_file` cannot
+    address any of them — billing someone for bytes they have no way to remove
+    is how you tell them their workspace is full of nothing. The volume those
+    do occupy is reclaimed when the sandbox is reaped."""
     h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x" * 4096, "/a.bin")
     await sandbox.mark_ready(h)
     before = await sandbox.disk_usage(h)
 
     item = Path(sandbox._require(h))
     (item / ".home" / "lib").mkdir(parents=True, exist_ok=True)
-    (item / ".home" / "lib" / "big.whl").write_bytes(b"z" * 4096)
-    assert await sandbox.disk_usage(h) - before >= 4096  # HOME is charged
-
-    after_home = await sandbox.disk_usage(h)
+    (item / ".home" / "lib" / "big.whl").write_bytes(b"z" * 8192)
     (item / ".jailbin").mkdir(exist_ok=True)
     (item / ".jailbin" / "launcher").write_bytes(b"s" * 4096)
-    assert await sandbox.disk_usage(h) == after_home  # system files are not
+
+    assert await sandbox.disk_usage(h) == before
 
 
 async def test_disk_usage_does_not_follow_a_symlink_out_of_the_workspace(

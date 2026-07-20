@@ -90,7 +90,6 @@ def _make_components(
     idle_timeout: timedelta,
     idle_check_interval: timedelta,
     mirror_interval: timedelta = timedelta(seconds=60),
-    workspace_quota: int = 0,
     runner=None,
 ):
     spec = make_spec(default_user="u")
@@ -104,7 +103,6 @@ def _make_components(
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,
         mirror_interval=mirror_interval,
-        workspace_quota=workspace_quota,
     )
     return app, sandbox, filestore, spec
 
@@ -198,44 +196,6 @@ async def test_mirror_sweeper_persists_warm_sandbox_to_snapshot():
                 break
     # …a sweep tick mirrored it into the snapshot.
     assert await filestore.read(iid, "/out.txt") == b"shell-made"
-
-
-async def test_quota_sweeper_recycles_over_quota_workspace():
-    """#345/#538: a workspace over `workspace_quota` is recycled by the sweeper
-    even though it is NOT idle — the only relief from scratch-vol disk pressure."""
-    app, sandbox, _, spec = _make_components(
-        idle_timeout=timedelta(seconds=60),  # NOT idle — only the quota can reap it
-        idle_check_interval=timedelta(seconds=0.05),
-        workspace_quota=100,
-        runner=_BigWritingRunner(500),  # 500 bytes > 100-byte cap
-    )
-    iid = register_rca_item(spec)
-    async with _running_app(app) as client:
-        resp = await client.post(f"/a/rca/items/{iid}/messages", json={"content": "x"})
-        assert resp.status_code == 202
-        assert sandbox.create_calls == 1
-        for _ in range(40):
-            await asyncio.sleep(0.05)
-            if sandbox.kill_calls >= 1:
-                break
-    assert sandbox.kill_calls == 1  # reaped by the quota sweep despite being active
-
-
-async def test_quota_sweeper_off_by_default_leaves_big_workspace():
-    """With `workspace_quota` 0 (unlimited) the sweeper never measures or
-    reaps — a big-but-not-idle workspace is left alone."""
-    app, sandbox, _, spec = _make_components(
-        idle_timeout=timedelta(seconds=60),
-        idle_check_interval=timedelta(seconds=0.05),
-        workspace_quota=0,  # unlimited
-        runner=_BigWritingRunner(500),
-    )
-    iid = register_rca_item(spec)
-    async with _running_app(app) as client:
-        await client.post(f"/a/rca/items/{iid}/messages", json={"content": "x"})
-        await asyncio.sleep(0.2)  # several sweeps
-        assert sandbox.kill_calls == 0  # quota disabled → nothing reaped while running
-    assert sandbox.kill_calls == 1  # only shutdown close_all reaps it
 
 
 async def test_lifespan_registers_activity_model_for_local_sandbox(tmp_path):

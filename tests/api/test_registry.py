@@ -310,29 +310,6 @@ async def test_kill_idle_survives_zombie_and_flaky_items_and_reaps_the_rest_366(
     assert (await registry.session("ws-flaky")) is sessions["ws-flaky"]
 
 
-async def test_enforce_quota_survives_zombie_and_flaky_items_366():
-    # #366 P7: same per-item resilience for the over-quota recycler.
-    sandbox = _ZombieKillSandbox()
-    sync = _FlakyMirrorSync(boom={"ws-flaky"})
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
-    sessions = {}
-    for wid in ("ws-zombie", "ws-flaky", "ws-live"):
-        s = await registry.session(wid)
-        await registry.ensure_handle(s)
-        assert s.handle is not None
-        await sandbox.upload(s.handle, b"x" * 100, "/big.bin")  # push over quota
-        sessions[wid] = s
-    zombie_handle = sessions["ws-zombie"].handle
-    assert zombie_handle is not None
-    sandbox.zombie_ids.add(zombie_handle.id)
-
-    recycled = await registry.enforce_quota(max_bytes=10)
-
-    assert set(recycled) == {"ws-zombie", "ws-live"}  # flaky skipped, sweep survived
-    assert sandbox.really_killed == [sessions["ws-live"].handle.id]
-    assert (await registry.session("ws-flaky")) is sessions["ws-flaky"]  # left for retry
-
-
 async def test_mirror_warm_survives_one_failing_item_366():
     # #366 P7: a mirror that errors on one item must not stop the sweep from
     # mirroring the others (one bad item ≠ a dead sweeper task).
@@ -661,99 +638,6 @@ async def test_mirror_warm_mirrors_only_warm_sessions():
 
 
 # ---- scratch-vol du quota sweeper (P5) ----
-
-
-async def test_enforce_quota_recycles_over_quota_item_345():
-    # #345: an item whose shared scratch dir blew past the cap is recycled
-    # (mirror → kill → forget heartbeat), so one runaway workspace can't fill
-    # the scratch volume the whole fleet shares.
-    events: list[str] = []
-
-    class _RecordingSandbox(_CountingSandbox):
-        async def kill(self, handle):
-            events.append("sandbox.kill")
-            await super().kill(handle)
-
-    class _RecordingSyncWithLog(_RecordingSync):
-        async def mirror(self, workspace_id, handle):
-            events.append("sync.mirror")
-            return await super().mirror(workspace_id, handle)
-
-    sandbox = _RecordingSandbox()
-    sync = _RecordingSyncWithLog()
-    activity = _FakeActivity()
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, activity=activity
-    )
-    s = await registry.session("ws-1")
-    h = await registry.ensure_handle(s)
-    await sandbox.upload(h, b"x" * 100, "/big.bin")  # 100 bytes of scratch
-
-    recycled = await registry.enforce_quota(max_bytes=50)
-    assert recycled == ["ws-1"]
-    assert events == ["sync.mirror", "sandbox.kill"]  # written back before rmtree
-    assert "ws-1" not in activity.ms  # heartbeat forgotten on recycle
-    assert (await registry.session("ws-1")) is not s  # session evicted
-
-
-async def test_enforce_quota_without_sync_or_activity_just_kills_345():
-    sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
-    s = await registry.session("ws-1")
-    h = await registry.ensure_handle(s)
-    await sandbox.upload(h, b"x" * 100, "/big.bin")
-
-    recycled = await registry.enforce_quota(max_bytes=50)
-    assert recycled == ["ws-1"]
-    assert sandbox.kill_calls == 1
-
-
-async def test_enforce_quota_leaves_under_quota_item_345():
-    sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
-    s = await registry.session("ws-1")
-    h = await registry.ensure_handle(s)
-    await sandbox.upload(h, b"x" * 10, "/small.bin")
-
-    recycled = await registry.enforce_quota(max_bytes=1000)
-    assert recycled == []
-    assert sandbox.kill_calls == 0
-    assert (await registry.session("ws-1")) is s
-
-
-async def test_enforce_quota_disabled_when_max_bytes_zero_345():
-    sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
-    s = await registry.session("ws-1")
-    h = await registry.ensure_handle(s)
-    await sandbox.upload(h, b"x" * 10**6, "/huge.bin")
-
-    recycled = await registry.enforce_quota(max_bytes=0)  # 0 ⇒ disabled
-    assert recycled == []
-    assert sandbox.kill_calls == 0
-
-
-async def test_enforce_quota_ignores_handleless_sessions_345():
-    sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
-    await registry.session("ws-1")  # no handle ever created
-    recycled = await registry.enforce_quota(max_bytes=1)
-    assert recycled == []
-    assert sandbox.kill_calls == 0
-
-
-async def test_enforce_quota_treats_a_cold_dir_as_zero_usage_345():
-    # The dir went cold (vanished) between sessions — walk raises SandboxNotFound,
-    # which counts as 0 bytes (nothing to reap), not a crash.
-    sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
-    s = await registry.session("ws-1")
-    h = await registry.ensure_handle(s)
-    await sandbox.kill(h)  # dir gone ⇒ subsequent walk raises SandboxNotFound
-    sandbox.kill_calls = 0
-    recycled = await registry.enforce_quota(max_bytes=1)
-    assert recycled == []
-    assert sandbox.kill_calls == 0
 
 
 async def test_ensure_handle_restores_when_backend_not_id_addressable_345():

@@ -551,16 +551,15 @@ class LocalProcessSandbox:
         await asyncio.to_thread(shutil.copyfile, target, local_path)
 
     async def disk_usage(self, handle: SandboxHandle) -> int:
-        item = self._require(handle)
-        targets = [p for p in (item / _WORKSPACE, item / _HOME) if p.exists()]
-        if not targets:
+        ws = self._workspace(handle)
+        if not ws.exists():
             return 0
-        total = await self._du(targets)
-        return total if total is not None else await asyncio.to_thread(self._du_sync, item)
+        total = await self._du([ws])
+        return total if total is not None else await asyncio.to_thread(self._du_sync, ws)
 
     @staticmethod
     async def _du(targets: list[Path]) -> int | None:
-        """`du -sb` over the dirs the user is charged for, or None if `du` can't
+        """`du -sb` over the workspace, or None if `du` can't
         answer (a minimal image without coreutils, a permissions failure) — the
         caller then falls back to walking in Python.
 
@@ -594,28 +593,20 @@ class LocalProcessSandbox:
         return total
 
     @staticmethod
-    def _du_sync(item_dir: Path) -> int:
+    def _du_sync(base: Path) -> int:
         """Fallback for when `du` isn't available: the same total, walked here.
-
-        Two dirs count: the workspace, and the per-sandbox `.home` — a
-        `pip install --user` really does occupy the volume, and it is the user's
-        doing even though it never appears in the file tree. The rest of the
-        item dir is system: the readiness marker, the jail launcher, and
-        `.tools`, a SYMLINK to a tree every sandbox on the host shares, which
-        would otherwise be charged to each of them.
 
         `st_size`, not allocated blocks — the same quantity `walk` reports per
         file, so the figure and the file tree's sizes agree. Symlinks are never
         followed (nor descended into), so a link the agent drops into its
         workspace can't charge someone else's tree to it, or itself twice."""
         total = 0
-        for name in (_WORKSPACE, _HOME):
-            for dirpath, _dirnames, filenames in os.walk(item_dir / name, followlinks=False):
-                for fname in filenames:
-                    f = Path(dirpath) / fname
-                    if not f.is_symlink():
-                        with contextlib.suppress(OSError):  # raced deletion
-                            total += f.stat().st_size
+        for dirpath, _dirnames, filenames in os.walk(base, followlinks=False):
+            for fname in filenames:
+                f = Path(dirpath) / fname
+                if not f.is_symlink():
+                    with contextlib.suppress(OSError):  # raced deletion
+                        total += f.stat().st_size
         return total
 
     async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
