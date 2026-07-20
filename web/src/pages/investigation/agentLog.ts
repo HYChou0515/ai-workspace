@@ -90,6 +90,19 @@ export const EMPTY_LOG: AgentLog = {
   restore: null,
 };
 
+/** How long after asking we still believe a reply is on its way.
+ *
+ * Generous next to the server-side give-up deadline plus retries, but finite:
+ * threads that died before a turn was guaranteed to end (a hard kill, a crash,
+ * anything predating that guarantee) sit in the store ending on a user message
+ * forever, and without a bound every mount of one would claim "replying…" and
+ * start a poll that can never terminate. An UNSTAMPED message is old data by
+ * definition — the timestamp predates the field — so it never counts as live. */
+const AWAITING_REPLY_MAX_MS = 30 * 60_000;
+
+const isRecent = (at: number | null | undefined): boolean =>
+  at != null && Date.now() - at < AWAITING_REPLY_MAX_MS;
+
 export function logFromMessages(messages: readonly Message[]): AgentLog {
   const entries: AgentEntry[] = [];
   for (const m of messages) {
@@ -129,7 +142,30 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });
     }
   }
-  return { entries, streaming: false, error: null, metrics: null, failover: null, restore: null };
+  // A thread whose LAST message is the user's is a thread whose reply has not
+  // landed — so hydrating it means a turn is still running server-side.
+  //
+  // Hard-coding `false` here rendered a reload mid-turn as a completely idle UI:
+  // the header said "your turn", the composer unlocked, the spinner vanished,
+  // and — worst — the cross-pod store-poll is gated on `streaming`, so the very
+  // recovery that would have surfaced the reply was switched off too. All while
+  // the turn kept burning tokens.
+  //
+  // The signal is only sound because a turn now always ends in SOMETHING
+  // persisted (an answer, an error, a cancellation) whether the provider hangs,
+  // the requester disconnects, the pod rolls or the store write fails — so it
+  // cannot stick on forever.
+  const last = messages[messages.length - 1];
+  const awaitingReply =
+    last !== undefined && last.role === "user" && isRecent(last.created_at);
+  return {
+    entries,
+    streaming: awaitingReply,
+    error: null,
+    metrics: null,
+    failover: null,
+    restore: null,
+  };
 }
 
 /** Entries that carry the conversation itself — the ones the backend persists.
