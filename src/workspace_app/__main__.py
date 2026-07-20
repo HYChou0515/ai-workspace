@@ -273,6 +273,7 @@ def main() -> None:
             kb_retrieval_enhancements=settings.kb.retrieval.enhancements,
             kb_quality_weight=settings.kb.retrieval.quality_weight,
             kb_quality_floor=settings.kb.retrieval.quality_floor,
+            kb_sparse_corpus_cap=settings.kb.retrieval.sparse_corpus_cap,
             # #195: per-turn kb_search cap for the KB chat turn + ask_knowledge_base
             # bridge (null in config ⇒ unlimited).
             kb_max_searches_per_turn=settings.kb.max_searches_per_turn,

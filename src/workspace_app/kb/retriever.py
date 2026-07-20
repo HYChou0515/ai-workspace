@@ -350,6 +350,7 @@ class Retriever:
         enhancement_defaults: EnhancementSettings | None = None,
         quality_weight: float = 0.10,
         quality_floor: int | None = None,
+        sparse_corpus_cap: int | None = None,
         disclosure_floor: float = 0.6,
     ) -> None:
         self._spec = spec
@@ -380,6 +381,14 @@ class Retriever:
         # exclude. Both are operator config (config.example.yaml).
         self._quality_weight = quality_weight
         self._quality_floor = quality_floor
+        # The BM25 corpus ceiling. The trigram filter narrows a DISTINCTIVE query to
+        # almost nothing, but a query of common vocabulary matches nearly every chunk
+        # and narrows nothing — so this caps how many of those the store ships back
+        # (the most trigram-similar ones), bounding the sparse arm's cost for the
+        # queries that actually hurt. BM25 still ranks; the dense arm ignores the cap
+        # and still sees every chunk, so a capped-out chunk can still be retrieved.
+        # `None` (the default) = uncapped, i.e. byte-for-byte the previous behaviour.
+        self._sparse_corpus_cap = sparse_corpus_cap
         # Permission-disclosure probe (D9): the absolute cosine-distance ceiling a
         # withheld collection's best chunk must clear to be disclosed when nothing
         # is readable (or when the readable results are near-worthless — it caps a
@@ -499,7 +508,7 @@ class Retriever:
         if overlay is not None:
             corpus = [(cid, ch.text) for cid, ch in overlay_chunks.items()]
         else:
-            corpus = self._sparse_corpus(queries, collection_ids, loc, exclude_doc_ids)
+            corpus = self._sparse_corpus(queries, query, collection_ids, loc, exclude_doc_ids)
         ranked_lists: list[list[str]] = []
         for q in queries:
             qv = self._embedder.embed_query(q)
@@ -988,6 +997,7 @@ class Retriever:
     def _sparse_corpus(
         self,
         queries: list[str],
+        rank_query: str,
         collection_ids: list[str],
         location: LocationFilter | None,
         exclude_doc_ids: frozenset[str],
@@ -1001,11 +1011,21 @@ class Retriever:
         `exclude_doc_ids` scope it exactly as the dense query. Text projected only
         (`partial`), so no vector is deserialized here either.
 
+        That filter only bites for DISTINCTIVE terms, though: a query of common
+        domain vocabulary fuzzy-matches nearly every chunk and narrows nothing — the
+        worst case, and the one real queries hit. So when `sparse_corpus_cap` is set,
+        the store also ORDERS by trigram similarity to `rank_query` and returns only
+        the top `cap` PER COLLECTION, bounding text I/O however many chunks match.
+        BM25 still does the ranking (this only chooses which chunks it sees), and
+        recall is protected by the dense arm, which ignores this cap and still
+        searches every chunk through the vector index. `None` ⇒ uncapped.
+
         No query term (a punctuation-only query) ⇒ empty corpus, exactly as BM25's
         own `q_terms`-empty guard would produce."""
         terms = {t for q in queries for t in tokenize(q)}
         if not terms:
             return []
+        cap = self._sparse_corpus_cap
         rm = self._spec.get_resource_manager(DocChunk)
         out: dict[str, str] = {}
         for cid in collection_ids:
@@ -1015,7 +1035,16 @@ class Retriever:
                 fuzzy = cond if fuzzy is None else (fuzzy | cond)
             assert fuzzy is not None  # `terms` is non-empty
             scope = _scoped((QB["collection_id"] == cid) & fuzzy, location, exclude_doc_ids)
-            for r in rm.list_resources(scope.build(), returns=["data", "info"], partial=["/text"]):
+            if cap is not None:
+                # specstar's order_by union omits TrigramSimilaritySort (works at runtime)
+                query = (
+                    scope.order_by(QB["text"].similarity(rank_query).desc())  # ty: ignore[invalid-argument-type]
+                    .limit(cap)
+                    .build()
+                )
+            else:
+                query = scope.build()
+            for r in rm.list_resources(query, returns=["data", "info"], partial=["/text"]):
                 out[r.info.resource_id] = cast(DocChunk, r.data).text  # ty: ignore[unresolved-attribute]
         return list(out.items())
 

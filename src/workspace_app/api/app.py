@@ -267,6 +267,7 @@ def create_app(
     # __main__ threads `settings.kb.retrieval.quality_weight / quality_floor`.
     kb_quality_weight: float = 0.10,
     kb_quality_floor: int | None = None,
+    kb_sparse_corpus_cap: int | None = None,
     # #195: per-turn cap on `kb_search` calls for the KB chat turn + the
     # ask_knowledge_base bridge. `None` ⇒ unlimited (also what other surfaces
     # like Topic Hub use). __main__ threads `settings.kb.max_searches_per_turn`
@@ -644,6 +645,7 @@ def create_app(
         enhancement_defaults=kb_retrieval_enhancements,
         quality_weight=kb_quality_weight,
         quality_floor=kb_quality_floor,
+        sparse_corpus_cap=kb_sparse_corpus_cap,
     )
     # #535: wire the retrieval-eval coordinator's retriever (built after
     # build_coordinators). Its EvalJob model + auto route are already registered;

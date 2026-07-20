@@ -86,6 +86,61 @@ def test_search_vector_io_scales_with_candidates_not_collection_size(
     )
 
 
+def test_sparse_corpus_is_capped_when_a_common_term_matches_everything(
+    spec: SpecStar,
+    chunker: FixedTokenChunker,
+    embedder: HashEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # The trigram pre-narrowing only helps for DISTINCTIVE terms. A query built
+    # from common domain vocabulary fuzzy-matches nearly every chunk, so the filter
+    # alone narrows nothing and the sparse arm is back to loading the collection —
+    # the worst case, and the one real queries actually hit.
+    #
+    # So the corpus is also CAPPED: the store returns only the most trigram-similar
+    # `sparse_corpus_cap` chunks, and BM25 ranks those. Text I/O is therefore
+    # bounded by the cap no matter how many chunks match. (Recall is protected by
+    # the dense arm, which is independent of this cap and still searches every
+    # chunk through the vector index.)
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    # EVERY doc carries the query's vocabulary, so every chunk fuzzy-matches.
+    for i in range(30):
+        ing.ingest(
+            collection_id=cid,
+            user="u",
+            filename=f"d{i}.md",
+            data=f"reflow oven temperature zone {i} thermal profile solder paste".encode(),
+        )
+    rm = spec.get_resource_manager(DocChunk)
+    total_chunks = len(rm.list_resources((QB["collection_id"] == cid).build()))
+    assert total_chunks > 60, "need a corpus big enough that an uncapped load is obvious"
+
+    counter = {"texts": 0}
+    orig_list = rm.list_resources
+
+    def counting_list(*args: object, **kwargs: object) -> list:
+        items = orig_list(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        counter["texts"] += sum(
+            1 for it in items if getattr(getattr(it, "data", None), "text", None)
+        )
+        return items
+
+    monkeypatch.setattr(rm, "list_resources", counting_list)
+
+    cap = 20
+    Retriever(
+        spec, embedder=embedder, candidates=5, top_k=3, sparse_corpus_cap=cap
+    ).search("reflow oven temperature profile", [cid])
+
+    # Bounded by the cap (plus the small fused hydration), NOT by the >60 chunks
+    # that all match the query's common terms.
+    assert counter["texts"] <= cap + 10, (
+        f"materialized {counter['texts']} chunk texts for {total_chunks} matching chunks — "
+        "the sparse corpus is not capped, so a common-word query still loads the collection"
+    )
+
+
 def test_sparse_corpus_scales_with_matches_not_collection_size(
     spec: SpecStar,
     chunker: FixedTokenChunker,
