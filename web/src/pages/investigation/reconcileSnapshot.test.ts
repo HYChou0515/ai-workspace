@@ -91,3 +91,86 @@ describe("reconcileSnapshot", () => {
     expect(reconcileSnapshot(live(), thread).entries).toEqual(logFromMessages(thread.messages).entries);
   });
 });
+
+/**
+ * A reload during a live turn used to render a completely idle UI: the header
+ * said "your turn", the composer unlocked, the spinner was gone and — worst —
+ * the cross-pod store-poll is gated on `streaming`, so the recovery that would
+ * have surfaced the reply was switched off too. Meanwhile the turn was still
+ * burning tokens server-side.
+ *
+ * A thread whose LAST message is the user's is a thread whose reply has not
+ * landed. That is only a sound signal because a turn now always ends in
+ * SOMETHING persisted — an answer, an error, a cancellation — whether the
+ * provider hangs (the give-up deadline), the requester disconnects, the pod
+ * rolls, or the store write fails.
+ */
+describe("hydration — is a turn still running", () => {
+  it("stays in the waiting state when the reply has not landed yet", () => {
+    const log = logFromMessages([
+      { role: "assistant", content: "an earlier answer" },
+      { role: "user", content: "and my new question", created_at: Date.now() },
+    ]);
+    expect(log.streaming).toBe(true);
+  });
+
+  it("is idle once the reply is there", () => {
+    const log = logFromMessages([
+      { role: "user", content: "q" },
+      { role: "assistant", content: "a" },
+    ]);
+    expect(log.streaming).toBe(false);
+  });
+
+  // A turn that died is persisted as an error message, so the thread no longer
+  // ends on the user and the UI stops waiting — this is what keeps the signal
+  // from getting stuck on forever.
+  it("is idle when the turn ended in a failure", () => {
+    const log = logFromMessages([
+      { role: "user", content: "q" },
+      { role: "error", content: "the model gave up" },
+    ]);
+    expect(log.streaming).toBe(false);
+  });
+
+  it("is idle for an empty thread", () => {
+    expect(logFromMessages([]).streaming).toBe(false);
+  });
+});
+
+/**
+ * The inference has to be bounded, or it trades one stuck state for another.
+ *
+ * Threads that died BEFORE a turn was guaranteed to end — a hard kill, a crash,
+ * anything predating these fixes — sit in the store ending on a user message
+ * forever. Without a bound, every mount of such a thread would claim "replying…"
+ * and start a store-poll that can never terminate.
+ *
+ * A turn is bounded server-side in minutes at the very outside (the give-up
+ * deadline plus retries), so a question left unanswered for far longer than that
+ * is not in flight — it is abandoned.
+ */
+describe("hydration — the waiting state is bounded by age", () => {
+  const MINUTE = 60_000;
+
+  it("waits for a question asked moments ago", () => {
+    const log = logFromMessages([
+      { role: "user", content: "q", created_at: Date.now() - MINUTE },
+    ]);
+    expect(log.streaming).toBe(true);
+  });
+
+  it("does not wait for a question left unanswered for hours", () => {
+    const log = logFromMessages([
+      { role: "user", content: "q", created_at: Date.now() - 300 * MINUTE },
+    ]);
+    expect(log.streaming).toBe(false);
+  });
+
+  // An unstamped message is old data by definition — the timestamp predates the
+  // field. Treating it as live would resurrect exactly the threads this bound
+  // exists to exclude.
+  it("does not wait for a message with no timestamp at all", () => {
+    expect(logFromMessages([{ role: "user", content: "q" }]).streaming).toBe(false);
+  });
+});
