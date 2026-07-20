@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from ...resources.kb import RetrievedPassage
 from ..llm import ILlm
 from .generate import make_question
-from .score import doc_rank, passage_rank
+from .score import doc_rank, passage_rank, summarize
 
 # (query, collection_ids) -> the retriever's DEEP ranked passages.
 Search = Callable[[str, list[str]], list[RetrievedPassage]]
@@ -58,4 +58,34 @@ def score_batch(
         doc_ranks=doc_ranks,
         n_kept=len(chunk_ranks),
         n_dropped=dropped,
+    )
+
+
+@dataclass(frozen=True)
+class Aggregated:
+    """A whole run's metrics, ready to stamp onto an ``EvalResult``. Recall dicts
+    are keyed by ``str(k)`` (JSON-friendly), chunk-level and doc-level."""
+
+    n_kept: int
+    n_dropped: int
+    recall_chunk: dict[str, float]
+    mrr_chunk: float
+    recall_doc: dict[str, float]
+    mrr_doc: float
+
+
+def aggregate(results: list[BatchResult], ks: tuple[int, ...] = (1, 3, 5, 10)) -> Aggregated:
+    """Concatenate every batch's per-item ranks and summarize both grains — what
+    ``finalize`` writes after rejoining a run's ``EvalBatchStat`` rows."""
+    chunk_ranks = [r for b in results for r in b.chunk_ranks]
+    doc_ranks = [r for b in results for r in b.doc_ranks]
+    chunk = summarize(chunk_ranks, ks)
+    doc = summarize(doc_ranks, ks)
+    return Aggregated(
+        n_kept=sum(b.n_kept for b in results),
+        n_dropped=sum(b.n_dropped for b in results),
+        recall_chunk={str(k): v for k, v in chunk.recall.items()},
+        mrr_chunk=chunk.mrr,
+        recall_doc={str(k): v for k, v in doc.recall.items()},
+        mrr_doc=doc.mrr,
     )

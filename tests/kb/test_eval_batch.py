@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 
-from workspace_app.kb.eval.batch import score_batch
+from workspace_app.kb.eval.batch import BatchResult, aggregate, score_batch
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources.kb import RetrievedPassage
 
@@ -56,3 +56,18 @@ def test_score_batch_records_a_miss_as_none_not_a_drop():
     assert out.chunk_ranks == [None]  # a kept item that missed
     assert out.n_kept == 1
     assert out.n_dropped == 0
+
+
+def test_aggregate_concatenates_batches_and_summarizes_both_grains():
+    b1 = BatchResult(chunk_ranks=[1, None], doc_ranks=[1, 2], n_kept=2, n_dropped=1)
+    b2 = BatchResult(chunk_ranks=[3], doc_ranks=[None], n_kept=1, n_dropped=0)
+    agg = aggregate([b1, b2], ks=(1, 3))
+
+    assert agg.n_kept == 3
+    assert agg.n_dropped == 1
+    # chunk ranks = [1, None, 3] → recall@1 = 1/3, recall@3 = 2/3
+    assert agg.recall_chunk == {"1": 1 / 3, "3": 2 / 3}
+    assert agg.mrr_chunk == (1.0 + 1 / 3) / 3
+    # doc ranks = [1, 2, None] → recall@1 = 1/3, recall@3 = 2/3
+    assert agg.recall_doc == {"1": 1 / 3, "3": 2 / 3}
+    assert agg.mrr_doc == (1.0 + 0.5) / 3
