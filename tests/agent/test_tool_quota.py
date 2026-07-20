@@ -27,7 +27,7 @@ def _ctx(quota: int) -> tuple[RunContextWrapper, WorkspaceFiles, str]:
         AgentToolContext(
             investigation_id=iid,
             files=files,
-            spec=spec,  # ty: ignore[invalid-argument-type]
+            spec=spec,
             app_slug="rca",
             acting_user="bob",
         )

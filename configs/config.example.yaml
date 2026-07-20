@@ -183,9 +183,15 @@
 #   max_file_size: 2147483648
 #   # #245: per-workspace TOTAL-size quota in bytes (0 = no quota). The sum of one
 #   # workspace's files may not exceed this, so a single workspace can't fill the
-#   # disk root the whole deploy shares. Gated at the user upload/edit endpoints
-#   # (the sandbox mirror is NOT gated — agent work is never lost); an over-quota
-#   # upload is rejected mid-stream with 507. Default ~20 GiB. Orphaned blobs are
+#   # disk root the whole deploy shares. #538: measured against the LIVE workspace
+#   # (the warm sandbox, re-walked at most once every few seconds), so files the
+#   # agent created there count and files deleted there stop counting; and gated in
+#   # the store facade, so EVERY write is refused — an upload, the IDE save, a
+#   # copy/move, the agent's own write_file — not just the upload endpoint. A write
+#   # that doesn't grow the workspace (shrink, same-size replace) and deletes are
+#   # always allowed, so a full workspace can still be tidied up. The sandbox mirror
+#   # is still NOT gated (agent work is never lost) — those bytes are just counted.
+#   # Over-quota writes are rejected with 507. Default ~20 GiB. Orphaned blobs are
 #   # reclaimed by the GC sweeper (gc_* below) so the count stays honest.
 #   workspace_quota: 21474836480
 #   # #245: blob-GC sweeper (reclaims deleted files' orphaned blobs via specstar's

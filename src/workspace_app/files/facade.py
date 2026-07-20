@@ -282,12 +282,20 @@ class WorkspaceFiles:
         if warm is None:
             self._tree.pop(workspace_id, None)  # went cold; don't serve stale sizes
             return None
+        now = self._now()
         cached = self._tree.get(workspace_id)
-        if cached is not None and self._now() - cached[0] < self._window:
+        if cached is not None and now - cached[0] < self._window:
             return cached[1]
         sb, h = warm
         tree = {e.path: e.size for e in await sb.walk(h, "/")}
-        self._tree[workspace_id] = (self._now(), tree)
+        # A pod serves many items over its life and each map is the size of a
+        # file tree, so expired entries are dropped rather than left to
+        # accumulate. Piggy-backed on the walk, which happens at most once per
+        # window per workspace, so the sweep can't become the hot path.
+        for other, (measured_at, _) in list(self._tree.items()):
+            if now - measured_at >= self._window:
+                del self._tree[other]
+        self._tree[workspace_id] = (now, tree)
         return tree
 
     def _record(self, workspace_id: str, path: str, size: int | None) -> None:
