@@ -8,7 +8,7 @@ from __future__ import annotations
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.agent.tools import read_skill_impl, save_skill_impl
+from workspace_app.agent.tools import exists_impl, read_skill_impl, save_skill_impl
 from workspace_app.apps.skills import SKILL_BODY_CAP
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
@@ -75,3 +75,18 @@ async def test_no_workspace_context_returns_friendly_error():
     ctx = RunContextWrapper(AgentToolContext())  # no files / investigation_id
     out = await save_skill_impl(ctx, "s", "d", "body")
     assert "error" in out
+
+
+async def test_confirmation_names_a_path_the_agent_can_actually_use():
+    """The confirmation is where the agent learns WHERE its skill landed, and it
+    will reuse that string — in `read_file`, or in a shell command. The store's
+    key is `/.skill/<slug>/SKILL.md`, but `exec` has no chroot, so a leading `/`
+    points at the system root. The confirmation therefore reports the same
+    relative form `list_files` prints, and that form round-trips."""
+    ctx = _ctx()
+    out = await save_skill_impl(ctx, "smt-reflow", "d", "body")
+    assert ".skill/smt-reflow/SKILL.md" in out
+    assert "/.skill/smt-reflow/SKILL.md" not in out
+    # the exact path it was shown reads back through the file tools
+    path = ".skill/smt-reflow/SKILL.md"
+    assert await exists_impl(ctx, path) is True

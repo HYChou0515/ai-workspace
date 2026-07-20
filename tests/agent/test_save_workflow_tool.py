@@ -92,3 +92,16 @@ async def test_profile_tools_override_is_the_ceiling():
     tools-free workflow still saves under it (exercises the profile-override path)."""
     ctx = _ctx(app_slug="playground", template_profile="intake")
     assert "saved workflow" in await save_workflow_impl(ctx, "flow", _VALID)
+
+
+async def test_confirmation_names_a_path_the_agent_can_actually_use():
+    """Same contract as save_skill: the confirmation is where the agent learns
+    where its workflow landed, and `exec` has no chroot — so the reported path
+    is the relative form its own `list_files` prints, and it round-trips."""
+    from workspace_app.agent.tools import exists_impl
+
+    ctx = _ctx()
+    out = await save_workflow_impl(ctx, "My Flow", _VALID)
+    assert ".workflows/my-flow.json" in out
+    assert "/.workflows/my-flow.json" not in out
+    assert await exists_impl(ctx, ".workflows/my-flow.json") is True
