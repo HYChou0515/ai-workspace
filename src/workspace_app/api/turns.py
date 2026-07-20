@@ -20,7 +20,7 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi.responses import StreamingResponse
 
@@ -369,6 +369,13 @@ _QueueItem = tuple[
 ]
 
 
+# Pushed into a subscriber's queue to END its SSE response (`forget`). A live
+# stream cannot be "dropped" by discarding the session: the subscriber holds its
+# own queue, so it would simply never hear anything again — while the heartbeat
+# kept flowing, which the client cannot tell apart from a quiet chat.
+_CLOSE_STREAM = object()
+
+
 @dataclass
 class _WorkspaceSession:
     """#43 collaborative turn state for one investigation: a FIFO queue of
@@ -388,6 +395,16 @@ class _WorkspaceSession:
         """Fan one event out to every live subscriber (#43 broadcast)."""
         for q in self.subscribers:
             q.put_nowait(event)
+
+    def close_subscribers(self) -> None:
+        """End every live SSE response attached to this session.
+
+        Used when the session itself is going away (`forget`): the client sees the
+        stream close, which its reconnect path already handles by re-hydrating —
+        the one outcome that leaves it consistent with a conversation that was
+        just closed or deleted."""
+        for q in list(self.subscribers):
+            q.put_nowait(cast("AgentEvent", _CLOSE_STREAM))
 
     def roster(self) -> list[str]:
         """The distinct, non-anonymous viewers currently subscribed (#455 presence)."""
@@ -469,6 +486,10 @@ class ChatTurnEngine:
         ws = self._ws_sessions.pop(key, None)
         if ws is None:
             return
+        # End the live responses BEFORE tearing the turn down: the in-flight turn
+        # publishes into THIS (now unreachable) session object, so anything it
+        # emits from here on can never be seen anyway.
+        ws.close_subscribers()
         # Cancel the in-flight turn (if any) + the parked worker. `cancel()` on an
         # already-finished task is a harmless no-op, so no done-guard is needed.
         for task in (ws.current_turn, ws.worker):
@@ -523,12 +544,22 @@ class ChatTurnEngine:
             logger.info("turns: worker %s turn started (epoch %d)", key, my_epoch)
             # The turn persists its own (partial) result via on_complete even
             # when cancelled; swallow the cancellation here so the worker lives.
-            with contextlib.suppress(asyncio.CancelledError):
-                await turn
-            session.current_turn = None
-            fut.set_result(None)  # wake the POST awaiting this message's turn
+            # Anything ELSE that escapes a turn is swallowed for the same reason:
+            # one bad turn must not take the conversation's worker with it, or
+            # every later message queues behind a task that will never run again.
+            try:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await turn
+            except Exception:  # noqa: BLE001 — a turn's failure is not the worker's
+                logger.exception("turns: worker %s turn raised", key)
+            finally:
+                session.current_turn = None
+                # Always wake the POST awaiting this message, whatever happened —
+                # otherwise the request hangs to its detach timeout for nothing.
+                if not fut.done():
+                    fut.set_result(None)
+                session.queue.task_done()
             logger.debug("turns: worker %s turn finished", key)
-            session.queue.task_done()
 
     async def _run_turn(
         self,
@@ -559,7 +590,20 @@ class ChatTurnEngine:
             reducer.add(err)
             publish(err)
         finally:
-            on_complete(reducer.produced)
+            # Persisting is guarded for the same reason the flush below is, but
+            # NOT silently: an unguarded raise here escaped `_run_turn`, and
+            # `_worker` suppresses only CancelledError — so the worker died before
+            # resolving the waiting POST and before `task_done()`, stranding every
+            # LATER message on this conversation behind a worker that no longer
+            # existed. Tell the viewer too: a turn that streamed live and then
+            # could not be saved otherwise vanishes on the next reload with no
+            # explanation at all.
+            try:
+                on_complete(reducer.produced)
+            except Exception as exc:  # noqa: BLE001 — persistence is best-effort here
+                logger.exception("turns: failed to persist turn for %s", ctx.investigation_id)
+                with contextlib.suppress(Exception):
+                    publish(_terminal_error(exc))
             # #492: flush the item's live sandbox to durable at turn-end — the
             # turn-end reconcile of guarantee (2). Runs on completion and on error
             # (the partial work is real). Guarded so best-effort durability never
@@ -653,6 +697,8 @@ class ChatTurnEngine:
                     except TimeoutError:
                         yield ": heartbeat\n\n"  # SSE comment — keeps the stream warm
                         continue
+                    if ev is _CLOSE_STREAM:
+                        return  # the session went away — end the response, don't hang
                     yield to_sse(ev)
             finally:
                 session.subscribers.pop(q, None)
