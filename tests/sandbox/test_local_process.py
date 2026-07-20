@@ -849,21 +849,39 @@ async def test_disk_usage_totals_the_workspace(sandbox: LocalProcessSandbox):
     assert await sandbox.disk_usage(h) == 42
 
 
-async def test_disk_usage_excludes_the_infra_area_beside_the_workspace(
+async def test_disk_usage_counts_the_per_sandbox_home_but_not_system_files(
     sandbox: LocalProcessSandbox,
 ):
-    """The `.ready` marker and the per-sandbox `.home` are siblings of the
-    walked workspace, not part of it. They never show up in the file tree, so
-    charging the user for them would mean telling someone their workspace is
-    full of bytes they cannot see or delete. (The scratch volume they do sit on
-    has its own cap — `sandbox.max_workspace_bytes`.)"""
+    """What the USER put here counts, wherever they put it. A
+    `pip install --user` lands in the per-sandbox `.home` and really does occupy
+    the volume, so it is theirs even though the file tree never shows it. The
+    rest of the item dir is not: the readiness marker and the jail launcher are
+    system, and `.tools` is a symlink to a tree every sandbox shares — charging
+    that to each of them would bill the same bytes over and over."""
     h = await sandbox.create(SandboxSpec())
     await sandbox.upload(h, b"x" * 10, "/a.bin")
     await sandbox.mark_ready(h)
-    # a `pip install --user` lands in the per-sandbox HOME, beside the workspace
-    home = Path(sandbox._require(h)) / ".home" / "lib"
-    home.mkdir(parents=True, exist_ok=True)
-    (home / "big.whl").write_bytes(b"z" * 5000)
+    item = Path(sandbox._require(h))
+    home_pkg = item / ".home" / "lib"
+    home_pkg.mkdir(parents=True, exist_ok=True)
+    (home_pkg / "big.whl").write_bytes(b"z" * 5000)
+    (item / ".jailbin").mkdir(exist_ok=True)
+    (item / ".jailbin" / "launcher").write_bytes(b"s" * 700)
+
+    assert await sandbox.disk_usage(h) == 5010  # workspace + .home, nothing else
+
+
+async def test_disk_usage_does_not_follow_a_symlink_out_of_the_workspace(
+    sandbox: LocalProcessSandbox, tmp_path: Path
+):
+    """Otherwise dropping one link into the workspace charges an entire tree the
+    agent doesn't own — or the same bytes twice."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "huge.bin").write_bytes(b"q" * 9000)
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x" * 10, "/a.bin")
+    (Path(sandbox._require(h)) / "root" / "link").symlink_to(elsewhere)
 
     assert await sandbox.disk_usage(h) == 10
 

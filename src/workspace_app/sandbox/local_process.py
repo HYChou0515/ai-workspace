@@ -590,19 +590,31 @@ class LocalProcessSandbox:
         return await asyncio.to_thread(self._resolve(cwd, path).is_file)
 
     async def disk_usage(self, handle: SandboxHandle) -> int:
-        cwd = self._workspace(handle)
-        return await asyncio.to_thread(self._du_sync, cwd)
+        return await asyncio.to_thread(self._du_sync, self._require(handle))
 
     @staticmethod
-    def _du_sync(base: Path) -> int:
-        """Apparent bytes under `base`. `st_size`, not allocated blocks: it is
-        the same quantity `walk` reports per file, so the usage figure and the
-        sizes shown in the file tree agree. Symlinks are not followed, so a link
-        into a shared tree isn't charged to this workspace."""
+    def _du_sync(item_dir: Path) -> int:
+        """Apparent bytes the USER put in this sandbox.
+
+        Two dirs count: the workspace, and the per-sandbox `.home` — a
+        `pip install --user` really does occupy the volume, and it is the user's
+        doing even though it never appears in the file tree. The rest of the
+        item dir is system: the readiness marker, the jail launcher, and
+        `.tools`, a SYMLINK to a tree every sandbox on the host shares, which
+        would otherwise be charged to each of them.
+
+        `st_size`, not allocated blocks — the same quantity `walk` reports per
+        file, so the figure and the file tree's sizes agree. Symlinks are never
+        followed (nor descended into), so a link the agent drops into its
+        workspace can't charge someone else's tree to it, or itself twice."""
         total = 0
-        for p in base.rglob("*"):
-            if p.is_file() and not p.is_symlink():
-                total += p.stat().st_size
+        for name in (_WORKSPACE, _HOME):
+            for dirpath, _dirnames, filenames in os.walk(item_dir / name, followlinks=False):
+                for fname in filenames:
+                    f = Path(dirpath) / fname
+                    if not f.is_symlink():
+                        with contextlib.suppress(OSError):  # raced deletion
+                            total += f.stat().st_size
         return total
 
     async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
