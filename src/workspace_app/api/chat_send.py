@@ -163,7 +163,17 @@ class ChatSendService:
         `shield` keeps the work running when this request is cancelled, while a
         live request still sees its exceptions exactly as before. The strong
         reference matters: asyncio holds only a weak one, so an un-referenced task
-        can be collected mid-flight, which is the very failure being prevented."""
+        can be collected mid-flight, which is the very failure being prevented.
+
+        #538: a workspace with no room left refuses the turn outright, BEFORE
+        the user's message is persisted. Gating each write individually still
+        let the whole turn run — the agent planned, wrote, was refused, retried,
+        wrote somewhere else — so every instruction given to an already-full
+        workspace burned a turn to rediscover the same thing. Refusing before
+        the message lands is what keeps the composer from waiting on a reply
+        that will never come; clearing space needs no agent, because deleting
+        from the file tree is never quota-gated."""
+        await self._files.ensure_room_for(investigation_id, 1)
         task = asyncio.create_task(self._send(investigation_id, rid, conv, engine_key, body))
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
