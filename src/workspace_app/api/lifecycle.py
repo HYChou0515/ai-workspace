@@ -311,6 +311,10 @@ def build_lifespan(
             if app.state.eval_coordinator is not None:
                 with boot_step("start retrieval-eval consumer"):
                     app.state.eval_coordinator.start_consuming()
+            # #534: metric-extraction consumer (when wired) — drains GraphJob jobs.
+            if app.state.graph_coordinator is not None:
+                with boot_step("start metric-extraction consumer"):
+                    app.state.graph_coordinator.start_consuming()
             # #175: context-card generation consumer.
             with boot_step("start context-card generation consumer"):
                 app.state.card_gen_coordinator.start_consuming()
@@ -400,6 +404,9 @@ def build_lifespan(
             if app.state.eval_coordinator is not None:
                 with contextlib.suppress(BaseException):
                     await app.state.eval_coordinator.aclose()
+            if app.state.graph_coordinator is not None:
+                with contextlib.suppress(BaseException):
+                    await app.state.graph_coordinator.aclose()
             with contextlib.suppress(BaseException):
                 await app.state.card_gen_coordinator.aclose()
             await kernels.shutdown_all()

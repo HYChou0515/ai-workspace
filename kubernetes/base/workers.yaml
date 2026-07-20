@@ -264,3 +264,45 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: rca-data
+---
+# ── metric extraction (#534): drains the GraphJob fan-out (dispatch → split →
+#    batch), extracting metric claims into GraphClaim over the opted-in
+#    (Collection.use_graph) collections. Enqueued weekly by cronjob-graph.yaml,
+#    so it is idle between runs — fixed 1 replica, no HPA, like eval/sanity.
+#    Needs a KB LLM wired + the SHARED Postgres backend. ────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-graph
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-graph
+  template:
+    metadata:
+      labels:
+        app: rca-worker-graph
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "graph"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data

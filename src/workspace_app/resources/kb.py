@@ -173,6 +173,13 @@ class Collection(Struct):  # → resource "collection"
     # System-wide governance: only a superuser may set it (grill D3). Indexed so
     # the global set is a query, not a scan. Absent ≡ not global (no migration).
     is_global: bool = False
+    # #534: opt IN to knowledge-graph metric extraction. Default False — extraction
+    # is expensive VLM/LLM work that only pays off on metric-bearing collections
+    # (reports / financial decks), so the owner turns it on per collection in the
+    # settings panel (like `auto_digest`), never silently-on-for-everything. Indexed
+    # so the graph dispatch can query the opted-in set instead of scanning. Absent
+    # ≡ off (no migration).
+    use_graph: bool = False
     # Issue #90: per-collection wiki guidance, APPENDED onto the bundled wiki
     # prompts (never a replacement — the machinery stays). `maintainer` shapes
     # how pages are written/organised (fold + unfold); `reader` shapes how the

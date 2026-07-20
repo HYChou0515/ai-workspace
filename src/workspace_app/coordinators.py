@@ -62,6 +62,8 @@ class CoordinatorBundle:
     # #535: the retrieval-eval fan-out. None when no KB LLM is wired (question
     # generation needs one). Its retriever is injected post-build (set_retriever).
     eval: EvalCoordinator | None
+    # #534: the metric-extraction fan-out. None when no KB LLM is wired.
+    graph: GraphCoordinator | None
 
 
 def build_ingestor(
@@ -138,6 +140,7 @@ def build_coordinators(
     sanity_llm_factory: LlmFactory | None,
     sanity_judge_llm: ILlm | None,
     eval_llm: ILlm | None = None,
+    graph_llm: ILlm | None = None,
     embedder: Embedder | None = None,
     cluster_tau: float = 0.9,
     suppress_tau: float = 0.92,
@@ -258,6 +261,16 @@ def build_coordinators(
             spec, eval_llm, message_queue_factory=message_queue_factory
         )
         logger.info("coordinators: retrieval-eval coordinator wired")
+    # #534: metric-extraction fan-out. Built (registers the GraphJob model + its
+    # auto route) whenever a KB LLM is wired; needs no post-build injection.
+    graph_coordinator = None
+    if graph_llm is not None:
+        from .kb.graph.coordinator import GraphCoordinator
+
+        graph_coordinator = GraphCoordinator(
+            spec, graph_llm, message_queue_factory=message_queue_factory
+        )
+        logger.info("coordinators: metric-extraction (graph) coordinator wired")
     logger.info("coordinators: built wiki/index/card_gen coordinators")
     return CoordinatorBundle(
         wiki=wiki,
@@ -266,9 +279,11 @@ def build_coordinators(
         quality=quality,
         sanity=sanity,
         eval=eval_coordinator,
+        graph=graph_coordinator,
     )
 
 
 if TYPE_CHECKING:
     from .health.sanity.coordinator import SanityBatteryCoordinator
     from .kb.eval.coordinator import EvalCoordinator
+    from .kb.graph.coordinator import GraphCoordinator
