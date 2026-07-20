@@ -41,6 +41,7 @@ import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.types import (
     DuplicateResourceError,
+    IndexableField,
     PreconditionFailedError,
     ResourceIDNotFoundError,
     RevisionStatus,
@@ -229,7 +230,18 @@ class WikiMaintenanceCoordinator:
         spec.add_model(
             Schema(WikiMaintenanceJob, "v1"),
             job_handler=self._handle,
-            indexed_fields=["status", "partition_key"],
+            # `op` is indexed (#571) so the rebuild anti-mash guard is a point
+            # lookup. It must NOT be expressed as a separate partition key: the
+            # rebuild job has to share the collection's key, because `building`
+            # is derived from the per-collection active-job count and a
+            # differently-keyed job would be invisible to it. Jobs written before
+            # this index group under None and simply don't coalesce — a duplicate
+            # rebuild at worst, never a correctness problem, so no backfill.
+            indexed_fields=[
+                "status",
+                "partition_key",
+                IndexableField("payload.op", str, index_key="op"),
+            ],
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )
         self._job_rm = spec.get_resource_manager(WikiMaintenanceJob)
@@ -348,6 +360,58 @@ class WikiMaintenanceCoordinator:
                     partition_key=cid,
                 )
             )
+
+    def enqueue_rebuild(self, collection_id: str, *, requested_by: str | None = None) -> bool:
+        """Queue a whole-collection wiki rebuild and return immediately. ``True``
+        if a run was queued, ``False`` if one was already pending (coalesced).
+
+        The producer deliberately reads NO source (#571). The walk — every ready
+        doc, one fold job each — is the worker's job (:meth:`_handle_rebuild`).
+        Doing it in the request, as the route used to, meant a thousand-document
+        collection loaded every blob and extracted text into memory and ran a CAS
+        state write per doc before the button could answer.
+
+        It DOES seed the build-state row, which the per-source walk used to
+        create as a side effect. ``status()`` returns a flat idle when that row is
+        missing and the FE polls only while ``building`` — so without this a
+        first-ever rebuild would show an idle wiki with a job running silently
+        behind it, and the poll would never start."""
+        if self._has_active_rebuild(collection_id):
+            return False
+        actor = requested_by if requested_by is not None else self._get_user_id()
+        with self._state_rm.using(user=actor), self._job_rm.using(user=actor):
+            # Ensure the row EXISTS without touching a thing. It must not reset
+            # the epoch: an upload batch may be folding right now, and its total
+            # (and any recorded `errors` / `last_error`) has to survive — the
+            # worker sets the real count, under the same fresh-vs-grow rule
+            # `on_doc_indexed` uses.
+            self._update_state(collection_id, lambda s: s)
+            self._job_rm.create(
+                WikiMaintenanceJob(
+                    payload=WikiJobPayload(
+                        collection_id=collection_id, source_path="", op="rebuild"
+                    ),
+                    partition_key=collection_id,
+                )
+            )
+        return True
+
+    def _has_active_rebuild(self, collection_id: str) -> bool:
+        """True if a rebuild is already queued OR running for this collection — the
+        anti-mash guard, so a user who doesn't see progress yet can't stack up
+        redundant whole-collection re-folds."""
+        # PENDING *and* PROCESSING, like `_has_active_reflect` /
+        # `_has_active_code_build`. A PENDING-only guard is open for essentially
+        # the whole run — an all-in-one deploy claims the job within
+        # milliseconds — so a second press would queue a second full walk and
+        # pay 2N maintainer runs. There is no per-source coalescing downstream
+        # to absorb that.
+        active = (
+            QB["status"].in_(_ACTIVE)
+            & (QB["partition_key"] == collection_id)
+            & (QB["op"] == "rebuild")
+        )
+        return self._job_rm.count_resources(active.build()) > 0
 
     async def submit_correction(
         self,
@@ -666,6 +730,9 @@ class WikiMaintenanceCoordinator:
                 # #397: credit the correction's page edits to whoever submitted it
                 # (the job's creator), like an unfold — there's no source updater.
                 self._handle_correct(payload, triggered_by=actor)
+            elif payload.op == "rebuild":
+                # #571: fan the whole collection out into per-source folds.
+                self._handle_rebuild(payload, triggered_by=actor)
             elif payload.op == "reflect":
                 # #479: consolidate the prose wiki; page writes credited to the
                 # user who triggered the reflection (the job's creator).
@@ -684,6 +751,85 @@ class WikiMaintenanceCoordinator:
             return base
         assert isinstance(coll, Collection)  # the Collection manager yields a Collection (ty)
         return with_collection_guidance(base, coll.wiki_maintainer_guidance)
+
+    def _handle_rebuild(self, payload, *, triggered_by: str) -> None:
+        """Fan a whole-collection rebuild out into one ``fold`` job per ready
+        source — the walk that used to sit inside the HTTP request (#571).
+
+        The candidate set comes from an INDEXED, metas-only query
+        (``collection_id`` + ``status``), so a thousand-source collection is no
+        longer streamed — blobs and extracted text and all — into memory just to
+        decide what to fold. Still-indexing sources are excluded IN THE QUERY:
+        a binary doc mid-index carries no extracted text, and folding it would
+        push an empty source into the wiki.
+
+        The epoch counter follows the same fresh-vs-grow rule as
+        `on_doc_indexed`, and is published only after the fan-out — see the
+        comments below, where both orderings are load-bearing."""
+        cid = payload.collection_id
+        # Re-check the collection: `use_wiki` can be turned off (or a git_url
+        # added, making it a code collection whose wiki is regenerated whole)
+        # between the press and the worker claiming the job. The old per-source
+        # path re-validated this on every doc.
+        try:
+            coll = self._coll_rm.get(cid).data
+        except ResourceIDNotFoundError:
+            return
+        if not (isinstance(coll, Collection) and coll.use_wiki) or coll.git_url:
+            return
+        q = (QB["collection_id"] == cid) & (QB["status"] == "ready")
+        # Same fresh-vs-grow rule as `on_doc_indexed`: start a new epoch only
+        # when nothing else is in flight, otherwise ADD to the running batch.
+        # "Nothing else" means an active count of 1 — this rebuild job is itself
+        # active on the collection's partition key while it runs. Decided BEFORE
+        # the fan-out, since the jobs it creates land in that same count.
+        fresh = self._active_count(cid) <= 1
+        try:
+            metas = list(self._doc_rm.search_resources(q.build()))
+            # The job manager carries no default user (#186), so every create
+            # must bind one — here the requester the run was queued by.
+            with self._job_rm.using(user=triggered_by):
+                for meta in metas:
+                    path = meta.indexed_data.get("path") if meta.indexed_data else None
+                    self._job_rm.create(
+                        WikiMaintenanceJob(
+                            payload=WikiJobPayload(
+                                collection_id=cid,
+                                source_path=path if isinstance(path, str) else "",
+                                doc_id=meta.resource_id,
+                            ),
+                            partition_key=cid,
+                        )
+                    )
+        except Exception:
+            # Record and STOP. Re-raising would make specstar redeliver, and the
+            # walk is not idempotent — it would re-create every fold job already
+            # queued, paying another N maintainer runs. Same shape as the
+            # code-split fan-out head, which swallows for the same reason.
+            _LOGGER.exception("wiki rebuild fan-out failed for %s", cid)
+            self._update_state(
+                cid,
+                lambda s: msgspec.structs.replace(
+                    s,
+                    errors=s.errors + 1,
+                    last_error=s.last_error or "the wiki rebuild could not be started",
+                ),
+            )
+            return
+        # Publish the total only NOW. `status()` derives `done` as
+        # `total - active`, so announcing it before the fan-out makes each
+        # created job push `done` DOWN — the user watches "5 / 6" count
+        # backwards to "0 / 6" before a single source has folded. With the
+        # total still 0 the FE simply omits the numbers until they are real.
+        n = len(metas)
+        self._update_state(
+            cid,
+            lambda s: (
+                WikiBuildState(collection_id=cid, total=n)
+                if fresh
+                else msgspec.structs.replace(s, total=s.total + n)
+            ),
+        )
 
     def _handle_fold(self, payload) -> None:
         """Fold one source into its collection's wiki, resolving the EXACT doc

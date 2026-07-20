@@ -11,6 +11,8 @@ from collections.abc import AsyncIterator
 
 from agents import RunContextWrapper
 from httpx import ASGITransport
+from specstar import QB
+from specstar.types import TaskStatus
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.agent.tools import read_new_source_impl, write_file_impl
@@ -19,6 +21,7 @@ from workspace_app.api.events import AgentEvent, RunDone
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.kb.wiki.jobs import WikiMaintenanceJob
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
@@ -219,3 +222,70 @@ async def test_clear_wipes_every_wiki_page():
 
         after = (await c.get(f"/kb/collections/{cid}/wiki")).json()["pages"]
         assert after == []
+
+
+# ── "Rebuild wiki" returns instead of walking the collection (#571) ────────
+
+
+async def test_rebuild_returns_without_folding_a_single_source():
+    """The request leaves one job behind and returns. Before #571 it walked every
+    doc — loading each one's blob and extracted text, running a CAS state write
+    and creating a fold job — before the button could answer."""
+    spec = make_spec(default_user="u")
+    app = _app(spec)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = await _build_wiki(c, app)
+        coord = app.state.wiki_coordinator
+        coord._stop_consuming()  # noqa: SLF001 — pin the window; assert on the REQUEST
+
+        r = await c.post(f"/kb/collections/{cid}/wiki/rebuild")
+        assert r.status_code == 200
+        assert r.json()["queued"] == 1  # how many sources the run covers
+
+        # Exactly ONE job exists — the rebuild — not one fold per source.
+        jobs = list(
+            spec.get_resource_manager(WikiMaintenanceJob).list_resources(
+                (QB["status"].eq(TaskStatus.PENDING)).build()
+            )
+        )
+        ops = []
+        for j in jobs:
+            assert isinstance(j.data, WikiMaintenanceJob)  # ty narrow
+            ops.append(j.data.payload.op)
+        assert ops == ["rebuild"]
+        await coord.aclose()
+
+
+async def test_a_queued_rebuild_already_reads_as_building():
+    """The FE polls only while `building`, and `status()` is flat-idle without a
+    build-state row — so a queued rebuild must already report building or the
+    progress pill never appears and the poll never starts."""
+    spec = make_spec(default_user="u")
+    app = _app(spec)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/collections", json={"name": "c", "use_wiki": True})).json()[
+            "resource_id"
+        ]
+        coord = app.state.wiki_coordinator
+        coord._stop_consuming()  # noqa: SLF001
+
+        await c.post(f"/kb/collections/{cid}/wiki/rebuild")
+
+        st = await c.get(f"/kb/collections/{cid}/wiki/status")
+        assert st.json()["building"] is True
+        await coord.aclose()
+
+
+async def test_pressing_rebuild_again_does_not_stack_a_second_run():
+    spec = make_spec(default_user="u")
+    app = _app(spec)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = await _build_wiki(c, app)
+        coord = app.state.wiki_coordinator
+        coord._stop_consuming()  # noqa: SLF001
+
+        first = (await c.post(f"/kb/collections/{cid}/wiki/rebuild")).json()
+        assert first["status"] == "rebuilding"
+        again = (await c.post(f"/kb/collections/{cid}/wiki/rebuild")).json()
+        assert again["status"] == "already_rebuilding"  # coalesced, not a second run
+        await coord.aclose()

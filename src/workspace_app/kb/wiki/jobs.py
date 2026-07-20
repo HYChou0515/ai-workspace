@@ -42,9 +42,15 @@ class WikiJobPayload(msgspec.Struct):
     collection_id: str
     source_path: str
     doc_id: str = ""
-    # fold | unfold | correct | reflect | code_sync | code_split | code_card |
-    # code_finalize. #479: reflect consolidates a PROSE wiki as a whole (survey →
-    # plan → apply) — no source_path/doc_id, it reads the entire wiki.
+    # fold | unfold | correct | reflect | rebuild | code_sync | code_split |
+    # code_card | code_finalize. #479: reflect consolidates a PROSE wiki as a
+    # whole (survey → plan → apply) — no source_path/doc_id, it reads the
+    # entire wiki.
+    # #571: rebuild re-folds the WHOLE collection — the worker walks
+    # `collection_id` and enqueues a `fold` per ready source. No
+    # source_path/doc_id (it targets no single source). This op exists so the
+    # "Rebuild wiki" button leaves one row behind and returns instead of
+    # walking every document inside the HTTP request.
     # #355: code_sync clones the collection's git_url + ingests it (off the API,
     # on the wiki worker), then chains to code_split — the head of the build.
     op: str = "fold"

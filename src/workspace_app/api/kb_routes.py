@@ -1538,18 +1538,28 @@ def register_kb_routes(
         if coll.git_url:
             await wiki_coordinator.trigger_code_build(collection_id, requested_by=get_user_id())
             return WikiRebuildOut(queued=1)
-        rm = spec.get_resource_manager(SourceDoc)
-        queued = 0
-        for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
-            doc = r.data
-            if not (isinstance(doc, SourceDoc) and doc.status == "ready"):
-                # Still indexing — no extracted text to fold yet; the index-
-                # completion hook folds it once ready. Skip it so `queued`
-                # reflects what actually folds now, not an inflated count.
-                continue
-            await wiki_coordinator.on_doc_indexed(r.info.resource_id)  # ty: ignore[unresolved-attribute]
-            queued += 1
-        return WikiRebuildOut(queued=queued)
+        # ACCEPT-AND-RETURN (#571), same shape as the collection re-read (#569):
+        # queue ONE `rebuild` job and answer. This used to walk every doc —
+        # loading each one's blob and extracted text, re-reading its collection,
+        # running a CAS state write and creating a fold job — before the button
+        # could respond. Every iteration awaited, so it didn't pin the event loop
+        # the way #569 did, but the user still sat through the whole walk with no
+        # way to back out. The walk is now `_handle_rebuild`, off the request.
+        #
+        # `queued` counts what the run covers: still-indexing docs are excluded
+        # (they carry no extracted text yet, and folding one would push an empty
+        # source into the wiki — the index-completion hook folds it once ready).
+        # An indexed count push-down; no row is materialised. Counted BEFORE the
+        # enqueue so a worker that claims the job immediately can't race the
+        # number as it flips docs.
+        ready = (QB["collection_id"] == collection_id) & (QB["status"] == "ready")
+        queued = spec.get_resource_manager(SourceDoc).count_resources(ready.build())
+        started = wiki_coordinator.enqueue_rebuild(collection_id, requested_by=get_user_id())
+        # `already_rebuilding` = this press coalesced onto a run still pending, so
+        # the UI can say so instead of confirming a rebuild that isn't happening.
+        return WikiRebuildOut(
+            queued=queued, status="rebuilding" if started else "already_rebuilding"
+        )
 
     @app.post("/kb/collections/{collection_id}/wiki/reflect")
     async def reflect_wiki(collection_id: str) -> WikiReflectOut:
