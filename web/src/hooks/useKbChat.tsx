@@ -55,7 +55,7 @@ export function useKbChat({
   // Log state + hydration are shared with the broadcast chats (useChatLog); only
   // the TRANSPORT below differs — here the POST *is* the stream, so there is no
   // separate subscription (and therefore no reconnect / cross-pod poll to run).
-  const { log, setLog, snapshot } = useChatLog({
+  const { log, setLog, reconcile } = useChatLog({
     threadKey: initialChatId,
     // Shares the cache with KbChatView's title query.
     queryKey: qk.kb.chat(initialChatId ?? "__new__"),
@@ -117,7 +117,10 @@ export function useKbChat({
         // Push it into the cache too so KbChatView's title query stays in sync.
         const fresh = await client.getChat(id);
         qc.setQueryData(qk.kb.chat(id), fresh);
-        snapshot(fresh);
+        // Reconcile, not replace: the persisted thread is what carries the
+        // resolved [n] citations, but it must never cost the user the answer
+        // they just watched stream in.
+        reconcile(fresh);
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;
         const msg = err instanceof Error ? err.message : String(err);
@@ -127,7 +130,7 @@ export function useKbChat({
         setLog((prev) => ({ ...prev, streaming: false }));
       }
     },
-    [chatId, collectionIds, excludedCollectionIds, client, log.streaming, onChatCreated, qc, setLog, snapshot],
+    [chatId, collectionIds, excludedCollectionIds, client, log.streaming, onChatCreated, qc, setLog, reconcile],
   );
 
   const cancel = useCallback(() => {

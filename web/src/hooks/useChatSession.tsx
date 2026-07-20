@@ -71,7 +71,7 @@ export function useChatSession(
   // Epoch ms of the last live event (or send) — gates the #202 store-poll so a
   // healthy same-pod stream is never polled over.
   const lastEventAtRef = useRef(0);
-  const { log, setLog, snapshot } = useChatLog({
+  const { log, setLog, snapshot, reconcile } = useChatLog({
     threadKey: transport.threadKey,
     queryKey: transport.queryKey,
     getThread: transport.getThread,
@@ -108,7 +108,11 @@ export function useChatSession(
               const fresh = await transport.getThread();
               if (fresh) {
                 qc.setQueryData(transport.queryKey, fresh);
-                snapshot(fresh);
+                // The terminal event is published BEFORE the turn is persisted,
+                // so this read can legitimately lose the race — reconcile, never
+                // replace, or the just-streamed reply is wiped with no later
+                // event to put it back.
+                reconcile(fresh);
               }
             }
           }
@@ -122,7 +126,10 @@ export function useChatSession(
         const fresh = await transport.getThread().catch(() => null);
         if (fresh && !stopped) {
           qc.setQueryData(transport.queryKey, fresh);
-          snapshot(fresh);
+          // A drop mid-turn re-hydrates a thread that does NOT yet contain the
+          // answer being streamed — reconcile so reconnecting never costs the
+          // user what they were reading.
+          reconcile(fresh);
         }
         backoff = Math.min(backoff * 2, 15000);
       }
@@ -131,7 +138,7 @@ export function useChatSession(
       stopped = true;
       controller.abort();
     };
-  }, [transport, qc, snapshot]);
+  }, [transport, qc, reconcile]);
 
   // #202 cross-pod safety net: when this viewer's stream is on a pod that isn't
   // running the turn, the broadcast yields nothing and the composer would stay
@@ -150,7 +157,7 @@ export function useChatSession(
       const done = last !== undefined && last.role !== "user";
       if (done) {
         qc.setQueryData(transport.queryKey, thread);
-        snapshot(thread);
+        reconcile(thread);
         return;
       }
       const snap = logFromMessages(msgs);
