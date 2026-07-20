@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import csv
+import dataclasses
 import functools
 import inspect
 import io
@@ -2035,6 +2036,72 @@ def builtin_tool_descriptions() -> dict[str, str]:
     }
 
 
+def _nullable_arg_names(tool: FunctionTool) -> list[str]:
+    """The tool's args that accept ``null`` — i.e. the ones with a Python default.
+
+    Read off the emitted schema rather than the signature so it reflects what the
+    MODEL is actually shown."""
+    schema = tool.params_json_schema or {}
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return []
+    out: list[str] = []
+    for name, prop in props.items():
+        if not isinstance(prop, dict):
+            continue
+        variants = prop.get("anyOf") or prop.get("oneOf")
+        types: set[str] = set()
+        if isinstance(variants, list):
+            for v in variants:
+                t = v.get("type") if isinstance(v, dict) else None
+                if isinstance(t, str):
+                    types.add(t)
+        else:
+            t = prop.get("type")
+            if isinstance(t, str):
+                types.add(t)
+            elif isinstance(t, list):
+                types.update(x for x in t if isinstance(x, str))
+        if "null" in types:
+            out.append(name)
+    return out
+
+
+def _with_absent_convention(tool: FunctionTool) -> FunctionTool:
+    """Tell the model, on the tool itself, how to say "I am not setting this".
+
+    Strict mode lists every property in ``required`` and `ensure_strict_json_schema`
+    strips the ``null`` default, so a tool with optional args presents slots the
+    model must fill on its FIRST call with no stated convention for leaving one
+    empty. Nothing in the schema, the description or the prompt has ever said what
+    "unset" looks like — so the model invents a spelling, and one that thinks in
+    Python invents ``None``, which is not JSON. The call fails, and the validation
+    error becomes the only specification it ever receives. That is why the first
+    attempt reliably fails and a later one works.
+
+    This is not prose arguing with the schema — the schema is silent on the point.
+    It is the missing sentence, derived from the schema so any tool that grows an
+    optional arg is covered without anyone remembering.
+
+    It rides on the tool DESCRIPTION, which means it reaches the model through the
+    native tool definition AND through `format_tools_for_prompt`, which renders
+    descriptions verbatim into the system prompt. So it does appear twice per turn
+    — worth stating plainly rather than claiming otherwise. The cost is bounded:
+    only 6 of 31 built-ins have nullable args, so this is one short line each, and
+    the alternative (a prompt-only note) would leave the wire-level tool
+    definition silent on its own convention."""
+    names = _nullable_arg_names(tool)
+    if not names:
+        return tool
+    listed = ", ".join(f"`{n}`" for n in names)
+    note = (
+        f"Optional arguments ({listed}): send JSON `null` for any you are not "
+        f"setting — `null` means 'no value', and is always accepted."
+    )
+    desc = f"{tool.description}\n\n{note}" if tool.description else note
+    return dataclasses.replace(tool, description=desc)
+
+
 def build_tools(
     allowed: list[str] | None = None,
     *,
@@ -2054,10 +2121,12 @@ def build_tools(
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
     tools = [
-        function_tool(
-            _guard_workspace_full(_IMPLS[n]),
-            name_override=n,
-            strict_mode=n not in _NONSTRICT_TOOLS,
+        _with_absent_convention(
+            function_tool(
+                _guard_workspace_full(_IMPLS[n]),
+                name_override=n,
+                strict_mode=n not in _NONSTRICT_TOOLS,
+            )
         )
         for n in names
         if n in _IMPLS

@@ -4,6 +4,7 @@ so it self-corrects instead of just dying on `Extra data`."""
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import pytest
@@ -332,3 +333,131 @@ def test_wrap_preserves_all_private_sdk_fields():
         assert getattr(wrapped, f.name) == getattr(base, f.name), (
             f"field {f.name!r} dropped / changed by the wrap; SDK likely depends on it"
         )
+
+
+# ─── nullable-arg coercion (the kb_search `page_from='None'` defect) ───
+
+
+def _kb_shaped_tool(seen: list[dict[str, Any]]) -> FunctionTool:
+    """A tool shaped like `kb_search`: one required string plus optional params
+    that are `X | null` — the shape strict mode turns into "every property is
+    required", which is why the model has to put SOMETHING in each of them."""
+
+    async def capture(_ctx: ToolContext[Any], args: str) -> str:
+        seen.append(json.loads(args))
+        return "ok"
+
+    nullable = lambda t: {"anyOf": [{"type": t}, {"type": "null"}]}  # noqa: E731
+    return FunctionTool(
+        name="kb_search",
+        description="d",
+        params_json_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "page_from": nullable("integer"),
+                "rerank": nullable("boolean"),
+                "document": nullable("string"),
+            },
+            "required": ["query", "page_from", "rerank", "document"],
+        },
+        on_invoke_tool=capture,
+        strict_json_schema=True,
+    )
+
+
+async def test_a_schema_validation_failure_is_logged_with_the_offending_args(caplog):
+    """This failure is invisible today, and that is why it survived in production.
+
+    The SDK catches a pydantic ValidationError inside the tool invoker and turns
+    it into a tool RESULT string, so it never reaches our runner's error path,
+    never becomes a `ToolCallParseError` event, and never lands in a log an
+    operator would read. The model quietly retries and the turn eventually
+    succeeds — so from the outside it looks only "slow", and nobody can tell WHICH
+    argument the model got wrong.
+
+    We cannot intercept the exception (it is caught before it reaches us), but the
+    result carries the SDK's own signature, so the wrap recognises it and records
+    the tool, the args it was called with, and the reason. That log line is how a
+    production model tells us which spelling it actually emits — the thing this
+    fix could not be verified against locally."""
+
+    async def sdk_style_validation_failure(_ctx: ToolContext[Any], _args: str) -> str:
+        return (
+            "An error occurred while running the tool. Please try again. Error: "
+            "Invalid JSON input for tool kb_search: 1 validation error for kb_search_args\n"
+            "page_from\n  Input should be a valid integer, unable to parse string as an "
+            "integer [type=int_parsing, input_value='None', input_type=str]"
+        )
+
+    tool = FunctionTool(
+        name="kb_search",
+        description="d",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=sdk_style_validation_failure,
+        strict_json_schema=True,
+    )
+    wrapped = wrap_with_args_recovery(tool)
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.args_recovery"):
+        out = await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"page_from": "None"}))
+
+    assert "Invalid JSON input" in out  # the model still gets its feedback, unchanged
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "kb_search" in logged
+    assert "page_from" in logged  # WHICH argument
+    assert "None" in logged  # and what it actually sent
+
+
+async def test_tool_output_that_merely_quotes_the_error_phrase_is_not_logged(caplog):
+    """The detector matches the SDK's error text against the tool RESULT, and for
+    `read_file` / `exec` / `list_files` that result is arbitrary workspace content.
+    A file that happens to quote the phrase — a log of this very defect, say —
+    would otherwise raise a false operator warning. Only a result that is actually
+    shaped like the SDK's failure counts."""
+
+    async def echo_content(_ctx: ToolContext[Any], _args: str) -> str:
+        return "docs say: Invalid JSON input for tool foo — beware of that error."
+
+    tool = FunctionTool(
+        name="read_file",
+        description="d",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=echo_content,
+        strict_json_schema=True,
+    )
+    wrapped = wrap_with_args_recovery(tool)
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.args_recovery"):
+        await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"path": "notes.md"}))
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def test_the_rejection_log_names_the_args_without_dumping_their_content(caplog):
+    """Operator logs are not a place to spill workspace data. Every other log line
+    in this module deliberately keeps raw payloads out; this one records WHICH
+    arguments were sent and their types — enough to identify the offending
+    spelling — without copying a `write_file` body or an `exec` command line into
+    the log."""
+
+    async def sdk_failure(_ctx: ToolContext[Any], _args: str) -> str:
+        return (
+            "An error occurred while running the tool. Please try again. Error: "
+            "Invalid JSON input for tool write_file: 1 validation error"
+        )
+
+    tool = FunctionTool(
+        name="write_file",
+        description="d",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=sdk_failure,
+        strict_json_schema=True,
+    )
+    wrapped = wrap_with_args_recovery(tool)
+    secret = "AWS_SECRET=hunter2"
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.args_recovery"):
+        await wrapped.on_invoke_tool(
+            _tool_ctx(), json.dumps({"path": "notes.md", "content": secret})
+        )
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "write_file" in logged
+    assert "content" in logged  # which argument
+    assert secret not in logged  # but never its value

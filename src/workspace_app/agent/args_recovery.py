@@ -63,6 +63,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from typing import Any, cast
 
 from agents import FunctionTool
 from agents.tool_context import ToolContext
@@ -129,6 +130,56 @@ def peel_first_json(args_json: str) -> tuple[object, str]:
     value, end = decoder.raw_decode(stripped)
     leftover = args_json[leading_ws + end :].strip()
     return value, leftover
+
+
+_SDK_VALIDATION_ERROR = "Invalid JSON input for tool"
+
+# The SDK's `default_tool_error_function` always opens with this. Requiring it —
+# rather than matching the phrase above anywhere — is what keeps a tool whose
+# OUTPUT happens to quote the error (a `read_file` of a log about this very
+# defect) from raising a false operator warning.
+_SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool."
+
+
+def _arg_shapes(args: dict[str, Any]) -> str:
+    """``name=type`` per argument — enough to identify which one the model got
+    wrong and in what spelling, with none of its content.
+
+    The values themselves are workspace data: a ``write_file`` body, an ``exec``
+    command line, a KB query. Every other log line in this module keeps raw
+    payloads out (see the comments on the parse-error paths), and an operator
+    diagnosing a schema rejection needs the SHAPE, not the secret. Strings short
+    enough to be a stand-in for "nothing" are shown verbatim, because that is
+    precisely the spelling we are trying to learn."""
+    parts: list[str] = []
+    for name, value in args.items():
+        if isinstance(value, str) and len(value) <= 8:
+            parts.append(f"{name}={value!r}")
+        else:
+            parts.append(f"{name}=<{type(value).__name__}>")
+    return ", ".join(parts)
+
+
+def _log_if_schema_rejected(tool_name: str, args: dict[str, Any], result: str) -> None:
+    """Record a schema rejection the SDK swallowed, naming the offending argument.
+
+    We cannot intercept the exception — it is caught before control returns to us —
+    but the result carries the SDK's own signature, so this recognises it and logs
+    which arguments were sent and in what shape. Without this the only symptom is
+    "the first call is always slow", with no way to tell WHICH argument or WHICH
+    spelling was at fault, which is how this defect survived unnoticed in
+    production.
+
+    The result itself is returned to the model unchanged: the feedback it needs to
+    self-correct is not ours to edit."""
+    if not result.startswith(_SDK_TOOL_ERROR_PREFIX) or _SDK_VALIDATION_ERROR not in result:
+        return
+    _LOGGER.warning(
+        "args_recovery: %s rejected the model's args by schema; args=(%s) reason=%s",
+        tool_name,
+        _arg_shapes(args),
+        result.split(_SDK_VALIDATION_ERROR, 1)[1][:300],
+    )
 
 
 def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
@@ -220,7 +271,12 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
                 raw_args=args_json,
                 call_id=call_id,
             )
-        return await original(ctx, json.dumps(value))
+        # `peel_first_json` returns `object`; the non-dict case raised above, so
+        # this cast records what the control flow already guarantees.
+        args = cast("dict[str, Any]", value)
+        result = await original(ctx, json.dumps(args))
+        _log_if_schema_rejected(tool.name, args, result)
+        return result
 
     # `FunctionTool` is a dataclass with ~20 fields (including private
     # SDK ones like `_failure_error_function`, `_use_default_failure_error_function`,
