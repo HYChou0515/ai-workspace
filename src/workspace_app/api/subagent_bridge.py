@@ -22,6 +22,7 @@ from ..kb.cited import record_citations
 from ..kb.collections import partition_collection_disclosure, resolve_effective_scope
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
+from ..kb.wiki.consult import WikiConsultant
 from ..perm import Actor
 from ..resources import AgentConfig
 from ..resources.groups import groups_of
@@ -43,23 +44,27 @@ class SubagentBridge:
         *,
         spec: SpecStar,
         runner: AgentRunner,
-        kb_runner: AgentRunner,
         retriever: Retriever,
         catalog: AgentConfigCatalog,
         purpose_fallbacks: dict[str, AgentConfig],
         get_user_id: Callable[[], str],
         max_searches: int | None,
         superusers: frozenset[str] = frozenset(),
+        # #537: builds the KB sub-agent's wiki consultant for whatever collections
+        # the call ends up scoped to. The app-side agent never touches the wiki
+        # itself (#270) — it asks the KB agent, which decides whether the wiki or
+        # the documents answer this question.
+        wiki_consultant_factory: Callable[[list[str]], WikiConsultant | None] | None = None,
     ) -> None:
         self._spec = spec
         self._runner = runner
-        self._kb_runner = kb_runner
         self._retriever = retriever
         self._catalog = catalog
         self._purpose_fallbacks = purpose_fallbacks
         self._get_user_id = get_user_id
         self._max_searches = max_searches
         self._superusers = superusers
+        self._wiki_consultant_factory = wiki_consultant_factory
 
     async def run(
         self,
@@ -69,7 +74,6 @@ class SubagentBridge:
         origin_id: str | None = None,
         enhancements: Enhancements | None = None,
         reasoning_effort: str | None = None,
-        wiki_query: bool = False,
         collection_ids: list[str] | None = None,
         budget: KbSearchBudget | None = None,
         wiki_budget: WikiSearchBudget | None = None,
@@ -177,17 +181,13 @@ class SubagentBridge:
             captured.extend(cites)
 
         logger.info(
-            "subagent_bridge: running %s sub-agent for origin %s (speaker %s, wiki=%s)",
+            "subagent_bridge: running %s sub-agent for origin %s (speaker %s)",
             purpose,
             origin_id,
             speaker,
-            wiki_query,
         )
-        # When the query opted into the wiki, drive the lookup with the
-        # wiki-aware runner (chunk / wiki / both routing); otherwise the plain
-        # base runner (chunk-RAG only).
         answer = await answer_question(
-            self._kb_runner if wiki_query else self._runner,
+            self._runner,
             self._retriever,
             ids,
             payload,
@@ -195,9 +195,12 @@ class SubagentBridge:
             spec=self._spec,
             enhancements=enhancements,
             reasoning_effort=reasoning_effort,
-            wiki=wiki_query,
             on_event=relay,
             on_citations=log_cites,
+            # #537: how the KB sub-agent consults the wiki, over the collections
+            # THIS call resolved to. The calling app agent has no wiki tools of its
+            # own — it delegates the whole question and the KB agent picks.
+            wiki_consultant_factory=self._wiki_consultant_factory,
             # #195: the RCA → KB bridge is the same KB agent — cap its searches
             # too (None ⇒ unlimited when the operator lifts the cap).
             max_searches=self._max_searches,

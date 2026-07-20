@@ -59,7 +59,6 @@ def _bridge(
     return SubagentBridge(
         spec=spec,
         runner=runner,
-        kb_runner=runner,
         retriever=Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM)),
         catalog=AgentConfigCatalog(),
         purpose_fallbacks={"kb_chat": cfg},
@@ -252,7 +251,6 @@ async def test_infer_modules_does_not_union_global():
     bridge = SubagentBridge(
         spec=spec,
         runner=runner,
-        kb_runner=runner,
         retriever=Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM)),
         catalog=AgentConfigCatalog(),
         purpose_fallbacks={"infer_modules": cfg},

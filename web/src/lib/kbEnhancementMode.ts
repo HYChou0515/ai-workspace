@@ -60,45 +60,6 @@ export function toBodyEnhancements(sel: EnhancementSelection): BodyEnhancements 
   return { expand: v.expand, hyde: v.hyde, rerank: v.rerank };
 }
 
-/** Fold the per-query "Search the wiki" toggle into the depth body. The wiki
- * flag is a separate sticky bool (it picks a retrieval PATH, not a depth dial),
- * so it can ride on top of any depth mode — including "standard" (which sends
- * no depth payload): wiki-on alone still produces `{ wiki: true }`. */
-export function withWikiFlag(
-  body: BodyEnhancements | undefined,
-  wiki: boolean,
-): BodyEnhancements | undefined {
-  if (!wiki) return body;
-  return { ...(body ?? {}), wiki: true };
-}
-
-const WIKI_KEY = "rca.kbSearchWiki";
-
-export function getKbWiki(): boolean {
-  try {
-    return localStorage.getItem(WIKI_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function setKbWiki(on: boolean): void {
-  try {
-    localStorage.setItem(WIKI_KEY, on ? "1" : "0");
-  } catch {
-    /* localStorage unavailable — the toggle just isn't sticky */
-  }
-}
-
-/** React state bound to the sticky "Search the wiki" toggle. */
-export function useKbWikiToggle(): readonly [boolean, (on: boolean) => void] {
-  const [on, setOn] = useState(getKbWiki);
-  const set = useCallback((v: boolean) => {
-    setOn(v);
-    setKbWiki(v);
-  }, []);
-  return [on, set] as const;
-}
 
 const KEY = "rca.kbEnhancementMode";
 

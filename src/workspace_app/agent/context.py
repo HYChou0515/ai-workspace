@@ -296,12 +296,6 @@ class AgentToolContext:
     # win over this; this wins over the operator default. `None` = no
     # caller override.
     kb_enhancements: Enhancements | None = None
-    # Per-query opt-in to the LLM-wiki retrieval path (#50 P6, the depth
-    # picker's "Search the wiki" advanced toggle). The WikiAwareRunner reads
-    # this together with each collection's use_rag/use_wiki to route the turn:
-    # off ⇒ pure chunk-RAG (unchanged); on + a use_wiki collection ⇒ wiki
-    # reader, and both ⇒ chunk + wiki answers merged.
-    wiki_query: bool = False
     # RCA → sub-agent bridge: when set (by the API layer), the RCA
     # agent's sub-agent-facing tools (`ask_knowledge_base`,
     # `infer_modules`, future) reach their sub-agent via this single
@@ -323,6 +317,19 @@ class AgentToolContext:
     # KB. The type is `Callable[..., …]` because that override is keyword-default
     # (not expressible in a positional `Callable[[...], …]` signature).
     run_subagent: Callable[..., Awaitable[tuple[str, list[Citation]]]] | None = None
+    # #537: the KB agent's SECOND knowledge source — consult the wiki. Given a
+    # question, a wiki reader navigates the wiki index-first (index → the pages the
+    # index points at → the source documents behind them) and returns its answer
+    # plus the passages it grounded on. The navigation runs in a THROWAWAY context,
+    # so whole wiki pages never land in the caller's window — the same
+    # context-economy reason `ask_knowledge_base` delegates (#270), and the reason
+    # the caller is NOT simply handed the wiki's file tools.
+    #
+    # Wired by the API layer for turns that scope a wiki-backed collection; `None`
+    # ⇒ `ask_wiki` reports there is no wiki here rather than failing.
+    run_wiki_reader: (
+        Callable[[str, OutputSink | None], Awaitable[tuple[str, list[RetrievedPassage]]]] | None
+    ) = None
     # Per-call citation lists from this turn's sub-agent invocations,
     # keyed by purpose. Per purpose, lists are in CALL ORDER — the
     # persist step pairs the Nth list with the Nth tool message of
@@ -330,6 +337,11 @@ class AgentToolContext:
     # the call id; the SDK runs tools sequentially within a turn, so
     # per-purpose order pairing is unambiguous.)
     subagent_citations: dict[str, list[list[Citation]]] = field(default_factory=dict)
+    # #537: this turn's knowledge-source allowance, rendered for the prompt. Set
+    # where the budgets are resolved (that's the only place that still knows a
+    # tool was dropped because its allowance was 0, rather than never granted).
+    # The runner appends it to the system prompt; "" ⇒ nothing appended.
+    search_allowance_note: str = ""
     # #62: a per-turn map from an exec tool's LLM-facing result (the cleaned
     # `_format_exec`, which IS the ToolEnd.output) to the FULL display result
     # (stderr kept even on success). The runner keys off ToolEnd.output to

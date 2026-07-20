@@ -41,8 +41,9 @@ class AskKbSpec:
     """One configured shape of `ask_knowledge_base`. All fields are data — a caller
     tunes them; the algorithm (spawn KB sub-agent → search → synthesize) is fixed.
 
-    - `kb_search_max` / `wiki_search_max`: the per-call search caps. `0` ⇒ that
-      tool isn't granted (off); `N` ⇒ granted, capped at N; `None` ⇒ unlimited.
+    - `kb_search_max` / `wiki_search_max`: the per-call caps, and the ONLY switch
+      for each source. `0` ⇒ that tool isn't granted (off); `N` ⇒ granted, capped
+      at N; `None` ⇒ unlimited. Independent (#537).
     - `glossary`: grant the cheap, deterministic `lookup_glossary` (no budget).
     - `prompt`: override the sub-agent's instruction (e.g. "force a wiki check").
     - `scope`: the collection ids to search; `None` ⇒ inherit the caller's scope.
@@ -57,12 +58,20 @@ class AskKbSpec:
     sub_agent_purpose: str = "kb_chat"
 
     def allowed_tools(self) -> list[str]:
-        """The tools this spec grants its sub-agent: `kb_search` always (a KB agent
-        must be able to search), `search_wiki` unless wiki is off (`max == 0`), and
-        the cheap `lookup_glossary` when enabled."""
-        tools = ["kb_search"]
+        """The tools this spec grants its sub-agent.
+
+        #537: the two searches are SYMMETRIC — each is granted unless its budget
+        is off (`max == 0`), so "the wiki but not the documents" and "the
+        documents but not the wiki" are both expressible. `kb_search` used to be
+        unconditional ("a KB agent must be able to search"), which made the wiki
+        knob the only real one and welded document search to every consultation.
+        The wiki is reached through the delegating `ask_wiki`, never the raw grep
+        (#270's A/B convention). `lookup_glossary` is free and rides along."""
+        tools = []
+        if self.kb_search_max != 0:
+            tools.append("kb_search")
         if self.wiki_search_max != 0:
-            tools.append("search_wiki")
+            tools.append("ask_wiki")
         if self.glossary:
             tools.append("lookup_glossary")
         return tools

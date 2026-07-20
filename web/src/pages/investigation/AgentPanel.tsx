@@ -4,7 +4,7 @@
  * user / agent / tool-call entries, with suggestion chips + composer.
  */
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 
 import { api } from "../../api";
@@ -212,12 +212,6 @@ export function AgentPanel({
   // Handoff 3.0 composer model picker. Picking a model here CHANGES THE item's
   // attached preset (persistent, every later turn, visible to all members) — the
   // backend AppCatalog resolves it per turn. It is NOT a per-message override.
-  // The RCA agent's ask_knowledge_base searches every collection, so the
-  // "Search the wiki" toggle is offered when ANY collection builds a wiki.
-  const { data: kbCollections = [] } = useQuery({
-    queryKey: qk.kb.collections,
-    queryFn: () => kbApi.listCollections(),
-  });
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -790,7 +784,6 @@ export function AgentPanel({
             // Depth applies to this turn's ask_knowledge_base lookups —
             // useAgent sends the sticky selection with every message.
             retrieval
-            wikiAvailable={kbCollections.some((c) => c.use_wiki)}
           />
           <input
             ref={fileInputRef}

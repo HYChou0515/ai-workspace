@@ -123,7 +123,8 @@ def test_default_drafter_spec_caps_rag_wiki_and_glossary():
     assert spec.kb_search_max == 3
     assert spec.wiki_search_max == 3
     assert spec.glossary is True
-    assert spec.allowed_tools() == ["kb_search", "search_wiki", "lookup_glossary"]
+    # #537: the wiki is reached through the delegating `ask_wiki`, not the raw grep.
+    assert spec.allowed_tools() == ["kb_search", "ask_wiki", "lookup_glossary"]
 
 
 class _PromptCapturingRunner:

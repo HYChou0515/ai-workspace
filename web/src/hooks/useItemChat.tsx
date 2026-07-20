@@ -4,11 +4,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { itemChatApi, type ItemChatApi } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
 import { isTerminal } from "../events";
+import { getKbSearchMax } from "../lib/kbSearchMax";
 import {
-  getKbWiki,
   getStored as getKbEnhancementSelection,
   toBodyEnhancements,
-  withWikiFlag,
 } from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import {
@@ -153,9 +152,12 @@ export function useItemChat({
           chatId,
           content: trimmed,
           reasoningEffort: getReasoningEffort() ?? undefined,
-          // Knowledge-search depth + the "Search the wiki" toggle → this turn's
-          // ask_knowledge_base lookups (same sticky selection useAgent sends).
-          enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
+          // Knowledge-search depth for this turn's ask_knowledge_base lookups.
+          enhancements: toBodyEnhancements(getKbEnhancementSelection()),
+          // #537: the turn-wide document-search allowance. This surface never sent
+          // it, so the composer's stepper moved but nothing changed — the operator
+          // default applied regardless, including when the user chose 0.
+          maxKbSearches: getKbSearchMax(),
           // #380: skills queued in the Skills panel to apply THIS turn (one-shot).
           applySkills: opts?.applySkills,
           // Attached image workspace paths — a VLM main model reads them inline.

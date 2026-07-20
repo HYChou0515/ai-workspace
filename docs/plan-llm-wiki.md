@@ -19,8 +19,8 @@
 | **P2** | sandbox-free wiki AgentToolContext flavour + `search_wiki`(FileStore-backed grep)+ `read_new_source` 工具 + `wiki_maintainer` agent purpose(重用既有檔案工具) | ✅ |
 | **P3** | Ingest hook — doc index 完成後(coalesced)觸發 maintainer 增量編輯。`WikiMaintenanceCoordinator`:per-collection 序列佇列(單程序無 lost-wakeup;跨 worker 靠 specstar CAS,屬未來硬化) | ✅ |
 | **P4** | Wiki-reading agent(純 agentic 導覽)+ source-doc citations(option 2:`read_source` 在 reader context 註冊 passage 回 SourceDoc,沿用 `parse_citations`) | ✅ |
-| **P5** | Query 整合 — `WikiAwareRunner`(KB chat 專屬 engine):chunk-only 為純 passthrough(零風險),wiki-only 直接串流 reader,both = 兩 agent 各答 + 共用引用清單 renumber + merge agent 串流 | ✅ |
-| **P6** | Knowledge-search-depth advanced 選項:per-query「Search the wiki」勾選(`EnhancementsInput.wiki` → `ctx.wiki_query`,路由旗標非 retriever knob) | ✅ |
+| **P5** | ~~Query 整合 — `WikiAwareRunner`(KB chat 專屬 engine):chunk-only 為純 passthrough(零風險),wiki-only 直接串流 reader,both = 兩 agent 各答 + 共用引用清單 renumber + merge agent 串流~~ **RETIRED by #537** —— 路由把「開 wiki」與「同時搜文件」焊死(wiki-only 需要 scope 內每個 collection 都關 `use_rag`)。改為 KB agent 用 `ask_wiki` 自行選擇來源;`wiki_reader` 保留(就是 `ask_wiki` 委派的對象),merge agent 退役(合併由本來就要綜合的那個 agent 做)。 | ⛔ |
+| **P6** | ~~per-query「Search the wiki」勾選(`EnhancementsInput.wiki` → `ctx.wiki_query`)~~ **RETIRED by #537** —— 勾選框只能「加上」wiki,無法「只要」wiki。App composer 不再有 wiki 控制(交給 KB agent 判斷);KB chat 改為每個來源一個配額,0 = 該來源本回合關閉。 | ⛔ |
 | **P7** | FE — collection 模式開關 + 唯讀 Wiki 瀏覽分頁([[wikilink]] 可導覽 + Rebuild)+ depth「Search the wiki」勾選 + 後端 wiki-browse 端點 | ✅ |
 | **P8** | live 健康檢查(#51):`agent-wiki-reader`(search_wiki)/ `agent-wiki-maintainer`(write_file)兩個 canned check(`ToolCallCheck` 參數化) | ✅ |
 
@@ -33,7 +33,7 @@ FE `vitest`+`tsc`+`build`、commit、本表打勾。
 |---|---|---|
 | **跨 worker CAS** | `WikiFileStore.read_with_etag`/`write_cas`(specstar v0.11.6 etag,in-place modify 也會 bump);`WorkspaceFiles.edit` duck-type 之 → etag-guarded read→write→retry,第二個 ingest worker 改同頁時 re-base 不覆寫。單程序仍靠 coordinator 序列化。 | ✅ |
 | **admin 清空** | `DELETE /kb/collections/{id}/wiki`(`WikiFileStore.clear`)—— rebuild 永遠增量、不刪;此為「打掉重練」後端把手,無 FE 入口。 | ✅ |
-| **RCA→KB wiki** | composer「Search the wiki」勾選 → RCA turn body → `ask_knowledge_base` 經 `_run_subagent(wiki_query=…)` 改用 wiki-aware runner(`answer_question(wiki=True)` 設 `ctx.wiki_query`);infer_modules 維持 chunk-only。FE 依 `design_handoff_rca_3.0` 在 RCA composer 顯示同一 toggle。 | ✅ |
+| **RCA→KB wiki** | ~~composer「Search the wiki」勾選 → RCA turn body → `ask_knowledge_base` 經 `_run_subagent(wiki_query=…)` 改用 wiki-aware runner(`answer_question(wiki=True)` 設 `ctx.wiki_query`);infer_modules 維持 chunk-only。FE 依 `design_handoff_rca_3.0` 在 RCA composer 顯示同一 toggle。~~ **RETIRED by #537**(見 P5/P6)。 | ⛔ |
 | **FE wiki 瀏覽** | 依 `design_handoff_rca_3.0/rca/views/wiki.jsx`:header(AI-maintained + Rebuild)、分組 tree(Index/Entities/Concepts)、prose + `[[wikilink]]`、**可點 Sources footer**(解析頁尾 `Sources:` → 開 source doc)、empty/building 狀態。 | ✅ |
 
 ---
@@ -47,6 +47,7 @@ FE `vitest`+`tsc`+`build`、commit、本表打勾。
   `list/read/write` 現有 wiki 頁,跨頁增量更新;**不**每次全量重建。爆發式多檔上傳
   **coalesce** 成一次維護。
 - **Query 時 wiki 檢索**:**純 agentic 導覽**(讀 index → 跟 `[[wikilink]]` → 讀頁),
+  **#537 更正**:導覽是主路,`search_wiki`(grep)只是 fallback —— Karpathy 原文是 index-first + 讀整頁;#506 一度只給 KB agent 一把 grep,等於把 fallback 當唯一手段。現在 KB agent 用 `ask_wiki` 委派給這個 reader。
   **無向量索引**。是 **Knowledge search depth 的 advanced 選項**(per-query 可勾可不勾)。
 - **both 模式**:**兩個 agent 各答再合併** —— chunk-agent 一份答、wiki-agent 一份答,
   再一個 merge 步驟整併(去重/重編引用)成最終答案。

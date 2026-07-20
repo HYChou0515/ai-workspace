@@ -24,7 +24,6 @@ import { type MsgKey, useT } from "../lib/i18n";
 import {
   PRESETS,
   useKbEnhancementMode,
-  useKbWikiToggle,
   type CustomEnhancements,
   type EnhancementMode,
   type EnhancementSelection,
@@ -259,7 +258,6 @@ export function ModelEffortPicker({
   selectedName,
   onSelectModel,
   retrieval = false,
-  wikiAvailable = false,
   wikiBudget = false,
 }: {
   models: PickerEntry[];
@@ -268,12 +266,9 @@ export function ModelEffortPicker({
   onSelectModel: (name: string) => void;
   /** KB surface: include the knowledge-search depth section. */
   retrieval?: boolean;
-  /** Issue #50: a collection in scope builds a wiki, so surface the wiki control
-   * (hidden when no collection has a wiki — it would do nothing). */
-  wikiAvailable?: boolean;
-  /** #506: render the wiki control as a budgeted "max wiki searches" number picker
-   * (KB chat: wiki is an in-agent tool) instead of the legacy boolean toggle (the
-   * RCA composer, whose wiki flag still routes through the whole-page reader). */
+  /** #537: show the wiki allowance — how many times this reply may consult the
+   * wiki. KB chat only: an app composer delegates the whole question to the KB
+   * agent, which picks its own sources (#270), so there is nothing to set there. */
   wikiBudget?: boolean;
 }) {
   const t = useT();
@@ -281,7 +276,6 @@ export function ModelEffortPicker({
   const [advanced, setAdvanced] = useState(false);
   const [effort, setEffort] = useReasoningEffort();
   const [depthSel, setDepthMode, setDepthSlider] = useKbEnhancementMode();
-  const [searchWiki, setSearchWiki] = useKbWikiToggle();
   const [maxSearches, setMaxSearches] = useKbSearchMax();
   const [maxWiki, setMaxWiki] = useKbWikiMax();
 
@@ -479,40 +473,18 @@ export function ModelEffortPicker({
                 )}
                 <SearchMaxStepper value={maxSearches} onChange={setMaxSearches} />
                 {advanced && <DepthSliders sel={depthSel} onSlider={setDepthSlider} />}
-                {wikiAvailable &&
-                  (wikiBudget ? (
-                    // #506: wiki is a budgeted in-agent tool — a number picker like
-                    // kb_search, not a routing toggle.
-                    <SearchMaxStepper
-                      value={maxWiki}
-                      onChange={setMaxWiki}
-                      labelKey="wikimax.label"
-                      titleKey="wikimax.title"
-                      zeroKey="wikimax.zero"
-                      decKey="wikimax.dec"
-                      incKey="wikimax.inc"
-                      max={KB_WIKI_MAX_UI_MAX}
-                    />
-                  ) : (
-                    <label
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        marginTop: 8,
-                        fontSize: pxToRem(13),
-                        cursor: "pointer",
-                      }}
-                      title={t("picker.wiki.title")}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={searchWiki}
-                        onChange={(e) => setSearchWiki(e.target.checked)}
-                      />
-                      {t("picker.wiki")}
-                    </label>
-                  ))}
+                {wikiBudget && (
+                  <SearchMaxStepper
+                    value={maxWiki}
+                    onChange={setMaxWiki}
+                    labelKey="wikimax.label"
+                    titleKey="wikimax.title"
+                    zeroKey="wikimax.zero"
+                    decKey="wikimax.dec"
+                    incKey="wikimax.inc"
+                    max={KB_WIKI_MAX_UI_MAX}
+                  />
+                )}
               </div>
             )}
 

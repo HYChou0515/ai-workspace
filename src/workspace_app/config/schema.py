@@ -733,9 +733,17 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         # `lookup_glossary` (#106) is the deterministic context-card path beside
         # kb_search: an unknown TERM resolves instantly from the glossary, only
         # a QUESTION needing document facts falls through to the slow RAG search.
+        #
+        # #537: `search_wiki` is deliberately absent. It greps wiki pages and hands
+        # back isolated `page:line: text` matches; without `read_file` beside it the
+        # holder can never open the page, follow a `[[wikilink]]`, or cite what it
+        # found — the opposite of the index-first navigation the LLM-wiki design
+        # rests on. #270's A/B convention keeps that leaf with the wiki maintainer /
+        # reader; the KB agent consults the wiki through `ask_wiki`, which delegates
+        # the whole navigation to the reader in a throwaway context.
         "allowed_tools": [
             "kb_search",
-            "search_wiki",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],
@@ -759,7 +767,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "allowed_tools": [
             "kb_search",
-            "search_wiki",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],
@@ -775,7 +783,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "allowed_tools": [
             "kb_search",
-            "search_wiki",
+            "ask_wiki",
             "lookup_glossary",
             "request_wiki_update",
         ],

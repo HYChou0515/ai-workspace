@@ -36,7 +36,6 @@ async def test_subagent_bridge_raises_when_no_config_for_purpose():
     bridge = SubagentBridge(
         spec=None,  # ty: ignore[invalid-argument-type]
         runner=None,  # ty: ignore[invalid-argument-type]
-        kb_runner=None,  # ty: ignore[invalid-argument-type]
         retriever=None,  # ty: ignore[invalid-argument-type]
         catalog=AgentConfigCatalog(),  # default_for(...) → None, purposes() → []
         purpose_fallbacks={},  # no bundled fallback either

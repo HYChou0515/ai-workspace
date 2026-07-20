@@ -18,7 +18,7 @@
 - 產生被查的向量／文字／provenance — 那是 [知識庫：攝取與索引](kb-ingest-index.md)（`kb/ingest.py`、`kb/chunker.py`、`kb/embedder.py`）的事。本子系統只**讀** `DocChunk.embedding` / `SourceDoc.text`。
 - 回合 / 取消 / SSE 的 pump — 那是 [API 與回合引擎](api-and-turns.md) 的 `ChatTurnEngine`。本子系統只提供工具 impl 與 `answer_question` 一個非串流子 agent 入口。
 - agent loop 本身（呼叫工具、重試）— 那是 [Agent 執行時](agent-runtime.md) 的 `AgentRunner`。
-- wiki 檢索是**平行的另一條路**（`search_wiki` / `read_source`），只在 `wiki_query` 開時由 wiki-aware runner 路由，細節見下游連結。
+- wiki 檢索是**平行的另一條路**：KB agent 呼叫 `ask_wiki`（#537），委派給 wiki reader 走 index-first 導覽（`list_files`/`read_file`/`search_wiki`/`read_source`），在拋棄式 context 內跑完，只回綜合答案 + 指回原始文件的 `[n]`。沒有路由旗標；用不用由 agent 依問題性質決定，各來源有自己的每回合配額（0 = 該來源不發工具）。
 
 ## 核心模組
 
@@ -46,7 +46,7 @@
 | --- | --- | --- | --- |
 | `ILlm` | ABC | `src/workspace_app/kb/llm.py` | `LitellmLlm`（生產 LiteLLM）；`FallbackLlm`（#196 failover 包裝，見原始碼）；測試注入 fake |
 | `Embedder` | Protocol/ABC | `src/workspace_app/kb/embedder.py` | `HashEmbedder`（測試）、`LitellmEmbedder`（Ollama／hosted）。實作細節見 [知識庫：攝取與索引](kb-ingest-index.md) |
-| `AgentRunner` | Protocol | `src/workspace_app/api/runner.py` | `LitellmAgentRunner`（live LLM，驅 kb_search loop）、`ScriptedAgentRunner`（測試）、`WikiAwareRunner`（chunk/wiki 路由） |
+| `AgentRunner` | Protocol | `src/workspace_app/api/runner.py` | `LitellmAgentRunner`（live LLM，驅 kb_search loop）、`ScriptedAgentRunner`（測試） |
 | `run_subagent` bridge | callable 接縫 | `src/workspace_app/api/subagent_bridge.py` | `SubagentBridge.run`（泛用 purpose→AgentConfig；`api/app.py` 只留別名 `_run_subagent = subagent_bridge.run`）；`_run_subagent_with_depth`（#280 tier scope ＋ kb_chat composer depth/effort）在 `src/workspace_app/api/chat_send.py` 的 `ChatSendService.send` 內 |
 | `AgentToolContext`（RCA vs KB dual-flavour） | dataclass | `src/workspace_app/agent/context.py` | RCA flavour（sandbox＋files）、KB flavour（retriever＋collection_ids＋kb_passages） |
 | Retriever 純函式注入點 | callable 注入 | `src/workspace_app/kb/retriever.py` | `text_of=_canonical_text`（merge）、`similarity=cosine over _chunk_vec`（mmr）、`on_progress` sink（即時串流） |

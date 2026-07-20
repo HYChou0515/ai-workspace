@@ -12,10 +12,8 @@ import { api } from "../api";
 import { qk } from "../api/queryKeys";
 import { isTerminal } from "../events";
 import {
-  getKbWiki,
   getStored as getKbEnhancementSelection,
   toBodyEnhancements,
-  withWikiFlag,
 } from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import { getKbSearchMax } from "../lib/kbSearchMax";
@@ -213,7 +211,7 @@ export function useAgentInternal(
           reasoningEffort: getReasoningEffort() ?? undefined,
           // Knowledge-search depth + the "Search the wiki" toggle → this turn's
           // ask_knowledge_base lookups (the RCA→KB bridge routes chunk/wiki/both).
-          enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
+          enhancements: toBodyEnhancements(getKbEnhancementSelection()),
           // #334: per-message kb_search-count cap, shared across this turn's
           // ask_knowledge_base calls.
           maxKbSearches: getKbSearchMax(),
