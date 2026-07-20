@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -430,6 +430,8 @@ class ChatTurnEngine:
         # #43: collaborative per-investigation queue/worker sessions, separate
         # from the per-requester `stream()` sessions KB chat uses.
         self._ws_sessions: dict[str, _WorkspaceSession] = {}
+        # Strong references to fire-and-forget drains (see `_spawn_detached`).
+        self._detached: set[asyncio.Task[None]] = set()
         # #349: the cross-pod cancel epoch. Each in-flight turn stamps the epoch
         # it started at; `_watch_epoch` aborts it once the shared epoch advances
         # past that stamp from ANOTHER pod. Defaults to an in-memory backend, so
@@ -765,16 +767,67 @@ class ChatTurnEngine:
 
         async def gen() -> AsyncIterator[str]:
             reducer = _TurnReducer()
+            finished = False
+            try:
+                while True:
+                    item = await queue.get()
+                    if item is None:
+                        finished = True
+                        logger.info("turns: stream turn complete for %s", key)
+                        _persist(reducer)
+                        return
+                    reducer.add(item)  # build the persistable shape
+                    yield to_sse(item)  # stream the raw event to this requester
+            finally:
+                # Starlette CLOSES this generator when the client disconnects, so
+                # persisting only at the sentinel above meant closing the tab
+                # mid-answer lost the ENTIRE turn — while the driver kept running
+                # to completion, producing an answer nobody could ever see. The
+                # turn is the user's whether or not they are still listening, so
+                # keep draining it to the end off to the side.
+                if not finished:
+                    logger.info("turns: requester left %s — draining the turn anyway", key)
+                    self._spawn_detached(self._drain_and_persist(queue, reducer, _persist, key))
+
+        def _persist(reducer: _TurnReducer) -> None:
+            """Save the turn, never letting a persistence failure escape into the
+            response (or into a detached drain, where nothing would catch it)."""
+            try:
+                on_complete(reducer.produced)
+            except Exception:  # noqa: BLE001 — best-effort, already logged
+                logger.exception("turns: failed to persist stream turn for %s", key)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    def _spawn_detached(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Run a fire-and-forget coroutine, holding a STRONG reference until it
+        finishes. asyncio keeps only a weak reference to a bare ``create_task``
+        result, so an un-referenced task can be garbage-collected mid-flight —
+        which here would silently drop the very turn we are trying to save."""
+        task = asyncio.create_task(coro)
+        self._detached.add(task)
+        task.add_done_callback(self._detached.discard)
+
+    async def _drain_and_persist(
+        self,
+        queue: asyncio.Queue[AgentEvent | None],
+        reducer: _TurnReducer,
+        persist: Callable[[_TurnReducer], None],
+        key: str,
+    ) -> None:
+        """Consume a turn to its end after its requester has gone, then save it."""
+        try:
             while True:
                 item = await queue.get()
                 if item is None:
-                    logger.info("turns: stream turn complete for %s", key)
-                    on_complete(reducer.produced)
-                    return
-                reducer.add(item)  # build the persistable shape
-                yield to_sse(item)  # stream the raw event to this requester
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
+                    break
+                reducer.add(item)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 — save whatever the turn produced
+            logger.exception("turns: detached drain failed for %s", key)
+        finally:
+            persist(reducer)
 
     async def cancel(self, key: str) -> None:
         """Interrupt the conversation's in-flight turn (its stream gets

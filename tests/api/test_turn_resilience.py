@@ -19,6 +19,8 @@ Two ways a turn used to vanish without anybody learning of it:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncGenerator
+from typing import cast
 
 from workspace_app.agent import AgentToolContext
 from workspace_app.api import MessageDelta, RunDone
@@ -164,3 +166,46 @@ async def test_an_abandoned_post_future_is_left_alone():
     release.set()
     await asyncio.wait_for(fut2, 3)
     await engine.forget("inv6")
+
+
+async def test_a_disconnected_requester_does_not_lose_the_whole_turn():
+    """The KB-chat path persists from inside the response generator, which
+    Starlette CLOSES when the client goes away. So closing the tab mid-answer
+    meant ``on_complete`` never ran and the entire turn was lost — while the
+    driver kept running to completion, producing an answer nobody could ever see.
+
+    The turn must be persisted whether or not anyone is still listening.
+    """
+    started = asyncio.Event()
+    release = asyncio.Event()
+    saved: list[list] = []
+
+    class _Slow:
+        async def run(self, content, ctx):  # noqa: ANN001, ANN201
+            yield MessageDelta(text="first ")
+            started.set()
+            await release.wait()
+            yield MessageDelta(text="and the rest")
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Slow())  # ty: ignore[invalid-argument-type]
+    resp = await engine.stream(
+        "kb1", "q", AgentToolContext(), on_complete=lambda msgs: saved.append(msgs)
+    )
+
+    # Starlette types body_iterator as a plain AsyncIterable; the response we
+    # build is an async GENERATOR, and closing it is exactly what Starlette does
+    # when the client disconnects.
+    body = cast("AsyncGenerator[str]", resp.body_iterator)
+    await body.__anext__()  # read the first frame, then walk away
+    await asyncio.wait_for(started.wait(), 3)
+    await body.aclose()  # what Starlette does on disconnect
+
+    release.set()
+    for _ in range(200):  # let the detached drain finish
+        if saved:
+            break
+        await asyncio.sleep(0.01)
+
+    assert saved, "the turn was dropped when the requester disconnected"
+    assert "and the rest" in saved[0][0].content
