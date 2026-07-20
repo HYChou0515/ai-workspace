@@ -44,6 +44,7 @@ from .eval import (
     eval_batch_stat_id,
     eval_run_id,
 )
+from .graph import GraphClaim
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
@@ -91,6 +92,7 @@ __all__ = [
     "Notification",
     "EvalBatchStat",
     "EvalResult",
+    "GraphClaim",
     "EvalRun",
     "eval_batch_stat_id",
     "eval_run_id",
@@ -599,6 +601,13 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     spec.add_model(EvalResult, indexed_fields=["collection_id", "run_label"])
     spec.add_model(EvalRun, indexed_fields=["status", "collection_id"])
     spec.add_model(EvalBatchStat, indexed_fields=["collection_id", "run_label"])
+    # #534: flat metric-claim table. collection_id (Ref, auto) + norm_metric +
+    # period indexed to filter a metric's values across decks and (later) rollup;
+    # source_doc_id indexed so a re-extraction can wipe+rewrite one doc's claims.
+    spec.add_model(
+        GraphClaim,
+        indexed_fields=["collection_id", "norm_metric", "period", "source_doc_id"],
+    )
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a
     # verdict get/list is a query; auto routes serve GET /sanity-verdict.
