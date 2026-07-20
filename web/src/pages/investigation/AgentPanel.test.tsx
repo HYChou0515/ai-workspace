@@ -128,7 +128,7 @@ describe("AgentPanel attach (#198)", () => {
     // cannot be re-read, and is the one piece of UI that cannot say which
     // message it belongs to.
     await waitFor(() => expect(screen.getByTestId("composer-hint")).toHaveTextContent("big.bin"));
-    expect(screen.getByTestId("composer-hint")).toHaveTextContent("大小上限");
+    expect(screen.getByTestId("composer-hint")).toHaveTextContent("伺服器拒收");
   });
 });
 

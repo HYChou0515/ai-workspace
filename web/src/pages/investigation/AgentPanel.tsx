@@ -264,7 +264,11 @@ export function AgentPanel({
       // composer, next to the box the files were dropped on.
       const problems = [
         ...res.overQuota.map((p) => `${p} — ${t("workspace.overQuota", { names: p })}`),
-        ...res.tooLarge.map((p) => `${p} — 超過大小上限`),
+        // Don't assert WHOSE limit: a 413 can come from a proxy in front of the
+        // app (ingress-nginx defaults to 1 MB) as easily as from the app's own
+        // cap, and "exceeds the size limit" on a 3 MB file sends the user hunting
+        // for a setting that was never the problem.
+        ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),
         ...res.failed.map((p) => `${p} — 上傳失敗`),
       ];
       if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
@@ -309,7 +313,7 @@ export function AgentPanel({
         setComposerHint(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
       }
       const problems = [
-        ...res.tooLarge.map((p) => `${p} — 超過大小上限`),
+        ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),
         ...res.failed.map((p) => `${p} — 上傳失敗`),
       ];
       if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
