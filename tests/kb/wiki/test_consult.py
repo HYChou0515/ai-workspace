@@ -147,3 +147,22 @@ async def test_collection_reader_guidance_reaches_that_wikis_reader_only():
 
     assert "Answer with a TL;DR." in prompts[a]
     assert "Answer with a TL;DR." not in prompts[b]
+
+
+async def test_progress_reaches_the_caller_while_a_wiki_is_being_read():
+    """A consultation can run for dozens of reader turns. With nothing streamed
+    back the chat shows an empty running card for the whole time, which reads as
+    a hang — so each wiki announces itself on the caller's live tool-log channel."""
+    spec = make_spec(default_user="u")
+    a = _collection(spec, "Process", use_wiki=True)
+    b = _collection(spec, "Equipment", use_wiki=True)
+    lines: list[bytes] = []
+
+    consult = make_wiki_consultant(_Reader(), spec, [a, b])
+    assert consult is not None
+    await consult("q", lines.append)
+
+    assert [x.decode() for x in lines] == [
+        "Reading the Process wiki…\n",
+        "Reading the Equipment wiki…\n",
+    ]
