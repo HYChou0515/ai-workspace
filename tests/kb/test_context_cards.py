@@ -68,6 +68,27 @@ def test_context_card_round_trip():
     assert got.norm_keys == ["capping", "m4"]
     assert got.title == "Metal-4 capping"
     assert got.body == "The capping layer over metal 4."
+    # #518: a card written without links carries an EMPTY reference list — the
+    # additive default is what makes "empty ⇒ today's behaviour" byte-for-byte true.
+    assert got.reference_doc_ids == []
+
+
+def test_context_card_carries_reference_doc_ids():
+    """#518: a card may link the documents that back it — the card-anchored precision
+    path scopes a vector search to exactly these. Optional and never required."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rm = spec.get_resource_manager(ContextCard)
+    rev = rm.create(
+        ContextCard(
+            collection_id=cid,
+            keys=["M4"],
+            norm_keys=derive_norm_keys(["M4"]),
+            body="The fourth metal layer.",
+            reference_doc_ids=["doc-a", "doc-b"],
+        )
+    )
+    assert rm.get(rev.resource_id).data.reference_doc_ids == ["doc-a", "doc-b"]
 
 
 def test_lookup_exact_hit_is_normalized():

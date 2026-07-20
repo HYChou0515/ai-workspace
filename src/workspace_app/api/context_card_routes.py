@@ -28,6 +28,9 @@ class ContextCardBody(BaseModel):
     keys: list[str]
     title: str = ""
     body: str = ""
+    reference_doc_ids: list[str] = []
+    """#518: the documents that back this card. Optional — omitted ⇒ no links, which
+    is today's behaviour."""
 
 
 class ContextCardPatchBody(BaseModel):
@@ -37,6 +40,11 @@ class ContextCardPatchBody(BaseModel):
     keys: list[str]
     title: str = ""
     body: str = ""
+    reference_doc_ids: list[str] | None = None
+    """#518: tri-state, unlike the create body. ``None`` (the default, and what every
+    client that predates the field sends) ⇒ KEEP the card's existing links; a list ⇒
+    replace them (``[]`` clears). An edit form that doesn't render links must not
+    silently discard them just by saving."""
 
 
 def register_context_card_actions(spec: SpecStar) -> None:
@@ -57,6 +65,7 @@ def register_context_card_actions(spec: SpecStar) -> None:
             norm_keys=derive_norm_keys(keys),
             title=body.title,
             body=body.body,
+            reference_doc_ids=body.reference_doc_ids,
         )
 
     @spec.update_action("context-card", path="edit", label="Edit context card", mode="update")
@@ -70,6 +79,12 @@ def register_context_card_actions(spec: SpecStar) -> None:
             norm_keys=derive_norm_keys(body.keys),
             title=body.title,
             body=body.body,
+            # #518: absent ⇒ carry the existing links forward (see the body's docstring).
+            reference_doc_ids=(
+                existing.reference_doc_ids
+                if body.reference_doc_ids is None
+                else body.reference_doc_ids
+            ),
         )
 
 

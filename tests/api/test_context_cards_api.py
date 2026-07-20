@@ -55,6 +55,25 @@ def test_author_falls_back_to_title_when_keys_are_only_blank(harness):
     assert cards[0].norm_keys == ["m4"]
 
 
+def test_author_action_stores_reference_doc_ids(harness):
+    """#518: a card may be authored with the documents that back it."""
+    cid = _collection(harness.spec)
+    r = harness.client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "body": "b", "reference_doc_ids": ["d1", "d2"]},
+    )
+    assert r.status_code in (200, 201)
+    assert _cards(harness.spec, cid)[0].reference_doc_ids == ["d1", "d2"]
+
+
+def test_author_action_defaults_reference_doc_ids_to_empty(harness):
+    """Omitting the field is the norm (today's FE never sends it) — a card with no
+    links behaves exactly as before."""
+    cid = _collection(harness.spec)
+    harness.client.post("/context-card/author", json={"collection_id": cid, "keys": ["M4"]})
+    assert _cards(harness.spec, cid)[0].reference_doc_ids == []
+
+
 def test_edit_action_recomputes_norm_keys(harness):
     cid = _collection(harness.spec)
     harness.client.post(
@@ -74,6 +93,46 @@ def test_edit_action_recomputes_norm_keys(harness):
     assert cards[0].norm_keys == ["pecvd", "sicn"]
     assert cards[0].title == "t2"
     assert cards[0].collection_id == cid  # collection preserved across edit
+
+
+def test_edit_action_preserves_reference_doc_ids_when_omitted(harness):
+    """#518 REGRESSION GUARD: the edit action rebuilds the whole card struct, so a
+    field the FE form doesn't know about is erased on every save. The links must
+    survive an edit that never mentions them — otherwise curating a card's evidence
+    is undone the next time anyone fixes a typo in its body."""
+    cid = _collection(harness.spec)
+    harness.client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "body": "b", "reference_doc_ids": ["d1"]},
+    )
+    rid = _card_ids(harness.spec, cid)[0]
+
+    r = harness.client.post(
+        f"/context-card/{rid}/edit", json={"keys": ["M4"], "title": "t2", "body": "b2"}
+    )
+    assert r.status_code in (200, 201)
+    card = _cards(harness.spec, cid)[0]
+    assert card.body == "b2"  # the edit landed…
+    assert card.reference_doc_ids == ["d1"]  # …without dropping the curated links
+
+
+def test_edit_action_replaces_reference_doc_ids_when_sent(harness):
+    """The other side of the tri-state: sending the field REPLACES the links, and an
+    explicit empty list clears them."""
+    cid = _collection(harness.spec)
+    harness.client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "reference_doc_ids": ["d1"]},
+    )
+    rid = _card_ids(harness.spec, cid)[0]
+
+    harness.client.post(
+        f"/context-card/{rid}/edit", json={"keys": ["M4"], "reference_doc_ids": ["d2", "d3"]}
+    )
+    assert _cards(harness.spec, cid)[0].reference_doc_ids == ["d2", "d3"]
+
+    harness.client.post(f"/context-card/{rid}/edit", json={"keys": ["M4"], "reference_doc_ids": []})
+    assert _cards(harness.spec, cid)[0].reference_doc_ids == []
 
 
 def test_external_lookup_returns_cards_keyed_by_term(harness):
