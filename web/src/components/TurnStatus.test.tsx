@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentEvent } from "../events";
@@ -129,5 +129,54 @@ describe("TurnStatus", () => {
     render(<TurnStatus log={{ ...log, streaming: true, metrics: down }} />);
     expect(screen.queryByText(/還原工作區/)).not.toBeInTheDocument();
     expect(screen.getByText(/running/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * After 40 seconds the copy stopped changing and the counter just climbed — past
+ * a minute, past an hour. The only ways out were Stop (which abandons the turn)
+ * and starting a new chat (which abandons the thread). A wait that cannot be
+ * acted on is the state the user reads as "it's broken", so a long one has to
+ * offer the obvious action: ask again.
+ */
+describe("TurnStatus — a way out of a long wait", () => {
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("offers no retry while the wait is still ordinary", () => {
+    render(<TurnStatus log={streaming()} onRetry={vi.fn()} />);
+    expect(screen.queryByTestId("turn-retry")).not.toBeInTheDocument();
+  });
+
+  it("offers a retry once the wait has gone on too long", async () => {
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} onRetry={vi.fn()} />);
+    await act(async () => {
+      vi.advanceTimersByTime(90_000);
+    });
+    expect(screen.getByTestId("turn-retry")).toBeInTheDocument();
+  });
+
+  it("asks again when the retry is taken", async () => {
+    vi.useFakeTimers();
+    const onRetry = vi.fn();
+    render(<TurnStatus log={streaming()} onRetry={onRetry} />);
+    await act(async () => {
+      vi.advanceTimersByTime(90_000);
+    });
+    fireEvent.click(screen.getByTestId("turn-retry"));
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  // Someone else's turn is not yours to restart.
+  it("offers nothing when the caller supplies no retry", async () => {
+    vi.useFakeTimers();
+    render(<TurnStatus log={streaming()} />);
+    await act(async () => {
+      vi.advanceTimersByTime(90_000);
+    });
+    expect(screen.queryByTestId("turn-retry")).not.toBeInTheDocument();
   });
 });

@@ -7,6 +7,7 @@
  * logic (path derivation, draft text, upload orchestration with progress) so the UI
  * in AgentPanel stays thin and the behaviour is unit-testable.
  */
+import { isInconclusive } from "../../api/writeVerified";
 import { mapWithConcurrency } from "../../api/concurrency";
 
 /** The folder a chat attach stages into for the item's active profile (#198), from
@@ -86,9 +87,18 @@ export async function runAttach(opts: {
   uploadDir: string;
   upload: (path: string, file: File, onChunk?: (loaded: number) => void) => Promise<void>;
   onProgress?: (p: AttachProgress) => void;
+  /** Ask whether `path` actually exists now.
+   *
+   * A network drop (status 0) or a gateway status arrives AFTER the body has
+   * been sent, so the server may well have stored the file already — the report
+   * "upload failed" was then both wrong and expensive: the user is told to retry
+   * a file that is on disk, and its path never reaches their message, so the
+   * agent cannot see the file they just attached. An inconclusive result is a
+   * question, not an answer. Omitted → inconclusive counts as failed. */
+  verify?: (path: string) => Promise<boolean>;
   concurrency?: number;
 }): Promise<AttachResult> {
-  const { files, uploadDir, upload, onProgress, concurrency = 4 } = opts;
+  const { files, uploadDir, upload, onProgress, verify, concurrency = 4 } = opts;
   const totalBytes = files.reduce((n, f) => n + f.size, 0);
   const totalFiles = files.length;
   const loaded = new Array<number>(totalFiles).fill(0);
@@ -119,7 +129,14 @@ export async function runAttach(opts: {
       const status = (err as { status?: number }).status;
       if (status === 413) tooLarge[i] = path;
       else if (status === 507) overQuota[i] = path;
-      else failed[i] = path;
+      else if (isInconclusive(err) && verify) {
+        // The request was cut, not refused — go and look before accusing it.
+        // A definite rejection (413/507) is never second-guessed: asking would
+        // only be slower, and could mistake a leftover file for a success.
+        const landed = await verify(path).catch(() => false);
+        if (landed) uploaded[i] = path;
+        else failed[i] = path;
+      } else failed[i] = path;
     } finally {
       doneFiles++;
       report();

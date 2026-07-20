@@ -489,3 +489,37 @@ async def test_connect_failure_is_not_retried_and_maps_to_not_found():
         with pytest.raises(SandboxNotFound):
             await sb.exists(_rid_handle(), "/")
     assert calls["n"] == 1  # gone → rebuild, never retried
+
+
+async def test_exec_read_timeout_is_busy_not_a_missing_sandbox():
+    """A read timeout during `exec` means the host is BUSY, not gone.
+
+    `_request` already gets this right by catching `httpx.TimeoutException`
+    BEFORE `TransportError` (it is a subclass). `exec` did not, so an operator
+    who set a non-zero `read_timeout` shorter than the host's `exec_timeout` got
+    `SandboxNotFound` — which `registry` treats as "the sandbox is gone, rebuild
+    it". That is the split-brain the `SandboxBusy` docstring exists to forbid:
+    a fresh sandbox is built while the original command runs on to completion in
+    the old one.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("still running", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        with pytest.raises(SandboxBusy):
+            await sb.exec(_rid_handle(), ["sleep", "600"])
+
+
+async def test_exec_transport_failure_is_still_a_missing_sandbox():
+    """A genuine transport failure (the pod went away) must keep mapping to
+    SandboxNotFound, so the rebuild path still works."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("pod gone", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        with pytest.raises(SandboxNotFound):
+            await sb.exec(_rid_handle(), ["echo", "hi"])

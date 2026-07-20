@@ -794,6 +794,13 @@ export const messages = {
     "zh-TW": "「{name}」沒有上傳:工作區空間已滿。請先刪除不需要的檔案，再重新上傳。",
     en: "{name} wasn't uploaded — the workspace is full. Delete files you no longer need, then try again.",
   },
+  // A failure we could not attribute. Report WHAT happened rather than guessing
+  // WHY: blaming the size limit for a dropped connection sends the user after a
+  // setting that was never involved.
+  "workspace.upload.error": {
+    "zh-TW": "「{name}」上傳失敗:{reason}",
+    en: "{name} failed to upload: {reason}",
+  },
   "workspace.upload.failed": {
     "zh-TW": "「{name}」沒有上傳:可能超過單一檔案的大小上限。",
     en: "{name} wasn't uploaded — it may exceed the single-file size limit.",

@@ -18,7 +18,7 @@ afterEach(cleanup);
 describe("ConnectionNotice", () => {
   it("says nothing while the stream is healthy", () => {
     const { container } = render(
-      <ConnectionNotice connection={{ state: "live", error: null, attempts: 0 }} />,
+      <ConnectionNotice connection={{ state: "live", receiving: true, error: null, attempts: 0 }} />,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -26,7 +26,7 @@ describe("ConnectionNotice", () => {
   it("says nothing during the very first connect", () => {
     // A notice on first paint would flag every page load as a problem.
     const { container } = render(
-      <ConnectionNotice connection={{ state: "connecting", error: null, attempts: 0 }} />,
+      <ConnectionNotice connection={{ state: "connecting", receiving: false, error: null, attempts: 0 }} />,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -34,7 +34,7 @@ describe("ConnectionNotice", () => {
   it("announces a reconnect in progress", () => {
     render(
       <ConnectionNotice
-        connection={{ state: "reconnecting", error: "stream failed: 504", attempts: 1 }}
+        connection={{ state: "reconnecting", receiving: false, error: "stream failed: 504", attempts: 1 }}
       />,
     );
     expect(screen.getByTestId("connection-notice")).toBeInTheDocument();
@@ -46,7 +46,7 @@ describe("ConnectionNotice", () => {
   it("escalates once the retries keep failing", () => {
     render(
       <ConnectionNotice
-        connection={{ state: "reconnecting", error: "stream failed: 502", attempts: 5 }}
+        connection={{ state: "reconnecting", receiving: false, error: "stream failed: 502", attempts: 5 }}
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent("連線持續中斷");
@@ -57,7 +57,7 @@ describe("ConnectionNotice", () => {
   it("reassures that nothing is lost", () => {
     render(
       <ConnectionNotice
-        connection={{ state: "reconnecting", error: "stream failed: 504", attempts: 1 }}
+        connection={{ state: "reconnecting", receiving: false, error: "stream failed: 504", attempts: 1 }}
       />,
     );
     expect(screen.getByRole("status")).toHaveTextContent("不會遺失");

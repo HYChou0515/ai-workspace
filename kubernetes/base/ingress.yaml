@@ -13,6 +13,18 @@ metadata:
     # proxy keeps the connection warm. The message POST no longer needs a long
     # timeout — it detaches a long turn and returns 202 (send_await_timeout).
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    # Uploads: ingress-nginx defaults proxy-body-size to 1 MB, so WITHOUT this a
+    # few-MB attachment is rejected by the proxy with a 413 that never reaches
+    # the app — the user is told "exceeds the size limit" while the server logs
+    # show nothing at all, two thousand times below the limit the app believes it
+    # is enforcing (filestore.max_file_size, ~2 GB). Keep the two in step;
+    # tests/test_ingress_upload_limit.py fails if they drift.
+    nginx.ingress.kubernetes.io/proxy-body-size: "2g"
+    # The upload handler streams `request.stream()` and enforces the cap
+    # incrementally, so it can refuse a too-large file early. Buffering the whole
+    # body here first defeats that: a 2 GB upload would be spooled to the proxy's
+    # disk in full before the app is allowed to see a single byte of it.
+    nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
     # Per-INVESTIGATION sticky routing (#16): the in-pod runtime (sandbox /
     # kernel / in-flight broadcast turn) lives on one pod, and an item is shared
     # across its users + chats — so every request for the same item must hit the

@@ -158,6 +158,33 @@ export function AgentPanel({
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  // Messages on a shared item SERIALIZE server-side; they do not cancel each
+  // other (#43). So a turn started by SOMEONE ELSE is no reason to lock this
+  // viewer out — the backend will happily queue behind it, and taking that away
+  // left a spectator with a spinner they did not start and a box they could not
+  // type in. Your own in-flight turn still blocks: Stop is the affordance there.
+  const othersTurn = log.streaming && log.streamingBy != null && log.streamingBy !== me;
+  // Standing note for as long as their turn runs: you may send, and what will
+  // happen if you do.
+  /** Abandon a stalled attempt and ask the same question again.
+   *
+   * Cancel FIRST: the backend serializes turns, so sending without stopping
+   * would queue the retry behind the very turn that is stuck. The question is
+   * taken from the thread rather than the draft box, which the user may already
+   * have typed something else into. */
+  const retryTurn = () => {
+    const asked = [...log.entries]
+      .reverse()
+      .find((e) => e.kind === "message" && e.message.role === "user");
+    if (asked?.kind !== "message") return;
+    cancel();
+    setComposerHint("已中止並重新提問。");
+    void send(asked.message.content);
+  };
+
+  const queueNote = othersTurn
+    ? `${log.streamingBy} 正在對話中。你現在送出的訊息會排在後面。`
+    : null;
   const dialog = useDialog();
 
   // #38: "undo to here" on the user prompt at entry `i` — drop that turn
@@ -189,7 +216,7 @@ export function AgentPanel({
       setDraft(restore);
       composerRef.current?.focus();
     } catch (err) {
-      alert(`Undo failed: ${err instanceof Error ? err.message : String(err)}`);
+      setComposerHint(`復原失敗：${err instanceof Error ? err.message : String(err)}`);
     }
   };
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
@@ -225,6 +252,14 @@ export function AgentPanel({
   // #198: stage one or more files (or a whole folder) into the profile's upload_dir,
   // then drop their path(s) into the draft. Any type, any size — the backend's 413 cap
   // is the only gate; an over-size / failed file is reported and the rest still land.
+  /** Did `path` actually land? Answers the inconclusive upload outcomes (a
+   * network drop or a gateway status arrives after the body was sent, so the
+   * file may well be on disk) instead of accusing the upload of failing. */
+  const attachmentLanded = async (path: string): Promise<boolean> => {
+    const listed = await api.listFiles(slug, investigationId);
+    return listed.some((f) => f.path === path || f.path === `/${path}`);
+  };
+
   const doAttach = async (files: File[]) => {
     if (!files.length || attaching) return;
     setProgress({
@@ -242,6 +277,7 @@ export function AgentPanel({
             onProgress: (loaded) => onChunk?.(loaded),
           }),
         onProgress: setProgress,
+        verify: attachmentLanded,
       });
       if (res.uploaded.length) {
         const ref = attachPrompt(res.uploaded) + "\n\n";
@@ -250,14 +286,19 @@ export function AgentPanel({
       }
       // #245: an over-quota (507) rejection is its own line so the user sees
       // "out of space", not a vague size error.
-      if (res.overQuota.length) {
-        alert(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
-      }
+      // An OS alert() interrupts, cannot be re-read, and is the one piece of UI
+      // that cannot say WHICH message it belongs to. Keep the report in the
+      // composer, next to the box the files were dropped on.
       const problems = [
-        ...res.tooLarge.map((p) => `${p} — exceeds the size limit`),
-        ...res.failed.map((p) => `${p} — upload failed`),
+        ...res.overQuota.map((p) => `${p} — ${t("workspace.overQuota", { names: p })}`),
+        // Don't assert WHOSE limit: a 413 can come from a proxy in front of the
+        // app (ingress-nginx defaults to 1 MB) as easily as from the app's own
+        // cap, and "exceeds the size limit" on a 3 MB file sends the user hunting
+        // for a setting that was never the problem.
+        ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),
+        ...res.failed.map((p) => `${p} — 上傳失敗`),
       ];
-      if (problems.length) alert(`Some files weren't attached:\n${problems.join("\n")}`);
+      if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
     } finally {
       setProgress(null);
       // #245: refresh the usage bar — a success grew `used`, a 507 left it full.
@@ -284,6 +325,7 @@ export function AgentPanel({
             onProgress: (loaded) => onChunk?.(loaded),
           }),
         onProgress: setProgress,
+        verify: attachmentLanded,
       });
       // runAttach derives each path via uploadPathFor, so re-deriving pairs an uploaded
       // path back to its source blob for the thumbnail.
@@ -295,13 +337,13 @@ export function AgentPanel({
       }));
       if (fresh.length) setImageChips((prev) => [...prev, ...fresh]);
       if (res.overQuota.length) {
-        alert(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
+        setComposerHint(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
       }
       const problems = [
-        ...res.tooLarge.map((p) => `${p} — exceeds the size limit`),
-        ...res.failed.map((p) => `${p} — upload failed`),
+        ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),
+        ...res.failed.map((p) => `${p} — 上傳失敗`),
       ];
-      if (problems.length) alert(`Some files weren't attached:\n${problems.join("\n")}`);
+      if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
     } finally {
       setProgress(null);
       queryClient.invalidateQueries({ queryKey: qk.workspaceUsage(slug, investigationId) });
@@ -332,7 +374,7 @@ export function AgentPanel({
 
   const submit = () => {
     const text = draft.trim();
-    if (log.streaming) {
+    if (log.streaming && !othersTurn) {
       // Pressing Enter mid-turn used to do NOTHING — the textarea stays enabled,
       // so the user types a whole message, hits Enter, and gets no reaction at
       // all. During any of the stuck states that is indistinguishable from the
@@ -486,7 +528,7 @@ export function AgentPanel({
           />
         ))}
         <ConnectionNotice connection={connection} />
-        <TurnStatus log={log} />
+        <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} />
         {log.error && (
           <div
             style={{
@@ -504,7 +546,7 @@ export function AgentPanel({
         </div>
       </div>
 
-      {composerHint && (
+      {(composerHint ?? queueNote) && (
         <div
           data-testid="composer-hint"
           role="status"
@@ -514,7 +556,7 @@ export function AgentPanel({
             color: "var(--text-paper-d)",
           }}
         >
-          {composerHint}
+          {composerHint ?? queueNote}
         </div>
       )}
 

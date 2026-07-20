@@ -218,11 +218,24 @@ export function FileTree({
         // #245: a 507 is the workspace quota (out of space), distinct from the
         // 413 single-file size cap — say which so the fix is obvious. #538: both
         // go through i18n, and the full-workspace one names the remedy.
+        //
+        // Everything else used to fall through to the SIZE message, which is a
+        // guess stated as a cause: a dropped connection or a 403 on a 3 MB file
+        // reported a size problem that did not exist and sent the user hunting
+        // for a limit that was never involved.
+        // An inconclusive failure (the connection was cut after the body went
+        // out) has already been resolved against the file list by the service
+        // boundary — if it reaches here, the write really did not land.
         const status = (err as { status?: number }).status;
         alert(
           status === 507
             ? t("workspace.upload.full", { name: f.name })
-            : t("workspace.upload.failed", { name: f.name }),
+            : status === 413
+              ? t("workspace.upload.failed", { name: f.name })
+              : t("workspace.upload.error", {
+                  name: f.name,
+                  reason: err instanceof Error ? err.message : String(err),
+                }),
         );
         continue;
       }

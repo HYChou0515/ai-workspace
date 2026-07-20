@@ -282,6 +282,52 @@ describe("<FileTree /> upload target", () => {
     expect(writeFile.mock.calls[0]![0]).toBe("/mydir/up.md");
   });
 
+  /**
+   * Every non-507 failure showed "it may exceed the single-file size limit" —
+   * a GUESS, stated as the cause. So a network drop or a gateway hiccup on a
+   * 3 MB file reported a size problem that did not exist, and sent the user
+   * hunting for a limit that was never involved.
+   *
+   * Worse, those failures arrive AFTER the body has been sent, so the server
+   * has usually stored the file: the user is told the upload failed for the
+   * wrong reason about a file that is sitting right there.
+   */
+  it("does not blame the size limit for a failure that has nothing to do with size", async () => {
+    const user = userEvent.setup();
+    const alertSpy = vi.fn();
+    vi.stubGlobal("alert", alertSpy);
+    const writeFile = vi.fn(async () => {
+      throw Object.assign(new Error("403"), { status: 403 });
+    });
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    await user.click(screen.getByText("mydir"));
+    fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+    expect(String(alertSpy.mock.calls[0]![0])).not.toContain("大小上限");
+    vi.unstubAllGlobals();
+  });
+
+  // Resolving an inconclusive failure against the file list now lives at the
+  // service boundary (api/writeVerified), so every writer gets it — by the time
+  // an error reaches the tree, the write really did not land, and the tree's job
+  // is only to report it without inventing a reason.
+  it("still reports a cut connection that really did lose the file", async () => {
+    const user = userEvent.setup();
+    const alertSpy = vi.fn();
+    vi.stubGlobal("alert", alertSpy);
+    const writeFile = vi.fn(async () => {
+      throw Object.assign(new Error("network error"), { status: 0 });
+    });
+    const listFiles = vi.fn(async () => [{ path: "/mydir/a.md", size: 1 }]); // not there
+    renderWith(spyService({ writeFile, listFiles }), [{ path: "/mydir/a.md", size: 1 }]);
+    await user.click(screen.getByText("mydir"));
+    fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
+
+    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+    vi.unstubAllGlobals();
+  });
+
   it("a folder's context menu uploads files into that folder", async () => {
     const user = userEvent.setup();
     const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
@@ -316,7 +362,10 @@ describe("<FileTree /> upload target", () => {
     const alertSpy = vi.fn();
     vi.stubGlobal("alert", alertSpy);
     const writeFile = vi.fn(async () => {
-      throw new Error("413");
+      // A real rejection carries its STATUS (the client throws HttpError); a
+      // message that merely reads "413" is not a 413, and the size message is
+      // now reserved for the status that actually means it.
+      throw Object.assign(new Error("write failed: 413"), { status: 413 });
     });
     renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
     const file = new File(["x"], "up.md", { type: "text/markdown" });
