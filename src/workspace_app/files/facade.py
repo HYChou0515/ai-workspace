@@ -422,15 +422,9 @@ class WorkspaceFiles:
             )
             return None
         sizes = {e.path: e.size for e in entries if not should_ignore(e.path, self._ignores)}
-        # A pod serves many items over its life and each measurement is the size
-        # of a file tree, so expired ones are dropped rather than left to
-        # accumulate. Piggy-backed on the walk, which happens at most once per
-        # window per workspace, so the sweep can't become the hot path.
-        for other, measured in list(self._tree.items()):
-            if now - measured.at >= self._window:
-                del self._tree[other]
-        self._tree[workspace_id] = _Measurement(now, sizes)
-        return self._tree[workspace_id]
+        measured = _Measurement(now, sizes)
+        self._install(workspace_id, measured)
+        return measured
 
     def record_measurement(self, workspace_id: str, sizes: dict[str, int]) -> None:
         """Install a measurement taken elsewhere — by the mirror sweep, which
@@ -441,7 +435,19 @@ class WorkspaceFiles:
         expired, so that user pays for the traversal and sees its errors. The
         sweep filters the same ignore set it mirrors with, so the quota counts
         exactly the bytes that reach the durable store."""
-        self._tree[workspace_id] = _Measurement(self._now(), sizes)
+        self._install(workspace_id, _Measurement(self._now(), sizes))
+
+    def _install(self, workspace_id: str, measured: _Measurement) -> None:
+        """Store a measurement, dropping any that have expired.
+
+        The expiry rides along with EVERY install, not just the walking one: a
+        pod serves many items over its life and each measurement is the size of
+        a file tree, so once the sweep became the normal source and walks became
+        rare, cleanup that only happened on a walk stopped happening at all."""
+        for other, previous in list(self._tree.items()):
+            if measured.at - previous.at >= self._window:
+                del self._tree[other]
+        self._tree[workspace_id] = measured
 
     def _record(self, workspace_id: str, path: str, size: int | None) -> None:
         """Fold a write (``size``) or a delete (``None``) this facade just made

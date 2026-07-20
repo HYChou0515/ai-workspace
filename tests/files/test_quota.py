@@ -389,6 +389,21 @@ async def test_an_unreachable_sandbox_degrades_to_the_durable_number():
         await files.write("ws1", "/more.bin", b"y" * 400)
 
 
+async def test_measurements_from_the_sweep_are_also_expired():
+    # The expiry used to ride along with the walk. Once the sweep became the
+    # normal source of measurements the walk stopped happening, and with it the
+    # cleanup — so every item this pod ever swept stayed in memory for the life
+    # of the process. There is no public surface for "how much is retained", so
+    # this reads the store directly.
+    clock = {"t": 0.0}
+    files = WorkspaceFiles(MemoryFileStore(), usage_window=5.0, now=lambda: clock["t"])
+    files.record_measurement("gone-1", {"/a": 1})
+    files.record_measurement("gone-2", {"/a": 1})
+    clock["t"] = 6.0
+    files.record_measurement("still-here", {"/a": 1})
+    assert set(files._tree) == {"still-here"}  # noqa: SLF001 — no public surface
+
+
 class _NoUsageStore:
     """A FileStore without usage accounting — like the wiki-page store, which
     is never quota-gated. `workspace_usage` / `file_size` are duck-typed, so the
