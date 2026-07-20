@@ -131,6 +131,27 @@ async def test_image_to_knowledge_runs_end_to_end_and_anchors_each_card() -> Non
     ]
 
 
+def test_image_to_knowledge_term_prompt_demands_a_verbatim_copy() -> None:
+    """REGRESSION GUARD (live-check finding): the term prompt used to list the KINDS of
+    term to pick ("a part number, tool id, step name, or the subject's proper name") and
+    a small model answered with the description itself — the card was created with key
+    `subject's proper name`, which nobody will ever search for. The card is the whole
+    precision half of #520, and it fails SILENTLY: the run succeeds, the card exists, and
+    it is simply unreachable. So the prompt must demand a verbatim copy and say outright
+    that a description is not an answer."""
+    agents = [s for s in _flatten(load_shared_workflow("image-to-knowledge")) if _is_agent(s)]
+    prompt = next(s.prompt for s in agents if "term" in (s.outputs or {}))
+    assert "verbatim" in prompt.lower()
+    assert "not" in prompt.lower() and "descri" in prompt.lower()  # forbids describing
+    # the failure mode is naming CATEGORIES of term as if they were the answer
+    assert "the subject's proper name" not in prompt
+    # a whole sentence is nearly as dead a key as a description — nobody types it
+    assert "sentence" in prompt.lower()
+    # measured: the VLM transcribes headings reliably and mangles prose, so a term
+    # lifted from prose is disproportionately likely to be a misreading
+    assert "heading" in prompt.lower()
+
+
 def _flatten(d):  # type: ignore[no-untyped-def]
     """Every step, walking one level into a map's `do` (the DSL allows no deeper)."""
     out = []

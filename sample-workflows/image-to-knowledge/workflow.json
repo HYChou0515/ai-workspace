@@ -36,7 +36,7 @@
           "name": "index",
           "phase": "read",
           "reads": ["notes/{image}.md"],
-          "prompt": "Read notes/{image}.md. Pick the ONE term a colleague would type when looking for this — a part number, tool id, step name, or the subject's proper name — and write a two-sentence summary of the note. Reply with a JSON object holding: term (that lookup term), title (a short display name), summary (the two sentences), and source (set it to exactly notes/{image}.md).",
+          "prompt": "Read notes/{image}.md and COPY OUT the one phrase from it that a colleague would type into a search box to find this — the most specific identifier the note actually contains. The term MUST appear verbatim in the note, and must be SHORT — at most a few words, the kind of thing someone types into a search box, never a whole sentence or a finding. Prefer an identifier from the note's title or a heading over one buried in prose — a vision model transcribes headings far more reliably than body text, so a term lifted from prose is more likely to be a misreading. Copy the characters; do not describe what to look for. Example: for a note headed 'CMP PAD CONDITIONER PN-4471' saying 'pad glazing raised defect counts', the term is 'PN-4471' — NOT 'a part number' or 'the heading' (those describe the term instead of being it), and NOT 'pad glazing raised defect counts' (that is a finding, not a lookup key). Also write a two-sentence summary of the note. Reply with a JSON object holding: term (the copied phrase), title (a short display name), summary (the two sentences), and source (set it to exactly notes/{image}.md).",
           "outputs": {
             "term": "str",
             "title": "str",
