@@ -7,6 +7,8 @@ uses — a warm workspace is measured from the live sandbox, so bytes the agent
 created there (exec output, downloads) count and bytes it deleted stop counting.
 """
 
+import asyncio
+
 import pytest
 
 from workspace_app.files.facade import WorkspaceFiles, WorkspaceFull
@@ -285,6 +287,40 @@ async def test_room_for_nothing_is_always_available():
         await files.ensure_room_for("ws1", 1)
     unlimited = WorkspaceFiles(MemoryFileStore())
     await unlimited.ensure_room_for("ws1", 10**9)
+
+
+async def test_two_racing_measurements_walk_once_and_do_not_lose_a_write():
+    # Both coroutines miss the memo and both would walk; whichever finished LAST
+    # installed its map, discarding any write recorded against the other one. The
+    # workspace then under-counted for the rest of the window — by however many
+    # writes raced, not by a bounded amount.
+    fs = MemoryFileStore()
+    sb = _WalkCountingSandbox()
+    handle = await sb.create(SandboxSpec())
+    gate = asyncio.Event()
+
+    inner_walk = sb.walk
+
+    async def _slow_walk(h: SandboxHandle, root: str):
+        await gate.wait()
+        return await inner_walk(h, root)
+
+    sb.walk = _slow_walk  # ty: ignore[invalid-assignment]
+
+    async def _resolve(_ws: str) -> SandboxHandle:
+        return handle
+
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve)
+    await sb.upload(handle, b"x" * 100, "/seed.bin")
+
+    racers = [asyncio.create_task(files.workspace_usage("ws1")) for _ in range(2)]
+    await asyncio.sleep(0)
+    gate.set()
+    assert await asyncio.gather(*racers) == [100, 100]
+    assert sb.walk_calls == 1  # the second took the first's measurement
+
+    await files.write("ws1", "/added.bin", b"y" * 50)
+    assert await files.workspace_usage("ws1") == 150  # the write survived
 
 
 class _NoUsageStore:

@@ -121,6 +121,12 @@ class WorkspaceFiles:
         self._window = usage_window
         self._now = now
         self._tree: dict[str, tuple[float, dict[str, int]]] = {}
+        # One walk per workspace at a time. Without this, two coroutines that
+        # both miss the memo both walk, and whichever finishes LAST installs its
+        # map — silently discarding any write the other recorded in between, so
+        # the workspace under-counts for the rest of the window by however many
+        # writes raced (a `gather` over several artifacts, say).
+        self._walk_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def _warm(self, workspace_id: str) -> tuple[Sandbox, SandboxHandle] | None:
         """The item's ONE live sandbox, or None when it is globally cold (so the
@@ -332,10 +338,22 @@ class WorkspaceFiles:
         if warm is None:
             self._tree.pop(workspace_id, None)  # went cold; don't serve stale sizes
             return None
-        now = self._now()
         cached = self._tree.get(workspace_id)
-        if cached is not None and now - cached[0] < self._window:
+        if cached is not None and self._now() - cached[0] < self._window:
             return cached[1]
+        async with self._walk_locks[workspace_id]:
+            # Re-check: whoever held the lock has just installed a fresh map, and
+            # taking it is the point — a second walk would overwrite their
+            # measurement along with any write recorded against it.
+            cached = self._tree.get(workspace_id)
+            if cached is not None and self._now() - cached[0] < self._window:
+                return cached[1]
+            return await self._walk_into_memo(workspace_id, warm)
+
+    async def _walk_into_memo(
+        self, workspace_id: str, warm: tuple[Sandbox, SandboxHandle]
+    ) -> dict[str, int]:
+        now = self._now()
         sb, h = warm
         tree = {
             e.path: e.size
