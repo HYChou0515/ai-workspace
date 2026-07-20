@@ -579,6 +579,37 @@ class WorkspaceFiles:
             return [e.path for e in await sb.walk(h, prefix or "/")]
         return await self._fs.ls(workspace_id, prefix)
 
+    async def list_dir(self, workspace_id: str, path: str = "") -> tuple[list[str], list[str]]:
+        """ONE directory level: the files directly in `path`, and its immediate
+        subdirectories — `ls`, not `find`. Both lists are sorted `/`-rooted
+        paths; a subdirectory carries a trailing `/`.
+
+        A recursive listing's size is whatever the workspace happens to hold,
+        which is why the agent-facing `list_files` reads a level at a time and
+        descends. The split itself is derived from the recursive walk, since
+        neither the Sandbox `walk` nor a FileStore key scan takes a depth —
+        so this bounds what the MODEL sees, not yet what the backend scans.
+        Pushing the depth down into both backends is the follow-up.
+
+        Directories are inferred from the paths of the files under them: an
+        empty directory has no files to infer from, so it does not appear —
+        the same blind spot `walk` (regular files only) already has."""
+        prefix = _norm(path) if path else "/"
+        if not prefix.endswith("/"):
+            prefix += "/"
+        files: list[str] = []
+        dirs: set[str] = set()
+        for entry in await self.ls(workspace_id, prefix.rstrip("/")):
+            rest = entry[len(prefix) :] if entry.startswith(prefix) else None
+            if not rest:
+                continue
+            head, slash, _ = rest.partition("/")
+            if slash:
+                dirs.add(prefix + head + "/")
+            else:
+                files.append(entry)
+        return sorted(files), sorted(dirs)
+
     async def stat_all(self, workspace_id: str, prefix: str = "") -> list[tuple[str, int]]:
         """Every file under ``prefix`` as ``(path, size)`` — WITHOUT reading a
         single file's bytes (#362). The file-tree endpoint only needs each

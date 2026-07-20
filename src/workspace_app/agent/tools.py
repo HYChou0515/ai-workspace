@@ -357,13 +357,56 @@ async def edit_file_impl(
     )
 
 
-async def list_files_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> list[str]:
-    """List files in the workspace, optionally filtered by prefix. This is your
-    workspace's directory listing — use it instead of `exec(["ls", ...])`. Paths
-    come back relative to the workspace root (`notes.txt`, `data/x.csv`), which
-    is exactly the form to pass to the other file tools and to use in `exec`."""
+def _capped_listing(entries: list[str], cap: int, *, noun: str, hint: str) -> str:
+    """Render `entries` one per line, stopping at `cap` characters and saying
+    how many there were in total.
+
+    A listing tool's answer is as big as whatever it is listing, so it needs a
+    ceiling of its own — and a cut listing has to SAY it was cut, with the true
+    count. An agent that silently receives half a directory believes it has
+    seen the whole thing and reasons from an absence that isn't real."""
+    kept: list[str] = []
+    used = 0
+    for entry in entries:
+        used += len(entry) + 1
+        if used > cap:
+            break
+        kept.append(entry)
+    if len(kept) == len(entries):
+        return "\n".join(entries)
+    return "\n".join(
+        [*kept, f"\n[showing {len(kept)} of {len(entries)} {noun} — {hint}]"],
+    )
+
+
+async def list_files_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> str:
+    """List ONE directory of the workspace — like `ls`, not like `find`. Returns
+    the files in it plus its sub-directories (each shown with a trailing `/`);
+    pass a sub-directory back in to look inside it. `prefix` defaults to the
+    workspace root. Paths come back relative to that root (`notes.txt`,
+    `data/`), which is the form the other file tools and `exec` both take. Use
+    this instead of `exec(["ls", ...])`."""
     fs, inv = _workspace(ctx)
-    return [rel_path(p) for p in await fs.ls(inv, prefix)]
+    files, dirs = await fs.list_dir(inv, prefix)
+    if not files and not dirs:
+        return f"no files under {_shown_prefix(prefix)}"
+    # #549: every path an agent SEES is relative — the store's `/x` key is the
+    # system root once it reaches `exec`, and a listing is the strongest
+    # evidence the model has about what a path here looks like.
+    return _capped_listing(
+        [rel_path(p) for p in (*dirs, *files)],
+        ctx.context.exec_output_max_chars,
+        noun="entries",
+        hint="list a sub-directory to see the rest",
+    )
+
+
+def _shown_prefix(prefix: str) -> str:
+    """The directory `list_files` was asked about, in the form the agent should
+    use — so an empty listing names something it can act on, in the one path
+    dialect that works everywhere (#549)."""
+    shown = rel_path(prefix.strip()).removeprefix("./")
+    return f"{shown.rstrip('/')}/" if shown not in ("", ".") else "the workspace root"
 
 
 async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bool:
