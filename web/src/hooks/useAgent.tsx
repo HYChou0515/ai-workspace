@@ -81,7 +81,7 @@ export function useAgentInternal(
           // Attached image workspace paths — a VLM main model reads them inline.
           imagePaths: opts?.imagePaths,
         }),
-      requestCancel: () => void api.cancelMessage(slug, investigationId),
+      requestCancel: () => api.cancelMessage(slug, investigationId),
       undoTurns: async (turns) => {
         await api.undoTurns(slug, investigationId, turns);
       },

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentEvent } from "../events";
@@ -42,8 +42,8 @@ function transport(over: Partial<BroadcastChatTransport> = {}): BroadcastChatTra
   };
 }
 
-const render = (t: BroadcastChatTransport) =>
-  renderHook(() => useChatSession(t, 60_000), { wrapper: QueryWrap });
+const render = (t: BroadcastChatTransport, pollMs = 60_000) =>
+  renderHook(() => useChatSession(t, pollMs), { wrapper: QueryWrap });
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -152,5 +152,35 @@ describe("useChatSession — subscribed is not the same as receiving", () => {
     );
     await new Promise((r) => setTimeout(r, 150));
     expect(result.current.connection.receiving).toBe(false);
+  });
+});
+
+describe("useChatSession — the recovery path can fail too", () => {
+  // The store-poll is the safety net for a cross-pod viewer. If IT is failing,
+  // the viewer has no live stream AND no fallback — the worst state there is,
+  // and it looked identical to "nothing has happened yet".
+  it("reports a failing store-poll as a lost connection", async () => {
+    const { result } = render(
+      transport({
+        subscribe: async function* () {
+          await new Promise<void>(() => {}); // attached but silent (wrong pod)
+        },
+        getThread: vi
+          .fn()
+          .mockResolvedValueOnce(THREAD) // hydration works
+          .mockRejectedValue(new Error("store unreachable")),
+      }),
+      50, // poll fast so the test does not wait on the real cadence
+    );
+
+    await waitFor(() => expect(result.current.log.entries).toHaveLength(1));
+    await act(async () => {
+      await result.current.send("q"); // arms the poll
+    });
+
+    await waitFor(() => expect(result.current.connection.state).toBe("reconnecting"), {
+      timeout: 3000,
+    });
+    expect(result.current.connection.error).toContain("store unreachable");
   });
 });
