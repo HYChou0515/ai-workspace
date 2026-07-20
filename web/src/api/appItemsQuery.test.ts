@@ -118,4 +118,23 @@ describe("updateAppItem", () => {
     expect(sent.title).toBe("Reflow drift");
     expect(sent.owner).toBe("alice");
   });
+
+  // #306 PR3: `permission` has its OWN endpoint (`PUT …/items/{id}/permission`).
+  // The generic item PUT is a read-modify-write off a cached item, so echoing
+  // `permission` back means any later field edit silently REVERTS a sharing
+  // change made in between (the cached copy still holds the pre-share value).
+  // Treat it like the other server-owned fields: never send it here.
+  it("strips `permission` so a field edit can never revert a sharing change", async () => {
+    const bodies = bodySpy();
+    await realApi.updateAppItem("/rca-investigation", "INC-1", {
+      title: "Reflow drift",
+      owner: "alice",
+      status: "open",
+      permission: { visibility: "private", read_chat: [] },
+    });
+
+    const sent = bodies[0]!;
+    expect(sent).not.toHaveProperty("permission");
+    expect(sent.status).toBe("open");
+  });
 });
