@@ -27,6 +27,7 @@ import {
   type KbApi,
   type KbCitation,
   type KbCollection,
+  type ReindexQueued,
 } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { mergeBlocked, screenFiles, type BlockedUpload } from "../../kb/uploadChecks";
@@ -225,10 +226,33 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
     },
   });
 
+  // #565: the re-read is ACCEPTED here, then walked by a worker — so when this
+  // resolves the page still looks exactly as it did. Acknowledge explicitly (a
+  // dialog, not a fading toast) or the silence reads as "nothing happened" and
+  // the user sends the whole collection through again. `queued: false` means the
+  // backend coalesced this press onto a run already in flight; say so instead of
+  // confirming a send that didn't happen.
+  const ackReindex = async (r: ReindexQueued) => {
+    await dialog.confirm({
+      title: r.queued ? t("kb.reindexAll.sent") : t("kb.reindexAll.already"),
+      body: t(r.queued ? "kb.reindexAll.sentBody" : "kb.reindexAll.alreadyBody", {
+        n: r.documents,
+      }),
+      actions: [{ id: "ok", label: t("kb.reindexAll.ack"), variant: "primary" }],
+    });
+  };
+
   const reindexAllMut = useMutation({
     mutationFn: () => client.reindexCollection(cid as string),
-    onSuccess: () => {
-      if (cid) void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
+    onSuccess: (r) => {
+      if (cid) {
+        void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
+        // The docs don't flip to `indexing` in the request any more — the worker
+        // does it moments later. Reopen the status poll gate too, or the strip
+        // sits idle until something else happens to invalidate it.
+        void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(cid) });
+      }
+      void ackReindex(r);
     },
   });
 
@@ -236,12 +260,13 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
   // leaving healthy `ready` docs untouched so an outage costs no re-embedding.
   const reindexFailedMut = useMutation({
     mutationFn: () => client.reindexCollection(cid as string, { only: "failed" }),
-    onSuccess: () => {
+    onSuccess: (r) => {
       if (cid) {
         void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
         // #395: reopen the summary poll gate — the retried docs are indexing.
         void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(cid) });
       }
+      void ackReindex(r);  // #565: same accept-and-return endpoint, same silence
     },
   });
 

@@ -428,7 +428,7 @@ describe("KbCollectionsPage", () => {
   });
 
   it("re-indexes all documents from the settings menu", async () => {
-    const reindexCollection = vi.fn(async () => {});
+    const reindexCollection = vi.fn(async () => ({ queued: true, documents: 1, status: "indexing" }));
     const client = {
       // doc_count > 0 enables the Re-index menu item (no longer derived from
       // the loaded page — the doc list lives in KbDocIde now).
@@ -450,8 +450,49 @@ describe("KbCollectionsPage", () => {
     expect(reindexCollection).toHaveBeenCalledWith("c1");
   });
 
+  // #565: "Re-read all" is accept-and-return now — the request leaves a job
+  // behind and the walk happens in a worker, so nothing visible changes for a
+  // moment. Without an explicit confirmation a user reads that silence as "it
+  // didn't work" and presses again, stacking redundant full-collection re-reads.
+  it("confirms explicitly that the re-read was sent, naming the document count", async () => {
+    const reindexCollection = vi.fn(async () => ({ queued: true, documents: 3, status: "indexing" }));
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 3 })],
+      listDocuments: async () => page([]),
+      reindexCollection,
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(await screen.findByTestId("kb-reindex-all"));
+    const confirm = await screen.findByRole("dialog", { name: "Re-read all documents" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "全部重新讀取" }));
+
+    const sent = await screen.findByRole("dialog", { name: "已送出" });
+    expect(within(sent).getByText(/3/)).toBeInTheDocument();
+  });
+
+  it("says the re-read is already running instead of confirming a second send", async () => {
+    // queued:false = the backend coalesced this press onto a pending run (#134).
+    const reindexCollection = vi.fn(async () => ({ queued: false, documents: 3, status: "indexing" }));
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 3 })],
+      listDocuments: async () => page([]),
+      reindexCollection,
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(await screen.findByTestId("kb-reindex-all"));
+    const confirm = await screen.findByRole("dialog", { name: "Re-read all documents" });
+    await userEvent.click(within(confirm).getByRole("button", { name: "全部重新讀取" }));
+
+    expect(await screen.findByRole("dialog", { name: "已經在重新讀取" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "已送出" })).not.toBeInTheDocument();
+  });
+
   it("does not re-index all when the confirm is cancelled", async () => {
-    const reindexCollection = vi.fn(async () => {});
+    const reindexCollection = vi.fn(async () => ({ queued: true, documents: 1, status: "indexing" }));
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 1 })],
       listDocuments: async () =>
@@ -470,7 +511,7 @@ describe("KbCollectionsPage", () => {
   });
 
   it("surfaces Re-index all as a Documents-tab action that re-indexes the collection (#172)", async () => {
-    const reindexCollection = vi.fn(async () => {});
+    const reindexCollection = vi.fn(async () => ({ queued: true, documents: 1, status: "indexing" }));
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 1 })],
       listDocuments: async () =>
@@ -502,7 +543,7 @@ describe("KbCollectionsPage", () => {
   });
 
   it("re-indexes only the failed docs from the failure strip (#223)", async () => {
-    const reindexCollection = vi.fn(async () => {});
+    const reindexCollection = vi.fn(async () => ({ queued: true, documents: 1, status: "indexing" }));
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 2 })],
       listDocuments: async () =>
