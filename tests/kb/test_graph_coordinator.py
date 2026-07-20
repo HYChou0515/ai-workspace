@@ -1,12 +1,13 @@
 from collections.abc import Iterator
 
 from specstar import QB
+from specstar.types import Binary
 
 from workspace_app.kb.graph.coordinator import GraphCoordinator
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim
-from workspace_app.resources.kb import Collection, DocChunk
+from workspace_app.resources.kb import Collection, DocChunk, SourceDoc
 
 
 class _FakeLlm(ILlm):
@@ -22,8 +23,22 @@ def _mk_collection(spec, name: str, *, use_graph: bool, docs: list[tuple[str, st
         .create(Collection(name=name, use_graph=use_graph))
         .resource_id
     )
+    drm = spec.get_resource_manager(SourceDoc)
     crm = spec.get_resource_manager(DocChunk)
     for doc_id, text in docs:
+        # A real SourceDoc: since #534 slice 2 the extractor mirrors the deck's read
+        # permission onto every claim, so the deck has to exist to be extracted from.
+        with drm.using("bob"):
+            drm.create(
+                SourceDoc(
+                    collection_id=coll_id,
+                    path=f"{doc_id}.pptx",
+                    content=Binary(data=b"x"),
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                ),
+                resource_id=doc_id,
+            )
         crm.create(
             DocChunk(collection_id=coll_id, source_doc_id=doc_id, seq=0, start=0, end=1, text=text)
         )

@@ -44,6 +44,33 @@ def collection_mirror_fields(spec: SpecStar, collection_id: str) -> dict[str, An
     }
 
 
+def doc_mirror_fields(spec: SpecStar, source_doc_id: str) -> dict[str, Any]:
+    """#534 slice 2 — the read-permission mirror kwargs for a row DERIVED from a
+    doc (a ``GraphClaim``), read from that doc's LIVE effective permission.
+
+    Both layers travel together: the doc's own copy of its collection's mirror
+    (already maintained by #303, so this never re-reads the collection) plus the
+    doc's own tightening (#308). A doc with no override yields the explicit verdict
+    ``"public"`` — never ``""``, which the claim scope reads as "no mirror was ever
+    written" and hides. Like ``collection_mirror_fields``, every field is set
+    EXPLICITLY so re-stamping a loosened doc resets a previously restricted claim.
+
+    The doc is guaranteed to exist (a claim is only ever extracted FROM one), so a
+    lookup miss is a real invariant break, not a case to paper over.
+    """
+    drm = spec.get_resource_manager(SourceDoc)
+    doc = drm.get(source_doc_id).data
+    assert isinstance(doc, SourceDoc)
+    override = doc.permission
+    return {
+        "collection_visibility": doc.collection_visibility,
+        "collection_read_meta": list(doc.collection_read_meta),
+        "collection_created_by": doc.collection_created_by,
+        "doc_visibility": "public" if override is None else override.visibility,
+        "doc_read_content": [] if override is None else list(override.read_content),
+    }
+
+
 def denied_doc_ids(
     spec: SpecStar,
     actor: Actor,
