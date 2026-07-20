@@ -13,7 +13,17 @@ import { pxToRem } from "../lib/pxToRem";
  *  - waiting:   等候模型回應…       (prompt is with the model, no token yet → LLM slow)
  *  - thinking:  思考中…            (reasoning is streaming; the content shows below)
  *  - answering / a running tool → defer to the existing ↑/↓ token metrics line. */
-export function TurnStatus({ log, className }: { log: AgentLog; className?: string }) {
+export function TurnStatus({
+  log,
+  className,
+  onRetry,
+}: {
+  log: AgentLog;
+  className?: string;
+  /** Ask the same question again, abandoning the stalled attempt. Omitted when
+   * the running turn is not this viewer's to restart. */
+  onRetry?: () => void;
+}) {
   const phase = turnPhase(log);
   const toolRunning = isToolRunning(log);
   const active = phase !== "idle";
@@ -43,6 +53,24 @@ export function TurnStatus({ log, className }: { log: AgentLog; className?: stri
   } as const;
 
   const elapsedSec = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
+
+  // Past 40s the copy stops changing and the counter just climbs — past a
+  // minute, past an hour. The only exits were Stop (abandon the turn) and a new
+  // chat (abandon the thread), and a wait that cannot be acted on is exactly the
+  // state a user reads as "it's broken". So a long one offers the obvious
+  // action. Absent `onRetry` there is nothing to offer — someone else's turn is
+  // not yours to restart.
+  const retry =
+    onRetry && elapsedSec >= RETRY_AFTER_S ? (
+      <button
+        type="button"
+        data-testid="turn-retry"
+        onClick={onRetry}
+        style={retryBtn}
+      >
+        重新問一次
+      </button>
+    ) : null;
 
   // #492 P11: a cold sandbox is being restored from its durable snapshot before
   // the turn can run — show "還原工作區… N/M" instead of a blank running card.
@@ -75,9 +103,23 @@ export function TurnStatus({ log, className }: { log: AgentLog; className?: stri
     <div className={className} style={box}>
       {switched ? "模型忙線,已自動切換,稍候…" : statusText(phase, elapsedSec)}
       {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
+      {retry}
     </div>
   );
 }
+
+const RETRY_AFTER_S = 60;
+
+const retryBtn: React.CSSProperties = {
+  marginLeft: 8,
+  padding: "0 6px",
+  border: "1px solid var(--accent)",
+  borderRadius: "var(--radius-btn)",
+  background: "transparent",
+  color: "var(--accent)",
+  font: "inherit",
+  cursor: "pointer",
+};
 
 function statusText(phase: TurnPhase, sec: number): string {
   if (phase === "prep") return sec > 4 ? "還在準備,稍等一下" : "準備中…";

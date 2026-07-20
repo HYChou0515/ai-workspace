@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { type AgentLog, logFromMessages, reconcileSnapshot } from "./agentLog";
+import type { AgentEvent } from "../../events";
+import {
+  EMPTY_LOG,
+  type AgentLog,
+  logFromMessages,
+  reconcileSnapshot,
+  reduceAgent,
+} from "./agentLog";
 
 const live = (over: Partial<AgentLog> = {}): AgentLog => ({
   entries: [],
   streaming: false,
+  streamingBy: null,
   error: null,
   metrics: null,
   failover: null,
@@ -172,5 +180,47 @@ describe("hydration — the waiting state is bounded by age", () => {
   // exists to exclude.
   it("does not wait for a message with no timestamp at all", () => {
     expect(logFromMessages([{ role: "user", content: "q" }]).streaming).toBe(false);
+  });
+});
+
+/**
+ * A shared item runs one turn at a time, but messages QUEUE server-side — they
+ * do not cancel each other (#43). So locking every viewer's composer while
+ * somebody else's turn runs takes away something the backend was happy to
+ * accept, and hands a spectator a UI indistinguishable from broken: a spinner
+ * they did not start, and a box they cannot type in.
+ *
+ * Knowing WHOSE turn is running is what makes the two cases separable.
+ */
+describe("whose turn is running", () => {
+  it("remembers who started the turn that is streaming", () => {
+    const log = reduceAgent(EMPTY_LOG, {
+      type: "user_message",
+      author: "bob",
+      content: "bob's question",
+    } as AgentEvent);
+    expect(log.streaming).toBe(true);
+    expect(log.streamingBy).toBe("bob");
+  });
+
+  it("forgets it once the turn ends", () => {
+    const running = reduceAgent(EMPTY_LOG, {
+      type: "user_message",
+      author: "bob",
+      content: "q",
+    } as AgentEvent);
+    const done = reduceAgent(running, { type: "done" } as AgentEvent);
+    expect(done.streaming).toBe(false);
+    expect(done.streamingBy).toBeNull();
+  });
+
+  // After a reload the thread itself says who is waiting: the trailing user
+  // message is the one whose reply has not landed.
+  it("recovers it from a hydrated thread", () => {
+    const log = logFromMessages([
+      { role: "user", content: "q", author: "carol", created_at: Date.now() },
+    ]);
+    expect(log.streaming).toBe(true);
+    expect(log.streamingBy).toBe("carol");
   });
 });

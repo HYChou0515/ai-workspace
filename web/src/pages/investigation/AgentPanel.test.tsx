@@ -522,3 +522,59 @@ describe("AgentPanel — the composer always answers back", () => {
     expect(await screen.findByTestId("composer-hint")).toHaveTextContent("已中止");
   });
 });
+
+describe("AgentPanel — a shared item queues, so a spectator is not locked out", () => {
+  function render(log: Partial<AgentState["log"]>, me = "alice") {
+    vi.spyOn(api, "getCurrentUser").mockResolvedValue(me);
+    const agent = {
+      ...stubAgent(),
+      log: { entries: [], streaming: false, streamingBy: null, ...log } as AgentState["log"],
+    } as AgentState;
+    return {
+      agent,
+      ...renderWithQuery(
+        <DialogProvider>
+          <AgentPanel
+            investigationId="it1"
+            agent={agent}
+            picker={[]}
+            suggestions={[]}
+            attachedPreset=""
+            onAttachPreset={() => {}}
+            uploadDir="uploads"
+          />
+        </DialogProvider>,
+      ),
+    };
+  }
+
+  // Messages on a shared item SERIALIZE server-side; they do not cancel each
+  // other. Locking the composer took away something the backend was happy to
+  // accept, and left the spectator with a spinner they did not start and a box
+  // they could not type in — indistinguishable from broken.
+  it("lets a spectator send while someone else's turn runs", async () => {
+    const { agent } = render({ streaming: true, streamingBy: "bob" });
+    const box = await screen.findByRole("textbox");
+    fireEvent.change(box, { target: { value: "me too" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    await waitFor(() => expect(agent.send).toHaveBeenCalledWith("me too", expect.anything()));
+  });
+
+  it("says the message will be queued rather than answered right away", async () => {
+    render({ streaming: true, streamingBy: "bob" });
+    expect(await screen.findByTestId("composer-hint")).toHaveTextContent("排在");
+  });
+
+  // Your OWN in-flight turn still blocks: Stop is the affordance there, and
+  // queueing a second message behind your own is rarely what you meant.
+  it("still blocks a second send during your own turn", async () => {
+    const { agent } = render({ streaming: true, streamingBy: "alice" });
+    const box = await screen.findByRole("textbox");
+    fireEvent.change(box, { target: { value: "again" } });
+    fireEvent.keyDown(box, { key: "Enter" });
+
+    await waitFor(() => expect(screen.getByTestId("composer-hint")).toHaveTextContent("回覆還在進行中"));
+    expect(agent.send).not.toHaveBeenCalled();
+  });
+});

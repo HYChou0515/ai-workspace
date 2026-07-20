@@ -158,6 +158,33 @@ export function AgentPanel({
   // composer's own feedback channel (Enter during a turn, Stop). Cleared on the
   // next successful send.
   const [composerHint, setComposerHint] = useState<string | null>(null);
+  // Messages on a shared item SERIALIZE server-side; they do not cancel each
+  // other (#43). So a turn started by SOMEONE ELSE is no reason to lock this
+  // viewer out — the backend will happily queue behind it, and taking that away
+  // left a spectator with a spinner they did not start and a box they could not
+  // type in. Your own in-flight turn still blocks: Stop is the affordance there.
+  const othersTurn = log.streaming && log.streamingBy != null && log.streamingBy !== me;
+  // Standing note for as long as their turn runs: you may send, and what will
+  // happen if you do.
+  /** Abandon a stalled attempt and ask the same question again.
+   *
+   * Cancel FIRST: the backend serializes turns, so sending without stopping
+   * would queue the retry behind the very turn that is stuck. The question is
+   * taken from the thread rather than the draft box, which the user may already
+   * have typed something else into. */
+  const retryTurn = () => {
+    const asked = [...log.entries]
+      .reverse()
+      .find((e) => e.kind === "message" && e.message.role === "user");
+    if (asked?.kind !== "message") return;
+    cancel();
+    setComposerHint("已中止並重新提問。");
+    void send(asked.message.content);
+  };
+
+  const queueNote = othersTurn
+    ? `${log.streamingBy} 正在對話中。你現在送出的訊息會排在後面。`
+    : null;
   const dialog = useDialog();
 
   // #38: "undo to here" on the user prompt at entry `i` — drop that turn
@@ -347,7 +374,7 @@ export function AgentPanel({
 
   const submit = () => {
     const text = draft.trim();
-    if (log.streaming) {
+    if (log.streaming && !othersTurn) {
       // Pressing Enter mid-turn used to do NOTHING — the textarea stays enabled,
       // so the user types a whole message, hits Enter, and gets no reaction at
       // all. During any of the stuck states that is indistinguishable from the
@@ -501,7 +528,7 @@ export function AgentPanel({
           />
         ))}
         <ConnectionNotice connection={connection} />
-        <TurnStatus log={log} />
+        <TurnStatus log={log} onRetry={othersTurn ? undefined : retryTurn} />
         {log.error && (
           <div
             style={{
@@ -519,7 +546,7 @@ export function AgentPanel({
         </div>
       </div>
 
-      {composerHint && (
+      {(composerHint ?? queueNote) && (
         <div
           data-testid="composer-hint"
           role="status"
@@ -529,7 +556,7 @@ export function AgentPanel({
             color: "var(--text-paper-d)",
           }}
         >
-          {composerHint}
+          {composerHint ?? queueNote}
         </div>
       )}
 

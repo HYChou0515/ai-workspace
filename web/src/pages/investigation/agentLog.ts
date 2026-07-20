@@ -67,6 +67,14 @@ export type AgentLog = {
   entries: AgentEntry[];
   /** True while the SSE stream is open. */
   streaming: boolean;
+  /** Who started the turn that is streaming, or null when nothing is running.
+   *
+   * A shared item runs one turn at a time, but messages QUEUE server-side — they
+   * do not cancel each other (#43). Locking every viewer's composer therefore
+   * took away something the backend was happy to accept, and handed a spectator
+   * a UI indistinguishable from broken: a spinner they did not start and a box
+   * they could not type in. Separating the two cases needs this. */
+  streamingBy: string | null;
   /** Non-null when the last terminal was an error. */
   error: string | null;
   /** Live token telemetry for the current turn (null until first event). */
@@ -84,6 +92,7 @@ export type AgentLog = {
 export const EMPTY_LOG: AgentLog = {
   entries: [],
   streaming: false,
+  streamingBy: null,
   error: null,
   metrics: null,
   failover: null,
@@ -161,6 +170,9 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
   return {
     entries,
     streaming: awaitingReply,
+    // The thread itself says who is waiting: the trailing user message is the
+    // one whose reply has not landed.
+    streamingBy: awaitingReply ? (last?.author ?? null) : null,
     error: null,
     metrics: null,
     failover: null,
@@ -491,18 +503,18 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "max_turns_exceeded": {
       const text = translate(initialLocale(), "banner.maxTurns", { turns: ev.turns });
       entries.push({ kind: "banner", at: now, text });
-      return { ...log, entries, streaming: false, error: text };
+      return { ...log, entries, streaming: false, streamingBy: null, error: text };
     }
 
     case "run_cancelled":
       entries.push({ kind: "banner", at: now, text: translate(initialLocale(), "banner.cancelled") });
-      return { ...log, entries, streaming: false };
+      return { ...log, entries, streaming: false, streamingBy: null };
 
     case "error":
-      return { ...log, entries, streaming: false, error: ev.message };
+      return { ...log, entries, streaming: false, streamingBy: null, error: ev.message };
 
     case "done":
-      return { ...log, entries, streaming: false };
+      return { ...log, entries, streaming: false, streamingBy: null };
 
     case "user_message":
       // #43: a human message on the shared investigation, broadcast to every
@@ -513,7 +525,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         at: ev.created_at || now,
         message: { role: "user", author: ev.author, content: ev.content },
       });
-      return { ...log, entries, streaming: true };
+      return { ...log, entries, streaming: true, streamingBy: ev.author ?? null };
 
     case "file_changed":
       // #43: a workspace file changed — a side effect handled in the hook
