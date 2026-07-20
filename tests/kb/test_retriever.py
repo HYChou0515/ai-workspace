@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 
 import msgspec
+import pytest
 from specstar import QB, SpecStar
 from specstar.types import Binary
 
@@ -24,6 +25,242 @@ def _ingest(spec, chunker, embedder, name, text):
         collection_id=cid, user="u", filename=name, data=text.encode()
     )
     return cid
+
+
+def test_search_vector_io_scales_with_candidates_not_collection_size(
+    spec: SpecStar,
+    chunker: FixedTokenChunker,
+    embedder: HashEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Perf contract: a search must NOT deserialize every chunk's embedding vector.
+    # The bulk corpus load feeds BM25 + passage metadata (no vector) and MMR needs
+    # vectors only for the fused candidates — so the number of vectors materialized
+    # scales with `candidates`, not the collection's chunk count (the "load the whole
+    # collection's 4096-d vectors" hang). Behavioural + mechanism-agnostic: it stays
+    # true however the projection is implemented, and only fails if a full-collection
+    # vector load is (re)introduced.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    for i in range(20):
+        ing.ingest(
+            collection_id=cid,
+            user="u",
+            filename=f"d{i}.md",
+            data=f"reflow oven temperature zone {i} thermal profile solder paste".encode(),
+        )
+    rm = spec.get_resource_manager(DocChunk)
+    total_chunks = len(rm.list_resources((QB["collection_id"] == cid).build()))
+    assert total_chunks > 40, "need a corpus big enough that a full load is unmistakable"
+
+    counter = {"vectors": 0}
+
+    def _has_vec(data: object) -> bool:
+        return bool(getattr(data, "embedding", None) or getattr(data, "embedding_alt", None))
+
+    orig_list = rm.list_resources
+    orig_get = rm.get
+
+    def counting_list(*args: object, **kwargs: object) -> list:
+        items = orig_list(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        counter["vectors"] += sum(1 for it in items if _has_vec(getattr(it, "data", None)))
+        return items
+
+    def counting_get(*args: object, **kwargs: object) -> object:
+        res = orig_get(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        if _has_vec(getattr(res, "data", None)):
+            counter["vectors"] += 1
+        return res
+
+    monkeypatch.setattr(rm, "list_resources", counting_list)
+    monkeypatch.setattr(rm, "get", counting_get)
+
+    cand = 5
+    Retriever(spec, embedder=embedder, candidates=cand, top_k=3).search("reflow temperature", [cid])
+
+    # Bounded by the candidate pool (a few dense probes + MMR hydration), nowhere
+    # near the >40 chunks a full-collection load would touch.
+    assert counter["vectors"] <= 4 * cand, (
+        f"materialized {counter['vectors']} chunk vectors for {total_chunks} chunks — "
+        "retrieval is bulk-loading vectors instead of projecting them away"
+    )
+
+
+def test_sparse_corpus_scales_with_matches_not_collection_size(
+    spec: SpecStar,
+    chunker: FixedTokenChunker,
+    embedder: HashEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # 2a: the BM25 (sparse) arm must not load + tokenize every chunk's text. It
+    # pre-narrows its corpus to the chunks trigram-similar to a query term (pg_trgm
+    # `.fuzzy`, GIN-served on Postgres), so the amount of chunk TEXT materialized
+    # during a search scales with the lexical-match count, not the collection size.
+    # Behavioural + mechanism-agnostic: fails only if a whole-collection text load
+    # (the pre-2a corpus) returns.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    # Many docs share common vocabulary; ONE doc carries the rare term the query hits.
+    # Distinct bodies per doc so #104 content-dedup keeps them as separate chunk sets.
+    for i in range(19):
+        ing.ingest(
+            collection_id=cid,
+            user="u",
+            filename=f"common{i}.md",
+            data=f"solder paste viscosity thixotropic index stencil aperture batch {i}".encode(),
+        )
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="rare.md",
+        data=b"quibblezorp flangewidget marker only here",
+    )
+    rm = spec.get_resource_manager(DocChunk)
+    total_chunks = len(rm.list_resources((QB["collection_id"] == cid).build()))
+    assert total_chunks > 40, "need a corpus big enough that a full text load is unmistakable"
+
+    counter = {"texts": 0}
+
+    def _has_text(data: object) -> bool:
+        return bool(getattr(data, "text", None))
+
+    orig_list = rm.list_resources
+    orig_get = rm.get
+
+    def counting_list(*args: object, **kwargs: object) -> list:
+        items = orig_list(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        counter["texts"] += sum(1 for it in items if _has_text(getattr(it, "data", None)))
+        return items
+
+    def counting_get(*args: object, **kwargs: object) -> object:
+        res = orig_get(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        if _has_text(getattr(res, "data", None)):
+            counter["texts"] += 1
+        return res
+
+    monkeypatch.setattr(rm, "list_resources", counting_list)
+    monkeypatch.setattr(rm, "get", counting_get)
+
+    Retriever(spec, embedder=embedder, candidates=5, top_k=3).search("quibblezorp", [cid])
+
+    # Only the rare doc's few chunks match the term + a small fused hydration —
+    # nowhere near the >40 chunks a whole-collection corpus load would touch.
+    assert counter["texts"] <= 15, (
+        f"materialized {counter['texts']} chunk texts for {total_chunks} chunks — "
+        "the sparse arm is loading the whole collection's text instead of narrowing"
+    )
+
+
+def test_overlay_that_empties_the_candidate_set_returns_no_passages(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #328 overlay edge: when the shadowed doc is the ONLY content and the candidate
+    # re-parse yields no virtual chunks, the overlaid candidate set is empty — the
+    # search returns nothing rather than falling through to rank an empty pool.
+    from workspace_app.kb.retriever import Overlay
+
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid, user="u", filename="only.md", data=b"reflow oven temperature zone"
+    )
+    only_id = encode_doc_id(cid, "only.md")
+    overlay = Overlay(virtual_chunks=[], shadow_doc_id=only_id, virtual_text="")
+    passages = Retriever(spec, embedder=embedder).search("reflow", [cid], overlay=overlay)
+    assert passages == []
+
+
+def test_search_with_no_query_terms_runs_dense_only(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # A punctuation-only query has no BM25 word tokens, so the trigram corpus
+    # narrowing has nothing to fuzzy-match — it yields an empty sparse corpus (like
+    # BM25's own no-terms guard) and the search runs on the dense arm alone, without
+    # crashing.
+    cid = _ingest(spec, chunker, embedder, "a.md", "reflow oven temperature zone three thermal")
+    passages = Retriever(spec, embedder=embedder).search("!!! ???", [cid])
+    # Dense still ranks (HashEmbedder), so we get results, just no keyword signal.
+    assert all(isinstance(p.document_id, str) for p in passages)
+
+
+def test_search_round_trips_do_not_scale_with_candidate_count(
+    spec: SpecStar,
+    chunker: FixedTokenChunker,
+    embedder: HashEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Phase 3: the ranking tail — chunk hydration, chunk→doc resolution, and the
+    # doc path / quality / text joins — must BATCH its store reads instead of
+    # issuing one (or several) per candidate. So the number of store round trips
+    # stays ~flat as the candidate pool grows. The in-memory test backend makes
+    # per-candidate reads look free; on Postgres each is a network round trip, so
+    # an N+1 here is what a search pays after the bulk loads are gone.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    for i in range(30):
+        ing.ingest(
+            collection_id=cid,
+            user="u",
+            filename=f"d{i}.md",
+            data=f"reflow oven temperature zone {i} thermal profile solder paste stencil".encode(),
+        )
+
+    managers = [spec.get_resource_manager(DocChunk), spec.get_resource_manager(SourceDoc)]
+    # Capture the REAL methods once, so each measured run wraps the originals
+    # rather than stacking a wrapper on a wrapper.
+    originals = [(rm, rm.get, rm.list_resources) for rm in managers]
+
+    def trips(candidates: int) -> int:
+        counter = {"n": 0}
+
+        def counted(orig: object):
+            def call(*args: object, **kwargs: object) -> object:
+                counter["n"] += 1
+                return orig(*args, **kwargs)  # ty: ignore[call-non-callable]
+
+            return call
+
+        for rm, orig_get, orig_list in originals:
+            monkeypatch.setattr(rm, "get", counted(orig_get))
+            monkeypatch.setattr(rm, "list_resources", counted(orig_list))
+        Retriever(spec, embedder=embedder, candidates=candidates, top_k=5).search(
+            "reflow temperature profile", [cid]
+        )
+        return counter["n"]
+
+    few = trips(5)
+    many = trips(25)
+    # A 5× bigger candidate pool must not cost 5× the round trips.
+    assert many - few <= 5, (
+        f"store round trips grew {few} → {many} as candidates went 5 → 25 — "
+        "the ranking tail is issuing per-candidate queries instead of batching"
+    )
+
+
+def test_collection_of_only_orphaned_chunks_returns_no_passages(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104: when EVERY candidate is a true orphan (neither its content file_id nor
+    # its owner id resolves to a live doc), nothing is citable — the search returns
+    # an empty result rather than rendering uncitable passages, and never asks the
+    # store for the text of zero documents.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid, user="u", filename="ghost.md", data=b"reflow oven temperature zone three"
+    )
+    chrm = spec.get_resource_manager(DocChunk)
+    for r in chrm.list_resources((QB["collection_id"] == cid).build()):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        chrm.update(
+            r.info.resource_id,  # ty: ignore[unresolved-attribute]
+            msgspec.structs.replace(
+                chunk, source_doc_id="gone-doc", source_file_id="no-such-content"
+            ),
+        )
+
+    assert Retriever(spec, embedder=embedder).search("reflow temperature", [cid]) == []
 
 
 def test_search_drops_a_chunk_whose_source_doc_is_gone(
@@ -554,3 +791,27 @@ def test_search_excludes_denied_docs(
     got = r.search("reflow temperature", [cid], exclude_doc_ids=frozenset({blocked}))
     assert got, "the non-excluded doc should still return passages"
     assert all(p.document_id != blocked for p in got)
+
+
+def test_doc_join_batch_loads_docs_outside_the_candidate_set(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # `_DocJoin` is built from the CANDIDATE chunks, but the attachment merge (#513
+    # P9) discovers parent docs only AFTER ranking — a parent whose own chunks never
+    # made the candidate cut is not in the join yet, so `load` batches it in. That
+    # end-to-end shape needs a parent that loses to its own attachment, which the
+    # hash embedder can't be made to produce reliably, so the contract is pinned
+    # directly: unknown ids are fetched, already-known ids cost nothing.
+    from workspace_app.kb.retriever import _DocJoin
+
+    cid = _ingest(spec, chunker, embedder, "a.md", "reflow oven temperature zone three")
+    doc_id = encode_doc_id(cid, "a.md")
+
+    join = _DocJoin(spec, [])  # built over no candidates — knows nothing yet
+    assert join.path_of(doc_id) is None
+
+    join.load([doc_id])
+    assert join.path_of(doc_id) == "a.md"
+
+    join.load([doc_id])  # already known — the no-op path, no second fetch
+    assert join.path_of(doc_id) == "a.md"
