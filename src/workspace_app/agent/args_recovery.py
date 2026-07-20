@@ -63,6 +63,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+from typing import Any, cast
 
 from agents import FunctionTool
 from agents.tool_context import ToolContext
@@ -131,6 +132,89 @@ def peel_first_json(args_json: str) -> tuple[object, str]:
     return value, leftover
 
 
+# ─── nullable-arg coercion ────────────────────────────────────────────
+
+
+def _nullable_non_string_types(schema: dict[str, Any], name: str) -> set[str] | None:
+    """The non-null JSON types declared for ``name``, IF the param is nullable and
+    none of its types is ``string``; else ``None`` (meaning: hands off).
+
+    Only nullable params qualify, because turning a value into ``null`` has to be
+    a legal outcome for that param. And a param that can be a string is excluded
+    on purpose — for `document: string | null` the text ``"None"`` is a value the
+    model may have meant (a file really can be called that), so second-guessing it
+    would trade a loud error for a silent wrong answer."""
+    prop = (schema.get("properties") or {}).get(name)
+    if not isinstance(prop, dict):
+        return None
+    variants = prop.get("anyOf") or prop.get("oneOf")
+    types: set[str] = set()
+    if isinstance(variants, list):
+        for v in variants:
+            t = v.get("type") if isinstance(v, dict) else None
+            if isinstance(t, str):
+                types.add(t)
+    else:
+        t = prop.get("type")
+        if isinstance(t, str):
+            types.add(t)
+        elif isinstance(t, list):
+            types.update(x for x in t if isinstance(x, str))
+    if "null" not in types or "string" in types:
+        return None
+    return types - {"null"}
+
+
+def _impossible(value: object, types: set[str]) -> bool:
+    """Whether ``value`` cannot be any of ``types`` under JSON's own rules.
+
+    Deliberately narrow: only a STRING that no reading could parse into the
+    declared type counts. A numeric string like ``"30"`` is left alone — pydantic
+    already coerces it, and silently nulling a page the user asked for would be
+    far worse than the error this guard exists to remove."""
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if "integer" in types or "number" in types:
+        try:
+            float(text)
+        except ValueError:
+            return True
+        return False
+    if "boolean" in types:
+        return text.lower() not in {"true", "false", "1", "0", "yes", "no"}
+    return False
+
+
+def _null_impossible_values(args: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any]:
+    """Read a value that CANNOT be its declared type as "not set" (#kb-search).
+
+    Strict mode marks every property required, so a model calling a tool with
+    seven optional params must put something in each one. When what it puts is a
+    stand-in for "nothing" — `"None"`, `"null"`, `""` — bouncing it back as a
+    validation error tells the model only that it was wrong, not what to do, and
+    it burns turns guessing. Since no integer is ever spelled "None", reading it
+    as absent is the only interpretation available, and it is the one the model
+    meant.
+
+    `arg_repair` already handles the bare Python `None` upstream; this covers the
+    quoted spelling, which we cannot observe locally because the model producing
+    it runs in production. Being correct for both is what makes the fix shippable
+    without first reproducing the exact one."""
+    out = dict(args)
+    for name, value in args.items():
+        types = _nullable_non_string_types(schema, name)
+        if types and _impossible(value, types):
+            _LOGGER.info(
+                "args_recovery: %s=%r cannot be %s; reading it as null",
+                name,
+                value,
+                "/".join(sorted(types)),
+            )
+            out[name] = None
+    return out
+
+
 def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     """Return a FunctionTool that classifies bad model args before running.
 
@@ -146,6 +230,7 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     than return a tool-result string.
     """
     original = tool.on_invoke_tool
+    schema = tool.params_json_schema or {}
 
     # Annotate as `ToolContext` (NOT the narrower `RunContextWrapper`):
     # agents-SDK introspects the annotation on `on_invoke_tool` to decide
@@ -220,7 +305,10 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
                 raw_args=args_json,
                 call_id=call_id,
             )
-        return await original(ctx, json.dumps(value))
+        # `peel_first_json` returns `object`; the non-dict case raised above, so
+        # this cast records what the control flow already guarantees.
+        args = cast("dict[str, Any]", value)
+        return await original(ctx, json.dumps(_null_impossible_values(args, schema)))
 
     # `FunctionTool` is a dataclass with ~20 fields (including private
     # SDK ones like `_failure_error_function`, `_use_default_failure_error_function`,

@@ -332,3 +332,85 @@ def test_wrap_preserves_all_private_sdk_fields():
         assert getattr(wrapped, f.name) == getattr(base, f.name), (
             f"field {f.name!r} dropped / changed by the wrap; SDK likely depends on it"
         )
+
+
+# ─── nullable-arg coercion (the kb_search `page_from='None'` defect) ───
+
+
+def _kb_shaped_tool(seen: list[dict[str, Any]]) -> FunctionTool:
+    """A tool shaped like `kb_search`: one required string plus optional params
+    that are `X | null` — the shape strict mode turns into "every property is
+    required", which is why the model has to put SOMETHING in each of them."""
+
+    async def capture(_ctx: ToolContext[Any], args: str) -> str:
+        seen.append(json.loads(args))
+        return "ok"
+
+    nullable = lambda t: {"anyOf": [{"type": t}, {"type": "null"}]}  # noqa: E731
+    return FunctionTool(
+        name="kb_search",
+        description="d",
+        params_json_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "page_from": nullable("integer"),
+                "rerank": nullable("boolean"),
+                "document": nullable("string"),
+            },
+            "required": ["query", "page_from", "rerank", "document"],
+        },
+        on_invoke_tool=capture,
+        strict_json_schema=True,
+    )
+
+
+async def test_impossible_string_for_a_nullable_number_or_bool_becomes_null():
+    """A `"None"` that reaches a param typed `integer | null` cannot be what the
+    model meant — no integer is ever spelled "None" — so it is read as "not set"
+    instead of being bounced back as a validation error the model has to guess
+    its way out of.
+
+    This is deliberately a SECOND line of defence. `arg_repair` already
+    translates a bare Python `None`; this catches the case where the quoted form
+    arrives instead, which we cannot observe from here because the model that
+    does it runs in production. Making the fix correct for BOTH spellings is what
+    lets it ship without first reproducing the exact one."""
+    seen: list[dict[str, Any]] = []
+    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
+    await wrapped.on_invoke_tool(
+        _tool_ctx(),
+        json.dumps({"query": "x", "page_from": "None", "rerank": "None", "document": "None"}),
+    )
+    assert seen[0]["page_from"] is None
+    assert seen[0]["rerank"] is None
+
+
+async def test_a_nullable_string_param_is_never_second_guessed():
+    """`document` is `string | null`, so `"None"` is a value the model may have
+    chosen on purpose — a file really can be called that. Coercing it would swap
+    one silent wrong answer for another, so it is passed through untouched and
+    the ambiguity stays with the caller who can actually resolve it."""
+    seen: list[dict[str, Any]] = []
+    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
+    await wrapped.on_invoke_tool(
+        _tool_ctx(), json.dumps({"query": "x", "page_from": None, "document": "None"})
+    )
+    assert seen[0]["document"] == "None"
+
+
+async def test_real_values_for_nullable_params_survive():
+    """The guard must only fire on values that CANNOT be the declared type. A
+    genuine page number — including the numeric string pydantic would coerce
+    anyway — has to reach the tool unchanged."""
+    seen: list[dict[str, Any]] = []
+    wrapped = wrap_with_args_recovery(_kb_shaped_tool(seen))
+    await wrapped.on_invoke_tool(
+        _tool_ctx(),
+        json.dumps({"query": "x", "page_from": 30, "rerank": True, "document": "report.pdf"}),
+    )
+    assert seen[0] == {"query": "x", "page_from": 30, "rerank": True, "document": "report.pdf"}
+
+    seen.clear()
+    await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"query": "x", "page_from": "30"}))
+    assert seen[0]["page_from"] == "30"  # left for pydantic's own int coercion
