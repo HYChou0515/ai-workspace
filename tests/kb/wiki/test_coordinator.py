@@ -799,3 +799,121 @@ async def test_enqueued_jobs_are_partitioned_by_collection():
     # concurrency is what production runs on POSTGRES (transactional) for. We
     # therefore pin the seam WE own (partition_key = collection id) here and
     # rely on specstar's own partitioned-queue guarantees for the rest.
+
+
+# ── whole-collection rebuild as a JOB (#571) ──────────────────────────────
+# "Rebuild wiki" used to walk the collection INSIDE the HTTP request: it loaded
+# every SourceDoc (blob + extracted text) and, per doc, re-read the doc, re-read
+# the collection, ran a CAS state write and created a fold job. Same shape as
+# #569's re-read-all. The walk is now its own `op`: the request leaves one row
+# behind and returns; a worker claiming it folds every ready source.
+
+
+def _wiki_collection(spec, **kw) -> str:
+    return (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True, **kw))
+        .resource_id
+    )
+
+
+def _pending_ops(spec) -> list[str]:
+    rm = spec.get_resource_manager(WikiMaintenanceJob)
+    return [j.data.payload.op for j in rm.list_resources(QB.all().build())]
+
+
+def test_enqueue_rebuild_leaves_one_job_and_does_not_walk_the_collection():
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    _add_source(spec, cid, "a.md", "alpha")
+    _add_source(spec, cid, "b.md", "beta")
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+
+    assert coord.enqueue_rebuild(cid) is True
+
+    assert _pending_ops(spec) == ["rebuild"]  # ONE job, not one fold per source
+
+
+def test_a_queued_rebuild_reports_building_even_before_the_worker_starts():
+    """`status()` returns a flat idle when no WikiBuildState row exists, and the
+    FE polls only while `building` — so a rebuild that queues without seeding the
+    row would show an idle wiki with a job silently running behind it, and the
+    poll would never start (the #569 regression, one route over). The per-source
+    walk used to create that row as a side effect; the producer must now do it."""
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)  # never built before → no state row at all
+    _add_source(spec, cid, "a.md", "alpha")
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+
+    coord.enqueue_rebuild(cid)
+
+    assert coord.status(cid).building is True
+
+
+async def test_the_rebuild_job_folds_every_ready_source():
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    _add_source(spec, cid, "a.md", "alpha source")
+    _add_source(spec, cid, "b.md", "beta source")
+    runner = _RecordingRunner()
+    coord = WikiMaintenanceCoordinator(spec, runner)
+
+    coord.enqueue_rebuild(cid)
+    await coord.aclose()  # drain: rebuild → fold per source
+
+    seen = "\n".join(runner.sources_seen)
+    assert "alpha source" in seen and "beta source" in seen
+    assert coord.status(cid).total == 2
+
+
+async def test_the_rebuild_job_skips_sources_that_are_still_indexing():
+    """A binary doc mid-index carries no extracted text; folding it would push an
+    empty source into the wiki. The old loop filtered on `doc.status == "ready"`
+    in Python — the worker now filters in the indexed query."""
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    _add_source(spec, cid, "ready.md", "ready source")
+    rm = spec.get_resource_manager(SourceDoc)
+    busy = rm.create(
+        SourceDoc(
+            collection_id=cid,
+            path="busy.pdf",
+            content=Binary(data=b"x"),
+            status="indexing",
+        )
+    ).resource_id
+    assert busy
+    runner = _RecordingRunner()
+    coord = WikiMaintenanceCoordinator(spec, runner)
+
+    coord.enqueue_rebuild(cid)
+    await coord.aclose()
+
+    assert coord.status(cid).total == 1  # only the ready source counted
+    assert "ready source" in "\n".join(runner.sources_seen)
+
+
+async def test_the_rebuild_job_ignores_other_collections_sources():
+    spec = make_spec(default_user="u")
+    mine, theirs = _wiki_collection(spec), _wiki_collection(spec)
+    _add_source(spec, mine, "a.md", "mine source")
+    _add_source(spec, theirs, "b.md", "theirs source")
+    runner = _RecordingRunner()
+    coord = WikiMaintenanceCoordinator(spec, runner)
+
+    coord.enqueue_rebuild(mine)
+    await coord.aclose()
+
+    seen = "\n".join(runner.sources_seen)
+    assert "mine source" in seen and "theirs source" not in seen
+
+
+def test_pressing_rebuild_again_coalesces_onto_the_pending_run():
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    _add_source(spec, cid, "a.md", "alpha")
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+
+    assert coord.enqueue_rebuild(cid) is True
+    assert coord.enqueue_rebuild(cid) is False
+    assert _pending_ops(spec) == ["rebuild"]
