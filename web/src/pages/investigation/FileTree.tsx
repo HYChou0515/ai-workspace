@@ -197,10 +197,6 @@ export function FileTree({
 
   const refresh = () => onChanged?.();
 
-  /** Upload outcomes that mean "the request was cut", not "the file was
-   * refused" — the body may already have reached the server. */
-  const INCONCLUSIVE_UPLOAD = new Set([0, 502, 503, 504]);
-
   // Upload into `targetDir` ("" = root). Defaults to the anchored folder so the
   // toolbar button drops files where the rest of the create actions land; the
   // folder context menu passes an explicit dir.
@@ -227,21 +223,10 @@ export function FileTree({
         // guess stated as a cause: a dropped connection or a 403 on a 3 MB file
         // reported a size problem that did not exist and sent the user hunting
         // for a limit that was never involved.
+        // An inconclusive failure (the connection was cut after the body went
+        // out) has already been resolved against the file list by the service
+        // boundary — if it reaches here, the write really did not land.
         const status = (err as { status?: number }).status;
-        if (status !== undefined && INCONCLUSIVE_UPLOAD.has(status)) {
-          // The request was cut, not refused — and it was cut AFTER the body
-          // went out, so the server has usually stored the file. Look before
-          // accusing: reporting a failure about a file that is sitting right
-          // there is worse than saying nothing.
-          const landed = await svc
-            .listFiles()
-            .then((all) => all.some((x) => x.path === path))
-            .catch(() => false);
-          if (landed) {
-            firstPath ??= path;
-            continue;
-          }
-        }
         alert(
           status === 507
             ? t("workspace.upload.full", { name: f.name })

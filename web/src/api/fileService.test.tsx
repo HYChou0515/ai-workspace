@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Simulate a sub-path deploy (VITE_BASE_PATH=/sub): file URLs must carry the
 // base path so they resolve under a path-stripping proxy (#73).
@@ -143,5 +143,52 @@ describe("useFileList", () => {
     if (result.current.kind !== "ready") throw new Error("not ready");
     expect(result.current.items).toEqual([{ path: "/a.md", size: 1 }]);
     expect(result.current.dirs).toEqual(["/sub"]);
+  });
+});
+
+/**
+ * The rule itself is covered in writeVerified.test.ts; this is about the WIRING.
+ * An unwired rule is an unfixed bug, and this is the seam every writer in the
+ * app goes through — the file tree, the composer's attachments, the skills /
+ * workflows / collections pickers, the editor's save, both KB IDEs.
+ */
+describe("investigationFileService.writeFile — one definition of success", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("succeeds when a cut connection turns out to have stored the file", async () => {
+    vi.spyOn(api, "writeFile").mockRejectedValue(
+      Object.assign(new Error("network error"), { status: 0 }),
+    );
+    const list = vi
+      .spyOn(api, "listFiles")
+      .mockResolvedValue([{ path: "/uploads/a.txt", size: 1 } as never]);
+
+    await expect(
+      investigationFileService("rca", "inv").writeFile("/uploads/a.txt", "x"),
+    ).resolves.toBeUndefined();
+    expect(list).toHaveBeenCalled();
+  });
+
+  it("still fails when the write really did not land", async () => {
+    vi.spyOn(api, "writeFile").mockRejectedValue(
+      Object.assign(new Error("gateway timeout"), { status: 504 }),
+    );
+    vi.spyOn(api, "listFiles").mockResolvedValue([]);
+
+    await expect(
+      investigationFileService("rca", "inv").writeFile("/uploads/a.txt", "x"),
+    ).rejects.toMatchObject({ status: 504 });
+  });
+
+  it("does not ask the file list about a definite refusal", async () => {
+    vi.spyOn(api, "writeFile").mockRejectedValue(
+      Object.assign(new Error("too large"), { status: 413 }),
+    );
+    const list = vi.spyOn(api, "listFiles");
+
+    await expect(
+      investigationFileService("rca", "inv").writeFile("/uploads/a.txt", "x"),
+    ).rejects.toMatchObject({ status: 413 });
+    expect(list).not.toHaveBeenCalled();
   });
 });

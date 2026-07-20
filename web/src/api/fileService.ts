@@ -13,6 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 
 import { api } from "./index";
+import { writeVerified } from "./writeVerified";
 import { API_PREFIX, apiFetch } from "./http";
 import type { DownloadPrepared } from "./kb";
 import { qk } from "./queryKeys";
@@ -81,7 +82,19 @@ export function investigationFileService(slug: string, investigationId: string):
     listFiles: (prefix) => api.listFiles(slug, investigationId, prefix),
     listDirs: () => api.listDirs(slug, investigationId),
     readFile: (path) => api.readFile(slug, investigationId, path),
-    writeFile: (path, body) => api.writeFile(slug, investigationId, path, body),
+    // #493: "did the response come back OK" and "are the bytes there" differ
+    // exactly when the connection is cut AFTER the body was sent — and the
+    // server has usually stored the file by then. Deciding that here means no
+    // writer (file tree, attachments, skills/workflows/collections pickers, the
+    // editor's save, both KB IDEs) can get it wrong by omission.
+    writeFile: (path, body) =>
+      writeVerified(
+        () => api.writeFile(slug, investigationId, path, body),
+        async () => {
+          const all = await api.listFiles(slug, investigationId);
+          return all.some((f) => f.path === path || f.path === `/${path.replace(/^\//, "")}`);
+        },
+      ),
     deleteFile: (path) => api.deleteFile(slug, investigationId, path),
     moveFile: (from, to) => api.moveFile(slug, investigationId, from, to),
     copyFile: (from, to) => api.copyFile(slug, investigationId, from, to),

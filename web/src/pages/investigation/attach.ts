@@ -7,6 +7,7 @@
  * logic (path derivation, draft text, upload orchestration with progress) so the UI
  * in AgentPanel stays thin and the behaviour is unit-testable.
  */
+import { isInconclusive } from "../../api/writeVerified";
 import { mapWithConcurrency } from "../../api/concurrency";
 
 /** The folder a chat attach stages into for the item's active profile (#198), from
@@ -81,10 +82,6 @@ export interface AttachProgress {
  * time (a folder pick can be thousands of files). A 413 routes to `tooLarge`, any other
  * error to `failed`; both skip that file and keep going (one bad file never aborts the
  * batch). `onProgress` fires with aggregate byte + file counts for a single progress bar. */
-/** Upload outcomes that say "the request was cut", not "the file was refused" —
- * the body may already have reached the server. */
-const INCONCLUSIVE = new Set([0, 502, 503, 504]);
-
 export async function runAttach(opts: {
   files: File[];
   uploadDir: string;
@@ -132,7 +129,7 @@ export async function runAttach(opts: {
       const status = (err as { status?: number }).status;
       if (status === 413) tooLarge[i] = path;
       else if (status === 507) overQuota[i] = path;
-      else if (INCONCLUSIVE.has(status ?? -1) && verify) {
+      else if (isInconclusive(err) && verify) {
         // The request was cut, not refused — go and look before accusing it.
         // A definite rejection (413/507) is never second-guessed: asking would
         // only be slower, and could mistake a leftover file for a success.

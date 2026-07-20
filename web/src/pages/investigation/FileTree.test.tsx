@@ -308,24 +308,10 @@ describe("<FileTree /> upload target", () => {
     vi.unstubAllGlobals();
   });
 
-  it("says nothing when a cut connection turns out to have stored the file", async () => {
-    const user = userEvent.setup();
-    const alertSpy = vi.fn();
-    vi.stubGlobal("alert", alertSpy);
-    // The body was sent; the response never came back. The file IS there.
-    const writeFile = vi.fn(async () => {
-      throw Object.assign(new Error("network error"), { status: 0 });
-    });
-    const listFiles = vi.fn(async () => [{ path: "/mydir/up.md", size: 1 }]);
-    renderWith(spyService({ writeFile, listFiles }), [{ path: "/mydir/a.md", size: 1 }]);
-    await user.click(screen.getByText("mydir"));
-    fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
-
-    await waitFor(() => expect(listFiles).toHaveBeenCalled());
-    expect(alertSpy).not.toHaveBeenCalled();
-    vi.unstubAllGlobals();
-  });
-
+  // Resolving an inconclusive failure against the file list now lives at the
+  // service boundary (api/writeVerified), so every writer gets it — by the time
+  // an error reaches the tree, the write really did not land, and the tree's job
+  // is only to report it without inventing a reason.
   it("still reports a cut connection that really did lose the file", async () => {
     const user = userEvent.setup();
     const alertSpy = vi.fn();
