@@ -550,6 +550,30 @@ class LocalProcessSandbox:
             raise FileNotFoundError(remote_path)
         await asyncio.to_thread(shutil.copyfile, target, local_path)
 
+    async def disk_usage(self, handle: SandboxHandle) -> int:
+        cwd = self._workspace(handle)
+        return await asyncio.to_thread(self._du_sync, cwd)
+
+    @staticmethod
+    def _du_sync(base: Path) -> int:
+        """Apparent bytes under `base` — the same quantity `walk` reports per
+        file, so the quota figure and the file tree agree. Symlinks are not
+        followed, so a link into a shared tree isn't charged here."""
+        total = 0
+        for p in base.rglob("*"):
+            if p.is_file() and not p.is_symlink():
+                total += p.stat().st_size
+        return total
+
+    async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
+        cwd = self._workspace(handle)
+        target = self._resolve(cwd, path)
+        return await asyncio.to_thread(self._size_sync, target)
+
+    @staticmethod
+    def _size_sync(target: Path) -> int | None:
+        return target.stat().st_size if target.is_file() else None
+
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
         cwd = self._workspace(handle)
         return await asyncio.to_thread(self._resolve(cwd, path).is_file)

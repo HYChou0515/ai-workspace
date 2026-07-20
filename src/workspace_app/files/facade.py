@@ -27,7 +27,6 @@ from pathlib import Path
 
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound
-from ..sync.ignore import DEFAULT_IGNORES, should_ignore
 
 # How many times an etag-guarded edit re-bases against a concurrent writer
 # before giving up and reporting a conflict. A handful is plenty — contention
@@ -47,31 +46,21 @@ _USAGE_WINDOW_S = 5.0
 
 
 class _Measurement:
-    """A workspace's file sizes and their total, kept in step.
+    """A workspace's size, and when it was taken.
 
-    The total is maintained rather than re-summed because the quota is asked on
-    every gated write; and it lives HERE, next to the map it summarises, so the
-    two cannot drift — the reason not to keep a running total was the risk of
-    maintaining it in several places, which this removes rather than accepts.
+    Just a number now. It used to carry a `path -> size` map as well, because
+    the quota also needs the size of the file being overwritten — but that map
+    was one file-tree-sized dict per warm item, held in THIS process, and the
+    two bugs it caused (a leak, twice, and an O(n) re-sum per write) both came
+    from keeping a copy of the sandbox here. `size_of` answers the per-file
+    half from the sandbox instead, so both halves come from the same live
+    source without either being mirrored into app memory."""
 
-    The map is not an optimisation: the quota needs both the workspace's total
-    AND the size of the file being overwritten, and taking those from different
-    sources is what once made a warm-only file count against the workspace but
-    credit back as zero."""
+    __slots__ = ("at", "total")
 
-    __slots__ = ("at", "sizes", "total")
-
-    def __init__(self, at: float, sizes: dict[str, int]) -> None:
+    def __init__(self, at: float, total: int) -> None:
         self.at = at
-        self.sizes = sizes
-        self.total = sum(sizes.values())
-
-    def set(self, path: str, size: int) -> None:
-        self.total += size - self.sizes.get(path, 0)
-        self.sizes[path] = size
-
-    def drop(self, path: str) -> None:
-        self.total -= self.sizes.pop(path, 0)
+        self.total = total
 
 
 class WorkspaceFull(Exception):
@@ -153,7 +142,6 @@ class WorkspaceFiles:
         handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
         rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
         quota: int = 0,
-        ignores: list[str] | None = None,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -162,15 +150,6 @@ class WorkspaceFiles:
         # #538: bytes one workspace may occupy; 0 ⇒ unlimited (the default, so the
         # wiki-page stores and other non-workspace uses are never gated).
         self._quota = quota
-        # #538: the paths the measurement skips — the SAME set `SandboxSync.mirror`
-        # filters out before writing the durable store. The quota protects that
-        # durable disk, so charging for bytes the mirror deliberately never sends
-        # there would let one `npm install` inside the workspace eat the whole
-        # quota with content that is never persisted, and would make the number
-        # jump the moment a reap moved the measurement to the durable side.
-        # (`registry._scratch_usage` counting them is correct — its cap guards the
-        # scratch volume, which really does hold them.)
-        self._ignores = DEFAULT_IGNORES if ignores is None else ignores
         # Async resolver: item → the handle its ONE live sandbox is reachable at,
         # or None when the item is globally cold (#492 same-source resolution).
         self._handle_for = handle_for
@@ -250,8 +229,8 @@ class WorkspaceFiles:
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         path = _norm(path)
         warm = await self._warm(workspace_id)
-        await self._ensure_headroom(workspace_id, path, len(data), warm)
-        await self._write_unchecked(workspace_id, path, data, warm)
+        previous = await self._ensure_headroom(workspace_id, path, len(data), warm)
+        await self._write_unchecked(workspace_id, path, data, warm, previous)
 
     async def _write_unchecked(
         self,
@@ -259,15 +238,24 @@ class WorkspaceFiles:
         path: str,
         data: bytes,
         warm: tuple[Sandbox, SandboxHandle] | None,
+        previous: int | None = None,
     ) -> None:
         """The write itself, without the quota gate — for callers that have
-        already established the operation cannot grow the workspace."""
+        already established the operation cannot grow the workspace.
+
+        `previous` is what the path held before, when the caller happens to know
+        it (the gate looked it up). Knowing it keeps the measurement exact across
+        a batch; not knowing it drops the measurement so the next read is honest
+        rather than guessed."""
         if warm is not None:
             sb, h = warm
             await sb.upload(h, data, path)
         else:
             await self._fs.write(workspace_id, path, data)
-        self._record(workspace_id, path, len(data))
+        if previous is None:
+            self._forget(workspace_id)
+        else:
+            self._adjust(workspace_id, len(data) - previous)
 
     async def move(self, workspace_id: str, src: str, dst: str) -> None:
         """Relocate one file. **Not** quota-gated, and deliberately so: the bytes
@@ -325,7 +313,7 @@ class WorkspaceFiles:
                 raise FileExists(path)
             await self._ensure_headroom(workspace_id, path, len(data), warm)
             await sb.upload(h, data, path)
-            self._record(workspace_id, path, len(data))
+            self._adjust(workspace_id, len(data))  # proven absent above
             return
         if await self._fs.exists(workspace_id, path):
             raise FileExists(path)
@@ -349,13 +337,17 @@ class WorkspaceFiles:
         # is rejected before it's staged; this is the backstop that keeps the rule
         # true for any future caller that doesn't.
         warm = await self._warm(workspace_id)
-        await self._ensure_headroom(workspace_id, path, source.stat().st_size, warm)
+        size = source.stat().st_size
+        previous = await self._ensure_headroom(workspace_id, path, size, warm)
         if warm is not None:
             sb, h = warm
             await sb.upload_file(h, source, path)
         else:
             await self._fs.write_from_path(workspace_id, path, source, content_type)
-        self._record(workspace_id, path, source.stat().st_size)
+        if previous is None:
+            self._forget(workspace_id)
+        else:
+            self._adjust(workspace_id, size - previous)
 
     async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
         """Like `read`, but stream the bytes out to the on-disk `dest` — RAM-free
@@ -409,101 +401,90 @@ class WorkspaceFiles:
         MUST come from the same source as `used`, or the two halves of the
         subtraction disagree and a warm-only file is charged twice."""
         path = _norm(path)
-        measured = await self._measurement(workspace_id, await self._warm(workspace_id))
-        if measured is not None:
-            return measured.sizes.get(path)
+        warm = await self._warm(workspace_id)
+        if warm is not None:
+            sb, h = warm
+            return await sb.size_of(h, path)
         size = getattr(self._fs, "file_size", None)
         return await size(workspace_id, path) if size is not None else None
 
     async def _measurement(
         self, workspace_id: str, warm: tuple[Sandbox, SandboxHandle] | None
     ) -> _Measurement | None:
-        """The workspace's current measurement, or ``None`` when it is cold (the
-        caller falls back to the durable store).
+        """The workspace's current size, or ``None`` when it is cold (the caller
+        falls back to the durable store).
 
         Normally this is whatever the mirror sweep last installed
-        (`record_measurement`) — the sweep walks every warm sandbox anyway, so
-        nobody's request has to. Walking here is the COLD-START fallback, for a
-        pod that has no session on this item and therefore never swept it: it is
-        better to pay one traversal than to answer from the durable snapshot,
-        whose additive-only reconciliation is what #538 was about.
+        (`record_measurement`) — the sweep traverses every warm sandbox anyway,
+        so nobody's request has to. Measuring here is the COLD-START fallback,
+        for a pod with no session on this item: one traversal beats answering
+        from the durable snapshot, whose additive-only reconciliation is what
+        #538 was about.
 
         `warm` is passed in rather than resolved here so a gated write probes
         sandbox liveness ONCE: the gate and the write that follows it share one
         answer instead of each paying a round-trip."""
         if warm is None:
-            self._tree.pop(workspace_id, None)  # went cold; don't serve stale sizes
+            self._tree.pop(workspace_id, None)  # went cold; don't serve a stale size
             return None
         cached = self._tree.get(workspace_id)
         if cached is not None and self._now() - cached.at < self._window:
             return cached
         async with self._walk_locks[workspace_id]:
             # Re-check: whoever held the lock has just installed a fresh
-            # measurement, and taking it is the point — a second walk would
+            # measurement, and taking it is the point — measuring again would
             # overwrite theirs along with any write recorded against it.
             cached = self._tree.get(workspace_id)
             if cached is not None and self._now() - cached.at < self._window:
                 return cached
-            return await self._walk_into_memo(workspace_id, warm)
+            now = self._now()
+            sb, h = warm
+            try:
+                total = await sb.disk_usage(h)
+            except (SandboxNotFound, SandboxBusy):
+                logger.warning(
+                    "files: cannot measure workspace %s (sandbox unreachable) — "
+                    "falling back to the durable snapshot",
+                    workspace_id,
+                )
+                return None
+            measured = _Measurement(now, total)
+            self._install(workspace_id, measured)
+            return measured
 
-    async def _walk_into_memo(
-        self, workspace_id: str, warm: tuple[Sandbox, SandboxHandle]
-    ) -> _Measurement | None:
-        """Measure by walking. Returns ``None`` when the sandbox cannot be read —
-        the caller then answers from the durable store rather than failing, so a
-        busy or just-reaped sandbox degrades the number's freshness instead of
-        turning a usage read into a 500 or refusing a write outright."""
-        now = self._now()
-        sb, h = warm
-        try:
-            entries = await sb.walk(h, "/")
-        except (SandboxNotFound, SandboxBusy):
-            logger.warning(
-                "files: cannot measure workspace %s (sandbox unreachable) — "
-                "falling back to the durable snapshot",
-                workspace_id,
-            )
-            return None
-        sizes = {e.path: e.size for e in entries if not should_ignore(e.path, self._ignores)}
-        measured = _Measurement(now, sizes)
-        self._install(workspace_id, measured)
-        return measured
+    def record_measurement(self, workspace_id: str, total: int) -> None:
+        """Install a size taken elsewhere — by the mirror sweep, which traverses
+        every warm sandbox on its own cadence (#538 follow-up).
 
-    def record_measurement(self, workspace_id: str, sizes: dict[str, int]) -> None:
-        """Install a measurement taken elsewhere — by the mirror sweep, which
-        already walks every warm sandbox on its own cadence (#538 follow-up).
-
-        This is what keeps the walk OFF the request path: without it the
+        This is what keeps the traversal OFF the request path: without it the
         measurement is taken lazily by whichever request first finds the window
-        expired, so that user pays for the traversal and sees its errors. The
-        sweep filters the same ignore set it mirrors with, so the quota counts
-        exactly the bytes that reach the durable store."""
-        self._install(workspace_id, _Measurement(self._now(), sizes))
+        expired, so that user pays for it and sees its errors."""
+        self._install(workspace_id, _Measurement(self._now(), total))
 
     def _install(self, workspace_id: str, measured: _Measurement) -> None:
         """Store a measurement, dropping any that have expired.
 
-        The expiry rides along with EVERY install, not just the walking one: a
-        pod serves many items over its life and each measurement is the size of
-        a file tree, so once the sweep became the normal source and walks became
-        rare, cleanup that only happened on a walk stopped happening at all."""
+        The expiry rides along with EVERY install, not just the measuring one:
+        once the sweep became the normal source and direct measurement became
+        rare, cleanup that only happened on the latter stopped happening."""
         for other, previous in list(self._tree.items()):
             if measured.at - previous.at >= self._window:
                 del self._tree[other]
         self._tree[workspace_id] = measured
 
-    def _record(self, workspace_id: str, path: str, size: int | None) -> None:
-        """Fold a write (``size``) or a delete (``None``) this facade just made
-        into the current measurement, so a batch of writes stays exact instead of
-        charging against a pre-batch number for a whole window. A no-op when
-        nothing is measured — the next read measures."""
+    def _adjust(self, workspace_id: str, delta: int) -> None:
+        """Fold a change this facade just made into the current measurement, so
+        a batch stays exact instead of charging a whole window against a
+        pre-batch number. A no-op when nothing is measured, or when the size of
+        what changed isn't known — the next read measures."""
         measured = self._tree.get(workspace_id)
-        if measured is None:
-            return
-        if size is None:
-            measured.drop(path)
-        else:
-            measured.set(path, size)
+        if measured is not None:
+            measured.total += delta
+
+    def _forget(self, workspace_id: str) -> None:
+        """Drop the measurement after a change whose size we didn't compute, so
+        the next read measures rather than serving a number we know is stale."""
+        self._tree.pop(workspace_id, None)
 
     async def _ensure_headroom(
         self,
@@ -511,7 +492,7 @@ class WorkspaceFiles:
         path: str,
         new_size: int,
         warm: tuple[Sandbox, SandboxHandle] | None,
-    ) -> None:
+    ) -> int | None:
         """Refuse a write that would push the workspace past its quota (#538).
 
         The rule is about GROWTH, not about being over: a write that doesn't make
@@ -519,13 +500,19 @@ class WorkspaceFiles:
         is always allowed, even when the workspace is already over. Otherwise a
         workspace that went over (the mirror is ungated, so it can) would be
         wedged: the user is told to delete things, but the tools they'd use to
-        tidy up are refused too. Deletes are never gated for the same reason."""
+        tidy up are refused too. Deletes are never gated for the same reason.
+
+        Returns the size `path` had before the write — the caller folds
+        `new - previous` into the measurement so a batch stays exact. ``None``
+        when there is no quota and nothing was looked up; the caller then drops
+        its measurement rather than guessing."""
         if not self._quota:
-            return
+            return None
         used, old = await self._usage_and_size(workspace_id, path, warm)
         growth = new_size - old
         if growth > 0 and used + growth > self._quota:
             raise WorkspaceFull(used=used, quota=self._quota, attempted=new_size)
+        return old
 
     async def ensure_room_for(self, workspace_id: str, extra_bytes: int) -> None:
         """Refuse up front if `extra_bytes` more would not fit (#538).
@@ -550,7 +537,9 @@ class WorkspaceFiles:
         path = _norm(path)
         measured = await self._measurement(workspace_id, warm)
         if measured is not None:
-            return measured.total, measured.sizes.get(path, 0)
+            assert warm is not None  # a measurement implies a live sandbox
+            sb, h = warm
+            return measured.total, (await sb.size_of(h, path) or 0)
         # Cold. Read the durable store DIRECTLY rather than via the public
         # `workspace_usage`/`file_size`, which would each re-resolve liveness —
         # turning one gated write into several sandbox round-trips, and letting
@@ -591,6 +580,15 @@ class WorkspaceFiles:
     async def delete(self, workspace_id: str, path: str) -> None:
         path = _norm(path)
         warm = await self._warm(workspace_id)
+        # What it cost, so the measurement can be adjusted instead of dropped.
+        # Deleting is exactly what a user does when they are out of space, and
+        # dropping the measurement would make every one of those deletes force a
+        # fresh traversal on the next read. Only worth asking when there IS a
+        # measurement to keep — otherwise the next read measures anyway.
+        freed: int | None = None
+        if warm is not None and self._tree.get(workspace_id) is not None:
+            sb, h = warm
+            freed = await sb.size_of(h, path)
         if warm is not None:
             sb, h = warm
             try:
@@ -599,7 +597,10 @@ class WorkspaceFiles:
                 raise FileNotFound(path) from exc
         else:
             await self._fs.delete(workspace_id, path)
-        self._record(workspace_id, path, None)
+        if freed is None:
+            self._forget(workspace_id)
+        else:
+            self._adjust(workspace_id, -freed)
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = _norm(prefix) if prefix else prefix

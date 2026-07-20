@@ -190,6 +190,19 @@ class DockerSandbox:
         r = await asyncio.to_thread(container.exec_run, ["test", "-f", self._target(path)])
         return r.exit_code == 0
 
+    async def disk_usage(self, handle: SandboxHandle) -> int:
+        """#538. DEPRECATED backend (#252): summed from `walk` rather than a
+        native `du`, which is the shape the protocol describes without the
+        speed. Kept correct, not fast — new deploys use `kind: http`."""
+        return sum(e.size for e in await self.walk(handle, "/"))
+
+    async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
+        container = self._require(handle)
+        r = await asyncio.to_thread(container.exec_run, ["stat", "-c", "%s", self._target(path)])
+        if r.exit_code != 0:
+            return None
+        return int(r.output.decode().strip())
+
     async def mark_ready(self, handle: SandboxHandle) -> None:
         # #366: marker at the container root (`/.ready`), OUTSIDE the `/workspace`
         # walk scope — so it never shows up in the file tree or in sync.

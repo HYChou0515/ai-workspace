@@ -386,7 +386,7 @@ def create_app(
         filestore=filestore,
         sandbox=sandbox,
         monitor=monitor,
-        on_measured=lambda ws, sizes: files.record_measurement(ws, sizes),
+        on_measured=lambda ws, total: files.record_measurement(ws, total),
     )
     # #345: only the local process sandbox keeps an item's working dir on a
     # shared volume across pods, so only it needs the GLOBAL activity heartbeat

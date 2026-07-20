@@ -73,6 +73,14 @@ class _FileEntryModel(BaseModel):
     version: str = ""
 
 
+class _DiskUsageReply(BaseModel):
+    bytes: int
+
+
+class _SizeReply(BaseModel):
+    size: int | None
+
+
 class _WalkReply(BaseModel):
     entries: list[_FileEntryModel]
 
@@ -333,6 +341,18 @@ def make_host_app(
     async def exists(rid: str, path: str) -> _ExistsReply:
         ok = await sandbox.exists(SandboxHandle(id=rid), path)
         return _ExistsReply(exists=ok)
+
+    @app.get("/sandboxes/{rid}/disk-usage")
+    async def disk_usage(rid: str) -> _DiskUsageReply:
+        """#538: the workspace's size as ONE number. The app's quota asks the
+        host rather than walking the tree and adding entries up itself — the
+        answer comes from the side that owns the disk, so every app pod looking
+        at this sandbox gets the same figure."""
+        return _DiskUsageReply(bytes=await sandbox.disk_usage(SandboxHandle(id=rid)))
+
+    @app.get("/sandboxes/{rid}/size")
+    async def size_of(rid: str, path: str) -> _SizeReply:
+        return _SizeReply(size=await sandbox.size_of(SandboxHandle(id=rid), path))
 
     @app.post("/sandboxes/{rid}/mark-ready", status_code=204)
     async def mark_ready(rid: str) -> None:
