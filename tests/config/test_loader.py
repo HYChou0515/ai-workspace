@@ -954,13 +954,11 @@ def test_sandbox_log_timeout_defaults_to_60_and_is_configurable(tmp_path: Path):
 
 def test_sandbox_isolation_block_loads_as_typed_dataclass_345(tmp_path: Path):
     """#345: operator YAML for the per-item-user isolation block must construct
-    the nested `SandboxIsolationSettings` (typed access), not a raw dict — and
-    `max_workspace_bytes` rides the flat sandbox section."""
+    the nested `SandboxIsolationSettings` (typed access), not a raw dict."""
     cfg = tmp_path / "config.yaml"
     cfg.write_text(
         dedent("""
             sandbox:
-              max_workspace_bytes: 1048576
               isolation:
                 enabled: true
                 memory_max: 1G
@@ -969,12 +967,29 @@ def test_sandbox_isolation_block_loads_as_typed_dataclass_345(tmp_path: Path):
         encoding="utf-8",
     )
     s = load(config_path=cfg, env={})
-    assert s.sandbox.max_workspace_bytes == 1048576
     iso = s.sandbox.isolation
     assert iso.enabled is True
     assert iso.memory_max == "1G"
     assert iso.cpu_cores == 2.0
     assert iso.uid_base == 1_000_000  # untouched key keeps its default
+
+
+def test_a_removed_sandbox_key_is_rejected_loudly(tmp_path: Path):
+    """#538: `sandbox.max_workspace_bytes` was a SECOND quota over the same
+    bytes, with its own measurement that disagreed. It is gone, and the loader's
+    unknown-key rule means a config still carrying it fails at boot rather than
+    silently doing nothing — an operator who set a cap deserves to be told it no
+    longer exists."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            sandbox:
+              max_workspace_bytes: 1048576
+        """),
+        encoding="utf-8",
+    )
+    with pytest.raises(Exception, match="max_workspace_bytes"):
+        load(config_path=cfg, env={})
 
 
 def test_sandbox_durable_block_loads_as_typed_dataclass_501(tmp_path: Path):

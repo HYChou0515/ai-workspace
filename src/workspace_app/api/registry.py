@@ -450,15 +450,20 @@ class InvestigationRegistry:
         return recycled
 
     async def _scratch_usage(self, handle: SandboxHandle) -> int:
-        """Bytes the item's working dir occupies — the du basis for the scratch
-        quota. Summed from the sandbox's own ``walk`` so it works for every
-        backend (the shared local dir, mock, http) without a new Protocol method.
+        """Bytes the item occupies — the SAME measurement the quota gates on
+        (`Sandbox.disk_usage`), not a second one of our own.
+
+        It used to sum `walk`, "so it works for every backend without a new
+        Protocol method". That method exists now, and the hand-rolled sum was
+        wrong for this job anyway: `walk` only sees the workspace, so the sweep
+        never counted the per-sandbox `$HOME` — exactly where a runaway
+        `pip install --user` lands, which is the runaway it exists to catch.
+
         A cold/absent dir reports 0 (nothing to reap)."""
         try:
-            entries = await self.sandbox.walk(handle, "/")
+            return await self.sandbox.disk_usage(handle)
         except SandboxNotFound:
             return 0
-        return sum(e.size for e in entries)
 
     async def _globally_idle(self, investigation_id: str, cutoff_ms: int) -> bool:
         """True when no pod has touched the item's shared dir since ``cutoff_ms``.

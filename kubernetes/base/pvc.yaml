@@ -33,7 +33,7 @@ spec:
   # a runaway item filling the scratch vol can't threaten the archive. Must be
   # ReadWriteMany (the shared-dir model needs every pod to mount it). The idle
   # reaper recycles each item's dir back to the durable archive, then frees it
-  # here; size for peak concurrent live workspaces (+ `sandbox.max_workspace_bytes`
+  # here; size for peak concurrent live workspaces (+ `filestore.workspace_quota`
   # caps any single item).
   accessModes:
     - ReadWriteMany
