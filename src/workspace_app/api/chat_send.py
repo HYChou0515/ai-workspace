@@ -137,8 +137,39 @@ class ChatSendService:
         # client watches the live SSE stream, refetching the thread on `done`.
         self._send_await_timeout = send_await_timeout
         self._conv_rm = spec.get_resource_manager(Conversation)
+        # Strong references to in-flight sends (see `send`): asyncio keeps only a
+        # weak one, so an un-referenced task can be collected mid-flight.
+        self._inflight: set[asyncio.Task[None]] = set()
 
     async def send(
+        self,
+        investigation_id: str,
+        rid: str,
+        conv: Conversation,
+        engine_key: str,
+        body: _MessageBody,
+    ) -> None:
+        """Append the user message, build the turn ctx and enqueue it — see
+        :meth:`_send` — but do it in a task this request only WATCHES.
+
+        Everything from persisting the user message to `enqueue` is I/O that can
+        outlast the client's connection: a cold sandbox wake, a slow store, image
+        loading, context and skill file reads. If the request died in that window
+        the message was already persisted while the turn was never created, so the
+        composer stayed locked forever waiting for a reply that nobody was ever
+        going to produce — and no amount of client-side recovery can invent a turn
+        that does not exist.
+
+        `shield` keeps the work running when this request is cancelled, while a
+        live request still sees its exceptions exactly as before. The strong
+        reference matters: asyncio holds only a weak one, so an un-referenced task
+        can be collected mid-flight, which is the very failure being prevented."""
+        task = asyncio.create_task(self._send(investigation_id, rid, conv, engine_key, body))
+        self._inflight.add(task)
+        task.add_done_callback(self._inflight.discard)
+        await asyncio.shield(task)
+
+    async def _send(
         self,
         investigation_id: str,
         rid: str,

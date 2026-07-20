@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
-from typing import cast
+from typing import Any, cast
 
 from workspace_app.agent import AgentToolContext
 from workspace_app.api import MessageDelta, RunDone
@@ -291,3 +291,58 @@ async def test_close_streams_lets_a_key_change_be_recovered():
 async def test_close_streams_is_a_no_op_for_a_key_nobody_watches():
     engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
     engine.close_streams("never-subscribed")  # must not raise or create noise
+
+
+async def test_a_send_survives_its_request_being_cancelled():
+    """A dead connection must not leave a message with no turn.
+
+    `ChatSendService.send` persists the user's message and only THEN does the I/O
+    that can outlast the connection — a cold sandbox wake, a slow store, image
+    and skill file reads — before enqueuing. A request cancelled in that window
+    left the message persisted and the turn never created, so the composer stayed
+    locked forever waiting for a reply nobody was going to produce. No amount of
+    client-side recovery can invent a turn that does not exist.
+    """
+    from workspace_app.api.chat_send import ChatSendService
+
+    finished = asyncio.Event()
+    started = asyncio.Event()
+
+    service = object.__new__(ChatSendService)  # the protection, not the wiring
+    service._inflight = set()
+
+    async def _slow(*_a, **_k) -> None:  # noqa: ANN002, ANN003
+        started.set()
+        await asyncio.sleep(0.1)  # the window between persist and enqueue
+        finished.set()
+
+    service._send = _slow
+
+    caller = asyncio.create_task(
+        service.send("inv", "c1", cast("Any", None), "inv", cast("Any", None))
+    )
+    await asyncio.wait_for(started.wait(), 3)
+    caller.cancel()  # the client hung up
+
+    await asyncio.wait_for(finished.wait(), 3)
+
+
+async def test_a_send_still_reports_its_own_failure_to_a_live_request():
+    """Shielding must not swallow errors: a request that is still there has to
+    see the exception, or a bad send would silently 202."""
+    from workspace_app.api.chat_send import ChatSendService
+
+    service = object.__new__(ChatSendService)
+    service._inflight = set()
+
+    async def _boom(*_a, **_k) -> None:  # noqa: ANN002, ANN003
+        raise RuntimeError("bad request")
+
+    service._send = _boom
+
+    try:
+        await service.send("inv", "c1", cast("Any", None), "inv", cast("Any", None))
+    except RuntimeError as exc:
+        assert "bad request" in str(exc)
+    else:  # pragma: no cover - the assertion below names the failure
+        raise AssertionError("the send's failure never reached the caller")
