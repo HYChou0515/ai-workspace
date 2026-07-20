@@ -579,6 +579,8 @@ def create_app(
         card_drafter_llm=card_drafter_llm,
         sanity_llm_factory=sanity_llm_factory,  # ty: ignore[invalid-argument-type]
         sanity_judge_llm=sanity_judge_llm,
+        # #535: retrieval-eval question generation runs on the KB llm.
+        eval_llm=kb_llm,
         # #506 P6: the same KB text embedder the ingestor/retriever use, so the
         # card-gen reconcile compares candidates + cards in one vector space.
         embedder=embedder,
@@ -643,6 +645,13 @@ def create_app(
         quality_weight=kb_quality_weight,
         quality_floor=kb_quality_floor,
     )
+    # #535: wire the retrieval-eval coordinator's retriever (built after
+    # build_coordinators). Its EvalJob model + auto route are already registered;
+    # this lets an all-in-one deploy (run_consumers=true) also consume eval jobs.
+    eval_coordinator = coordinators.eval
+    if eval_coordinator is not None:
+        eval_coordinator.set_retriever(kb_retriever)
+    app.state.eval_coordinator = eval_coordinator
     register_kb_routes(
         api,
         spec,
