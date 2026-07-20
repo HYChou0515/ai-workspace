@@ -14,8 +14,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-import msgspec
-from specstar import QB, SpecStar
+from specstar import QB, MergePatch, SpecStar
 
 from ..perm import Actor, Permission, Verb, authorize
 from ..resources.kb import Collection, SourceDoc
@@ -114,33 +113,42 @@ def push_mirror_to_docs(
     created_by: str,
 ) -> int:
     """Re-push the collection's read-visibility mirror onto every SourceDoc in it
-    (the #303 fan-out). specstar has no bulk update, so this is a per-doc loop —
-    run OFF the event loop by the caller. Runs as ``created_by`` (the collection
-    owner) so each doc keeps its own ``created_by`` while ``updated_by`` records
-    the fan-out. A doc already carrying the target mirror is skipped so a no-op
-    change doesn't churn revisions. Returns the number of docs actually updated.
-    """
+    (the #303 fan-out) — ONE ``patch_many`` (specstar #434), run OFF the event loop
+    by the caller. Runs as ``created_by`` (the collection owner) so each doc keeps
+    its own ``created_by`` while ``updated_by`` records the fan-out. Returns the
+    number of docs actually moved.
+
+    The mirror fields are named explicitly rather than diffed first: a merge patch
+    that changes nothing creates no revision, so specstar's own no-op detection
+    replaces the pre-#434 "read the doc, compare, skip" loop — which had to load
+    every doc's full data blob (multi-KB of extracted text) just to decide it had
+    nothing to do.
+
+    A row whose revision moved between selection and write is reported as a
+    CONFLICT and left alone; that is expected here because indexing writes to the
+    same rows. The patch is idempotent, so we simply re-run once for those. What
+    must NOT happen is a quiet under-count: ``patch_many`` collects an unwritable
+    row instead of raising, and a doc left on the OLD (looser) mirror while the
+    caller is told the tightening succeeded is a read leak. So anything still
+    unwritten after the retry raises."""
     drm = spec.get_resource_manager(SourceDoc)
-    target = list(read_meta)
-    updated = 0
-    with drm.using(created_by):
-        for r in drm.list_resources((QB["collection_id"] == collection_id).build()):
-            doc = r.data
-            assert isinstance(doc, SourceDoc)
-            if (
-                doc.collection_visibility == visibility
-                and doc.collection_read_meta == target
-                and doc.collection_created_by == created_by
-            ):
-                continue
-            drm.update(
-                r.info.resource_id,  # ty: ignore[unresolved-attribute]
-                msgspec.structs.replace(
-                    doc,
-                    collection_visibility=visibility,
-                    collection_read_meta=target,
-                    collection_created_by=created_by,
-                ),
-            )
-            updated += 1
+    query = (QB["collection_id"] == collection_id).build()
+    patch = MergePatch(
+        {
+            "collection_visibility": visibility,
+            "collection_read_meta": list(read_meta),
+            "collection_created_by": created_by,
+        }
+    )
+    result = drm.patch_many(query, patch, user=created_by)
+    updated = result.patched
+    if result.conflicts:
+        retry = drm.patch_many(query, patch, user=created_by)
+        updated += retry.patched
+        result = retry
+    if result.conflicts or result.failures:
+        raise RuntimeError(
+            f"collection {collection_id}: the permission mirror did not reach every doc — "
+            f"conflicts={result.conflicts} failures={result.failures}"
+        )
     return updated
