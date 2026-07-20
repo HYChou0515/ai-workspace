@@ -4,6 +4,7 @@ so it self-corrects instead of just dying on `Extra data`."""
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 import pytest
@@ -414,3 +415,45 @@ async def test_real_values_for_nullable_params_survive():
     seen.clear()
     await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"query": "x", "page_from": "30"}))
     assert seen[0]["page_from"] == "30"  # left for pydantic's own int coercion
+
+
+async def test_a_schema_validation_failure_is_logged_with_the_offending_args(caplog):
+    """This failure is invisible today, and that is why it survived in production.
+
+    The SDK catches a pydantic ValidationError inside the tool invoker and turns
+    it into a tool RESULT string, so it never reaches our runner's error path,
+    never becomes a `ToolCallParseError` event, and never lands in a log an
+    operator would read. The model quietly retries and the turn eventually
+    succeeds — so from the outside it looks only "slow", and nobody can tell WHICH
+    argument the model got wrong.
+
+    We cannot intercept the exception (it is caught before it reaches us), but the
+    result carries the SDK's own signature, so the wrap recognises it and records
+    the tool, the args it was called with, and the reason. That log line is how a
+    production model tells us which spelling it actually emits — the thing this
+    fix could not be verified against locally."""
+
+    async def sdk_style_validation_failure(_ctx: ToolContext[Any], _args: str) -> str:
+        return (
+            "An error occurred while running the tool. Please try again. Error: "
+            "Invalid JSON input for tool kb_search: 1 validation error for kb_search_args\n"
+            "page_from\n  Input should be a valid integer, unable to parse string as an "
+            "integer [type=int_parsing, input_value='None', input_type=str]"
+        )
+
+    tool = FunctionTool(
+        name="kb_search",
+        description="d",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=sdk_style_validation_failure,
+        strict_json_schema=True,
+    )
+    wrapped = wrap_with_args_recovery(tool)
+    with caplog.at_level(logging.WARNING, logger="workspace_app.agent.args_recovery"):
+        out = await wrapped.on_invoke_tool(_tool_ctx(), json.dumps({"page_from": "None"}))
+
+    assert "Invalid JSON input" in out  # the model still gets its feedback, unchanged
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "kb_search" in logged
+    assert "page_from" in logged  # WHICH argument
+    assert "None" in logged  # and what it actually sent

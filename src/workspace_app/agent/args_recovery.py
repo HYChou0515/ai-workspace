@@ -215,6 +215,35 @@ def _null_impossible_values(args: dict[str, Any], schema: dict[str, Any]) -> dic
     return out
 
 
+# The agents-SDK catches a pydantic ValidationError inside its tool invoker and
+# returns this shape as a tool RESULT (see `default_tool_error_function`). That
+# is why an argument the model got wrong never reaches our runner's error path,
+# never becomes a `ToolCallParseError`, and never lands in an operator's log —
+# the model just retries in-band and the turn looks merely slow.
+_SDK_VALIDATION_ERROR = "Invalid JSON input for tool"
+
+
+def _log_if_schema_rejected(tool_name: str, args: dict[str, Any], result: str) -> None:
+    """Record a schema rejection the SDK swallowed, with the args that caused it.
+
+    We cannot intercept the exception — it is caught before control returns to us —
+    but the result carries the SDK's own signature, so this recognises it and logs
+    what the model actually sent. Without this the only symptom is "the first call
+    is always slow", with no way to tell WHICH argument or WHICH spelling was at
+    fault, which is exactly how this defect survived unnoticed in production.
+
+    The result itself is returned to the model unchanged: the feedback it needs to
+    self-correct is not ours to edit."""
+    if _SDK_VALIDATION_ERROR not in result:
+        return
+    _LOGGER.warning(
+        "args_recovery: %s rejected the model's args by schema; args=%s reason=%s",
+        tool_name,
+        json.dumps(args, ensure_ascii=False)[:500],
+        result.split(_SDK_VALIDATION_ERROR, 1)[1][:500],
+    )
+
+
 def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     """Return a FunctionTool that classifies bad model args before running.
 
@@ -308,7 +337,10 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
         # `peel_first_json` returns `object`; the non-dict case raised above, so
         # this cast records what the control flow already guarantees.
         args = cast("dict[str, Any]", value)
-        return await original(ctx, json.dumps(_null_impossible_values(args, schema)))
+        coerced = _null_impossible_values(args, schema)
+        result = await original(ctx, json.dumps(coerced))
+        _log_if_schema_rejected(tool.name, coerced, result)
+        return result
 
     # `FunctionTool` is a dataclass with ~20 fields (including private
     # SDK ones like `_failure_error_function`, `_use_default_failure_error_function`,
