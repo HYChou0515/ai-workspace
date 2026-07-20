@@ -14,7 +14,7 @@ function stubAgent(): AgentState {
   return {
     investigationId: "it1",
     log: { entries: [], streaming: false } as unknown as AgentState["log"],
-    connection: { state: "live", error: null, attempts: 0 },
+    connection: { state: "live", receiving: true, error: null, attempts: 0 },
     send: vi.fn(async () => {}),
     mention: vi.fn(async () => {}),
     cancel: vi.fn(),
@@ -111,9 +111,7 @@ describe("AgentPanel attach (#198)", () => {
     );
   });
 
-  it("alerts but keeps the survivors when one file is too large (413)", async () => {
-    const alertSpy = vi.fn();
-    vi.stubGlobal("alert", alertSpy);
+  it("reports the rejected file in the composer but keeps the survivors (413)", async () => {
     vi.spyOn(api, "uploadFile").mockImplementation(async (_s, _i, path) => {
       if (path === "uploads/big.bin") throw Object.assign(new Error("413"), { status: 413 });
     });
@@ -126,8 +124,11 @@ describe("AgentPanel attach (#198)", () => {
     const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
     await waitFor(() => expect(composer.value).toContain("uploads/ok.csv"));
     expect(composer.value).not.toContain("big.bin");
-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
-    expect(alertSpy.mock.calls[0][0]).toContain("size limit");
+    // Reported in the composer rather than an OS alert(): an alert interrupts,
+    // cannot be re-read, and is the one piece of UI that cannot say which
+    // message it belongs to.
+    await waitFor(() => expect(screen.getByTestId("composer-hint")).toHaveTextContent("big.bin"));
+    expect(screen.getByTestId("composer-hint")).toHaveTextContent("大小上限");
   });
 });
 

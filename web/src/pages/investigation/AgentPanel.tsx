@@ -189,7 +189,7 @@ export function AgentPanel({
       setDraft(restore);
       composerRef.current?.focus();
     } catch (err) {
-      alert(`Undo failed: ${err instanceof Error ? err.message : String(err)}`);
+      setComposerHint(`復原失敗：${err instanceof Error ? err.message : String(err)}`);
     }
   };
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
@@ -225,6 +225,14 @@ export function AgentPanel({
   // #198: stage one or more files (or a whole folder) into the profile's upload_dir,
   // then drop their path(s) into the draft. Any type, any size — the backend's 413 cap
   // is the only gate; an over-size / failed file is reported and the rest still land.
+  /** Did `path` actually land? Answers the inconclusive upload outcomes (a
+   * network drop or a gateway status arrives after the body was sent, so the
+   * file may well be on disk) instead of accusing the upload of failing. */
+  const attachmentLanded = async (path: string): Promise<boolean> => {
+    const listed = await api.listFiles(slug, investigationId);
+    return listed.some((f) => f.path === path || f.path === `/${path}`);
+  };
+
   const doAttach = async (files: File[]) => {
     if (!files.length || attaching) return;
     setProgress({
@@ -242,6 +250,7 @@ export function AgentPanel({
             onProgress: (loaded) => onChunk?.(loaded),
           }),
         onProgress: setProgress,
+        verify: attachmentLanded,
       });
       if (res.uploaded.length) {
         const ref = attachPrompt(res.uploaded) + "\n\n";
@@ -250,14 +259,15 @@ export function AgentPanel({
       }
       // #245: an over-quota (507) rejection is its own line so the user sees
       // "out of space", not a vague size error.
-      if (res.overQuota.length) {
-        alert(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
-      }
+      // An OS alert() interrupts, cannot be re-read, and is the one piece of UI
+      // that cannot say WHICH message it belongs to. Keep the report in the
+      // composer, next to the box the files were dropped on.
       const problems = [
-        ...res.tooLarge.map((p) => `${p} — exceeds the size limit`),
-        ...res.failed.map((p) => `${p} — upload failed`),
+        ...res.overQuota.map((p) => `${p} — ${t("workspace.overQuota", { names: p })}`),
+        ...res.tooLarge.map((p) => `${p} — 超過大小上限`),
+        ...res.failed.map((p) => `${p} — 上傳失敗`),
       ];
-      if (problems.length) alert(`Some files weren't attached:\n${problems.join("\n")}`);
+      if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
     } finally {
       setProgress(null);
       // #245: refresh the usage bar — a success grew `used`, a 507 left it full.
@@ -284,6 +294,7 @@ export function AgentPanel({
             onProgress: (loaded) => onChunk?.(loaded),
           }),
         onProgress: setProgress,
+        verify: attachmentLanded,
       });
       // runAttach derives each path via uploadPathFor, so re-deriving pairs an uploaded
       // path back to its source blob for the thumbnail.
@@ -295,13 +306,13 @@ export function AgentPanel({
       }));
       if (fresh.length) setImageChips((prev) => [...prev, ...fresh]);
       if (res.overQuota.length) {
-        alert(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
+        setComposerHint(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
       }
       const problems = [
-        ...res.tooLarge.map((p) => `${p} — exceeds the size limit`),
-        ...res.failed.map((p) => `${p} — upload failed`),
+        ...res.tooLarge.map((p) => `${p} — 超過大小上限`),
+        ...res.failed.map((p) => `${p} — 上傳失敗`),
       ];
-      if (problems.length) alert(`Some files weren't attached:\n${problems.join("\n")}`);
+      if (problems.length) setComposerHint(`部分檔案未附加：${problems.join("；")}`);
     } finally {
       setProgress(null);
       queryClient.invalidateQueries({ queryKey: qk.workspaceUsage(slug, investigationId) });

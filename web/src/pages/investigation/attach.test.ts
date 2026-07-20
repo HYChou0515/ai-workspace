@@ -148,3 +148,78 @@ describe("runAttach (#198)", () => {
     expect(last.doneFiles).toBe(2);
   });
 });
+
+/**
+ * "It said the upload failed, but the file was there."
+ *
+ * `uploadFile` rejects on a network drop (status 0) and on a gateway status —
+ * but those arrive AFTER the body has been sent, so the server may well have
+ * stored the file already. Declaring failure then is both wrong and expensive:
+ * the user is told to retry a file that is on disk, and the path never makes it
+ * into their message, so the agent cannot see the file they just attached.
+ *
+ * An inconclusive result is a question, not an answer: go and look.
+ */
+describe("runAttach — an inconclusive upload is verified, not assumed failed", () => {
+  const file = (name: string) => new File(["x"], name, { type: "text/plain" });
+
+  it("counts a gateway-cut upload as uploaded when the file is actually there", async () => {
+    const res = await runAttach({
+      files: [file("a.txt")],
+      uploadDir: "uploads",
+      upload: async () => {
+        throw Object.assign(new Error("write failed: 504"), { status: 504 });
+      },
+      verify: async () => true, // it landed
+    });
+
+    expect(res.uploaded).toEqual(["uploads/a.txt"]);
+    expect(res.failed).toEqual([]);
+  });
+
+  it("still reports a failure when the file really is not there", async () => {
+    const res = await runAttach({
+      files: [file("b.txt")],
+      uploadDir: "uploads",
+      upload: async () => {
+        throw Object.assign(new Error("write failed: network error"), { status: 0 });
+      },
+      verify: async () => false,
+    });
+
+    expect(res.uploaded).toEqual([]);
+    expect(res.failed).toEqual(["uploads/b.txt"]);
+  });
+
+  // A definite rejection needs no second opinion — asking would only be slower
+  // and could mistake a leftover file for a success.
+  it("does not second-guess a definite rejection", async () => {
+    const verify = vi.fn(async () => true);
+    const res = await runAttach({
+      files: [file("c.txt")],
+      uploadDir: "uploads",
+      upload: async () => {
+        throw Object.assign(new Error("write failed: 413"), { status: 413 });
+      },
+      verify,
+    });
+
+    expect(res.tooLarge).toEqual(["uploads/c.txt"]);
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it("falls back to reporting a failure when it cannot check", async () => {
+    const res = await runAttach({
+      files: [file("d.txt")],
+      uploadDir: "uploads",
+      upload: async () => {
+        throw Object.assign(new Error("write failed: 502"), { status: 502 });
+      },
+      verify: async () => {
+        throw new Error("cannot list files either");
+      },
+    });
+
+    expect(res.failed).toEqual(["uploads/d.txt"]);
+  });
+});

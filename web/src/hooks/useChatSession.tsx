@@ -62,6 +62,16 @@ export type BroadcastChatTransport = {
  * only read as broken. `attempts` separates a blip from an outage. */
 export type ChatConnection = {
   state: "connecting" | "live" | "reconnecting";
+  /** Whether a real turn event has actually arrived on this subscription.
+   *
+   * `subscribe` succeeds on ANY replica: a pod that is not running the turn just
+   * creates an empty session for the key and starts heartbeating, so the viewer
+   * is subscribed, healthy-looking and completely deaf. "Connected" therefore
+   * says nothing about delivery, and asserting it would be a claim we have no
+   * evidence for. Presence churn ("someone is typing") does not count — it is
+   * not turn progress, and counting it suppressed the cross-pod store-poll in
+   * exactly the situation the poll exists for. */
+  receiving: boolean;
   /** Why the stream last dropped; null while healthy. */
   error: string | null;
   /** Consecutive failed reconnects (0 while healthy). */
@@ -94,6 +104,7 @@ export function useChatSession(
   const lastEventAtRef = useRef(0);
   const [connection, setConnection] = useState<ChatConnection>({
     state: "connecting",
+    receiving: false,
     error: null,
     attempts: 0,
   });
@@ -123,16 +134,21 @@ export function useChatSession(
           setConnection((c) => (c.state === "live" ? c : { ...c, state: "live", error: null }));
           for await (const ev of transport.subscribe(controller.signal)) {
             backoff = 1000; // a healthy stream resets the backoff
-            // An actual event is the proof the stream works — only now is the
-            // outage over.
-            setConnection((c) =>
-              c.state === "live" && c.attempts === 0
-                ? c
-                : { state: "live", error: null, attempts: 0 },
-            );
-            // A live event means this viewer IS on the turn's pod — record it so
-            // the #202 store-poll stays dormant while the stream flows.
-            lastEventAtRef.current = Date.now();
+            // A real TURN event is the proof the stream works — only now is the
+            // outage over. Presence is excluded for the same reason as above: a
+            // pod that is not running the turn still broadcasts it.
+            if (ev.type !== "presence") {
+              setConnection((c) =>
+                c.state === "live" && c.attempts === 0 && c.receiving
+                  ? c
+                  : { state: "live", receiving: true, error: null, attempts: 0 },
+              );
+            }
+            // Only a real turn event proves this viewer is on the turn's pod.
+            // Presence churn is broadcast by the session regardless, so counting
+            // it kept the #202 store-poll dormant in exactly the cross-pod case
+            // the poll exists for.
+            if (ev.type !== "presence") lastEventAtRef.current = Date.now();
             if (ev.type === "file_changed") {
               // A human edited a workspace file — refetch the tree. Not a turn
               // event, so it never folds into the log.
@@ -162,6 +178,7 @@ export function useChatSession(
           const why = err instanceof Error ? err.message : String(err);
           setConnection((c) => ({
             state: "reconnecting",
+            receiving: false,
             error: why,
             attempts: c.attempts + 1,
           }));
@@ -169,7 +186,9 @@ export function useChatSession(
         // A stream that ENDS without throwing (the server closed it) is also a
         // lost connection, not a finished chat.
         setConnection((c) =>
-          c.state === "reconnecting" ? c : { state: "reconnecting", error: null, attempts: c.attempts + 1 },
+          c.state === "reconnecting"
+            ? c
+            : { state: "reconnecting", receiving: false, error: null, attempts: c.attempts + 1 },
         );
         if (stopped) return;
         await sleep(backoff);

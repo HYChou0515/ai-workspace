@@ -105,3 +105,52 @@ describe("useChatSession — connection state", () => {
     });
   });
 });
+
+/**
+ * Reconnecting is not the same as reconnecting to the RIGHT pod.
+ *
+ * `subscribe` succeeds on ANY replica — the new pod just creates an empty
+ * session for the key and starts heartbeating. But the turn is running on the
+ * pod that owns it, publishing into ITS session, so this viewer is subscribed,
+ * healthy-looking and completely deaf. Calling that "live" is worse than saying
+ * nothing: it asserts something false about a stream delivering nothing.
+ *
+ * The store-poll still fetches the content (any pod serves the shared store), so
+ * this is about telling the truth, not about losing anything.
+ */
+describe("useChatSession — subscribed is not the same as receiving", () => {
+  it("does not claim live for a stream that never delivers anything", async () => {
+    const { result } = render(transport()); // subscribe resolves, then stays silent
+    // It connected, so it is not "reconnecting" — but it has no evidence of
+    // delivery either, and must not assert one.
+    await waitFor(() => expect(result.current.connection.receiving).toBe(false));
+  });
+
+  it("confirms delivery only once a real event arrives", async () => {
+    const { result } = render(
+      transport({
+        subscribe: async function* () {
+          yield { type: "message_delta", text: "hi" } as AgentEvent;
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+    await waitFor(() => expect(result.current.connection.receiving).toBe(true));
+  });
+
+  // Presence ("someone is typing") churn is not turn progress. Treating it as
+  // proof of delivery suppressed the cross-pod poll — in exactly the situation
+  // the poll exists for.
+  it("does not count presence churn as delivery", async () => {
+    const { result } = render(
+      transport({
+        subscribe: async function* () {
+          yield { type: "presence", users: ["bob"] } as unknown as AgentEvent;
+          await new Promise<void>(() => {});
+        },
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 150));
+    expect(result.current.connection.receiving).toBe(false);
+  });
+});
