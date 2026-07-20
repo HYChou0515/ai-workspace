@@ -194,6 +194,46 @@ async def test_an_over_quota_workspace_can_still_be_tidied_up():
     assert await files.workspace_usage("ws1") == 0
 
 
+async def test_warm_file_size_reads_the_sandbox_not_the_snapshot():
+    files, fs, sb, handle = await _warm()
+    await sb.upload(handle, b"z" * 250, "/only-in-sandbox.bin")
+    assert await fs.file_size("ws1", "/only-in-sandbox.bin") is None  # not mirrored
+    assert await files.file_size("ws1", "/only-in-sandbox.bin") == 250
+    assert await files.file_size("ws1", "/nope.bin") is None
+
+
+async def test_create_exclusive_is_gated_and_counted():
+    files, _fs, _sb, _handle = await _warm()
+    await files.create_exclusive("ws1", "/claim", b"x" * 40)
+    # counted immediately, without waiting for a re-walk
+    assert await files.workspace_usage("ws1") == 40
+
+
+async def test_measuring_one_workspace_keeps_another_freshly_measured_one():
+    # The expiry sweep rides along with a walk, so it must not throw away
+    # measurements that are still inside their window — that would turn one
+    # workspace's re-walk into a re-walk for every other workspace too.
+    fs = MemoryFileStore()
+    sb = _WalkCountingSandbox()
+    handle = await sb.create(SandboxSpec())
+    clock = {"t": 0.0}
+
+    async def _resolve(_ws: str) -> SandboxHandle:
+        return handle
+
+    files = WorkspaceFiles(
+        fs, sandbox=sb, handle_for=_resolve, usage_window=5.0, now=lambda: clock["t"]
+    )
+    await files.workspace_usage("ws1")
+    clock["t"] = 6.0  # ws1's measurement expires
+    await files.workspace_usage("ws2")
+    clock["t"] = 7.0  # ws1 re-measures; ws2 is only 1s old and must survive
+    await files.workspace_usage("ws1")
+    walks = sb.walk_calls
+    await files.workspace_usage("ws2")
+    assert sb.walk_calls == walks  # ws2 answered from its surviving measurement
+
+
 class _NoUsageStore:
     """A FileStore without usage accounting — like the wiki-page store, which
     is never quota-gated. `workspace_usage` / `file_size` are duck-typed, so the
