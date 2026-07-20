@@ -78,6 +78,24 @@ def test_overwrite_credits_old_bytes_so_same_size_replace_is_allowed():
     assert client.put(f"/a/rca/items/{iid}/files/b.bin", content=b"z").status_code == 507
 
 
+def test_copying_a_file_past_the_quota_returns_507():
+    # #538: the quota lived in the upload endpoint's streaming loop, so every OTHER
+    # way of growing a workspace — copy, move, the IDE save, a workflow — was free.
+    # The gate now sits in the store facade all of them share.
+    app, spec = _quota_app(workspace_quota=100)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    assert client.put(f"/a/rca/items/{iid}/files/a.bin", content=b"x" * 80).status_code == 204
+
+    dup = client.post(
+        f"/a/rca/items/{iid}/files/move",
+        json={"from": "/a.bin", "to": "/b.bin", "copy": True},
+    )
+    assert dup.status_code == 507
+    assert dup.json()["detail"]["error"] == "workspace_quota_exceeded"
+    assert client.get(f"/a/rca/items/{iid}/files/b.bin").status_code == 404
+
+
 def test_workspace_quota_zero_disables_the_cap():
     # #245: quota of 0 means no per-workspace limit.
     app, spec = _quota_app(workspace_quota=0)

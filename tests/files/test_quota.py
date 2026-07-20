@@ -7,7 +7,9 @@ uses — a warm workspace is measured from the live sandbox, so bytes the agent
 created there (exec output, downloads) count and bytes it deleted stop counting.
 """
 
-from workspace_app.files.facade import WorkspaceFiles
+import pytest
+
+from workspace_app.files.facade import WorkspaceFiles, WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
@@ -133,6 +135,38 @@ async def test_deleting_in_the_sandbox_frees_headroom_immediately():
     assert await files.remaining_quota("ws1", "/new", quota=1000) == 100
     await files.delete("ws1", "/big")
     assert await files.remaining_quota("ws1", "/new", quota=1000) == 1000
+
+
+async def test_a_write_past_the_quota_is_refused_and_lands_nothing():
+    # #538 (3): the quota was enforced only by the upload endpoint, so everything
+    # that wasn't a user upload — the agent's own write_file, a workflow, the IDE
+    # save — sailed straight past it. The facade is the one chokepoint they all
+    # share, so the rule belongs here.
+    files = WorkspaceFiles(MemoryFileStore(), quota=1000)
+    await files.write("ws1", "/a", b"x" * 900)
+    with pytest.raises(WorkspaceFull) as caught:
+        await files.write("ws1", "/b", b"y" * 200)
+    assert caught.value.used == 900
+    assert caught.value.quota == 1000
+    assert await files.exists("ws1", "/b") is False
+
+
+async def test_an_over_quota_workspace_can_still_be_tidied_up():
+    # A workspace CAN end up over quota — the mirror writes the durable store
+    # directly and stays ungated so agent work is never lost. If the gate keyed
+    # on "already over" rather than "would grow", such a workspace would be
+    # wedged: we'd tell the user to delete things while refusing the very writes
+    # that shrink it. Shrinking, same-size replacement and deletes stay open.
+    store = MemoryFileStore()
+    await store.write("ws1", "/huge", b"x" * 2000)  # as the ungated mirror would
+    files = WorkspaceFiles(store, quota=1000)
+
+    await files.write("ws1", "/huge", b"x" * 1500)  # shrink: allowed
+    await files.write("ws1", "/huge", b"y" * 1500)  # same size: allowed
+    with pytest.raises(WorkspaceFull):
+        await files.write("ws1", "/huge", b"x" * 1600)  # growth: still refused
+    await files.delete("ws1", "/huge")
+    assert await files.workspace_usage("ws1") == 0
 
 
 class _NoUsageStore:

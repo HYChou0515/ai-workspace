@@ -41,6 +41,25 @@ _CAS_EDIT_RETRIES = 5
 _USAGE_WINDOW_S = 5.0
 
 
+class WorkspaceFull(Exception):
+    """A write was refused because it would push the workspace past its quota
+    (#538). Raised by the facade, so every write path — an upload, an IDE save,
+    the agent's own `write_file`, a workflow — is refused by the same rule
+    rather than only the one endpoint that happened to check.
+
+    Carries the numbers the caller needs to tell the user what to do about it:
+    the API turns them into a 507 body, the agent tools into a message that says
+    to delete something."""
+
+    def __init__(self, used: int, quota: int, attempted: int) -> None:
+        super().__init__(
+            f"workspace is full: {used} of {quota} bytes used, cannot write {attempted} more"
+        )
+        self.used = used
+        self.quota = quota
+        self.attempted = attempted
+
+
 def _norm(path: str) -> str:
     """Canonicalise a workspace path: ``./brief.md``, ``brief.md`` and
     ``/brief.md`` all map to the same internal key ``/brief.md``. So
@@ -57,11 +76,15 @@ class WorkspaceFiles:
         sandbox: Sandbox | None = None,
         handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
         rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
+        quota: int = 0,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self._fs = filestore
         self._sb = sandbox
+        # #538: bytes one workspace may occupy; 0 ⇒ unlimited (the default, so the
+        # wiki-page stores and other non-workspace uses are never gated).
+        self._quota = quota
         # Async resolver: item → the handle its ONE live sandbox is reachable at,
         # or None when the item is globally cold (#492 same-source resolution).
         self._handle_for = handle_for
@@ -134,6 +157,7 @@ class WorkspaceFiles:
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         path = _norm(path)
+        await self._ensure_headroom(workspace_id, path, len(data))
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -151,6 +175,7 @@ class WorkspaceFiles:
         serialises claimants there — the durable path is where cross-pod atomicity
         matters, and it has it."""
         path = _norm(path)
+        await self._ensure_headroom(workspace_id, path, len(data))
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -176,6 +201,10 @@ class WorkspaceFiles:
         snapshot catches up on the next mirror, exactly like any warm write);
         cold ⇒ stream into the FileStore blob."""
         path = _norm(path)
+        # The streaming upload route also checks mid-stream so an over-quota body
+        # is rejected before it's staged; this is the backstop that keeps the rule
+        # true for any future caller that doesn't.
+        await self._ensure_headroom(workspace_id, path, source.stat().st_size)
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -272,6 +301,22 @@ class WorkspaceFiles:
             cached[1].pop(path, None)
         else:
             cached[1][path] = size
+
+    async def _ensure_headroom(self, workspace_id: str, path: str, new_size: int) -> None:
+        """Refuse a write that would push the workspace past its quota (#538).
+
+        The rule is about GROWTH, not about being over: a write that doesn't make
+        the workspace bigger — shrinking a file, replacing it with the same size —
+        is always allowed, even when the workspace is already over. Otherwise a
+        workspace that went over (the mirror is ungated, so it can) would be
+        wedged: the user is told to delete things, but the tools they'd use to
+        tidy up are refused too. Deletes are never gated for the same reason."""
+        if not self._quota:
+            return
+        used, old = await self._usage_and_size(workspace_id, path)
+        growth = new_size - old
+        if growth > 0 and used + growth > self._quota:
+            raise WorkspaceFull(used=used, quota=self._quota, attempted=new_size)
 
     async def _usage_and_size(self, workspace_id: str, path: str) -> tuple[int, int]:
         """``(workspace bytes, bytes at path)`` — the quota subtraction's two

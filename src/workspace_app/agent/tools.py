@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import magic
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
 
-from ..files import WorkspaceFiles
+from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
@@ -285,6 +285,19 @@ async def make_deck_impl(
     )
 
 
+def _workspace_full_msg(exc: WorkspaceFull) -> str:
+    """#538: what the agent is told when a write is refused for space. The agent
+    can't make more room appear, so the message names the ONE action that helps
+    and the tool that does it — otherwise a model retries the same write, or
+    invents a workaround like writing somewhere else."""
+    return (
+        f"error: the workspace is full ({exc.used} of {exc.quota} bytes used) — "
+        f"writing {exc.attempted} more bytes would exceed it. Delete files that are "
+        f"no longer needed with delete_file, then retry. Tell the user what you "
+        f"deleted, or ask them which files they want to keep."
+    )
+
+
 async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, content: str) -> str:
     """Create a NEW file. This never overwrites: if the file already exists it
     is rejected and the current content is returned — use `edit_file` to change
@@ -293,7 +306,10 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
     if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
         return denied
     fs, inv = _workspace(ctx)
-    current = await fs.create(inv, path, content.encode("utf-8"))
+    try:
+        current = await fs.create(inv, path, content.encode("utf-8"))
+    except WorkspaceFull as exc:
+        return _workspace_full_msg(exc)
     if current is None:
         return f"wrote {len(content)} bytes to {path}"
     return (
@@ -315,7 +331,10 @@ async def edit_file_impl(
     if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
         return denied
     fs, inv = _workspace(ctx)
-    current = await fs.edit(inv, path, old_string, new_string)
+    try:
+        current = await fs.edit(inv, path, old_string, new_string)
+    except WorkspaceFull as exc:
+        return _workspace_full_msg(exc)
     if current is None:
         return f"edited {path}"
     return (
