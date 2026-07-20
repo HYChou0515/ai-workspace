@@ -33,18 +33,25 @@ export function ItemMembersPanel({
   manifest,
   item,
   variant = "sidebar",
+  onManage,
 }: {
   manifest: AppManifest;
   item: AppItem;
   /** `popover` drops the heading chrome for the top bar's dropdown. */
   variant?: "sidebar" | "popover";
+  /** Hand the "manage access" click UPWARD instead of opening the dialog here.
+   *
+   * Required inside a `Popover`: the popover is its own `z-index` stacking
+   * context AND closes on any mousedown outside itself, so a dialog owned in
+   * here would be both z-capped and torn down by its own first click. The caller
+   * renders {@link ItemAccessDialog} above the popover instead. */
+  onManage?: () => void;
 }) {
   const me = useCurrentUser();
   const isSuperuser = useIsSuperuser();
   const [sharing, setSharing] = useState(false);
   const owner = (item.created_by as string) || (item.owner as string) || "";
   const perm = parseItemPermission((item as Record<string, unknown>).permission);
-  const access = useSetItemPermission(manifest.slug, item.resource_id);
   const canManage = canChangeItemPermission(perm, me, owner, isSuperuser);
   const label = manifest.labels?.members ?? "Members";
 
@@ -61,7 +68,7 @@ export function ItemMembersPanel({
             className="btn"
             data-variant="secondary"
             data-size="sm"
-            onClick={() => setSharing(true)}
+            onClick={() => (onManage ? onManage() : setSharing(true))}
           >
             Manage access…
           </button>
@@ -78,22 +85,44 @@ export function ItemMembersPanel({
       </ul>
 
       {sharing && (
-        <ItemShareDialog
-          itemName={(item.title as string) || manifest.item.noun}
-          owner={owner}
-          value={perm ?? { visibility: "private" }}
-          busy={access.isPending}
-          error={access.error}
-          onSubmit={(next) => {
-            void access.setPermissionAsync(next).then(
-              () => setSharing(false),
-              () => {},
-            );
-          }}
-          onClose={() => setSharing(false)}
-        />
+        <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />
       )}
     </div>
+  );
+}
+
+/**
+ * The share dialog bound to one work item's dedicated permission endpoint.
+ *
+ * Split out so a caller that cannot host a modal in place — the top bar renders
+ * the roster inside a `Popover` — can own it at a level where it lays out and
+ * survives correctly, without re-deriving the owner / current permission / save
+ * wiring. Closes only on success; a failure stays open with the reason.
+ */
+export function ItemAccessDialog({
+  manifest,
+  item,
+  onClose,
+}: {
+  manifest: AppManifest;
+  item: AppItem;
+  onClose: () => void;
+}) {
+  const owner = (item.created_by as string) || (item.owner as string) || "";
+  const perm = parseItemPermission((item as Record<string, unknown>).permission);
+  const access = useSetItemPermission(manifest.slug, item.resource_id);
+  return (
+    <ItemShareDialog
+      itemName={(item.title as string) || manifest.item.noun}
+      owner={owner}
+      value={perm ?? { visibility: "private" }}
+      busy={access.isPending}
+      error={access.error}
+      onSubmit={(next) => {
+        void access.setPermissionAsync(next).then(onClose, () => {});
+      }}
+      onClose={onClose}
+    />
   );
 }
 

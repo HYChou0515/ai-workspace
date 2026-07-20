@@ -129,4 +129,18 @@ describe("ItemMembersPanel", () => {
     render();
     expect(await screen.findByTestId("members-manage")).toBeInTheDocument();
   });
+
+  // Inside a Popover the panel must NOT host the dialog: the popover is its own
+  // z-index stacking context and closes on any outside mousedown, so a modal
+  // owned in here would be z-capped and torn down by its own first click. The
+  // caller takes the click and renders ItemAccessDialog above the popover.
+  it("delegates the click upward when the host owns the dialog", async () => {
+    const onManage = vi.fn();
+    renderWithQuery(
+      <ItemMembersPanel manifest={manifest} item={item} variant="popover" onManage={onManage} />,
+    );
+    fireEvent.click(await screen.findByTestId("members-manage"));
+    expect(onManage).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("share-dialog")).not.toBeInTheDocument();
+  });
 });

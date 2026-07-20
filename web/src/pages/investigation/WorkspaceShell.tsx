@@ -10,7 +10,6 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "../../api";
 import type { AppItem, AppManifest, CloseStatus, FileInfo } from "../../api/types";
-import { ItemShareDialog } from "../../components/ItemShareDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useIsSuperuser } from "../../hooks/useIsSuperuser";
 import {
@@ -32,6 +31,7 @@ import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { CrossHandle } from "../../components/CrossHandle";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { ItemChatShell } from "../../components/ItemChatShell";
+import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembersPanel";
 import { resolveUploadDir } from "./attach";
 import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
@@ -55,7 +55,7 @@ import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
-import { useSetItemPermission, useUpdateItemField } from "../../hooks/useResources";
+import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
 import { useIsNarrow } from "../../hooks/useMediaQuery";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
@@ -77,7 +77,7 @@ import { pxToRem } from "../../lib/pxToRem";
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
-export type ActivityMode = "evidence" | "search" | "history" | "reviewers" | "activity";
+export type ActivityMode = "evidence" | "search" | "history" | "members" | "activity";
 
 /** Close a tab through the dirty-aware path (save-on-close prompt). Provided
  * by ShellBody so the deep tab strip can request closes without prop drilling. */
@@ -444,6 +444,7 @@ function ShellBody({
             <>
           <ActivityBar
             mode={activityMode}
+            membersLabel={manifest.labels?.members ?? "Members"}
             onMode={(m) => {
               setActivityMode(m);
               // On narrow the sidebar is a closed overlay; tapping an activity
@@ -624,7 +625,6 @@ export function EditItemModal({
   // item's Edit modal yet had no button to change its access. Mirror the server's
   // rule exactly (public never confers change_permission — see the helper).
   const canManageAccess = canChangeItemPermission(perm, me, owner, isSuperuser);
-  const access = useSetItemPermission(manifest.slug, item.resource_id);
   return (
     <ModalShell
       onClose={onClose}
@@ -656,24 +656,7 @@ export function EditItemModal({
         </button>
       )}
       {sharing && (
-        <ItemShareDialog
-          itemName={(item.title as string) || manifest.item.noun}
-          owner={owner}
-          value={perm ?? { visibility: "private" }}
-          busy={access.isPending}
-          error={access.error}
-          // Close ONLY on success: a 403 (e.g. a delegate whose grant was just
-          // revoked) keeps the dialog up with the reason, instead of the old
-          // `await` inside a `() => void` prop, which turned the rejection into
-          // an unhandled promise and left the dialog hanging silently.
-          onSubmit={(next) => {
-            void access.setPermissionAsync(next).then(
-              () => setSharing(false),
-              () => {},
-            );
-          }}
-          onClose={() => setSharing(false)}
-        />
+        <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />
       )}
     </ModalShell>
   );
@@ -702,11 +685,13 @@ export function TopBar({
   onEdit: () => void;
 }) {
   const isNarrow = useIsNarrow();
+  // Owned here rather than in the roster popover below — see the `onManage` note.
+  const [sharing, setSharing] = useState(false);
   return (
     <div
       style={{
         // Narrow: the trailing control cluster (Workspace toggle + palette +
-        // Members + Close + Notifications + avatar) can't fit one 360px row, so
+        // members + Close + Notifications + avatar) can't fit one 360px row, so
         // wrap instead of overflowing — page-item clips overflow with no scroll,
         // which would strand the Close (the only resolve entry point) (#464).
         height: isNarrow ? "auto" : 52,
@@ -841,7 +826,7 @@ export function TopBar({
           <button
             type="button"
             onClick={onClick}
-            title="Members"
+            title={manifest.labels?.members ?? "Members"}
             style={{
               ...iconBtn,
               display: "inline-flex",
@@ -859,14 +844,21 @@ export function TopBar({
         )}
       >
         {() => (
-          <div style={{ minWidth: 200, padding: "6px 0" }}>
-            <MemberLine name={`${item.owner} (owner)`} />
-            {((item.members as string[] | undefined) ?? []).map((m) => (
-              <MemberLine key={m} name={m} />
-            ))}
-          </div>
+          <ItemMembersPanel
+            manifest={manifest}
+            item={item}
+            variant="popover"
+            // The dialog is owned OUTSIDE the popover: a popover is its own
+            // z-index stacking context and closes on any outside mousedown, so a
+            // modal hosted within it would be both z-capped and dismissed by its
+            // own first click.
+            onManage={() => setSharing(true)}
+          />
         )}
       </Popover>
+      {sharing && (
+        <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />
+      )}
 
       {/* Close is shown only when the App declares a lifecycle (#89 P7b); its
           resolve states come from the manifest, not hardcoded RCA statuses. */}
@@ -1071,37 +1063,6 @@ function IdChip({ resourceId }: { resourceId: string }) {
   );
 }
 
-function MemberLine({ name }: { name: string }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        padding: "4px 10px",
-        fontSize: pxToRem(12),
-      }}
-    >
-      <span
-        style={{
-          width: 20,
-          height: 20,
-          borderRadius: "50%",
-          background: "var(--paper-2)",
-          border: "1px solid var(--paper-3)",
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: pxToRem(10),
-          fontWeight: 600,
-        }}
-      >
-        {name.slice(0, 2).toUpperCase()}
-      </span>
-      {name}
-    </div>
-  );
-}
 
 const iconBtn: React.CSSProperties = {
   width: 32,
@@ -1119,9 +1080,14 @@ const iconBtn: React.CSSProperties = {
 function ActivityBar({
   mode,
   onMode,
+  membersLabel,
 }: {
   mode: ActivityMode;
   onMode: (m: ActivityMode) => void;
+  /** The App's word for the roster — the same label the panel and the top bar
+   * popover use, so the icon's tooltip can't say "Reviewers" while the panel it
+   * opens says "Members". */
+  membersLabel: string;
 }) {
   const items: {
     name: IconName;
@@ -1132,7 +1098,7 @@ function ActivityBar({
     { name: "folder", label: "Files", onClick: () => onMode("evidence"), active: mode === "evidence" },
     { name: "search", label: "Search files", onClick: () => onMode("search"), active: mode === "search" },
     { name: "clock", label: "History", onClick: () => onMode("history"), active: mode === "history" },
-    { name: "users", label: "Reviewers", onClick: () => onMode("reviewers"), active: mode === "reviewers" },
+    { name: "users", label: membersLabel, onClick: () => onMode("members"), active: mode === "members" },
     { name: "bell", label: "Activity", onClick: () => onMode("activity"), active: mode === "activity" },
   ];
   return (
@@ -1197,8 +1163,8 @@ function ActivitySidebar(props: {
       );
     case "history":
       return <HistorySidebar files={props.files} recentFiles={props.recentFiles} onOpenFile={props.onOpenFile} />;
-    case "reviewers":
-      return <ReviewersSidebar item={props.item} />;
+    case "members":
+      return <MembersSidebar manifest={props.manifest} item={props.item} />;
     case "activity":
       return <ActivityFeed slug={props.manifest.slug} itemId={props.item.resource_id} onOpenFile={props.onOpenFile} />;
   }
@@ -1286,27 +1252,16 @@ function HistorySidebar({
   );
 }
 
-/* ----------------------------- Reviewers sidebar ----------------------------- */
+/* ----------------------------- Members sidebar ----------------------------- */
 
-function ReviewersSidebar({ item }: { item: AppItem }) {
-  const members = (item.members as string[] | undefined) ?? [];
+/** The roster panel in its sidebar frame. The list + access management live in
+ * the shared {@link ItemMembersPanel} — the top bar's popover renders the very
+ * same component, so the two can never disagree about who is on the item or what
+ * they may do. */
+function MembersSidebar({ manifest, item }: { manifest: AppManifest; item: AppItem }) {
   return (
     <aside style={sidebarStyle}>
-      <div style={sidebarHeader}>
-        <span className="caps">Reviewers</span>
-      </div>
-      <div style={{ padding: 12, fontSize: pxToRem(12), color: "var(--text-paper)" }}>
-        <div style={{ marginBottom: 4 }}>
-          <strong>{item.owner}</strong>{" "}
-          <span style={{ color: "var(--text-paper-d)" }}>(owner)</span>
-        </div>
-        {members.map((m) => (
-          <div key={m}>{m}</div>
-        ))}
-        {members.length === 0 && (
-          <div style={{ color: "var(--text-paper-d)" }}>No additional members.</div>
-        )}
-      </div>
+      <ItemMembersPanel manifest={manifest} item={item} />
     </aside>
   );
 }
