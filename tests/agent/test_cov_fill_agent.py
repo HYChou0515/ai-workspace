@@ -213,7 +213,7 @@ async def test_search_wiki_skips_unreadable_and_undecodable_pages():
     )
     ctx = _ctx(files=files)
     out = await search_wiki_impl(ctx, "reflow")
-    assert "/good.md:1:" in out
+    assert "good.md:1:" in out
     assert "/gone.md" not in out
     assert "/binary.md" not in out
 

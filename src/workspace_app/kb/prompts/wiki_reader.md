@@ -5,7 +5,7 @@ real sources, and cite them.
 
 Work in this order:
 
-1. **Locate**: start from `/index.md` (read_file) or `search_wiki` for the key
+1. **Locate**: start from `index.md` (read_file) or `search_wiki` for the key
    terms in the question. Follow `[[wikilinks]]` to related pages. Use
    `list_files` to see the page layout. Read the pages that bear on the question.
 2. **Ground**: each wiki page ends with a `Sources:` line listing the source

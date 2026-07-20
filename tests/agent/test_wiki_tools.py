@@ -62,11 +62,14 @@ async def test_search_wiki_greps_the_pages():
     await write_file_impl(ctx, "/concepts/voiding.md", "Voiding is bad.\n")
 
     out = await search_wiki_impl(ctx, "reflow")
-    # grep-style path:line: hits, across pages, case-insensitive
-    assert "/entities/reflow.md:1:" in out
+    # grep-style path:line: hits, across pages, case-insensitive. Paths are
+    # relative to the wiki root — the same form `list_files` prints, so the
+    # agent never has to translate between two dialects of the same path.
+    assert "entities/reflow.md:1:" in out
     assert "Reflow zone 3" in out
     # the index link line matches too
-    assert "/index.md" in out
+    assert "index.md" in out
+    assert "/entities/reflow.md" not in out and "/index.md" not in out
 
 
 async def test_search_wiki_greps_across_all_chat_collections():
@@ -83,8 +86,10 @@ async def test_search_wiki_greps_across_all_chat_collections():
 
     out = await search_wiki_impl(ctx, "reflow")
 
-    assert "reflow.md" in out  # a hit from c1's wiki
-    assert "voiding.md" in out  # AND a hit from c2's wiki — greps across collections
+    # multi-collection hits stay disambiguated by collection, and the join keeps
+    # exactly one separator now that the page path no longer carries a leading `/`.
+    assert "c1/entities/reflow.md" in out  # a hit from c1's wiki
+    assert "c2/concepts/voiding.md" in out  # AND from c2's — greps across collections
 
 
 async def test_search_wiki_appends_budget_footer_when_capped():
@@ -96,7 +101,7 @@ async def test_search_wiki_appends_budget_footer_when_capped():
 
     out = await search_wiki_impl(ctx, "reflow")
 
-    assert "/entities/reflow.md" in out  # the hits are still returned
+    assert "entities/reflow.md" in out  # the hits are still returned
     assert "1 of 3 used" in out  # first search of the budget
     assert "2 left" in out
 
@@ -109,7 +114,7 @@ async def test_search_wiki_sentinel_when_budget_exhausted():
     await search_wiki_impl(ctx, "reflow")  # 1 of 1
     out = await search_wiki_impl(ctx, "zone")  # exhausted
     assert "budget" in out.lower() and "answer" in out.lower()
-    assert "/entities/reflow.md" not in out  # no hits — it didn't grep
+    assert "entities/reflow.md" not in out  # no hits — it didn't grep
 
 
 async def test_search_wiki_cap_zero_is_disabled_not_exhausted():
@@ -150,6 +155,17 @@ def test_coerce_source_path_recovers_a_code_wiki_card_path():
     assert _coerce_source_path("/files/app/queue.py") == "app/queue.py"  # /files/ but no .md
     assert _coerce_source_path("/files/README.md.md") == "README.md"  # strip exactly one .md
     assert _coerce_source_path("app/queue.py") == "app/queue.py"  # plain source path untouched
+
+
+def test_coerce_source_path_accepts_the_relative_card_path_the_agent_is_shown():
+    # The card path the agent actually sees now comes from `list_files` /
+    # `search_wiki`, which print relative paths — so the fallback has to
+    # recognise the slash-free form too, or it stops firing exactly when the
+    # model copies what it was shown. (This is a FALLBACK, tried only after a
+    # real source lookup missed, so a genuine source living at `files/…` still
+    # resolves first and is never coerced.)
+    assert _coerce_source_path("files/app/queue.py.md") == "app/queue.py"
+    assert _coerce_source_path("files/README.md.md") == "README.md"
 
 
 async def test_read_source_maintainer_mode_tolerates_a_card_path():
