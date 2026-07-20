@@ -1,0 +1,141 @@
+// @vitest-environment happy-dom
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import type { AppItem, AppManifest } from "../../api/types";
+import { renderWithQuery } from "../../test/queryWrapper";
+import { EditItemModal } from "./WorkspaceShell";
+
+vi.mock("../../api", () => ({
+  api: { setItemPermission: vi.fn(), getCurrentUser: vi.fn(), getMe: vi.fn() },
+}));
+import { api } from "../../api";
+
+// The dialog's own behaviour is covered by ItemShareDialog.test.tsx; stub it down
+// to a Save button so these tests are about the ENTRY POINT and the save wiring.
+vi.mock("../../components/ItemShareDialog", () => ({
+  ItemShareDialog: ({
+    busy,
+    error,
+    onSubmit,
+  }: {
+    busy?: boolean;
+    error?: string | null;
+    onSubmit: (p: unknown) => void;
+  }) => (
+    <div>
+      <button
+        type="button"
+        data-testid="stub-save"
+        disabled={busy}
+        onClick={() => onSubmit({ visibility: "private" })}
+      >
+        save
+      </button>
+      {error ? <div data-testid="stub-error">{error}</div> : null}
+    </div>
+  ),
+}));
+// The schema-driven form is irrelevant here (and needs a full manifest).
+vi.mock("../../components/ItemForm", () => ({
+  ItemForm: () => <form />,
+  pruneEmpty: (v: Record<string, unknown>) => v,
+}));
+
+const manifest = { slug: "rca", item: { noun: "Investigation" } } as unknown as AppManifest;
+
+const item = {
+  resource_id: "INC-1",
+  title: "Reflow drift",
+  owner: "alice",
+  created_by: "alice",
+  permission: { visibility: "private" },
+} as unknown as AppItem;
+
+function open(override: Partial<Record<string, unknown>> = {}) {
+  return renderWithQuery(
+    <EditItemModal
+      manifest={manifest}
+      item={{ ...item, ...override } as AppItem}
+      onClose={vi.fn()}
+      onSubmit={vi.fn()}
+    />,
+  );
+}
+
+/** Sign in as someone other than the item's owner (`alice`). */
+function signInAs(id: string, isSuperuser = false) {
+  vi.mocked(api.getCurrentUser).mockResolvedValue(id);
+  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser });
+}
+
+beforeEach(() => {
+  vi.mocked(api.getCurrentUser).mockResolvedValue("alice");
+  vi.mocked(api.getMe).mockResolvedValue({ id: "alice", is_superuser: false });
+});
+afterEach(cleanup);
+
+describe("EditItemModal — access management", () => {
+  it("saves through the dedicated permission endpoint and closes the dialog", async () => {
+    vi.mocked(api.setItemPermission).mockResolvedValue({ visibility: "private", notified: [] });
+    open();
+
+    fireEvent.click(await screen.findByTestId("manage-access"));
+    fireEvent.click(screen.getByTestId("stub-save"));
+
+    await waitFor(() =>
+      expect(api.setItemPermission).toHaveBeenCalledWith("rca", "INC-1", { visibility: "private" }),
+    );
+    await waitFor(() => expect(screen.queryByTestId("stub-save")).not.toBeInTheDocument());
+  });
+
+  // The old wiring `await`ed the call inside a `() => void` prop, so a 403 became
+  // an unhandled rejection: the dialog neither closed nor said why.
+  it("surfaces a failure and keeps the dialog open", async () => {
+    vi.mocked(api.setItemPermission).mockRejectedValue(new Error("not authorized to change_permission"));
+    open();
+
+    fireEvent.click(await screen.findByTestId("manage-access"));
+    fireEvent.click(screen.getByTestId("stub-save"));
+
+    expect(await screen.findByTestId("stub-error")).toHaveTextContent("not authorized");
+    expect(screen.getByTestId("stub-save")).toBeInTheDocument();
+  });
+});
+
+// The UI gated the control on `me === owner`, but the backend has always let a
+// superuser (perm/authorize: superusers short-circuit every verb) and a
+// `change_permission` grantee through. So an admin could enter any item and see
+// its Edit modal, yet had no way to change its access — the button simply wasn't
+// rendered. The affordance must match what the server actually allows.
+describe("EditItemModal — who may manage access", () => {
+  it("shows the control to the owner", async () => {
+    open();
+    expect(await screen.findByTestId("manage-access")).toBeInTheDocument();
+  });
+
+  it("shows the control to a superuser who does not own the item", async () => {
+    signInAs("root", true);
+    open();
+    expect(await screen.findByTestId("manage-access")).toBeInTheDocument();
+  });
+
+  it("shows the control to a change_permission delegate", async () => {
+    signInAs("carol");
+    open({
+      permission: { visibility: "restricted", change_permission: ["user:carol"] },
+    });
+    expect(await screen.findByTestId("manage-access")).toBeInTheDocument();
+  });
+
+  it("hides the control from a plain collaborator", async () => {
+    signInAs("dave");
+    open({
+      permission: { visibility: "restricted", read_chat: ["user:dave"], converse: ["user:dave"] },
+    });
+    // Wait for identity to settle so this isn't just "hasn't rendered yet".
+    await waitFor(() => expect(api.getMe).toHaveBeenCalled());
+    expect(screen.queryByTestId("manage-access")).not.toBeInTheDocument();
+  });
+});

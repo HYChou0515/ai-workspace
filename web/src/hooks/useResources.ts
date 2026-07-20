@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
 import type { ActivityEntry, AppItem, AppManifest, AppSummary } from "../api/types";
+import type { ItemPermission } from "../lib/itemPermission";
 
 const STATIC = Number.POSITIVE_INFINITY;
 
@@ -86,6 +87,34 @@ export function useUpdateItemField(slug: string, resourceRoute: string, item: Ap
     /** Commit several fields at once (the edit form). */
     setFields: (patch: Record<string, unknown>) => mutation.mutate(patch),
     isPending: mutation.isPending,
+  };
+}
+
+/** #306 PR3 — set a work item's access control through its DEDICATED endpoint
+ * (`PUT …/items/{id}/permission`), then invalidate the item + list caches.
+ *
+ * The invalidation is the point. The share dialog used to call the API inline
+ * and close, leaving the cached item on its PRE-share permission — so reopening
+ * the dialog showed the old state and the change read as "didn't take". The list
+ * is invalidated too because visibility can now hide or reveal the row.
+ *
+ * `error` is surfaced (rather than left as an unhandled rejection) so a 403 from
+ * a stale delegate shows up in the UI instead of hanging the dialog open. */
+export function useSetItemPermission(slug: string, itemId: string) {
+  const qc = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: (perm: ItemPermission) => api.setItemPermission(slug, itemId, perm),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.appItem(slug, itemId) });
+      void qc.invalidateQueries({ queryKey: qk.appItems(slug) });
+    },
+  });
+  return {
+    setPermission: (perm: ItemPermission) => mutation.mutate(perm),
+    /** Awaitable variant for callers that close a dialog only on success. */
+    setPermissionAsync: (perm: ItemPermission) => mutation.mutateAsync(perm),
+    isPending: mutation.isPending,
+    error: mutation.error ? mutation.error.message : null,
   };
 }
 

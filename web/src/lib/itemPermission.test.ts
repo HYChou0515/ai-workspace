@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canWriteItem, parseItemPermission } from "./itemPermission";
+import { canChangeItemPermission, canWriteItem, parseItemPermission } from "./itemPermission";
 
 const OWNER = "owner1";
 const ME = "me1";
@@ -112,5 +112,36 @@ describe("item role ↔ grant mapping (grill D2)", () => {
     );
     expect(perm.read_content).toContain("user:bob");
     expect(perm.read_chat ?? []).not.toContain("user:bob"); // custom omitted read_chat
+  });
+});
+
+// Mirrors `perm/authorize.py` step 5, which special-cases `change_permission`:
+// it is NEVER conferred by `public` visibility — only the owner, a superuser, or
+// an explicit grant may rewire access control. A generic verb check would say
+// "public ⇒ allowed" and hand the share control to every viewer.
+describe("canChangeItemPermission", () => {
+  it("allows the owner", () => {
+    expect(canChangeItemPermission({ visibility: "private" }, "alice", "alice", false)).toBe(true);
+  });
+  it("allows a superuser who does not own the item", () => {
+    expect(canChangeItemPermission({ visibility: "private" }, "root", "alice", true)).toBe(true);
+  });
+  it("allows an explicit change_permission grantee", () => {
+    const perm = { visibility: "restricted" as const, change_permission: ["user:carol"] };
+    expect(canChangeItemPermission(perm, "carol", "alice", false)).toBe(true);
+  });
+  it("denies a plain collaborator", () => {
+    const perm = { visibility: "restricted" as const, converse: ["user:dave"] };
+    expect(canChangeItemPermission(perm, "dave", "alice", false)).toBe(false);
+  });
+  it("denies a stranger on a PUBLIC item — public never confers change_permission", () => {
+    expect(canChangeItemPermission({ visibility: "public" }, "eve", "alice", false)).toBe(false);
+  });
+  it("denies a stranger when the item has no permission object (legacy ≡ public)", () => {
+    expect(canChangeItemPermission(undefined, "eve", "alice", false)).toBe(false);
+  });
+  it("honours an explicit `all` grant", () => {
+    const perm = { visibility: "restricted" as const, change_permission: ["all"] };
+    expect(canChangeItemPermission(perm, "eve", "alice", false)).toBe(true);
   });
 });

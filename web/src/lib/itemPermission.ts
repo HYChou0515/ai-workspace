@@ -107,6 +107,30 @@ export function hasItemVerb(
   );
 }
 
+/** #306 PR3 — who may open the sharing UI, mirroring `perm/authorize.py` step 5.
+ *
+ * `change_permission` is deliberately NOT routed through {@link hasItemVerb}: the
+ * backend special-cases it so that `public` visibility never confers it — only
+ * the owner, a superuser, or an explicit grant may rewire access control. Reusing
+ * the generic check would hand the share control to every viewer of a public item.
+ *
+ * The UI gate exists so the affordance matches what the server will accept; the
+ * server enforces regardless. Getting it WRONG in the other direction is what
+ * left admins unable to change any item's access: the control was `me === owner`,
+ * while the backend had always honoured superusers and delegates. */
+export function canChangeItemPermission(
+  permission: ItemPermission | undefined,
+  currentUserId: string,
+  ownerId: string,
+  isSuperuser: boolean,
+): boolean {
+  if (currentUserId === ownerId || isSuperuser) return true;
+  const grants = permission?.change_permission;
+  return (
+    Array.isArray(grants) && (grants.includes(`user:${currentUserId}`) || grants.includes("all"))
+  );
+}
+
 export const canReadChat = (p: ItemPermission | undefined, u: string, o: string) =>
   hasItemVerb(p, u, o, "read_chat");
 export const canReadItemContent = (p: ItemPermission | undefined, u: string, o: string) =>

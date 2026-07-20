@@ -215,8 +215,16 @@ export const realApi: ApiClient = {
     // those keys. specstar rejects `resource_id` in a write body with a 422
     // ("…is immutable"), which would silently drop the whole edit — so PUT only
     // the model struct fields, never the ride-along metadata.
+    //
+    // #306 PR3: `permission` is stripped for a different reason — it has its own
+    // endpoint (`PUT …/items/{id}/permission`). This PUT is a read-modify-write
+    // off a CACHED item, so echoing `permission` back means the next field edit
+    // replays a stale copy and silently REVERTS whatever the share dialog just
+    // set. Keeping it out makes the dedicated endpoint the only writer, so the
+    // revert is impossible regardless of how stale the cache is.
     const body = { ...data };
-    for (const k of ["resource_id", "created_time", "updated_time", "created_by"]) delete body[k];
+    for (const k of ["resource_id", "created_time", "updated_time", "created_by", "permission"])
+      delete body[k];
     const resp = await apiFetch(`${resourceRoute}/${encodeURIComponent(id)}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
