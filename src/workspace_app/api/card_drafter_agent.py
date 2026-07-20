@@ -65,7 +65,7 @@ def default_card_drafter_config(
 ) -> AgentConfig:
     """The bundled agentic-drafter ``AgentConfig``: it delegates every KB lookup
     through ``ask_knowledge_base`` (context isolation, #270), so that is its only
-    tool — never the leaf ``kb_search`` / ``search_wiki`` (which would need a
+    tool — never the leaves ``kb_search`` / ``search_wiki`` (which would need a
     retriever / wiki store the drafter's own context doesn't carry).
 
     The loop needs a TOOL-calling model, so the composition root passes the kb_chat
@@ -88,10 +88,9 @@ def default_card_drafter_config(
 
 def default_drafter_ask_kb_spec() -> AskKbSpec:
     """The drafter's base ``AskKbSpec`` — the sub-agent it delegates to gets a
-    capped chunk search + a capped wiki grep + the glossary over the document's OWN
+    capped chunk search + a capped wiki consultation + the glossary over the document's OWN
     collection (scope is stamped per-document by :func:`drafter_context_builder`), so
-    it consults ALL of RAG + wiki + glossary before drafting (#506 ③). ``answer_question``
-    wires the per-collection wiki store when a spec grants ``search_wiki``."""
+    it consults ALL of RAG + wiki + glossary before drafting (#506 ③)."""
     return AskKbSpec(kb_search_max=3, wiki_search_max=3, glossary=True)
 
 
@@ -198,9 +197,12 @@ def wire_agentic_card_drafter(
     identity so the #305 collection-read gate passes ``[collection_id]`` through (a
     background job carries no request speaker); safe because the drafter's spec
     FORCES scope to the document's collection, so superuser status can't widen the
-    search. The wiki is reached by delegation (`ask_wiki`), so the base runner is
-    wiki-aware runner is never taken."""
+    search. #537: the sub-agent's spec grants `ask_wiki`, so the drafter must wire
+    a consultant for it to delegate to — a granted tool with nothing behind it just
+    burns a call to report there is no wiki. It's built per call over the scope the
+    spec forced, and returns `None` when that collection keeps no wiki."""
     from ..kb.help_collection import HELP_SYSTEM_USER
+    from ..kb.wiki.consult import make_wiki_consultant
     from .subagent_bridge import SubagentBridge
 
     bridge = SubagentBridge(
@@ -212,6 +214,7 @@ def wire_agentic_card_drafter(
         get_user_id=lambda: HELP_SYSTEM_USER,
         max_searches=max_searches,
         superusers=frozenset({HELP_SYSTEM_USER}),
+        wiki_consultant_factory=lambda cids: make_wiki_consultant(runner, spec, cids),
     )
     coordinator.set_drafter(
         AgentCardDrafter(
