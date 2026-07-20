@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import posixpath
 from dataclasses import dataclass
+from typing import cast
 
 from specstar import QB, SpecStar
 from specstar.query import ConditionBuilder
@@ -40,6 +41,26 @@ logger = logging.getLogger(__name__)
 # LLM (and the user) see a clear "nothing to read here" note instead of a
 # wall of U+FFFD replacement characters (#114).
 _NO_EXTRACTABLE_TEXT = "(no extractable text; this file has only raw binary content)"
+
+# Every DocChunk field the ranking pipeline reads EXCEPT the embedding Vectors
+# (#508 idiom — `partial` takes the fields to KEEP): the BM25 corpus (`text`), the
+# passage/merge + citation metadata (`seq`/`start`/`end`/`collection_id`/
+# `provenance`), and chunk→doc resolution (`source_doc_id`/`source_file_id`). The
+# vectors are needed ONLY by MMR, and only for the handful of fused candidates
+# (hydrated by id in `_hydrate_vectors`), so bulk-loading a whole collection's
+# 4096-d vectors here is pure waste — the "load every chunk's embedding" hang. A
+# new scalar the retriever reads must be added here; a new heavy field stays out by
+# default. Leading-slash paths default to the `data` section (specstar `partial`).
+_CHUNK_FIELDS = [
+    "/text",
+    "/seq",
+    "/start",
+    "/end",
+    "/collection_id",
+    "/source_doc_id",
+    "/source_file_id",
+    "/provenance",
+]
 
 
 @dataclass(frozen=True)
@@ -307,9 +328,13 @@ class Retriever:
             cand,
         )
         # {chunk_id: DocChunk}; #308 excludes chunks of docs the speaker's per-doc
-        # override blocks, from BOTH the BM25/MMR corpus (this dict) and the dense
+        # override blocks, from BOTH the BM25 corpus (this dict) and the dense
         # native-vector query below, so a hidden doc never reaches ranking/answer.
-        chunks = self._load_chunks(collection_ids, loc, exclude_doc_ids)
+        # Vector-free unless the overlay path needs the full set for its in-memory
+        # dense recompute — MMR's vectors are hydrated per-candidate below.
+        chunks = self._load_chunks(
+            collection_ids, loc, exclude_doc_ids, include_vectors=overlay is not None
+        )
         if overlay is not None:
             # #104: the shadowed doc's REAL chunks are its CONTENT chunks — match
             # by the shadow doc's file_id (an aliased doc's content is owned by a
@@ -447,6 +472,15 @@ class Retriever:
             len(ranked_lists),
         )
 
+        # MMR needs the stored vectors, but ONLY for the fused survivors (≤ `cand`).
+        # The bulk chunk load is vector-free (#508), so hydrate just these: the
+        # overlay's chunks already carry vectors (full load + virtual chunks); every
+        # other path fetches them by id (a handful of reads, not the whole corpus).
+        if overlay is not None:
+            vec_of = {cid: _chunk_vec(chunks[cid]) for cid in fused}
+        else:
+            vec_of = self._hydrate_vectors(fused)
+
         # RRF order → descending relevance scores; MMR for diversity (cosine of
         # the stored chunk vectors as the similarity).
         relevance = {cid: 1.0 / (rank + 1) for rank, cid in enumerate(fused)}
@@ -457,9 +491,7 @@ class Retriever:
             # (code vector) is populated per chunk. P3.0 retriever fan-out
             # keeps each path's vectors homogeneous (same field), so the MMR
             # similarity safely reads whichever is set.
-            similarity=lambda a, b: (
-                1.0 - cosine_distance(_chunk_vec(chunks[a]), _chunk_vec(chunks[b]))
-            ),
+            similarity=lambda a, b: 1.0 - cosine_distance(vec_of.get(a, []), vec_of.get(b, [])),
             k=mmr_k,
         )
 
@@ -764,9 +796,12 @@ class Retriever:
             .limit(self._candidates)
             .build()
         )
+        # We only read the ranked ids — `returns=["info"]` keeps `r.info` (the
+        # resource id) and drops `r.data`, so the vector sort runs in the store
+        # (pgvector) without shipping each candidate's 4096-d embedding back.
         return [
             r.info.resource_id  # ty: ignore[unresolved-attribute]
-            for r in rm.list_resources(query)
+            for r in rm.list_resources(query, returns=["info"])
         ]
 
     def _load_chunks(
@@ -774,18 +809,52 @@ class Retriever:
         collection_ids: list[str],
         location: LocationFilter | None = None,
         exclude_doc_ids: frozenset[str] = frozenset(),
+        *,
+        include_vectors: bool = False,
     ) -> dict[str, DocChunk]:
-        """The chunk universe for BM25 + MMR + passage metadata. A `location`
-        filter scopes it the SAME way as the dense query, so every retrieval
-        signal sees the same narrowed candidate set."""
+        """The chunk universe for BM25 + passage metadata. A `location` filter
+        scopes it the SAME way as the dense query, so every retrieval signal sees
+        the same narrowed candidate set.
+
+        Vector-free by default (#508): the returned chunks carry only `_CHUNK_FIELDS`
+        (no embedding), because BM25 + merge never read a vector and MMR needs one
+        only for the fused candidates (hydrated separately). This is what stops a
+        search from deserializing a whole collection's 4096-d vectors. Set
+        `include_vectors` for the #328 overlay path, which recomputes the dense
+        order in-memory over the full chunk set and so needs every vector."""
         rm = self._spec.get_resource_manager(DocChunk)
         out: dict[str, DocChunk] = {}
         for cid in collection_ids:
             scope = _scoped(QB["collection_id"] == cid, location, exclude_doc_ids)
-            for r in rm.list_resources(scope.build()):
-                data = r.data
-                assert isinstance(data, DocChunk)
-                out[r.info.resource_id] = data  # ty: ignore[unresolved-attribute]
+            if include_vectors:
+                results = rm.list_resources(scope.build())
+            else:
+                # `returns` keeps `r.info` (the resource id) while `partial` narrows
+                # `r.data` to the vector-free subset — a `Partial_DocChunk`, a
+                # distinct type carrying every read field, so `cast` (not isinstance).
+                results = rm.list_resources(
+                    scope.build(), returns=["data", "info"], partial=_CHUNK_FIELDS
+                )
+            for r in results:
+                out[r.info.resource_id] = cast(DocChunk, r.data)  # ty: ignore[unresolved-attribute]
+        return out
+
+    def _hydrate_vectors(self, chunk_ids: list[str]) -> dict[str, list[float]]:
+        """The stored vector for each of the given (fused-candidate) chunk ids — the
+        ONLY chunks MMR needs a vector for. A point read per id keeps the bulk corpus
+        load (`_load_chunks`) vector-free (#508): vector I/O scales with `candidates`,
+        not collection size. Reads the same field `_chunk_vec` does (text or code);
+        an id whose chunk vanished mid-query is simply skipped (its MMR similarity
+        then defaults to max-distance, exactly as an empty vector already did)."""
+        rm = self._spec.get_resource_manager(DocChunk)
+        out: dict[str, list[float]] = {}
+        for cid in chunk_ids:
+            try:
+                data = rm.get(cid).data
+            except ResourceIDNotFoundError:  # pragma: no cover — fused id came from the load
+                continue
+            assert isinstance(data, DocChunk)  # a full point get, not a partial projection
+            out[cid] = _chunk_vec(data)
         return out
 
     def _resolve_doc_id(self, chunk: DocChunk) -> str | None:

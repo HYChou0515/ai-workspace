@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 
 import msgspec
+import pytest
 from specstar import QB, SpecStar
 from specstar.types import Binary
 
@@ -24,6 +25,65 @@ def _ingest(spec, chunker, embedder, name, text):
         collection_id=cid, user="u", filename=name, data=text.encode()
     )
     return cid
+
+
+def test_search_vector_io_scales_with_candidates_not_collection_size(
+    spec: SpecStar,
+    chunker: FixedTokenChunker,
+    embedder: HashEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # Perf contract: a search must NOT deserialize every chunk's embedding vector.
+    # The bulk corpus load feeds BM25 + passage metadata (no vector) and MMR needs
+    # vectors only for the fused candidates — so the number of vectors materialized
+    # scales with `candidates`, not the collection's chunk count (the "load the whole
+    # collection's 4096-d vectors" hang). Behavioural + mechanism-agnostic: it stays
+    # true however the projection is implemented, and only fails if a full-collection
+    # vector load is (re)introduced.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    for i in range(20):
+        ing.ingest(
+            collection_id=cid,
+            user="u",
+            filename=f"d{i}.md",
+            data=f"reflow oven temperature zone {i} thermal profile solder paste".encode(),
+        )
+    rm = spec.get_resource_manager(DocChunk)
+    total_chunks = len(rm.list_resources((QB["collection_id"] == cid).build()))
+    assert total_chunks > 40, "need a corpus big enough that a full load is unmistakable"
+
+    counter = {"vectors": 0}
+
+    def _has_vec(data: object) -> bool:
+        return bool(getattr(data, "embedding", None) or getattr(data, "embedding_alt", None))
+
+    orig_list = rm.list_resources
+    orig_get = rm.get
+
+    def counting_list(*args: object, **kwargs: object) -> list:
+        items = orig_list(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        counter["vectors"] += sum(1 for it in items if _has_vec(getattr(it, "data", None)))
+        return items
+
+    def counting_get(*args: object, **kwargs: object) -> object:
+        res = orig_get(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        if _has_vec(getattr(res, "data", None)):
+            counter["vectors"] += 1
+        return res
+
+    monkeypatch.setattr(rm, "list_resources", counting_list)
+    monkeypatch.setattr(rm, "get", counting_get)
+
+    cand = 5
+    Retriever(spec, embedder=embedder, candidates=cand, top_k=3).search("reflow temperature", [cid])
+
+    # Bounded by the candidate pool (a few dense probes + MMR hydration), nowhere
+    # near the >40 chunks a full-collection load would touch.
+    assert counter["vectors"] <= 4 * cand, (
+        f"materialized {counter['vectors']} chunk vectors for {total_chunks} chunks — "
+        "retrieval is bulk-loading vectors instead of projecting them away"
+    )
 
 
 def test_search_drops_a_chunk_whose_source_doc_is_gone(
