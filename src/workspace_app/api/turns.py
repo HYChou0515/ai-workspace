@@ -825,9 +825,7 @@ class ChatTurnEngine:
         if live:
             logger.info("turns: draining %d in-flight turn(s) (<=%.1fs)", len(live), timeout)
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(
-                    asyncio.gather(*live, return_exceptions=True), timeout
-                )
+                await asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout)
         # Past the deadline: cancel, then let each turn's teardown persist what it
         # has (that path is the same one Stop uses).
         stragglers = [t for t in live if not t.done()]
@@ -836,9 +834,7 @@ class ChatTurnEngine:
         if stragglers:
             logger.warning("turns: %d turn(s) did not drain — cancelled", len(stragglers))
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(
-                    asyncio.gather(*stragglers, return_exceptions=True), 2.0
-                )
+                await asyncio.wait_for(asyncio.gather(*stragglers, return_exceptions=True), 2.0)
         for session in self._ws_sessions.values():
             if session.worker is not None:
                 session.worker.cancel()
