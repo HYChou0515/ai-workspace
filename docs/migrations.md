@@ -121,7 +121,45 @@ uv run python scripts/run_migrate.py doc-chunk cluster-member
 
 ---
 
-## 6. 注意事項
+## 6. 目前的具體案例：`doc-chunk` 的 `text` 索引回填（關鍵字檢索）
+
+檢索改成**不再整包載入整個 collection** 之後，關鍵字（BM25）那半段改用 `DocChunk.text`
+上的 **pg_trgm 索引**先把候選集縮小。而索引要看得到一列，`text` 必須先被萃取進那一列的
+`indexed_data` —— 萃取**只發生在寫入當下**（就是 §2 那條規則）。
+
+**所以升版後、回填前，既有的 chunk 對關鍵字檢索是隱形的：**
+
+| | 回填前 | 回填後 |
+| --- | --- | --- |
+| 既有 chunk 的**關鍵字**檢索 | ❌ 找不到 | ✅ 正常 |
+| 既有 chunk 的**語意（向量）**檢索 | ✅ 不受影響 | ✅ 正常 |
+| **新上傳**的檔案 | ✅ 立即正常 | ✅ 正常 |
+
+語意檢索照常運作，所以症狀不是「整個搜不到」，而是**舊文件的關鍵字命中率掉下去**——
+這種半殘狀態不會噴錯，只會安靜地少給答案，所以請把回填當成部署的一部分，不要拖。
+
+schema 動作：`doc-chunk` v5 → **v6**，一樣是一個 `_reindex_only` step（資料不變，只是逼出
+「重新萃取 + 寫回」的副作用）。指令與 §3 相同：
+
+```bash
+# 1. 部署帶有 v6 的版本
+# 2. 先 dry-run，確認沒有 failed
+uv run python scripts/run_migrate.py --dry-run doc-chunk
+# 3. 正式重寫（會重寫每一列的 meta，挑低流量時段）
+uv run python scripts/run_migrate.py doc-chunk
+```
+
+**不需要手動建索引**：pg_trgm 擴充與那個 GIN 都由 specstar 在**每次開機**時確保存在
+（`CREATE EXTENSION IF NOT EXISTS pg_trgm` + 建索引），只要 DB role 有權限即可。
+
+**代價**：`text` 進了 `indexed_data`，等於每個 chunk 的文字在 JSONB 裡**多存一份**。這是
+「用索引換掉整包載入」刻意付的成本，不是意外。大量重寫之後可以照 §4 跑一次
+`REINDEX TABLE CONCURRENTLY doc_chunk_meta;`——這裡不是為了回收空間（`indexed_data` 是
+變大的），而是讓重寫後的索引更緊實。
+
+---
+
+## 7. 注意事項
 
 - **挑低流量時段**：migrate 會重寫每一列的 meta。
 - **順序**：先 dry-run，再正式跑，最後 `REINDEX`。

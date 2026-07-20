@@ -495,6 +495,20 @@ RCA 的 system prompt 是純 markdown，存在
   升 v3（而非沿用 v2）是因為生產資料多為 `None`、少數已是 `v2`；只在 v2 上加
   索引不會重抽那些已 v2 的列，跳 v3 才會讓**全部**列重抽。新寫入的列已直接帶
   索引，不需處理。
+- **索引回填（`text` 三連字索引，升級後一次性）**：檢索不再整包載入整個
+  collection，關鍵字（BM25）那半段改由 `DocChunk.text` 上的 pg_trgm 索引先縮小
+  候選集，`DocChunk` 因此升到 schema `v6`。同樣地 specstar 只在**寫入時**抽取
+  `indexed_data`，所以升級後**既有 chunk 的關鍵字檢索會查不到**（語意/向量檢索
+  不受影響，新上傳的檔案立即正常），直到 operator 跑一次遷移 —— 它只從已存的
+  `text` **重抽索引，不重新 parse 也不重算 embedding**：
+
+  ```bash
+  uv run python scripts/run_migrate.py --dry-run doc-chunk   # 先確認沒有 failed
+  uv run python scripts/run_migrate.py doc-chunk             # 正式重寫
+  ```
+
+  pg_trgm 擴充與該 GIN 由 specstar 開機時自動確保存在，不需手動建。細節與
+  回填前後的行為對照見 [資料遷移](migrations.md) §6。
 
 ---
 
