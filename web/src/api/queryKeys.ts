@@ -50,6 +50,11 @@ export const qk = {
   workspaceWorkflows: (slug: string, itemId: string) =>
     ["workspaceWorkflows", slug, itemId] as const,
 
+  // #520: the shipped starter templates, with per-item compatibility. Keyed by item
+  // because the compatibility flag depends on the item's profile, not just the app.
+  workflowTemplates: (slug: string, itemId: string) =>
+    ["workflowTemplates", slug, itemId] as const,
+
   // #419: the file-first entity framework. `catalog` = one item's entity types
   // (schema + quick-create form); `list` = one type's projected records. A
   // create / update invalidates the matching `list` (and the catalog is stable,

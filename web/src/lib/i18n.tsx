@@ -544,6 +544,24 @@ export const messages = {
   },
   "workflows.close": { "zh-TW": "關閉", en: "Close" },
   "workflows.steps": { "zh-TW": "{n} 個步驟", en: "{n} steps" },
+  // #520: shipped starter templates. Copy speaks in outcomes ("copy one to edit"),
+  // never in internals like `.workflows/` or tool ceilings.
+  "templates.heading": { "zh-TW": "現成範本", en: "Ready-made templates" },
+  "templates.intro": {
+    "zh-TW": "拉一份到這個工作區，就能直接改成你要的樣子。",
+    en: "Copy one into this workspace and edit it into what you need.",
+  },
+  "templates.copy": { "zh-TW": "拉一份來改", en: "Copy to edit" },
+  "templates.unavailable": {
+    "zh-TW": "這個項目的設定不支援這個範本",
+    en: "This item's setup can't run this template",
+  },
+  "templates.replaceConfirm": {
+    "zh-TW": "這個工作區已經有同名的「{name}」。要用範本覆蓋掉你現有的版本嗎？",
+    en: 'This workspace already has "{name}". Replace your version with the template?',
+  },
+  "templates.replace": { "zh-TW": "覆蓋", en: "Replace" },
+  "templates.copied": { "zh-TW": "已加入「{name}」", en: 'Added "{name}"' },
   // KB chat collection modal (KbCollectionsModal) — #271.
   "collections.more": { "zh-TW": "更多 · {n}", en: "More · {n}" },
   "collections.kbTitle": { "zh-TW": "在哪些知識庫裡搜尋", en: "Which collections to search" },

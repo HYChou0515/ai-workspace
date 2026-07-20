@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileService } from "../api/fileService";
 import { renderWithQuery } from "../test/queryWrapper";
+import { DialogProvider } from "./Dialog";
 import { WorkflowsModal } from "./WorkflowsModal";
 
 // Stub the listing API; keep WORKFLOWS_DIR real (the modal derives the download prefix).
@@ -39,13 +40,15 @@ function fakeService() {
 
 function render(svc: FileService, onRun?: (chatId: string) => void) {
   return renderWithQuery(
-    <WorkflowsModal
-      slug="playground"
-      itemId="inv1"
-      fileService={svc}
-      onClose={() => {}}
-      onRun={onRun}
-    />,
+    <DialogProvider>
+      <WorkflowsModal
+        slug="playground"
+        itemId="inv1"
+        fileService={svc}
+        onClose={() => {}}
+        onRun={onRun}
+      />
+    </DialogProvider>,
   );
 }
 

@@ -3,12 +3,15 @@ import { useRef, useState } from "react";
 
 import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
+import { TemplateConflictError, workflowTemplatesApi } from "../api/workflowTemplates";
 import { workflowApi } from "../api/workflows";
 import { WORKFLOWS_DIR } from "../api/workspaceWorkflows";
+import { useWorkflowTemplates } from "../hooks/useWorkflowTemplates";
 import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
+import { useDialog } from "./Dialog";
 import { ModalShell } from "./ModalShell";
 
 /**
@@ -37,9 +40,39 @@ export function WorkflowsModal({
 }) {
   const t = useT();
   const qc = useQueryClient();
+  const dialog = useDialog();
   const workflows = useWorkspaceWorkflows(slug, itemId);
+  const templates = useWorkflowTemplates(slug, itemId);
   const importRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+
+  /** #520: pull a shipped template in. A name clash comes back as a 409 rather than
+   * quietly overwriting, so we ask before replacing — the copy in the workspace may
+   * already carry the user's edits. */
+  const copyTemplate = async (id: string, title: string) => {
+    setBusy(true);
+    try {
+      try {
+        await workflowTemplatesApi.copy(slug, itemId, id);
+      } catch (err) {
+        if (!(err instanceof TemplateConflictError)) throw err;
+        const choice = await dialog.confirm({
+          title: t("templates.heading"),
+          body: t("templates.replaceConfirm", { name: title || id }),
+          actions: [
+            { id: "replace", label: t("templates.replace"), variant: "danger" },
+            { id: "cancel", label: t("workflows.close") },
+          ],
+        });
+        if (choice !== "replace") return;
+        await workflowTemplatesApi.copy(slug, itemId, id, { overwrite: true });
+      }
+      await qc.invalidateQueries({ queryKey: qk.workspaceWorkflows(slug, itemId) });
+      await qc.invalidateQueries({ queryKey: qk.files(itemId) });
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const run = async (id: string) => {
     setBusy(true);
@@ -153,6 +186,58 @@ export function WorkflowsModal({
             ))
           )}
         </div>
+
+        {(templates.data ?? []).length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+            <strong style={{ fontSize: "var(--text-body-sm)" }}>{t("templates.heading")}</strong>
+            <p
+              style={{
+                margin: 0,
+                fontSize: pxToRem(11),
+                color: "var(--text-paper-d)",
+              }}
+            >
+              {t("templates.intro")}
+            </p>
+            {(templates.data ?? []).map((tpl) => (
+              <div
+                key={tpl.id}
+                data-testid="workflow-template-row"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 8px",
+                  border: "1px solid var(--paper-3)",
+                  borderRadius: "var(--radius-btn)",
+                  // #520: an unusable template stays VISIBLE but reads as inert, so the
+                  // user learns it exists and what would make it work.
+                  opacity: tpl.compatible ? 1 : 0.55,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>
+                    {tpl.title || tpl.id}
+                  </div>
+                  <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+                    {tpl.compatible ? tpl.description : t("templates.unavailable")}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  data-testid={`workflow-template-copy-${tpl.id}`}
+                  aria-label={`${t("templates.copy")} ${tpl.title || tpl.id}`}
+                  disabled={busy || !tpl.compatible}
+                  title={tpl.compatible ? undefined : tpl.problems.join("; ")}
+                  onClick={() => void copyTemplate(tpl.id, tpl.title)}
+                  style={pillBtn}
+                >
+                  <Icon name="download" size={12} /> {t("templates.copy")}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 4 }}>
           <button
