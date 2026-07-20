@@ -86,6 +86,103 @@ def test_search_vector_io_scales_with_candidates_not_collection_size(
     )
 
 
+def test_sparse_corpus_scales_with_matches_not_collection_size(
+    spec: SpecStar,
+    chunker: FixedTokenChunker,
+    embedder: HashEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    # 2a: the BM25 (sparse) arm must not load + tokenize every chunk's text. It
+    # pre-narrows its corpus to the chunks trigram-similar to a query term (pg_trgm
+    # `.fuzzy`, GIN-served on Postgres), so the amount of chunk TEXT materialized
+    # during a search scales with the lexical-match count, not the collection size.
+    # Behavioural + mechanism-agnostic: fails only if a whole-collection text load
+    # (the pre-2a corpus) returns.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    # Many docs share common vocabulary; ONE doc carries the rare term the query hits.
+    # Distinct bodies per doc so #104 content-dedup keeps them as separate chunk sets.
+    for i in range(19):
+        ing.ingest(
+            collection_id=cid,
+            user="u",
+            filename=f"common{i}.md",
+            data=f"solder paste viscosity thixotropic index stencil aperture batch {i}".encode(),
+        )
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="rare.md",
+        data=b"quibblezorp flangewidget marker only here",
+    )
+    rm = spec.get_resource_manager(DocChunk)
+    total_chunks = len(rm.list_resources((QB["collection_id"] == cid).build()))
+    assert total_chunks > 40, "need a corpus big enough that a full text load is unmistakable"
+
+    counter = {"texts": 0}
+
+    def _has_text(data: object) -> bool:
+        return bool(getattr(data, "text", None))
+
+    orig_list = rm.list_resources
+    orig_get = rm.get
+
+    def counting_list(*args: object, **kwargs: object) -> list:
+        items = orig_list(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        counter["texts"] += sum(1 for it in items if _has_text(getattr(it, "data", None)))
+        return items
+
+    def counting_get(*args: object, **kwargs: object) -> object:
+        res = orig_get(*args, **kwargs)  # ty: ignore[invalid-argument-type]
+        if _has_text(getattr(res, "data", None)):
+            counter["texts"] += 1
+        return res
+
+    monkeypatch.setattr(rm, "list_resources", counting_list)
+    monkeypatch.setattr(rm, "get", counting_get)
+
+    Retriever(spec, embedder=embedder, candidates=5, top_k=3).search("quibblezorp", [cid])
+
+    # Only the rare doc's few chunks match the term + a small fused hydration —
+    # nowhere near the >40 chunks a whole-collection corpus load would touch.
+    assert counter["texts"] <= 15, (
+        f"materialized {counter['texts']} chunk texts for {total_chunks} chunks — "
+        "the sparse arm is loading the whole collection's text instead of narrowing"
+    )
+
+
+def test_overlay_that_empties_the_candidate_set_returns_no_passages(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #328 overlay edge: when the shadowed doc is the ONLY content and the candidate
+    # re-parse yields no virtual chunks, the overlaid candidate set is empty — the
+    # search returns nothing rather than falling through to rank an empty pool.
+    from workspace_app.kb.retriever import Overlay
+
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid, user="u", filename="only.md", data=b"reflow oven temperature zone"
+    )
+    only_id = encode_doc_id(cid, "only.md")
+    overlay = Overlay(virtual_chunks=[], shadow_doc_id=only_id, virtual_text="")
+    passages = Retriever(spec, embedder=embedder).search("reflow", [cid], overlay=overlay)
+    assert passages == []
+
+
+def test_search_with_no_query_terms_runs_dense_only(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # A punctuation-only query has no BM25 word tokens, so the trigram corpus
+    # narrowing has nothing to fuzzy-match — it yields an empty sparse corpus (like
+    # BM25's own no-terms guard) and the search runs on the dense arm alone, without
+    # crashing.
+    cid = _ingest(spec, chunker, embedder, "a.md", "reflow oven temperature zone three thermal")
+    passages = Retriever(spec, embedder=embedder).search("!!! ???", [cid])
+    # Dense still ranks (HashEmbedder), so we get results, just no keyword signal.
+    assert all(isinstance(p.document_id, str) for p in passages)
+
+
 def test_search_drops_a_chunk_whose_source_doc_is_gone(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):

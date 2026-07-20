@@ -417,7 +417,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # real hash onto old chunks is a reindex (denormalize-from-parent), not this
     # migrate — see #104 plan P4.
     spec.add_model(
-        Schema(DocChunk, "v5")
+        Schema(DocChunk, "v6")
         .step(None, _reindex_only, to="v3", source_type=DocChunk)
         .step("v2", _reindex_only, to="v3", source_type=DocChunk)
         .step("v3", _reindex_only, to="v4", source_type=DocChunk)
@@ -429,11 +429,25 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
         # no-op reindex gives every v4 row a v5 delta: `POST /doc-chunk/migrate/
         # execute` then re-extracts + re-saves each, and 0.12.1 strips the vectors
         # on the way out. Operator then `REINDEX`es the GIN to reclaim the space.
-        .step("v4", _reindex_only, to="v5", source_type=DocChunk),
+        .step("v4", _reindex_only, to="v5", source_type=DocChunk)
+        # v6: `text` becomes an indexed field (its `TrigramIndex` GIN backs the
+        # sparse arm's `.fuzzy()` corpus pre-narrowing). specstar extracts an indexed
+        # field into `indexed_data` at WRITE time only, so pre-v6 rows have no
+        # `indexed_data->>'text'` and are invisible to `.fuzzy()` until re-extracted.
+        # This no-op reindex gives every v5 row a v6 delta; `POST /doc-chunk/migrate/
+        # execute` then re-extracts + re-saves each (folding `text` into indexed_data),
+        # after which an operator builds/`REINDEX`es the pg_trgm GIN. NOT a
+        # reparse/reembed — the text is already on each row.
+        .step("v5", _reindex_only, to="v6", source_type=DocChunk),
         indexed_fields=[
             "source_doc_id",
             "source_file_id",
             "collection_id",
+            # The chunk text, extracted into `indexed_data` so its `TrigramIndex` GIN
+            # (declared on the field) can serve the sparse arm's `.fuzzy(term)` corpus
+            # narrowing. Duplicates the text into the jsonb — the accepted cost of
+            # keyword-narrowing without loading the whole collection (2a).
+            "text",
             IndexableField("provenance.page", int, index_key="page"),
             IndexableField("provenance.slide", int, index_key="slide"),
             IndexableField("provenance.sheet", str, index_key="sheet"),
