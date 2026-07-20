@@ -197,10 +197,48 @@ class _Restriction:
         return QB["source_file_id"].in_(list(self.file_ids)) | by_doc
 
 
+@dataclass(frozen=True)
+class _Exclusion:
+    """#308 × #104: the denied documents, resolved against content sharing.
+
+    A chunk is bound to CONTENT, and identical bytes at several paths share ONE chunk
+    set that records only ONE holder. So "hide this document" cannot simply mean "drop
+    the chunks naming it": that chunk set may be the only copy of content another,
+    perfectly readable document also holds, and dropping it takes that document away
+    from a reader entitled to it — losing your own document because someone else
+    uploaded the same bytes and had theirs restricted.
+
+    The rule is therefore: **content stays reachable while ANY live holder is
+    readable, and disappears once none is.** ``safe_file_ids`` are the content hashes
+    with at least one readable holder. Legacy chunks (``source_file_id == ""``) never
+    match one — a real hash is never empty — so they keep the old doc-id semantics,
+    which is right because they are bound to their own document.
+    """
+
+    doc_ids: tuple[str, ...]
+    safe_file_ids: tuple[str, ...]
+
+    def __bool__(self) -> bool:
+        return bool(self.doc_ids)
+
+    @property
+    def doc_ids_set(self) -> frozenset[str]:
+        """Membership form, for the attribution side (`_DocJoin`) rather than the query."""
+        return frozenset(self.doc_ids)
+
+    def condition(self) -> ConditionBuilder:
+        # "denied UNLESS the content has a readable holder" — the de Morgan of
+        # ``NOT(doc is denied AND content has no readable holder)``.
+        denied = QB["source_doc_id"].not_in(list(self.doc_ids))
+        if not self.safe_file_ids:
+            return denied
+        return denied | QB["source_file_id"].in_(list(self.safe_file_ids))
+
+
 def _scoped(
     base: ConditionBuilder,
     location: LocationFilter | None,
-    exclude_doc_ids: frozenset[str] = frozenset(),
+    exclude: _Exclusion | None = None,
     restrict: _Restriction | None = None,
 ) -> ConditionBuilder:
     """AND the location filter's predicates onto a base query, then EXCLUDE any
@@ -211,8 +249,8 @@ def _scoped(
     if location is not None:
         for cond in location.conditions():
             out = out & cond
-    if exclude_doc_ids:
-        out = out & QB["source_doc_id"].not_in(list(exclude_doc_ids))
+    if exclude:
+        out = out & exclude.condition()
     if restrict is not None:
         out = out & restrict.condition()
     return out
@@ -253,8 +291,14 @@ class _DocJoin:
     # Everything the tail reads off a SourceDoc except `text` (see above).
     _META_FIELDS = ["/path", "/quality_score", "/collection_id", "/content/file_id"]
 
-    def __init__(self, spec: SpecStar, chunks: Iterable[DocChunk]) -> None:
+    def __init__(
+        self,
+        spec: SpecStar,
+        chunks: Iterable[DocChunk],
+        denied_doc_ids: frozenset[str] = frozenset(),
+    ) -> None:
         self._spec = spec
+        self._denied = denied_doc_ids
         chunk_list = list(chunks)
         rm = spec.get_resource_manager(SourceDoc)
         self._canonical: dict[tuple[str, str], str] = {}
@@ -279,6 +323,12 @@ class _DocJoin:
                 doc = cast(SourceDoc, r.data)
                 self._remember(rid, doc)
                 key = (doc.collection_id, _content_file_id(doc))
+                # #308: never CANONICALISE onto a denied holder. Shared content is
+                # reachable through a readable sibling, but the citation must name
+                # that sibling — naming the denied document would disclose that it
+                # exists, and its path, to someone barred from it.
+                if rid in self._denied:
+                    continue
                 stamp = (r.info.created_time.timestamp(), rid)  # ty: ignore[unresolved-attribute]
                 if key not in best or stamp < best[key]:
                     best[key] = stamp
@@ -306,7 +356,11 @@ class _DocJoin:
             canonical = self._canonical.get((chunk.collection_id, chunk.source_file_id))
             if canonical is not None:
                 return canonical
-        return chunk.source_doc_id or None
+        # The fallback is the chunk's own holder; if THAT is denied there is no
+        # readable document to attribute the passage to, so the caller drops it.
+        if chunk.source_doc_id and chunk.source_doc_id not in self._denied:
+            return chunk.source_doc_id
+        return None
 
     def load(self, doc_ids: Iterable[str]) -> None:
         """Batch-load metadata for docs OUTSIDE the candidate set — the attachment
@@ -489,6 +543,9 @@ class Retriever:
         # sparse corpus must see the SAME restriction — if only one arm is bounded, the
         # other quietly reintroduces out-of-scope chunks into the fusion pool.
         restrict = self._restriction(restrict_to_doc_ids)
+        # #308 × #104: resolve the denied set against content sharing ONCE — see
+        # `_Exclusion`. Empty denial ⇒ None, and every pushdown below is untouched.
+        exclude = self._exclusion(collection_ids, exclude_doc_ids)
         # The overlay path (#328) rebuilds the whole candidate set in memory (drop the
         # shadowed doc's chunks, add the virtual ones) and recomputes the dense order
         # over it, so it alone loads every chunk WITH its vector. The NORMAL path never
@@ -501,7 +558,7 @@ class Retriever:
         if overlay is not None:
             # #518: the overlay path ranks in-memory over THIS set, so the restriction
             # has to bound it here — the dense/sparse pushdowns below don't apply.
-            overlay_chunks = self._load_chunks(collection_ids, loc, exclude_doc_ids, restrict)
+            overlay_chunks = self._load_chunks(collection_ids, loc, exclude, restrict)
             # #104: the shadowed doc's REAL chunks are its CONTENT chunks — match
             # by the shadow doc's file_id (an aliased doc's content is owned by a
             # canonical sibling, so a source_doc_id match alone would miss them),
@@ -550,9 +607,7 @@ class Retriever:
         if overlay is not None:
             corpus = [(cid, ch.text) for cid, ch in overlay_chunks.items()]
         else:
-            corpus = self._sparse_corpus(
-                queries, query, collection_ids, loc, exclude_doc_ids, restrict
-            )
+            corpus = self._sparse_corpus(queries, query, collection_ids, loc, exclude, restrict)
 
         def dense(vec: list[float], field: str = "embedding") -> list[str]:
             """One dense arm, with the query scope bound once.
@@ -569,7 +624,7 @@ class Retriever:
                 cids=collection_ids,
                 loc=loc,
                 overlay=overlay,
-                exclude_doc_ids=exclude_doc_ids,
+                exclude=exclude,
                 restrict=restrict,
             )
 
@@ -651,7 +706,9 @@ class Retriever:
 
         # Resolve every candidate's doc (id → path / quality) in two batched queries
         # instead of several point reads per candidate — see `_DocJoin`.
-        join = _DocJoin(self._spec, cand_chunks.values())
+        join = _DocJoin(
+            self._spec, cand_chunks.values(), exclude.doc_ids_set if exclude else frozenset()
+        )
 
         # #105: second-phase document-quality prior. Recall (RRF + MMR above) is
         # unchanged; this only re-scores the surviving candidates.
@@ -833,7 +890,7 @@ class Retriever:
         cids: list[str],
         loc: LocationFilter | None,
         overlay: Overlay | None,
-        exclude_doc_ids: frozenset[str] = frozenset(),
+        exclude: _Exclusion | None = None,
         restrict: _Restriction | None = None,
     ) -> list[str]:
         """Dense ranking for one query vector. Normal path pushes the cosine sort
@@ -848,7 +905,7 @@ class Retriever:
             vec,
             field=field,
             location=loc,
-            exclude_doc_ids=exclude_doc_ids,
+            exclude=exclude,
             restrict=restrict,
         )
 
@@ -952,7 +1009,7 @@ class Retriever:
         *,
         field: str = "embedding",
         location: LocationFilter | None = None,
-        exclude_doc_ids: frozenset[str] = frozenset(),
+        exclude: _Exclusion | None = None,
         restrict: _Restriction | None = None,
     ) -> list[str]:
         """Top candidate chunk ids nearest `vec` in the given vector `field`
@@ -963,9 +1020,7 @@ class Retriever:
         the vector sort — index filter + vector order in ONE query, the same
         way `collection_id` already scopes it."""
         rm = self._spec.get_resource_manager(DocChunk)
-        scope = _scoped(
-            QB["collection_id"].in_(collection_ids), location, exclude_doc_ids, restrict
-        )
+        scope = _scoped(QB["collection_id"].in_(collection_ids), location, exclude, restrict)
         query = (
             scope
             # specstar's order_by type union omits VectorDistanceSort (works at runtime)
@@ -985,7 +1040,7 @@ class Retriever:
         self,
         collection_ids: list[str],
         location: LocationFilter | None = None,
-        exclude_doc_ids: frozenset[str] = frozenset(),
+        exclude: _Exclusion | None = None,
         restrict: _Restriction | None = None,
     ) -> dict[str, DocChunk]:
         """The FULL in-memory chunk set (with vectors) for the #328 overlay path,
@@ -997,7 +1052,7 @@ class Retriever:
         rm = self._spec.get_resource_manager(DocChunk)
         out: dict[str, DocChunk] = {}
         for cid in collection_ids:
-            scope = _scoped(QB["collection_id"] == cid, location, exclude_doc_ids, restrict)
+            scope = _scoped(QB["collection_id"] == cid, location, exclude, restrict)
             for r in rm.list_resources(scope.build()):
                 data = r.data
                 assert isinstance(data, DocChunk)
@@ -1026,7 +1081,7 @@ class Retriever:
         rank_query: str,
         collection_ids: list[str],
         location: LocationFilter | None,
-        exclude_doc_ids: frozenset[str],
+        exclude: _Exclusion | None,
         restrict: _Restriction | None = None,
     ) -> list[tuple[str, str]]:
         """The BM25 corpus, narrowed to the chunks trigram-similar to a query term
@@ -1065,9 +1120,7 @@ class Retriever:
             # query would let BM25 pull in chunks from outside the card's documents, so
             # the "search inside these docs" promise would hold for one arm and not the
             # other — and the fusion step can't tell the difference.
-            scope = _scoped(
-                (QB["collection_id"] == cid) & fuzzy, location, exclude_doc_ids, restrict
-            )
+            scope = _scoped((QB["collection_id"] == cid) & fuzzy, location, exclude, restrict)
             if cap is not None:
                 # specstar's order_by union omits TrigramSimilaritySort (works at runtime)
                 query = (
@@ -1092,6 +1145,47 @@ class Retriever:
         ordered = tuple(sorted(doc_ids))
         fids = {fid for fid in (self._doc_file_id(d) for d in ordered) if fid}
         return _Restriction(doc_ids=ordered, file_ids=tuple(sorted(fids)))
+
+    def _exclusion(self, collection_ids: list[str], doc_ids: frozenset[str]) -> _Exclusion | None:
+        """#308 × #104: resolve denied documents against content sharing.
+
+        Finds the denied docs' content hashes, then asks which of those hashes ALSO
+        have a live holder the reader may see. Those are ``safe_file_ids``: the chunk
+        set stays reachable through the readable sibling instead of vanishing with the
+        denied document, because it is the same bytes the reader is entitled to.
+
+        Two small queries, both skipped entirely when nothing is denied — which is the
+        overwhelmingly common case, so the ordinary search pays nothing.
+        """
+        if not doc_ids:
+            return None
+        rm = self._spec.get_resource_manager(SourceDoc)
+        denied = sorted(doc_ids)
+        hashes = {
+            fid
+            for r in rm.list_resources(
+                QB.resource_id().in_(denied).build(),
+                returns=["data"],
+                partial=["/content/file_id"],
+            )
+            if (fid := _content_file_id(cast(SourceDoc, r.data)))
+        }
+        if not hashes:  # pre-#104 docs carry no hash — plain doc-id exclusion
+            return _Exclusion(doc_ids=tuple(denied), safe_file_ids=())
+        safe = {
+            fid
+            for r in rm.list_resources(
+                (
+                    QB["collection_id"].in_(sorted(collection_ids))
+                    & QB["file_id"].in_(sorted(hashes))
+                ).build(),
+                returns=["data", "info"],
+                partial=["/content/file_id"],
+            )
+            if r.info.resource_id not in doc_ids  # ty: ignore[unresolved-attribute]
+            and (fid := _content_file_id(cast(SourceDoc, r.data))) in hashes
+        }
+        return _Exclusion(doc_ids=tuple(denied), safe_file_ids=tuple(sorted(safe)))
 
     def _doc_file_id(self, doc_id: str) -> str:
         """A doc's content hash (``content.file_id``), or ``""`` if the doc is
