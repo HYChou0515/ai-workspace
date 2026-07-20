@@ -420,9 +420,6 @@ export type SendKbMessageArgs = {
     expand?: number | null;
     hyde?: number | null;
     rerank?: boolean | null;
-    /** Issue #50 P6: opt this query into the wiki path (the depth picker's
-     * "Search the wiki" toggle). The BE routes chunk / wiki / both. */
-    wiki?: boolean | null;
   };
   /** Issue #32: which kb_chat entry to drive this turn (the picker
    * value). undefined → the first kb_chats[] entry. */

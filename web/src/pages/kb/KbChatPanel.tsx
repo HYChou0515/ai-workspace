@@ -362,11 +362,6 @@ export function KbChatPanel({
               selectedName={pickedAgent}
               onSelectModel={setPickedAgent}
               retrieval
-              wikiAvailable={collections.some(
-                (c) => collectionIds.includes(c.resource_id) && c.use_wiki,
-              )}
-              // #506: KB chat searches the wiki as a budgeted in-agent tool → the
-              // number picker, not the routing toggle.
               wikiBudget
             />
             {log.streaming ? (

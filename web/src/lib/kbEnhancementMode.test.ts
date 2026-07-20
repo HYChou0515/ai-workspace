@@ -6,7 +6,6 @@ import {
   PRESETS,
   setStored,
   toBodyEnhancements,
-  withWikiFlag,
   type EnhancementSelection,
 } from "./kbEnhancementMode";
 
@@ -81,31 +80,6 @@ describe("kbEnhancementMode — sticky storage", () => {
       JSON.stringify({ mode: "lightning" }),
     );
     expect(getStored()).toEqual({ mode: "standard" });
-  });
-});
-
-describe("withWikiFlag — folds the wiki toggle into the depth body", () => {
-  it("adds wiki:true on top of an explicit depth body", () => {
-    expect(withWikiFlag({ expand: 1, hyde: 0, rerank: true }, true)).toEqual({
-      expand: 1,
-      hyde: 0,
-      rerank: true,
-      wiki: true,
-    });
-  });
-
-  it("produces { wiki: true } even when the depth body is undefined (standard)", () => {
-    // standard depth sends no payload; wiki-on alone must still reach the BE.
-    expect(withWikiFlag(undefined, true)).toEqual({ wiki: true });
-  });
-
-  it("leaves the body untouched when the wiki toggle is off", () => {
-    expect(withWikiFlag({ expand: 2, hyde: 0, rerank: false }, false)).toEqual({
-      expand: 2,
-      hyde: 0,
-      rerank: false,
-    });
-    expect(withWikiFlag(undefined, false)).toBeUndefined();
   });
 });
 
