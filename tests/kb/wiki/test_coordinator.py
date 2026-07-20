@@ -13,16 +13,17 @@ tools, proving the hook wires the right context end-to-end.
 
 from __future__ import annotations
 
+import msgspec
 import pytest
 from agents import RunContextWrapper
 from specstar import QB
-from specstar.types import Binary
+from specstar.types import Binary, TaskStatus
 
 from workspace_app.agent.tools import read_new_source_impl, write_file_impl
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.wiki.coordinator import WikiMaintenanceCoordinator
 from workspace_app.kb.wiki.corrections import WikiNotEnabledError
-from workspace_app.kb.wiki.jobs import WikiMaintenanceJob
+from workspace_app.kb.wiki.jobs import WikiJobPayload, WikiMaintenanceJob
 from workspace_app.kb.wiki.store import CORRECTIONS_DIR, WikiFileStore, correction_page_path
 from workspace_app.resources import Collection, SourceDoc, make_spec
 
@@ -917,3 +918,126 @@ def test_pressing_rebuild_again_coalesces_onto_the_pending_run():
     assert coord.enqueue_rebuild(cid) is True
     assert coord.enqueue_rebuild(cid) is False
     assert _pending_ops(spec) == ["rebuild"]
+
+
+async def test_a_rebuild_queued_mid_batch_does_not_reset_the_running_progress():
+    """`on_doc_indexed` starts a fresh epoch only when NOTHING is active, and
+    grows the total otherwise — so an upload batch folding right now keeps its
+    count. A rebuild queued on top must respect the same rule: resetting would
+    make the in-flight sources vanish from the progress bar and then reappear as
+    `done` going backwards."""
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "alpha")
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+    coord._stop_consuming()  # noqa: SLF001 — hold the batch so it is genuinely in flight
+    await coord.on_doc_indexed(d1)
+    assert coord.status(cid).total == 1
+
+    coord.enqueue_rebuild(cid)
+
+    assert coord.status(cid).total >= 1  # the in-flight source was not forgotten
+    await coord.aclose()
+
+
+async def test_queuing_a_rebuild_does_not_erase_a_recorded_failure():
+    """`errors` / `last_error` are what stop a maintainer that wrote nothing from
+    being silent. Seeding the build-state row must not wipe them."""
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    _add_source(spec, cid, "a.md", "alpha")
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+    coord._stop_consuming()  # noqa: SLF001
+    coord._update_state(  # noqa: SLF001 — stand in for an earlier failed run
+        cid, lambda s: msgspec.structs.replace(s, errors=2, last_error="boom")
+    )
+
+    coord.enqueue_rebuild(cid)
+
+    st = coord.status(cid)
+    assert st.errors == 2 and st.last_error == "boom"
+    await coord.aclose()
+
+
+async def test_progress_never_counts_backwards_while_the_rebuild_fans_out():
+    """`done` is derived as `total - active`, so publishing the total BEFORE
+    creating the fold jobs makes every create push `done` DOWN: the user presses
+    Rebuild and watches "5 / 6" count backwards to "0 / 6" before a single source
+    has folded. The FE samples this every 1.2s, and the window is N creates long
+    — exactly the window this change set out to make longer."""
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    for i in range(5):
+        _add_source(spec, cid, f"s{i}.md", f"source {i}")
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+    coord._stop_consuming()  # noqa: SLF001 — nothing drains, so every sample is mid-walk
+
+    seen: list[tuple[int, int]] = []
+    real_create = coord._job_rm.create  # noqa: SLF001
+
+    def _sampling_create(*a, **kw):
+        out = real_create(*a, **kw)
+        st = coord.status(cid)
+        seen.append((st.total, st.done))
+        return out
+
+    coord._job_rm.create = _sampling_create  # noqa: SLF001  # ty: ignore[invalid-assignment]
+    coord.enqueue_rebuild(cid)
+    coord._handle_rebuild(  # noqa: SLF001 — drive the walk directly; consumer is stopped
+        WikiJobPayload(collection_id=cid, source_path="", op="rebuild"), triggered_by="u"
+    )
+
+    dones = [d for _, d in seen]
+    assert dones == sorted(dones), f"progress went backwards: {seen}"
+
+
+def test_a_rebuild_already_running_is_not_stacked_onto():
+    """PENDING-only would leave the guard open for the whole run: an all-in-one
+    deploy claims the job within milliseconds, so a second press would queue a
+    second full walk — 2N maintainer LLM runs. The sibling guards
+    (`_has_active_reflect`, `_has_active_code_build`) check PROCESSING too."""
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    _add_source(spec, cid, "a.md", "alpha")
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+    coord._stop_consuming()  # noqa: SLF001
+
+    assert coord.enqueue_rebuild(cid) is True
+    # Claim it, exactly as the consumer does when it picks the job up.
+    jrm = spec.get_resource_manager(WikiMaintenanceJob)
+    job = next(iter(jrm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())))
+    data = job.data
+    assert isinstance(data, WikiMaintenanceJob)
+    rid = job.info.resource_id  # ty: ignore[unresolved-attribute]
+    with jrm.using(user=job.info.created_by):  # ty: ignore[unresolved-attribute]
+        jrm.update(rid, msgspec.structs.replace(data, status=TaskStatus.PROCESSING))
+
+    assert coord.enqueue_rebuild(cid) is False  # no second walk
+
+
+async def test_a_failure_mid_walk_is_recorded_instead_of_replaying_the_whole_walk():
+    """The walk is not idempotent — a raise makes specstar redeliver and re-run it
+    from the top, duplicating every fold job already created (N more maintainer
+    runs). Record the failure and stop, like the code-split fan-out head does."""
+    spec = make_spec(default_user="u")
+    cid = _wiki_collection(spec)
+    for i in range(3):
+        _add_source(spec, cid, f"s{i}.md", f"source {i}")
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+    coord._stop_consuming()  # noqa: SLF001
+
+    calls = {"n": 0}
+    real_create = coord._job_rm.create  # noqa: SLF001
+
+    def _boom_halfway(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("connection blip")
+        return real_create(*a, **kw)
+
+    coord._job_rm.create = _boom_halfway  # noqa: SLF001  # ty: ignore[invalid-assignment]
+    coord._handle_rebuild(  # noqa: SLF001
+        WikiJobPayload(collection_id=cid, source_path="", op="rebuild"), triggered_by="u"
+    )
+
+    assert coord.status(cid).errors == 1  # surfaced, not silently retried
