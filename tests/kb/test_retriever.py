@@ -913,6 +913,62 @@ def test_search_excludes_denied_docs(
     assert all(p.document_id != blocked for p in got)
 
 
+def test_denying_one_holder_keeps_shared_content_reachable_via_its_sibling(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#308 × #104: identical bytes at two paths share ONE chunk set, and that set
+    records only ONE holder. Denying that holder must NOT take the content away from a
+    reader who may legitimately read the sibling — losing access to your own document
+    because someone else uploaded the same bytes and had theirs restricted is a
+    correctness failure, not a security one.
+
+    The passage must also be attributed to the READABLE holder: the content→doc
+    resolver picks the earliest-created holder, so without permission-awareness a
+    citation would name the denied document and leak that it exists at all."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    shared = b"reflow oven temperature drifted in zone three causing solder voids"
+    # the DENIED doc is ingested first, so it is both the recorded holder and the
+    # resolver's canonical pick — the case where naive exclusion does most damage.
+    ing.ingest(collection_id=cid, user="u", filename="secret.md", data=shared)
+    ing.ingest(collection_id=cid, user="u", filename="public.md", data=shared)
+    denied = encode_doc_id(cid, "secret.md")
+    readable = encode_doc_id(cid, "public.md")
+
+    got = Retriever(spec, embedder=embedder).search(
+        "reflow temperature", [cid], exclude_doc_ids=frozenset({denied})
+    )
+
+    assert got, "denying one holder wiped content the reader may read through the sibling"
+    assert all(p.document_id != denied for p in got), "cited the denied document"
+    assert any(p.document_id == readable for p in got)
+
+
+def test_denying_every_holder_removes_the_shared_content(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """The other half: content is reachable while ANY holder is readable, and gone once
+    none is. Otherwise the sibling rule would become a way around the block."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    shared = b"reflow oven temperature drifted in zone three causing solder voids"
+    ing.ingest(collection_id=cid, user="u", filename="a.md", data=shared)
+    ing.ingest(collection_id=cid, user="u", filename="b.md", data=shared)
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="other.md",
+        data=b"an unrelated note about stencil aperture and paste release",
+    )
+    both = frozenset({encode_doc_id(cid, "a.md"), encode_doc_id(cid, "b.md")})
+
+    got = Retriever(spec, embedder=embedder).search(
+        "reflow temperature", [cid], exclude_doc_ids=both
+    )
+
+    assert all(p.document_id not in both for p in got)
+
+
 def test_doc_join_batch_loads_docs_outside_the_candidate_set(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
