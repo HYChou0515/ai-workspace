@@ -11,6 +11,7 @@ import { getKbSearchMax } from "../lib/kbSearchMax";
 import type { AgentLog } from "../pages/investigation/agentLog";
 import {
   type BroadcastChatTransport,
+  type ChatConnection,
   STORE_POLL_MS,
   useChatSession,
 } from "./useChatSession";
@@ -31,6 +32,8 @@ export type AgentState = {
    * (notebook cell execution) are scoped to it. */
   investigationId: string;
   log: AgentLog;
+  /** Whether this viewer is actually receiving live events (#493 / L3). */
+  connection: ChatConnection;
   /** Enqueue an interactive turn. `opts.imagePaths` carries the composer's
    * attached image workspace paths so a VLM main model sees them inline (no
    * read_image round-trip); a text-only model ignores them. `opts.applySkills` (#380) loads the named skills
