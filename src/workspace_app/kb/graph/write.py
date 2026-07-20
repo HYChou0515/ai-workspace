@@ -28,6 +28,30 @@ def norm_metric(metric: str) -> str:
     return " ".join(metric.split()).casefold()
 
 
+def wipe_doc_claims(spec: SpecStar, source_doc_id: str) -> int:
+    """Drop every claim extracted from one deck. Returns how many went.
+
+    Called on the re-extraction path (wipe then rewrite, so tuning the prompt and
+    re-running never double-counts) AND whenever the deck itself is torn down. A
+    claim is keyed on its deck — unlike a chunk, which #104 made content-addressed
+    and therefore refcounted — so there is no shared-content question here: the
+    deck goes, its numbers go. An orphan would otherwise keep whatever mirror it
+    last held (readable), and no fan-out keyed on a live doc could ever reach it
+    again.
+
+    Hard-delete, not soft: a soft ``delete`` still shows up in ``list_resources``,
+    so a re-run would accumulate.
+    """
+    rm = spec.get_resource_manager(GraphClaim)
+    stale = [
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources((QB["source_doc_id"] == source_doc_id).build())
+    ]
+    for rid in stale:
+        rm.permanently_delete(rid)
+    return len(stale)
+
+
 def write_doc_claims(
     spec: SpecStar,
     llm: ILlm,
@@ -40,14 +64,7 @@ def write_doc_claims(
     ``(chunk_id, text)`` pairs. Wipes the doc's existing GraphClaims first (a
     metas-only delete), then writes fresh. Returns the number written."""
     rm = spec.get_resource_manager(GraphClaim)
-    # Hard-delete (not soft): a soft ``delete`` still shows in list_resources, so
-    # a re-run would accumulate. permanently_delete wipes for real.
-    stale = [
-        r.info.resource_id  # ty: ignore[unresolved-attribute]
-        for r in rm.list_resources((QB["source_doc_id"] == source_doc_id).build())
-    ]
-    for rid in stale:
-        rm.permanently_delete(rid)
+    wipe_doc_claims(spec, source_doc_id)
     # #534 slice 2: stamp the deck's effective read permission onto every claim.
     # Read ONCE per doc — it can't change mid-extraction in any way this write
     # could honour, and the permission fan-out re-pushes it if it does. Skipping it

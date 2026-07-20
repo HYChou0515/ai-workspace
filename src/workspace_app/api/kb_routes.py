@@ -50,6 +50,7 @@ from ..kb.findability import (
     doc_passages_in_top_k,
     probe_findability,
 )
+from ..kb.graph.write import wipe_doc_claims
 from ..kb.ingest import Ingestor, teardown_doc_chunks
 from ..kb.links import rewrite_md_links
 from ..kb.llm import ILlm
@@ -1998,6 +1999,11 @@ def register_kb_routes(
             # set for its surviving siblings — they resolve to it by file_id (no
             # re-home). Governs the chunks now that source_doc_id is not a cascade.
             teardown_doc_chunks(spec, did)
+            # #534 slice 2: the deck's extracted metrics go with it. A claim is
+            # keyed on its deck, not content-addressed like a chunk, so there is no
+            # refcount to consult — and an orphan would keep its last mirror
+            # (readable) beyond the reach of every fan-out.
+            wipe_doc_claims(spec, did)
             rm.permanently_delete(did)
 
         # #513 P7: cascade to attachments — a child SourceDoc (parent_doc_id ==
@@ -2083,6 +2089,11 @@ def register_kb_routes(
         assert wiki_coordinator is not None
         await wiki_coordinator.on_doc_deleted(doc_id)
         teardown_doc_chunks(spec, doc_id)
+        # #534 slice 2: a rename re-creates the doc under a NEW id, so the old id's
+        # claims would dangle forever — never wiped by a re-extraction (which only
+        # ever touches the id it is processing) and counted twice the next time the
+        # same deck is read.
+        wipe_doc_claims(spec, doc_id)
         rm.permanently_delete(doc_id)
         with rm.using(user=creator):
             rm.create(new_doc, resource_id=new_id)

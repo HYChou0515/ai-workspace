@@ -146,3 +146,23 @@ def test_clearing_a_deck_override_reopens_its_metrics():
     r = client.delete(f"/kb/documents/{doc_id}/permission")
     assert r.status_code == 200
     assert _readable(spec, "alice", claim_id) is True
+
+
+def test_deleting_a_deck_takes_its_metrics_with_it():
+    """Deleting a deck must not leave its numbers behind. Claims are keyed on the
+    deck (not content-addressed like chunks, so no refcount question), and an
+    orphaned claim keeps whatever mirror it last held — readable, and no longer
+    reachable by any fan-out keyed on a live doc."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _cid, doc_id, claim_id = _seed(spec)
+    assert _readable(spec, "bob", claim_id) is True
+
+    r = client.delete("/kb/documents", params={"id": doc_id})
+    assert r.status_code == 200
+    grm = spec.get_resource_manager(GraphClaim)
+    try:
+        grm.get(claim_id)
+    except ResourceIDNotFoundError:
+        return
+    raise AssertionError("the deleted deck's claim is still there")
