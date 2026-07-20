@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import Any, cast
 
 from agents.tracing import set_trace_processors
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.responses import JSONResponse
 from specstar import SpecStar
 
 from ..agent.config_catalog import AgentConfigCatalog
 from ..config.schema import EnhancementSettings
-from ..files import WorkspaceFiles
+from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileStore
 from ..health import CheckRegistry, CheckResult
 from ..health.replay import ReplayService
@@ -432,6 +433,10 @@ def create_app(
         sandbox,
         registry.resolve_io_handle,
         rebuild=registry.rebuild_io_handle if host_managed_durable else None,
+        # #538: the quota lives in the facade, so EVERY way of growing a workspace
+        # is refused by one rule — not just the upload endpoint that used to be
+        # the only checker while the agent, workflows and copy/move went free.
+        quota=workspace_quota,
     )
     kernels = KernelService()
     activity = ActivityLog()
@@ -497,6 +502,26 @@ def create_app(
         openapi_url="/api/openapi.json",
         swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
     )
+
+    @app.exception_handler(WorkspaceFull)
+    async def _workspace_full(_request: Request, exc: WorkspaceFull) -> JSONResponse:
+        """#538: one handler so every route that writes reports a full workspace
+        the same way — 507 with the numbers the FE needs to say "delete
+        something". Registering it here rather than try/except-ing each route is
+        what stops the next write endpoint from silently going ungated, which is
+        exactly how copy/move/the IDE save escaped the original quota."""
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "error": "workspace_quota_exceeded",
+                    "used": exc.used,
+                    "quota": exc.quota,
+                    "attempted": exc.attempted,
+                }
+            },
+        )
+
     # #177: EVERY backend route registers on this prefixed router — specstar's
     # CRUD routes (via apply(router=…)) and all hand-written ones. It's included
     # onto `app` exactly once, just before the SPA mount at the end of create_app.

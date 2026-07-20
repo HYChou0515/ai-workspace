@@ -7,6 +7,6 @@ the live sandbox when one is up (the single source of truth) and to the
 FileStore snapshot when it's cold — without any caller changing.
 """
 
-from .facade import WorkspaceFiles
+from .facade import WorkspaceFiles, WorkspaceFull
 
-__all__ = ["WorkspaceFiles"]
+__all__ = ["WorkspaceFiles", "WorkspaceFull"]

@@ -769,6 +769,17 @@ export const messages = {
     "zh-TW": "空間不足，未能上傳:{names}",
     en: "Out of space, not uploaded: {names}",
   },
+  // #538: the file tree's own upload failures, which were hardcoded English.
+  // A full workspace is the one upload failure the user can act on, so its
+  // message names the remedy rather than only the symptom.
+  "workspace.upload.full": {
+    "zh-TW": "「{name}」沒有上傳:工作區空間已滿。請先刪除不需要的檔案，再重新上傳。",
+    en: "{name} wasn't uploaded — the workspace is full. Delete files you no longer need, then try again.",
+  },
+  "workspace.upload.failed": {
+    "zh-TW": "「{name}」沒有上傳:可能超過單一檔案的大小上限。",
+    en: "{name} wasn't uploaded — it may exceed the single-file size limit.",
+  },
 
   // #283: workflow launch pre-flight dialog + progress views.
   "wf.launch.title": { "zh-TW": "執行前確認", en: "Before you run" },

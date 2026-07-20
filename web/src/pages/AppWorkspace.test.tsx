@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { renderWithQuery } from "../test/queryWrapper";
 import { AppWorkspace } from "./AppWorkspace";
 
 afterEach(cleanup);
@@ -34,7 +35,7 @@ vi.mock("../hooks/useInvestigation", () => ({
 
 describe("AppWorkspace", () => {
   it("loads the item (decoding the slash-bearing id) and feeds the workspace shell", () => {
-    render(
+    renderWithQuery(
       <MemoryRouter initialEntries={["/a/rca/rca-investigation%2F1"]}>
         <Routes>
           <Route path="/a/:slug/:itemId" element={<AppWorkspace />} />

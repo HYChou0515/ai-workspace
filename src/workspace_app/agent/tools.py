@@ -3,16 +3,19 @@ from __future__ import annotations
 import asyncio
 import base64
 import csv
+import functools
+import inspect
 import io
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import magic
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
 
-from ..files import WorkspaceFiles
+from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
@@ -282,6 +285,55 @@ async def make_deck_impl(
         style=style,
         length=length,
         out_path=out_path,
+    )
+
+
+def _guard_workspace_full(impl: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a tool impl so a full workspace reaches the model as instructions.
+
+    Applied once where tools are built rather than at each write, so it covers
+    every tool that can reach the store — `write_file` and `edit_file`, but
+    equally `make_deck`, `save_skill`, `infer_modules`, `create_entity`, and
+    whatever is added next. Left to individual `try`/`except`s this was already
+    wrong for four of them: `WorkspaceFull` reached the SDK's default handler,
+    the model was told only "an error occurred", and it retried the same write.
+
+    Not every impl is a coroutine — `kb_search`, `lookup_glossary`,
+    `resolve_collection` and the context-card pair are plain functions — so the
+    wrapper has to preserve each one's calling convention. Wrapping a sync impl
+    in an `async def` would hand `function_tool` a coroutine where it expects a
+    value and break tools that never touch the workspace at all."""
+    if inspect.iscoroutinefunction(impl):
+
+        @functools.wraps(impl)
+        async def _guarded_async(*args: Any, **kwargs: Any) -> Any:
+            try:
+                return await impl(*args, **kwargs)
+            except WorkspaceFull as exc:
+                return _workspace_full_msg(exc)
+
+        return _guarded_async
+
+    @functools.wraps(impl)
+    def _guarded_sync(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return impl(*args, **kwargs)
+        except WorkspaceFull as exc:
+            return _workspace_full_msg(exc)
+
+    return _guarded_sync
+
+
+def _workspace_full_msg(exc: WorkspaceFull) -> str:
+    """#538: what the agent is told when a write is refused for space. The agent
+    can't make more room appear, so the message names the ONE action that helps
+    and the tool that does it — otherwise a model retries the same write, or
+    invents a workaround like writing somewhere else."""
+    return (
+        f"error: the workspace is full ({exc.used} of {exc.quota} bytes used) — "
+        f"writing {exc.attempted} more bytes would exceed it. Delete files that are "
+        f"no longer needed with delete_file, then retry. Tell the user what you "
+        f"deleted, or ask them which files they want to keep."
     )
 
 
@@ -1006,6 +1058,8 @@ async def infer_modules_impl(
     # Overwrite: re-running a build replaces the map. create() refuses an
     # existing path (returns its content), so delete first when present.
     if await fs.create(inv, out, csv_bytes) is not None:
+        # The delete comes first, so the replacement can only be smaller than
+        # what it frees — the quota cannot refuse it.
         await fs.delete(inv, out)
         await fs.create(inv, out, csv_bytes)
 
@@ -1739,7 +1793,11 @@ def build_tools(
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
     tools = [
-        function_tool(_IMPLS[n], name_override=n, strict_mode=n not in _NONSTRICT_TOOLS)
+        function_tool(
+            _guard_workspace_full(_IMPLS[n]),
+            name_override=n,
+            strict_mode=n not in _NONSTRICT_TOOLS,
+        )
         for n in names
         if n in _IMPLS
     ]
@@ -1752,7 +1810,11 @@ def build_tools(
         # that opts into author-skill always has at least that, so this covers
         # the authoring entry point too.
         if merged_profile_skills(app_slug, profile, _declared_shared_skills(app_slug)):
-            tools.append(function_tool(_IMPLS["read_skill"], name_override="read_skill"))
+            tools.append(
+                function_tool(
+                    _guard_workspace_full(_IMPLS["read_skill"]), name_override="read_skill"
+                )
+            )
     return tools
 
 
