@@ -59,6 +59,8 @@ class EvalRun(Struct):  # → resource "eval-run"
     collection_id: str
     run_label: str
     total: int  # number of batches the split seeded
+    seed: str = ""  # run-level sampling seed (finalize stamps it onto the EvalResult)
+    sample_size: int = 0  # run-level requested sample size
     done: list[int] = field(default_factory=list)  # batch indices that finished OK
     failed: list[int] = field(default_factory=list)  # batch indices that gave up
     finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
