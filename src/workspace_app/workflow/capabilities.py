@@ -171,6 +171,7 @@ def create_context_card(
     title: str,
     body: str,
     user: str,
+    reference_doc_ids: list[str] | None = None,
 ) -> str:
     """Create a ``ContextCard`` (#106) on an EXISTING collection as ``user`` (manual
     §8). Used by the agent's ``create_context_card`` tool (after its own exists-check)
@@ -183,6 +184,9 @@ def create_context_card(
     missing. Re-run idempotency is the deterministic node's job (the ``step_card``
     receipt via ``WorkflowHandle.upsert_context_card``); this core just authors one
     card. Returns the new card's resource id.
+
+    #518: ``reference_doc_ids`` links the documents that back the card (``None`` ⇒ no
+    links, today's behaviour).
     """
     from ..kb.context_cards import derive_norm_keys
     from ..resources.kb import ContextCard
@@ -200,6 +204,7 @@ def create_context_card(
                 norm_keys=derive_norm_keys(eff_keys),
                 title=title,
                 body=body,
+                reference_doc_ids=list(reference_doc_ids or []),
             )
         )
     return rev.resource_id
@@ -214,6 +219,7 @@ def update_context_card(
     body: str,
     user: str,
     expected_body: str | None = None,
+    reference_doc_ids: list[str] | None = None,
 ) -> str:
     """Full overwrite of an EXISTING ``ContextCard`` by id (#111) as ``user`` — the
     update counterpart of ``create_context_card``. New ``keys``/``title``/``body``
@@ -225,7 +231,12 @@ def update_context_card(
     ``expected_body`` is an optional read-before-write guard: when given, it must equal
     the card's currently-stored ``body`` or a ``CardConflict`` is raised (the agent
     surface passes the body it read so a stale read can't silently overwrite a newer
-    one; the deterministic workflow surface passes ``None`` = last-write-wins)."""
+    one; the deterministic workflow surface passes ``None`` = last-write-wins).
+
+    #518: ``reference_doc_ids`` is tri-state, because this is a FULL overwrite —
+    ``None`` KEEPS the card's existing links, a list replaces them, ``[]`` clears. A
+    caller that only means to refresh a definition must not cost the card the evidence
+    someone curated onto it."""
     from specstar.types import ResourceIDNotFoundError
 
     from ..kb.context_cards import derive_norm_keys
@@ -251,6 +262,12 @@ def update_context_card(
                 norm_keys=derive_norm_keys(eff_keys),
                 title=title,
                 body=body,
+                # #518: absent ⇒ carry the card's existing links across the overwrite.
+                reference_doc_ids=(
+                    list(existing.reference_doc_ids)
+                    if reference_doc_ids is None
+                    else list(reference_doc_ids)
+                ),
             ),
         )
     return card_id
@@ -291,6 +308,7 @@ def upsert_context_card(
     body: str,
     user: str,
     retries: int = 3,
+    reference_doc_ids: list[str] | None = None,
 ) -> str:
     """Create-or-update a ``ContextCard`` by key (#111) — the workflow commit path's
     ‘有就更新、沒才新增’. Resolve the collection, then for the first usable key that
@@ -319,7 +337,13 @@ def upsert_context_card(
                 break
         if target is None:  # no card names this key yet → create (no conflict possible)
             return create_context_card(
-                spec, collection=collection_id, keys=eff_keys, title=title, body=body, user=user
+                spec,
+                collection=collection_id,
+                keys=eff_keys,
+                title=title,
+                body=body,
+                user=user,
+                reference_doc_ids=reference_doc_ids,
             )
         try:
             return update_context_card(
@@ -330,6 +354,9 @@ def upsert_context_card(
                 body=body,
                 user=user,
                 expected_body=target[1].body,  # read-before-write guard
+                # #518: None here means "say nothing about links" → the update keeps
+                # whatever the card already carries.
+                reference_doc_ids=reference_doc_ids,
             )
         except CardConflict:
             continue  # a parallel run moved it — re-read the current card + retry

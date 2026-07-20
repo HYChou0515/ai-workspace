@@ -819,6 +819,35 @@ async def test_commit_overwrites_the_target_card_for_an_accepted_update():
     assert cards[0].body == "new"
 
 
+async def test_commit_keeps_the_target_cards_reference_doc_ids():
+    """#518 REGRESSION GUARD: committing a card-gen UPDATE rewrites the whole card
+    struct. A proposal has no notion of linked documents, so the links a human curated
+    onto the target must survive the overwrite — otherwise every card-gen round silently
+    strips the evidence off the cards it refreshes."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    target = _add_card(spec, cid, ["M4"], body="old")
+    rm = spec.get_resource_manager(ContextCard)
+    curated = rm.get(target).data
+    rm.create_or_update(target, msgspec.structs.replace(curated, reference_doc_ids=["doc-a"]))
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
+        [doc],
+    )
+    (p,) = coord.proposals(jid).proposals
+    assert p.mode == "update" and p.target_card_id == target
+    p.decision = "accepted"
+    coord.save_review(jid, [p])
+
+    assert coord.commit(jid).updated == 1
+    got = rm.get(target).data
+    assert got.body == "new"  # the refresh landed…
+    assert got.reference_doc_ids == ["doc-a"]  # …without stripping the curated links
+
+
 async def test_commit_skips_proposals_the_reviewer_did_not_accept():
     spec = make_spec(default_user="u")
     cid = _collection(spec)

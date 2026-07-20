@@ -341,6 +341,32 @@ def test_land_term_answer_updates_an_existing_card_for_the_term():
     assert card.body == "def: new def"
 
 
+def test_land_term_answer_keeps_the_existing_cards_reference_doc_ids():
+    """#518 REGRESSION GUARD: landing an answer rewrites the whole card struct, so the
+    documents a human linked onto the card must survive. Answering a follow-up question
+    shouldn't cost the card its curated evidence."""
+    spec = make_spec(default_user="u")
+    rm = spec.get_resource_manager(ContextCard)
+    cid = _collection(spec)
+    existing = rm.create(
+        ContextCard(
+            collection_id=cid,
+            keys=["M4"],
+            norm_keys=["m4"],
+            body="old",
+            reference_doc_ids=["doc-a"],
+        )
+    ).resource_id
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="d1", question_text="?"
+    )
+
+    assert land_term_answer(spec, qid, answer="new def", formatter=_FakeFormatter()) == existing
+    got = rm.get(existing).data
+    assert got.body == "def: new def"  # the answer landed…
+    assert got.reference_doc_ids == ["doc-a"]  # …without dropping the links
+
+
 async def test_land_description_answer_appends_to_the_clarification_page():
     spec = make_spec(default_user="u")
     cid = _collection(spec)

@@ -342,6 +342,52 @@ def test_upsert_context_card_updates_the_existing_card_for_an_existing_key(spec_
     assert spec_instance.get_resource_manager(ContextCard).get(first).data.body == "new"
 
 
+def test_upsert_context_card_links_the_documents_it_was_given(spec_instance: SpecStar):
+    """#518: the commit path can anchor a card to the documents that back it — this is
+    what the #520 starter workflow uses to point a card at the document it just filed."""
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow.capabilities import upsert_context_card
+
+    cid = _collection(spec_instance)
+    card_id = upsert_context_card(
+        spec_instance,
+        collection=cid,
+        keys=["M4"],
+        title="M4",
+        body="four",
+        user="u",
+        reference_doc_ids=["doc-a"],
+    )
+    got = spec_instance.get_resource_manager(ContextCard).get(card_id).data
+    assert got.reference_doc_ids == ["doc-a"]
+
+
+def test_upsert_context_card_keeps_existing_links_when_none_given(spec_instance: SpecStar):
+    """#518 REGRESSION GUARD: upsert is a FULL overwrite, so a later run that says
+    nothing about links must not wipe the ones already curated on the card. A workflow
+    that only refreshes a definition shouldn't cost the card its evidence."""
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow.capabilities import upsert_context_card
+
+    cid = _collection(spec_instance)
+    card_id = upsert_context_card(
+        spec_instance,
+        collection=cid,
+        keys=["M4"],
+        title="M4",
+        body="old",
+        user="u",
+        reference_doc_ids=["doc-a"],
+    )
+    again = upsert_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="M4", body="new", user="u"
+    )
+    assert again == card_id
+    got = spec_instance.get_resource_manager(ContextCard).get(card_id).data
+    assert got.body == "new"  # the refresh landed…
+    assert got.reference_doc_ids == ["doc-a"]  # …without dropping the links
+
+
 def test_upsert_context_card_retries_on_parallel_conflict(spec_instance: SpecStar, monkeypatch):
     """#429 P5: the workflow card commit is optimistic — it reads the card body, updates
     with an expected_body guard, and retries on CardConflict (a parallel run moved it), so

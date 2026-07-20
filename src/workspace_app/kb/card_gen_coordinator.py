@@ -40,6 +40,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.types import ResourceIDNotFoundError, TaskStatus
 
@@ -90,14 +91,17 @@ _RUN_STATUS = {
 }
 
 
-def _exists(rm, resource_id: str) -> bool:
-    """Whether a resource id still resolves — used at commit to tell an in-place
-    card update from a fall-back create when the target was deleted."""
+def _existing_card(rm, resource_id: str) -> ContextCard | None:
+    """The card a commit-time UPDATE targets, or ``None`` when it was deleted since
+    generation (the caller falls back to a create). Returns the card rather than a bool
+    so the overwrite can carry the target's server-owned / human-curated fields forward
+    without a second read."""
     try:
-        rm.get(resource_id)
+        data = rm.get(resource_id).data
     except ResourceIDNotFoundError:
-        return False
-    return True
+        return None
+    assert isinstance(data, ContextCard)  # narrow Struct|Unset for ty
+    return data
 
 
 class CardGenCoordinator:
@@ -229,10 +233,17 @@ class CardGenCoordinator:
             title=p.title,
             body=p.body,
         )
-        if p.mode == "update" and p.target_card_id and _exists(cardrm, p.target_card_id):
+        target = _existing_card(cardrm, p.target_card_id) if p.target_card_id else None
+        if p.mode == "update" and target is not None:
             # New COMMITTED revision of the target (create_or_update, not modify —
             # modify refuses a committed→committed overwrite).
-            cardrm.create_or_update(p.target_card_id, card)
+            # #518: a proposal has no notion of linked documents, so this full-struct
+            # overwrite must carry the target's curated links across — else every
+            # card-gen round strips the evidence off the cards it refreshes.
+            cardrm.create_or_update(
+                p.target_card_id,
+                msgspec.structs.replace(card, reference_doc_ids=list(target.reference_doc_ids)),
+            )
             result.updated += 1
         else:
             # New card — or the update target vanished since generation.
