@@ -44,7 +44,13 @@ function parseQuestions(args: Record<string, unknown>): Question[] | null {
 }
 
 const UNANSWERED = "(未選擇)";
-const DONT_UNDERSTAND = "看不懂,請換個說法再問一次";
+// What "看不懂" actually reports. A bare "say it differently" leaves the agent
+// to guess what was wrong, and it usually guesses the same way twice. The four
+// things that cause it — roundabout phrasing, jargon, too many words with no
+// point, invented terms — all have the same remedy, so the message states the
+// remedy rather than asking the user to diagnose which one it was.
+const DONT_UNDERSTAND =
+  "看不懂 — 請用更短的句子、我熟悉的詞、具體的例子重問一次同一題(不要自創名詞)";
 
 /** How one question's answer reads in the transcript. The four shapes stay
  * distinguishable on purpose: a rejection must not look like a choice, and a

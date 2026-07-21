@@ -179,6 +179,11 @@ describe("AskUserCard escape hatches", () => {
     // instead of proceeding on a choice the user never made.
     expect(content).toMatch(/看不懂/);
     expect(content).not.toMatch(/Postgres|SQLite/);
+    // And it says what to do about it. "Say it differently" leaves the agent
+    // guessing, and it guesses the same way twice — the causes (roundabout
+    // phrasing, jargon, wordiness, invented terms) share one remedy, so the
+    // message carries the remedy rather than asking the user which it was.
+    expect(content).toMatch(/更短|具體|自創/);
   });
 
   it("always offers an answer of the user's own", () => {

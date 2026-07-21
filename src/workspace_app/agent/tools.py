@@ -1336,6 +1336,14 @@ async def ask_user_impl(
     each other; ask one at a time when a later question only makes sense once
     you know the earlier answer.
 
+    Write each question the way you would say it out loud: one short sentence,
+    the words the user has already used, a concrete example where it helps.
+    Each option's description says what picking it leads to.
+
+    The user can always answer in their own words, add a note to whichever
+    option they pick, or tell you the question itself did not land — in which
+    case ask the same question again, shorter and more plainly.
+
     Your turn ends here. The user's answer arrives as their next message, and
     you continue from there — so put everything they need in the question, and
     do not answer it yourself.
