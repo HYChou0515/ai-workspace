@@ -153,3 +153,40 @@ async def test_read_image_truncates_long_output_at_the_read_file_cap():
     assert isinstance(out, str)
     assert "x" * 500 not in out
     assert "omitted" in out
+
+
+async def test_read_image_survives_the_wrap_the_runner_puts_on_every_tool():
+    """The composition, not either part. `read_image` returns a `ToolOutputImage`
+    and `wrap_with_args_recovery` is applied to EVERY tool in the real runner
+    (`litellm_runner`), but nothing exercised the two together — so a wrap that
+    read the tool's output as text turned every call into
+    "error running tool read_image: 'ToolOutputImage' object has no attribute
+    'startswith'", while the tool's own tests (which call the impl directly) and
+    the wrap's own tests (whose stub tools return strings) both stayed green."""
+    import json
+
+    from agents.tool_context import ToolContext
+    from agents.usage import Usage
+
+    from workspace_app.agent.args_recovery import wrap_with_args_recovery
+    from workspace_app.agent.tools import build_tools
+
+    files = WorkspaceFiles(MemoryFileStore())
+    await files.write("inv-1", "/defect.png", _PNG)
+    [tool] = build_tools(["read_image"])
+    wrapped = wrap_with_args_recovery(tool)
+    ctx = ToolContext(
+        context=AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            agent_config=AgentConfig(name="qwen-vl", vision=True),
+        ),
+        tool_name="read_image",
+        tool_call_id="call-1",
+        tool_arguments="{}",
+        usage=Usage(),
+    )
+
+    out = await wrapped.on_invoke_tool(ctx, json.dumps({"path": "defect.png"}))
+
+    assert isinstance(out, ToolOutputImage)  # the pixels, not an error string
