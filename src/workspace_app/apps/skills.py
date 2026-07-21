@@ -24,9 +24,11 @@ from collections.abc import Mapping
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import msgspec
+
+from .skill_payload import ORIGIN_FILE, SkillSource, origin_for, skill_payload
 
 if TYPE_CHECKING:
     from ..files import WorkspaceFiles
@@ -301,6 +303,72 @@ def augment_shared_skill_body(
     return "\n\n".join([body, describe_dsl_grammar(), describe_workflow_boundaries(ceiling)])
 
 
+def _skill_source(
+    app_slug: str | None, profile: str | None, name: str
+) -> tuple[SkillSource, Any] | None:
+    """Where a baked-in skill's files live, or None if it isn't one. Precedence
+    matches the body resolvers: a profile package skill shadows a shared one."""
+    if app_slug is not None and profile is not None:
+        root = _skill_root(app_slug, profile)
+        if root is not None:
+            candidate = root / name
+            if (candidate / "SKILL.md").is_file():
+                return ("profile", candidate)
+    from .shared_skills import SHARED_SKILLS
+
+    src = SHARED_SKILLS.get(name)
+    return ("shared", src) if src is not None else None
+
+
+async def materialize_skill(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> None:
+    """#589: copy a baked-in skill's files into the workspace so the body's own
+    instructions resolve — ``see references/glossary.md`` and
+    ``exec(["python", ".skill/<name>/scripts/x.py"])`` only work if the files are
+    actually there.
+
+    Copy-if-absent: a workspace copy already present is left completely alone.
+    That is the whole point — the AI is meant to tweak these scripts, and an
+    overwrite would delete its work. Refreshing a copy is a separate, explicit
+    action, never a side effect of using the skill.
+
+    Writes go through ``WorkspaceFiles``, which routes to the item's live sandbox
+    when one is already awake (so the files are usable THIS turn) and to the
+    durable store when it is cold — without waking it, which `read_skill`
+    promises. A workspace over quota fails here, loudly, like any other write.
+    """
+    if await files.ls(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/"):
+        return
+    found = _skill_source(app_slug, profile, name)
+    if found is None:
+        return
+    source, src_dir = found
+    payload = skill_payload(src_dir)
+    # A skill that is nothing but its SKILL.md has nothing to materialize, and
+    # copying it anyway would be pure cost: the copy shadows the package version,
+    # so the body stops tracking upstream and the skill starts reporting as a
+    # workspace one. Every skill shipped today is exactly that shape, so the
+    # common case must stay untouched — only a skill that actually brings files
+    # becomes a local copy.
+    if set(payload) <= {"SKILL.md"}:
+        return
+    for rel, data in payload.items():
+        await files.write(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{rel}", data)
+    # Written LAST: until it exists the copy is incomplete, and a manifest that
+    # outlived a half-written copy would claim shipped bytes for files that were
+    # never written.
+    await files.write(
+        workspace_id,
+        f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}",
+        msgspec.json.encode(origin_for(source, payload)),
+    )
+
+
 async def resolve_skill_body(
     files: WorkspaceFiles,
     workspace_id: str,
@@ -315,6 +383,7 @@ async def resolve_skill_body(
     resolves the body IGNORING the enable/disable toggle (apply overrides off)."""
     from .shared_skills import SHARED_SKILLS, load_shared_skill
 
+    await materialize_skill(files, workspace_id, app_slug, profile, name)
     body = await load_workspace_skill(files, workspace_id, name)
     if body is None and name in SHARED_SKILLS:
         body = load_shared_skill(name)

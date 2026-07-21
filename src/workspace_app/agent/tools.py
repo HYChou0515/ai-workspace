@@ -1369,11 +1369,16 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
 
     # #298: a user+AI co-created skill in this workspace shadows any package
     # skill of the same name. Read live (uncached) — it may have just been saved.
-    from ..apps.skills import augment_shared_skill_body
+    from ..apps.skills import augment_shared_skill_body, materialize_skill
 
     files = ctx.context.files
     inv = ctx.context.investigation_id
     if files is not None and inv is not None:
+        # #589: reading a skill is the moment its body starts telling the model to
+        # run `scripts/…`, so it is the moment those files have to exist.
+        await materialize_skill(
+            files, inv, ctx.context.app_slug, ctx.context.template_profile, name
+        )
         try:
             body = await load_workspace_skill(files, inv, name)
         except SkillError as e:

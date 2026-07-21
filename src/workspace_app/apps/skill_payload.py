@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from pathlib import Path
-from typing import Literal
+from pathlib import PurePosixPath
+from typing import Any, Literal
 
 from msgspec import Struct
 
@@ -36,26 +36,35 @@ _EXCLUDED_SUFFIXES = (".pyc",)
 ORIGIN_FILE = ".origin"
 
 
-def _is_noise(rel: Path) -> bool:
+def _is_noise(rel: PurePosixPath) -> bool:
     if rel.as_posix() == ORIGIN_FILE:
         return True
     return bool(_EXCLUDED_DIRS.intersection(rel.parts)) or rel.name.endswith(_EXCLUDED_SUFFIXES)
 
 
-def skill_payload(source_dir: Path) -> dict[str, bytes]:
+def skill_payload(source_dir: Any) -> dict[str, bytes]:
     """Every file a skill ships, keyed by its POSIX path relative to the skill
     folder. Sub-folders are kept — ``SKILL.md`` refers to its siblings by
     relative path (``see references/glossary.md``), so the shape has to survive
     the copy or the body's own instructions stop resolving."""
     out: dict[str, bytes] = {}
-    for path in sorted(source_dir.rglob("*")):
-        if not path.is_file():
+    _walk(source_dir, PurePosixPath(), out)
+    return dict(sorted(out.items()))
+
+
+def _walk(node: Any, prefix: PurePosixPath, out: dict[str, bytes]) -> None:
+    """Recursive ``iterdir`` rather than ``rglob``: a profile skill is reached
+    through ``importlib.resources``, whose Traversable has no ``rglob`` and no
+    ``relative_to``. Both sources have to walk the same way or only one of them
+    would ever ship its files."""
+    for child in node.iterdir():
+        here = prefix / child.name
+        if _is_noise(here):
             continue
-        rel = path.relative_to(source_dir)
-        if _is_noise(rel):
-            continue
-        out[rel.as_posix()] = path.read_bytes()
-    return out
+        if child.is_dir():
+            _walk(child, here, out)
+        else:
+            out[here.as_posix()] = child.read_bytes()
 
 
 SkillSource = Literal["shared", "profile"]
