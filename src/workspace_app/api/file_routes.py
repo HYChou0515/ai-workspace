@@ -171,6 +171,7 @@ def register_file_routes(
                     description=s.description,
                     source=s.source,
                     default_on=s.default_on,
+                    is_copy=s.is_copy,
                     pref=_skill_pref_state(prefs.get(s.name)),
                     effective=s.effective,
                 )

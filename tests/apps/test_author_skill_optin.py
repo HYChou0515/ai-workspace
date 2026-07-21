@@ -115,6 +115,8 @@ def test_skills_endpoint_returns_picker_state_across_sources():
         "description": "a",
         "source": "workspace",
         "default_on": True,
+        # A skill written here, not a copy of a baked-in one (#589).
+        "is_copy": False,
         "pref": "follow",
         "effective": True,
     }
@@ -123,3 +125,19 @@ def test_skills_endpoint_returns_picker_state_across_sources():
     # the App's declared shared skill is offered too (default-on in playground)
     assert by["author-skill"]["source"] == "shared"
     assert by["author-skill"]["effective"] is True
+
+
+def test_skills_endpoint_reports_whether_a_baked_in_skill_has_a_local_copy():
+    """#589: once a baked-in skill's files are copied here they are editable,
+    downloadable and refreshable — but the row still has to answer as the skill it
+    copied, or using a default-off one would quietly turn it on for good. The
+    panel therefore needs both facts, so both are on the wire."""
+    from tests.api.conftest import register_rca_item
+
+    app, spec = _app(_Capture())
+    client = TestClient(app)
+    iid = register_rca_item(spec)
+
+    rows = {s["name"]: s for s in client.get(f"/a/rca/items/{iid}/skills").json()["skills"]}
+
+    assert rows["author-skill"]["is_copy"] is False

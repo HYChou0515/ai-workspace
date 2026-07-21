@@ -60,6 +60,11 @@ class SkillMeta(msgspec.Struct, frozen=True):
 
     name: str
     description: str
+    #: #589 — this workspace folder is a COPY of a baked-in skill (it carries an
+    #: `.origin` manifest), not a skill written here. It still lives in the
+    #: workspace and is still editable; it simply must not be mistaken for the
+    #: user's own work when deciding source and default-on.
+    is_copy: bool = False
 
 
 @cache
@@ -157,6 +162,13 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
     bad hand-edit can't break the whole index. Empty when there's no ``.skill/``."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/"
     paths = await files.ls(workspace_id, prefix)
+    # Which folders are copies falls straight out of the listing we already have,
+    # so knowing it costs no extra read.
+    copies = {
+        p[len(prefix) :].removesuffix(f"/{ORIGIN_FILE}")
+        for p in paths
+        if p.endswith(f"/{ORIGIN_FILE}")
+    }
     out: list[SkillMeta] = []
     for path in sorted(paths):
         rel = path[len(prefix) :]
@@ -165,7 +177,7 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
         dir_name = rel[: -len("/SKILL.md")]
         meta = await _workspace_skill_meta(files, workspace_id, path, dir_name)
         if meta is not None:
-            out.append(meta)
+            out.append(msgspec.structs.replace(meta, is_copy=dir_name in copies))
     return out
 
 
@@ -233,6 +245,12 @@ class SkillState(msgspec.Struct, frozen=True):
     source: str
     default_on: bool
     effective: bool
+    #: #589 — the workspace holds an editable COPY of this baked-in skill. Kept
+    #: separate from ``source`` because the two facts are independent: the copy
+    #: still answers as the skill it copied (so a default-off one can't be turned
+    #: on for good just by using it), yet its files really are here — downloadable,
+    #: editable, and refreshable from upstream.
+    is_copy: bool = False
 
 
 def effective_item_skills(
@@ -269,7 +287,16 @@ def effective_item_skills(
     for m in list_skills(app_slug, profile):
         rows[m.name] = (m, "profile", True)
     for m in workspace_metas:
-        rows[m.name] = (m, "workspace", True)
+        prior = rows.get(m.name)
+        if m.is_copy and prior is not None:
+            # A copy of a baked-in skill answers as the skill it copied. Its
+            # DESCRIPTION comes from the copy — that is the text actually read
+            # this turn, and the AI may have edited it — but its source and
+            # default-on stay the package's, so using a default-off skill once
+            # cannot quietly turn it on for good.
+            rows[m.name] = (m, prior[1], prior[2])
+        else:
+            rows[m.name] = (m, "workspace", True)
     out: list[SkillState] = []
     for name in sorted(rows):
         meta, source, default_on = rows[name]
@@ -282,6 +309,7 @@ def effective_item_skills(
                 source=source,
                 default_on=default_on,
                 effective=effective,
+                is_copy=meta.is_copy,
             )
         )
     return out

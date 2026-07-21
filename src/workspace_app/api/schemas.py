@@ -72,6 +72,11 @@ class _ItemSkillState(BaseModel):
     description: str
     source: str
     default_on: bool
+    #: #589 — the workspace holds an editable copy of this baked-in skill's files.
+    #: Independent of ``source``: the row still answers as the skill it copied, but
+    #: its files are here, so the download control applies and (later) so does a
+    #: refresh from upstream.
+    is_copy: bool = False
     pref: Literal["follow", "on", "off"]
     effective: bool
 
