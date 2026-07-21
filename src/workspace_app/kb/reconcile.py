@@ -81,13 +81,33 @@ class Grade:
     reason: str = ""  # "wiki" | "near-card" | ""
 
 
-#: What counts as "more of the same token" on an ASCII edge. ``R7`` inside
-#: ``R70`` is a different code, not a mention of this one.
-_ASCII_TOKEN = "0123456789abcdefghijklmnopqrstuvwxyz_"
+def _scriptio_continua(ch: str) -> bool:
+    """Is ``ch`` from a script written WITHOUT spaces between words? Those scripts
+    have no word boundary to demand, so requiring one would match almost nothing.
+    CJK ideographs and Japanese kana are the ones this corpus contains; Korean
+    and Thai are deliberately absent — Korean writes spaces, and no Thai has ever
+    appeared here, so claiming to handle it would be untested fiction."""
+    o = ord(ch)
+    return (
+        0x3040 <= o <= 0x30FF  # hiragana + katakana
+        or 0x3400 <= o <= 0x4DBF  # CJK unified ext A
+        or 0x4E00 <= o <= 0x9FFF  # CJK unified
+        or 0xF900 <= o <= 0xFAFF  # CJK compatibility ideographs
+        or 0x20000 <= o <= 0x2FA1F  # CJK unified ext B-F
+    )
 
 
-def wiki_mentions(wiki_blob: str, term: str) -> bool:
-    """Does ``wiki_blob`` (already lower-cased) actually mention ``term``?
+def _continues_a_token(ch: str) -> bool:
+    """Would ``ch`` next to a term's edge make it a LONGER word rather than a
+    mention of the term? True for any alphanumeric in a space-writing script, plus
+    the underscore (``m4_5`` is its own identifier, not a mention of ``m4``). A
+    hyphen is NOT one: ``R7-2`` names a substep OF ``R7``."""
+    return ch == "_" or (ch.isalnum() and not _scriptio_continua(ch))
+
+
+def _wiki_mentions(wiki_blob: str, term: str) -> bool:
+    """Does ``wiki_blob`` — which the caller has ALREADY lower-cased — mention
+    ``term``?
 
     A bare substring test is wrong for this corpus. The knowledge base is mixed
     Chinese and English, and much of the terminology is short alphanumeric codes
@@ -95,20 +115,21 @@ def wiki_mentions(wiki_blob: str, term: str) -> bool:
     swallows a legitimate question — the same mistake the project already rejects
     for indexed-list membership, where ``"m4"`` must not match ``"m40"``.
 
-    Boundaries are decided per CHARACTER CLASS rather than per language, because
-    one term can be mixed (``M1 金屬層``). An edge that is ASCII-alphanumeric
-    demands a neighbour that isn't; a CJK edge demands nothing, since Chinese has
-    no word boundaries and requiring one there would match almost nothing."""
+    So an edge in a space-writing script demands a neighbour that doesn't continue
+    the token, and an edge in a scriptio-continua script demands nothing. The rule
+    is about SCRIPT, not about ASCII: restricting it to a-z0-9 would leave the
+    same bug alive in every other alphabet (``café`` inside ``cafés``). Each end is
+    judged on its own, because one term can straddle both worlds (``光罩m4``)."""
     needle = term.strip().lower()
     if not wiki_blob or not needle:
         return False
-    head_bound = needle[0] in _ASCII_TOKEN
-    tail_bound = needle[-1] in _ASCII_TOKEN
+    head_bound = _continues_a_token(needle[0])
+    tail_bound = _continues_a_token(needle[-1])
     start = wiki_blob.find(needle)
     while start != -1:
         end = start + len(needle)
-        before_ok = not head_bound or start == 0 or wiki_blob[start - 1] not in _ASCII_TOKEN
-        after_ok = not tail_bound or end == len(wiki_blob) or wiki_blob[end] not in _ASCII_TOKEN
+        before_ok = not head_bound or start == 0 or not _continues_a_token(wiki_blob[start - 1])
+        after_ok = not tail_bound or end == len(wiki_blob) or not _continues_a_token(wiki_blob[end])
         if before_ok and after_ok:
             return True
         start = wiki_blob.find(needle, start + 1)
@@ -319,9 +340,15 @@ class Reconciler:
             return
         wiki_blob = self._wiki_text(collection_id).lower() if self._wiki_text else ""
         for term, open_question in items:
+            # A blank term is not a question — nothing to ask, nothing to audit.
+            # The old substring net only swallowed it by accident (`"" in blob` is
+            # True), so it leaked a blank question through whenever the collection
+            # had no wiki; that must not depend on whether a wiki exists.
+            if not term.strip():
+                continue
             norm_key = norm(term)
             vec = self._embed(_card_text(norm_key, term))
-            wiki = wiki_mentions(wiki_blob, term)
+            wiki = _wiki_mentions(wiki_blob, term)
             grade = grade_candidate(
                 self._spec,
                 collection_id=collection_id,
