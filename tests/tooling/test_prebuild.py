@@ -975,3 +975,83 @@ def test_the_pip_flavour_names_dispatch_too(tmp_path: Path):
     assert _argv_built_for(launch, "pip3", ["list"]) == "-m pip list"
     assert _argv_built_for(launch, "pip3.12", ["list"]) == "-m pip list"
     assert _argv_built_for(launch, "pipx", ["list"]) == "list"
+
+
+# --- the bundled interpreter must not claim to be distro-managed ---
+#
+# uv's CPython builds ship an EXTERNALLY-MANAGED marker, and the bundle copies
+# the whole interpreter tree, marker included. pip then REFUSES `pip install X`
+# outright ("error: externally-managed-environment") unless it is handed
+# --break-system-packages. The marker means "an OS package manager owns this
+# interpreter, install into a venv instead" — which is simply not true of a
+# self-contained bundle that no packager tracks, and there is no venv for the
+# agent to install into either. Dropping it is not loosening a safety rail; it
+# is deleting a claim that was never about this environment.
+#
+# With it gone, pip's own behaviour does the right thing unaided: the bundle's
+# site-packages is root-owned and read-only in production, so pip reports
+# "Defaulting to user installation because normal site-packages is not writeable"
+# and installs into $HOME/.local — and the launcher has already pointed HOME at
+# SANDBOX_HOME, which is exactly where this interpreter looks. No flag to teach,
+# and nothing injected into the user's command line on their behalf.
+
+
+def test_the_bundled_interpreter_is_not_left_marked_externally_managed(tmp_path: Path):
+    """The marker travels with uv's interpreter; the bundle must not inherit it.
+    Every X.Y under lib/ is cleared — the tree is copied wholesale, so which
+    directory the marker lands in is uv's choice, not ours."""
+    py = tmp_path / "python"
+    (py / "lib" / "python3.12").mkdir(parents=True)
+    (py / "lib" / "python3.13").mkdir(parents=True)
+    markers = [
+        py / "lib" / "python3.12" / "EXTERNALLY-MANAGED",
+        py / "lib" / "python3.13" / "EXTERNALLY-MANAGED",
+    ]
+    for m in markers:
+        m.write_text("[externally-managed]\nError=managed by the distro\n")
+
+    prebuild_module()._drop_externally_managed(py)
+
+    assert [m for m in markers if m.exists()] == []
+
+
+def test_dropping_the_marker_is_fine_when_there_is_none(tmp_path: Path):
+    """Interpreter builds that never shipped the marker must not make the
+    prebuild explode — the bundle is still perfectly valid without it."""
+    py = tmp_path / "python"
+    (py / "lib" / "python3.12").mkdir(parents=True)
+    prebuild_module()._drop_externally_managed(py)  # must not raise
+
+
+def test_a_change_to_what_the_builder_strips_forces_a_rebuild(tmp_path: Path, monkeypatch):
+    """Same stale-cache class as #64 and #393's launcher edit: clearing
+    EXTERNALLY-MANAGED is builder behaviour that is BAKED INTO the bundle, so
+    `_source_hash(source)` cannot see a change to it. Without folding it into
+    the stamp, editing the strip step would leave every already-built bundle
+    exactly as it was — still refusing `pip install` — while the code claimed
+    to have fixed it."""
+    prebuild = prebuild_module()
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "foo.py").write_text("x")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / ".built").write_text(prebuild._build_stamp(src))
+    assert prebuild._should_rebuild(src, dst) is False
+
+    def _drop_externally_managed(python_dir: Path) -> None:
+        """A different rule about what the bundle strips."""
+
+    monkeypatch.setattr(prebuild, "_drop_externally_managed", _drop_externally_managed)
+    assert prebuild._should_rebuild(src, dst) is True
+
+
+@pytest.mark.skipif(not _has_uv(), reason="uv not available")
+@pytest.mark.integration
+def test_a_real_built_carrier_ships_no_externally_managed_marker(tmp_path: Path):
+    """The end-to-end fact the unit tests stand in for: build a carrier with the
+    real toolchain and the interpreter that comes out must not carry uv's
+    PEP 668 marker — which is precisely the file pip checks before refusing
+    `pip install`."""
+    launch = _build_bare_carrier(tmp_path)
+    assert list((launch.parent / "python").rglob("EXTERNALLY-MANAGED")) == []

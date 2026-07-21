@@ -22,6 +22,7 @@ See `docs/plan-skills-and-tools.md` §B.4.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -101,6 +102,34 @@ exec "$ld" "$here/python/bin/python{ver}" "$@"
 """
 
 
+def _drop_externally_managed(python_dir: Path) -> None:
+    """Clear PEP 668's `EXTERNALLY-MANAGED` from the interpreter we just bundled.
+
+    uv's CPython builds ship the marker, and the bundle copies the interpreter
+    tree wholesale, so it rides along. pip then REFUSES a plain
+    ``pip install X`` ("error: externally-managed-environment") until it is
+    handed ``--break-system-packages`` — a flag nothing in the product ever told
+    the agent about, on an interpreter that is not, in fact, externally managed:
+    no OS packager tracks this bundle, and there is no venv for the agent to be
+    redirected into. The marker is a claim about uv's own installation that
+    stopped being true the moment we copied it.
+
+    Removing it lets pip's default behaviour do the right thing unaided: the
+    bundle's site-packages is root-owned and read-only in production, so pip
+    falls back to a ``--user`` install under ``$HOME/.local`` — and the launcher
+    has already pointed HOME at the per-sandbox ``SANDBOX_HOME``, which is
+    exactly where this interpreter's user-site is (#393). So the obvious command
+    works, with no flag to teach and nothing silently injected into the agent's
+    argv on its behalf.
+
+    Best-effort across every ``lib/pythonX.Y`` present: which one holds the
+    marker is uv's business, not ours.
+    """
+    for marker in python_dir.glob("lib/python*/EXTERNALLY-MANAGED"):
+        marker.unlink()
+        logger.info("prebuild: cleared %s (the bundle is not distro-managed)", marker)
+
+
 def build_package(*, name: str, source: Path, dst: Path, force: bool = False) -> None:
     """Build the package at ``source`` into the prebuilt bundle at ``dst``.
 
@@ -172,6 +201,7 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
     real = (venv / "bin" / "python").resolve()  # .../cpython-X.Y.Z/bin/pythonX.Y
     ver = real.name.removeprefix("python")  # "3.13"
     shutil.copytree(real.parent.parent, dst / "python", symlinks=True)
+    _drop_externally_managed(dst / "python")
     launch = dst / "launch"
     if _is_venv_carrier(source):
         # No commands to dispatch: write the pure-python launcher and
@@ -317,9 +347,15 @@ def _builder_fingerprint() -> str:
     code, not package source, yet it is written into the bundle's `launch`.
     Without this, changing `_PYTHON_LAUNCH` (e.g. #393's `SANDBOX_HOME`
     routing) would silently keep the stale `launch` in every cached bundle,
-    the same stale-cache class as #64's version-keyed wheel."""
+    the same stale-cache class as #64's version-keyed wheel.
+
+    The templates are not the only builder decision baked into a bundle:
+    `_drop_externally_managed` edits the interpreter tree we copy in, and a
+    change to WHAT it strips is just as invisible to `_source_hash`. Its source
+    is folded in for the same reason — otherwise editing it would leave every
+    cached bundle still refusing `pip install` while the code read as fixed."""
     h = hashlib.sha256()
-    for tpl in (_LAUNCH, _PYTHON_LAUNCH):
+    for tpl in (_LAUNCH, _PYTHON_LAUNCH, inspect.getsource(_drop_externally_managed)):
         h.update(tpl.encode())
         h.update(b"\0")
     return h.hexdigest()
