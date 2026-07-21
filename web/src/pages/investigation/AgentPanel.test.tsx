@@ -578,3 +578,39 @@ describe("AgentPanel — a shared item queues, so a spectator is not locked out"
     expect(agent.send).not.toHaveBeenCalled();
   });
 });
+
+// #583: the panel is the only place that knows who is signed in — `EntryView`
+// takes an id and claims nothing without one. If the panel forgets to hand it
+// over, the whole feature is silently inert, which is exactly how it fails.
+describe("AgentPanel — my own messages sit on the right", () => {
+  function renderWithLog(entries: unknown[]) {
+    const agent = stubAgent();
+    agent.log = { entries, streaming: false } as unknown as AgentState["log"];
+    return renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={agent}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+        />
+      </DialogProvider>,
+    );
+  }
+
+  it("passes the signed-in identity through, so mine align right and a peer's do not", async () => {
+    vi.spyOn(api, "getCurrentUser").mockResolvedValue("hy");
+    renderWithLog([
+      { kind: "message", message: { role: "user", content: "mine", author: "hy" } },
+      { kind: "message", message: { role: "user", content: "theirs", author: "sam" } },
+    ]);
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("message-block")[0]).toHaveAttribute("data-mine", "true"),
+    );
+    expect(screen.getAllByTestId("message-block")[1]).toHaveAttribute("data-mine", "false");
+  });
+});

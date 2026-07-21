@@ -160,6 +160,7 @@ export function EntryView({
   onUndo,
   onReportWiki,
   fileUrl,
+  currentUser,
 }: {
   entry: AgentEntry;
   onOpenCitation?: (c: MessageCitation) => void;
@@ -180,6 +181,10 @@ export function EntryView({
    * can render the charts it wrote inline. Provided by item-scoped surfaces
    * (RCA / Playground AgentPanel); absent on KB chat → no inline images. */
   fileUrl?: (path: string) => string;
+  /** #583: the signed-in user's id, so MY messages can sit on the right of a
+   * shared thread. Absent → nothing is claimed and everything stays left, which
+   * is the correct default for a surface that doesn't know who is watching. */
+  currentUser?: string;
 }) {
   if (entry.kind === "banner") {
     return (
@@ -223,6 +228,7 @@ export function EntryView({
       onReplay={onReplay}
       onUndo={onUndo}
       onReportWiki={onReportWiki}
+      currentUser={currentUser}
     />
   );
 }
@@ -451,6 +457,7 @@ function MessageBlock({
   onReplay,
   onUndo,
   onReportWiki,
+  currentUser,
 }: {
   message: Message;
   onOpenCitation?: (c: MessageCitation) => void;
@@ -458,15 +465,39 @@ function MessageBlock({
   onReplay?: () => void;
   onUndo?: () => void;
   onReportWiki?: () => void;
+  currentUser?: string;
 }) {
   const t = useT();
+  // #583: only a HUMAN message I actually wrote moves to the right. `author` is
+  // stamped server-side and arrives over the broadcast (there is no optimistic
+  // echo — see useChatSession), so this is stable from the first paint. An
+  // author-less message is NOT claimed: in a shared item chat it could be
+  // anyone's, and putting someone else's words on my side is worse than leaving
+  // every legacy message where it already was.
+  const mine =
+    message.role === "user" &&
+    currentUser !== undefined &&
+    message.author !== undefined &&
+    message.author !== null &&
+    message.author === currentUser;
   // #221: resolve the answer body's `[n]` markers against this message's
   // citations so each inline marker becomes a clickable pill (same target as
   // the Sources cards below). Empty map ⇒ markers render as muted text.
   const byMarker = useMemo(() => buildByMarker(message.citations ?? []), [message.citations]);
   if (message.role === "user") {
     return (
-      <div>
+      <div
+        data-testid="message-block"
+        data-mine={mine ? "true" : "false"}
+        style={
+          // Alignment only — no bubble, no fill, no radius. `alignSelf` makes the
+          // block shrink to its text inside the feed's flex column, which is the
+          // whole reason the shift is visible: a full-width block has nowhere to
+          // move. The cap keeps a long paste from spanning the column and landing
+          // back where it started.
+          mine ? { alignSelf: "flex-end", maxWidth: "72%", minWidth: 0 } : undefined
+        }
+      >
         <div
           style={{
             display: "flex",
@@ -475,6 +506,9 @@ function MessageBlock({
             color: "var(--text-paper-d)",
             fontSize: pxToRem(11),
             fontFamily: "var(--font-mono)",
+            // Mirror the header so the avatar hugs the same edge as the block.
+            // The undo control keeps its spacer and so stays at the far end.
+            flexDirection: mine ? "row-reverse" : "row",
           }}
         >
           <span
@@ -502,8 +536,14 @@ function MessageBlock({
           )}
         </div>
         <div
+          data-testid="message-body"
           style={{
-            marginLeft: 28,
+            // The 28px indent lines the text up under the name; on my side it
+            // hangs off the other edge. The text itself is NEVER right-aligned —
+            // ragged-left multi-line text is markedly harder to read, and the
+            // block has already carried the "this is mine" signal.
+            marginLeft: mine ? 0 : 28,
+            marginRight: mine ? 28 : 0,
             marginTop: 4,
             fontSize: pxToRem(13),
             color: "var(--text-paper)",
@@ -520,7 +560,7 @@ function MessageBlock({
   }
   if (message.role === "assistant") {
     return (
-      <div>
+      <div data-testid="message-block" data-mine="false">
         <div
           style={{
             display: "flex",
@@ -603,7 +643,11 @@ function MessageBlock({
   // tool messages fold into ToolCallView during reduce; render unattributed
   // ones (e.g. system messages) plainly.
   return (
-    <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)" }}>
+    <div
+      data-testid="message-block"
+      data-mine="false"
+      style={{ fontSize: pxToRem(12), color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)" }}
+    >
       {message.content}
     </div>
   );

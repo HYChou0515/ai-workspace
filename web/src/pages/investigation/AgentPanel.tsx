@@ -498,6 +498,8 @@ export function AgentPanel({
           <EntryView
             key={i}
             entry={e}
+            // #583: who is reading, so their own messages align right.
+            currentUser={me}
             onOpenCitation={(c) =>
               window.open(docHref(c.document_id, c.snippet), "_blank", "noopener,noreferrer")
             }

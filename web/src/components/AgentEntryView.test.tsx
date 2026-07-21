@@ -628,3 +628,52 @@ describe("EntryView — inline chart images (#285)", () => {
     expect(container.querySelector("img")).toBeNull();
   });
 });
+
+// The chat is a flat, full-width log: the only thing separating speakers is a
+// 20px avatar and a 28px indent, so in a multi-person thread you cannot tell your
+// own messages from anyone else's at a glance. Align MY messages to the right —
+// alignment only, no bubble: this surface is a work record, not an IM client.
+describe("EntryView — my own messages align right (#583)", () => {
+  const mine = { kind: "message", message: { role: "user", content: "why?", author: "hy" } } as const;
+
+  it("right-aligns a user message written by the signed-in user", () => {
+    render(<EntryView entry={mine as AgentEntry} currentUser="hy" />);
+    const block = screen.getByTestId("message-block");
+    expect(block).toHaveAttribute("data-mine", "true");
+    expect(block).toHaveStyle({ alignSelf: "flex-end" });
+  });
+
+  it("leaves another human's message on the left", () => {
+    render(<EntryView entry={mine as AgentEntry} currentUser="someone-else" />);
+    const block = screen.getByTestId("message-block");
+    expect(block).toHaveAttribute("data-mine", "false");
+    expect(block).not.toHaveStyle({ alignSelf: "flex-end" });
+  });
+
+  it("leaves the agent on the left even when it answers me", () => {
+    render(
+      <EntryView
+        entry={{ kind: "message", message: { role: "assistant", content: "because", author: "hy" } }}
+        currentUser="hy"
+      />,
+    );
+    expect(screen.getByTestId("message-block")).toHaveAttribute("data-mine", "false");
+  });
+
+  // Don't guess. An old message with no author could be anyone in a shared item
+  // chat; claiming it as mine would put someone else's words on my side.
+  it("does not claim an author-less message, and does nothing without an identity", () => {
+    render(<EntryView entry={{ kind: "message", message: { role: "user", content: "hi" } }} currentUser="hy" />);
+    expect(screen.getByTestId("message-block")).toHaveAttribute("data-mine", "false");
+    cleanup();
+    render(<EntryView entry={mine as AgentEntry} />);
+    expect(screen.getByTestId("message-block")).toHaveAttribute("data-mine", "false");
+  });
+
+  // Multi-line text right-aligned is unreadable; the BLOCK moves, the text does not.
+  it("keeps the text itself left-aligned inside the right-aligned block", () => {
+    render(<EntryView entry={mine as AgentEntry} currentUser="hy" />);
+    const body = screen.getByTestId("message-body");
+    expect(body).not.toHaveStyle({ textAlign: "right" });
+  });
+});
