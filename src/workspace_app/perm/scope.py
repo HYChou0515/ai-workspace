@@ -172,12 +172,18 @@ def source_doc_access_scope(
     return _and_scopes(collection, source_doc_override_scope(superusers, groups_provider))
 
 
-def graph_claim_access_scope(
+def graph_evidence_access_scope(
     superusers: frozenset[str] = frozenset(),
     groups_provider: GroupsProvider | None = None,
 ) -> AccessScope:
-    """#534 slice 2 — a metric claim is visible iff the DECK it was extracted from
-    is. Same two-half shape as ``source_doc_access_scope`` (collection mirror AND
+    """#534 — a piece of extracted EVIDENCE (a ``GraphClaim`` measurement, a
+    ``GraphMention`` term) is visible iff the DECK it was extracted from is.
+
+    One scope for both, because it is one rule: they carry the same seven mirror
+    fields and answer the same question. Two copies would be two things to keep in
+    step, and a permission rule that drifts is a leak.
+
+    Same two-half shape as ``source_doc_access_scope`` (collection mirror AND
     per-doc tightening, ANDed so an override can only tighten, both matching the
     caller against the mirrored collection owner), read off the claim's own
     denormalized copy of that deck's effective permission.

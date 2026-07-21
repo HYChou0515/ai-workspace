@@ -50,6 +50,7 @@ from ..kb.findability import (
     doc_passages_in_top_k,
     probe_findability,
 )
+from ..kb.graph.mention_write import wipe_doc_mentions
 from ..kb.graph.write import wipe_doc_claims
 from ..kb.ingest import Ingestor, teardown_doc_chunks
 from ..kb.links import rewrite_md_links
@@ -2007,6 +2008,7 @@ def register_kb_routes(
             # refcount to consult — and an orphan would keep its last mirror
             # (readable) beyond the reach of every fan-out.
             wipe_doc_claims(spec, did)
+            wipe_doc_mentions(spec, did)
             rm.permanently_delete(did)
 
         # #513 P7: cascade to attachments — a child SourceDoc (parent_doc_id ==
@@ -2097,6 +2099,7 @@ def register_kb_routes(
         # ever touches the id it is processing) and counted twice the next time the
         # same deck is read.
         wipe_doc_claims(spec, doc_id)
+        wipe_doc_mentions(spec, doc_id)
         rm.permanently_delete(doc_id)
         with rm.using(user=creator):
             rm.create(new_doc, resource_id=new_id)
