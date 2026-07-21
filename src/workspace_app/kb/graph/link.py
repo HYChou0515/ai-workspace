@@ -13,8 +13,6 @@ whole two-layer split rests on.
 
 from __future__ import annotations
 
-import re
-
 import msgspec
 from specstar import QB, SpecStar
 
@@ -25,30 +23,6 @@ from ...resources.graph import (
     GraphRelationship,
 )
 from ..llm import ILlm
-
-_DIGITS = re.compile(r"\d+")
-
-
-def differs_by_number(a: str, b: str) -> bool:
-    """Whether two surfaces carry different numbers — the one outright veto.
-
-    RO-3 and RO-4, part A1203 and A1204: different things, and precisely the pairs
-    a similarity score cannot separate, since they differ by one character out of
-    many. Vetoed rather than queued for review, because asking a person to reject
-    them one at a time spends the scarcest thing here on a question a rule answers.
-
-    Compares VALUES, not spellings, so "RO-03" and "RO-3" do not trip it: whether
-    those are one machine is a real question for a later basis to answer, and this
-    rule must not pre-empt it by vetoing.
-
-    Fires only when BOTH sides carry numbers. A side with none has nothing to
-    disagree about — "回焊爐" beside "RO-3" is the general name next to the
-    specific code, the commonest way a document declares an alias, and vetoing
-    that would throw away the strongest evidence the vocabulary can get.
-    """
-    left = [int(n) for n in _DIGITS.findall(a)]
-    right = [int(n) for n in _DIGITS.findall(b)]
-    return bool(left) and bool(right) and left != right
 
 
 def _find_or_create_entity(spec: SpecStar, key: str, display: str) -> str:
@@ -209,8 +183,11 @@ def link_declared_aliases(spec: SpecStar) -> int:
     be read by anyone who doubts it. A declaration that could not be quoted never
     got this far.
 
-    The number veto still applies. A model transcribing "RO-3、RO-4" as a
-    declaration has transcribed a list, and no document means that as an alias.
+    What keeps a mis-read list ("RO-3、RO-4") out is the extraction contract, not a
+    rule here: the passage must explicitly state the two names are one thing, and
+    the quote saying so must appear in it. Adding a rule about digits on top would
+    be guessing at the shape of the mistake — and every such guess in this module
+    has been wrong within a corpus or two.
 
     Idempotent: an equivalence already folded in leaves nothing to do.
     """
@@ -225,8 +202,6 @@ def link_declared_aliases(spec: SpecStar) -> int:
         if host is None:
             continue
         for other_key in mention.declared_same_as:
-            if differs_by_number(mention.norm_surface, other_key):
-                continue
             target = _entity_for_key(spec, other_key)
             if target is None or target == host:
                 continue
@@ -281,88 +256,96 @@ def _absorb(spec: SpecStar, host_id: str, other_id: str, *, evidence: str) -> No
     )
 
 
-# How much two keys must have in common before the model is asked about them.
-# Every pair would be too many calls, so a cheap test narrows the field. Missing a
-# pair costs a merge nobody proposed — visible as two entries someone can still
-# join by hand — while asking about everything costs money on every single run.
-_MIN_OVERLAP = 0.34
+def link_resembling_entities(spec: SpecStar, llm: ILlm) -> int:
+    """PROPOSE merges by handing the vocabulary to the model. Returns proposals.
 
-_JUDGE_PROMPT = (
-    "Two terms from technical documents. Are they two names for the SAME thing, "
-    "or two different things?\n\n"
-    "A: {a}\nB: {b}\n\n"
-    "Different equipment, different steps of a process, a thing and a measurement "
-    "OF that thing, and a general category and one specific item in it are all "
-    "DIFFERENT. Say they are the same only if one is simply another way of "
-    "writing the other.\n\n"
-    'Answer ONLY as JSON: {{"same": true or false, "why": "<one short sentence>"}}'
+    The whole list at once, not pair by pair. Asking about pairs costs a call per
+    pair — N² of them — which is what forced the earlier attempts to invent a
+    cheap test for which pairs deserved one. Every such test was wrong within a
+    corpus or two: character overlap admitted "condition" against "dose" because
+    Latin has twenty-six letters, and a rule refusing to merge terms whose digits
+    differ also refused 第2型糖尿病 against 第二型糖尿病. Rules over spelling keep
+    meeting exceptions because the question is not about spelling.
+
+    Given the list, the model answers the question that was actually being asked —
+    and it sees across languages, where no rule over characters ever could: 乳酸中毒
+    and lactic acidosis are one thing to a reader and share not one character.
+
+    It still only PROPOSES. That constraint is about who decides, not about how
+    candidates are found, and conflating the two is what produced the heuristics
+    in the first place.
+    """
+    entities = _live_entities(spec)
+    if len(entities) < 2:
+        return 0
+    seen = _existing_proposals(spec)
+    by_name: dict[str, list[str]] = {}
+    for entity_id, entity in entities:
+        by_name.setdefault(entity.canonical_name, []).append(entity_id)
+    proposed = 0
+    for batch in _batches(entities, _NAMES_PER_CALL):
+        for group, why in _group(llm, batch):
+            ids = [i for name in group for i in by_name.get(name, [])]
+            host, rest = ids[0], ids[1:]
+            for other in rest:
+                if (host, other) in seen or (other, host) in seen:
+                    continue
+                seen.add((host, other))
+                proposed += _propose(spec, host, other, why=why)
+    return proposed
+
+
+# How many names go into one adjudication call. Bounded by the model's context,
+# not by any belief about the data. A vocabulary larger than this is split, and a
+# pair that lands in different batches is simply not proposed this run — the pass
+# repeats, the batches are ordered by name so they are stable, and a missed
+# proposal is a merge nobody suggested, which is visible as two entries.
+_NAMES_PER_CALL = 60
+
+_GROUP_PROMPT = (
+    "Below is a list of terms taken from technical documents. Some of them are "
+    "different names for the SAME thing — a translation, an abbreviation, a "
+    "spelling variant, a fuller form of the same name.\n\n"
+    "Group ONLY those. Different equipment, different steps, a thing and a "
+    "measurement of it, a category and a member of it, and two different values "
+    "(500mg and 850mg, RO-3 and RO-4) are all DIFFERENT and must not be grouped.\n\n"
+    "Terms:\n{names}\n\n"
+    'Answer ONLY as JSON: {{"groups": [{{"names": ["…", "…"], "why": "<short>"}}]}}. '
+    "Return an empty list if nothing belongs together."
 )
 
 
-def _bigrams(text: str) -> set[str]:
-    squashed = text.replace(" ", "")
-    if len(squashed) < 2:
-        return set(squashed)  # nothing to pair — fall back to the character itself
-    return {squashed[i : i + 2] for i in range(len(squashed) - 1)}
+def _batches(entities: list[tuple[str, GraphEntity]], size: int) -> list[list[str]]:
+    names = sorted({e.canonical_name for _, e in entities})
+    return [names[i : i + size] for i in range(0, len(names), size)]
 
 
-def _overlap(a: str, b: str) -> float:
-    """How much two terms have in common, as a fraction of the smaller one.
+def _group(llm: ILlm, names: list[str]) -> list[tuple[list[str], str]]:
+    """The model's groupings, or nothing for an unreadable answer.
 
-    ADJACENT CHARACTER PAIRS, not characters. Latin has twenty-six letters, so any
-    two English words share most of theirs — comparing characters admitted
-    "condition" against "dose" and asked the model about nearly every pair in the
-    corpus, which is the O(n²) cost the narrowing exists to prevent. It only ever
-    looked selective because the first corpus tried was Chinese, where the
-    character set is large enough to hide the flaw.
-
-    A pair carries position as well as identity, so it separates words in both
-    scripts while still matching real variants: 乳酸中毒 against 乳酸性酸中毒, or a
-    plural against its singular.
-
-    Crude on purpose either way — it decides only who gets ASKED, and the model
-    and then a person both still stand between it and any change.
+    Nothing, rather than a guess: this path can only ADD work for a person, so a
+    confused reply should ask them nothing at all.
     """
-    left, right = _bigrams(a), _bigrams(b)
-    if not left or not right:
-        return 0.0
-    return len(left & right) / min(len(left), len(right))
+    import json
 
-
-def link_resembling_entities(spec: SpecStar, llm: ILlm) -> int:
-    """PROPOSE merges the model believes in. Returns proposals made.
-
-    Never applies anything. A resemblance points at nothing outside the model —
-    unlike a declaration, which points at a sentence anyone can read — so it waits
-    for a person, and that is the whole reason this basis is separated from the
-    other three.
-
-    Cost is shaped by that. Pairs a rule already settles never reach the model
-    (numbers that disagree are vetoed first: spending a call, and then someone's
-    attention, to reject RO-3 against RO-4 is waste), and a cheap overlap test
-    narrows the rest.
-
-    A proposal is recorded as PENDING links from the other identity's mentions to
-    this one, so accepting it is the same absorption a declaration performs and
-    rejecting it leaves nothing behind.
-    """
-    entities = _live_entities(spec)
-    proposed = 0
-    seen = _existing_proposals(spec)
-    for i, (a_id, a) in enumerate(entities):
-        for b_id, b in entities[i + 1 :]:
-            if (a_id, b_id) in seen or (b_id, a_id) in seen:
-                continue
-            a_key, b_key = a.canonical_name, b.canonical_name
-            if differs_by_number(a_key, b_key):
-                continue
-            if _overlap(a_key, b_key) < _MIN_OVERLAP:
-                continue
-            verdict = _adjudicate(llm, a_key, b_key)
-            if verdict is None:
-                continue
-            proposed += _propose(spec, a_id, b_id, why=verdict)
-    return proposed
+    reply = llm.collect(_GROUP_PROMPT.format(names="\n".join(f"- {n}" for n in names)))
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return []
+    try:
+        data = json.loads(reply[start : end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return []
+    groups = data.get("groups") if isinstance(data, dict) else None
+    out: list[tuple[list[str], str]] = []
+    for item in groups if isinstance(groups, list) else []:
+        if not isinstance(item, dict):
+            continue
+        members = [str(n) for n in item.get("names", []) if str(n) in names]
+        if len(members) < 2:
+            continue  # a group of one groups nothing; a name it invented is not ours
+        out.append((sorted(set(members)), str(item.get("why", "")).strip()))
+    return out
 
 
 def _live_entities(spec: SpecStar) -> list[tuple[str, GraphEntity]]:
@@ -395,29 +378,16 @@ def _existing_proposals(spec: SpecStar) -> set[tuple[str, str]]:
     return out
 
 
-def _adjudicate(llm: ILlm, a: str, b: str) -> str | None:
-    """The model's verdict, or ``None`` for "no" and for anything unreadable.
-
-    An unparseable answer is a no: this path can only ADD work for a person, so
-    the safe reading of a confused reply is to ask nothing.
-    """
-    import json
-
-    reply = llm.collect(_JUDGE_PROMPT.format(a=a, b=b))
-    start, end = reply.find("{"), reply.rfind("}")
-    if start == -1 or end == -1 or end < start:
-        return None
-    try:
-        data = json.loads(reply[start : end + 1])
-    except (json.JSONDecodeError, ValueError):
-        return None
-    if not isinstance(data, dict) or data.get("same") is not True:
-        return None
-    return str(data.get("why", "")).strip() or "the model judged these the same"
-
-
 def _propose(spec: SpecStar, host_id: str, other_id: str, *, why: str) -> int:
-    """Record a merge proposal as pending links, without touching either identity."""
+    """Record a merge proposal as pending links, without touching either identity.
+
+    An identity with no links of its own still gets a proposal — one pending row
+    naming no mention. A kind and a predicate ARE identities, which was the claim,
+    but nothing MENTIONS "機台": things are labelled with it. Expressing every
+    proposal over the other side's mentions therefore made those two kinds of
+    identity unproposable, and the taxonomy stayed split by language while the
+    design said it would not.
+    """
     lrm = spec.get_resource_manager(GraphEntityLink)
     made = 0
     for r in lrm.list_resources((QB["entity_id"] == other_id).build()):
@@ -437,7 +407,26 @@ def _propose(spec: SpecStar, host_id: str, other_id: str, *, why: str) -> int:
             )
         )
         made = 1
-    return made
+    if made:
+        return made
+    # The link needs the collections its subject's evidence lives in, or the scope
+    # reads "nothing vouches for this" and hides the proposal from everyone — the
+    # same fail-closed rule that has now caught three rows created without one.
+    erm = spec.get_resource_manager(GraphEntity)
+    other = erm.get(other_id).data
+    assert isinstance(other, GraphEntity)
+    lrm.create(
+        GraphEntityLink(
+            entity_id=host_id,
+            mention_id="",  # nothing mentions a kind; the proposal is about the names
+            basis="resembles",
+            evidence=why,
+            state="pending",
+            proposed_from=other_id,
+            collection_ids=list(other.collection_ids),
+        )
+    )
+    return 1
 
 
 def reconcile_vocabulary(spec: SpecStar, llm: ILlm | None = None) -> None:

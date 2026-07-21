@@ -26,13 +26,13 @@ from workspace_app.resources.kb import Collection
 
 
 class _Judge(ILlm):
-    def __init__(self, verdict: str) -> None:
-        self.verdict = verdict
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
         self.asked: list[str] = []
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         self.asked.append(prompt)
-        yield self.verdict, False
+        yield self.reply, False
 
 
 def _collection(spec: SpecStar) -> str:
@@ -69,7 +69,9 @@ def _two_proposed(spec: SpecStar) -> tuple[str, str]:
     _mention(spec, cid, "deck-A", "回焊爐", n=4)
     _mention(spec, cid, "deck-B", "回焊機")
     link_identical_mentions(spec)
-    link_resembling_entities(spec, _Judge('{"same": true, "why": "same equipment"}'))
+    link_resembling_entities(
+        spec, _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
+    )
     (proposal,) = list_proposals(spec)
     return proposal.entity_id, proposal.proposed_from
 
@@ -105,22 +107,28 @@ def test_rejecting_leaves_both_identities_alone():
     host, other = _two_proposed(spec)
     reject_proposal(spec, host, other, by="amy")
     erm = spec.get_resource_manager(GraphEntity)
-    kept = erm.get(host).data
-    assert isinstance(kept, GraphEntity)
-    assert kept.norm_keys == [norm_surface("回焊爐")]
+    # neither side moved: each identity still holds exactly its own name. Which
+    # of the two the proposal happened to name as host is not the point.
+    for eid in (host, other):
+        kept = erm.get(eid).data
+        assert isinstance(kept, GraphEntity)
+        assert len(kept.norm_keys) == 1
     assert list_proposals(spec) == []
 
 
 def test_a_rejected_pair_is_never_proposed_again():
-    """The whole point of asking a person is that the answer is kept. Re-proposing
-    a rejected pair would re-spend the model AND put the same question back in
-    front of them every week, which is how a queue stops being read."""
+    """The whole point of asking a person is that the answer is kept. A rejected
+    pair coming back next week would put the same question in front of the same
+    person every run, which is how a queue stops being read.
+
+    The model is still asked — a batch is one call whatever it contains, so
+    excluding decided pairs from the prompt would buy nothing and would break the
+    groups it reasons over. What must not happen is the PROPOSAL returning."""
     spec = make_spec(default_user=lambda: "bob")
     host, other = _two_proposed(spec)
     reject_proposal(spec, host, other, by="amy")
-    judge = _Judge('{"same": true, "why": "same equipment"}')
+    judge = _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
     assert link_resembling_entities(spec, judge) == 0
-    assert judge.asked == []
     assert list_proposals(spec) == []
 
 
@@ -128,7 +136,7 @@ def test_an_accepted_pair_is_never_proposed_again():
     spec = make_spec(default_user=lambda: "bob")
     host, other = _two_proposed(spec)
     accept_proposal(spec, host, other, by="amy")
-    judge = _Judge('{"same": true, "why": "same equipment"}')
+    judge = _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
     assert link_resembling_entities(spec, judge) == 0
     assert list_proposals(spec) == []
 

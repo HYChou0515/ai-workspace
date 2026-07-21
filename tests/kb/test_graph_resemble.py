@@ -27,15 +27,16 @@ from workspace_app.resources.kb import Collection
 
 
 class _Judge(ILlm):
-    """Answers every adjudication the same way, and counts how often it was asked."""
+    """Stands in for the model, and counts how many times it was called — the
+    number that decides whether this pass is affordable."""
 
-    def __init__(self, verdict: str) -> None:
-        self.verdict = verdict
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
         self.asked: list[str] = []
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         self.asked.append(prompt)
-        yield self.verdict, False
+        yield self.reply, False
 
 
 def _collection(spec: SpecStar) -> str:
@@ -79,7 +80,9 @@ def test_an_accepted_resemblance_is_proposed_never_applied():
     _mention(spec, cid, "deck-B", "回焊機")
     link_identical_mentions(spec)
 
-    judge = _Judge('{"same": true, "why": "both name the reflow equipment"}')
+    judge = _Judge(
+        '{"groups": [{"names": ["回焊爐", "回焊機"], "why": "both name the reflow equipment"}]}'
+    )
     assert link_resembling_entities(spec, judge) == 1
     pending = _links(spec, "pending")
     assert len(pending) == 1
@@ -95,36 +98,51 @@ def test_a_refused_resemblance_leaves_nothing_behind():
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-B", "回焊機")
     link_identical_mentions(spec)
-    assert link_resembling_entities(spec, _Judge('{"same": false, "why": "different"}')) == 0
+    assert link_resembling_entities(spec, _Judge('{"groups": []}')) == 0
     assert _links(spec, "pending") == []
 
 
-def test_pairs_a_rule_already_settles_never_reach_the_model():
-    """The model is the expensive part and the only part that can be wrong without
-    saying so. Numbers that disagree are vetoed before anyone is asked — spending a
-    call, and then a person's attention, to reject RO-3 against RO-4 is waste."""
+def test_the_whole_vocabulary_costs_one_call_not_one_per_pair():
+    """Why no cheap test decides who gets asked: asking pair by pair costs N²
+    calls, which is what made a filter necessary, and every filter over spelling
+    met an exception within a corpus or two — character overlap admitted
+    "condition" against "dose", a digit rule refused 第2型糖尿病 against
+    第二型糖尿病. A batch costs one call and asks the question that was meant."""
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
-    _mention(spec, cid, "deck-A", "RO-3")
-    _mention(spec, cid, "deck-B", "RO-4")
+    for i, name in enumerate(["回焊爐", "回焊機", "錫膏印刷", "SPI", "空洞", "假焊"]):
+        _mention(spec, cid, f"deck-{i}", name)
     link_identical_mentions(spec)
-    judge = _Judge('{"same": true, "why": "look alike"}')
-    assert link_resembling_entities(spec, judge) == 0
-    assert judge.asked == []
+    judge = _Judge('{"groups": []}')
+    link_resembling_entities(spec, judge)
+    assert len(judge.asked) == 1
 
 
-def test_unrelated_names_never_reach_the_model_either():
-    """Every pair would be too many calls, so a cheap overlap test narrows the
-    field first. Missing a pair here costs a merge nobody proposed — visible as two
-    entries — while asking about everything costs money on every run."""
+def test_a_group_naming_something_nobody_wrote_is_ignored():
+    """A model listing a term that is not in the vocabulary has invented it, and
+    an invented name cannot be evidence for anything."""
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
-    _mention(spec, cid, "deck-B", "錫膏印刷")
+    _mention(spec, cid, "deck-B", "回焊機")
     link_identical_mentions(spec)
-    judge = _Judge('{"same": true, "why": "sure"}')
-    link_resembling_entities(spec, judge)
-    assert judge.asked == []
+    judge = _Judge('{"groups": [{"names": ["回焊爐", "熱風爐"], "why": "made up"}]}')
+    assert link_resembling_entities(spec, judge) == 0
+
+
+def test_terms_that_differ_only_by_a_number_are_the_model_s_call_now():
+    """There is no rule here refusing them. Every rule of that shape had an
+    exception — the one that would have vetoed 500mg against 850mg also vetoed
+    第2型糖尿病 against 第二型糖尿病 — so the question goes to something that can
+    tell the two cases apart, and its answer is a proposal either way."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _mention(spec, cid, "deck-A", "第2型糖尿病")
+    _mention(spec, cid, "deck-B", "第二型糖尿病")
+    link_identical_mentions(spec)
+    judge = _Judge('{"groups": [{"names": ["第2型糖尿病", "第二型糖尿病"], "why": "同一個疾病"}]}')
+    assert link_resembling_entities(spec, judge) == 1
+    assert len(_links(spec, "pending")) == 1
 
 
 def test_proposing_the_same_pair_twice_changes_nothing():
@@ -133,7 +151,7 @@ def test_proposing_the_same_pair_twice_changes_nothing():
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-B", "回焊機")
     link_identical_mentions(spec)
-    judge = _Judge('{"same": true, "why": "same equipment"}')
+    judge = _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
     link_resembling_entities(spec, judge)
     before = len(_links(spec, "pending"))
     link_resembling_entities(spec, judge)
@@ -152,44 +170,69 @@ def test_the_reconcile_runs_without_a_model_at_all():
     assert _links(spec, "pending") == []
 
 
-class TestWhoGetsAsked:
-    """The narrowing decides how much the pass costs, and it has to work in both
-    scripts. Comparing single characters does not: Latin has 26 of them, so any
-    two English words share most of their letters and the test admits nearly every
-    pair — which is O(n²) model calls, the exact thing the narrowing exists to
-    prevent. Adjacent character PAIRS carry position, so they separate words in
-    both scripts."""
+def test_a_kind_can_be_proposed_even_though_nothing_mentions_it():
+    """A kind and a predicate are identities like any other — that was the claim.
+    But a proposal was recorded as pending links over the other side's MENTIONS,
+    and a kind has none: nothing mentions "機台", things are labelled with it. So
+    kinds could never be proposed at all, and the taxonomy stayed split by
+    language while the design said otherwise."""
+    from workspace_app.kb.graph.link import name_predicates
+    from workspace_app.kb.graph.review import list_proposals
 
-    def test_unrelated_english_terms_are_not_asked_about(self):
-        from workspace_app.kb.graph.link import _MIN_OVERLAP, _overlap
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    rm = spec.get_resource_manager(GraphMention)
+    for doc, surface, kind in (("deck-A", "回焊爐", "機台"), ("deck-B", "Reflow Oven", "tool")):
+        with rm.using("bob"):
+            rm.create(
+                GraphMention(
+                    collection_id=cid,
+                    source_doc_id=doc,
+                    surface=surface,
+                    norm_surface=norm_surface(surface),
+                    kind=kind,
+                    norm_kind=norm_surface(kind),
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                    doc_visibility="public",
+                ),
+                resource_id=mention_id(doc, surface),
+            )
+    link_identical_mentions(spec)
+    name_predicates(spec)
+    judge = _Judge('{"groups": [{"names": ["機台", "tool"], "why": "同一個類型的中英文"}]}')
+    assert link_resembling_entities(spec, judge) == 1
+    (proposal,) = list_proposals(spec)
+    assert {proposal.name, proposal.other_name} == {"機台", "tool"}
 
-        for a, b in [
-            ("condition", "dose"),
-            ("adverse effect", "drug"),
-            ("causes", "contraindicated in"),
-            ("renal impairment", "lactic acidosis"),
-        ]:
-            assert _overlap(a, b) < _MIN_OVERLAP, (a, b)
 
-    def test_unrelated_chinese_terms_are_not_asked_about(self):
-        from workspace_app.kb.graph.link import _MIN_OVERLAP, _overlap
+def test_a_kind_proposal_is_visible_to_someone_who_can_read_its_evidence():
+    """The proposal existed but nobody could see it: the link was created without
+    the collections its evidence lives in, and an empty list is what the scope
+    reads as "nothing vouches for this". Third row in this slice created without
+    one — the rule is right, the omission keeps being mine."""
+    from workspace_app.kb.graph.review import list_proposals
 
-        for a, b in [("疾病", "第二型糖尿病"), ("劑量", "腎功能不全")]:
-            assert _overlap(a, b) < _MIN_OVERLAP, (a, b)
-
-    def test_genuine_variants_still_reach_the_model(self):
-        from workspace_app.kb.graph.link import _MIN_OVERLAP, _overlap
-
-        for a, b in [
-            ("乳酸中毒", "乳酸性酸中毒"),
-            ("假焊", "假焊點"),
-            ("lactic acidosis", "lactic acidoses"),
-        ]:
-            assert _overlap(a, b) >= _MIN_OVERLAP, (a, b)
-
-    def test_a_one_character_term_still_compares(self):
-        """Nothing has adjacent pairs to compare, so it falls back to characters
-        rather than silently never matching anything."""
-        from workspace_app.kb.graph.link import _overlap
-
-        assert _overlap("鎢", "鎢") == 1.0
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    rm = spec.get_resource_manager(GraphMention)
+    for doc, surface, kind in (("deck-A", "回焊爐", "機台"), ("deck-B", "Reflow Oven", "tool")):
+        with rm.using("bob"):
+            rm.create(
+                GraphMention(
+                    collection_id=cid,
+                    source_doc_id=doc,
+                    surface=surface,
+                    norm_surface=norm_surface(surface),
+                    kind=kind,
+                    norm_kind=norm_surface(kind),
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                    doc_visibility="public",
+                ),
+                resource_id=mention_id(doc, surface),
+            )
+    link_identical_mentions(spec)
+    judge = _Judge('{"groups": [{"names": ["機台", "tool"], "why": "同一個類型"}]}')
+    link_resembling_entities(spec, judge)
+    assert len(list_proposals(spec, as_user="bob")) == 1

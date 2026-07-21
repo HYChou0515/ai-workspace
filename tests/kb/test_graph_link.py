@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from specstar import QB, SpecStar
 
-from workspace_app.kb.graph.link import differs_by_number, link_identical_mentions
+from workspace_app.kb.graph.link import link_identical_mentions
 from workspace_app.kb.graph.normalize import norm_surface
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphEntity, GraphEntityLink, GraphMention, mention_id
@@ -64,31 +64,6 @@ def _links(spec: SpecStar) -> list[GraphEntityLink]:
         assert isinstance(r.data, GraphEntityLink)
         out.append(r.data)
     return out
-
-
-class TestDiffersByNumber:
-    """The one hard veto. Two surfaces whose digits differ are different things —
-    RO-3 and RO-4, part A1203 and A1204 — and they are exactly the pairs a
-    similarity score cannot tell apart, since they differ by one character out of
-    many. Vetoed outright rather than queued: asking a person to reject them one
-    by one is spending the scarcest thing here on a question a rule can answer."""
-
-    def test_a_differing_digit_is_a_veto(self):
-        assert differs_by_number("RO-3", "RO-4")
-        assert differs_by_number("A1203", "A1204")
-
-    def test_matching_digits_are_not(self):
-        assert not differs_by_number("Reflow Oven", "reflow oven")
-        assert not differs_by_number("RO-3", "RO-3 爐")
-
-    def test_no_digits_at_all_is_not(self):
-        assert not differs_by_number("回焊爐", "Reflow Oven")
-
-    def test_leading_zeros_do_not_make_a_difference(self):
-        """RO-03 and RO-3 are the same number written two ways. The veto is about
-        the VALUE, not the spelling — deciding whether the two are the same machine
-        is a later question, and this rule must not pre-empt it by vetoing."""
-        assert not differs_by_number("RO-03", "RO-3")
 
 
 def test_mentions_with_one_key_become_one_entity():
@@ -221,20 +196,6 @@ def test_a_declaration_joins_two_identities_without_a_reviewer():
     assert sorted(live[0].norm_keys) == sorted([norm_surface("回焊爐"), norm_surface("RO")])
     declared = [link for link in _links(spec) if link.basis == "declared"]
     assert declared and declared[0].evidence == "deck-A: 回焊爐,以下簡稱 RO"
-
-
-def test_a_declaration_whose_numbers_disagree_is_refused():
-    """No document means "RO-3 is another name for RO-4". The number veto applies
-    to a reported declaration too — the model may have transcribed a list."""
-    from workspace_app.kb.graph.link import link_declared_aliases
-
-    spec = make_spec(default_user=lambda: "bob")
-    cid = _collection(spec)
-    _declaring_mention(spec, cid, "deck-A", "RO-3", "RO-4", "RO-3、RO-4")
-    _mention(spec, cid, "deck-B", "RO-4")
-    link_identical_mentions(spec)
-    assert link_declared_aliases(spec) == 0
-    assert len([e for e in _entities(spec) if e.collection_ids]) == 2
 
 
 def test_applying_declarations_twice_changes_nothing():
