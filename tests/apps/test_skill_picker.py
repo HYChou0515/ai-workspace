@@ -136,3 +136,53 @@ async def test_build_applied_skills_block_notes_a_body_over_cap(monkeypatch):
     out = await build_applied_skills_block(files, "inv", "rca", "default", ["big"])
     assert "big" in out
     assert "could not load" in out
+
+
+# #589: a baked-in skill that brought files is COPIED into the workspace, and a
+# workspace skill is unconditionally default-on and shadows the package source.
+# Left alone, merely using a default-OFF shared skill once would silently make it
+# default-ON for good: clear the per-item pref afterwards and it stays enabled,
+# with nothing to explain why. A copy has to keep answering as what it is.
+async def test_a_copied_baked_in_skill_keeps_its_source_and_default():
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(**{"author-workflow": b"purpose only"})
+    await files.write("inv", "/.skill/author-workflow/.origin", b'{"source":"shared","files":{}}')
+
+    metas = await workspace_skill_metas(files, "inv")
+    s = _by_name(effective_item_skills("_template", "default", {}, metas))["author-workflow"]
+
+    assert s.source == "shared"
+    assert s.default_on is False
+    assert s.effective is False
+
+
+# A skill the user genuinely wrote here has no origin manifest and must keep
+# behaving exactly as before — on by default, source 'workspace'.
+async def test_a_hand_written_workspace_skill_is_unaffected():
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(mine=b"my own")
+    metas = await workspace_skill_metas(files, "inv")
+    s = _by_name(effective_item_skills("_template", "default", {}, metas))["mine"]
+
+    assert s.source == "workspace"
+    assert s.default_on is True
+
+
+# The panel keys the download control off `source == "workspace"`. A copy now
+# reports its package source (so it can't be silently turned on for good), which
+# would take that control away — even though its files really are here and really
+# are downloadable. The two facts are independent, so they are reported
+# independently rather than encoded in one string.
+async def test_a_copy_is_reported_as_a_local_copy_alongside_its_source():
+    from workspace_app.apps.skills import workspace_skill_metas
+
+    files = await _files_with(**{"author-workflow": b"purpose only"})
+    await files.write("inv", "/.skill/author-workflow/.origin", b'{"source":"shared","files":{}}')
+
+    metas = await workspace_skill_metas(files, "inv")
+    states = _by_name(effective_item_skills("_template", "default", {}, metas))
+
+    assert states["author-workflow"].is_copy is True
+    assert states["author-skill"].is_copy is False

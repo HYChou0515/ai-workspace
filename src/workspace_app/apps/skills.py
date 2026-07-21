@@ -18,15 +18,18 @@ agent knows which skills apply) and reads the body on demand via the
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections.abc import Mapping
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import msgspec
+
+from .skill_payload import ORIGIN_FILE, SkillOrigin, SkillSource, origin_for, skill_payload
 
 if TYPE_CHECKING:
     from ..files import WorkspaceFiles
@@ -58,6 +61,11 @@ class SkillMeta(msgspec.Struct, frozen=True):
 
     name: str
     description: str
+    #: #589 — this workspace folder is a COPY of a baked-in skill (it carries an
+    #: `.origin` manifest), not a skill written here. It still lives in the
+    #: workspace and is still editable; it simply must not be mistaken for the
+    #: user's own work when deciding source and default-on.
+    is_copy: bool = False
 
 
 @cache
@@ -155,6 +163,13 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
     bad hand-edit can't break the whole index. Empty when there's no ``.skill/``."""
     prefix = f"/{WORKSPACE_SKILL_DIR}/"
     paths = await files.ls(workspace_id, prefix)
+    # Which folders are copies falls straight out of the listing we already have,
+    # so knowing it costs no extra read.
+    copies = {
+        p[len(prefix) :].removesuffix(f"/{ORIGIN_FILE}")
+        for p in paths
+        if p.endswith(f"/{ORIGIN_FILE}")
+    }
     out: list[SkillMeta] = []
     for path in sorted(paths):
         rel = path[len(prefix) :]
@@ -163,7 +178,7 @@ async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> lis
         dir_name = rel[: -len("/SKILL.md")]
         meta = await _workspace_skill_meta(files, workspace_id, path, dir_name)
         if meta is not None:
-            out.append(meta)
+            out.append(msgspec.structs.replace(meta, is_copy=dir_name in copies))
     return out
 
 
@@ -231,6 +246,12 @@ class SkillState(msgspec.Struct, frozen=True):
     source: str
     default_on: bool
     effective: bool
+    #: #589 — the workspace holds an editable COPY of this baked-in skill. Kept
+    #: separate from ``source`` because the two facts are independent: the copy
+    #: still answers as the skill it copied (so a default-off one can't be turned
+    #: on for good just by using it), yet its files really are here — downloadable,
+    #: editable, and refreshable from upstream.
+    is_copy: bool = False
 
 
 def effective_item_skills(
@@ -267,7 +288,16 @@ def effective_item_skills(
     for m in list_skills(app_slug, profile):
         rows[m.name] = (m, "profile", True)
     for m in workspace_metas:
-        rows[m.name] = (m, "workspace", True)
+        prior = rows.get(m.name)
+        if m.is_copy and prior is not None:
+            # A copy of a baked-in skill answers as the skill it copied. Its
+            # DESCRIPTION comes from the copy — that is the text actually read
+            # this turn, and the AI may have edited it — but its source and
+            # default-on stay the package's, so using a default-off skill once
+            # cannot quietly turn it on for good.
+            rows[m.name] = (m, prior[1], prior[2])
+        else:
+            rows[m.name] = (m, "workspace", True)
     out: list[SkillState] = []
     for name in sorted(rows):
         meta, source, default_on = rows[name]
@@ -280,6 +310,7 @@ def effective_item_skills(
                 source=source,
                 default_on=default_on,
                 effective=effective,
+                is_copy=meta.is_copy,
             )
         )
     return out
@@ -301,6 +332,186 @@ def augment_shared_skill_body(
     return "\n\n".join([body, describe_dsl_grammar(), describe_workflow_boundaries(ceiling)])
 
 
+def _skill_source(
+    app_slug: str | None, profile: str | None, name: str
+) -> tuple[SkillSource, Any] | None:
+    """Where a baked-in skill's files live, or None if it isn't one. Precedence
+    matches the body resolvers: a profile package skill shadows a shared one."""
+    if app_slug is not None and profile is not None:
+        root = _skill_root(app_slug, profile)
+        if root is not None:
+            candidate = root / name
+            if (candidate / "SKILL.md").is_file():
+                return ("profile", candidate)
+    from .shared_skills import SHARED_SKILLS
+
+    src = SHARED_SKILLS.get(name)
+    return ("shared", src) if src is not None else None
+
+
+async def materialize_skill(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> None:
+    """#589: copy a baked-in skill's files into the workspace so the body's own
+    instructions resolve — ``see references/glossary.md`` and
+    ``exec(["python", ".skill/<name>/scripts/x.py"])`` only work if the files are
+    actually there.
+
+    Copy-if-absent: a workspace copy already present is left completely alone.
+    That is the whole point — the AI is meant to tweak these scripts, and an
+    overwrite would delete its work. Refreshing a copy is a separate, explicit
+    action, never a side effect of using the skill.
+
+    Writes go through ``WorkspaceFiles``, which routes to the item's live sandbox
+    when one is already awake (so the files are usable THIS turn) and to the
+    durable store when it is cold — without waking it, which `read_skill`
+    promises. A workspace over quota fails here, loudly, like any other write.
+    """
+    if await files.ls(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/"):
+        return
+    found = _skill_source(app_slug, profile, name)
+    if found is None:
+        return
+    source, src_dir = found
+    payload = skill_payload(src_dir)
+    # A skill that is nothing but its SKILL.md has nothing to materialize, and
+    # copying it anyway would be pure cost: the copy shadows the package version,
+    # so the body stops tracking upstream and the skill starts reporting as a
+    # workspace one. Every skill shipped today is exactly that shape, so the
+    # common case must stay untouched — only a skill that actually brings files
+    # becomes a local copy.
+    if set(payload) <= {"SKILL.md"}:
+        return
+    for rel, data in payload.items():
+        await files.write(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{rel}", data)
+    # Written LAST: until it exists the copy is incomplete, and a manifest that
+    # outlived a half-written copy would claim shipped bytes for files that were
+    # never written.
+    await files.write(
+        workspace_id,
+        f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}",
+        msgspec.json.encode(origin_for(source, payload)),
+    )
+
+
+async def skill_update_available(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> bool:
+    """Whether the package now ships something this copy does not have.
+
+    Compares what was SHIPPED (recorded in `.origin`) against what the package
+    ships now — deliberately not against the files on disk here. An edit made in
+    this workspace is not an upstream change, and offering "update" for it would
+    invite the user to press a button whose only honest outcome is "skipped".
+    """
+    from ..filestore.protocol import FileNotFound
+
+    try:
+        raw = await files.read(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}")
+    except FileNotFound:
+        return False
+    origin = msgspec.json.decode(raw, type=SkillOrigin)
+    found = _skill_source(app_slug, profile, name)
+    if found is None:
+        return False
+    _source, src_dir = found
+    return origin.files != origin_for(_source, skill_payload(src_dir)).files
+
+
+class SkillRefresh(msgspec.Struct, frozen=True):
+    """What a refresh actually did, per file. ``skipped`` is the interesting one:
+    those files were edited here, so they were left exactly as they are."""
+
+    updated: list[str]
+    skipped: list[str]
+    removed: list[str]
+
+
+async def refresh_skill(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+    *,
+    force: bool = False,
+) -> SkillRefresh:
+    """Bring a copied skill up to the version the package now ships.
+
+    ``force`` is "reset to factory": every shipped file is restored, including
+    ones edited here. It is destructive on purpose and only ever because the user
+    said so — never as a side effect of using or updating the skill.
+
+    Per file, never wholesale. A file still byte-identical to what was shipped is
+    replaced; a file that was edited here is left alone and reported. Overwriting
+    everything would delete the AI's tweaks — the very thing this feature exists
+    to allow — and doing it on an action labelled "update" would destroy them at
+    the moment the user least expects it.
+    """
+    from ..filestore.protocol import FileNotFound
+
+    root = f"/{WORKSPACE_SKILL_DIR}/{name}"
+    try:
+        raw = await files.read(workspace_id, f"{root}/{ORIGIN_FILE}")
+    except FileNotFound:
+        return SkillRefresh(updated=[], skipped=[], removed=[])
+    origin = msgspec.json.decode(raw, type=SkillOrigin)
+    found = _skill_source(app_slug, profile, name)
+    if found is None:
+        return SkillRefresh(updated=[], skipped=[], removed=[])
+    source, src_dir = found
+    payload = skill_payload(src_dir)
+
+    async def _unchanged(rel: str) -> bool:
+        """Whether the workspace copy still holds the bytes we shipped. Only ever
+        asked about a file the manifest records, so the lookup cannot miss."""
+        shipped = origin.files[rel]
+        try:
+            here = await files.read(workspace_id, f"{root}/{rel}")
+        except FileNotFound:
+            return False
+        return hashlib.sha256(here).hexdigest() == shipped
+
+    updated: list[str] = []
+    skipped: list[str] = []
+    for rel, data in payload.items():
+        if not force and origin.files.get(rel) == hashlib.sha256(data).hexdigest():
+            # Upstream did not touch this file, so there is nothing to bring —
+            # regardless of what happened to it here. "Nothing to bring" is not
+            # the same as "skipped": reporting it would bury the files the user
+            # actually needs to know about among every unchanged one.
+            continue
+        if not force and rel in origin.files and not await _unchanged(rel):
+            skipped.append(rel)
+            continue
+        await files.write(workspace_id, f"{root}/{rel}", data)
+        updated.append(rel)
+    removed: list[str] = []
+    for rel in origin.files:
+        if rel in payload:
+            continue
+        # Retired upstream. Dropping follows the same rule as changing: a file the
+        # AI edited is its work now, and upstream removing the original is not a
+        # licence to delete it.
+        if not force and not await _unchanged(rel):
+            skipped.append(rel)
+            continue
+        await files.delete(workspace_id, f"{root}/{rel}")
+        removed.append(rel)
+    await files.write(
+        workspace_id, f"{root}/{ORIGIN_FILE}", msgspec.json.encode(origin_for(source, payload))
+    )
+    return SkillRefresh(updated=sorted(updated), skipped=sorted(skipped), removed=sorted(removed))
+
+
 async def resolve_skill_body(
     files: WorkspaceFiles,
     workspace_id: str,
@@ -315,17 +526,27 @@ async def resolve_skill_body(
     resolves the body IGNORING the enable/disable toggle (apply overrides off)."""
     from .shared_skills import SHARED_SKILLS, load_shared_skill
 
+    await materialize_skill(files, workspace_id, app_slug, profile, name)
     body = await load_workspace_skill(files, workspace_id, name)
-    if body is not None:
-        return body
-    if name in SHARED_SKILLS:
-        return augment_shared_skill_body(name, load_shared_skill(name), app_slug, profile)
-    if app_slug is not None and profile is not None:
+    if body is None and name in SHARED_SKILLS:
+        body = load_shared_skill(name)
+    if body is None and app_slug is not None and profile is not None:
         try:
-            return load_skill(app_slug, profile, name)
+            body = load_skill(app_slug, profile, name)
         except SkillError:
             return None
-    return None
+    if body is None:
+        return None
+    # #589: the derived reference is appended to whatever body we resolved, from
+    # ANY source. It used to hang off the shared branch alone, which was fine
+    # while a baked-in skill could never be copied into the workspace. Once it
+    # can, the workspace copy wins the precedence above — and a source-specific
+    # augmentation would silently stop firing, freezing the AI's idea of the
+    # workflow syntax on the day the skill was copied. That staleness is the one
+    # thing the derivation exists to prevent, so it cannot depend on provenance:
+    # the AUTHORED text is what gets copied and edited, the DERIVED part is
+    # recomputed every read and was never part of the body to begin with.
+    return augment_shared_skill_body(name, body, app_slug, profile)
 
 
 async def build_applied_skills_block(

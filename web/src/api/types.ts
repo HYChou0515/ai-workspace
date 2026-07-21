@@ -257,11 +257,27 @@ export type ItemToolState = {
  * where it comes from (`shared` / `profile` / `workspace`); the tri-state toggle
  * is stored under `name`. Resolved server-side so the picker can't drift from the
  * turn's skill index. `pref` reuses the tool picker's tri-state. */
+export type SkillRefreshResult = {
+  updated: string[];
+  /** Left exactly as they are because they were edited here (#589). */
+  skipped: string[];
+  removed: string[];
+};
+
 export type ItemSkillState = {
   name: string;
   description: string;
   source: string;
   default_on: boolean;
+  /** #589 — the workspace holds an editable copy of this baked-in skill's files.
+   * Independent of `source`: the row still answers as the skill it copied (so a
+   * default-off one can't be turned on for good just by using it), yet its files
+   * really are here — downloadable, and refreshable from upstream. */
+  is_copy?: boolean;
+  /** #589 — the package ships something this copy does not have. The update
+   * control appears on THIS, not merely on being a copy: a button whose only
+   * honest outcome is "nothing changed" reads as broken. */
+  update_available?: boolean;
   pref: ToolPref;
   effective: boolean;
 };
@@ -424,6 +440,16 @@ export interface ApiClient {
   /** GET /a/{slug}/items/{id}/skills — the per-item skills picker state (per-skill
    * source + tri-state + effective), resolved server-side (#380). */
   getItemSkills(slug: string, itemId: string): Promise<ItemSkillState[]>;
+  /** POST /a/{slug}/items/{id}/skills/{name}/refresh — bring this item's copy of a
+   * baked-in skill up to the shipped version, per file. Files edited here come
+   * back in `skipped` rather than being overwritten; `force` is "reset to
+   * factory" and restores those too. */
+  refreshItemSkill(
+    slug: string,
+    itemId: string,
+    name: string,
+    body: { force: boolean },
+  ): Promise<SkillRefreshResult>;
   /** GET {resource_route} — the App's items (specstar list → flat rows).
    * Optional SearchParams filter/sort server-side (dashboard nav + filters). */
   listAppItems(resourceRoute: string, params?: SearchParams): Promise<AppItem[]>;

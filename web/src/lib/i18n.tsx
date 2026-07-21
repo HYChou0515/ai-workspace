@@ -503,6 +503,14 @@ export const messages = {
     en: 'No skills yet. Ask the assistant "help me make a skill" to build one together.',
   },
   "skills.download": { "zh-TW": "下載", en: "Download" },
+  "skills.reset": { "zh-TW": "還原成出貨版本", en: "Reset to the shipped version" },
+  "skills.refresh": { "zh-TW": "更新為出貨版本", en: "Update to the shipped version" },
+  "skills.refreshDone": { "zh-TW": "已更新到出貨版本。", en: "Updated to the shipped version." },
+  "skills.refreshKept": {
+    "zh-TW": "這些檔案你改過，所以保持原樣",
+    en: "Edited here, so left as they are",
+  },
+  "skills.copy": { "zh-TW": "可在此編輯", en: "editable here" },
   "skills.import": { "zh-TW": "匯入", en: "Import" },
   "skills.importHint": {
     "zh-TW": "選擇一個技能資料夾以加入這個工作區",
