@@ -912,13 +912,14 @@ def test_carrier_launcher_home_is_private_not_shared_tmp_when_unset(tmp_path: Pa
 # symlinks (one file, one build fingerprint) instead of growing a second script.
 
 
-def _echo_carrier(tmp_path: Path) -> Path:
-    """A carrier bundle whose bundled interpreter is `/bin/echo`, so the
-    launcher's final exec PRINTS the argv it built rather than running it.
+def _echo_carrier(tmp_path: Path, interpreter: str = "/bin/echo") -> Path:
+    """A carrier bundle whose bundled interpreter is a stand-in binary, so the
+    launcher's final exec PRINTS what it built rather than running python.
+    `/bin/echo` reports the argv; `/usr/bin/env` reports the environment.
     Keeps this a fast unit test: no uv, no real interpreter, no network."""
     bundle = tmp_path / "python-stack"
     (bundle / "python" / "bin").mkdir(parents=True)
-    (bundle / "python" / "bin" / "python3.12").symlink_to("/bin/echo")
+    (bundle / "python" / "bin" / "python3.12").symlink_to(interpreter)
     (bundle / ".venv" / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
     launch = bundle / "launch"
     launch.write_text(prebuild_module()._PYTHON_LAUNCH.format(ver="3.12"))
@@ -1096,3 +1097,22 @@ def test_build_package_actually_strips_the_marker_from_the_bundle(tmp_path: Path
 
     assert (dst / "launch").is_file()  # the build really ran
     assert list((dst / "python").rglob("EXTERNALLY-MANAGED")) == []
+
+
+def test_pip_can_never_install_into_the_shared_bundle(tmp_path: Path):
+    """Where an install LANDS must not depend on file permissions happening to
+    be right.
+
+    With the PEP 668 marker gone, pip only falls back to a `--user` install when
+    the bundle's site-packages is unwritable. That holds in the `kind: http`
+    production path (root-owned `/opt/tools`, exec dropped to a non-root uid) —
+    but by luck, not by design. On a dev box (`isolate: false` and a
+    `WORKSPACE_TOOLS_DIR` the developer owns), or in any image that runs exec as
+    root, it is writable, and pip then rewrites the bundle: a directory EVERY
+    sandbox on the pod reads, which survives sandbox reap and stays in the
+    `.built` cache. One sandbox would be editing everyone's interpreter.
+
+    `PIP_USER=1` makes the sandbox's own `.home` the target unconditionally, so
+    the invariant is structural instead of an unenforced assumption."""
+    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
+    assert "PIP_USER=1" in _argv_built_for(launch, "python", []).splitlines()

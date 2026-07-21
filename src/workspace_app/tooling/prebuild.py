@@ -49,6 +49,16 @@ export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYT
 # be read-only, and ~/.cache would otherwise pollute the synced workspace).
 export HOME="${{SANDBOX_HOME:-$(mktemp -d)}}"
 export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
+# WHERE an install lands must not depend on file permissions happening to be
+# right. Without the PEP 668 marker, pip only picks the `--user` target when the
+# bundle's site-packages is unwritable — true in the `kind: http` production path
+# (root-owned /opt/tools, exec dropped to a non-root uid), but by luck. On a dev
+# box, or any image running exec as root, it is writable and pip would rewrite
+# the BUNDLE: a dir every sandbox on the pod reads, which survives sandbox reap
+# and stays in the `.built` cache. PIP_USER makes $HOME/.local the target
+# unconditionally, so "a sandbox cannot edit the shared interpreter" is
+# structural rather than an unenforced assumption.
+export PIP_USER=1
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 """
@@ -97,6 +107,16 @@ export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYT
 # where /tmp is a per-exec ephemeral tmpfs (safe there).
 export HOME="${{SANDBOX_HOME:-$(mktemp -d)}}"
 export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
+# WHERE an install lands must not depend on file permissions happening to be
+# right. Without the PEP 668 marker, pip only picks the `--user` target when the
+# bundle's site-packages is unwritable — true in the `kind: http` production path
+# (root-owned /opt/tools, exec dropped to a non-root uid), but by luck. On a dev
+# box, or any image running exec as root, it is writable and pip would rewrite
+# the BUNDLE: a dir every sandbox on the pod reads, which survives sandbox reap
+# and stays in the `.built` cache. PIP_USER makes $HOME/.local the target
+# unconditionally, so "a sandbox cannot edit the shared interpreter" is
+# structural rather than an unenforced assumption.
+export PIP_USER=1
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$@"
 """
