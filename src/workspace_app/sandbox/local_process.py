@@ -84,7 +84,12 @@ mkdir -p "$ROOT/tmp/.jailbin"
 # heredocs, and a bare `python` shim alone would let `python3` fall through
 # to /usr/bin/python3 — the host Python with no pandas/numpy/scipy/matplotlib.
 if [ -x "$ROOT/.tools/python-stack/launch" ]; then
-  for n in python python3 python3.10 python3.11 python3.12 python3.13; do
+  # `pip*` too: the launcher dispatches on the name it is invoked as, so these
+  # are the same symlink and `pip install X` installs into the very interpreter
+  # `python` runs. Carrier branch only — the /usr/bin/python3 fallback below
+  # cannot answer to `pip`.
+  for n in python python3 python3.10 python3.11 python3.12 python3.13 \
+           pip pip3 pip3.10 pip3.11 pip3.12 pip3.13; do
     ln -sf /.tools/python-stack/launch "$ROOT/tmp/.jailbin/$n"
   done
 elif [ -e /usr/bin/python3 ]; then
@@ -194,6 +199,15 @@ _HOME = ".home"
 # the jail bootstrap. A bare `python` shim alone would let `python3` fall
 # through to the host interpreter.
 _PYTHON_SHIM_NAMES = ("python", "python3", "python3.10", "python3.11", "python3.12", "python3.13")
+# `pip` rides the SAME launcher (it dispatches on the name it was invoked as), so
+# `pip install X` installs into the very interpreter `python` runs. Unshimmed, it
+# fell through to the image's own pip: a different interpreter AND a different
+# HOME, so the install landed where the carrier never looks and the import failed
+# with nothing explaining why. Carrier-only, deliberately — the no-carrier
+# fallback is /usr/bin/python3, and a `pip` pointing there would run
+# `python3 install X`, which is not a command; better to let the image's real pip
+# answer than to shim something that cannot work.
+_PIP_SHIM_NAMES = ("pip", "pip3", "pip3.10", "pip3.11", "pip3.12", "pip3.13")
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
@@ -294,11 +308,12 @@ class LocalProcessSandbox:
         # Carrier when present, else the system python3 — anything but the host's
         # own venv that heads the inherited PATH. (A deployment image always
         # ships one or the other; prod always ships the carrier.)
-        target = carrier if os.access(carrier, os.X_OK) else Path("/usr/bin/python3")
+        has_carrier = os.access(carrier, os.X_OK)
+        target = carrier if has_carrier else Path("/usr/bin/python3")
         want = os.fspath(target)
         jailbin = root / _JAILBIN
         jailbin.mkdir(exist_ok=True)
-        for name in _PYTHON_SHIM_NAMES:
+        for name in _PYTHON_SHIM_NAMES + (_PIP_SHIM_NAMES if has_carrier else ()):
             link = jailbin / name
             if link.is_symlink() and os.readlink(link) == want:
                 continue  # already correct — no write (cheap + race-free on reruns)

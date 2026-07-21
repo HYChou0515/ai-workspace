@@ -898,3 +898,80 @@ def test_carrier_launcher_home_is_private_not_shared_tmp_when_unset(tmp_path: Pa
     assert os.path.isdir(home)
     # A private per-invocation dir: mktemp -d creates it 0700 (owner-only).
     assert oct(os.stat(home).st_mode & 0o777) == "0o700"
+
+
+# --- the carrier launcher is multi-call: `python` runs python, `pip` runs pip ---
+#
+# `pip` was never shimmed, so a bare `pip install X` in `exec` resolved down the
+# rest of PATH to the IMAGE's python (jailed: /usr/bin/pip; unjailed: the host
+# service's own venv) — a different interpreter AND a different HOME from the
+# carrier the agent's `python` actually is. pip reported success and the import
+# then failed, with nothing anywhere connecting the two.
+#
+# The launcher dispatches on the name it was invoked as, so the shims stay plain
+# symlinks (one file, one build fingerprint) instead of growing a second script.
+
+
+def _echo_carrier(tmp_path: Path) -> Path:
+    """A carrier bundle whose bundled interpreter is `/bin/echo`, so the
+    launcher's final exec PRINTS the argv it built rather than running it.
+    Keeps this a fast unit test: no uv, no real interpreter, no network."""
+    bundle = tmp_path / "python-stack"
+    (bundle / "python" / "bin").mkdir(parents=True)
+    (bundle / "python" / "bin" / "python3.12").symlink_to("/bin/echo")
+    (bundle / ".venv" / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+    launch = bundle / "launch"
+    launch.write_text(prebuild_module()._PYTHON_LAUNCH.format(ver="3.12"))
+    launch.chmod(0o755)
+    return launch
+
+
+def prebuild_module():
+    from workspace_app.tooling import prebuild
+
+    return prebuild
+
+
+def _argv_built_for(launch: Path, called_as: str, args: list[str]) -> str:
+    """Run the launcher through a `called_as`-named symlink (what the sandbox's
+    shim dir holds) and return the argv it handed the interpreter.
+
+    The shims live in their own dir, exactly as `.jailbin` does in a real
+    sandbox — the bundle root already has a `python/` DIRECTORY, so a shim named
+    `python` could not sit beside it anyway."""
+    import subprocess
+
+    shim_dir = launch.parent.parent / "jailbin"
+    shim_dir.mkdir(exist_ok=True)
+    shim = shim_dir / called_as
+    shim.symlink_to(launch)
+    r = subprocess.run([str(shim), *args], capture_output=True, text=True, check=True)
+    return r.stdout.strip()
+
+
+def test_invoked_as_pip_the_carrier_launcher_runs_the_carriers_own_pip(tmp_path: Path):
+    """`pip install X` must become the carrier's `python -m pip install X` — the
+    one interpreter whose HOME the launcher has already rewritten to
+    SANDBOX_HOME, so the `--user` fallback lands where the carrier reads."""
+    launch = _echo_carrier(tmp_path)
+    assert _argv_built_for(launch, "pip", ["install", "cowsay"]) == "-m pip install cowsay"
+
+
+def test_invoked_as_python_the_launcher_is_unchanged(tmp_path: Path):
+    """Regression lock for the dispatch itself: `python` must still forward its
+    argv verbatim. `exec(["python", "-c", …])` is the agent's most common call,
+    and a `case` arm that leaked into it would break every one of them."""
+    launch = _echo_carrier(tmp_path)
+    assert _argv_built_for(launch, "python", ["-c", "print(1)"]) == "-c print(1)"
+
+
+def test_the_pip_flavour_names_dispatch_too(tmp_path: Path):
+    """`pip3` is what agents type at least as often as `pip`, and the
+    major-minor flavours mirror the `python3.N` shims that already exist. A name
+    that merely STARTS with pip (`pipx`) must not be swallowed — it is a
+    different tool, and silently running it as pip would be worse than the
+    command simply not being found."""
+    launch = _echo_carrier(tmp_path)
+    assert _argv_built_for(launch, "pip3", ["list"]) == "-m pip list"
+    assert _argv_built_for(launch, "pip3.12", ["list"]) == "-m pip list"
+    assert _argv_built_for(launch, "pipx", ["list"]) == "list"

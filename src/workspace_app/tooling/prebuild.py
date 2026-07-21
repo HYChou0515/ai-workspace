@@ -67,10 +67,23 @@ exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 # *file* (the symlink target), the lookup fails with ENOTDIR (errno 20):
 # `cannot open shared object file: Error 20`. Resolving the symlink
 # first puts $here in the real bundle dir.
+#
+# MULTI-CALL: the launcher also answers to `pip`. `python` was shimmed but `pip`
+# was not, so a bare `pip install X` resolved down the rest of PATH to the
+# IMAGE's python — a different interpreter AND a different HOME than the carrier
+# the agent's `python` actually is. pip reported success; the import then failed;
+# nothing connected the two. Dispatching on the invoked name keeps the sandbox
+# shims plain symlinks to this one file (one build fingerprint, one thing to
+# provision) instead of a second script that could drift from it. `basename`
+# must be taken BEFORE `readlink -f`, which resolves the shim away.
 _PYTHON_LAUNCH = """\
 #!/bin/sh
+called=$(basename -- "$0")
 self=$(readlink -f "$0" 2>/dev/null || echo "$0")
 here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+case "$called" in
+  pip|pip[0-9]*) set -- -m pip "$@" ;;
+esac
 export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
 # HOME (caches + any `pip --user` install fallback) → a per-sandbox dir the exec
 # path passes as SANDBOX_HOME. A user's `pip install --break-system-packages X`
