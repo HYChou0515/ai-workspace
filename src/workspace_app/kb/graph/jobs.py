@@ -5,7 +5,13 @@ One ``GraphJob`` JobType, a ``kind`` field discriminating the stages (like
 because each doc's ``write_doc_claims`` is independent and idempotent, so there
 is nothing to aggregate. The cronjob POSTs one ``kind="dispatch"``; it fans out
 per opted-in collection (``split``), each of which fans out per batch of docs
-(``batch``). ``partition_key`` is set at ``create()`` time.
+(``batch``), and ends by queueing one ``kind="reconcile"`` — the pass that turns
+the accumulated evidence into a vocabulary. ``partition_key`` is set at
+``create()`` time.
+
+The reconcile is a job KIND rather than a sweep so it inherits what the queue
+already provides: retry, status, logging, and a worker pod that can consume it
+independently of the extraction stages.
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ from specstar.types import Job
 
 
 class GraphJobPayload(msgspec.Struct):
-    kind: str = "dispatch"  # dispatch | split | batch
+    kind: str = "dispatch"  # dispatch | split | batch | reconcile
     collection_id: str = ""  # split | batch
     doc_ids: list[str] = []  # batch: the docs to (re)extract claims for
 
