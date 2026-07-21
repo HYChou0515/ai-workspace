@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 
 from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.filestore.protocol import FileNotFound
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
@@ -394,3 +395,45 @@ def test_a_busy_sandbox_is_a_503_not_a_500():
     assert resp.status_code == 503
     assert resp.json()["detail"]["error"] == "sandbox_busy"
     assert resp.headers.get("retry-after")
+
+
+# ── a missing file is a 404, not an opaque 500 (#588) ──────────────────────
+
+
+def test_a_file_layer_miss_is_a_404_not_a_500():
+    """`create_app` handled `WorkspaceFull` / `SandboxBusy` / `SandboxNotFound`
+    and nothing else, so a `FileNotFound` escaping any hand-written route became
+    an unhandled 500 — the reason a failed move could only be diagnosed by
+    reading server logs. It is a missing file; say so."""
+    spec = make_spec()
+    fs = SpecstarFileStore(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=fs,
+        runner=ScriptedAgentRunner([]),
+    )
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    assert client.put(f"/a/rca/items/{iid}/files/folder/a.txt", content=b"hi").status_code == 204
+
+    # Stand in for the source vanishing between the read and the delete — a
+    # sandbox reaped or rebuilt mid-move sends the two to different stores.
+    real = fs.delete
+
+    async def _gone(workspace_id: str, path: str) -> None:
+        if path.endswith("folder/a.txt"):
+            raise FileNotFound(path)
+        await real(workspace_id, path)
+
+    fs.delete = _gone  # ty: ignore[invalid-assignment]
+    r = client.post(
+        f"/a/rca/items/{iid}/files/move", json={"from": "/folder/a.txt", "to": "/a.txt"}
+    )
+    fs.delete = real  # ty: ignore[invalid-assignment]
+
+    assert r.status_code == 404
+
+    # …and the failed move left the workspace exactly as it was.
+    paths = {e["path"] for e in client.get(f"/a/rca/items/{iid}/files").json()}
+    assert paths == {"/folder/a.txt"}
