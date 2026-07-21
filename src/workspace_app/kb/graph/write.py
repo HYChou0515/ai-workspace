@@ -17,15 +17,10 @@ from ...resources.graph import GraphClaim
 from ..doc_permission import doc_mirror_fields
 from ..llm import ILlm
 from .extract import extract_claims
+from .normalize import norm_metric as _norm_metric
+from .normalize import norm_period, norm_unit
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def norm_metric(metric: str) -> str:
-    """Stable grouping key for a metric surface form: collapse whitespace +
-    casefold. (VALUE normalisation — parsing "1.2M" into a number — is a separate,
-    later concern; this only canonicalises the NAME for filter / group.)"""
-    return " ".join(metric.split()).casefold()
 
 
 def wipe_doc_claims(spec: SpecStar, source_doc_id: str) -> int:
@@ -91,11 +86,13 @@ def write_doc_claims(
                     collection_id=collection_id,
                     source_doc_id=source_doc_id,
                     chunk_id=chunk_id,
-                    norm_metric=norm_metric(claim.metric),
+                    norm_metric=_norm_metric(claim.metric),
                     metric=claim.metric,
                     value=claim.value,
                     period=claim.period,
+                    norm_period=norm_period(claim.period),
                     unit=claim.unit,
+                    norm_unit=norm_unit(claim.unit),
                     **mirror,
                 )
             )

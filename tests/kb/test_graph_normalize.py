@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from workspace_app.kb.graph.normalize import norm_metric, norm_unit, parse_period
+from workspace_app.kb.graph.normalize import norm_metric, norm_period, norm_unit
 
 
 class TestNormMetric:
@@ -70,7 +70,7 @@ class TestParsePeriod:
         ],
     )
     def test_one_period_written_two_ways_parses_the_same(self, a: str, b: str):
-        assert parse_period(a) == parse_period(b)
+        assert norm_period(a) == norm_period(b)
 
     @pytest.mark.parametrize(
         "a,b",
@@ -83,24 +83,24 @@ class TestParsePeriod:
         ],
     )
     def test_two_different_periods_never_collapse(self, a: str, b: str):
-        assert parse_period(a) != parse_period(b)
+        assert norm_period(a) != norm_period(b)
 
     def test_an_unparseable_period_keeps_its_own_literal_group(self):
         """ "去年同期" has no meaning without a document date we do not have. It
         forms its own group rather than being dropped (which would silently lose a
         real measurement) or guessed into a year (which would invent one)."""
-        assert parse_period("去年同期") == parse_period("去年同期")
-        assert parse_period("去年同期") != parse_period("2024")
-        assert parse_period("去年同期") != parse_period("上個會計年度")
+        assert norm_period("去年同期") == norm_period("去年同期")
+        assert norm_period("去年同期") != norm_period("2024")
+        assert norm_period("去年同期") != norm_period("上個會計年度")
 
     def test_an_unparseable_period_still_ignores_pure_surface_noise(self):
-        assert parse_period(" 去年同期 ") == parse_period("去年同期")
+        assert norm_period(" 去年同期 ") == norm_period("去年同期")
 
     def test_a_missing_period_is_its_own_thing_not_an_unparseable_one(self):
         """No period at all is a fact about the claim ("headcount: 340"), not a
         failure to read one, so it must not share a group with unreadable text."""
-        assert parse_period("") == parse_period("   ")
-        assert parse_period("") != parse_period("去年同期")
+        assert norm_period("") == norm_period("   ")
+        assert norm_period("") != norm_period("去年同期")
 
 
 class TestNormUnit:
@@ -138,3 +138,35 @@ class TestNormUnit:
         assert norm_unit("元") != norm_unit("TWD")
         assert norm_unit("元") != norm_unit("CNY")
         assert norm_unit("元") == norm_unit("元")
+
+
+class TestKeysAreStorable:
+    """The keys are STORED and indexed, not computed per read: ``exp_aggregate_by``
+    groups on ``indexed_data``, so a value that only exists at read time cannot be
+    grouped on at all. That makes each key's stored form part of the contract."""
+
+    @pytest.mark.parametrize(
+        "fn,arg",
+        [
+            (norm_metric, "Revenue (USD)"),
+            (norm_period, "Q3 2024"),
+            (norm_period, "去年同期"),
+            (norm_period, ""),
+            (norm_unit, "美元"),
+        ],
+    )
+    def test_every_key_is_a_plain_string(self, fn, arg: str):
+        assert isinstance(fn(arg), str)
+
+    def test_a_period_key_cannot_be_confused_with_another_shape(self):
+        """The shapes are tagged, so a year, a quarter index and an unreadable
+        literal can never collide into one key by coincidence."""
+        keys = {
+            norm_period("2024"),
+            norm_period("FY2024"),
+            norm_period("Q3 2024"),
+            norm_period("H1 2024"),
+            norm_period("去年同期"),
+            norm_period(""),
+        }
+        assert len(keys) == 6

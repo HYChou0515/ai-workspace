@@ -108,6 +108,30 @@ __all__ = [
 ]
 
 
+def _renormalize_claim(record: Any) -> Any:
+    """#534 甲 — recompute a claim's comparison keys from its raw surfaces under
+    the CURRENT rules.
+
+    This is the shape every future rule change takes: edit the pure function in
+    ``kb/graph/normalize.py``, bump the ``Schema`` version, add a step pointing
+    here. The keys are derived state, and versioned state is how a rule change
+    stops being invisible — a row carries the version that produced it, so "which
+    rows are still on the old rules" is a query, not a guess.
+
+    Reads only the row's own fields, so it is a pure transform a migrate step may
+    run (it cannot load another resource).
+    """
+    from ..kb.graph.normalize import norm_metric, norm_period, norm_unit
+
+    assert isinstance(record, GraphClaim)
+    return msgspec.structs.replace(
+        record,
+        norm_metric=norm_metric(record.metric),
+        norm_period=norm_period(record.period),
+        norm_unit=norm_unit(record.unit),
+    )
+
+
 def _reindex_only(record: Any) -> Any:
     """A no-op schema migration step (data unchanged) — used as ``step(None,
     _reindex_only, …)`` so migrating a pre-Schema (version ``None``) row to the
@@ -615,12 +639,20 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # A pre-slice-2 row has NO cell for these (the fields weren't indexed when it
     # was written), so the scope's `isna()` clause reads it as public until the
     # backfill reaches it — strictly better than today's no-scope-at-all, never worse.
+    # #534 甲 v1→v2: the comparison keys are DERIVED state, so a rule change is a
+    # schema change. The step carries the new algorithm and recomputes every key
+    # from the raw surfaces the row already holds, so `POST /graph-claim/migrate/
+    # execute` brings old rows onto the current rules — and until it runs, each
+    # row still records which version produced its keys, so the drift is a fact
+    # someone can query rather than an invisible one. The `None` step covers rows
+    # written before any Schema existed (all of slice 1's).
     spec.add_model(
-        GraphClaim,
+        Schema(GraphClaim, "v2").step(None, _renormalize_claim, to="v2", source_type=GraphClaim),
         indexed_fields=[
             "collection_id",
             "norm_metric",
-            "period",
+            "norm_period",
+            "norm_unit",
             "source_doc_id",
             IndexableField("collection_visibility", str),
             IndexableField("collection_read_meta", list),

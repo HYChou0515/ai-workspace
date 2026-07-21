@@ -82,14 +82,19 @@ _QUARTER = re.compile(r"Q\s*([1-4])(?!\d)|第\s*([一二三四1-4])\s*季", re.I
 _HALF = re.compile(r"H\s*([12])(?!\d)|(上|下)半年?", re.IGNORECASE)
 _CJK_DIGIT = {"一": 1, "二": 2, "三": 3, "四": 4}
 
-# The parse result is a tuple, so equality IS the comparison — no separate
-# "are these the same period" function to keep in step with the parser.
-Period = tuple[object, ...]
+# The key is a plain STRING, and string equality IS the comparison — there is no
+# separate "are these the same period" function that could drift from the parser.
+# A string (rather than the tuple this once returned) because the key is STORED
+# and indexed: `exp_aggregate_by` groups on `indexed_data`, so a period that only
+# exists as a Python object at read time cannot be grouped on at all.
+#
+# Each shape is TAGGED, so a year, a quarter and an unreadable literal can never
+# collide by coincidence — "2024" the year and "2024" the unparsed text are
+# different facts and get different keys.
+_NO_PERIOD = "NONE"
 
-_NO_PERIOD: Period = ("none",)
 
-
-def parse_period(period: str) -> Period:
+def norm_period(period: str) -> str:
     """Parse a period surface into a comparable key.
 
     Recognises a calendar or fiscal year, a quarter and a half, in the spellings
@@ -99,9 +104,9 @@ def parse_period(period: str) -> Period:
     Three outcomes, deliberately distinct:
 
     * a parse — compares equal to any other spelling of the same period;
-    * ``("none",)`` for an absent period — a FACT about the claim ("headcount:
-      340" has no period), not a failure;
-    * ``("raw", <folded text>)`` for something we cannot read — "去年同期" means
+    * ``"NONE"`` for an absent period — a FACT about the claim ("headcount: 340"
+      has no period), not a failure;
+    * ``"RAW:<folded text>"`` for something we cannot read — "去年同期" means
       nothing without a document date we do not have. It groups only with the
       identical text. Dropping it would silently lose a real measurement; guessing
       a year would invent one.
@@ -117,17 +122,17 @@ def parse_period(period: str) -> Period:
     year = int(year_match.group(1)) if year_match else None
     fiscal = bool(_FISCAL.search(text))
     if year is None:
-        return ("raw", text.casefold())
+        return f"RAW:{text.casefold()}"
     quarter = _QUARTER.search(text)
     if quarter:
         raw = quarter.group(1) or quarter.group(2)
-        index = _CJK_DIGIT.get(raw) if raw in _CJK_DIGIT else int(raw)
-        return ("quarter", year, index, fiscal)
+        index = _CJK_DIGIT[raw] if raw in _CJK_DIGIT else int(raw)
+        return f"{'FQ' if fiscal else 'Q'}:{year}:{index}"
     half = _HALF.search(text)
     if half:
         index = int(half.group(1)) if half.group(1) else (1 if half.group(2) == "上" else 2)
-        return ("half", year, index, fiscal)
-    return ("year", year, fiscal)
+        return f"{'FH' if fiscal else 'H'}:{year}:{index}"
+    return f"{'FY' if fiscal else 'Y'}:{year}"
 
 
 # ── unit ─────────────────────────────────────────────────────────────

@@ -44,8 +44,22 @@ class GraphClaim(Struct):  # → resource "graph-claim"
     norm_metric: str  # normalised metric key (indexed) — filter / group on this
     metric: str  # raw surface form (display)
     value: str  # verbatim value ("1.2M", "15%")
-    period: str = ""  # indexed; "" when the metric carries no period
-    unit: str = ""
+    period: str = ""  # raw surface form (display)
+    unit: str = ""  # raw surface form (display)
+    # #534 甲: the comparison keys, DERIVED from the raw surfaces above by the pure
+    # rules in `kb/graph/normalize.py` and stored because they must be INDEXED —
+    # `exp_aggregate_by` groups on `indexed_data`, so a key that only existed at
+    # read time could not be grouped on at all, and a filter on it would silently
+    # match nothing. The raw surface stays beside each key as the thing a person
+    # reads and the thing a re-derivation starts from.
+    #
+    # A derived-and-stored value is STATE, so it is versioned like state: changing
+    # a rule bumps the `Schema` version and the migration step carries the new
+    # algorithm (see `resources/__init__.py`). Every row then records WHICH version
+    # of the rules produced its keys, which is what keeps an improved rule from
+    # leaving older rows quietly on the old one.
+    norm_period: str = ""
+    norm_unit: str = ""
     chunk_id: str = ""  # provenance: the chunk / slide
     confidence: float = 1.0
     # --- #534 slice 2: the read-permission mirror (see the class docstring) ---
