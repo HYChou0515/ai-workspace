@@ -449,6 +449,18 @@ class GraphMentionOut(BaseModel):
     evidence: str  # where to go and check that
 
 
+class GraphRelatedOut(BaseModel):
+    """One connection this identity takes part in, from its side."""
+
+    direction: str  # "out" (it is the subject) | "in" (it is the object)
+    predicate: str  # verbatim, as the document wrote it
+    other_name: str
+    other_entity_id: str  # "" when the far end is not in the vocabulary yet
+    quote: str
+    source_doc_id: str
+    chunk_id: str
+
+
 class GraphEntityOut(BaseModel):
     """One identity and everything the corpus said about it that the caller may
     read. Assembled from the links, so nothing is stored twice."""
@@ -459,6 +471,7 @@ class GraphEntityOut(BaseModel):
     kind: str
     occurrences: int
     mentions: list[GraphMentionOut]
+    related: list[GraphRelatedOut]
 
 
 class GraphProposalOut(BaseModel):
@@ -1913,6 +1926,18 @@ def register_kb_routes(
             aliases=list(page.entity.norm_keys),
             kind=kind,
             occurrences=page.occurrences,
+            related=[
+                GraphRelatedOut(
+                    direction=r.direction,
+                    predicate=r.predicate,
+                    other_name=r.other_name,
+                    other_entity_id=r.other_entity_id,
+                    quote=r.quote,
+                    source_doc_id=r.source_doc_id,
+                    chunk_id=r.chunk_id,
+                )
+                for r in page.related
+            ],
             mentions=[
                 GraphMentionOut(
                     surface=m.surface,

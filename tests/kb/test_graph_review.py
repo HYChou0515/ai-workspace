@@ -223,3 +223,97 @@ def test_a_link_is_hidden_from_someone_who_cannot_read_its_evidence():
         pytest.raises(ResourceIDNotFoundError),
     ):
         lrm.get(lid)
+
+
+def _relationship(spec, cid: str, doc: str, subj: str, pred: str, obj: str, *, private=False):
+    from workspace_app.resources.graph import GraphRelationship, relationship_id
+
+    rm = spec.get_resource_manager(GraphRelationship)
+    with rm.using("bob"):
+        rm.create(
+            GraphRelationship(
+                collection_id=cid,
+                source_doc_id=doc,
+                subject=subj,
+                predicate=pred,
+                object=obj,
+                norm_subject=norm_surface(subj),
+                norm_predicate=norm_surface(pred),
+                norm_object=norm_surface(obj),
+                chunk_id=f"{doc}#0",
+                quote=f"{subj}{pred}{obj}",
+                collection_visibility="private" if private else "public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=relationship_id(doc, f"{doc}#0", subj, pred, obj),
+        )
+
+
+def _entity_id_named(spec, name: str) -> str:
+    erm = spec.get_resource_manager(GraphEntity)
+    for r in erm.list_resources(QB.all().build()):
+        assert isinstance(r.data, GraphEntity)
+        if r.data.canonical_name == name:
+            return r.info.resource_id
+    raise AssertionError(f"no entity named {name}")
+
+
+def test_the_page_shows_what_the_thing_connects_to():
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _mention(spec, cid, "deck-A", "回焊爐")
+    _mention(spec, cid, "deck-A", "空洞")
+    _relationship(spec, cid, "deck-A", "回焊爐", "造成", "空洞")
+    link_identical_mentions(spec)
+
+    page = entity_page(spec, _entity_id_named(spec, "回焊爐"), as_user="bob")
+    (rel,) = page.related
+    assert (rel.direction, rel.predicate, rel.other_name) == ("out", "造成", "空洞")
+    assert rel.other_entity_id == _entity_id_named(spec, "空洞")
+    assert rel.quote == "回焊爐造成空洞"
+
+
+def test_the_other_end_sees_the_same_connection_pointing_back():
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _mention(spec, cid, "deck-A", "回焊爐")
+    _mention(spec, cid, "deck-A", "空洞")
+    _relationship(spec, cid, "deck-A", "回焊爐", "造成", "空洞")
+    link_identical_mentions(spec)
+
+    page = entity_page(spec, _entity_id_named(spec, "空洞"), as_user="bob")
+    (rel,) = page.related
+    assert (rel.direction, rel.other_name) == ("in", "回焊爐")
+
+
+def test_a_connection_written_in_another_language_lands_on_the_same_page():
+    """The payoff of the vocabulary layer. An English deck states the connection
+    using "Reflow Oven"; a reader on the 回焊爐 page still sees it, because the
+    ends are resolved through the identity rather than matched as strings."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _mention(spec, cid, "deck-A", "回焊爐")
+    _mention(spec, cid, "deck-B", "Reflow Oven")
+    _mention(spec, cid, "deck-B", "void")
+    _relationship(spec, cid, "deck-B", "Reflow Oven", "causes", "void")
+    link_identical_mentions(spec)
+    # the vocabulary learns the two names are one thing
+    host = _entity_id_named(spec, "回焊爐")
+    other = _entity_id_named(spec, "Reflow Oven")
+    accept_proposal(spec, host, other, by="amy")
+
+    page = entity_page(spec, host, as_user="bob")
+    assert [r.predicate for r in page.related] == ["causes"]
+
+
+def test_a_connection_from_an_unreadable_document_never_appears():
+    spec = make_spec(default_user=lambda: "bob")
+    open_cid = _collection(spec)
+    secret_cid = _private_collection(spec)
+    _mention(spec, open_cid, "deck-A", "回焊爐")
+    _relationship(spec, secret_cid, "deck-S", "回焊爐", "造成", "機密缺陷", private=True)
+    link_identical_mentions(spec)
+    eid = _entity_id_named(spec, "回焊爐")
+    assert entity_page(spec, eid, as_user="bob").related != []
+    assert entity_page(spec, eid, as_user="alice").related == []

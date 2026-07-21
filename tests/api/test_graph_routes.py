@@ -112,3 +112,42 @@ def test_a_decision_needs_a_proposal_that_exists():
     eid = _seed(spec)
     r = client.post(f"/kb/graph/proposals/{eid}/reject", params={"other": "graph-entity:nope"})
     assert r.status_code == 404
+
+
+def test_the_entity_page_shows_what_the_thing_connects_to():
+    """The point of a graph rather than a list: open one thing and see what it
+    leads to, with the sentence that said so and the slide it was on."""
+    from workspace_app.resources.graph import GraphRelationship, relationship_id
+
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    eid = _seed(spec)
+    cid = spec.get_resource_manager(GraphMention).get(mention_id("deck-A", "回焊爐")).data
+    assert isinstance(cid, GraphMention)
+    rrm = spec.get_resource_manager(GraphRelationship)
+    with rrm.using("bob"):
+        rrm.create(
+            GraphRelationship(
+                collection_id=cid.collection_id,
+                source_doc_id="deck-A",
+                subject="回焊爐",
+                predicate="造成",
+                object="空洞",
+                norm_subject=norm_surface("回焊爐"),
+                norm_predicate=norm_surface("造成"),
+                norm_object=norm_surface("空洞"),
+                chunk_id="deck-A#0",
+                quote="回焊爐溫度過高造成空洞",
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=relationship_id("deck-A", "deck-A#0", "回焊爐", "造成", "空洞"),
+        )
+    body = client.get(f"/kb/graph/entities/{eid}").json()
+    (rel,) = body["related"]
+    assert rel["direction"] == "out"
+    assert rel["predicate"] == "造成"
+    assert rel["other_name"] == "空洞"
+    assert rel["quote"] == "回焊爐溫度過高造成空洞"
+    assert rel["chunk_id"] == "deck-A#0"

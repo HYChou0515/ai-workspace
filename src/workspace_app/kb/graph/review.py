@@ -16,7 +16,12 @@ import msgspec
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from ...resources.graph import GraphEntity, GraphEntityLink, GraphMention
+from ...resources.graph import (
+    GraphEntity,
+    GraphEntityLink,
+    GraphMention,
+    GraphRelationship,
+)
 
 
 @dataclass(frozen=True)
@@ -33,6 +38,19 @@ class Proposal:
 
 
 @dataclass(frozen=True)
+class Related:
+    """One connection this identity takes part in, from this identity's side."""
+
+    direction: str  # "out" (subject) | "in" (object)
+    predicate: str  # verbatim, as the document wrote it
+    other_name: str  # the display name of the far end
+    other_entity_id: str  # "" when the far end is not in the vocabulary yet
+    quote: str
+    source_doc_id: str
+    chunk_id: str
+
+
+@dataclass(frozen=True)
 class EntityPage:
     """One identity and every piece of evidence for it, across documents."""
 
@@ -40,6 +58,7 @@ class EntityPage:
     mentions: list[GraphMention]
     links: list[GraphEntityLink]
     occurrences: int
+    related: list[Related]
 
 
 def list_proposals(spec: SpecStar, *, as_user: str | None = None) -> list[Proposal]:
@@ -179,9 +198,67 @@ def entity_page(spec: SpecStar, entity_id: str, *, as_user: str) -> EntityPage:
             assert isinstance(mention, GraphMention)
             links.append(link)
             mentions.append(mention)
+        related = _related(spec, entity, as_user=as_user)
     return EntityPage(
         entity=entity,
         mentions=mentions,
         links=links,
         occurrences=sum(m.occurrences for m in mentions),
+        related=related,
     )
+
+
+def _related(spec: SpecStar, entity: GraphEntity, *, as_user: str) -> list[Related]:
+    """The connections this identity takes part in, from its side.
+
+    Matched on the identity's KEYS, not on one name, which is the payoff of the
+    vocabulary layer: an English deck stating the connection under "Reflow Oven"
+    shows up on the 回焊爐 page, because the ends resolve through the identity
+    rather than being compared as strings.
+
+    Reads stay inside the caller's scope, so a connection stated in a document
+    they cannot open never appears — it repeats that document's sentence.
+    """
+    if not entity.norm_keys:
+        return []
+    rrm = spec.get_resource_manager(GraphRelationship)
+    erm = spec.get_resource_manager(GraphEntity)
+    keys = list(entity.norm_keys)
+    out: list[Related] = []
+    with (
+        rrm.using(as_user, apply_access_scope=True),  # ty: ignore[unknown-argument]
+        erm.using(as_user, apply_access_scope=True),  # ty: ignore[unknown-argument]
+    ):
+        for field, direction, far in (
+            ("norm_subject", "out", "object"),
+            ("norm_object", "in", "subject"),
+        ):
+            for r in rrm.list_resources((QB[field].in_(keys)).build()):
+                rel = r.data
+                assert isinstance(rel, GraphRelationship)
+                far_surface = getattr(rel, far)
+                far_key = getattr(rel, f"norm_{far}")
+                far_id, far_name = _identity_of(erm, far_key, far_surface)
+                out.append(
+                    Related(
+                        direction=direction,
+                        predicate=rel.predicate,
+                        other_name=far_name,
+                        other_entity_id=far_id,
+                        quote=rel.quote,
+                        source_doc_id=rel.source_doc_id,
+                        chunk_id=rel.chunk_id,
+                    )
+                )
+    return out
+
+
+def _identity_of(erm, key: str, fallback: str) -> tuple[str, str]:
+    """The identity a surface resolves to, or the surface itself when the
+    vocabulary has not reached it — a connection to something unnamed is still
+    worth showing, and pretending otherwise would hide half the graph."""
+    for r in erm.list_resources((QB["norm_keys"].contains(key)).build()):
+        data = r.data
+        assert isinstance(data, GraphEntity)
+        return r.info.resource_id, data.canonical_name
+    return "", fallback
