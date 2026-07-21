@@ -40,6 +40,10 @@ download/upload API, and dogfooding the skill mechanism itself to drive the auth
   **Boundary:** skill scripts use only python-stack's frozen deps — **no installing new
   packages**. A skill that needs a custom dependency or a validated/reusable tool graduates
   into a real **tool-package** (§B of `plan-skills-and-tools.md`) — that's a later phase.
+  *(Superseded on the install half: `pip` is now shimmed to the carrier, so a script CAN
+  `pip install` into the same interpreter. What survives is the reason the boundary existed —
+  such an install is unpinned, unreproducible and dies with the workspace, so a stable script
+  with custom deps still graduates. See `docs/skills-authoring.md`.)*
 - **Q5** Portability **rides the existing workspace file API**: export = `POST
   .../files/download/prepare?prefix=.skill/<name>` → zip; import = existing `PUT
   .../files/{path}`. No new export/import subsystem. v1 ships a **thin FE skills panel**

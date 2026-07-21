@@ -45,9 +45,12 @@ meta-skill,走一個六步流程:
   agent 用 `read_file` 讀。沒有特殊處理。
 - **Scripts** 透過 workspace 內建的 Python stack 執行——
   `exec(["python", ".skill/<name>/scripts/summarise.py", "data.csv"])`——它帶了
-  pandas / numpy / scipy / matplotlib。**skill 的 script 沒辦法安裝新套件**;如果它需要
-  自訂依賴,或你想要一個經過驗證、可重複使用的 tool,那就是把它升格成正式 tool-package
-  的時機(見 `docs/plan-skills-and-tools.md` §B)。
+  pandas / numpy / scipy / matplotlib。缺的套件可以在 sandbox 裡 `pip install` 補上——`pip`
+  和 `python` 是同一個直譯器——但那只是**這個 workspace 當下的狀態**:沒有鎖檔、不可重現、
+  workspace 一被回收就沒了,所以 script 若依賴它就得自己在開頭裝。如果它需要**釘死的**自訂
+  依賴,或你想要一個經過驗證、可重複使用的 tool,那就是把它升格成正式 tool-package 的時機
+  (見 `docs/plan-skills-and-tools.md` §B):tool-package 的依賴由 `uv.lock` 釘死並在 prebuild
+  時打包進 bundle。
 
 你儲存的 skill 會在同一個 workspace 立即載入(索引每個 turn 都會重新整理)。它**不會**
 外洩到其他 workspace——那正是 download/import 的用途。
