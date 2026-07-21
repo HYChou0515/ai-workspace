@@ -44,6 +44,15 @@ class Proposal:
     name: str
     other_name: str
     why: str
+    # The two axes people split review along. A collection is a boundary of
+    # RESPONSIBILITY — different collections are read by different people — so it
+    # is filtered at the source. A kind is a boundary of EXPERTISE (whoever knows
+    # the machines is not whoever knows the defects) and travels on the row so the
+    # page can group by it. A pair whose sides disagree on kind is itself a
+    # signal, so both are carried rather than one combined value.
+    collection_ids: list[str]
+    kind: str
+    other_kind: str
     # What each side actually looked like in the documents. Measured against a
     # real model, `why` is the least trustworthy thing here — it justified merging
     # two different machines with a sentence that read perfectly and described
@@ -77,7 +86,9 @@ class EntityPage:
     related: list[Related]
 
 
-def list_proposals(spec: SpecStar, *, as_user: str | None = None) -> list[Proposal]:
+def list_proposals(
+    spec: SpecStar, *, as_user: str | None = None, collection_id: str | None = None
+) -> list[Proposal]:
     """Every merge waiting on a person, one row per pair rather than per mention.
 
     A proposal is stored as pending links (so accepting it is the same absorption
@@ -98,6 +109,8 @@ def list_proposals(spec: SpecStar, *, as_user: str | None = None) -> list[Propos
             stack.enter_context(lrm.using(as_user, apply_access_scope=True))  # ty: ignore[unknown-argument]
             stack.enter_context(erm.using(as_user, apply_access_scope=True))  # ty: ignore[unknown-argument]
         out.extend(_gather_proposals(spec, lrm, erm, seen))
+    if collection_id:
+        out = [p for p in out if collection_id in p.collection_ids]
     return out
 
 
@@ -125,6 +138,9 @@ def _gather_proposals(spec: SpecStar, lrm, erm, seen: set[tuple[str, str]]) -> l
                 why=link.evidence,
                 evidence=_evidence_for(spec, link.entity_id),
                 other_evidence=_evidence_for(spec, link.proposed_from),
+                collection_ids=sorted(set(host.collection_ids) | set(other.collection_ids)),
+                kind=_kind_name(erm, host),
+                other_kind=_kind_name(erm, other),
             )
         )
     return out
@@ -171,6 +187,18 @@ def _evidence_for(spec: SpecStar, entity_id: str) -> list[Evidence]:
             Evidence(source_doc_id=mention.source_doc_id, surface=mention.surface, text=text)
         )
     return out
+
+
+def _kind_name(erm, entity: GraphEntity) -> str:
+    """The display name of an identity's kind, or "" when it has none or the
+    reader cannot see it — a kind rests on evidence like anything else."""
+    if not entity.kind_id:
+        return ""
+    try:
+        kind = erm.get(entity.kind_id).data
+    except ResourceIDNotFoundError:
+        return ""
+    return kind.canonical_name if isinstance(kind, GraphEntity) else ""
 
 
 def accept_proposal(spec: SpecStar, entity_id: str, proposed_from: str, *, by: str) -> None:

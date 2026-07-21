@@ -544,6 +544,9 @@ export type KbGraphProposal = {
   why: string;
   evidence: KbGraphEvidence[];
   other_evidence: KbGraphEvidence[];
+  collection_ids: string[];
+  kind: string;
+  other_kind: string;
 };
 
 export type KbReviewCard = {
@@ -703,7 +706,7 @@ export interface KbApi {
    * (an encrypted Office file) without a round-trip. */
   listUploadChecks(): Promise<UploadCheckHint[]>;
   /** #534 B: the merge queue and its two decisions. */
-  listGraphProposals(): Promise<KbGraphProposal[]>;
+  listGraphProposals(collectionId?: string): Promise<KbGraphProposal[]>;
   decideGraphProposal(entityId: string, otherId: string, same: boolean): Promise<void>;
   /** Issue #101: build the collection's export zip and return its handle. The
    * zip is held server-side until streamed (or reaped); two-step so a large
@@ -901,8 +904,9 @@ export const realKbApi: KbApi = {
   /** #534 B: the merge queue — name pairs an AI thinks are one thing, each side
    * carrying the documents and sentences it came from so a person can judge the
    * evidence rather than the AI's account of it. */
-  async listGraphProposals() {
-    return (await ok(await apiFetch("/kb/graph/proposals"), "list merge proposals")).json();
+  async listGraphProposals(collectionId) {
+    const q = collectionId ? `?collection=${encodeURIComponent(collectionId)}` : "";
+    return (await ok(await apiFetch(`/kb/graph/proposals${q}`), "list merge proposals")).json();
   },
   async decideGraphProposal(entityId, otherId, same) {
     const verb = same ? "accept" : "reject";

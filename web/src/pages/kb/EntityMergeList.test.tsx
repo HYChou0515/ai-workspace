@@ -132,3 +132,40 @@ describe("EntityMergeList framing", () => {
     expect(screen.getByText("這兩個是同一個東西嗎?")).toBeInTheDocument();
   });
 });
+
+describe("EntityMergeList kinds", () => {
+  const TYPED = {
+    ...PROPOSAL,
+    kind: "機台",
+    other_kind: "缺陷",
+    collection_ids: ["c1"],
+  };
+
+  it("shows what kind each side is", () => {
+    /** Whoever knows the machines is not whoever knows the defects, so the row
+     * has to say which it is before a reviewer can tell whether it is theirs. */
+    render(<EntityMergeList proposals={[TYPED]} onAccept={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.getByText("機台")).toBeInTheDocument();
+    expect(screen.getByText("缺陷")).toBeInTheDocument();
+  });
+
+  it("marks a pair whose two sides are different kinds", () => {
+    /** The model grouping a machine with a defect is the shape its worst mistakes
+     * take — it merged an inspection machine with a printing machine, and a
+     * defect with the joint it occurs on. A row that disagrees with itself about
+     * what kind of thing this is deserves a second look before anything else. */
+    render(<EntityMergeList proposals={[TYPED]} onAccept={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.getByTestId("merge-kind-mismatch")).toBeInTheDocument();
+  });
+
+  it("does not mark a pair whose sides agree", () => {
+    render(
+      <EntityMergeList
+        proposals={[{ ...TYPED, other_kind: "機台" }]}
+        onAccept={vi.fn()}
+        onReject={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("merge-kind-mismatch")).toBeNull();
+  });
+});

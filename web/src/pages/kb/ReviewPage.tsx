@@ -74,15 +74,26 @@ export function ReviewPage() {
     queryFn: () => kbApi.listCollections(),
   });
 
+  // The collection filter goes to the SERVER: it is a boundary of responsibility,
+  // not a view preference — different collections are reviewed by different
+  // people. The kind filter stays here, because it is how one reviewer narrows
+  // what they are looking at within their own queue.
+  const [kind, setKind] = useState("");
   const merges = useQuery({
-    queryKey: qk.kb.graphProposals,
-    queryFn: () => kbApi.listGraphProposals(),
+    queryKey: qk.kb.graphProposals(collectionId || undefined),
+    queryFn: () => kbApi.listGraphProposals(collectionId || undefined),
     enabled: view === "merges",
   });
+  const mergeKinds = Array.from(
+    new Set((merges.data ?? []).flatMap((p) => [p.kind, p.other_kind]).filter(Boolean)),
+  ).sort();
+  const shownMerges = (merges.data ?? []).filter(
+    (p) => !kind || p.kind === kind || p.other_kind === kind,
+  );
   const decideMerge = useMutation({
     mutationFn: ({ a, b, same }: { a: string; b: string; same: boolean }) =>
       kbApi.decideGraphProposal(a, b, same),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: qk.kb.graphProposals }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["kb", "graph", "proposals"] }),
   });
 
   const { query, ...actions } = useReviewInbox({
@@ -121,18 +132,19 @@ export function ReviewPage() {
         ))}
       </div>
 
-      {!isMerges && (
       <div className="rvw__toolbar" role="search">
-        <label className="rvw__search">
-          <Icon name="search" size={14} color="var(--text-paper-d2)" />
-          <input
-            type="search"
-            aria-label={t("review.filter.search")}
-            placeholder={t("review.filter.search")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-        </label>
+        {!isMerges && (
+          <label className="rvw__search">
+            <Icon name="search" size={14} color="var(--text-paper-d2)" />
+            <input
+              type="search"
+              aria-label={t("review.filter.search")}
+              placeholder={t("review.filter.search")}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </label>
+        )}
         <select
           className="inline-edit"
           aria-label={t("review.filter.collection")}
@@ -146,6 +158,21 @@ export function ReviewPage() {
             </option>
           ))}
         </select>
+        {isMerges && (
+          <select
+            className="inline-edit"
+            aria-label={t("merge.filterKind")}
+            value={kind}
+            onChange={(e) => setKind(e.target.value)}
+          >
+            <option value="">{t("merge.filterKind")}</option>
+            {mergeKinds.map((k) => (
+              <option key={k} value={k}>
+                {k}
+              </option>
+            ))}
+          </select>
+        )}
         {isFlat && (
           <select
             className="inline-edit"
@@ -158,7 +185,7 @@ export function ReviewPage() {
             <option value="question">{t("review.type.question")}</option>
           </select>
         )}
-        {view !== "suppressed" && (
+        {view !== "suppressed" && !isMerges && (
           <label className="rvw__check">
             <input
               type="checkbox"
@@ -179,7 +206,6 @@ export function ReviewPage() {
           </label>
         )}
       </div>
-      )}
 
       {isMerges ? (
         <div className="rvw-page__body">
@@ -187,7 +213,7 @@ export function ReviewPage() {
             <Skeleton style={{ height: 220 }} />
           ) : (
             <EntityMergeList
-              proposals={merges.data ?? []}
+              proposals={shownMerges}
               onAccept={(a, b) => decideMerge.mutate({ a, b, same: true })}
               onReject={(a, b) => decideMerge.mutate({ a, b, same: false })}
             />

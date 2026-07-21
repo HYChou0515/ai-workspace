@@ -400,3 +400,60 @@ def test_a_proposal_carries_what_each_side_actually_looked_like():
     seen = {(e.source_doc_id, e.text) for e in proposal.evidence + proposal.other_evidence}
     assert ("deck-D", "Stencil Printer pressure is monitored by SPI") in seen
     assert ("deck-C", "錫膏印刷機(Stencil Printer)壓力不足會造成錫量不足") in seen
+
+
+def test_the_queue_can_be_narrowed_to_one_collection():
+    """Different collections are reviewed by different people, so the queue has to
+    be splittable along that line — otherwise everyone sees everyone's work and
+    nobody can tell which rows are theirs."""
+    spec = make_spec(default_user=lambda: "bob")
+    mine = _collection(spec)
+    theirs = _collection(spec)
+    _mention(spec, mine, "deck-A", "回焊爐")
+    _mention(spec, mine, "deck-B", "回焊機")
+    _mention(spec, theirs, "deck-C", "錫膏印刷機")
+    _mention(spec, theirs, "deck-D", "錫膏印刷")
+    link_identical_mentions(spec)
+    link_resembling_entities(
+        spec,
+        _Judge(
+            '{"groups": ['
+            '{"names": ["回焊爐", "回焊機"], "why": "同一台爐"},'
+            '{"names": ["錫膏印刷機", "錫膏印刷"], "why": "同一台印刷機"}]}'
+        ),
+    )
+    assert len(list_proposals(spec, as_user="bob")) == 2
+    only_mine = list_proposals(spec, as_user="bob", collection_id=mine)
+    assert [{p.name, p.other_name} for p in only_mine] == [{"回焊爐", "回焊機"}]
+
+
+def test_a_proposal_says_what_kind_each_side_is():
+    """A second axis people split on: whoever knows the machines is not whoever
+    knows the defects. The row has to carry the kind for that to be possible —
+    and a pair whose two sides disagree on kind is itself worth seeing."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    rm = spec.get_resource_manager(GraphMention)
+    for doc, surface, kind in (("deck-A", "回焊爐", "機台"), ("deck-B", "回焊機", "機台")):
+        with rm.using("bob"):
+            rm.create(
+                GraphMention(
+                    collection_id=cid,
+                    source_doc_id=doc,
+                    surface=surface,
+                    norm_surface=norm_surface(surface),
+                    kind=kind,
+                    norm_kind=norm_surface(kind),
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                    doc_visibility="public",
+                ),
+                resource_id=mention_id(doc, surface),
+            )
+    link_identical_mentions(spec)
+    link_resembling_entities(
+        spec, _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "同一台爐"}]}')
+    )
+    (proposal,) = list_proposals(spec, as_user="bob")
+    assert proposal.kind == "機台"
+    assert proposal.other_kind == "機台"

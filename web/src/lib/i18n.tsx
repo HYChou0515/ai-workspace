@@ -717,6 +717,11 @@ export const messages = {
     "zh-TW": "這兩個是同一個東西嗎?",
     en: "Are these the same thing?",
   },
+  "merge.kindMismatch": {
+    "zh-TW": "兩邊被判定為不同類別 — 值得多看一眼",
+    en: "The two sides were classed as different kinds — worth a closer look",
+  },
+  "merge.filterKind": { "zh-TW": "所有類別", en: "All kinds" },
   "merge.same": { "zh-TW": "是同一個", en: "Same thing" },
   "merge.different": { "zh-TW": "不是同一個", en: "Different things" },
   "merge.whyLabel": { "zh-TW": "AI 認為:", en: "AI says:" },

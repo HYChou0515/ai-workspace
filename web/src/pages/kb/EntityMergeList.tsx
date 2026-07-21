@@ -29,6 +29,9 @@ export type MergeProposal = {
   why: string;
   evidence: MergeEvidence[];
   other_evidence: MergeEvidence[];
+  collection_ids?: string[];
+  kind?: string;
+  other_kind?: string;
 };
 
 type Props = {
@@ -37,11 +40,22 @@ type Props = {
   onReject: (entityId: string, otherId: string) => void;
 };
 
-function Side({ name, evidence }: { name: string; evidence: MergeEvidence[] }) {
+function Side({
+  name,
+  kind,
+  evidence,
+}: {
+  name: string;
+  kind?: string;
+  evidence: MergeEvidence[];
+}) {
   const t = useT();
   return (
     <div className="mrg__side">
-      <div className="mrg__name">{name}</div>
+      <div className="mrg__name">
+        {name}
+        {kind ? <span className="mrg__kind">{kind}</span> : null}
+      </div>
       {evidence.length === 0 ? (
         <p className="mrg__none" data-testid="merge-no-evidence">
           {t("merge.noEvidence")}
@@ -89,9 +103,18 @@ export function EntityMergeList({ proposals, onAccept, onReject }: Props) {
               Saying what is being decided needs no font support and no legend. */}
           <p className="mrg__q">{t("merge.question")}</p>
           <div className="mrg__pair">
-            <Side name={p.name} evidence={p.evidence} />
-            <Side name={p.other_name} evidence={p.other_evidence} />
+            <Side name={p.name} kind={p.kind} evidence={p.evidence} />
+            <Side name={p.other_name} kind={p.other_kind} evidence={p.other_evidence} />
           </div>
+          {p.kind && p.other_kind && p.kind !== p.other_kind ? (
+            /* The shape the model's worst mistakes take: a machine grouped with a
+               defect, a defect with the joint it occurs on. A row that disagrees
+               with itself about what KIND of thing this is has earned a second
+               look before any of the others. */
+            <p className="mrg__mismatch" data-testid="merge-kind-mismatch">
+              {t("merge.kindMismatch")}
+            </p>
+          ) : null}
           <p className="mrg__why">
             <span className="mrg__whyLabel" data-testid="merge-why-label">
               {t("merge.whyLabel")}

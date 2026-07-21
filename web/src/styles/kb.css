@@ -3588,6 +3588,23 @@
 .mrg__name {
   font-weight: 600;
   margin-bottom: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mrg__kind {
+  font-weight: 400;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  background: var(--paper-2);
+  border-radius: 99px;
+  padding: 1px 8px;
+}
+.mrg__mismatch {
+  margin: 10px 0 0;
+  font-size: var(--text-small);
+  color: var(--accent);
 }
 .mrg__ev {
   list-style: none;

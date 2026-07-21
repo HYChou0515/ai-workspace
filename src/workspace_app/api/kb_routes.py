@@ -498,6 +498,9 @@ class GraphProposalOut(BaseModel):
     why: str
     evidence: list[GraphEvidenceOut]
     other_evidence: list[GraphEvidenceOut]
+    collection_ids: list[str]
+    kind: str
+    other_kind: str
 
 
 class DocDeletedOut(BaseModel):
@@ -1972,10 +1975,19 @@ def register_kb_routes(
         )
 
     @app.get("/kb/graph/proposals")
-    async def graph_proposals() -> list[GraphProposalOut]:
-        """The merges waiting on a person — the only place this system asks for
-        attention, so it shows one row per pair rather than per mention."""
-        return [_proposal_out(p) for p in list_proposals(spec, as_user=get_user_id())]
+    async def graph_proposals(
+        collection: str = Query("", description="narrow to one knowledge base"),
+    ) -> list[GraphProposalOut]:
+        """The merges waiting on a person — one row per pair rather than per
+        mention.
+
+        Narrowable by collection because that is a boundary of RESPONSIBILITY:
+        different collections are reviewed by different people, and a queue that
+        cannot be split along it shows everyone everyone else's work."""
+        return [
+            _proposal_out(p)
+            for p in list_proposals(spec, as_user=get_user_id(), collection_id=collection or None)
+        ]
 
     @app.post("/kb/graph/proposals/{entity_id}/accept")
     async def graph_accept(entity_id: str, other: str = Query(...)) -> GraphEntityOut:
@@ -2014,6 +2026,9 @@ def register_kb_routes(
             why=p.why,
             evidence=ev(p.evidence),
             other_evidence=ev(p.other_evidence),
+            collection_ids=list(p.collection_ids),
+            kind=p.kind,
+            other_kind=p.other_kind,
         )
 
     @app.get("/kb/documents")
