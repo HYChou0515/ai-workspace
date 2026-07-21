@@ -81,6 +81,40 @@ class Grade:
     reason: str = ""  # "wiki" | "near-card" | ""
 
 
+#: What counts as "more of the same token" on an ASCII edge. ``R7`` inside
+#: ``R70`` is a different code, not a mention of this one.
+_ASCII_TOKEN = "0123456789abcdefghijklmnopqrstuvwxyz_"
+
+
+def wiki_mentions(wiki_blob: str, term: str) -> bool:
+    """Does ``wiki_blob`` (already lower-cased) actually mention ``term``?
+
+    A bare substring test is wrong for this corpus. The knowledge base is mixed
+    Chinese and English, and much of the terminology is short alphanumeric codes
+    (``M1``-``M6``, ``R7``), so ``"R7" in blob`` fires on ``R70`` and silently
+    swallows a legitimate question — the same mistake the project already rejects
+    for indexed-list membership, where ``"m4"`` must not match ``"m40"``.
+
+    Boundaries are decided per CHARACTER CLASS rather than per language, because
+    one term can be mixed (``M1 金屬層``). An edge that is ASCII-alphanumeric
+    demands a neighbour that isn't; a CJK edge demands nothing, since Chinese has
+    no word boundaries and requiring one there would match almost nothing."""
+    needle = term.strip().lower()
+    if not wiki_blob or not needle:
+        return False
+    head_bound = needle[0] in _ASCII_TOKEN
+    tail_bound = needle[-1] in _ASCII_TOKEN
+    start = wiki_blob.find(needle)
+    while start != -1:
+        end = start + len(needle)
+        before_ok = not head_bound or start == 0 or wiki_blob[start - 1] not in _ASCII_TOKEN
+        after_ok = not tail_bound or end == len(wiki_blob) or wiki_blob[end] not in _ASCII_TOKEN
+        if before_ok and after_ok:
+            return True
+        start = wiki_blob.find(needle, start + 1)
+    return False
+
+
 def grade_candidate(
     spec: SpecStar,
     *,
@@ -287,7 +321,7 @@ class Reconciler:
         for term, open_question in items:
             norm_key = norm(term)
             vec = self._embed(_card_text(norm_key, term))
-            wiki = bool(wiki_blob) and term.strip().lower() in wiki_blob
+            wiki = wiki_mentions(wiki_blob, term)
             grade = grade_candidate(
                 self._spec,
                 collection_id=collection_id,

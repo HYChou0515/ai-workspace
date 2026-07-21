@@ -427,6 +427,46 @@ def test_reconciler_suppresses_a_wiki_documented_term_question() -> None:
     assert supp[0].label == "Widget"
 
 
+def _ask(spec, cid: str, term: str, wiki: str) -> bool:
+    """Run one term through the wiki net; True when the question WAS opened."""
+    rec = Reconciler(
+        spec,
+        _TagEmb(),
+        cluster_tau=0.5,
+        suppress_tau=1.01,  # never suppress via near-card — isolate the wiki axis
+        update_tau=1.01,
+        wiki_text=lambda _cid: wiki,
+    )
+    opened: list[str] = []
+    rec.reconcile_term_questions(cid, [(term, lambda: opened.append("q") or "q")])
+    return opened == ["q"]
+
+
+def test_the_wiki_net_matches_on_term_boundaries_not_bare_substrings() -> None:
+    """The corpus is mixed Chinese/English and the terminology is largely
+    alphanumeric codes (M1-M6, R7), so a bare substring test silently swallows
+    questions: "R7" appears inside "R70". Boundaries are decided per CHARACTER
+    CLASS, not per language — an ASCII-alphanumeric edge demands a non-alnum
+    neighbour, a CJK edge demands nothing (Chinese has no word boundaries), and
+    a mixed term gets each rule on its own side. Same standard as the project's
+    element-membership rule, where "m4" must not match a card keyed "m40"."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    # ASCII edges: a longer code is NOT this term.
+    assert _ask(spec, cid, "R7", "R70 is the seventieth reflow zone.")
+    assert _ask(spec, cid, "M4", "The M40 mask layer is documented.")
+    # ASCII edges: a real mention still hits, punctuation and CJK both counting
+    # as boundaries — including one flush against the end of the corpus.
+    assert not _ask(spec, cid, "R7", "R7 的定義如下。")
+    assert not _ask(spec, cid, "M4", "(M4) is the fourth metal layer.")
+    # A false hit does not end the scan: the real mention follows it.
+    assert not _ask(spec, cid, "R7", "R70 is one zone, and so is R7")
+    # A CJK term has no boundaries to honour — substring is the correct rule.
+    assert not _ask(spec, cid, "蝕刻", "乾式蝕刻製程的說明。")
+    # An empty corpus (no wiki / wiki off) can mention nothing.
+    assert _ask(spec, cid, "R7", "")
+
+
 def test_reconciler_suppresses_a_term_question_near_an_existing_card() -> None:
     """A term semantically covered by an existing card is suppressed too — no wiki
     needed (the near-card safety net, mirroring proposals). The card member shares
