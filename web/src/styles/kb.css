@@ -3598,11 +3598,17 @@
 }
 .mrg__doc {
   flex: none;
-  color: var(--text-paper-d2);
+  color: var(--text-paper-d);
   font-size: var(--text-small);
   border: 1px solid var(--paper-3);
   border-radius: 4px;
   padding: 0 5px;
+  text-decoration: none;
+  background: var(--paper-2);
+}
+.mrg__doc:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .mrg__quote {
   color: var(--text-paper-d);
@@ -3626,6 +3632,19 @@
   display: flex;
   gap: 8px;
   margin-top: 12px;
+}
+/* Both answers read as buttons and neither is emphasised. The shared surface is
+   here rather than on one variant because equal weight must not mean invisible:
+   a transparent control on this background did not look pressable at all, and a
+   reviewer who cannot see the choice cannot make it. */
+.mrg__actions .btn {
+  background: var(--paper-2);
+  border-color: var(--text-paper-d2);
+  color: var(--text-paper);
+  font-weight: 600;
+}
+.mrg__actions .btn:hover:not(:disabled) {
+  background: var(--paper-3);
 }
 
 @media (max-width: 720px) {

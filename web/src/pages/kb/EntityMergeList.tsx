@@ -13,6 +13,7 @@
  * they do not take it as the finding.
  */
 import { useT } from "../../lib/i18n";
+import { docHref } from "./kbLinks";
 
 export type MergeEvidence = {
   source_doc_id: string;
@@ -49,7 +50,17 @@ function Side({ name, evidence }: { name: string; evidence: MergeEvidence[] }) {
         <ul className="mrg__ev">
           {evidence.map((e) => (
             <li key={`${e.source_doc_id}:${e.text}`}>
-              <span className="mrg__doc">{e.source_doc_id}</span>
+              {/* An excerpt settles an obvious mismatch and not a close call, so
+                  the document has to be one click away — opened AT the sentence,
+                  and in a new tab so the reviewer keeps their place in the queue. */}
+              <a
+                className="mrg__doc"
+                href={docHref(e.source_doc_id, e.text || e.surface)}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {e.source_doc_id}
+              </a>
               <span className="mrg__quote">{e.text || e.surface}</span>
             </li>
           ))}

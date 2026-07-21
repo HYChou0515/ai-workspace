@@ -108,3 +108,17 @@ describe("EntityMergeList emphasis", () => {
     expect(same.getAttribute("data-variant")).toBe(different.getAttribute("data-variant"));
   });
 });
+
+describe("EntityMergeList sourcing", () => {
+  it("opens the document the sentence came from, at that sentence", () => {
+    /** A one-line excerpt is enough to reject an obvious mismatch and not enough
+     * to settle a close call — the reviewer has to be able to read around it.
+     * The link carries the sentence so the document opens with it highlighted,
+     * and opens in a new tab so their place in the queue survives. */
+    render(<EntityMergeList proposals={[PROPOSAL]} onAccept={vi.fn()} onReject={vi.fn()} />);
+    const link = screen.getByRole("link", { name: "deck-D" });
+    expect(link.getAttribute("href")).toContain(encodeURIComponent("deck-D"));
+    expect(link.getAttribute("href")).toContain("hl=");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+});
