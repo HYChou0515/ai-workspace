@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import msgspec
 from specstar import QB, SpecStar
+from specstar.types import ResourceIDNotFoundError
 
 from ...resources.graph import GraphEntity, GraphEntityLink, GraphMention
 
@@ -120,29 +121,46 @@ def reject_proposal(spec: SpecStar, entity_id: str, proposed_from: str, *, by: s
         )
 
 
-def entity_page(spec: SpecStar, entity_id: str) -> EntityPage:
-    """One identity, and everything the corpus said about it.
+def entity_page(spec: SpecStar, entity_id: str, *, as_user: str) -> EntityPage:
+    """One identity, and everything the corpus said about it THAT THIS READER MAY
+    SEE.
 
     What the whole slice was for: a thing, every document that mentioned it under
     whatever name, how often, and on which slide — assembled from the links rather
     than from anything stored twice.
+
+    The filtering is not done here. Every read runs inside
+    ``using(as_user, apply_access_scope=True)``, which is the same context
+    specstar's own generated routes enter, so each model's registered scope does
+    its one job: the entity disappears when no evidence is readable (a bare name
+    can leak), and a mention from a collection this reader cannot open never
+    arrives. Re-implementing those rules here would be a second copy to keep in
+    step — and a permission rule that drifts is a leak.
     """
     erm = spec.get_resource_manager(GraphEntity)
     lrm = spec.get_resource_manager(GraphEntityLink)
     mrm = spec.get_resource_manager(GraphMention)
-    entity = erm.get(entity_id).data
-    assert isinstance(entity, GraphEntity)
-    links: list[GraphEntityLink] = []
-    mentions: list[GraphMention] = []
-    for r in lrm.list_resources((QB["entity_id"] == entity_id).build()):
-        link = r.data
-        assert isinstance(link, GraphEntityLink)
-        if link.state != "active":
-            continue
-        links.append(link)
-        mention = mrm.get(link.mention_id).data
-        assert isinstance(mention, GraphMention)
-        mentions.append(mention)
+    with (
+        erm.using(as_user, apply_access_scope=True),  # ty: ignore[unknown-argument]
+        lrm.using(as_user, apply_access_scope=True),  # ty: ignore[unknown-argument]
+        mrm.using(as_user, apply_access_scope=True),  # ty: ignore[unknown-argument]
+    ):
+        entity = erm.get(entity_id).data  # 404s when nothing vouches for it
+        assert isinstance(entity, GraphEntity)
+        links: list[GraphEntityLink] = []
+        mentions: list[GraphMention] = []
+        for r in lrm.list_resources((QB["entity_id"] == entity_id).build()):
+            link = r.data
+            assert isinstance(link, GraphEntityLink)
+            if link.state != "active":
+                continue
+            try:
+                mention = mrm.get(link.mention_id).data
+            except ResourceIDNotFoundError:
+                continue  # evidence in a collection this reader cannot open
+            assert isinstance(mention, GraphMention)
+            links.append(link)
+            mentions.append(mention)
     return EntityPage(
         entity=entity,
         mentions=mentions,

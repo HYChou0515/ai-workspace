@@ -41,7 +41,11 @@ def _collection(spec: SpecStar) -> str:
         return rm.create(Collection(name="c")).resource_id
 
 
-def _mention(spec: SpecStar, cid: str, doc: str, surface: str, *, n: int = 1) -> None:
+def _mention(
+    spec: SpecStar, cid: str, doc: str, surface: str, *, n: int = 1, private: bool = False
+) -> None:
+    """The mirror must match the collection it claims to come from — it is the ONLY
+    thing the scope reads, so a fixture that hardcodes "public" tests nothing."""
     rm = spec.get_resource_manager(GraphMention)
     with rm.using("bob"):
         rm.create(
@@ -52,7 +56,7 @@ def _mention(spec: SpecStar, cid: str, doc: str, surface: str, *, n: int = 1) ->
                 norm_surface=norm_surface(surface),
                 occurrences=n,
                 chunk_ids=[f"{doc}#0"],
-                collection_visibility="public",
+                collection_visibility="private" if private else "public",
                 collection_created_by="bob",
                 doc_visibility="public",
             ),
@@ -89,7 +93,7 @@ def test_accepting_merges_the_two_and_records_who_said_so():
     kept = erm.get(host).data
     assert isinstance(kept, GraphEntity)
     assert sorted(kept.norm_keys) == sorted([norm_surface("回焊爐"), norm_surface("回焊機")])
-    page = entity_page(spec, host)
+    page = entity_page(spec, host, as_user="bob")
     assert {m.surface for m in page.mentions} == {"回焊爐", "回焊機"}
     assert {link.basis for link in page.links} == {"approved"}
     assert all(link.evidence == "amy" for link in page.links)
@@ -139,7 +143,57 @@ def test_an_entity_page_gathers_the_evidence_across_documents():
     link_identical_mentions(spec)
     erm = spec.get_resource_manager(GraphEntity)
     (row,) = list(erm.list_resources(QB.all().build()))
-    page = entity_page(spec, row.info.resource_id)  # ty: ignore[unresolved-attribute]
+    page = entity_page(spec, row.info.resource_id, as_user="bob")  # ty: ignore[unresolved-attribute]
     assert page.entity.canonical_name == "回焊爐"
     assert sorted(m.source_doc_id for m in page.mentions) == ["deck-A", "deck-B"]
     assert page.occurrences == 5
+
+
+def _private_collection(spec: SpecStar) -> str:
+    from workspace_app.perm import Permission
+
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("bob"):
+        return rm.create(
+            Collection(name="secret", permission=Permission(visibility="private"))
+        ).resource_id
+
+
+def test_a_reader_sees_only_the_evidence_they_may_read():
+    """The page is assembled from scoped reads, so the filtering is specstar's
+    access_scope doing its one job — not a second copy of the permission rules
+    written here, which would be a rule to keep in step and therefore a leak
+    waiting to happen."""
+    spec = make_spec(default_user=lambda: "bob")
+    open_cid = _collection(spec)
+    secret_cid = _private_collection(spec)
+    _mention(spec, open_cid, "deck-A", "回焊爐", n=2)
+    _mention(spec, secret_cid, "deck-S", "回焊爐", n=9, private=True)
+    link_identical_mentions(spec)
+    erm = spec.get_resource_manager(GraphEntity)
+    (row,) = list(erm.list_resources(QB.all().build()))
+    eid = row.info.resource_id  # ty: ignore[unresolved-attribute]
+
+    owner = entity_page(spec, eid, as_user="bob")
+    assert sorted(m.source_doc_id for m in owner.mentions) == ["deck-A", "deck-S"]
+
+    outsider = entity_page(spec, eid, as_user="alice")
+    assert [m.source_doc_id for m in outsider.mentions] == ["deck-A"]
+    assert outsider.occurrences == 2
+
+
+def test_an_entity_with_no_readable_evidence_is_not_a_page_at_all():
+    """Not an empty page — the identity itself is hidden, because a bare name can
+    leak. The scope on the entity is what answers this, before any assembly."""
+    import pytest
+    from specstar.types import ResourceIDNotFoundError
+
+    spec = make_spec(default_user=lambda: "bob")
+    secret_cid = _private_collection(spec)
+    _mention(spec, secret_cid, "deck-S", "機密製程", private=True)
+    link_identical_mentions(spec)
+    erm = spec.get_resource_manager(GraphEntity)
+    (row,) = list(erm.list_resources(QB.all().build()))
+    eid = row.info.resource_id  # ty: ignore[unresolved-attribute]
+    with pytest.raises(ResourceIDNotFoundError):
+        entity_page(spec, eid, as_user="alice")
