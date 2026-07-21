@@ -44,13 +44,13 @@ function parseQuestions(args: Record<string, unknown>): Question[] | null {
 }
 
 const UNANSWERED = "(未選擇)";
-// What "看不懂" actually reports. A bare "say it differently" leaves the agent
-// to guess what was wrong, and it usually guesses the same way twice. The four
-// things that cause it — roundabout phrasing, jargon, too many words with no
-// point, invented terms — all have the same remedy, so the message states the
-// remedy rather than asking the user to diagnose which one it was.
+// What "看不懂" reports. One button, never a menu: the user presses this while
+// annoyed at having just read something useless, and asking them to classify
+// their own irritation is a second insult. So it lists every cause and leaves
+// the agent to work out which one it committed.
 const DONT_UNDERSTAND =
-  "看不懂 — 請用更短的句子、我熟悉的詞、具體的例子重問一次同一題(不要自創名詞)";
+  "看不懂 — 可能是繞了一大圈、術語太多、字很多但沒重點,或用了我沒看過的詞。" +
+  "請重問同一題:直接講、用我熟悉的字、短一點,需要的話給個例子。";
 
 /** How one question's answer reads in the transcript. The four shapes stay
  * distinguishable on purpose: a rejection must not look like a choice, and a

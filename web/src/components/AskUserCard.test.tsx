@@ -179,11 +179,14 @@ describe("AskUserCard escape hatches", () => {
     // instead of proceeding on a choice the user never made.
     expect(content).toMatch(/看不懂/);
     expect(content).not.toMatch(/Postgres|SQLite/);
-    // And it says what to do about it. "Say it differently" leaves the agent
-    // guessing, and it guesses the same way twice — the causes (roundabout
-    // phrasing, jargon, wordiness, invented terms) share one remedy, so the
-    // message carries the remedy rather than asking the user which it was.
-    expect(content).toMatch(/更短|具體|自創/);
+    // It also names every cause and what to do instead. One button, never a
+    // menu: the user presses this while annoyed at having just read something
+    // useless, and asking them to classify their own irritation is a second
+    // insult — so the agent gets the whole list and works out which one it did.
+    for (const cause of [/繞/, /術語/, /沒重點/, /沒看過的詞/]) {
+      expect(content).toMatch(cause);
+    }
+    expect(content).toMatch(/重問同一題/);
   });
 
   it("always offers an answer of the user's own", () => {
