@@ -713,7 +713,7 @@ function ItemRow({
         <span style={{ fontSize: pxToRem(13), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owner.name}</span>
       </div>
 
-      <div>
+      <div style={{ minWidth: 0 }}>
         <AccessChip visibility={itemVisibility(item.permission)} />
       </div>
 

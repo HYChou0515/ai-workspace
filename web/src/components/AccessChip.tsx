@@ -4,37 +4,39 @@
  * An owner scanning the item table needs to spot what is already open without
  * opening a share dialog per row. All three states are shown, never just the
  * "interesting" ones — an absent chip would be ambiguous between "public" and
- * "not loaded".
+ * "not loaded", which defeats scanning.
+ *
+ * Copy comes from the shared table in `lib/itemPermission` so the chip and the
+ * share dialog opened from that same row cannot describe the item differently.
  */
 
+import {
+  ITEM_VISIBILITY_HINT,
+  ITEM_VISIBILITY_LABEL,
+  type DisplayVisibility,
+} from "../lib/itemPermission";
 import { chipStyle, type ChipTone } from "./StatusChip";
-import type { ItemVisibility } from "../lib/itemPermission";
 
-// `private` is the quiet default for a new item, so it is the muted one; the
-// tones rank by how far the item reaches, not by how alarming it is — an item
-// being public is a fact to notice, not an error to fix.
-const TONE: Record<ItemVisibility, ChipTone> = {
-  public: "info",
-  restricted: "warn",
+// Salience tracks REACH, and the loudest tone goes to the most-open state: the
+// question this column answers is "what have I left open?", so `public` must be
+// the one that catches the eye. `warn` is this codebase's caution tone
+// (severityTone P2, statusTone triaging) — an item being public is a fact worth
+// noticing, which is what caution means here, not an error.
+const TONE: Record<DisplayVisibility, ChipTone> = {
+  public: "warn",
+  restricted: "info",
   private: "muted",
+  unknown: "muted",
 };
 
-const LABEL: Record<ItemVisibility, string> = {
-  public: "Public",
-  restricted: "Restricted",
-  private: "Private",
-};
-
-const HINT: Record<ItemVisibility, string> = {
-  public: "Everyone in the workspace can open this",
-  restricted: "Only you and the people you named",
-  private: "Only you",
-};
-
-export function AccessChip({ visibility }: { visibility: ItemVisibility }) {
+export function AccessChip({ visibility }: { visibility: DisplayVisibility }) {
+  const known = visibility !== "unknown";
   return (
-    <span style={chipStyle(TONE[visibility])} title={HINT[visibility]}>
-      {LABEL[visibility]}
+    <span
+      style={{ ...chipStyle(TONE[visibility]), overflow: "hidden", maxWidth: "100%" }}
+      title={known ? ITEM_VISIBILITY_HINT[visibility] : "This item's access setting could not be read"}
+    >
+      {known ? ITEM_VISIBILITY_LABEL[visibility] : "—"}
     </span>
   );
 }

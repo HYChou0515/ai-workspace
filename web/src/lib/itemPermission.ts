@@ -73,14 +73,45 @@ export function parseItemPermission(raw: unknown): ItemPermission | undefined {
   return raw as ItemPermission;
 }
 
-/** The item's effective visibility for DISPLAY (#578). An absent or malformed
- * `permission` is `public` — that is the backend's rule (`WorkItemBase.permission`:
- * absent ≡ public, legacy rows were never migrated), and it is precisely the row
- * an owner scanning for "what have I left open?" must see flagged. Rendering it
- * blank would hide the one case that matters. */
-export function itemVisibility(raw: unknown): ItemVisibility {
-  return parseItemPermission(raw)?.visibility ?? "public";
+/** What to SHOW for an item's access (#578) — the three real states, plus
+ * `"unknown"` when the permission is present but unreadable.
+ *
+ * ABSENT ≡ `public`: that is the backend's rule (`WorkItemBase.permission`
+ * docstring; `perm/scope.py` admits rows whose visibility cell `isna()`), and it
+ * is exactly the row an owner scanning for "what have I left open?" must see
+ * flagged — a legacy item nobody ever configured really is reachable by all.
+ *
+ * PRESENT-BUT-UNPARSEABLE is NOT folded in with it. `canWriteItem` can afford
+ * that guess — it only mis-renders an affordance the server re-checks — but here
+ * the guess IS the product: labelling an item we failed to read as "everyone can
+ * open this" would silently mark it world-readable on any FE/BE version skew (a
+ * fourth visibility literal, say). Say we can't tell instead. */
+export type DisplayVisibility = ItemVisibility | "unknown";
+
+export function itemVisibility(raw: unknown): DisplayVisibility {
+  if (raw === undefined || raw === null) return "public";
+  return parseItemPermission(raw)?.visibility ?? "unknown";
 }
+
+/** ONE table of visibility copy, shared by the item table's chip and the share
+ * dialog — otherwise the same item describes its own access differently
+ * depending on which of the two you happen to be looking at.
+ *
+ * The hints are third-person on purpose: the chip renders on every row,
+ * including other people's items and (for a superuser) items nobody shared. "Only
+ * you" is false there in both directions. They describe the item's SETTING, not
+ * what the current viewer happens to be able to do. */
+export const ITEM_VISIBILITY_LABEL: Record<ItemVisibility, string> = {
+  public: "Public",
+  restricted: "Restricted",
+  private: "Private",
+};
+
+export const ITEM_VISIBILITY_HINT: Record<ItemVisibility, string> = {
+  public: "Everyone in the workspace can open this",
+  restricted: "Only the owner and the people or groups granted access",
+  private: "Only the owner",
+};
 
 export function canWriteItem(
   permission: ItemPermission | undefined,

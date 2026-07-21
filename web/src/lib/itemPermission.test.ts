@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canChangeItemPermission, canWriteItem, parseItemPermission } from "./itemPermission";
+import { canChangeItemPermission, canWriteItem, itemVisibility, parseItemPermission } from "./itemPermission";
 
 const OWNER = "owner1";
 const ME = "me1";
@@ -143,5 +143,27 @@ describe("canChangeItemPermission", () => {
   it("honours an explicit `all` grant", () => {
     const perm = { visibility: "restricted" as const, change_permission: ["all"] };
     expect(canChangeItemPermission(perm, "eve", "alice", false)).toBe(true);
+  });
+});
+
+describe("#578 itemVisibility — display fold", () => {
+  it("treats an absent permission as public, matching the backend", () => {
+    // WorkItemBase.permission: absent ≡ public (legacy rows, never migrated).
+    expect(itemVisibility(undefined)).toBe("public");
+    expect(itemVisibility(null)).toBe("public");
+  });
+
+  it("reports an unreadable permission as unknown, NOT public", () => {
+    // Folding a permission we failed to parse into "public" would have the table
+    // assert "everyone can open this" about an item whose setting it could not
+    // read — silently relabelling it world-readable on any FE/BE version skew.
+    expect(itemVisibility({ visibility: "some-future-value" })).toBe("unknown");
+    expect(itemVisibility({})).toBe("unknown");
+  });
+
+  it("passes the three real values straight through", () => {
+    expect(itemVisibility({ visibility: "public" })).toBe("public");
+    expect(itemVisibility({ visibility: "restricted" })).toBe("restricted");
+    expect(itemVisibility({ visibility: "private" })).toBe("private");
   });
 });
