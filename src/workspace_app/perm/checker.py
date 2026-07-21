@@ -279,6 +279,59 @@ class SourceDocPermissionChecker(IPermissionChecker):
         return new_perm is not UNSET and new_perm != stored
 
 
+class GraphMirrorChecker(IPermissionChecker):
+    """#534 — an extracted row may not claim a permission its collection does not
+    grant.
+
+    The read side is driven entirely by the mirror each evidence row carries, so
+    whoever can write a row with a mirror of their choosing can publish a fact of
+    their choosing to everyone. The auto-CRUD create route is open to any signed-in
+    caller, which is the attack: POST a claim into someone's private collection,
+    stamp the mirror "public", and everybody can read it.
+
+    The check deliberately does not ask WHO is writing. The extraction job runs as
+    an ordinary user and must keep working, and any rule phrased around identity
+    would have to name it — a rule that has to enumerate its friends breaks the
+    day someone adds a worker. It asks instead whether the mirror TELLS THE TRUTH
+    about the collection it names, which the extractor satisfies for free because
+    it copies the mirror from the document rather than composing one.
+
+    An UNWRITTEN mirror passes: it is not a lie, and the read side already hides
+    such a row from everyone. Refusing it would break the fail-closed default that
+    lets a forgetful writer lose rows loudly instead of publishing them silently.
+    """
+
+    def __init__(self, resolve_collection: Callable[[str], Permission | None]) -> None:
+        self._resolve = resolve_collection
+
+    def check_permission(self, context: Any) -> PermissionResult:
+        data = getattr(context, "data", None) or getattr(context, "new_data", None)
+        claimed = getattr(data, "collection_visibility", None)
+        if not isinstance(claimed, str) or not claimed:
+            return PermissionResult.allow  # no mirror written — not a claim about anything
+        collection_id = getattr(data, "collection_id", "")
+        actual = self._resolve(collection_id) if isinstance(collection_id, str) else None
+        truth = "public" if actual is None else actual.visibility
+        if claimed == truth:
+            return PermissionResult.allow
+        logger.warning(
+            "checker: graph row claims visibility %r for collection %s, which is %r",
+            claimed,
+            collection_id,
+            truth,
+        )
+        return PermissionResult.deny
+
+
+def graph_mirror_event_handler(
+    resolve_collection: Callable[[str], Permission | None],
+) -> PermissionEventHandler:
+    """#534 — wrap the mirror-truthfulness check for the per-model
+    ``event_handlers`` slot (the ``permission_checker`` slot is shadowed by
+    specstar's spec-level default — see the module docstring)."""
+    return PermissionEventHandler(GraphMirrorChecker(resolve_collection))
+
+
 def source_doc_permission_event_handler(
     superusers: frozenset[str] = frozenset(),
 ) -> PermissionEventHandler:

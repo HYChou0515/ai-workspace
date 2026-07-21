@@ -21,8 +21,10 @@ from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
 from ..kb.chat_permission import kbchat_permission_event_handler
+from ..perm import Permission
 from ..perm.checker import (
     collection_permission_event_handler,
+    graph_mirror_event_handler,
     source_doc_permission_event_handler,
 )
 from ..perm.scope import (
@@ -228,6 +230,21 @@ def _groups_provider(spec: SpecStar) -> GroupsProvider:
     closure so `perm/` needn't import the `Group` resource (dependency direction:
     resources → perm)."""
     return lambda user: groups_of(spec, user)
+
+
+def _collection_permission(spec: SpecStar) -> Callable[[str], Permission | None]:
+    """#534 — a collection's LIVE permission, for the mirror-truthfulness check.
+    Injected like the groups resolver so `perm/` needn't import a resource."""
+
+    def resolve(collection_id: str) -> Permission | None:
+        crm = spec.get_resource_manager(Collection)
+        try:
+            coll = crm.get(collection_id).data
+        except Exception:  # noqa: BLE001 — an unknown collection cannot vouch for anything
+            return Permission(visibility="private")
+        return coll.permission if isinstance(coll, Collection) else None
+
+    return resolve
 
 
 def _readable_collections_provider(
@@ -698,6 +715,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("doc_read_content", list),
         ],
         access_scope=graph_evidence_access_scope(superusers, groups),
+        event_handlers=[graph_mirror_event_handler(_collection_permission(spec))],
     )
     # #534 B: the primary layer — what a document said, verbatim. Same evidence
     # shape as a claim, so the same mirror and the same scope. `norm_surface` /
@@ -722,6 +740,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("doc_read_content", list),
         ],
         access_scope=graph_evidence_access_scope(superusers, groups),
+        event_handlers=[graph_mirror_event_handler(_collection_permission(spec))],
     )
     # #534 B: the vocabulary layer. It owns nothing — `GraphEntityLink` carries the
     # claim that a mention belongs here, WITH the basis it was made on, so a wrong
