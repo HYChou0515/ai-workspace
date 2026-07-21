@@ -210,6 +210,8 @@ export function KbChatPanel({
           <EntryView
             key={i}
             entry={entry}
+            // #583: who is reading, so their own messages align right.
+            currentUser={me}
             onOpenCitation={onOpenCitation}
             // Permission-disclosure: the "🔒 request access" chip asks the
             // withheld collection's owner for read access (deduped server-side).
