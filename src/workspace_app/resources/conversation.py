@@ -114,6 +114,18 @@ class Message(Struct):
     A mention is a human-to-human event in the thread, NOT an agent turn."""
 
     citations: list[Citation] = field(default_factory=list)
+
+    answers: str | None = None
+    """The `tool_call_id` of the `ask_user` question this message answers, when
+    the user replied by choosing an option rather than typing (grill-me).
+
+    Without it the UI can only guess which question an answer belongs to by
+    adjacency, which breaks the moment two questions are open, the user scrolls
+    back to an earlier one, or a second tab answers first. It also lets an
+    answered question retire its buttons instead of inviting a second answer.
+
+    `None` for every ordinary message — this is opt-in, and a message that
+    merely follows a question does not claim to answer it."""
     """Only set when role=tool AND tool_name="ask_knowledge_base" — the
     KB sub-agent's resolved [n] citations for this tool's answer. Empty for
     all other messages. Mirrors `KbMessage.citations`; lets the FE render

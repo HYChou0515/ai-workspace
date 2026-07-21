@@ -16,6 +16,11 @@ from .kb_chat_routes import EnhancementsInput
 
 class _MessageBody(BaseModel):
     content: str
+    # grill-me: the `tool_call_id` of the `ask_user` question this message
+    # answers, set when the user clicked an option instead of typing. Carried
+    # through to `Message.answers`; the send path is otherwise unchanged — an
+    # answer starts a turn like any other message.
+    answers: str | None = None
     # Per-message reasoning effort from the UI selector; None → model default.
     reasoning_effort: Literal["low", "medium", "high"] | None = None
     # Knowledge-search depth from the composer picker. Applies to this
