@@ -45,41 +45,6 @@ def differs_by_number(a: str, b: str) -> bool:
     return bool(left) and bool(right) and left != right
 
 
-# A bracket declares an ALIAS only when what is inside could itself be a name.
-# "回焊爐(250°C)" states a setting; "產能(2024)" states a period; "Yield (%)" states
-# a unit. Requiring a letter or an ideograph, and refusing anything that is only a
-# number with trailing unit-ish characters, keeps those out.
-_BRACKETED = re.compile(r"^(?P<outer>[^(（\[【]+)[(（\[【](?P<inner>[^)）\]】]+)[)）\]】]\s*$")
-_HAS_NAME_CHAR = re.compile(r"[^\W\d_]", re.UNICODE)
-_ONLY_MEASURE = re.compile(r"^[\d\s.,:%°/-]*[a-zA-Z°%]{0,3}$")
-
-
-def declared_aliases(surface: str) -> list[tuple[str, str]]:
-    """The equivalences a surface DECLARES about itself.
-
-    "回焊爐(Reflow Oven)" is a document saying, in its own words, that these two
-    names are one thing — the strongest basis short of a person, and it costs
-    nothing to read: the declaration is written inside the surface, which is
-    exactly why the entity key keeps the parentheticals the metric key strips.
-
-    Returns pairs, or nothing when the bracket is not a declaration: a measurement
-    ("250°C"), a period ("2024"), a unit ("%"), or a pair whose numbers disagree,
-    which no document means as an alias.
-    """
-    match = _BRACKETED.match(surface.strip())
-    if match is None:
-        return []
-    outer = match.group("outer").strip()
-    inner = match.group("inner").strip()
-    if not outer or not inner:
-        return []
-    if not _HAS_NAME_CHAR.search(inner) or _ONLY_MEASURE.match(inner):
-        return []  # a setting, a period or a unit — not another name
-    if differs_by_number(outer, inner):
-        return []
-    return [(outer, inner)]
-
-
 def _find_or_create_entity(spec: SpecStar, key: str, display: str) -> str:
     """The entity whose keys already contain ``key``, or a new one.
 
@@ -185,42 +150,38 @@ def _display_name(candidates: list[tuple[str, int]]) -> str:
 
 
 def link_declared_aliases(spec: SpecStar) -> int:
-    """Fold every declaration a document made into the vocabulary. Returns links
-    created.
+    """Apply every equivalence a document STATED. Returns absorptions performed.
 
-    One deck writing "回焊爐(Reflow Oven)" is enough for every other deck's
-    "Reflow Oven" — including the ones that only ever use the English — to resolve
-    to the same identity. That is what makes an entity page whole across
-    languages, and no model was asked for it.
+    Applied without review, and the reason is not that a model produced it — a
+    resemblance comes from the same model and waits for a person. It is that this
+    one points at a sentence: the link records the quote, so what it rested on can
+    be read by anyone who doubts it. A declaration that could not be quoted never
+    got this far.
 
-    Idempotent like the identical pass: an alias already carried by the entity is
-    nothing to do, so a re-run adds neither entities nor links.
+    The number veto still applies. A model transcribing "RO-3、RO-4" as a
+    declaration has transcribed a list, and no document means that as an alias.
+
+    Idempotent: an equivalence already folded in leaves nothing to do.
     """
-    from .normalize import norm_surface
-
     mrm = spec.get_resource_manager(GraphMention)
-    created = 0
-    for r in mrm.list_resources(QB.all().build()):
+    applied = 0
+    for r in mrm.list_resources((QB["declared_same_as"].is_not_null()).build()):
         mention = r.data
         assert isinstance(mention, GraphMention)
-        for outer, inner in declared_aliases(mention.surface):
-            outer_key, inner_key = norm_surface(outer), norm_surface(inner)
-            host = _entity_for_key(spec, norm_surface(mention.surface))
-            if host is None:
+        if not mention.declared_same_as:
+            continue
+        host = _entity_for_key(spec, mention.norm_surface)
+        if host is None:
+            continue
+        for other_key in mention.declared_same_as:
+            if differs_by_number(mention.norm_surface, other_key):
                 continue
-            for key in (outer_key, inner_key):
-                target = _entity_for_key(spec, key)
-                if target == host:
-                    continue
-                if target is None:
-                    # The alias was never mentioned on its own; the declaring
-                    # surface is the only evidence, so the key joins the host.
-                    _add_key(spec, host, key)
-                    created += 1
-                    continue
-                _absorb(spec, host, target, evidence=mention.surface)
-                created += 1
-    return created
+            target = _entity_for_key(spec, other_key)
+            if target is None or target == host:
+                continue
+            _absorb(spec, host, target, evidence=mention.declared_quote)
+            applied += 1
+    return applied
 
 
 def _entity_for_key(spec: SpecStar, key: str) -> str | None:
@@ -230,23 +191,13 @@ def _entity_for_key(spec: SpecStar, key: str) -> str | None:
     return None
 
 
-def _add_key(spec: SpecStar, entity_id: str, key: str) -> None:
-    rm = spec.get_resource_manager(GraphEntity)
-    entity = rm.get(entity_id).data
-    assert isinstance(entity, GraphEntity)
-    if key not in entity.norm_keys:
-        rm.update(
-            entity_id, msgspec.structs.replace(entity, norm_keys=sorted([*entity.norm_keys, key]))
-        )
-
-
 def _absorb(spec: SpecStar, host_id: str, other_id: str, *, evidence: str) -> None:
     """Move another identity's keys, evidence-locations and links onto the host.
 
-    The mentions themselves are untouched — only the links move, and they move
-    carrying ``declared`` as their basis and the declaring surface as the place to
-    go and check it. The absorbed identity is then empty of evidence, which the
-    access scope already treats as invisible.
+    The mentions themselves are untouched — only the LINKS move, carrying their
+    new basis and the words to go and check. The absorbed identity keeps no
+    evidence, which the access scope already reads as invisible, so nothing has to
+    be deleted and the absorption can be undone by moving the links back.
     """
     rm = spec.get_resource_manager(GraphEntity)
     host = rm.get(host_id).data

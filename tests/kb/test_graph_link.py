@@ -180,77 +180,72 @@ def test_a_kind_becomes_an_entity_too():
     assert by_name["機台"].kind_id == ""  # the recursion stops at a kind
 
 
-class TestDeclaredAliases:
-    """The strongest basis short of a human: the document declaring its own
-    equivalence. It needs no model — the declaration is written INSIDE the surface
-    ("回焊爐(Reflow Oven)"), which is exactly why the entity key keeps
-    parentheticals that the metric key strips."""
+def _declaring_mention(spec, cid: str, doc: str, surface: str, same_as: str, quote: str):
+    from workspace_app.resources.graph import GraphMention as _M
 
-    def test_a_parenthetical_name_is_a_declared_alias(self):
-        from workspace_app.kb.graph.link import declared_aliases
-
-        assert declared_aliases("回焊爐(Reflow Oven)") == [("回焊爐", "Reflow Oven")]
-        assert declared_aliases("Reflow Oven (RO-3)") == [("Reflow Oven", "RO-3")]
-
-    def test_a_parenthetical_measurement_is_not_an_alias(self):
-        """ "回焊爐(250°C)" states a setting, not another name for the oven. A
-        bracket only declares an alias when what is inside could BE a name."""
-        from workspace_app.kb.graph.link import declared_aliases
-
-        assert declared_aliases("回焊爐(250°C)") == []
-        assert declared_aliases("Yield (%)") == []
-        assert declared_aliases("產能(2024)") == []
-
-    def test_a_declaration_whose_numbers_disagree_is_refused(self):
-        """No document means "RO-3 is another name for RO-4"; that is a typo or a
-        list. The number veto applies to a declaration too."""
-        from workspace_app.kb.graph.link import declared_aliases
-
-        assert declared_aliases("RO-3(RO-4)") == []
-
-    def test_a_name_and_a_code_are_still_an_alias(self):
-        """ "回焊爐(RO-3)" is the commonest form of all: the general name beside the
-        specific code. One side simply has no number to disagree with, so the veto
-        must not fire — it exists to stop two DIFFERENT numbers merging."""
-        from workspace_app.kb.graph.link import declared_aliases
-
-        assert declared_aliases("回焊爐(RO-3)") == [("回焊爐", "RO-3")]
+    rm = spec.get_resource_manager(_M)
+    with rm.using("bob"):
+        rm.create(
+            _M(
+                collection_id=cid,
+                source_doc_id=doc,
+                surface=surface,
+                norm_surface=norm_surface(surface),
+                declared_same_as=[norm_surface(same_as)],
+                declared_quote=quote,
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=mention_id(doc, surface),
+        )
 
 
-def test_a_declared_alias_joins_two_entities():
-    """The payoff: one document writing "回焊爐(Reflow Oven)" is enough for every
-    other document's "Reflow Oven" to resolve to the same identity — including the
-    ones that only ever use the English. This is what makes an entity page whole
-    across languages, and no model was asked."""
+def test_a_declaration_joins_two_identities_without_a_reviewer():
+    """The payoff, and the reason a model-reported declaration still applies on its
+    own: one document stating the equivalence resolves every other document's
+    "RO" — including the ones that only ever use it — to the same identity. The
+    link records the sentence, so anyone can check what it rested on."""
     from workspace_app.kb.graph.link import link_declared_aliases
 
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
-    _mention(spec, cid, "deck-A", "回焊爐(Reflow Oven)")
-    _mention(spec, cid, "deck-B", "Reflow Oven")
-    _mention(spec, cid, "deck-C", "回焊爐")
+    _declaring_mention(spec, cid, "deck-A", "回焊爐", "RO", "回焊爐,以下簡稱 RO")
+    _mention(spec, cid, "deck-B", "RO")
     link_identical_mentions(spec)
-    assert len(_entities(spec)) == 3  # three distinct keys before the declaration
+    assert len(_entities(spec)) == 2
 
-    link_declared_aliases(spec)
-    keyed = {k: e for e in _entities(spec) for k in e.norm_keys}
-    assert keyed[norm_surface("回焊爐")] is keyed[norm_surface("Reflow Oven")] or (
-        keyed[norm_surface("回焊爐")].canonical_name
-        == keyed[norm_surface("Reflow Oven")].canonical_name
-    )
+    assert link_declared_aliases(spec) == 1
+    live = [e for e in _entities(spec) if e.collection_ids]
+    assert len(live) == 1
+    assert sorted(live[0].norm_keys) == sorted([norm_surface("回焊爐"), norm_surface("RO")])
     declared = [link for link in _links(spec) if link.basis == "declared"]
-    assert declared and declared[0].evidence == "回焊爐(Reflow Oven)"
+    assert declared and declared[0].evidence == "回焊爐,以下簡稱 RO"
 
 
-def test_linking_declared_aliases_twice_changes_nothing():
+def test_a_declaration_whose_numbers_disagree_is_refused():
+    """No document means "RO-3 is another name for RO-4". The number veto applies
+    to a reported declaration too — the model may have transcribed a list."""
     from workspace_app.kb.graph.link import link_declared_aliases
 
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
-    _mention(spec, cid, "deck-A", "回焊爐(Reflow Oven)")
-    _mention(spec, cid, "deck-B", "Reflow Oven")
+    _declaring_mention(spec, cid, "deck-A", "RO-3", "RO-4", "RO-3、RO-4")
+    _mention(spec, cid, "deck-B", "RO-4")
+    link_identical_mentions(spec)
+    assert link_declared_aliases(spec) == 0
+    assert len([e for e in _entities(spec) if e.collection_ids]) == 2
+
+
+def test_applying_declarations_twice_changes_nothing():
+    from workspace_app.kb.graph.link import link_declared_aliases
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _declaring_mention(spec, cid, "deck-A", "回焊爐", "RO", "回焊爐,以下簡稱 RO")
+    _mention(spec, cid, "deck-B", "RO")
     link_identical_mentions(spec)
     link_declared_aliases(spec)
     before = len(_entities(spec)), len(_links(spec))
-    link_declared_aliases(spec)
+    assert link_declared_aliases(spec) == 0
     assert (len(_entities(spec)), len(_links(spec))) == before

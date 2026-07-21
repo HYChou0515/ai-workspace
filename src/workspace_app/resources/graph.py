@@ -145,6 +145,13 @@ class GraphMention(Struct):  # → resource "graph-mention"
     kind: str = ""  # the document's own word for the sort of thing
     norm_kind: str = ""  # derived comparison key (indexed)
     occurrences: int = 1  # how often the document mentions it — an importance signal
+    # An equivalence THIS DOCUMENT stated about this name ("回焊爐,以下簡稱 RO"),
+    # with the words that state it. Primary-layer data: it is something the
+    # document said, not a judgement about it. The quote is what lets the
+    # vocabulary apply the link without asking a person — it points at a sentence
+    # anyone can go and read, unlike a resemblance, which points at nothing.
+    declared_same_as: list[str] = []  # normalised surfaces (indexed)
+    declared_quote: str = ""
     chunk_ids: list[str] = []  # provenance: the chunks/slides it appeared on
     # --- the read-permission mirror, identical to GraphClaim's (see there) ---
     collection_visibility: str = ""

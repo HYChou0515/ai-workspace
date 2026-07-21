@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterable
 
+import msgspec
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
@@ -79,8 +80,15 @@ def write_doc_mentions(
     kinds: dict[str, str] = {}
     counts: dict[str, int] = {}
     chunk_ids: dict[str, list[str]] = {}
+    declared: list[tuple[str, str, str]] = []
     for chunk_id, text in chunks:
-        for mention in extract_entities(llm, text):
+        extraction = extract_entities(llm, text)
+        # An equivalence the passage STATED, with the words that state it. Carried
+        # out of here so the vocabulary can apply it without asking a person: the
+        # quote is a sentence anyone can go and read, which is what separates a
+        # reported declaration from the model's own impression.
+        declared.extend((a.a, a.b, a.quote) for a in extraction.aliases)
+        for mention in extraction.mentions:
             key = norm_surface(mention.surface)
             surfaces.setdefault(key, mention.surface)
             # The first non-empty kind wins; a later passage that omitted it does
@@ -108,4 +116,54 @@ def write_doc_mentions(
             ),
             resource_id=mention_id(source_doc_id, surface),
         )
+    _record_declarations(spec, source_doc_id, declared, mirror, collection_id)
     return len(surfaces)
+
+
+def _record_declarations(
+    spec: SpecStar,
+    source_doc_id: str,
+    declared: list[tuple[str, str, str]],
+    mirror: dict,
+    collection_id: str,
+) -> None:
+    """Persist the equivalences this document stated, as mentions of both names.
+
+    A declaration is only useful if BOTH names exist as evidence — "回焊爐,以下
+    簡稱 RO" is worth nothing if "RO" never became a row for the vocabulary to
+    link. The passage said both names, so both are mentions of it; the quote
+    travels with the pair when the vocabulary reads them.
+    """
+    rm = spec.get_resource_manager(GraphMention)
+    for a, b, quote in declared:
+        for name, other in ((a, b), (b, a)):
+            rid = mention_id(source_doc_id, name)
+            try:
+                existing = rm.get(rid).data
+                assert isinstance(existing, GraphMention)
+                if norm_surface(other) in existing.declared_same_as:
+                    continue
+                rm.update(
+                    rid,
+                    msgspec.structs.replace(
+                        existing,
+                        declared_same_as=sorted({*existing.declared_same_as, norm_surface(other)}),
+                        declared_quote=existing.declared_quote or quote,
+                    ),
+                )
+                continue
+            except ResourceIDNotFoundError:
+                pass
+            rm.create(
+                GraphMention(
+                    collection_id=collection_id,
+                    source_doc_id=source_doc_id,
+                    surface=name,
+                    norm_surface=norm_surface(name),
+                    occurrences=1,
+                    declared_same_as=[norm_surface(other)],
+                    declared_quote=quote,
+                    **mirror,
+                ),
+                resource_id=rid,
+            )

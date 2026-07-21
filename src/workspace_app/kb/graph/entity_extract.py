@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from ..llm import ILlm
 
@@ -42,9 +43,42 @@ _PROMPT = (
     '- "kind": what sort of thing it is, in the passage\'s own words (a short '
     "noun such as 機台 / 製程 / 材料 / defect / parameter). Use the vocabulary "
     "the passage itself uses; there is no fixed list to choose from.\n\n"
-    'Output ONLY a JSON array of objects with keys "surface" and "kind" — no '
-    "prose.\n\nPassage:\n{text}"
+    "Then, ONLY if the passage explicitly says two names are the same thing "
+    '("以下簡稱", "又稱", "aka", "i.e."), list those pairs. For each give '
+    '"a", "b", and "quote" — the words from the passage that say so, copied '
+    "exactly. If the passage does not say it, do not list it: a resemblance you "
+    "noticed is not a declaration.\n\n"
+    "Output ONLY a JSON object:\n"
+    '{{"mentions": [{{"surface": ..., "kind": ...}}], '
+    '"aliases": [{{"a": ..., "b": ..., "quote": ...}}]}}\n'
+    "No prose.\n\nPassage:\n{text}"
 )
+
+
+@dataclass(frozen=True)
+class DeclaredAlias:
+    """An equivalence the passage STATES, with the words that state it.
+
+    The quote is the whole point. A model reporting "the text says these are the
+    same" and a model judging "these look similar" both come out of the same
+    model, but the first points at a sentence anyone can read and the second
+    points at nothing — and that is the line between applying a link and queueing
+    it for a person. The quote is what keeps the distinction a checkable
+    condition rather than a label the model awards itself.
+    """
+
+    a: str
+    b: str
+    quote: str
+
+
+@dataclass(frozen=True)
+class Extraction:
+    """What one passage yielded: the things it talks about, and the equivalences
+    it states about them."""
+
+    mentions: list[EntityMention]
+    aliases: list[DeclaredAlias]
 
 
 @dataclass(frozen=True)
@@ -56,35 +90,76 @@ class EntityMention:
     kind: str = ""
 
 
-def extract_entities(llm: ILlm, text: str) -> list[EntityMention]:
-    """Extract the passage's mentions. Never raises.
+def extract_entities(llm: ILlm, text: str) -> Extraction:
+    """Extract the passage's mentions and the equivalences it declares. Never
+    raises.
 
-    A reply that is not a JSON array — refusal, commentary, a truncated
-    generation — yields no mentions rather than failing, so one bad passage
-    cannot take down the batch it rides in. Entries with no surface are dropped:
-    a kind with nothing to attach it to is not a mention of anything.
+    A reply that is neither the expected object nor a bare mention array — a
+    refusal, commentary, a truncated generation — yields nothing rather than
+    failing, so one bad passage cannot take down the batch it rides in. The bare
+    array is still accepted because small models drift back to the simpler shape
+    they were asked for last time.
 
-    Occurrences are NOT collapsed here. The same term appearing twice is two
-    entries, because how often a document mentions something is a signal, and the
-    writer aggregates it across the whole document rather than per passage.
+    Entries with no surface are dropped: a kind with nothing to attach it to is
+    not a mention of anything. Occurrences are NOT collapsed here — how often a
+    document mentions something is a signal, and the writer aggregates it across
+    the whole document rather than per passage.
+
+    A declared alias is kept only if it is complete AND its quote really appears
+    in the passage. Without that check the requirement would be decoration: a
+    model free to invent the sentence has given nobody anything to verify.
     """
     reply = llm.collect(_PROMPT.format(text=text))
-    start, end = reply.find("["), reply.rfind("]")
-    if start == -1 or end == -1 or end < start:
-        return []  # no JSON array in the reply
-    try:
-        data = json.loads(reply[start : end + 1])
-    except (json.JSONDecodeError, ValueError):
-        _LOGGER.warning("extract_entities: malformed JSON reply, dropping the batch")
-        return []
-    if not isinstance(data, list):
-        return []
-    out: list[EntityMention] = []
-    for item in data:
+    payload = _parse(reply)
+    if payload is None:
+        return Extraction(mentions=[], aliases=[])
+    raw_mentions = payload.get("mentions")
+    raw_aliases = payload.get("aliases")
+    mentions: list[EntityMention] = []
+    for item in raw_mentions if isinstance(raw_mentions, list) else []:
         if not isinstance(item, dict):
             continue
         surface = str(item.get("surface", "")).strip()
         if not surface:
             continue
-        out.append(EntityMention(surface=surface, kind=str(item.get("kind", "")).strip()))
-    return out
+        mentions.append(EntityMention(surface=surface, kind=str(item.get("kind", "")).strip()))
+    aliases: list[DeclaredAlias] = []
+    for item in raw_aliases if isinstance(raw_aliases, list) else []:
+        if not isinstance(item, dict):
+            continue
+        a = str(item.get("a", "")).strip()
+        b = str(item.get("b", "")).strip()
+        quote = str(item.get("quote", "")).strip()
+        if not (a and b and quote):
+            continue
+        if quote not in text:
+            _LOGGER.warning("extract_entities: dropped an alias whose quote is not in the passage")
+            continue
+        aliases.append(DeclaredAlias(a=a, b=b, quote=quote))
+    return Extraction(mentions=mentions, aliases=aliases)
+
+
+def _parse(reply: str) -> dict[str, Any] | None:
+    """The reply as a mapping, accepting either the object asked for or a bare
+    mention array.
+
+    Both shapes are attempted independently: a bare array's own braces make the
+    object slice unparseable, so a failure on one shape must fall through to the
+    other rather than condemn the reply.
+    """
+    for opener, closer in (("{", "}"), ("[", "]")):
+        start, end = reply.find(opener), reply.rfind(closer)
+        if start == -1 or end == -1 or end < start:
+            continue
+        try:
+            data = json.loads(reply[start : end + 1])
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(data, dict) and ("mentions" in data or "aliases" in data):
+            return data
+        if isinstance(data, dict):
+            continue  # a lone object from INSIDE a bare array — try the array shape
+        if isinstance(data, list):
+            return {"mentions": data, "aliases": []}
+    _LOGGER.warning("extract_entities: no usable JSON in the reply, dropping the batch")
+    return None

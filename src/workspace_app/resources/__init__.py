@@ -712,6 +712,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             "source_doc_id",
             IndexableField("norm_surface", str),
             IndexableField("norm_kind", str),
+            IndexableField("declared_same_as", list),
             IndexableField("collection_visibility", str),
             IndexableField("collection_read_meta", list),
             IndexableField("collection_read_content", list),
