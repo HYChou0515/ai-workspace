@@ -2,7 +2,8 @@ from collections.abc import Iterator
 
 from specstar import QB
 
-from workspace_app.kb.graph.write import norm_metric, write_doc_claims
+from workspace_app.kb.graph.normalize import norm_metric
+from workspace_app.kb.graph.write import write_doc_claims
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim
@@ -235,3 +236,88 @@ def test_write_doc_claims_reads_the_collection_verdict_live_not_the_decks_copy()
     )
     (claim,) = _claims(spec, doc_id)
     assert claim.collection_visibility == "private"
+
+
+def test_write_doc_claims_stamps_every_comparison_key():
+    """All three keys are written at extraction, not just the metric one: they are
+    what the grouping reads, and a key left empty groups with every other row that
+    also failed to write one."""
+    from specstar.types import Binary
+
+    from workspace_app.resources.kb import Collection, SourceDoc
+
+    llm = _FakeLlm(
+        '[{"metric": "Revenue (USD)", "period": "2024年第三季", "value": "1.2M", "unit": "美元"}]'
+    )
+    spec = make_spec(default_user=lambda: "bob")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(Collection(name="c")).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    with drm.using("bob"):
+        doc_id = drm.create(
+            SourceDoc(
+                collection_id=cid,
+                path="deck.pptx",
+                content=Binary(data=b"x"),
+                collection_visibility="public",
+                collection_created_by="bob",
+            )
+        ).resource_id
+    write_doc_claims(
+        spec, llm, collection_id=cid, source_doc_id=doc_id, chunks=[(f"{doc_id}#0", "t")]
+    )
+    (claim,) = _claims(spec, doc_id)
+    assert claim.metric == "Revenue (USD)"  # the raw surface survives for display
+    assert claim.norm_metric == norm_metric("Revenue")
+    assert claim.norm_period == "Q:2024:3"
+    assert claim.norm_unit == "USD"
+
+
+def test_migrating_a_claim_recomputes_its_keys_under_the_current_rules(tmp_path):
+    """The keys are derived STATE, so a rule change is a schema change: the migrate
+    step carries the new algorithm and rewrites rows that predate it.
+
+    The row here is written by a spec with NO Schema for GraphClaim — exactly what
+    slice 1 shipped, so its rows sit at version ``None`` holding keys the slice-1
+    rule produced and no period/unit key at all. Running migrate on the current
+    code brings them onto the current rules, which is what stops an improved rule
+    from reaching only new data."""
+    from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
+
+    from workspace_app.resources.graph import GraphClaim
+    from workspace_app.resources.kb import Collection
+
+    backend = BackendConfig(
+        connections={"local": ConnectionProfile(type="disk", options={"rootdir": str(tmp_path)})},
+        meta=BackendBinding(use="local"),
+        resource=BackendBinding(use="local"),
+        blob=BackendBinding(use="local"),
+    )
+    spec_old = SpecStar()
+    spec_old.configure(default_user="bob", backend=backend)
+    spec_old.add_model(Collection)
+    spec_old.add_model(GraphClaim, indexed_fields=["collection_id"])  # no Schema ⇒ version None
+    rid = (
+        spec_old.get_resource_manager(GraphClaim)
+        .create(
+            GraphClaim(
+                collection_id="c1",
+                source_doc_id="deck-A",
+                norm_metric="revenue (usd)",  # what the slice-1 rule produced
+                metric="Revenue (USD)",
+                value="1.2M",
+                period="2024年第三季",
+                unit="美元",
+            )
+        )
+        .resource_id
+    )
+
+    rm = make_spec(default_user="bob", backend=backend).get_resource_manager(GraphClaim)
+    rm.migrate(rid)  # operator backfill: POST /graph-claim/migrate/execute
+    got = rm.get(rid).data
+    assert isinstance(got, GraphClaim)
+    assert got.norm_metric == "revenue"
+    assert got.norm_period == "Q:2024:3"
+    assert got.norm_unit == "USD"
