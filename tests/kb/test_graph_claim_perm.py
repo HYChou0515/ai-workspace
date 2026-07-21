@@ -205,6 +205,23 @@ def test_a_collection_reader_granted_only_read_meta_gets_no_numbers():
     assert _readable(spec, "alice", claim_id) is False
 
 
+def test_a_collection_reader_granted_only_read_content_gets_no_numbers():
+    """The fourth corner: granted the content of a collection whose existence they
+    were never shown. Every doc route answers 404 for such a reader, so the claims
+    must not become the one way in — the mirror image of the read_meta-only case,
+    one level up."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    claim_id = _claim(
+        spec,
+        cid,
+        collection_visibility="restricted",
+        collection_read_meta=[],
+        collection_read_content=["user:alice"],
+    )
+    assert _readable(spec, "alice", claim_id) is False
+
+
 def test_a_collection_reader_granted_both_gets_the_numbers():
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
