@@ -35,6 +35,8 @@ from ..doc_permission import (
 from ..eval.sample import into_batches
 from ..llm import ILlm
 from .jobs import GraphJob, GraphJobPayload
+from .link import reconcile_vocabulary
+from .mention_write import write_doc_mentions
 from .write import write_doc_claims
 
 _LOGGER = logging.getLogger(__name__)
@@ -86,6 +88,11 @@ class GraphCoordinator:
             self._split(payload)
         elif payload.kind == "batch":
             self._batch(payload)
+        elif payload.kind == "reconcile":
+            # #534 B: turn the accumulated evidence into a vocabulary. Runs over
+            # the whole corpus, not one collection — identity is shared across
+            # them, which is the point of the layer.
+            reconcile_vocabulary(self._spec, llm=self._llm)
         else:  # pragma: no cover — defensive
             _LOGGER.warning("graph: unknown job kind %r", payload.kind)
 
@@ -97,6 +104,10 @@ class GraphCoordinator:
                     partition_key=cid,
                 )
             )
+        # The vocabulary pass has to be ASKED for, or a corpus extracts every week
+        # and never gets an entity page. It may run before the last batch lands —
+        # it is idempotent and re-runs, so the next pass picks up what it missed.
+        self._job_rm.create(GraphJob(payload=GraphJobPayload(kind="reconcile")))
 
     def reconcile_mirrors(self, collection_id: str) -> None:
         """#534 slice 2 — bring every claim in the collection back onto the CURRENT
@@ -174,12 +185,17 @@ class GraphCoordinator:
     def _batch(self, payload: GraphJobPayload) -> None:
         cid = payload.collection_id
         for doc_id in payload.doc_ids:
+            chunks = self._doc_chunks(doc_id)
             write_doc_claims(
-                self._spec,
-                self._llm,
-                collection_id=cid,
-                source_doc_id=doc_id,
-                chunks=self._doc_chunks(doc_id),
+                self._spec, self._llm, collection_id=cid, source_doc_id=doc_id, chunks=chunks
+            )
+            # #534 B: the primary layer, over the SAME chunks. Two passes for now —
+            # the issue's plan is one joint prompt for entities, relationships and
+            # claims, which halves the model time and keeps the signals together.
+            # Worth doing when relationships arrive and the joint signal actually
+            # matters; splitting them now keeps each extractor testable on its own.
+            write_doc_mentions(
+                self._spec, self._llm, collection_id=cid, source_doc_id=doc_id, chunks=chunks
             )
 
     # ── helpers ──────────────────────────────────────────────────────

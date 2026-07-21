@@ -21,15 +21,18 @@ from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
 from ..kb.chat_permission import kbchat_permission_event_handler
+from ..perm import Permission
 from ..perm.checker import (
     collection_permission_event_handler,
+    graph_mirror_event_handler,
     source_doc_permission_event_handler,
 )
 from ..perm.scope import (
     GroupsProvider,
     collection_access_scope,
     conversation_access_scope,
-    graph_claim_access_scope,
+    graph_entity_access_scope,
+    graph_evidence_access_scope,
     kbchat_access_scope,
     source_doc_access_scope,
 )
@@ -45,7 +48,13 @@ from .eval import (
     eval_batch_stat_id,
     eval_run_id,
 )
-from .graph import GraphClaim
+from .graph import (
+    GraphClaim,
+    GraphEntity,
+    GraphEntityLink,
+    GraphMention,
+    GraphRelationship,
+)
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
@@ -94,6 +103,10 @@ __all__ = [
     "EvalBatchStat",
     "EvalResult",
     "GraphClaim",
+    "GraphEntity",
+    "GraphEntityLink",
+    "GraphMention",
+    "GraphRelationship",
     "EvalRun",
     "eval_batch_stat_id",
     "eval_run_id",
@@ -106,6 +119,20 @@ __all__ = [
     "sanity_result_id",
     "sanity_verdict_id",
 ]
+
+
+def _renormalize_mention(record: Any) -> Any:
+    """#534 B — recompute a mention's comparison keys under the CURRENT rules.
+    Same contract as ``_renormalize_claim``: edit the pure function, bump the
+    version, point a step here, run migrate."""
+    from ..kb.graph.normalize import norm_surface
+
+    assert isinstance(record, GraphMention)
+    return msgspec.structs.replace(
+        record,
+        norm_surface=norm_surface(record.surface),
+        norm_kind=norm_surface(record.kind),
+    )
 
 
 def _renormalize_claim(record: Any) -> Any:
@@ -210,6 +237,38 @@ def _groups_provider(spec: SpecStar) -> GroupsProvider:
     closure so `perm/` needn't import the `Group` resource (dependency direction:
     resources → perm)."""
     return lambda user: groups_of(spec, user)
+
+
+def _collection_permission(spec: SpecStar) -> Callable[[str], Permission | None]:
+    """#534 — a collection's LIVE permission, for the mirror-truthfulness check.
+    Injected like the groups resolver so `perm/` needn't import a resource."""
+
+    def resolve(collection_id: str) -> Permission | None:
+        crm = spec.get_resource_manager(Collection)
+        try:
+            coll = crm.get(collection_id).data
+        except Exception:  # noqa: BLE001 — an unknown collection cannot vouch for anything
+            return Permission(visibility="private")
+        return coll.permission if isinstance(coll, Collection) else None
+
+    return resolve
+
+
+def _readable_collections_provider(
+    spec: SpecStar, superusers: frozenset[str]
+) -> Callable[[str], frozenset[str]]:
+    """#534 B — the collections a user may read the CONTENT of, for the shared
+    identity scope. Injected the same way (and for the same reason) as the groups
+    resolver: `perm/` must not import a resource. Collections are few and the
+    lookup is a point get per id, so listing them per request is cheap."""
+    from ..kb.collections import readable_collection_ids
+
+    def resolve(user: str) -> frozenset[str]:
+        crm = spec.get_resource_manager(Collection)
+        ids = [m.resource_id for m in crm.search_resources(None)]
+        return frozenset(readable_collection_ids(spec, ids, user, superusers=superusers))
+
+    return resolve
 
 
 def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> None:
@@ -662,7 +721,88 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("doc_read_meta", list),
             IndexableField("doc_read_content", list),
         ],
-        access_scope=graph_claim_access_scope(superusers, groups),
+        access_scope=graph_evidence_access_scope(superusers, groups),
+        event_handlers=[graph_mirror_event_handler(_collection_permission(spec))],
+    )
+    # #534 B: the primary layer — what a document said, verbatim. Same evidence
+    # shape as a claim, so the same mirror and the same scope. `norm_surface` /
+    # `norm_kind` are indexed because the vocabulary layer groups on them, and
+    # they are derived state, so they are versioned like the claim keys are.
+    spec.add_model(
+        Schema(GraphMention, "v1").step(
+            None, _renormalize_mention, to="v1", source_type=GraphMention
+        ),
+        indexed_fields=[
+            "collection_id",
+            "source_doc_id",
+            IndexableField("norm_surface", str),
+            IndexableField("norm_kind", str),
+            IndexableField("declared_same_as", list),
+            IndexableField("collection_visibility", str),
+            IndexableField("collection_read_meta", list),
+            IndexableField("collection_read_content", list),
+            IndexableField("collection_created_by", str),
+            IndexableField("doc_visibility", str),
+            IndexableField("doc_read_meta", list),
+            IndexableField("doc_read_content", list),
+        ],
+        access_scope=graph_evidence_access_scope(superusers, groups),
+        event_handlers=[graph_mirror_event_handler(_collection_permission(spec))],
+    )
+    # #534 B: the vocabulary layer. It owns nothing — `GraphEntityLink` carries the
+    # claim that a mention belongs here, WITH the basis it was made on, so a wrong
+    # grouping costs a link and not a record. `collection_ids` is where its evidence
+    # lives and is what the scope reads: identity is shared across collections, so
+    # it cannot inherit one, and an access scope cannot ask another table what the
+    # caller may see. Empty ⇒ invisible (a bare name can leak).
+    spec.add_model(
+        GraphEntity,
+        indexed_fields=[
+            IndexableField("norm_keys", list),
+            IndexableField("kind_id", str),
+            IndexableField("collection_ids", list),
+            IndexableField("merged_into", str),
+        ],
+        access_scope=graph_entity_access_scope(
+            _readable_collections_provider(spec, superusers), superusers
+        ),
+    )
+    # The link's own visibility rides its entity (cascade Ref): a link to an entity
+    # you cannot see is not reachable, and its basis/evidence say nothing on their
+    # own. `state` indexed so the review queue is a query.
+    spec.add_model(
+        GraphEntityLink,
+        indexed_fields=[
+            "entity_id",
+            "mention_id",
+            IndexableField("state", str),
+            IndexableField("collection_ids", list),
+        ],
+        access_scope=graph_entity_access_scope(
+            _readable_collections_provider(spec, superusers), superusers
+        ),
+    )
+    # #534 B: the connections. Evidence like a mention — same mirror, same scope,
+    # same "the document goes, its rows go" lifecycle. The ends are surfaces, not
+    # entity ids: resolving them is the vocabulary's job and changes as it learns.
+    spec.add_model(
+        GraphRelationship,
+        indexed_fields=[
+            "collection_id",
+            "source_doc_id",
+            IndexableField("norm_subject", str),
+            IndexableField("norm_predicate", str),
+            IndexableField("norm_object", str),
+            IndexableField("collection_visibility", str),
+            IndexableField("collection_read_meta", list),
+            IndexableField("collection_read_content", list),
+            IndexableField("collection_created_by", str),
+            IndexableField("doc_visibility", str),
+            IndexableField("doc_read_meta", list),
+            IndexableField("doc_read_content", list),
+        ],
+        access_scope=graph_evidence_access_scope(superusers, groups),
+        event_handlers=[graph_mirror_event_handler(_collection_permission(spec))],
     )
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a

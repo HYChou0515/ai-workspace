@@ -172,12 +172,18 @@ def source_doc_access_scope(
     return _and_scopes(collection, source_doc_override_scope(superusers, groups_provider))
 
 
-def graph_claim_access_scope(
+def graph_evidence_access_scope(
     superusers: frozenset[str] = frozenset(),
     groups_provider: GroupsProvider | None = None,
 ) -> AccessScope:
-    """#534 slice 2 — a metric claim is visible iff the DECK it was extracted from
-    is. Same two-half shape as ``source_doc_access_scope`` (collection mirror AND
+    """#534 — a piece of extracted EVIDENCE (a ``GraphClaim`` measurement, a
+    ``GraphMention`` term) is visible iff the DECK it was extracted from is.
+
+    One scope for both, because it is one rule: they carry the same seven mirror
+    fields and answer the same question. Two copies would be two things to keep in
+    step, and a permission rule that drifts is a leak.
+
+    Same two-half shape as ``source_doc_access_scope`` (collection mirror AND
     per-doc tightening, ANDed so an override can only tighten, both matching the
     caller against the mirrored collection owner), read off the claim's own
     denormalized copy of that deck's effective permission.
@@ -219,6 +225,38 @@ def graph_claim_access_scope(
     scope = halves[0]
     for half in halves[1:]:
         scope = _and_scopes(scope, half)
+    return scope
+
+
+def graph_entity_access_scope(
+    readable_collections: Callable[[str], frozenset[str]],
+    superusers: frozenset[str] = frozenset(),
+) -> AccessScope:
+    """#534 B — a shared identity is visible iff the caller can read a collection
+    it has evidence in.
+
+    The rule #534 asks for is "you see the entity if you can see at least one of
+    its mentions", which is a question about ANOTHER table — and an access scope
+    is a predicate over one row. So the row carries the collections its evidence
+    lives in, and the predicate asks whether any of them is one the caller can
+    read. ``readable_collections`` resolves that set per caller, the same shape as
+    the ``groups_provider`` #307 threads through the other scopes.
+
+    An empty list is invisible to everyone but a superuser: nothing vouches for
+    the identity, and a bare name can leak.
+    """
+
+    def scope(user: str) -> ConditionBuilder | _Unrestricted:
+        if user in superusers:
+            logger.debug("scope: graph-entity superuser %s -> unrestricted", user)
+            return UNRESTRICTED
+        visible = readable_collections(user)
+        if not visible:
+            # `contains_any([])` is vacuously false on some backends and an error
+            # on others; spell the "nothing is visible" case out.
+            return QB["collection_ids"].contains("\x00never")
+        return QB["collection_ids"].contains_any(sorted(visible))
+
     return scope
 
 

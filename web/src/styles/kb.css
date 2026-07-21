@@ -3546,3 +3546,140 @@
   background: var(--paper);
   color: var(--text-paper);
 }
+
+
+/* #534 B: the merge queue. Two sides, side by side, each leading with the
+   documents' own sentences — the reviewer decides on those, not on the model's
+   summary, which measured against a real model is wrong about half the time and
+   reads convincingly either way. */
+.mrg {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mrg__row {
+  background: var(--paper);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+}
+.mrg__q {
+  margin: 0 0 10px;
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--text-paper);
+}
+.mrg__pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+/* A rule between the two, rather than a symbol on it: the divider's job is to
+   say "these are two separate things being compared", which a line does without
+   depending on a glyph the font may not carry. */
+.mrg__pair > :nth-child(2) {
+  border-left: 1px solid var(--paper-3);
+  padding-left: 18px;
+}
+.mrg__name {
+  font-weight: 600;
+  margin-bottom: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mrg__kind {
+  font-weight: 400;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+  background: var(--paper-2);
+  border-radius: 99px;
+  padding: 1px 8px;
+}
+.mrg__mismatch {
+  margin: 10px 0 0;
+  font-size: var(--text-small);
+  color: var(--accent);
+}
+.mrg__ev {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mrg__ev li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+.mrg__doc {
+  flex: none;
+  color: var(--text-paper-d);
+  font-size: var(--text-small);
+  border: 1px solid var(--paper-3);
+  border-radius: 4px;
+  padding: 0 5px;
+  text-decoration: none;
+  background: var(--paper-2);
+}
+.mrg__doc:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.mrg__quote {
+  color: var(--text-paper-d);
+}
+.mrg__none {
+  margin: 0;
+  font-size: var(--text-small);
+  color: var(--text-paper-d2);
+  font-style: italic;
+}
+.mrg__why {
+  margin: 12px 0 0;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+.mrg__whyLabel {
+  color: var(--text-paper-d2);
+  margin-right: 6px;
+}
+.mrg__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+/* Both answers read as buttons and neither is emphasised. The shared surface is
+   here rather than on one variant because equal weight must not mean invisible:
+   a transparent control on this background did not look pressable at all, and a
+   reviewer who cannot see the choice cannot make it. */
+.mrg__actions .btn {
+  background: var(--paper-2);
+  border-color: var(--text-paper-d2);
+  color: var(--text-paper);
+  font-weight: 600;
+}
+.mrg__actions .btn:hover:not(:disabled) {
+  background: var(--paper-3);
+}
+
+@media (max-width: 720px) {
+  .mrg__pair {
+    grid-template-columns: 1fr;
+  }
+  .mrg__pair > :nth-child(2) {
+    border-left: 0;
+    border-top: 1px solid var(--paper-3);
+    padding-left: 0;
+    padding-top: 12px;
+  }
+}
