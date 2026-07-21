@@ -239,10 +239,13 @@ def _related(spec: SpecStar, entity: GraphEntity, *, as_user: str) -> list[Relat
                 far_surface = getattr(rel, far)
                 far_key = getattr(rel, f"norm_{far}")
                 far_id, far_name = _identity_of(erm, far_key, far_surface)
+                # The predicate resolves through the vocabulary too, so a page
+                # shows one connection-word once the two spellings are joined.
+                _, predicate = _identity_of(erm, rel.norm_predicate, rel.predicate)
                 out.append(
                     Related(
                         direction=direction,
-                        predicate=rel.predicate,
+                        predicate=predicate,
                         other_name=far_name,
                         other_entity_id=far_id,
                         quote=rel.quote,

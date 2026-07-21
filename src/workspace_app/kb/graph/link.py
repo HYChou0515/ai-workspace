@@ -18,7 +18,12 @@ import re
 import msgspec
 from specstar import QB, SpecStar
 
-from ...resources.graph import GraphEntity, GraphEntityLink, GraphMention
+from ...resources.graph import (
+    GraphEntity,
+    GraphEntityLink,
+    GraphMention,
+    GraphRelationship,
+)
 from ..llm import ILlm
 
 _DIGITS = re.compile(r"\d+")
@@ -133,11 +138,14 @@ def link_identical_mentions(spec: SpecStar) -> int:
     kind_ids: dict[str, str] = {}
     for mentions in by_key.values():
         for kind_key in {m.norm_kind for m in mentions if m.norm_kind}:
+            labelled = [m for m in mentions if m.norm_kind == kind_key]
             if kind_key not in kind_ids:
-                kind_display = _display_name(
-                    [(m.kind, m.occurrences) for m in mentions if m.norm_kind == kind_key]
-                )
+                kind_display = _display_name([(m.kind, m.occurrences) for m in labelled])
                 kind_ids[kind_key] = _find_or_create_entity(spec, kind_key, kind_display)
+            # A kind's evidence is the mentions carrying the label. Without it the
+            # kind has no collections, and the scope hides an identity nothing
+            # vouches for — so the kind would be invisible on every page.
+            _add_collections(spec, kind_ids[kind_key], {m.collection_id for m in labelled})
 
     created = 0
     for key, mentions in by_key.items():
@@ -157,6 +165,39 @@ def _display_name(candidates: list[tuple[str, int]]) -> str:
     normalised string nobody did. Ties break on the surface itself so a re-run
     cannot shuffle the name."""
     return max(candidates, key=lambda pair: (pair[1], pair[0]))[0]
+
+
+def name_predicates(spec: SpecStar) -> int:
+    """Give every connection-word an identity. Returns identities created.
+
+    A predicate is a name for a kind of connection, and "造成" and "leads to" are
+    one connection written two ways — the same problem a thing has, so it gets the
+    same answer rather than a mechanism of its own. Once they are identities, the
+    four bases join them exactly as they join anything else, and a page shows one
+    predicate instead of two.
+
+    Relationships keep their verbatim predicate. This only ensures something
+    exists to resolve it to; the row is evidence and is never rewritten.
+    """
+    rrm = spec.get_resource_manager(GraphRelationship)
+    by_key: dict[str, list[tuple[str, int]]] = {}
+    where: dict[str, set[str]] = {}
+    for r in rrm.list_resources(QB.all().build()):
+        rel = r.data
+        assert isinstance(rel, GraphRelationship)
+        if rel.norm_predicate:
+            by_key.setdefault(rel.norm_predicate, []).append((rel.predicate, 1))
+            where.setdefault(rel.norm_predicate, set()).add(rel.collection_id)
+    created = 0
+    for key, surfaces in by_key.items():
+        existed = _entity_for_key(spec, key)
+        entity_id = existed or _find_or_create_entity(spec, key, _display_name(surfaces))
+        # A predicate's evidence is the relationships that use it. Without this it
+        # carries no collections, and the scope reads "nothing vouches for this"
+        # as invisible — to everyone, including the owner.
+        _add_collections(spec, entity_id, where[key])
+        created += 0 if existed else 1
+    return created
 
 
 def link_declared_aliases(spec: SpecStar) -> int:
@@ -380,6 +421,7 @@ def reconcile_vocabulary(spec: SpecStar, llm: ILlm | None = None) -> None:
     can also be turned off by configuration rather than by editing.
     """
     link_identical_mentions(spec)
+    name_predicates(spec)
     link_declared_aliases(spec)
     if llm is not None:
         link_resembling_entities(spec, llm)  # ← comment out to stop proposing merges

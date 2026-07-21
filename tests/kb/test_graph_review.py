@@ -317,3 +317,40 @@ def test_a_connection_from_an_unreadable_document_never_appears():
     eid = _entity_id_named(spec, "回焊爐")
     assert entity_page(spec, eid, as_user="bob").related != []
     assert entity_page(spec, eid, as_user="alice").related == []
+
+
+def test_a_predicate_is_an_identity_like_everything_else():
+    """ "造成" and "leads to" are one connection written two ways. They go through
+    the same pipeline as a thing and a kind — so once the vocabulary joins them,
+    every page shows one predicate instead of two, and no separate mechanism had
+    to be built to make that happen."""
+    from workspace_app.kb.graph.link import reconcile_vocabulary
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _mention(spec, cid, "deck-A", "回焊爐")
+    _mention(spec, cid, "deck-A", "空洞")
+    _relationship(spec, cid, "deck-A", "回焊爐", "造成", "空洞")
+    _relationship(spec, cid, "deck-B", "回焊爐", "leads to", "空洞")
+    reconcile_vocabulary(spec, llm=None)
+
+    zh = _entity_id_named(spec, "造成")
+    en = _entity_id_named(spec, "leads to")
+    page = entity_page(spec, _entity_id_named(spec, "回焊爐"), as_user="bob")
+    assert sorted(r.predicate for r in page.related) == ["leads to", "造成"]
+
+    accept_proposal(spec, zh, en, by="amy")
+    page = entity_page(spec, _entity_id_named(spec, "回焊爐"), as_user="bob")
+    assert sorted(r.predicate for r in page.related) == ["造成", "造成"]
+
+
+def test_a_predicate_the_vocabulary_has_not_reached_still_reads():
+    """Until the pass runs, the page falls back to the words the document used.
+    A connection is worth showing before it is tidy."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _mention(spec, cid, "deck-A", "回焊爐")
+    _relationship(spec, cid, "deck-A", "回焊爐", "造成", "空洞")
+    link_identical_mentions(spec)
+    page = entity_page(spec, _entity_id_named(spec, "回焊爐"), as_user="bob")
+    assert [r.predicate for r in page.related] == ["造成"]

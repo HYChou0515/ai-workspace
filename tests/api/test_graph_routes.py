@@ -58,6 +58,7 @@ def _seed(spec: SpecStar, *, private: bool = False) -> str:
                     surface="回焊爐",
                     norm_surface=norm_surface("回焊爐"),
                     kind="機台",
+                    norm_kind=norm_surface("機台"),
                     occurrences=2,
                     chunk_ids=[f"{doc}#0"],
                     collection_visibility="private" if private else "public",
@@ -151,3 +152,16 @@ def test_the_entity_page_shows_what_the_thing_connects_to():
     assert rel["other_name"] == "空洞"
     assert rel["quote"] == "回焊爐溫度過高造成空洞"
     assert rel["chunk_id"] == "deck-A#0"
+
+
+def test_the_page_names_the_kind_once_the_vocabulary_has_run():
+    """A kind is an identity too, so it only appears once something vouches for
+    it — the same rule that hides an unbacked name. Before the fix that gave kinds
+    their evidence, this was empty for everyone including the owner."""
+    from workspace_app.kb.graph.link import reconcile_vocabulary
+
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    eid = _seed(spec)
+    reconcile_vocabulary(spec, llm=None)
+    assert client.get(f"/kb/graph/entities/{eid}").json()["kind"] == "機台"
