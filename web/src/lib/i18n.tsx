@@ -708,6 +708,22 @@ export const messages = {
     "zh-TW": "沒有符合篩選條件的項目。",
     en: "No items match the current filters.",
   },
+  // #534 B: the merge queue. The copy deliberately says what the reviewer is
+  // deciding ("same thing" / "different things"), not what the system will do
+  // internally — and marks the reason as the model's claim, because measured
+  // against a real one it is wrong about half the time and reads convincingly.
+  "review.tab.merges": { "zh-TW": "身分合併", en: "Merges" },
+  "merge.same": { "zh-TW": "是同一個", en: "Same thing" },
+  "merge.different": { "zh-TW": "不是同一個", en: "Different things" },
+  "merge.whyLabel": { "zh-TW": "AI 認為:", en: "AI says:" },
+  "merge.noEvidence": {
+    "zh-TW": "沒有你能開啟的出處。",
+    en: "No source you can open.",
+  },
+  "merge.empty": {
+    "zh-TW": "目前沒有需要判斷的名稱。",
+    en: "No names waiting on a decision.",
+  },
   "review.tab.pending": { "zh-TW": "待處理", en: "Pending" },
   "review.tab.resolved": { "zh-TW": "已處理", en: "Handled" },
   // #506 P7: the clustered ("group duplicates") view.

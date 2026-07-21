@@ -529,6 +529,23 @@ export type KbDocQuestion = {
 /** #481: one card-proposal row of the global 審核 inbox — the proposal plus its
  * collection, the run it belongs to (the `run` column), and whether the caller
  * may act on it (write permission on the collection). */
+/** #534 B: one merge waiting on a person, with each side's own evidence. */
+export type KbGraphEvidence = {
+  source_doc_id: string;
+  surface: string;
+  text: string;
+};
+
+export type KbGraphProposal = {
+  entity_id: string;
+  other_id: string;
+  name: string;
+  other_name: string;
+  why: string;
+  evidence: KbGraphEvidence[];
+  other_evidence: KbGraphEvidence[];
+};
+
 export type KbReviewCard = {
   run_id: string;
   collection_id: string;
@@ -685,6 +702,9 @@ export interface KbApi {
    * picked files against these before upload, pre-blocking the common case
    * (an encrypted Office file) without a round-trip. */
   listUploadChecks(): Promise<UploadCheckHint[]>;
+  /** #534 B: the merge queue and its two decisions. */
+  listGraphProposals(): Promise<KbGraphProposal[]>;
+  decideGraphProposal(entityId: string, otherId: string, same: boolean): Promise<void>;
   /** Issue #101: build the collection's export zip and return its handle. The
    * zip is held server-side until streamed (or reaped); two-step so a large
    * export's build latency hides behind a loading state, not a stalled click. */
@@ -877,6 +897,17 @@ const jsonHeaders = { "content-type": "application/json" };
 export const realKbApi: KbApi = {
   async getAgentConfig() {
     return (await ok(await apiFetch("/kb/agent"), "kb agent config")).json();
+  },
+  /** #534 B: the merge queue — name pairs an AI thinks are one thing, each side
+   * carrying the documents and sentences it came from so a person can judge the
+   * evidence rather than the AI's account of it. */
+  async listGraphProposals() {
+    return (await ok(await apiFetch("/kb/graph/proposals"), "list merge proposals")).json();
+  },
+  async decideGraphProposal(entityId, otherId, same) {
+    const verb = same ? "accept" : "reject";
+    const url = `/kb/graph/proposals/${encodeURIComponent(entityId)}/${verb}?other=${encodeURIComponent(otherId)}`;
+    await ok(await apiFetch(url, { method: "POST" }), "decide merge proposal");
   },
   async listCollections() {
     return (await ok(await apiFetch("/kb/collections"), "list collections")).json();

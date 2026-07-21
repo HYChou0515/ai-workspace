@@ -3546,3 +3546,93 @@
   background: var(--paper);
   color: var(--text-paper);
 }
+
+
+/* #534 B: the merge queue. Two sides, side by side, each leading with the
+   documents' own sentences — the reviewer decides on those, not on the model's
+   summary, which measured against a real model is wrong about half the time and
+   reads convincingly either way. */
+.mrg {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.mrg__row {
+  background: var(--paper);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+}
+.mrg__pair {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.mrg__vs {
+  color: var(--text-paper-d2);
+  font-size: var(--text-body);
+  align-self: center;
+}
+.mrg__name {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.mrg__ev {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mrg__ev li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: var(--text-small);
+  line-height: 1.5;
+}
+.mrg__doc {
+  flex: none;
+  color: var(--text-paper-d2);
+  font-size: var(--text-small);
+  border: 1px solid var(--paper-3);
+  border-radius: 4px;
+  padding: 0 5px;
+}
+.mrg__quote {
+  color: var(--text-paper-d);
+}
+.mrg__none {
+  margin: 0;
+  font-size: var(--text-small);
+  color: var(--text-paper-d2);
+  font-style: italic;
+}
+.mrg__why {
+  margin: 12px 0 0;
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+.mrg__whyLabel {
+  color: var(--text-paper-d2);
+  margin-right: 6px;
+}
+.mrg__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+@media (max-width: 720px) {
+  .mrg__pair {
+    grid-template-columns: 1fr;
+  }
+  .mrg__vs {
+    justify-self: start;
+  }
+}

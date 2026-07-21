@@ -281,6 +281,10 @@ export const mockKbApi: KbApi = {
     documents.set(collectionId, list);
     return [id];
   },
+  async listGraphProposals() {
+    return [];
+  },
+  async decideGraphProposal() {},
   async listUploadChecks() {
     // #325: mirror the bundled Office hint so mock-mode pre-blocks too.
     return [
