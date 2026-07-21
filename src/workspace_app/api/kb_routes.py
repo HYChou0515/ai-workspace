@@ -51,6 +51,7 @@ from ..kb.findability import (
     probe_findability,
 )
 from ..kb.graph.mention_write import wipe_doc_mentions
+from ..kb.graph.review import accept_proposal, entity_page, list_proposals, reject_proposal
 from ..kb.graph.write import wipe_doc_claims
 from ..kb.ingest import Ingestor, teardown_doc_chunks
 from ..kb.links import rewrite_md_links
@@ -59,6 +60,7 @@ from ..kb.preview import is_structured_text, preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
 from ..perm import Actor, Permission, Verb, Visibility, authorize
+from ..resources.graph import mention_id
 from ..resources.groups import groups_of
 from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
 from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
@@ -434,6 +436,71 @@ class RenderedDoc(BaseModel):
     # Tune-parsing modal writes). "" ⇒ the doc inherits the collection guidance;
     # the modal prefills its editor from this (else the collection's).
     parser_guidance_override: str = ""
+
+
+class GraphMentionOut(BaseModel):
+    """One document's evidence for an identity, in the words that document used."""
+
+    surface: str  # verbatim, as that document wrote it
+    source_doc_id: str
+    occurrences: int
+    chunk_ids: list[str]
+    basis: str  # why this evidence is filed under this identity
+    evidence: str  # where to go and check that
+
+
+class GraphRelatedOut(BaseModel):
+    """One connection this identity takes part in, from its side."""
+
+    direction: str  # "out" (it is the subject) | "in" (it is the object)
+    predicate: str  # verbatim, as the document wrote it
+    other_name: str
+    other_entity_id: str  # "" when the far end is not in the vocabulary yet
+    quote: str
+    source_doc_id: str
+    chunk_id: str
+
+
+class GraphEntityOut(BaseModel):
+    """One identity and everything the corpus said about it that the caller may
+    read. Assembled from the links, so nothing is stored twice."""
+
+    id: str
+    name: str
+    aliases: list[str]
+    kind: str
+    occurrences: int
+    mentions: list[GraphMentionOut]
+    related: list[GraphRelatedOut]
+
+
+class GraphEvidenceOut(BaseModel):
+    """One place a name actually appeared, in the document's own words."""
+
+    source_doc_id: str
+    surface: str
+    text: str
+
+
+class GraphProposalOut(BaseModel):
+    """A merge waiting on a person — both names, and what each side actually
+    looked like in the documents.
+
+    The reason is the model's, and measured against a real one it is the least
+    trustworthy thing here: it justified merging two different machines with a
+    sentence that read perfectly and described only one of them. The evidence is
+    what a reviewer should be deciding on."""
+
+    entity_id: str
+    other_id: str
+    name: str
+    other_name: str
+    why: str
+    evidence: list[GraphEvidenceOut]
+    other_evidence: list[GraphEvidenceOut]
+    collection_ids: list[str]
+    kind: str
+    other_kind: str
 
 
 class DocDeletedOut(BaseModel):
@@ -1847,6 +1914,121 @@ def register_kb_routes(
             counts=counts,
             runs=_running_unit_progress(spec, collection_id),
             latest_ms=latest,
+        )
+
+    @app.get("/kb/graph/entities/{entity_id}")
+    async def graph_entity(entity_id: str) -> GraphEntityOut:
+        """#534 B — one identity, every document that named it, and under which
+        name.
+
+        Reads AS THE CALLER, so the access scope filters: an identity nothing
+        readable vouches for is a 404 rather than an empty page (a bare name can
+        leak a customer code or an unreleased part), and evidence from a
+        collection they cannot open never arrives. No permission rule is written
+        here — a second copy is one to keep in step, and one that drifts is a leak.
+        """
+        try:
+            page = entity_page(spec, entity_id, as_user=get_user_id())
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        by_mention = {link.mention_id: link for link in page.links}
+        kind = ""
+        if page.entity.kind_id:
+            try:
+                kind_page = entity_page(spec, page.entity.kind_id, as_user=get_user_id())
+                kind = kind_page.entity.canonical_name
+            except ResourceIDNotFoundError:
+                kind = ""  # the kind rests on evidence this caller cannot read
+        return GraphEntityOut(
+            id=entity_id,
+            name=page.entity.canonical_name,
+            # The surfaces documents actually used, not the normalised keys.
+            # A key is lowercased and folded and nobody wrote it that way; putting
+            # one in front of a reader is exactly what the display-name rule
+            # exists to prevent, and an alias is a name like any other.
+            aliases=sorted({m.surface for m in page.mentions}),
+            kind=kind,
+            occurrences=page.occurrences,
+            related=[
+                GraphRelatedOut(
+                    direction=r.direction,
+                    predicate=r.predicate,
+                    other_name=r.other_name,
+                    other_entity_id=r.other_entity_id,
+                    quote=r.quote,
+                    source_doc_id=r.source_doc_id,
+                    chunk_id=r.chunk_id,
+                )
+                for r in page.related
+            ],
+            mentions=[
+                GraphMentionOut(
+                    surface=m.surface,
+                    source_doc_id=m.source_doc_id,
+                    occurrences=m.occurrences,
+                    chunk_ids=list(m.chunk_ids),
+                    basis=by_mention[mention_id(m.source_doc_id, m.surface)].basis,
+                    evidence=by_mention[mention_id(m.source_doc_id, m.surface)].evidence,
+                )
+                for m in page.mentions
+            ],
+        )
+
+    @app.get("/kb/graph/proposals")
+    async def graph_proposals(
+        collection: str = Query("", description="narrow to one knowledge base"),
+    ) -> list[GraphProposalOut]:
+        """The merges waiting on a person — one row per pair rather than per
+        mention.
+
+        Narrowable by collection because that is a boundary of RESPONSIBILITY:
+        different collections are reviewed by different people, and a queue that
+        cannot be split along it shows everyone everyone else's work."""
+        return [
+            _proposal_out(p)
+            for p in list_proposals(spec, as_user=get_user_id(), collection_id=collection or None)
+        ]
+
+    @app.post("/kb/graph/proposals/{entity_id}/accept")
+    async def graph_accept(entity_id: str, other: str = Query(...)) -> GraphEntityOut:
+        """Agree that two identities are one. The links record WHO agreed, so the
+        answer to "why are these the same" becomes a person rather than a model."""
+        _require_proposal(entity_id, other)
+        accept_proposal(spec, entity_id, other, by=get_user_id())
+        return await graph_entity(entity_id)
+
+    @app.post("/kb/graph/proposals/{entity_id}/reject")
+    async def graph_reject(entity_id: str, other: str = Query(...)) -> GraphProposalOut:
+        """Say no. Nothing merges — nothing was changed to propose it — but the
+        answer is kept, so the pair is never raised again."""
+        proposal = _require_proposal(entity_id, other)
+        reject_proposal(spec, entity_id, other, by=get_user_id())
+        return proposal
+
+    def _require_proposal(entity_id: str, other: str) -> GraphProposalOut:
+        for p in list_proposals(spec, as_user=get_user_id()):
+            if (p.entity_id, p.proposed_from) == (entity_id, other):
+                return _proposal_out(p)
+        raise HTTPException(status_code=404, detail="no such proposal")
+
+    def _proposal_out(p) -> GraphProposalOut:
+        def ev(items):
+            return [
+                GraphEvidenceOut(source_doc_id=e.source_doc_id, surface=e.surface, text=e.text)
+                for e in items
+            ]
+
+        return GraphProposalOut(
+            entity_id=p.entity_id,
+            other_id=p.proposed_from,
+            name=p.name,
+            other_name=p.other_name,
+            why=p.why,
+            evidence=ev(p.evidence),
+            other_evidence=ev(p.other_evidence),
+            collection_ids=list(p.collection_ids),
+            kind=p.kind,
+            other_kind=p.other_kind,
         )
 
     @app.get("/kb/documents")

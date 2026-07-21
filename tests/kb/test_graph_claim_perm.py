@@ -194,7 +194,7 @@ def test_a_collection_reader_granted_only_read_meta_gets_no_numbers():
     granted, read_content withheld — must not surrender the metrics of every deck
     inside it."""
     spec = make_spec(default_user=lambda: "bob")
-    cid = _collection(spec)
+    cid = _collection(spec, permission=Permission(visibility="restricted"))
     claim_id = _claim(
         spec,
         cid,
@@ -211,7 +211,7 @@ def test_a_collection_reader_granted_only_read_content_gets_no_numbers():
     must not become the one way in — the mirror image of the read_meta-only case,
     one level up."""
     spec = make_spec(default_user=lambda: "bob")
-    cid = _collection(spec)
+    cid = _collection(spec, permission=Permission(visibility="restricted"))
     claim_id = _claim(
         spec,
         cid,
@@ -224,7 +224,7 @@ def test_a_collection_reader_granted_only_read_content_gets_no_numbers():
 
 def test_a_collection_reader_granted_both_gets_the_numbers():
     spec = make_spec(default_user=lambda: "bob")
-    cid = _collection(spec)
+    cid = _collection(spec, permission=Permission(visibility="restricted"))
     claim_id = _claim(
         spec,
         cid,

@@ -245,3 +245,44 @@ async def test_the_batch_job_records_mentions_alongside_claims():
     assert len(rows) == 1
     assert isinstance(rows[0].data, GraphMention)
     assert rows[0].data.surface == "回焊爐"
+
+
+async def test_a_reconcile_job_builds_the_vocabulary():
+    """The vocabulary pass is a JOB kind, not a sweep: it inherits the queue's
+    retry, status and logging, and a worker pod can consume it like any other
+    stage. Asserted through _handle so the wiring is what is under test."""
+    from workspace_app.resources.graph import GraphEntity
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "回焊爐 250C")])
+    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord._handle(
+        SimpleNamespace(
+            data=GraphJob(
+                payload=GraphJobPayload(kind="batch", collection_id=cid, doc_ids=["deck-A"])
+            )
+        )
+    )
+    coord._handle(SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="reconcile"))))
+    erm = spec.get_resource_manager(GraphEntity)
+    names = set()
+    for r in erm.list_resources(QB.all().build()):
+        assert isinstance(r.data, GraphEntity)
+        names.add(r.data.canonical_name)
+    assert "回焊爐" in names
+
+
+async def test_a_dispatch_ends_by_queueing_a_reconcile():
+    """The pass that turns evidence into a vocabulary has to be asked for, or a
+    corpus extracts every week and never gets an entity page."""
+    spec = make_spec(default_user=lambda: "bob")
+    _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "x")])
+    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord._handle(SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="dispatch"))))
+    jrm = spec.get_resource_manager(GraphJob)
+    kinds = []
+    for r in jrm.list_resources(QB.all().build()):
+        assert isinstance(r.data, GraphJob)
+        assert isinstance(r.data.payload, GraphJobPayload)
+        kinds.append(r.data.payload.kind)
+    assert "reconcile" in kinds

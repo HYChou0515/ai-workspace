@@ -104,6 +104,9 @@ export const qk = {
 
   kb: {
     all: ["kb"] as const,
+    // #534 B: the merge queue.
+    graphProposals: (collectionId?: string) =>
+      ["kb", "graph", "proposals", collectionId ?? ""] as const,
     collections: ["kb", "collections"] as const,
     documents: (collectionId: string) =>
       ["kb", "documents", collectionId] as const,
