@@ -218,3 +218,7 @@ class GraphEntityLink(Struct):  # → resource "graph-entity-link"
     basis: str = "resembles"  # one of LINK_BASES
     evidence: str = ""  # where to go and check: a chunk id, a rule name, a user id
     state: str = "active"  # active | pending (awaiting review) | rejected
+    # On a PENDING proposal: the identity this link would absorb. Accepting the
+    # proposal is the same absorption a declaration performs; rejecting it leaves
+    # nothing behind, because nothing was changed to make it.
+    proposed_from: str = ""

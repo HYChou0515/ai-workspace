@@ -19,6 +19,7 @@ import msgspec
 from specstar import QB, SpecStar
 
 from ...resources.graph import GraphEntity, GraphEntityLink, GraphMention
+from ..llm import ILlm
 
 _DIGITS = re.compile(r"\d+")
 
@@ -220,3 +221,149 @@ def _absorb(spec: SpecStar, host_id: str, other_id: str, *, evidence: str) -> No
             msgspec.structs.replace(link, entity_id=host_id, basis="declared", evidence=evidence),
         )
     rm.update(other_id, msgspec.structs.replace(other, norm_keys=[], collection_ids=[]))
+
+
+# How much two keys must have in common before the model is asked about them.
+# Every pair would be too many calls, so a cheap test narrows the field. Missing a
+# pair costs a merge nobody proposed — visible as two entries someone can still
+# join by hand — while asking about everything costs money on every single run.
+_MIN_OVERLAP = 0.34
+
+_JUDGE_PROMPT = (
+    "Two terms from technical documents. Are they two names for the SAME thing, "
+    "or two different things?\n\n"
+    "A: {a}\nB: {b}\n\n"
+    "Different equipment, different steps of a process, a thing and a measurement "
+    "OF that thing, and a general category and one specific item in it are all "
+    "DIFFERENT. Say they are the same only if one is simply another way of "
+    "writing the other.\n\n"
+    'Answer ONLY as JSON: {{"same": true or false, "why": "<one short sentence>"}}'
+)
+
+
+def _overlap(a: str, b: str) -> float:
+    """Character-set overlap, as a fraction of the smaller term. Crude on purpose:
+    it decides only who gets ASKED, and the model and then a person both still
+    stand between it and any change to the vocabulary."""
+    left, right = set(a.replace(" ", "")), set(b.replace(" ", ""))
+    if not left or not right:
+        return 0.0
+    return len(left & right) / min(len(left), len(right))
+
+
+def link_resembling_entities(spec: SpecStar, llm: ILlm) -> int:
+    """PROPOSE merges the model believes in. Returns proposals made.
+
+    Never applies anything. A resemblance points at nothing outside the model —
+    unlike a declaration, which points at a sentence anyone can read — so it waits
+    for a person, and that is the whole reason this basis is separated from the
+    other three.
+
+    Cost is shaped by that. Pairs a rule already settles never reach the model
+    (numbers that disagree are vetoed first: spending a call, and then someone's
+    attention, to reject RO-3 against RO-4 is waste), and a cheap overlap test
+    narrows the rest.
+
+    A proposal is recorded as PENDING links from the other identity's mentions to
+    this one, so accepting it is the same absorption a declaration performs and
+    rejecting it leaves nothing behind.
+    """
+    entities = _live_entities(spec)
+    proposed = 0
+    seen = _existing_proposals(spec)
+    for i, (a_id, a) in enumerate(entities):
+        for b_id, b in entities[i + 1 :]:
+            if (a_id, b_id) in seen or (b_id, a_id) in seen:
+                continue
+            a_key, b_key = a.canonical_name, b.canonical_name
+            if differs_by_number(a_key, b_key):
+                continue
+            if _overlap(a_key, b_key) < _MIN_OVERLAP:
+                continue
+            verdict = _adjudicate(llm, a_key, b_key)
+            if verdict is None:
+                continue
+            proposed += _propose(spec, a_id, b_id, why=verdict)
+    return proposed
+
+
+def _live_entities(spec: SpecStar) -> list[tuple[str, GraphEntity]]:
+    rm = spec.get_resource_manager(GraphEntity)
+    out: list[tuple[str, GraphEntity]] = []
+    for r in rm.list_resources(QB.all().build()):
+        entity = r.data
+        assert isinstance(entity, GraphEntity)
+        if entity.collection_ids:  # an absorbed identity holds no evidence
+            out.append((r.info.resource_id, entity))  # ty: ignore[unresolved-attribute]
+    return out
+
+
+def _existing_proposals(spec: SpecStar) -> set[tuple[str, str]]:
+    """Pairs already proposed, so a re-run neither re-asks the model nor stacks a
+    second copy of the same question in front of a person."""
+    rm = spec.get_resource_manager(GraphEntityLink)
+    out: set[tuple[str, str]] = set()
+    for r in rm.list_resources((QB["state"] == "pending").build()):
+        link = r.data
+        assert isinstance(link, GraphEntityLink)
+        if link.proposed_from:
+            out.add((link.entity_id, link.proposed_from))
+    return out
+
+
+def _adjudicate(llm: ILlm, a: str, b: str) -> str | None:
+    """The model's verdict, or ``None`` for "no" and for anything unreadable.
+
+    An unparseable answer is a no: this path can only ADD work for a person, so
+    the safe reading of a confused reply is to ask nothing.
+    """
+    import json
+
+    reply = llm.collect(_JUDGE_PROMPT.format(a=a, b=b))
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return None
+    try:
+        data = json.loads(reply[start : end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("same") is not True:
+        return None
+    return str(data.get("why", "")).strip() or "the model judged these the same"
+
+
+def _propose(spec: SpecStar, host_id: str, other_id: str, *, why: str) -> int:
+    """Record a merge proposal as pending links, without touching either identity."""
+    lrm = spec.get_resource_manager(GraphEntityLink)
+    made = 0
+    for r in lrm.list_resources((QB["entity_id"] == other_id).build()):
+        link = r.data
+        assert isinstance(link, GraphEntityLink)
+        if link.state != "active":
+            continue
+        lrm.create(
+            GraphEntityLink(
+                entity_id=host_id,
+                mention_id=link.mention_id,
+                basis="resembles",
+                evidence=why,
+                state="pending",
+                proposed_from=other_id,
+            )
+        )
+        made = 1
+    return made
+
+
+def reconcile_vocabulary(spec: SpecStar, llm: ILlm | None = None) -> None:
+    """Bring the vocabulary up to date with the evidence.
+
+    The bases run in order of how much they can be trusted, and each line is
+    independent: comment one out and that basis stops, with nothing else to
+    change. The model line is last and takes ``llm=None`` to mean "skip", so it
+    can also be turned off by configuration rather than by editing.
+    """
+    link_identical_mentions(spec)
+    link_declared_aliases(spec)
+    if llm is not None:
+        link_resembling_entities(spec, llm)  # ← comment out to stop proposing merges
