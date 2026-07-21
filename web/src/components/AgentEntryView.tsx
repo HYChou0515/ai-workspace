@@ -24,11 +24,12 @@ import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
 import { extractToolImages } from "../renderers/toolImages";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
+import { useUser } from "../hooks/useUsers";
 import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
 import { useToolLabel } from "./toolCatalog";
-import { UserChip } from "./UserChip";
+import { UserAvatar, UserChip } from "./UserChip";
 import { pxToRem } from "../lib/pxToRem";
 
 // One reference card under an answer / ask_knowledge_base tool card. Shared by
@@ -474,6 +475,11 @@ function MessageBlock({
   // author-less message is NOT claimed: in a shared item chat it could be
   // anyone's, and putting someone else's words on my side is worse than leaving
   // every legacy message where it already was.
+  // The thread used to print the raw user id and an avatar made of its first two
+  // characters, while `useUser`/`UserAvatar` (directory name + photo) were already
+  // used for the mention line right below. Resolve it here — unconditionally, so
+  // the hook order never depends on the role.
+  const author = useUser(message.author ?? "");
   const mine =
     message.role === "user" &&
     currentUser !== undefined &&
@@ -490,12 +496,32 @@ function MessageBlock({
         data-testid="message-block"
         data-mine={mine ? "true" : "false"}
         style={
-          // Alignment only — no bubble, no fill, no radius. `alignSelf` makes the
-          // block shrink to its text inside the feed's flex column, which is the
-          // whole reason the shift is visible: a full-width block has nowhere to
-          // move. The cap keeps a long paste from spanning the column and landing
-          // back where it started.
-          mine ? { alignSelf: "flex-end", maxWidth: "72%", minWidth: 0 } : undefined
+          mine
+            ? {
+                // `alignSelf` shrinks the block to its text inside the feed's flex
+                // column — a full-width block has nowhere to move, so this is what
+                // makes the shift exist at all. The cap stops a long paste from
+                // spanning the column and landing back where it started.
+                alignSelf: "flex-end",
+                maxWidth: "72%",
+                minWidth: 0,
+                // Alignment alone is not enough: a SHORT message reads as
+                // right-aligned, but a long one runs back toward the left margin
+                // and its leading edge lines up with nothing, so it reads as
+                // oddly-indented prose. The fill is what makes the block's
+                // boundary visible, and the boundary is the whole signal.
+                //
+                // Deliberately the LOW-contrast surface token on the page ground,
+                // no tail, no accent: your own message must not become the
+                // heaviest thing on screen — the agent's answer is what you came
+                // to read. `--radius-card` is the radius tool cards already use,
+                // so this borrows the existing chrome rather than inventing a
+                // second shape language.
+                background: "var(--paper-2)",
+                borderRadius: "var(--radius-card)",
+                padding: "8px 10px",
+              }
+            : undefined
         }
       >
         <div
@@ -511,23 +537,8 @@ function MessageBlock({
             flexDirection: mine ? "row-reverse" : "row",
           }}
         >
-          <span
-            style={{
-              width: 20,
-              height: 20,
-              borderRadius: "50%",
-              background: "var(--paper-2)",
-              border: "1px solid var(--paper-3)",
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: pxToRem(10),
-              fontWeight: 600,
-            }}
-          >
-            {(message.author ?? "U").slice(0, 2).toUpperCase()}
-          </span>
-          <span>{message.author ?? "user"}</span>
+          <UserAvatar userId={message.author ?? ""} size={20} />
+          <span>{message.author ? author.name : "user"}</span>
           {onUndo && (
             <>
               <span style={{ flex: 1 }} />
@@ -538,12 +549,12 @@ function MessageBlock({
         <div
           data-testid="message-body"
           style={{
-            // The 28px indent lines the text up under the name; on my side it
-            // hangs off the other edge. The text itself is NEVER right-aligned —
-            // ragged-left multi-line text is markedly harder to read, and the
-            // block has already carried the "this is mine" signal.
+            // The 28px indent lines the text up under the name; inside my filled
+            // block the padding already provides that inset, so no margin. The
+            // text itself is NEVER right-aligned — ragged-left multi-line text is
+            // markedly harder to read, and the block's visible edge is what says
+            // "this one is mine".
             marginLeft: mine ? 0 : 28,
-            marginRight: mine ? 28 : 0,
             marginTop: 4,
             fontSize: pxToRem(13),
             color: "var(--text-paper)",

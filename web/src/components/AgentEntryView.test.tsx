@@ -11,6 +11,21 @@ import { ToolCatalogContext } from "./toolCatalog";
 // UserChip pulls /users/{id} — stub so happy-dom doesn't hit the network.
 vi.mock("./UserChip", () => ({
   UserChip: ({ userId }: { userId: string }) => <span data-chip={userId} />,
+  UserAvatar: ({ userId, size }: { userId: string; size?: number }) => (
+    <span data-avatar={userId} data-size={size} />
+  ),
+}));
+// A stand-in company directory, so a test can tell a resolved display name from
+// the raw id that used to leak into the thread.
+vi.mock("../hooks/useUsers", () => ({
+  useUsers: () => [],
+  useUser: (id: string) => ({
+    id,
+    name: id === "hy" ? "Chou Hung-Yi" : id,
+    section: "",
+    email: "",
+    photo_url: null,
+  }),
 }));
 vi.mock("./RcaMark", () => ({
   RcaMark: () => <span data-rca />,
@@ -675,5 +690,62 @@ describe("EntryView — my own messages align right (#583)", () => {
     render(<EntryView entry={mine as AgentEntry} currentUser="hy" />);
     const body = screen.getByTestId("message-body");
     expect(body).not.toHaveStyle({ textAlign: "right" });
+  });
+
+  // Alignment ALONE is not enough. A short message reads as right-aligned, but a
+  // long one runs back toward the left margin and its leading edge lines up with
+  // nothing — it reads as oddly-indented prose, not as mine. The fill is what
+  // makes the block's boundary visible, and the boundary IS the signal.
+  it("fills my block so its edges are visible, and leaves everyone else unfilled", () => {
+    render(<EntryView entry={mine as AgentEntry} currentUser="hy" />);
+    // Read the inline style directly: `toHaveStyle` resolves through the CSS
+    // engine, which cannot see an unregistered custom property in happy-dom and
+    // would report "no fill" for a block that is in fact filled.
+    const filled = (screen.getByTestId("message-block") as HTMLElement).style;
+    expect(filled.background).toBe("var(--paper-2)");
+    expect(filled.borderRadius).toBe("var(--radius-card)");
+    cleanup();
+    render(<EntryView entry={mine as AgentEntry} currentUser="sam" />);
+    expect((screen.getByTestId("message-block") as HTMLElement).style.background).toBe("");
+  });
+});
+
+
+// The thread showed the RAW user id and an avatar built from its first two
+// characters — while `UserAvatar`/`useUser` (photo + directory name) were already
+// in use two lines below for the mention line. In a shared item chat that reads
+// as a column of `hy` / `sa` / `u5`: aligning those to the right would just move
+// something unreadable.
+describe("EntryView — message authorship uses the directory (#583)", () => {
+  it("shows the author's display name and their directory avatar", () => {
+    render(
+      <EntryView
+        entry={{ kind: "message", message: { role: "user", content: "hi", author: "hy" } }}
+        currentUser="hy"
+      />,
+    );
+    expect(screen.getByText("Chou Hung-Yi")).toBeInTheDocument();
+    expect(screen.queryByText("hy")).not.toBeInTheDocument();
+    expect(document.querySelector('[data-avatar="hy"]')).not.toBeNull();
+  });
+
+  it("falls back to the raw id for someone the directory does not know", () => {
+    render(
+      <EntryView
+        entry={{ kind: "message", message: { role: "user", content: "hi", author: "ghost" } }}
+      />,
+    );
+    expect(screen.getByText("ghost")).toBeInTheDocument();
+  });
+
+  // The agent is not a person in the directory — its `author` is a preset name.
+  it("leaves the agent's own attribution alone", () => {
+    render(
+      <EntryView
+        entry={{ kind: "message", message: { role: "assistant", content: "hi", author: "Analyst" } }}
+      />,
+    );
+    expect(screen.getByText("Analyst")).toBeInTheDocument();
+    expect(document.querySelector('[data-avatar="Analyst"]')).toBeNull();
   });
 });
