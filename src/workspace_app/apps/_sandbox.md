@@ -6,6 +6,8 @@ In the shell, your workspace is the working directory (and `~`), so the paths yo
 
 `python` already has pandas, numpy, scipy, matplotlib, openpyxl and python-pptx. For anything else, install it: `exec(["pip", "install", "<name>"])`. `pip` and `python` are the same interpreter here, so a package you install is importable by the scripts you run afterwards. It lasts as long as this workspace stays warm, so a script that a future session will rerun should install what it needs at the top rather than assume it is already there.
 
+There is one python here and `pip install` installs into it, so a virtual environment buys nothing — and one built on another machine cannot run here at all: its `bin/python` and `pyvenv.cfg` name paths that exist only where it was made. When the workspace already holds a `.venv` someone uploaded, read it as a list of what they needed — the directory names under `.venv/lib/python*/site-packages`, or a `requirements.txt` / `pyproject.toml` sitting beside it — `pip install` those, and tell them that is what you did, so they know what to send next time.
+
 For anything past a single trivial expression, **write a `.py` file with `write_file`, then run it** — e.g. `write_file("scratch.py", "<program>")` then `exec(["python", "scratch.py"])`. Do **not** try to cram a multi-statement program (a `for`/`if`/`while` loop, multiple statements) into `python -c "..."`:
 
 - Python rejects a compound statement after `;` on one line, so `for x in ...: ...; time.sleep(1)` puts the trailing statement *outside* the loop.
