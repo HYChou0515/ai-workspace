@@ -15,7 +15,7 @@
 - **鏈是開環的**:生成器只看單 doc 內文(`drafting_prompt` 只 `{path}`/`{document}`,`card_drafter.py:35`),**看不到既有知識**;「別重複」邏輯全塞在 finalize 當**事後 exact `norm_key`**:`classify_against_existing`(`kb/card_gen.py:294`)、`open_or_merge_term_question`(`kb/doc_questions.py:73`)。換字面/wiki 已解釋 仍照問。
 - **④ 後端已支援改 keys**:`edit_context_card`(`api/context_card_routes.py:33-73`)收 `{keys,title,body}` 並重算 norm_keys;`ContextCardsTab`(`web/src/pages/kb/ContextCardsTab.tsx:256-285`)已能改。只有 `ReviewDrawer`(`web/src/pages/kb/ReviewDrawer.tsx:122-129`)把 keys 顯示唯讀。
 - **⑤ 無跨 run 去重**:`merge_drafts`(`card_gen.py:254`)只在單 run 內;`_finalize`(`card_gen_coordinator.py:438`)只比 committed cards,不看其他 pending run。burst auto-digest(`index_coordinator.py:613` 每 doc 一 run)→ 同新詞 N 個獨立待審。
-- **⑥ exact-key 已有分級**:`classify_against_existing` new/update/skip;缺近似/語意 + wiki 覆蓋。
+- **⑥ exact-key 已有分級**:`classify_against_existing` new/update/skip;缺近似/語意。**卡片提案只對既有卡片分級,不對 wiki**(#537:詞彙表卡片與百科頁是不可互換的兩種來源;用「百科提過」壓掉卡片,等於用最貴的來源消滅最便宜、最確定的那條,而且讓「用 wiki 頁生卡」必然產出 0 張)。wiki 覆蓋的判定屬於**術語提問**(③),見下。
 - **① review-inbox 全撈無上限**:`build_review_inbox`(`kb/review_inbox.py:103`)每 collection × 每 done run × 每 proposal + 每 open Q,每列帶整包 body;FE(`ReviewTable.tsx`)全載入純前端 filter,無分頁/虛擬化;`CardGenRun.collection_id` 未 index(`resources/__init__.py:433`,只 index `status`)。
 - **wiki = Karpathy prose,無向量索引**:`search_wiki`(`agent/tools.py:339`)= 子字串 grep over `WikiFileStore`(`kb/wiki/store.py`);wiki 是 per-collection opt-in(`_wiki_enabled`)。**不能靠向量 retriever 拉 wiki 段落。**
 
@@ -51,11 +51,11 @@ prompt(`card_drafting.md`)改 agentic:先查清「已被涵蓋 / 已問過」再
 
 ### wiki 讀取:靠 budgeted `search_wiki` 工具(agent loop 內),非向量
 - **生成(P5)**:agent 用 `search_wiki`(grep,受 `wiki_search_budget` 約束)自己搜 wiki;scope=[cid](`WikiFileStore` 以 collection id 為 key)。
-- **reconcile(P6)**:對**有限的 draft 候選**逐個 grep wiki 全文(重用 `api/search.search_text`)當「已解釋」的確定性判定 → 進分級自動丟(⑥)。這層是無 LLM 的安全網,不吃預算。
+- **reconcile(P6/G1)**:對**術語提問**逐個 grep wiki 全文當「已經寫下來了」的確定性判定 → 不開問(③)。這層是無 LLM 的安全網,不吃預算。**卡片提案不走這條** —— 已寫下來 ≠ 已可查表。
 
 ### reconcile 分級(⑤⑥,Q1 reconcile · Q3)
 候選 embed → 指派 cluster_key → 每群算建議動作:
-- 群內最近**既有卡** ≥ τ_high **或 wiki grep 命中** → `已解釋`→ **自動丟(suppressed,可審計)**。
+- 群內最近**既有卡** ≥ τ_high → `已解釋`→ **自動丟(suppressed,`reason=near-card`,可審計)**。wiki grep 命中只作用於術語提問(`reason=wiki`),不作用於卡片提案。
 - 近某既有卡(部分) → `更新卡 X`(帶 target_card_id),等人**一鍵確認**。
 - 無既有涵蓋 → `新卡`,整群合成 review 一列。
 

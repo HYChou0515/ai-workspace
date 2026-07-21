@@ -20,7 +20,11 @@ const item = (over: Partial<KbSuppressedItem> = {}): KbSuppressedItem => ({
 
 describe("SuppressedAuditList", () => {
   it("lists each auto-dropped candidate with its label and collection", () => {
-    render(<SuppressedAuditList items={[item(), item({ label: "Metal 4", reason: "wiki" })]} />);
+    render(
+      <SuppressedAuditList
+        items={[item(), item({ kind: "term_question", label: "Metal 4", reason: "wiki" })]}
+      />,
+    );
     expect(screen.getByText("Reflow Zone 3")).toBeInTheDocument();
     expect(screen.getByText("Metal 4")).toBeInTheDocument();
     expect(screen.getAllByText("Alpha").length).toBe(2);
@@ -28,7 +32,14 @@ describe("SuppressedAuditList", () => {
 
   it("explains WHY each candidate was dropped in words, not the raw slug", () => {
     render(
-      <SuppressedAuditList items={[item({ reason: "wiki" }), item({ reason: "near-card" })]} />,
+      <SuppressedAuditList
+        items={[
+          // `wiki` is a TERM-QUESTION verdict only: a card proposal is never graded
+          // against the wiki (#537), so kind:"proposal" + reason:"wiki" cannot occur.
+          item({ kind: "term_question", reason: "wiki" }),
+          item({ reason: "near-card" }),
+        ]}
+      />,
     );
     expect(screen.queryByText("near-card")).not.toBeInTheDocument();
     expect(screen.getByText(/wiki/i)).toBeInTheDocument();

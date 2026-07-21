@@ -20,6 +20,7 @@ from workspace_app.kb.context_cards import cards_with_ids_for_collections, deriv
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.reconcile import (
     Reconciler,
+    _wiki_mentions,
     assign_cluster_key,
     collection_wiki_text,
     grade_candidate,
@@ -359,12 +360,16 @@ def test_reconciler_marks_update_when_partially_near_a_card() -> None:
     assert kept[0].target_card_id == card_id
 
 
-# ── wiki-grep safety net (⑥: already documented in the wiki → suppress) ───────
+# ── the wiki does NOT vote on card proposals (#537) ───────────────────────────
 
 
-def test_reconciler_suppresses_a_proposal_documented_in_the_wiki() -> None:
-    """A proposal whose surface key already appears in the collection's wiki is
-    suppressed (the deterministic "already explained" net), even with no near card."""
+def test_reconciler_keeps_a_proposal_the_wiki_merely_mentions() -> None:
+    """A glossary card and a wiki page are NOT substitutes (#537 locked the three
+    sources as non-interchangeable), so "the wiki mentions this term" is not a
+    reason to withhold the card: the card is the cheap exact-key lookup, the wiki
+    is a reader sub-agent. Only an existing CARD may suppress a proposal — which
+    is why picking a wiki page as the card-gen source used to yield nothing at
+    all, every drafted key being present in the very corpus it was drafted from."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     existing = cards_with_ids_for_collections(spec, [cid])  # no cards
@@ -378,27 +383,9 @@ def test_reconciler_suppresses_a_proposal_documented_in_the_wiki() -> None:
     )
     p = ProposedCard(keys=["Gamma"], title="TAGZ", mode="new")
     kept = rec.reconcile_proposals(cid, "run1", [p], existing)
-    assert kept == []
-    supp = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"]
-    assert len(supp) == 1
-
-
-def test_reconciler_keeps_a_proposal_absent_from_the_wiki() -> None:
-    """The wiki net only fires on an actual hit — an undocumented term is kept."""
-    spec = make_spec(default_user="u")
-    cid = _collection(spec)
-    existing = cards_with_ids_for_collections(spec, [cid])
-    rec = Reconciler(
-        spec,
-        _TagEmb(),
-        cluster_tau=0.5,
-        suppress_tau=1.01,
-        update_tau=1.01,
-        wiki_text=lambda _cid: "This page is about something else entirely.",
-    )
-    p = ProposedCard(keys=["Gamma"], title="TAGZ", mode="new")
-    kept = rec.reconcile_proposals(cid, "run1", [p], existing)
     assert [x.keys for x in kept] == [["Gamma"]]
+    supp = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"]
+    assert supp == []
 
 
 def test_collection_wiki_text_concatenates_pages_only_when_wiki_is_on() -> None:
@@ -439,6 +426,121 @@ def test_reconciler_suppresses_a_wiki_documented_term_question() -> None:
     assert len(supp) == 1
     assert supp[0].reason == "wiki"
     assert supp[0].label == "Widget"
+
+
+def _ask(spec, cid: str, term: str, wiki: str) -> bool:
+    """Run one term through the wiki net; True when the question WAS opened."""
+    rec = Reconciler(
+        spec,
+        _TagEmb(),
+        cluster_tau=0.5,
+        suppress_tau=1.01,  # never suppress via near-card — isolate the wiki axis
+        update_tau=1.01,
+        wiki_text=lambda _cid: wiki,
+    )
+    opened: list[str] = []
+    rec.reconcile_term_questions(cid, [(term, lambda: opened.append("q") or "q")])
+    return opened == ["q"]
+
+
+def test_wiki_mentions_bounds_every_script_that_has_word_boundaries() -> None:
+    """The boundary rule is about SCRIPT, not about ASCII. Any script that writes
+    word boundaries (Latin with diacritics, Greek, full-width digits — not just
+    a-z0-9) must demand one; only scriptio-continua scripts (CJK ideographs,
+    kana), which write no spaces between words, may match as bare substrings.
+    Restricting the rule to ASCII would leave the very bug it fixes alive in
+    every other alphabet. The blob arrives already lower-cased."""
+    # A bounded script: a longer word is not this term.
+    assert not _wiki_mentions("r70 is the seventieth zone.", "R7")
+    assert not _wiki_mentions("cafés everywhere", "café")
+    assert _wiki_mentions("a café here", "café")
+    # Full-width digits are alphanumeric, so they continue an ASCII token.
+    assert not _wiki_mentions("r7７ is a code", "R7")
+    # Scriptio continua: no boundaries exist to honour.
+    assert _wiki_mentions("乾式蝕刻製程的說明。", "蝕刻")
+    assert _wiki_mentions("ドライエッチング処理", "エッチング")
+
+
+def test_wiki_mentions_judges_each_end_of_a_mixed_term_independently() -> None:
+    """A term can straddle both worlds ("光罩m4"), so the two ends are decided
+    separately. Collapsing the two flags into one — by AND or by OR — must break
+    something here, or the claim is untested decoration."""
+    # CJK head (no boundary needed) + ASCII tail (boundary needed).
+    assert not _wiki_mentions("光罩m40 的說明", "光罩m4")  # AND-collapse would allow this
+    assert _wiki_mentions("光罩m4 的說明", "光罩m4")
+    # ASCII head (boundary needed) + CJK tail (none needed).
+    assert _wiki_mentions("r7 說明abc", "r7 說明")  # OR-collapse would reject this
+    assert not _wiki_mentions("xr7 說明", "r7 說明")
+
+
+def test_wiki_mentions_treats_underscore_as_token_and_hyphen_as_boundary() -> None:
+    """Pinned deliberately: identifiers carry underscores (``m4_5`` is its own
+    thing, not a mention of ``m4``) while hyphens separate a code from a substep
+    (``R7-2`` does mention ``R7``)."""
+    assert not _wiki_mentions("m4_5 layer", "m4")
+    assert _wiki_mentions("r7-2 is a substep", "r7")
+
+
+def test_the_wiki_net_matches_on_term_boundaries_not_bare_substrings() -> None:
+    """The corpus is mixed Chinese/English and the terminology is largely
+    alphanumeric codes (M1-M6, R7), so a bare substring test silently swallows
+    questions: "R7" appears inside "R70". Boundaries are decided per CHARACTER
+    CLASS, not per language — an ASCII-alphanumeric edge demands a non-alnum
+    neighbour, a CJK edge demands nothing (Chinese has no word boundaries), and
+    a mixed term gets each rule on its own side. Same standard as the project's
+    element-membership rule, where "m4" must not match a card keyed "m40"."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    # ASCII edges: a longer code is NOT this term.
+    assert _ask(spec, cid, "R7", "R70 is the seventieth reflow zone.")
+    assert _ask(spec, cid, "M4", "The M40 mask layer is documented.")
+    # ASCII edges: a real mention still hits, punctuation and CJK both counting
+    # as boundaries — including one flush against the end of the corpus.
+    assert not _ask(spec, cid, "R7", "R7 的定義如下。")
+    assert not _ask(spec, cid, "M4", "(M4) is the fourth metal layer.")
+    # A false hit does not end the scan: the real mention follows it.
+    assert not _ask(spec, cid, "R7", "R70 is one zone, and so is R7")
+    # A CJK term has no boundaries to honour — substring is the correct rule.
+    assert not _ask(spec, cid, "蝕刻", "乾式蝕刻製程的說明。")
+    # An empty corpus (no wiki / wiki off) can mention nothing.
+    assert _ask(spec, cid, "R7", "")
+
+
+def test_a_blank_term_never_reaches_a_human() -> None:
+    """A drafter that emits an empty term has produced nothing to ask about, so no
+    question is opened and no member is recorded. Worth pinning because the old
+    substring net swallowed it only BY ACCIDENT — `"" in blob` is True — which
+    means it leaked a blank question through whenever the collection had no wiki
+    at all. Neither outcome should depend on whether a wiki happens to exist."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    for wiki in ("Some wiki content.", ""):
+        assert not _ask(spec, cid, "   ", wiki)
+    assert _members(spec, cid) == []
+
+
+def test_a_wiki_mentioned_proposal_in_the_update_band_becomes_an_update() -> None:
+    """Both axes live at once. A proposal the wiki mentions AND that sits near an
+    existing card is no longer swallowed with reason="wiki" — it surfaces as the
+    "update card X" row the card axis says it is. The wiki no longer has a vote
+    on proposals, so it cannot pre-empt that verdict."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    card_id = _card(spec, cid, ["beta"], title="TAGX")
+    existing = cards_with_ids_for_collections(spec, [cid])
+    rec = Reconciler(
+        spec,
+        _TagEmb(),
+        cluster_tau=0.5,
+        suppress_tau=1.01,  # unreachable → an exact tag match lands in the update band
+        update_tau=0.5,
+        wiki_text=lambda _cid: "beta is described at length in the wiki.",
+    )
+    p = ProposedCard(keys=["beta"], title="TAGX", mode="new")
+    kept = rec.reconcile_proposals(cid, "run1", [p], existing)
+    assert [x.mode for x in kept] == ["update"]
+    assert kept[0].target_card_id == card_id
+    assert [m for m in _members(spec, cid) if m.state == "suppressed"] == []
 
 
 def test_reconciler_suppresses_a_term_question_near_an_existing_card() -> None:

@@ -69,16 +69,72 @@ def assign_cluster_key(
 
 @dataclass(frozen=True)
 class Grade:
-    """The reconcile verdict for one candidate against the collection's existing
-    cards + wiki. ``action`` is ``suppress`` (already explained → auto-drop, kept
-    only as an auditable ClusterMember), ``update`` (partially covered → suggest
-    editing ``target_card_id``), or ``new`` (a genuinely new concept). ``reason``
-    records WHY a suppress fired (``wiki`` grep hit vs ``near-card``) for the audit
-    view."""
+    """The reconcile verdict for one candidate against what the collection already
+    explains. ``action`` is ``suppress`` (already explained → auto-drop, kept only as
+    an auditable ClusterMember), ``update`` (partially covered → suggest editing
+    ``target_card_id``), or ``new`` (a genuinely new concept). ``reason`` records WHY
+    a suppress fired, for the audit view: ``near-card`` for either kind of candidate,
+    ``wiki`` only for a term question — ``wiki_hit`` is never set for a card proposal
+    (#537), see :meth:`Reconciler.reconcile_proposals`."""
 
     action: str  # "suppress" | "update" | "new"
     target_card_id: str | None = None
     reason: str = ""  # "wiki" | "near-card" | ""
+
+
+def _scriptio_continua(ch: str) -> bool:
+    """Is ``ch`` from a script written WITHOUT spaces between words? Those scripts
+    have no word boundary to demand, so requiring one would match almost nothing.
+    CJK ideographs and Japanese kana are the ones this corpus contains; Korean
+    and Thai are deliberately absent — Korean writes spaces, and no Thai has ever
+    appeared here, so claiming to handle it would be untested fiction."""
+    o = ord(ch)
+    return (
+        0x3040 <= o <= 0x30FF  # hiragana + katakana
+        or 0x3400 <= o <= 0x4DBF  # CJK unified ext A
+        or 0x4E00 <= o <= 0x9FFF  # CJK unified
+        or 0xF900 <= o <= 0xFAFF  # CJK compatibility ideographs
+        or 0x20000 <= o <= 0x2FA1F  # CJK unified ext B-F
+    )
+
+
+def _continues_a_token(ch: str) -> bool:
+    """Would ``ch`` next to a term's edge make it a LONGER word rather than a
+    mention of the term? True for any alphanumeric in a space-writing script, plus
+    the underscore (``m4_5`` is its own identifier, not a mention of ``m4``). A
+    hyphen is NOT one: ``R7-2`` names a substep OF ``R7``."""
+    return ch == "_" or (ch.isalnum() and not _scriptio_continua(ch))
+
+
+def _wiki_mentions(wiki_blob: str, term: str) -> bool:
+    """Does ``wiki_blob`` — which the caller has ALREADY lower-cased — mention
+    ``term``?
+
+    A bare substring test is wrong for this corpus. The knowledge base is mixed
+    Chinese and English, and much of the terminology is short alphanumeric codes
+    (``M1``-``M6``, ``R7``), so ``"R7" in blob`` fires on ``R70`` and silently
+    swallows a legitimate question — the same mistake the project already rejects
+    for indexed-list membership, where ``"m4"`` must not match ``"m40"``.
+
+    So an edge in a space-writing script demands a neighbour that doesn't continue
+    the token, and an edge in a scriptio-continua script demands nothing. The rule
+    is about SCRIPT, not about ASCII: restricting it to a-z0-9 would leave the
+    same bug alive in every other alphabet (``café`` inside ``cafés``). Each end is
+    judged on its own, because one term can straddle both worlds (``光罩m4``)."""
+    needle = term.strip().lower()
+    if not wiki_blob or not needle:
+        return False
+    head_bound = _continues_a_token(needle[0])
+    tail_bound = _continues_a_token(needle[-1])
+    start = wiki_blob.find(needle)
+    while start != -1:
+        end = start + len(needle)
+        before_ok = not head_bound or start == 0 or not _continues_a_token(wiki_blob[start - 1])
+        after_ok = not tail_bound or end == len(wiki_blob) or not _continues_a_token(wiki_blob[end])
+        if before_ok and after_ok:
+            return True
+        start = wiki_blob.find(needle, start + 1)
+    return False
 
 
 def grade_candidate(
@@ -173,10 +229,12 @@ class Reconciler:
     to one inbox row (⑤). Thresholds are collection-wide config hyperparameters.
 
     ``wiki_text`` is an injected ``(collection_id) -> str`` provider returning the
-    collection's whole wiki as one string (the deterministic "already documented in
-    the wiki" safety net — a candidate whose surface key appears there is
-    suppressed). Loaded ONCE per finalize (not per candidate) so the blob read isn't
-    repeated; ``None`` disables the wiki check. See :func:`collection_wiki_text`."""
+    collection's whole wiki as one string, used by :meth:`reconcile_term_questions`
+    ONLY: a term already written down anywhere needn't be asked of a human. Card
+    proposals are deliberately NOT graded against it — see the note in
+    :meth:`reconcile_proposals`. Loaded ONCE per batch (not per candidate) so the
+    blob read isn't repeated; ``None`` disables the wiki check. See
+    :func:`collection_wiki_text`."""
 
     def __init__(
         self,
@@ -209,25 +267,29 @@ class Reconciler:
         deterministic member id, so an accidental re-finalize can't double-count."""
         ensure_proposal_ids(proposals)
         self._project_cards(collection_id, existing)
-        # Load the collection's wiki ONCE (not per candidate); "" when disabled.
-        wiki_blob = self._wiki_text(collection_id).lower() if self._wiki_text and proposals else ""
         kept: list[ProposedCard] = []
         for p in proposals:
             norm_key = (derive_norm_keys(p.keys) or [""])[0]
             vec = self._embed(_card_text(norm_key, p.title))
-            # Already documented in the wiki? A hit on ANY surface key (substring,
-            # case-insensitive — same default as the search_wiki tool).
-            wiki = bool(wiki_blob) and any(k.strip() and k.lower() in wiki_blob for k in p.keys)
             state = "active"
             reason = ""
             if p.mode == "new":
+                # NOT graded against the wiki — only against existing CARDS. A card
+                # and a wiki page are different sources, not substitutes (#537): the
+                # card is the cheap deterministic exact-key lookup the KB agent is
+                # told to reach for FIRST, the wiki is a reader sub-agent two tiers
+                # up in cost. Suppressing the cheap source because the expensive one
+                # mentions the term inverts that order, and made "generate cards from
+                # a wiki page" a guaranteed no-op: every key drafted off a page is by
+                # construction present in the corpus being greped. The wiki check
+                # belongs on term QUESTIONS (don't ask what is already written down),
+                # which is where it stays — see reconcile_term_questions.
                 grade = grade_candidate(
                     self._spec,
                     collection_id=collection_id,
                     embedding=vec,
                     tau_high=self._suppress_tau,
                     tau_update=self._update_tau,
-                    wiki_hit=wiki,
                 )
                 if grade.action == "suppress":
                     state, reason = "suppressed", grade.reason
@@ -279,9 +341,15 @@ class Reconciler:
             return
         wiki_blob = self._wiki_text(collection_id).lower() if self._wiki_text else ""
         for term, open_question in items:
+            # A blank term is not a question — nothing to ask, nothing to audit.
+            # The old substring net only swallowed it by accident (`"" in blob` is
+            # True), so it leaked a blank question through whenever the collection
+            # had no wiki; that must not depend on whether a wiki exists.
+            if not term.strip():
+                continue
             norm_key = norm(term)
             vec = self._embed(_card_text(norm_key, term))
-            wiki = bool(wiki_blob) and term.strip().lower() in wiki_blob
+            wiki = _wiki_mentions(wiki_blob, term)
             grade = grade_candidate(
                 self._spec,
                 collection_id=collection_id,
