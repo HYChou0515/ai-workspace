@@ -898,3 +898,254 @@ def test_carrier_launcher_home_is_private_not_shared_tmp_when_unset(tmp_path: Pa
     assert os.path.isdir(home)
     # A private per-invocation dir: mktemp -d creates it 0700 (owner-only).
     assert oct(os.stat(home).st_mode & 0o777) == "0o700"
+
+
+# --- the carrier launcher is multi-call: `python` runs python, `pip` runs pip ---
+#
+# `pip` was never shimmed, so a bare `pip install X` in `exec` resolved down the
+# rest of PATH to the IMAGE's python (jailed: /usr/bin/pip; unjailed: the host
+# service's own venv) — a different interpreter AND a different HOME from the
+# carrier the agent's `python` actually is. pip reported success and the import
+# then failed, with nothing anywhere connecting the two.
+#
+# The launcher dispatches on the name it was invoked as, so the shims stay plain
+# symlinks (one file, one build fingerprint) instead of growing a second script.
+
+
+def _echo_carrier(tmp_path: Path, interpreter: str = "/bin/echo") -> Path:
+    """A carrier bundle whose bundled interpreter is a stand-in binary, so the
+    launcher's final exec PRINTS what it built rather than running python.
+    `/bin/echo` reports the argv; `/usr/bin/env` reports the environment.
+    Keeps this a fast unit test: no uv, no real interpreter, no network."""
+    bundle = tmp_path / "python-stack"
+    (bundle / "python" / "bin").mkdir(parents=True)
+    (bundle / "python" / "bin" / "python3.12").symlink_to(interpreter)
+    (bundle / ".venv" / "lib" / "python3.12" / "site-packages").mkdir(parents=True)
+    launch = bundle / "launch"
+    launch.write_text(prebuild_module()._PYTHON_LAUNCH.format(ver="3.12"))
+    launch.chmod(0o755)
+    return launch
+
+
+def prebuild_module():
+    from workspace_app.tooling import prebuild
+
+    return prebuild
+
+
+def _argv_built_for(launch: Path, called_as: str, args: list[str]) -> str:
+    """Run the launcher through a `called_as`-named symlink (what the sandbox's
+    shim dir holds) and return the argv it handed the interpreter.
+
+    The shims live in their own dir, exactly as `.jailbin` does in a real
+    sandbox — the bundle root already has a `python/` DIRECTORY, so a shim named
+    `python` could not sit beside it anyway."""
+    import subprocess
+
+    shim_dir = launch.parent.parent / "jailbin"
+    shim_dir.mkdir(exist_ok=True)
+    shim = shim_dir / called_as
+    shim.symlink_to(launch)
+    r = subprocess.run([str(shim), *args], capture_output=True, text=True, check=True)
+    return r.stdout.strip()
+
+
+def test_invoked_as_pip_the_carrier_launcher_runs_the_carriers_own_pip(tmp_path: Path):
+    """`pip install X` must become the carrier's `python -m pip install X` — the
+    one interpreter whose HOME the launcher has already rewritten to
+    SANDBOX_HOME, so the `--user` fallback lands where the carrier reads."""
+    launch = _echo_carrier(tmp_path)
+    assert _argv_built_for(launch, "pip", ["install", "cowsay"]) == "-m pip install cowsay"
+
+
+def test_invoked_as_python_the_launcher_is_unchanged(tmp_path: Path):
+    """Regression lock for the dispatch itself: `python` must still forward its
+    argv verbatim. `exec(["python", "-c", …])` is the agent's most common call,
+    and a `case` arm that leaked into it would break every one of them."""
+    launch = _echo_carrier(tmp_path)
+    assert _argv_built_for(launch, "python", ["-c", "print(1)"]) == "-c print(1)"
+
+
+def test_the_pip_flavour_names_dispatch_too(tmp_path: Path):
+    """`pip3` is what agents type at least as often as `pip`, and the
+    major-minor flavours mirror the `python3.N` shims that already exist. A name
+    that merely STARTS with pip (`pipx`) must not be swallowed — it is a
+    different tool, and silently running it as pip would be worse than the
+    command simply not being found."""
+    launch = _echo_carrier(tmp_path)
+    assert _argv_built_for(launch, "pip3", ["list"]) == "-m pip list"
+    assert _argv_built_for(launch, "pip3.12", ["list"]) == "-m pip list"
+    assert _argv_built_for(launch, "pipx", ["list"]) == "list"
+
+
+# --- the bundled interpreter must not claim to be distro-managed ---
+#
+# uv's CPython builds ship an EXTERNALLY-MANAGED marker, and the bundle copies
+# the whole interpreter tree, marker included. pip then REFUSES `pip install X`
+# outright ("error: externally-managed-environment") unless it is handed
+# --break-system-packages. The marker means "an OS package manager owns this
+# interpreter, install into a venv instead" — which is simply not true of a
+# self-contained bundle that no packager tracks, and there is no venv for the
+# agent to install into either. Dropping it is not loosening a safety rail; it
+# is deleting a claim that was never about this environment.
+#
+# With it gone, pip's own behaviour does the right thing unaided: the bundle's
+# site-packages is root-owned and read-only in production, so pip reports
+# "Defaulting to user installation because normal site-packages is not writeable"
+# and installs into $HOME/.local — and the launcher has already pointed HOME at
+# SANDBOX_HOME, which is exactly where this interpreter looks. No flag to teach,
+# and nothing injected into the user's command line on their behalf.
+
+
+def test_the_bundled_interpreter_is_not_left_marked_externally_managed(tmp_path: Path):
+    """The marker travels with uv's interpreter; the bundle must not inherit it.
+    Every X.Y under lib/ is cleared — the tree is copied wholesale, so which
+    directory the marker lands in is uv's choice, not ours."""
+    py = tmp_path / "python"
+    (py / "lib" / "python3.12").mkdir(parents=True)
+    (py / "lib" / "python3.13").mkdir(parents=True)
+    markers = [
+        py / "lib" / "python3.12" / "EXTERNALLY-MANAGED",
+        py / "lib" / "python3.13" / "EXTERNALLY-MANAGED",
+    ]
+    for m in markers:
+        m.write_text("[externally-managed]\nError=managed by the distro\n")
+
+    prebuild_module()._drop_externally_managed(py)
+
+    assert [m for m in markers if m.exists()] == []
+
+
+def test_dropping_the_marker_is_fine_when_there_is_none(tmp_path: Path):
+    """Interpreter builds that never shipped the marker must not make the
+    prebuild explode — the bundle is still perfectly valid without it."""
+    py = tmp_path / "python"
+    (py / "lib" / "python3.12").mkdir(parents=True)
+    prebuild_module()._drop_externally_managed(py)  # must not raise
+
+
+def test_a_change_to_what_the_builder_strips_forces_a_rebuild(tmp_path: Path, monkeypatch):
+    """Same stale-cache class as #64 and #393's launcher edit: clearing
+    EXTERNALLY-MANAGED is builder behaviour that is BAKED INTO the bundle, so
+    `_source_hash(source)` cannot see a change to it. Without folding it into
+    the stamp, editing the strip step would leave every already-built bundle
+    exactly as it was — still refusing `pip install` — while the code claimed
+    to have fixed it."""
+    prebuild = prebuild_module()
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "foo.py").write_text("x")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / ".built").write_text(prebuild._build_stamp(src))
+    assert prebuild._should_rebuild(src, dst) is False
+
+    def _drop_externally_managed(python_dir: Path) -> None:
+        """A different rule about what the bundle strips."""
+
+    monkeypatch.setattr(prebuild, "_drop_externally_managed", _drop_externally_managed)
+    assert prebuild._should_rebuild(src, dst) is True
+
+
+@pytest.mark.skipif(not _has_uv(), reason="uv not available")
+@pytest.mark.integration
+def test_a_real_built_carrier_ships_no_externally_managed_marker(tmp_path: Path):
+    """The end-to-end fact the unit tests stand in for: build a carrier with the
+    real toolchain and the interpreter that comes out must not carry uv's
+    PEP 668 marker — which is precisely the file pip checks before refusing
+    `pip install`."""
+    launch = _build_bare_carrier(tmp_path)
+    assert list((launch.parent / "python").rglob("EXTERNALLY-MANAGED")) == []
+
+
+def test_build_package_actually_strips_the_marker_from_the_bundle(tmp_path: Path, monkeypatch):
+    """Pins the WIRING, not just the helper.
+
+    The unit tests above call `_drop_externally_managed` directly, so deleting
+    its call site in `build_package` left them all green — the only red was an
+    `integration` + `skipif(uv)` test that CI does not run. That is precisely the
+    hole this whole change exists to close, so the wiring gets a lock in the set
+    CI runs: only the two external process boundaries (`uv venv` / `uv sync`) are
+    faked, everything after them — the copytree, the strip, the launcher — is the
+    real code path."""
+    import subprocess as _sp
+
+    prebuild = prebuild_module()
+    src = tmp_path / "src"
+    src.mkdir()
+    # No [project.scripts] ⇒ a venv carrier, so no schema dump to stand in for.
+    (src / "pyproject.toml").write_text('[project]\nname = "carrier"\nversion = "0.1.0"\n')
+    (src / "uv.lock").write_text("")
+
+    interp = tmp_path / "managed" / "cpython-3.12.8"
+    (interp / "bin").mkdir(parents=True)
+    (interp / "bin" / "python3.12").write_text("#!/bin/sh\n")
+    (interp / "lib" / "python3.12").mkdir(parents=True)
+    (interp / "lib" / "python3.12" / "EXTERNALLY-MANAGED").write_text("[externally-managed]\n")
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["uv", "venv"]:
+            venv = Path(cmd[-1])
+            (venv / "bin").mkdir(parents=True)
+            (venv / "bin" / "python").symlink_to(interp / "bin" / "python3.12")
+        return _sp.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(prebuild.subprocess, "run", fake_run)
+
+    dst = tmp_path / "dst"
+    prebuild.build_package(name="carrier", source=src, dst=dst)
+
+    assert (dst / "launch").is_file()  # the build really ran
+    assert list((dst / "python").rglob("EXTERNALLY-MANAGED")) == []
+
+
+def test_pip_can_never_install_into_the_shared_bundle(tmp_path: Path):
+    """Where an install LANDS must not depend on file permissions happening to
+    be right.
+
+    With the PEP 668 marker gone, pip only falls back to a `--user` install when
+    the bundle's site-packages is unwritable. That holds in the `kind: http`
+    production path (root-owned `/opt/tools`, exec dropped to a non-root uid) —
+    but by luck, not by design. On a dev box (`isolate: false` and a
+    `WORKSPACE_TOOLS_DIR` the developer owns), or in any image that runs exec as
+    root, it is writable, and pip then rewrites the bundle: a directory EVERY
+    sandbox on the pod reads, which survives sandbox reap and stays in the
+    `.built` cache. One sandbox would be editing everyone's interpreter.
+
+    `PIP_USER=1` makes the sandbox's own `.home` the target unconditionally, so
+    the invariant is structural instead of an unenforced assumption."""
+    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
+    assert "PIP_USER=1" in _argv_built_for(launch, "python", []).splitlines()
+
+
+def test_a_package_the_user_installed_wins_over_the_bundled_one(tmp_path: Path, monkeypatch):
+    """A user is entitled to upgrade pandas.
+
+    The launcher puts the carrier's site-packages on PYTHONPATH, and PYTHONPATH
+    is searched BEFORE the user site — so `pip install --upgrade pandas`
+    installed the new version and `import pandas` kept resolving the old one.
+    `pip list` agreed with the old one, and pip's "will lack sys.path precedence"
+    warning does not fire for this case, so there was no signal at all: reported
+    success, no effect. That is the same class of failure as the unshimmed pip,
+    reached through a different door.
+
+    It bites exactly the 20 packages the carrier ships (numpy / pandas / scipy /
+    matplotlib / pillow / openpyxl / python-pptx / lxml and their closure) —
+    which are the ones an agent is most likely to want a newer version of.
+    Anything NOT in the bundle was never affected.
+
+    So the user site goes FIRST. An incompatible version the user asked for then
+    shadows the curated stack — for that one sandbox, until it is reaped."""
+    home = tmp_path / "sandboxhome"
+    home.mkdir()
+    monkeypatch.setenv("SANDBOX_HOME", str(home))
+    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
+
+    dump = _argv_built_for(launch, "python", [])
+    line = next(ln for ln in dump.splitlines() if ln.startswith("PYTHONPATH="))
+    parts = line.removeprefix("PYTHONPATH=").split(":")
+
+    user_site = str(home / ".local" / "lib" / "python3.12" / "site-packages")
+    bundle_site = str(launch.parent / ".venv" / "lib" / "python3.12" / "site-packages")
+    assert user_site in parts, f"user site is not on the path at all: {parts}"
+    assert parts.index(user_site) < parts.index(bundle_site)

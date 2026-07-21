@@ -711,17 +711,6 @@ async def test_unjailed_exec_sets_sandbox_home_to_private_per_sandbox_dir(tmp_pa
     assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # .home invisible
 
 
-async def test_jailed_exec_passes_sandbox_home_tmp(tmp_path):
-    """#393: the jail keeps HOME on its per-exec ephemeral /tmp (isolated
-    there), passed EXPLICITLY as SANDBOX_HOME=/tmp rather than relied on as the
-    launcher's silent default — keeping jail behavior byte-identical while the
-    fail-safe default is reserved for genuine misconfiguration."""
-    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
-    h = await sb.create(SandboxSpec())
-    _argv, _cwd, env = sb._exec_argv(h, ["true"])
-    assert env["SANDBOX_HOME"] == "/tmp"
-
-
 async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback(tmp_path):
     """A carrier provisioned AFTER the first exec (the `provision_tools` path)
     must be picked up: the per-exec shim re-points `python` from the
@@ -910,3 +899,33 @@ async def test_size_of_reports_one_file(sandbox: LocalProcessSandbox):
     assert await sandbox.size_of(h, "/missing.bin") is None
     await sandbox.mkdir(h, "/adir")
     assert await sandbox.size_of(h, "/adir") is None  # directories are not files
+
+
+async def test_a_bare_pip_install_is_importable_by_the_next_command(tmp_path, carrier_tools):
+    """The end-to-end fact every other test in this change only stands in for.
+
+    Everything else is a substitute: symlink identity, the argv the launcher
+    builds (with `/bin/echo` standing in for the interpreter), the presence of an
+    env var. None of them would notice if the bundle shipped no pip at all, or if
+    the install landed somewhere the interpreter does not read. This runs the two
+    commands a user actually runs, in that order, through the real exec path:
+
+        exec(["pip", "install", "cowsay"])       # bare `pip`, no flags to teach
+        exec(["python", "-c", "import cowsay"])  # a SEPARATE exec
+
+    and it is the conjunction of the whole change: `pip` resolves to the carrier
+    (the shim), it is not refused (the PEP 668 marker is gone), it lands in this
+    sandbox's own `.home` (PIP_USER + SANDBOX_HOME), and it is still there for the
+    next command. Remove any one of those and this goes red. Needs network (PyPI).
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=carrier_tools)
+    h = await sb.create(SandboxSpec(), sandbox_id="A")
+
+    install = await sb.exec(
+        h, ["pip", "install", "--no-input", "--disable-pip-version-check", "cowsay"]
+    )
+    assert install.exit_code == 0, install.stderr.decode()
+
+    imported = await sb.exec(h, ["python", "-c", "import cowsay; print(cowsay.__name__)"])
+    assert imported.exit_code == 0, imported.stderr.decode()
+    assert imported.stdout.decode().strip() == "cowsay"

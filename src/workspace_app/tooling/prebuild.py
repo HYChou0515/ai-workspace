@@ -22,6 +22,7 @@ See `docs/plan-skills-and-tools.md` §B.4.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -39,7 +40,6 @@ logger = logging.getLogger(__name__)
 _LAUNCH = """\
 #!/bin/sh
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
 # HOME (caches + any `pip --user` fallback) goes to a per-sandbox dir the exec
 # path passes as SANDBOX_HOME — NOT a shared /tmp. The unset fallback is a
 # fresh PRIVATE `mktemp -d`, never the shared pod /tmp: forgetting to set it
@@ -48,6 +48,25 @@ export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYT
 # be read-only, and ~/.cache would otherwise pollute the synced workspace).
 export HOME="${{SANDBOX_HOME:-$(mktemp -d)}}"
 export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
+# WHERE an install lands must not depend on file permissions happening to be
+# right. Without the PEP 668 marker, pip only picks the `--user` target when the
+# bundle's site-packages is unwritable — true in the `kind: http` production path
+# (root-owned /opt/tools, exec dropped to a non-root uid), but by luck. On a dev
+# box, or any image running exec as root, it is writable and pip would rewrite
+# the BUNDLE: a dir every sandbox on the pod reads, which survives sandbox reap
+# and stays in the `.built` cache. PIP_USER makes $HOME/.local the target
+# unconditionally, so "a sandbox cannot edit the shared interpreter" is
+# structural rather than an unenforced assumption.
+export PIP_USER=1
+# The user site goes FIRST, ahead of the bundle's own packages. A user is
+# entitled to upgrade pandas: with the bundle first, `pip install --upgrade
+# pandas` installed the new version while `import pandas` kept resolving the old
+# one — and `pip list` agreed with the old one, and pip's "lacks sys.path
+# precedence" warning does not fire for this case, so there was no signal at all.
+# Reported success, no effect. Derived from HOME, hence set after it.
+mine="$HOME/.local/lib/python{ver}/site-packages"
+bundled="$here/.venv/lib/python{ver}/site-packages"
+export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 """
@@ -67,11 +86,23 @@ exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 # *file* (the symlink target), the lookup fails with ENOTDIR (errno 20):
 # `cannot open shared object file: Error 20`. Resolving the symlink
 # first puts $here in the real bundle dir.
+#
+# MULTI-CALL: the launcher also answers to `pip`. `python` was shimmed but `pip`
+# was not, so a bare `pip install X` resolved down the rest of PATH to the
+# IMAGE's python — a different interpreter AND a different HOME than the carrier
+# the agent's `python` actually is. pip reported success; the import then failed;
+# nothing connected the two. Dispatching on the invoked name keeps the sandbox
+# shims plain symlinks to this one file (one build fingerprint, one thing to
+# provision) instead of a second script that could drift from it. The invoked
+# name must be taken BEFORE `readlink -f`, which resolves the shim away.
 _PYTHON_LAUNCH = """\
 #!/bin/sh
+called=${{0##*/}}
 self=$(readlink -f "$0" 2>/dev/null || echo "$0")
 here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
-export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
+case "$called" in
+  pip|pip[0-9]*) set -- -m pip "$@" ;;
+esac
 # HOME (caches + any `pip --user` install fallback) → a per-sandbox dir the exec
 # path passes as SANDBOX_HOME. A user's `pip install --break-system-packages X`
 # can't write the root-owned carrier venv, so pip defaults to `--user` = $HOME/
@@ -83,9 +114,56 @@ export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYT
 # where /tmp is a per-exec ephemeral tmpfs (safe there).
 export HOME="${{SANDBOX_HOME:-$(mktemp -d)}}"
 export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
+# WHERE an install lands must not depend on file permissions happening to be
+# right. Without the PEP 668 marker, pip only picks the `--user` target when the
+# bundle's site-packages is unwritable — true in the `kind: http` production path
+# (root-owned /opt/tools, exec dropped to a non-root uid), but by luck. On a dev
+# box, or any image running exec as root, it is writable and pip would rewrite
+# the BUNDLE: a dir every sandbox on the pod reads, which survives sandbox reap
+# and stays in the `.built` cache. PIP_USER makes $HOME/.local the target
+# unconditionally, so "a sandbox cannot edit the shared interpreter" is
+# structural rather than an unenforced assumption.
+export PIP_USER=1
+# The user site goes FIRST, ahead of the bundle's own packages. A user is
+# entitled to upgrade pandas: with the bundle first, `pip install --upgrade
+# pandas` installed the new version while `import pandas` kept resolving the old
+# one — and `pip list` agreed with the old one, and pip's "lacks sys.path
+# precedence" warning does not fire for this case, so there was no signal at all.
+# Reported success, no effect. Derived from HOME, hence set after it.
+mine="$HOME/.local/lib/python{ver}/site-packages"
+bundled="$here/.venv/lib/python{ver}/site-packages"
+export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$@"
 """
+
+
+def _drop_externally_managed(python_dir: Path) -> None:
+    """Clear PEP 668's `EXTERNALLY-MANAGED` from the interpreter we just bundled.
+
+    uv's CPython builds ship the marker, and the bundle copies the interpreter
+    tree wholesale, so it rides along. pip then REFUSES a plain
+    ``pip install X`` ("error: externally-managed-environment") until it is
+    handed ``--break-system-packages`` — a flag nothing in the product ever told
+    the agent about, on an interpreter that is not, in fact, externally managed:
+    no OS packager tracks this bundle, and there is no venv for the agent to be
+    redirected into. The marker is a claim about uv's own installation that
+    stopped being true the moment we copied it.
+
+    Removing it lets pip's default behaviour do the right thing unaided: the
+    bundle's site-packages is root-owned and read-only in production, so pip
+    falls back to a ``--user`` install under ``$HOME/.local`` — and the launcher
+    has already pointed HOME at the per-sandbox ``SANDBOX_HOME``, which is
+    exactly where this interpreter's user-site is (#393). So the obvious command
+    works, with no flag to teach and nothing silently injected into the agent's
+    argv on its behalf.
+
+    Best-effort across every ``lib/pythonX.Y`` present: which one holds the
+    marker is uv's business, not ours.
+    """
+    for marker in python_dir.glob("lib/python*/EXTERNALLY-MANAGED"):
+        marker.unlink()
+        logger.info("prebuild: cleared %s (the bundle is not distro-managed)", marker)
 
 
 def build_package(*, name: str, source: Path, dst: Path, force: bool = False) -> None:
@@ -159,6 +237,7 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
     real = (venv / "bin" / "python").resolve()  # .../cpython-X.Y.Z/bin/pythonX.Y
     ver = real.name.removeprefix("python")  # "3.13"
     shutil.copytree(real.parent.parent, dst / "python", symlinks=True)
+    _drop_externally_managed(dst / "python")
     launch = dst / "launch"
     if _is_venv_carrier(source):
         # No commands to dispatch: write the pure-python launcher and
@@ -304,9 +383,15 @@ def _builder_fingerprint() -> str:
     code, not package source, yet it is written into the bundle's `launch`.
     Without this, changing `_PYTHON_LAUNCH` (e.g. #393's `SANDBOX_HOME`
     routing) would silently keep the stale `launch` in every cached bundle,
-    the same stale-cache class as #64's version-keyed wheel."""
+    the same stale-cache class as #64's version-keyed wheel.
+
+    The templates are not the only builder decision baked into a bundle:
+    `_drop_externally_managed` edits the interpreter tree we copy in, and a
+    change to WHAT it strips is just as invisible to `_source_hash`. Its source
+    is folded in for the same reason — otherwise editing it would leave every
+    cached bundle still refusing `pip install` while the code read as fixed."""
     h = hashlib.sha256()
-    for tpl in (_LAUNCH, _PYTHON_LAUNCH):
+    for tpl in (_LAUNCH, _PYTHON_LAUNCH, inspect.getsource(_drop_externally_managed)):
         h.update(tpl.encode())
         h.update(b"\0")
     return h.hexdigest()

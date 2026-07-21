@@ -186,9 +186,11 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
 
 新增 tool 要跑**任意 Python** 並可能持有 credential——把它開放給執行期使用者不安全,所以這是
 **deploy-time 的 dev 動作**(plan §B.9 明列為非目標)。使用者需要臨時計算時,走 **skill 的
-`scripts/`**:它們跑在 workspace 內建的 python-stack(pandas / numpy / scipy / matplotlib),但
-**裝不了新依賴**。當一段 script 穩定、需要自訂依賴、或值得被驗證後重用,那就是 **dev 把它
-升格成 tool-package** 的時機。
+`scripts/`**:它們跑在 workspace 內建的 python-stack(pandas / numpy / scipy / matplotlib);缺
+的套件可以在 sandbox 裡 `pip install` 補上,但那是**這個 workspace 當下的狀態**——沒有鎖檔、
+不可重現、workspace 一被回收就沒了。當一段 script 穩定、需要自訂依賴、或值得被驗證後重用,
+那就是 **dev 把它升格成 tool-package** 的時機:tool-package 的依賴由 `uv.lock` 釘死並在
+prebuild 時打包進 bundle,每個部署拿到的是同一組版本。
 
 **細節**:[`subsystems/tooling-and-sandbox-host.md`](subsystems/tooling-and-sandbox-host.md)
 (子系統參考)、[`plan-skills-and-tools.md`](plan-skills-and-tools.md) §B(設計與決策)。

@@ -435,3 +435,36 @@ def test_discover_app_slugs_includes_rca():
 
 def test_validate_all_apps_passes_for_bundled_apps():
     validate_all_apps()  # no raise — every bundled App (rca) is coherent
+
+
+# ─── the shell preamble follows the RESOLVED tools, not a manifest flag ──────
+#
+# `_sandbox.md` was attached on `function.sandbox`, a flag read in only two
+# places in the codebase and never reconciled with the tools an item actually
+# resolves. So an agent could be handed a page of `exec(cmd)` / `pip install` /
+# "write a .py then run it" guidance while having no way to run anything — and
+# #480 would ALSO tell it `exec` is off and available on request, so two parts
+# of one prompt disagreed. Nothing errors; the model just reads instructions
+# that are not true for it.
+
+_SHELL_LINE = "runs a real shell command"
+
+
+def _prompt_for(**kwargs) -> str:
+    return AppCatalog(presets=_presets()).resolve(**kwargs).system_prompt
+
+
+def test_an_app_without_the_shell_tool_is_not_told_about_the_shell():
+    """`topic-hub` declares `function.sandbox` but grants no `exec` — the live
+    case that was already wrong before any config was touched."""
+    assert _SHELL_LINE not in _prompt_for(app_slug="topic-hub", profile="default")
+
+
+def test_turning_the_shell_off_for_one_item_also_takes_away_its_instructions():
+    """A per-item `tool_prefs` pin resolves AFTER the manifest flag, so the
+    preamble has to key off the resolved set or it cannot see this at all."""
+    with_shell = _prompt_for(app_slug="rca", profile="default")
+    assert _SHELL_LINE in with_shell  # baseline: rca does grant exec
+
+    without = _prompt_for(app_slug="rca", profile="default", tool_prefs={"exec": False})
+    assert _SHELL_LINE not in without

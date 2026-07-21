@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 # the resulting /dev files are cleaned up by `exec` afterwards.
 _JAIL_BOOTSTRAP = r"""
 ROOT="$1"; shift
-mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp" "$ROOT/root"
+mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp" "$ROOT/root" "$ROOT/.home"
 mount --bind /usr "$ROOT/usr"; mount -o remount,bind,ro "$ROOT/usr"
 mount --bind /etc "$ROOT/etc"; mount -o remount,bind,ro "$ROOT/etc"
 # Provisioned tools: a shared host dir bind-mounted read-only at /.tools (a
@@ -84,7 +84,12 @@ mkdir -p "$ROOT/tmp/.jailbin"
 # heredocs, and a bare `python` shim alone would let `python3` fall through
 # to /usr/bin/python3 — the host Python with no pandas/numpy/scipy/matplotlib.
 if [ -x "$ROOT/.tools/python-stack/launch" ]; then
-  for n in python python3 python3.10 python3.11 python3.12 python3.13; do
+  # `pip*` too: the launcher dispatches on the name it is invoked as, so these
+  # are the same symlink and `pip install X` installs into the very interpreter
+  # `python` runs. Carrier branch only — the /usr/bin/python3 fallback below
+  # cannot answer to `pip`.
+  for n in python python3 python3.10 python3.11 python3.12 python3.13 \
+           pip pip3 pip3.10 pip3.11 pip3.12 pip3.13; do
     ln -sf /.tools/python-stack/launch "$ROOT/tmp/.jailbin/$n"
   done
 elif [ -e /usr/bin/python3 ]; then
@@ -194,6 +199,15 @@ _HOME = ".home"
 # the jail bootstrap. A bare `python` shim alone would let `python3` fall
 # through to the host interpreter.
 _PYTHON_SHIM_NAMES = ("python", "python3", "python3.10", "python3.11", "python3.12", "python3.13")
+# `pip` rides the SAME launcher (it dispatches on the name it was invoked as), so
+# `pip install X` installs into the very interpreter `python` runs. Unshimmed, it
+# fell through to the image's own pip: a different interpreter AND a different
+# HOME, so the install landed where the carrier never looks and the import failed
+# with nothing explaining why. Carrier-only, deliberately — the no-carrier
+# fallback is /usr/bin/python3, and a `pip` pointing there would run
+# `python3 install X`, which is not a command; better to let the image's real pip
+# answer than to shim something that cannot work.
+_PIP_SHIM_NAMES = ("pip", "pip3", "pip3.10", "pip3.11", "pip3.12", "pip3.13")
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
@@ -294,11 +308,20 @@ class LocalProcessSandbox:
         # Carrier when present, else the system python3 — anything but the host's
         # own venv that heads the inherited PATH. (A deployment image always
         # ships one or the other; prod always ships the carrier.)
-        target = carrier if os.access(carrier, os.X_OK) else Path("/usr/bin/python3")
+        has_carrier = os.access(carrier, os.X_OK)
+        target = carrier if has_carrier else Path("/usr/bin/python3")
         want = os.fspath(target)
         jailbin = root / _JAILBIN
         jailbin.mkdir(exist_ok=True)
-        for name in _PYTHON_SHIM_NAMES:
+        if not has_carrier:
+            # A carrier that went away takes its pip shims with it. Leaving them
+            # behind would point `pip` at a path that no longer exists — ENOENT,
+            # rather than falling through to the image's own pip. That is exactly
+            # the "a shim that cannot work is worse than none" case above, just
+            # arrived at by a different route.
+            for name in _PIP_SHIM_NAMES:
+                (jailbin / name).unlink(missing_ok=True)
+        for name in _PYTHON_SHIM_NAMES + (_PIP_SHIM_NAMES if has_carrier else ()):
             link = jailbin / name
             if link.is_symlink() and os.readlink(link) == want:
                 continue  # already correct — no write (cheap + race-free on reruns)
@@ -361,11 +384,20 @@ class LocalProcessSandbox:
             # workspace) when set.
             if self._tools_dir is not None:
                 env["SANDBOX_TOOLS_DIR"] = str(self._tools_dir)
-            # #393: the jail keeps the launcher's HOME on its per-exec ephemeral
-            # /tmp (a fresh isolated tmpfs mounted by the bootstrap — safe there).
-            # Passed EXPLICITLY, not left to the launcher's fail-safe default, so
-            # jail behavior stays byte-identical.
-            env["SANDBOX_HOME"] = "/tmp"
+            # #393: the launcher's HOME is the sandbox's own `.home` — here in
+            # its chroot-relative spelling, but the SAME dir the unjailed branch
+            # names below: a sibling of the `/root` workspace, in the infra area,
+            # so it is never walked/synced and is reaped with the sandbox.
+            #
+            # It used to be `/tmp`, and the bootstrap mounts a FRESH tmpfs over
+            # /tmp on every exec — so a `pip install` here did not merely fail to
+            # survive a recycle, it did not survive to the NEXT COMMAND, which is
+            # the only way an install is ever used. That stayed invisible while
+            # the bundled interpreter carried its PEP 668 marker (pip refused,
+            # loudly); dropping the marker turned the loud refusal into a silent
+            # evaporation. This is not persistence — nothing outlives the sandbox
+            # — it is the jail catching up to the unjailed path.
+            env["SANDBOX_HOME"] = f"/{_HOME}"
         else:
             # No chroot: run directly in the workspace subdir, HOME → workspace.
             argv = cmd
@@ -383,7 +415,18 @@ class LocalProcessSandbox:
             # — per-exec so a carrier provisioned after `create` is seen. Survives
             # the `setpriv` wrap (no `--reset-env`) and is inherited by children.
             self._install_python_shim(root)
-            env["PATH"] = f"{root / _JAILBIN}{os.pathsep}{env.get('PATH', '')}"
+            env["SANDBOX_JAILBIN"] = str(root / _JAILBIN)
+            env["PATH"] = f"{env['SANDBOX_JAILBIN']}{os.pathsep}{env.get('PATH', '')}"
+            # A LOGIN shell (`bash -lc …`, and the `sh -lc` wrapper every
+            # workflow node command rides) sources /etc/profile, which on Debian
+            # HARD-RESETS PATH — throwing the line above away and routing the
+            # agent back to the image's own interpreter, with none of the
+            # carrier's deps and none of its HOME rewriting. The jail overlays a
+            # tmpfs on /etc/profile.d to re-prepend; unjailed has no chroot to
+            # overlay, so the images install `docker/profile.d/sandbox-jailbin.sh`
+            # and it reads the dir back out of SANDBOX_JAILBIN (per-sandbox, so a
+            # pod-wide file cannot name it; /etc/profile resets PATH only, so the
+            # variable survives). See tests/sandbox/test_login_shell_path.py.
         return argv, sub_cwd, env
 
     async def exec(
