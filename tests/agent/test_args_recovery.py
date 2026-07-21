@@ -461,3 +461,58 @@ async def test_the_rejection_log_names_the_args_without_dumping_their_content(ca
     assert "write_file" in logged
     assert "content" in logged  # which argument
     assert secret not in logged  # but never its value
+
+
+async def test_wrap_passes_a_structured_tool_output_through_untouched():
+    """A tool's output is not necessarily text. The SDK types this very seam as
+    ``Awaitable[Any]`` and documents structured returns (``ToolOutputImage``,
+    ``ToolOutputFileContent``, ``ToolOutputText``) — and ``read_image`` (#517)
+    returns a ``ToolOutputImage`` so a VLM main model sees the pixels.
+
+    The wrap is applied to EVERY tool in the real runner, so treating that value
+    as a string blew up inside the invoke and the model got
+    "error running tool read_image: 'ToolOutputImage' object has no attribute
+    'startswith'" instead of the image — every single call. The tool's own tests
+    never saw it: they call the function directly, not through this wrap."""
+    from agents import ToolOutputImage
+
+    image = ToolOutputImage(image_url="data:image/png;base64,iVBORw0KGgo=")
+
+    async def shot(_ctx: ToolContext[Any], _args: str) -> ToolOutputImage:
+        return image
+
+    tool = FunctionTool(
+        name="read_image",
+        description="reads an image",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=shot,
+        strict_json_schema=False,
+    )
+    wrapped = wrap_with_args_recovery(tool)
+
+    out = await wrapped.on_invoke_tool(_tool_ctx(), '{"path": "a.png"}')
+
+    assert out is image  # handed back verbatim — not stringified, not inspected
+
+
+async def test_wrap_still_logs_a_schema_rejection_that_arrives_as_a_list():
+    """The SDK also allows a LIST of structured outputs. Skipping the inspection
+    for anything non-str must not be done by catching AttributeError — that would
+    also swallow a real bug — so the list case is pinned explicitly."""
+    from agents import ToolOutputText
+
+    parts = [ToolOutputText(text="a"), ToolOutputText(text="b")]
+
+    async def multi(_ctx: ToolContext[Any], _args: str) -> list[ToolOutputText]:
+        return parts
+
+    tool = FunctionTool(
+        name="multi",
+        description="returns parts",
+        params_json_schema={"type": "object", "properties": {}},
+        on_invoke_tool=multi,
+        strict_json_schema=False,
+    )
+    wrapped = wrap_with_args_recovery(tool)
+
+    assert await wrapped.on_invoke_tool(_tool_ctx(), "{}") is parts

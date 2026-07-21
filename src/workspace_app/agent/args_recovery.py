@@ -160,7 +160,7 @@ def _arg_shapes(args: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-def _log_if_schema_rejected(tool_name: str, args: dict[str, Any], result: str) -> None:
+def _log_if_schema_rejected(tool_name: str, args: dict[str, Any], result: Any) -> None:
     """Record a schema rejection the SDK swallowed, naming the offending argument.
 
     We cannot intercept the exception — it is caught before control returns to us —
@@ -170,8 +170,19 @@ def _log_if_schema_rejected(tool_name: str, args: dict[str, Any], result: str) -
     spelling was at fault, which is how this defect survived unnoticed in
     production.
 
+    A tool's output is NOT necessarily text — the SDK types this seam as
+    ``Awaitable[Any]`` and documents structured returns, which is how ``read_image``
+    (#517) hands a VLM main model the pixels as a ``ToolOutputImage``. A schema
+    rejection can only ever arrive as the SDK's plain error STRING, so anything
+    else is simply not the thing being looked for. Reading it as text anyway raised
+    inside the invoke, and since this wrap is applied to every tool in the runner
+    the model got "error running tool read_image: ... has no attribute
+    'startswith'" instead of the image, on every call (#584).
+
     The result itself is returned to the model unchanged: the feedback it needs to
     self-correct is not ours to edit."""
+    if not isinstance(result, str):
+        return
     if not result.startswith(_SDK_TOOL_ERROR_PREFIX) or _SDK_VALIDATION_ERROR not in result:
         return
     _LOGGER.warning(
@@ -213,7 +224,14 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
     # carries an AgentToolContext as its run-context state, so the wrap
     # only needs to support that one shape. `Any` would silently bypass
     # ty for callers; the concrete type catches mismatches.
-    async def safer(ctx: ToolContext[AgentToolContext], args_json: str) -> str:
+    #
+    # The RETURN, by contrast, is `Any` — exactly as the SDK types the seam
+    # (`on_invoke_tool: Callable[..., Awaitable[Any]]`), because a tool may answer
+    # with a structured output (`ToolOutputImage`/`ToolOutputText`/
+    # `ToolOutputFileContent`, or a list of them) and this wrap only classifies the
+    # ARGUMENTS. Narrowing it to `str` here was a claim about other people's tools
+    # that was not ours to make, and it is what turned `read_image` into an error.
+    async def safer(ctx: ToolContext[AgentToolContext], args_json: str) -> Any:
         # The model's actual emission + call id travel on the raised error so
         # the runner can show the user WHAT went wrong (#76), without putting
         # raw payloads into the user-safe message.
