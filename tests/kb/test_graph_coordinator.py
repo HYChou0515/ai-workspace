@@ -14,10 +14,15 @@ from workspace_app.resources.kb import Collection, DocChunk, SourceDoc
 
 
 class _FakeLlm(ILlm):
-    """Stateless (thread-safe under parallel batch jobs): one fixed claim list."""
+    """Stateless (thread-safe under parallel batch jobs). Answers whichever
+    extractor asked, keyed on a word only that prompt contains — the batch runs
+    both over the same chunks."""
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
-        yield '[{"metric": "Revenue", "period": "Q3", "value": "1.2M", "unit": "USD"}]', False
+        if "surface" in prompt:
+            yield '[{"surface": "回焊爐", "kind": "機台"}]', False
+        else:
+            yield '[{"metric": "Revenue", "period": "Q3", "value": "1.2M", "unit": "USD"}]', False
 
 
 def _mk_collection(spec, name: str, *, use_graph: bool, docs: list[tuple[str, str]]) -> str:
@@ -215,3 +220,28 @@ def _mirror_of(spec, claim_id: str):
     got = spec.get_resource_manager(GraphClaim).get(claim_id).data
     assert isinstance(got, GraphClaim)
     return got
+
+
+async def test_the_batch_job_records_mentions_alongside_claims():
+    """The primary layer rides the job that already exists. Asserted through the
+    JOB rather than by calling the writer, because a writer nothing invokes
+    produces nothing — and that failure is invisible in the writer's own tests."""
+    from specstar import QB as _QB
+
+    from workspace_app.resources.graph import GraphMention
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "回焊爐 溫度 250C")])
+    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord._handle(
+        SimpleNamespace(
+            data=GraphJob(
+                payload=GraphJobPayload(kind="batch", collection_id=cid, doc_ids=["deck-A"])
+            )
+        )
+    )
+    mrm = spec.get_resource_manager(GraphMention)
+    rows = list(mrm.list_resources((_QB["source_doc_id"] == "deck-A").build()))
+    assert len(rows) == 1
+    assert isinstance(rows[0].data, GraphMention)
+    assert rows[0].data.surface == "回焊爐"
