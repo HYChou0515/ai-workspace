@@ -629,6 +629,12 @@ def register_file_routes(
         # durability. Stale handle (killed mid-call) is swallowed — re-run.
         with contextlib.suppress(Exception):
             await registry.flush(investigation_id)
+        # #538 follow-up: the command wrote straight into the sandbox, so the
+        # facade's cached size never heard about it and would keep serving a
+        # pre-exec number for the rest of its window. Drop it so the next read
+        # measures — the Terminal pane's whole point is doing things the facade
+        # cannot see.
+        files.forget_measurement(investigation_id)
         logger.info(
             "file_routes: exec in item %s completed with exit %s",
             investigation_id,
