@@ -265,7 +265,10 @@ async def test_a_reconcile_job_builds_the_vocabulary():
     )
     coord._handle(SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="reconcile"))))
     erm = spec.get_resource_manager(GraphEntity)
-    names = {r.data.canonical_name for r in erm.list_resources(QB.all().build())}
+    names = set()
+    for r in erm.list_resources(QB.all().build()):
+        assert isinstance(r.data, GraphEntity)
+        names.add(r.data.canonical_name)
     assert "回焊爐" in names
 
 
@@ -277,5 +280,9 @@ async def test_a_dispatch_ends_by_queueing_a_reconcile():
     coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
     coord._handle(SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="dispatch"))))
     jrm = spec.get_resource_manager(GraphJob)
-    kinds = [r.data.payload.kind for r in jrm.list_resources(QB.all().build())]
+    kinds = []
+    for r in jrm.list_resources(QB.all().build()):
+        assert isinstance(r.data, GraphJob)
+        assert isinstance(r.data.payload, GraphJobPayload)
+        kinds.append(r.data.payload.kind)
     assert "reconcile" in kinds
