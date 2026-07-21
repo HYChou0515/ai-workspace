@@ -44,7 +44,7 @@ import { useOnboarding } from "../hooks/useOnboarding";
 import { usePinned, useRecentlyViewed } from "../hooks/usePins";
 import { useAppItems, useAppManifest } from "../hooks/useResources";
 import { useUser, useUsers } from "../hooks/useUsers";
-import { isDiscoverableOnly, parseItemPermission } from "../lib/itemPermission";
+import { useItemAccess } from "../hooks/useItemAccess";
 import { pxToRem } from "../lib/pxToRem";
 
 const DAY = 86_400_000;
@@ -460,7 +460,6 @@ export function AppDashboard() {
                 key={it.resource_id}
                 slug={slug}
                 item={it}
-                me={me}
                 statusSpec={fieldSpec(statusField)}
                 statusTone={toneOf(statusField, it[statusField])}
                 sevSpec={fieldSpec(sevField)}
@@ -614,7 +613,6 @@ function ItemLockedTitle({ slug, itemId, title }: { slug: string; itemId: string
 function ItemRow({
   slug,
   item,
-  me,
   statusSpec,
   statusTone,
   sevSpec,
@@ -628,7 +626,6 @@ function ItemRow({
 }: {
   slug: string;
   item: AppItem;
-  me: string;
   statusSpec?: FieldSpec;
   statusTone: ChipTone;
   sevSpec?: FieldSpec;
@@ -646,8 +643,9 @@ function ItemRow({
   const statusVal = String(item[statusSpec?.name ?? "status"] ?? "");
   // Permission-disclosure: an item the user may see-exist (read_meta) but not enter
   // (read_chat). It stays in the list but is a locked row — no link in, a "request
-  // access" action instead. Owner-for-access is `created_by`, not the `owner` field.
-  const locked = isDiscoverableOnly(parseItemPermission(item.permission), me, item.created_by);
+  // access" action instead. A superuser is never locked (they can open anything),
+  // which is why this goes through `useItemAccess` rather than the raw helper.
+  const { isDiscoverableOnly: locked } = useItemAccess(item);
 
   return (
     <div role="row" style={{ display: "grid", gridTemplateColumns: GRID, padding: "14px 16px", alignItems: "center", gap: 10, borderBottom: last ? "none" : "1px solid var(--paper-3)" }}>

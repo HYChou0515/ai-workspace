@@ -12,12 +12,8 @@ import { api } from "../../api";
 import type { AppItem, AppManifest, CloseStatus, FileInfo } from "../../api/types";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useIsSuperuser } from "../../hooks/useIsSuperuser";
-import {
-  canChangeItemPermission,
-  canConverse,
-  canReadItemContent,
-  parseItemPermission,
-} from "../../lib/itemPermission";
+import { useItemAccess } from "../../hooks/useItemAccess";
+import { canChangeItemPermission, parseItemPermission } from "../../lib/itemPermission";
 import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
@@ -210,12 +206,11 @@ function ShellBody({
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Permission-disclosure graceful-degrade: lock the panels the user lacks the
   // verb for, so a limited-access member sees a clean locked state instead of a
-  // raw 403 from the file / chat sub-route (the backend still enforces). Owner
-  // for access is `created_by`, not the display `owner` field.
-  const me = useCurrentUser();
-  const _perm = parseItemPermission(item.permission);
-  const _canSeeFiles = canReadItemContent(_perm, me, item.created_by);
-  const _canConverse = canConverse(_perm, me, item.created_by);
+  // raw 403 from the file / chat sub-route (the backend still enforces).
+  // `useItemAccess` carries BOTH identity bits — the earlier inline call passed
+  // only the user id, so an admin (who the backend lets in) lost the entire
+  // workspace to the `private` branch with nothing on screen to explain it.
+  const { canSeeFiles: _canSeeFiles, canConverse: _canConverse } = useItemAccess(item);
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
   // toggle the sidebar / bottom panel.
