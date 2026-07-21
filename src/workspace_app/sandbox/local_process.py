@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 # the resulting /dev files are cleaned up by `exec` afterwards.
 _JAIL_BOOTSTRAP = r"""
 ROOT="$1"; shift
-mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp" "$ROOT/root"
+mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp" "$ROOT/root" "$ROOT/.home"
 mount --bind /usr "$ROOT/usr"; mount -o remount,bind,ro "$ROOT/usr"
 mount --bind /etc "$ROOT/etc"; mount -o remount,bind,ro "$ROOT/etc"
 # Provisioned tools: a shared host dir bind-mounted read-only at /.tools (a
@@ -384,11 +384,20 @@ class LocalProcessSandbox:
             # workspace) when set.
             if self._tools_dir is not None:
                 env["SANDBOX_TOOLS_DIR"] = str(self._tools_dir)
-            # #393: the jail keeps the launcher's HOME on its per-exec ephemeral
-            # /tmp (a fresh isolated tmpfs mounted by the bootstrap — safe there).
-            # Passed EXPLICITLY, not left to the launcher's fail-safe default, so
-            # jail behavior stays byte-identical.
-            env["SANDBOX_HOME"] = "/tmp"
+            # #393: the launcher's HOME is the sandbox's own `.home` — here in
+            # its chroot-relative spelling, but the SAME dir the unjailed branch
+            # names below: a sibling of the `/root` workspace, in the infra area,
+            # so it is never walked/synced and is reaped with the sandbox.
+            #
+            # It used to be `/tmp`, and the bootstrap mounts a FRESH tmpfs over
+            # /tmp on every exec — so a `pip install` here did not merely fail to
+            # survive a recycle, it did not survive to the NEXT COMMAND, which is
+            # the only way an install is ever used. That stayed invisible while
+            # the bundled interpreter carried its PEP 668 marker (pip refused,
+            # loudly); dropping the marker turned the loud refusal into a silent
+            # evaporation. This is not persistence — nothing outlives the sandbox
+            # — it is the jail catching up to the unjailed path.
+            env["SANDBOX_HOME"] = f"/{_HOME}"
         else:
             # No chroot: run directly in the workspace subdir, HOME → workspace.
             argv = cmd

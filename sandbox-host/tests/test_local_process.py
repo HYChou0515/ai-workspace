@@ -663,17 +663,6 @@ async def test_unjailed_exec_sets_sandbox_home_to_private_per_sandbox_dir(tmp_pa
     assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # .home invisible
 
 
-async def test_jailed_exec_passes_sandbox_home_tmp(tmp_path):
-    """#393: the jail keeps HOME on its per-exec ephemeral /tmp (isolated
-    there), passed EXPLICITLY as SANDBOX_HOME=/tmp rather than relied on as the
-    launcher's silent default — keeping jail behavior byte-identical while the
-    fail-safe default is reserved for genuine misconfiguration."""
-    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
-    h = await sb.create(SandboxSpec())
-    _argv, _cwd, env = sb._exec_argv(h, ["true"])
-    assert env["SANDBOX_HOME"] == "/tmp"
-
-
 async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback(tmp_path):
     """A carrier provisioned AFTER the first exec (the `provision_tools` path)
     must be picked up: the per-exec shim re-points `python` from the
