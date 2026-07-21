@@ -11,6 +11,13 @@
  * makes "forgot the superuser half" unrepresentable at the call site.
  *
  * It is a UX gate only — the server still enforces on every route.
+ *
+ * LOADING CONTRACT: an `undefined` item (still fetching) has no permission to
+ * read, and an absent permission is public to `authorize` — so every verb comes
+ * back TRUE. That is deliberate for the write gate (`useItemCanWrite` stays
+ * optimistically writable rather than flashing a read-only board), but a consumer
+ * that renders CONTENT off these flags must gate on the item being loaded first,
+ * or it will paint a full workspace for an item it hasn't seen yet.
  */
 
 import type { AppItem } from "../api/types";

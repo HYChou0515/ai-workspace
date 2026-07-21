@@ -12,7 +12,13 @@ import { WorkspaceShell } from "./WorkspaceShell";
 // heavy child (live chat SSE, presence, activity feed, the file service) is
 // stubbed down to a marker. `ActivityBar`, the thing we assert on, is internal
 // to WorkspaceShell and only mounts inside the `read_content` branch.
-vi.mock("../../components/ItemChatShell", () => ({ ItemChatShell: () => <div /> }));
+const chatReadOnly = vi.fn();
+vi.mock("../../components/ItemChatShell", () => ({
+  ItemChatShell: ({ readOnly }: { readOnly?: boolean }) => {
+    chatReadOnly(readOnly);
+    return <div data-testid="chat" />;
+  },
+}));
 vi.mock("../../components/PresenceBar", () => ({ PresenceBar: () => null }));
 vi.mock("../../components/ActivityFeed", () => ({ ActivityFeed: () => null }));
 vi.mock("../../hooks/useAgent", () => ({
@@ -78,11 +84,14 @@ describe("WorkspaceShell — who gets the IDE column", () => {
     isSuperuser.mockReturnValue(true);
     open();
     expect(await screen.findByTitle("Search files")).toBeInTheDocument();
+    // The other half of the symptom: the composer was read-only too.
+    expect(chatReadOnly).toHaveBeenLastCalledWith(false);
   });
 
   it("still hides it from a plain non-owner with no read_content", async () => {
     open();
     await waitFor(() => expect(screen.getByTestId("page-item")).toBeInTheDocument());
     expect(screen.queryByTitle("Search files")).not.toBeInTheDocument();
+    expect(chatReadOnly).toHaveBeenLastCalledWith(true);
   });
 });

@@ -44,12 +44,18 @@ describe("useItemAccess", () => {
     expect(result.current.isDiscoverableOnly).toBe(false);
   });
 
-  it("still locks a plain non-owner out of a private item", async () => {
+  // Deliberately NOT "everything false on a private item": every value there is
+  // also the pre-resolution value, so such a test passes even if the hook never
+  // reads identity at all. Grant one verb, wait for THAT to turn true — proof the
+  // queries resolved — and only then assert the others are still denied.
+  it("still denies the verbs a plain non-owner was not granted", async () => {
     signInAs("dave", false);
-    const { result } = access(privateItem);
+    const { result } = access({
+      ...privateItem,
+      permission: { visibility: "restricted", read_meta: ["user:dave"], read_chat: ["user:dave"] },
+    } as unknown as AppItem);
 
-    // Wait for identity to settle so this isn't just "the query hasn't resolved".
-    await waitFor(() => expect(api.getMe).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.canReadChat).toBe(true));
     expect(result.current.canSeeFiles).toBe(false);
     expect(result.current.canConverse).toBe(false);
     expect(result.current.canWrite).toBe(false);
