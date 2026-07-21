@@ -27,7 +27,13 @@ export type { ChatThread };
  * double it).
  */
 
-export type ChatSendOpts = { applySkills?: string[]; imagePaths?: string[] };
+export type ChatSendOpts = {
+  applySkills?: string[];
+  imagePaths?: string[];
+  /** grill-me: the `ask_user` question this message answers, when the user
+   * clicked an option instead of typing. */
+  answers?: string;
+};
 
 export type BroadcastChatTransport = {
   /** Identity of the thread. A change resets the log and re-subscribes. */

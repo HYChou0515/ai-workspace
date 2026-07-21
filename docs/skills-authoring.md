@@ -79,11 +79,25 @@ IDE 的檔案樹會把 `.skill/` 這個點開頭的資料夾藏起來,所以 cha
    `apps/<slug>/profiles/<profile>/.skill/<name>/`,之後該 profile 的每個新 workspace
    都會內附它。
 
-注意:**烤進去(baked-in)**的 profile skill 是唯讀的 package 內容,所以在 v1 它只帶
-它的 `SKILL.md` 內文——不帶掛載在 workspace 的 `references/`/`scripts/`。升級一個帶 script
-的 skill 時,由開發者決定這個 script 應該升格成 tool-package,還是當成 profile 範本檔
-seed 進 workspace。(你自己建立的 workspace skill 沒有這個限制——它們的 references 與 scripts
-能用,是因為它們就住在 sandbox 掛載的那個 workspace 裡。)
+內建的 skill **會帶著它的整包檔案**——`references/`、`scripts/`、資料檔都一樣。第一次有人
+用到它(送 Apply 或 agent 自己 `read_skill`)時,那些檔案就會被複製進該 workspace 的
+`.skill/<name>/`,所以 `SKILL.md` 裡寫的 `see references/glossary.md` 和
+`exec(["python", ".skill/<name>/scripts/x.py", …])` 都能直接成立(#589)。
+
+複製之後那份就是**這個 workspace 的**:agent 可以改它、微調 script——這正是 skill 和
+tool-package 的差別所在。因此:
+
+- **平台永遠不會覆寫它。** 再次使用該 skill 只會確認檔案在,不會把出貨版本蓋回去。
+- 你之後改進了出貨版本,既有的 workspace **不會自動拿到**。使用者在 Skills 面板按
+  **更新**才會拉——而且是**逐檔**的:沒被動過的檔案更新,改過的原封不動保留並列出來給你看。
+  要全部推翻用**還原成出廠版**,那是明確的破壞性動作。
+- 只有 `SKILL.md`、沒有任何附帶檔案的 skill **不會**被複製——複製品會跟 package 版一模一樣,
+  卻換來「內文不再跟上游」這個代價。
+
+**執行權限不會被保留。** FileStore 沒有 mode 的概念,所以 script 一律用直譯器叫
+(`python …` / `bash …`),不要依賴 `./script` 這種寫法。需要釘死依賴、或真的需要一個
+預編譯執行檔時,那是升格成 tool-package 的時機(`docs/plan-skills-and-tools.md` §B):
+它的依賴由 `uv.lock` 鎖住,而且它的 bundle 傳輸會保留權限位。
 
 ## 給 app 作者
 

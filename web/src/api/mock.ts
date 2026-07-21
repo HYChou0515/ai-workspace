@@ -728,6 +728,11 @@ export const mockApi: ApiClient = {
     return { resource_id: id };
   },
 
+  async refreshItemSkill(_slug: string, _itemId: string, _name: string, _body: { force: boolean }) {
+    await delay(10);
+    return { updated: [] as string[], skipped: [] as string[], removed: [] as string[] };
+  },
+
   async setItemPermission(_slug: string, _itemId: string, perm) {
     await delay(10);
     return { visibility: perm.visibility, notified: [] as string[] };
@@ -871,6 +876,9 @@ export const mockApi: ApiClient = {
       role: "user",
       author: "default-user",
       content: args.content,
+      // grill-me: offline mode must record the answered question too, or a
+      // card answered here stays offering its buttons.
+      answers: args.answers,
     });
     publish(args.investigationId, {
       type: "user_message",

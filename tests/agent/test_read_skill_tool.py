@@ -344,3 +344,27 @@ def test_agent_tool_context_app_slug_and_profile_default_none():
     ctx2 = AgentToolContext(app_slug="rca", template_profile="local-lab")
     assert ctx2.app_slug == "rca"
     assert ctx2.template_profile == "local-lab"
+
+
+# #589: `read_skill` carries its own copy of the source precedence, separate from
+# `resolve_skill_body`. Both must append the derived reference regardless of which
+# source produced the body — otherwise the same skill answers differently
+# depending on whether the model read it or the user applied it, and a copied
+# `author-workflow` freezes the workflow syntax the AI writes against.
+async def test_derived_reference_survives_a_workspace_copy():
+    from workspace_app.agent.tools import read_skill_impl
+    from workspace_app.files import WorkspaceFiles
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    files = WorkspaceFiles(MemoryFileStore())
+    inv = "inv-1"
+    md = "---\nname: author-workflow\ndescription: author a workflow\n---\n\npurpose only"
+    await files.write(inv, "/.skill/author-workflow/SKILL.md", md.encode("utf-8"))
+    ctx = AgentToolContext(
+        app_slug="rca", template_profile="default", files=files, investigation_id=inv
+    )
+
+    out = await read_skill_impl(RunContextWrapper(ctx), "author-workflow")
+
+    assert "purpose only" in out
+    assert "machine-derived reference (always current)" in out

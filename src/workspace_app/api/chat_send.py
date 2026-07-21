@@ -196,7 +196,13 @@ class ChatSendService:
         author = self._get_user_id()
         created = now_ms()
         conv.messages.append(
-            Message(role="user", content=body.content, author=author, created_at=created)
+            Message(
+                role="user",
+                content=body.content,
+                author=author,
+                created_at=created,
+                answers=body.answers,
+            )
         )
         self._conv_rm.update(rid, conv)
         logger.info(

@@ -19,6 +19,7 @@ plain FileStore pass-through — handy for tests + the transitional fallback.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections import defaultdict
@@ -216,8 +217,12 @@ class WorkspaceFiles:
         return (self._sb, handle)
 
     async def read(self, workspace_id: str, path: str) -> bytes:
+        return await self._read_with(workspace_id, path, await self._warm(workspace_id))
+
+    async def _read_with(self, workspace_id: str, path: str, warm) -> bytes:
+        """`read` against an ALREADY-resolved liveness. Split out so a multi-step
+        operation resolves once and every step provably hits the same store."""
         path = _norm(path)
-        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             try:
@@ -267,12 +272,31 @@ class WorkspaceFiles:
         full would be refused, and renaming a folder would need room for the
         whole tree. Worse, the rename a user reaches for to tidy up is exactly
         the operation an over-quota workspace must not refuse. The source is
-        removed immediately after the destination lands, so a failure can only
-        leave a harmless duplicate, never a hole."""
+        removed immediately after the destination lands; if that removal fails
+        the destination is rolled back, so a failed move leaves the workspace
+        exactly as it was — never a hole, and never a duplicate the user has to
+        reconcile against a 500 (#588)."""
         src, dst = _norm(src), _norm(dst)
-        data = await self.read(workspace_id, src)
-        await self._write_unchecked(workspace_id, dst, data, await self._warm(workspace_id))
-        await self.delete(workspace_id, src)
+        # Resolve liveness ONCE for the whole operation (#588). Each step used to
+        # resolve it independently, so a sandbox reaped or rebuilt mid-move
+        # (#345/#366) could send the read and the delete to DIFFERENT stores —
+        # which is how the delete came to fail on a file the read had just
+        # returned, intermittently and only under real sandbox churn.
+        warm = await self._warm(workspace_id)
+        data = await self._read_with(workspace_id, src, warm)
+        await self._write_unchecked(workspace_id, dst, data, warm)
+        try:
+            await self._delete_with(workspace_id, src, warm)
+        except Exception:
+            # The source would not go, so the move FAILED — make it look like it
+            # never ran. Keeping the destination (the old behaviour, described in
+            # this docstring as "a harmless duplicate") hands the user a 500 AND
+            # two copies to sort out by hand. The destination is provably free
+            # before a move (the route 409s on an occupied target), so removing
+            # what we just wrote cannot destroy anything else.
+            with contextlib.suppress(Exception):
+                await self._delete_with(workspace_id, dst, warm)
+            raise
 
     async def write_record(self, workspace_id: str, path: str, data: bytes) -> None:
         """Write a record of something that has ALREADY happened. **Not** quota
@@ -597,8 +621,11 @@ class WorkspaceFiles:
         return max(quota - (used - old), old)
 
     async def delete(self, workspace_id: str, path: str) -> None:
+        await self._delete_with(workspace_id, path, await self._warm(workspace_id))
+
+    async def _delete_with(self, workspace_id: str, path: str, warm) -> None:
+        """`delete` against an ALREADY-resolved liveness — see `_read_with`."""
         path = _norm(path)
-        warm = await self._warm(workspace_id)
         # What it cost, so the measurement can be adjusted instead of dropped.
         # Deleting is exactly what a user does when they are out of space, and
         # dropping the measurement would make every one of those deletes force a

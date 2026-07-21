@@ -1311,6 +1311,78 @@ async def mention_user_impl(
     return f"Notified {user_id} to come look at this investigation."
 
 
+# How many questions one `ask_user` call may carry. More than a handful stops
+# being a conversation and becomes a form the user has to fill in before the
+# agent will talk to them again.
+_MAX_QUESTIONS = 5
+# A single option is an announcement, not a choice — the user has nothing to
+# decide, and the agent should just say it instead of asking.
+_MIN_OPTIONS = 2
+
+
+async def ask_user_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    questions: list[dict[str, Any]],
+) -> str:
+    """Ask the user to choose between concrete options, and stop until they answer.
+
+    Use this when you need a decision only the user can make and guessing would
+    waste their time — which alternative to take, which of several readings of
+    an ambiguous request is right. Each question carries its own options, and
+    each option carries a short description of what choosing it means, so the
+    user can decide without asking you what the options are.
+
+    Pass up to five questions. Batch questions whose answers do NOT depend on
+    each other; ask one at a time when a later question only makes sense once
+    you know the earlier answer.
+
+    Write each question the way you would say it out loud: get to the point in
+    one short sentence, use the words the user has already used, and give a
+    concrete example where it helps. Each option's description says what
+    picking it leads to.
+
+    The user can always answer in their own words, add a note to whichever
+    option they pick, or tell you the question itself did not land — in which
+    case ask the same question again, shorter and more plainly.
+
+    Your turn ends here. The user's answer arrives as their next message, and
+    you continue from there — so put everything they need in the question, and
+    do not answer it yourself.
+    """
+    if not questions:
+        return "error: ask_user needs at least one question"
+    if len(questions) > _MAX_QUESTIONS:
+        return (
+            f"error: ask_user takes at most {_MAX_QUESTIONS} questions "
+            f"(got {len(questions)}). Ask the most important ones first — the "
+            "rest can follow once these are answered."
+        )
+
+    lines: list[str] = []
+    for i, q in enumerate(questions, start=1):
+        text = str(q.get("question", "")).strip()
+        if not text:
+            return f"error: question {i} is empty"
+        options = q.get("options") or []
+        if len(options) < _MIN_OPTIONS:
+            return (
+                f"error: question {i} needs at least {_MIN_OPTIONS} options — "
+                "with fewer there is nothing for the user to choose between."
+            )
+        lines.append(f"{i}. {text}")
+        for opt in options:
+            label = str(opt.get("label", "")).strip()
+            desc = str(opt.get("description", "")).strip()
+            lines.append(f"   - {label}" + (f" — {desc}" if desc else ""))
+
+    # The options the UI renders come from this call's own `tool_args`, which
+    # the turn reducer already persists and streams (turns.py). This return
+    # value is what the MODEL sees, so it is a plain restatement — enough for
+    # the transcript to read sensibly, with no second copy of the schema to
+    # drift from the first.
+    return "Asked the user:\n" + "\n".join(lines)
+
+
 async def lookup_user_impl(ctx: RunContextWrapper[AgentToolContext], handle: str) -> str:
     """Look up a teammate in this shared workspace by their handle.
 
@@ -1369,19 +1441,34 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
 
     # #298: a user+AI co-created skill in this workspace shadows any package
     # skill of the same name. Read live (uncached) — it may have just been saved.
+    from ..apps.skills import augment_shared_skill_body, materialize_skill
+
     files = ctx.context.files
     inv = ctx.context.investigation_id
     if files is not None and inv is not None:
+        # #589: reading a skill is the moment its body starts telling the model to
+        # run `scripts/…`, so it is the moment those files have to exist.
+        await materialize_skill(
+            files, inv, ctx.context.app_slug, ctx.context.template_profile, name
+        )
         try:
             body = await load_workspace_skill(files, inv, name)
         except SkillError as e:
             return f"error: {e}"
         if body is not None:
-            return body
+            # #589: the derived reference is appended to a body from ANY source.
+            # It used to hang off the shared branch below, which was fine while a
+            # baked-in skill could never be copied here. Once it can, this branch
+            # wins — and a source-specific augmentation would silently stop
+            # firing, freezing the workflow syntax the AI writes against on the
+            # day the skill was copied. The AUTHORED text is what gets copied and
+            # edited; the DERIVED part is recomputed every read.
+            return augment_shared_skill_body(
+                name, body, ctx.context.app_slug, ctx.context.template_profile
+            )
 
     # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
     from ..apps.shared_skills import SHARED_SKILLS, load_shared_skill
-    from ..apps.skills import augment_shared_skill_body
 
     if name in SHARED_SKILLS:
         try:
@@ -1954,6 +2041,7 @@ _IMPLS = {
     "delete_file": delete_file_impl,
     "mention_user": mention_user_impl,
     "lookup_user": lookup_user_impl,
+    "ask_user": ask_user_impl,
     "ask_knowledge_base": ask_knowledge_base_impl,
     "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
@@ -2029,7 +2117,7 @@ _LEGACY_TOOL_RENAMES = {"ls": "list_files"}
 # needs, so they build as non-strict. Entity fields are open by design (the
 # schema lives in the workspace, not the tool signature), so this is correct, not
 # a workaround.
-_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity"})
+_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity", "ask_user"})
 
 
 def builtin_tool_descriptions() -> dict[str, str]:

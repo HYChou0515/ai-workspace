@@ -41,7 +41,10 @@ const SKILLS: ItemSkillState[] = [
 ];
 
 function fakeClient(skills = SKILLS) {
-  return { getItemSkills: vi.fn(async () => skills) };
+  return {
+    getItemSkills: vi.fn(async () => skills),
+    refreshItemSkill: vi.fn(async () => ({ updated: [], skipped: [], removed: [] })),
+  };
 }
 
 function fakeService() {
@@ -162,5 +165,100 @@ describe("SkillsModal (#380)", () => {
     await waitFor(() =>
       expect(f.writeFile).toHaveBeenCalledWith(".skill/new-skill/SKILL.md", expect.anything()),
     );
+  });
+});
+
+// #589: a baked-in skill that ships scripts is COPIED into the workspace. The row
+// still reports its package source — so using a default-off one cannot quietly
+// turn it on for good — but its files really are here. Keying the download
+// control off `source === "workspace"` would therefore hide it for exactly the
+// skills that just gained downloadable files.
+describe("SkillsModal — a baked-in skill with a local copy (#589)", () => {
+  const COPIED: ItemSkillState[] = [
+    {
+      name: "triage",
+      description: "triage a defect",
+      source: "profile",
+      default_on: true,
+      is_copy: true,
+      pref: "follow",
+      effective: true,
+    },
+  ];
+
+  it("offers download for a copy even though its source is not `workspace`", async () => {
+    renderModal({ client: fakeClient(COPIED) as never });
+    expect(await screen.findByTestId("skill-download-triage")).toBeInTheDocument();
+  });
+
+  it("says the copy is editable here, so its source badge is not the whole story", async () => {
+    renderModal({ client: fakeClient(COPIED) as never });
+    expect(await screen.findByTestId("skill-copy-triage")).toBeInTheDocument();
+  });
+});
+
+// The copy is frozen at the version it was made from — deliberately, so the AI's
+// edits survive. That makes an explicit way to pull a newer version the other
+// half of the bargain: without it, "frozen" is just "stuck".
+describe("SkillsModal — refreshing a copy (#589)", () => {
+  const COPIED: ItemSkillState[] = [
+    {
+      name: "triage",
+      description: "triage a defect",
+      source: "profile",
+      default_on: true,
+      is_copy: true,
+      update_available: true,
+      pref: "follow",
+      effective: true,
+    },
+  ];
+
+  const NO_UPDATE: ItemSkillState[] = [{ ...COPIED[0], update_available: false }];
+
+  it("pulls the shipped version and reports what it left alone", async () => {
+    const refreshItemSkill = vi.fn(async () => ({
+      updated: ["scripts/x.py"],
+      skipped: ["scripts/tuned.py"],
+      removed: [],
+    }));
+    renderModal({
+      client: { ...fakeClient(COPIED), refreshItemSkill } as never,
+    });
+
+    fireEvent.click(await screen.findByTestId("skill-refresh-triage"));
+
+    await waitFor(() =>
+      expect(refreshItemSkill).toHaveBeenCalledWith("rca", "i1", "triage", { force: false }),
+    );
+    // The files it did NOT touch are the ones the user needs told about.
+    expect(await screen.findByText(/scripts\/tuned\.py/)).toBeInTheDocument();
+  });
+
+  it("offers reset-to-factory even when there is nothing new upstream", async () => {
+    const refreshItemSkill = vi.fn(async () => ({ updated: [], skipped: [], removed: [] }));
+    renderModal({ client: { ...fakeClient(NO_UPDATE), refreshItemSkill } as never });
+
+    fireEvent.click(await screen.findByTestId("skill-reset-triage"));
+
+    // The escape hatch for edits the per-file update deliberately refuses to
+    // touch: without it, one bad edit by the AI has no way back.
+    await waitFor(() =>
+      expect(refreshItemSkill).toHaveBeenCalledWith("rca", "i1", "triage", { force: true }),
+    );
+  });
+
+  it("hides the update control when upstream has not moved", async () => {
+    renderModal({ client: fakeClient(NO_UPDATE) as never });
+    await screen.findByTestId("skill-row-triage");
+    // A button whose only honest outcome is "nothing changed" reads as broken.
+    expect(screen.queryByTestId("skill-refresh-triage")).toBeNull();
+    expect(screen.getByTestId("skill-reset-triage")).toBeInTheDocument();
+  });
+
+  it("offers no refresh for a skill that was written here", async () => {
+    renderModal();
+    await screen.findByTestId("skill-row-my-skill");
+    expect(screen.queryByTestId("skill-refresh-my-skill")).toBeNull();
   });
 });

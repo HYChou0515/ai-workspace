@@ -16,6 +16,11 @@ from .kb_chat_routes import EnhancementsInput
 
 class _MessageBody(BaseModel):
     content: str
+    # grill-me: the `tool_call_id` of the `ask_user` question this message
+    # answers, set when the user clicked an option instead of typing. Carried
+    # through to `Message.answers`; the send path is otherwise unchanged — an
+    # answer starts a turn like any other message.
+    answers: str | None = None
     # Per-message reasoning effort from the UI selector; None → model default.
     reasoning_effort: Literal["low", "medium", "high"] | None = None
     # Knowledge-search depth from the composer picker. Applies to this
@@ -72,6 +77,15 @@ class _ItemSkillState(BaseModel):
     description: str
     source: str
     default_on: bool
+    #: #589 — the workspace holds an editable copy of this baked-in skill's files.
+    #: Independent of ``source``: the row still answers as the skill it copied, but
+    #: its files are here, so the download control applies and (later) so does a
+    #: refresh from upstream.
+    is_copy: bool = False
+    #: #589 — the package ships something this copy does not have. The refresh
+    #: control appears on this, not merely on being a copy: a button whose only
+    #: honest outcome is "nothing changed" reads as broken.
+    update_available: bool = False
     pref: Literal["follow", "on", "off"]
     effective: bool
 
@@ -326,3 +340,20 @@ class _EntityUpdateBody(BaseModel):
     patch: dict[str, Any] = Field(default_factory=dict)
     expected_version: str | None = None  # §C6 — reject if the record moved on
     body: str | None = None  # §C2 — replace the markdown body; None preserves it
+
+
+class _SkillRefreshRequest(BaseModel):
+    """#589: ``force`` turns "update" into "reset to factory" — restore every
+    shipped file, including ones edited here. Off by default: the destructive
+    reading has to be asked for."""
+
+    force: bool = False
+
+
+class _SkillRefreshResult(BaseModel):
+    """What the refresh did, per file. ``skipped`` is the one the user needs:
+    those files were edited here, so they were deliberately left as they are."""
+
+    updated: list[str]
+    skipped: list[str]
+    removed: list[str]

@@ -14,7 +14,7 @@ from specstar import SpecStar
 from ..agent.config_catalog import AgentConfigCatalog
 from ..config.schema import EnhancementSettings
 from ..files import WorkspaceFiles, WorkspaceFull
-from ..filestore.protocol import FileStore
+from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
 from ..health.replay import ReplayService
 from ..health.service import HealthService
@@ -582,6 +582,18 @@ def create_app(
             status_code=503,
             content={"detail": {"error": "sandbox_gone", "message": str(exc)}},
             headers={"Retry-After": "1"},
+        )
+
+    @app.exception_handler(FileNotFound)
+    async def _file_gone(_request: Request, exc: FileNotFound) -> JSONResponse:
+        """#588: a workspace file op named a path that isn't there. Until this
+        existed the only handlers were WorkspaceFull / SandboxBusy /
+        SandboxNotFound, so this escaped as a bare 500 from every hand-written
+        file route — which is why a failed move could only be diagnosed by
+        reading server logs. It is a missing file: say so, with the path."""
+        return JSONResponse(
+            status_code=404,
+            content={"detail": {"error": "file_not_found", "message": str(exc)}},
         )
 
     # #177: EVERY backend route registers on this prefixed router — specstar's

@@ -111,6 +111,8 @@ export const itemChatApi = {
     itemId: string;
     chatId: string;
     content: string;
+    /** grill-me: the `ask_user` question this message answers. */
+    answers?: string;
     reasoningEffort?: string;
     /** Knowledge-search depth + the "Search the wiki" toggle for this turn's
      * ask_knowledge_base lookups — mirrors the item-level `api.sendMessage`. The
@@ -140,6 +142,7 @@ export const itemChatApi = {
         max_kb_searches: args.maxKbSearches,
         apply_skills: args.applySkills,
         image_paths: args.imagePaths,
+        answers: args.answers,
       }),
       signal: args.signal,
     });

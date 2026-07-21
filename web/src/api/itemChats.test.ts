@@ -100,3 +100,29 @@ describe("itemChatApi call sites", () => {
     expect(calls[0]!.init?.method).toBe("DELETE");
   });
 });
+
+/**
+ * The workspace's chat runs through THIS client, not `real.ts`. Setting a body
+ * field on `real.ts` alone leaves it plumbed everywhere except on the wire —
+ * which is how `answers` first shipped: typed end to end, dropped at the POST.
+ */
+describe("itemChatApi body fields", () => {
+  it("sends the question an answer answers", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init: { body?: BodyInit | null }) =>
+        new Response("", { status: 202 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await itemChatApi.sendMessage({
+      slug: "rca",
+      itemId: "INC-1",
+      chatId: "c1",
+      content: "SQLite",
+      answers: "call_1",
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({ content: "SQLite", answers: "call_1" });
+  });
+});

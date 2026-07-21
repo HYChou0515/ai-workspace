@@ -40,7 +40,7 @@ export function SkillsModal({
   appliedSkills?: string[];
   /** Toggle a skill in this turn's apply set. */
   onToggleApply?: (name: string) => void;
-  client?: Pick<ApiClient, "getItemSkills">;
+  client?: Pick<ApiClient, "getItemSkills" | "refreshItemSkill">;
 }) {
   const t = useT();
   const qc = useQueryClient();
@@ -49,6 +49,9 @@ export function SkillsModal({
     queryFn: () => client.getItemSkills(slug, itemId),
   });
   const importRef = useRef<HTMLInputElement | null>(null);
+  // What the last refresh left alone. Shown because "we did not touch these" is
+  // the only part of the result the user has to act on.
+  const [refreshNote, setRefreshNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
   const [saving, setSaving] = useState(false);
@@ -84,6 +87,16 @@ export function SkillsModal({
     } finally {
       setSaving(false);
     }
+  };
+
+  const refresh = async (name: string, force: boolean) => {
+    const res = await client.refreshItemSkill(slug, itemId, name, { force });
+    setRefreshNote(
+      res.skipped.length > 0
+        ? `${t("skills.refreshKept")}: ${res.skipped.join(", ")}`
+        : t("skills.refreshDone"),
+    );
+    await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
   };
 
   const download = async (name: string) => {
@@ -145,6 +158,21 @@ export function SkillsModal({
           {t("skills.intro")}
         </p>
 
+        {refreshNote && (
+          <p
+            data-testid="skills-refresh-note"
+            style={{
+              margin: 0,
+              fontSize: pxToRem(11),
+              color: "var(--accent-h)",
+              background: "var(--accent-soft)",
+              borderRadius: "var(--radius-btn)",
+              padding: "4px 8px",
+            }}
+          >
+            {refreshNote}
+          </p>
+        )}
         <div
           style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 4, flex: 1 }}
         >
@@ -164,7 +192,16 @@ export function SkillsModal({
                 onSetState={(next) => setState(s.name, next)}
                 applied={applied.has(s.name)}
                 onToggleApply={() => onToggleApply?.(s.name)}
-                onDownload={s.source === "workspace" ? () => void download(s.name) : undefined}
+                // #589: a copy's files are in the workspace even though the row reports
+                // the package source it came from, so both cases are downloadable.
+                onDownload={
+                  s.source === "workspace" || s.is_copy ? () => void download(s.name) : undefined
+                }
+                // Update only when there is something to bring; reset is always
+                // available — it is the way back from an edit gone wrong, and
+                // that need has nothing to do with upstream having moved.
+                onRefresh={s.update_available ? () => void refresh(s.name, false) : undefined}
+                onReset={s.is_copy ? () => void refresh(s.name, true) : undefined}
               />
             ))
           )}
@@ -225,6 +262,8 @@ function SkillRow({
   applied,
   onToggleApply,
   onDownload,
+  onRefresh,
+  onReset,
 }: {
   skill: ItemSkillState;
   state: ToolPref;
@@ -232,6 +271,12 @@ function SkillRow({
   applied: boolean;
   onToggleApply: () => void;
   onDownload?: () => void;
+  /** #589 — only a local COPY of a baked-in skill can be refreshed from
+   * upstream; a skill written here has no upstream to refresh from. */
+  onRefresh?: () => void;
+  /** #589 — restore every shipped file, including ones edited here. Offered on
+   * any copy: it is the way back from an edit gone wrong. */
+  onReset?: () => void;
 }) {
   const t = useT();
   return (
@@ -261,6 +306,23 @@ function SkillRow({
           >
             {skill.source}
           </span>
+          {skill.is_copy && (
+            // The source badge alone would read as "this is package content, you
+            // can't touch it" — but a copy IS editable here, and that is the
+            // whole point of copying it.
+            <span
+              data-testid={`skill-copy-${skill.name}`}
+              style={{
+                fontSize: pxToRem(10),
+                color: "var(--accent-h)",
+                background: "var(--accent-soft)",
+                borderRadius: 999,
+                padding: "0 6px",
+              }}
+            >
+              {t("skills.copy")}
+            </span>
+          )}
         </div>
         <div
           title={skill.description}
@@ -302,6 +364,28 @@ function SkillRow({
           style={{ ...pillBtn, height: 24 }}
         >
           <Icon name="download" size={12} />
+        </button>
+      )}
+      {onReset && (
+        <button
+          type="button"
+          data-testid={`skill-reset-${skill.name}`}
+          aria-label={`${t("skills.reset")} ${skill.name}`}
+          onClick={onReset}
+          style={{ ...pillBtn, height: 24 }}
+        >
+          <Icon name="undo" size={12} />
+        </button>
+      )}
+      {onRefresh && (
+        <button
+          type="button"
+          data-testid={`skill-refresh-${skill.name}`}
+          aria-label={`${t("skills.refresh")} ${skill.name}`}
+          onClick={onRefresh}
+          style={{ ...pillBtn, height: 24 }}
+        >
+          <Icon name="refresh" size={12} />
         </button>
       )}
 
