@@ -54,6 +54,12 @@ RUN uv sync --frozen --no-dev
 # create_app mounts <repo>/web/dist at /; here <repo> == /app.
 COPY --from=web /web/dist ./web/dist
 
+# Login-shell PATH guard, for `sandbox.kind: local` — the app then runs the
+# agent's `exec` in THIS image, unjailed, and `bash -lc "python3 …"` would
+# otherwise lose the carrier shim to /etc/profile's PATH reset. Same file the
+# sandbox-host image installs. Pinned by tests/sandbox/test_login_shell_path.py.
+COPY docker/profile.d/sandbox-jailbin.sh /etc/profile.d/sandbox-jailbin.sh
+
 EXPOSE 8000
 # Honest healthcheck — the API always serves /openapi.json.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \

@@ -383,7 +383,18 @@ class LocalProcessSandbox:
             # — per-exec so a carrier provisioned after `create` is seen. Survives
             # the `setpriv` wrap (no `--reset-env`) and is inherited by children.
             self._install_python_shim(root)
-            env["PATH"] = f"{root / _JAILBIN}{os.pathsep}{env.get('PATH', '')}"
+            env["SANDBOX_JAILBIN"] = str(root / _JAILBIN)
+            env["PATH"] = f"{env['SANDBOX_JAILBIN']}{os.pathsep}{env.get('PATH', '')}"
+            # A LOGIN shell (`bash -lc …`, and the `sh -lc` wrapper every
+            # workflow node command rides) sources /etc/profile, which on Debian
+            # HARD-RESETS PATH — throwing the line above away and routing the
+            # agent back to the image's own interpreter, with none of the
+            # carrier's deps and none of its HOME rewriting. The jail overlays a
+            # tmpfs on /etc/profile.d to re-prepend; unjailed has no chroot to
+            # overlay, so the images install `docker/profile.d/sandbox-jailbin.sh`
+            # and it reads the dir back out of SANDBOX_JAILBIN (per-sandbox, so a
+            # pod-wide file cannot name it; /etc/profile resets PATH only, so the
+            # variable survives). See tests/sandbox/test_login_shell_path.py.
         return argv, sub_cwd, env
 
     async def exec(

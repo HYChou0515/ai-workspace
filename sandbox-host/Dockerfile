@@ -68,6 +68,15 @@ RUN uv sync --frozen --no-dev
 # /.tools inside each sandbox (SANDBOX_HOST_TOOLS_DIR above points here).
 COPY --from=tools /build/.workspace-tools /opt/tools
 
+# Login-shell PATH guard. The hosted sandbox has no userns jail (uid + cgroup
+# only, #393), so `python`/`pip` reach the carrier through a per-sandbox
+# `.jailbin` dir the exec path prepends to PATH — and `bash -lc` / `sh -lc`
+# (which every workflow node command rides) source /etc/profile, which on Debian
+# hard-resets PATH and drops it. The jail overlays its own /etc/profile.d; with
+# no chroot this is the equivalent, reading the per-sandbox dir back out of
+# SANDBOX_JAILBIN. Pinned by tests/sandbox/test_login_shell_path.py.
+COPY docker/profile.d/sandbox-jailbin.sh /etc/profile.d/sandbox-jailbin.sh
+
 EXPOSE 8000
 # The host needs root (setuid/chown to foreign uids) + a delegated cgroup v2
 # subtree; it fails loud at boot / on /readyz if cgroup v2 isn't available.
