@@ -1055,3 +1055,44 @@ def test_a_real_built_carrier_ships_no_externally_managed_marker(tmp_path: Path)
     `pip install`."""
     launch = _build_bare_carrier(tmp_path)
     assert list((launch.parent / "python").rglob("EXTERNALLY-MANAGED")) == []
+
+
+def test_build_package_actually_strips_the_marker_from_the_bundle(tmp_path: Path, monkeypatch):
+    """Pins the WIRING, not just the helper.
+
+    The unit tests above call `_drop_externally_managed` directly, so deleting
+    its call site in `build_package` left them all green — the only red was an
+    `integration` + `skipif(uv)` test that CI does not run. That is precisely the
+    hole this whole change exists to close, so the wiring gets a lock in the set
+    CI runs: only the two external process boundaries (`uv venv` / `uv sync`) are
+    faked, everything after them — the copytree, the strip, the launcher — is the
+    real code path."""
+    import subprocess as _sp
+
+    prebuild = prebuild_module()
+    src = tmp_path / "src"
+    src.mkdir()
+    # No [project.scripts] ⇒ a venv carrier, so no schema dump to stand in for.
+    (src / "pyproject.toml").write_text('[project]\nname = "carrier"\nversion = "0.1.0"\n')
+    (src / "uv.lock").write_text("")
+
+    interp = tmp_path / "managed" / "cpython-3.12.8"
+    (interp / "bin").mkdir(parents=True)
+    (interp / "bin" / "python3.12").write_text("#!/bin/sh\n")
+    (interp / "lib" / "python3.12").mkdir(parents=True)
+    (interp / "lib" / "python3.12" / "EXTERNALLY-MANAGED").write_text("[externally-managed]\n")
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd[:2] == ["uv", "venv"]:
+            venv = Path(cmd[-1])
+            (venv / "bin").mkdir(parents=True)
+            (venv / "bin" / "python").symlink_to(interp / "bin" / "python3.12")
+        return _sp.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(prebuild.subprocess, "run", fake_run)
+
+    dst = tmp_path / "dst"
+    prebuild.build_package(name="carrier", source=src, dst=dst)
+
+    assert (dst / "launch").is_file()  # the build really ran
+    assert list((dst / "python").rglob("EXTERNALLY-MANAGED")) == []

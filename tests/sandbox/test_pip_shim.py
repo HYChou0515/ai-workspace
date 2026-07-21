@@ -58,3 +58,23 @@ async def test_without_a_carrier_pip_is_left_to_the_image(tmp_path: Path) -> Non
     jailbin = await _shim_dir(tmp_path, None)
     assert (jailbin / "python").is_symlink()  # the fallback still shims python
     assert not (jailbin / "pip").exists()
+
+
+async def test_a_carrier_that_goes_away_takes_its_pip_shims_with_it(tmp_path: Path) -> None:
+    """A dangling `pip` is the failure the carrier-only rule exists to avoid,
+    reached from the other direction: the tools mount disappears, `python` is
+    re-pointed at the /usr/bin/python3 fallback, and a leftover `pip` symlink
+    now names a path that is not there. It must be removed, so the image's own
+    pip — a working pip — answers instead of ENOENT."""
+    tools = _carrier(tmp_path)
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+    jailbin = Path(env["SANDBOX_JAILBIN"])
+    assert (jailbin / "pip").is_symlink()
+
+    (tools / "python-stack" / "launch").unlink()  # the carrier goes away
+    sb._exec_argv(h, ["true"])
+
+    assert not (jailbin / "pip").exists()
+    assert (jailbin / "python").is_symlink()  # python still answers, via the fallback

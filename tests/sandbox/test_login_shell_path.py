@@ -21,9 +21,10 @@ the sandbox images install into `/etc/profile.d/`. It reads the shim dir from
 pod-wide file cannot hardcode it. `/etc/profile` only resets PATH — exported
 variables survive it, which is what makes this work.
 
-These tests pin the snippet's own behaviour; `test_local_process.py` pins that
-the exec path exports `SANDBOX_JAILBIN`, and `test_sandbox_images.py` pins that
-the images actually install the snippet.
+All three halves are pinned here: the snippet's own behaviour, that the exec
+path exports `SANDBOX_JAILBIN`, and that every image which runs an unjailed exec
+actually installs the file. The host's own copy of the exec wiring is pinned in
+`sandbox-host/tests/test_login_shell_path.py`.
 """
 
 from __future__ import annotations

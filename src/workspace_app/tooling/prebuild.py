@@ -75,11 +75,11 @@ exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 # the agent's `python` actually is. pip reported success; the import then failed;
 # nothing connected the two. Dispatching on the invoked name keeps the sandbox
 # shims plain symlinks to this one file (one build fingerprint, one thing to
-# provision) instead of a second script that could drift from it. `basename`
-# must be taken BEFORE `readlink -f`, which resolves the shim away.
+# provision) instead of a second script that could drift from it. The invoked
+# name must be taken BEFORE `readlink -f`, which resolves the shim away.
 _PYTHON_LAUNCH = """\
 #!/bin/sh
-called=$(basename -- "$0")
+called=${{0##*/}}
 self=$(readlink -f "$0" 2>/dev/null || echo "$0")
 here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
 case "$called" in

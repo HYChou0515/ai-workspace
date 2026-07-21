@@ -313,6 +313,14 @@ class LocalProcessSandbox:
         want = os.fspath(target)
         jailbin = root / _JAILBIN
         jailbin.mkdir(exist_ok=True)
+        if not has_carrier:
+            # A carrier that went away takes its pip shims with it. Leaving them
+            # behind would point `pip` at a path that no longer exists — ENOENT,
+            # rather than falling through to the image's own pip. That is exactly
+            # the "a shim that cannot work is worse than none" case above, just
+            # arrived at by a different route.
+            for name in _PIP_SHIM_NAMES:
+                (jailbin / name).unlink(missing_ok=True)
         for name in _PYTHON_SHIM_NAMES + (_PIP_SHIM_NAMES if has_carrier else ()):
             link = jailbin / name
             if link.is_symlink() and os.readlink(link) == want:
