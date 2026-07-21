@@ -159,3 +159,65 @@ describe("AskUserCard", () => {
     expect(container.textContent).toBe("");
   });
 });
+
+describe("AskUserCard escape hatches", () => {
+  /* The options are the agent's guess. When the guess is wrong the user has
+   * only two ways out — pick something anyway, or leave the card and type. The
+   * first produces a made-up preference, which is worse than no answer, so the
+   * card always offers a way to say something else and a way to reject the
+   * question itself. They are added by the card, not by the agent, so they are
+   * there even when a small model forgets them. */
+
+  it("always offers a way to say the question makes no sense", () => {
+    const onAnswer = vi.fn();
+    render(<AskUserCard call={oneQuestion} onAnswer={onAnswer} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /看不懂/ }));
+
+    const [{ content }] = onAnswer.mock.calls[0];
+    // Not an answer — a rejection of the question, so the agent re-asks
+    // instead of proceeding on a choice the user never made.
+    expect(content).toMatch(/看不懂/);
+    expect(content).not.toMatch(/Postgres|SQLite/);
+  });
+
+  it("always offers an answer of the user's own", () => {
+    const onAnswer = vi.fn();
+    render(<AskUserCard call={oneQuestion} onAnswer={onAnswer} />);
+
+    fireEvent.change(screen.getByPlaceholderText(/補充|自己回答/), {
+      target: { value: "DuckDB, we already ship it" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /送出/ }));
+
+    const [{ content }] = onAnswer.mock.calls[0];
+    expect(content).toMatch(/DuckDB, we already ship it/);
+  });
+
+  it("carries a note alongside a chosen option", () => {
+    /* "SQLite, but only because nobody can run a server" is often the part
+     * that actually matters — the label alone loses it. */
+    const onAnswer = vi.fn();
+    render(<AskUserCard call={oneQuestion} onAnswer={onAnswer} />);
+
+    fireEvent.change(screen.getByPlaceholderText(/補充|自己回答/), {
+      target: { value: "no one to run a server" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
+
+    const [{ content }] = onAnswer.mock.calls[0];
+    expect(content).toMatch(/SQLite/);
+    expect(content).toMatch(/no one to run a server/);
+  });
+
+  it("keeps one click for the ordinary case", () => {
+    /* The escape hatches must not tax the common path — picking an offered
+     * option is still a single click with nothing else to press. */
+    const onAnswer = vi.fn();
+    render(<AskUserCard call={oneQuestion} onAnswer={onAnswer} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Postgres/ }));
+
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+  });
+});

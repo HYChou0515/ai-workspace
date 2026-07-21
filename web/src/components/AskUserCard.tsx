@@ -44,6 +44,19 @@ function parseQuestions(args: Record<string, unknown>): Question[] | null {
 }
 
 const UNANSWERED = "(未選擇)";
+const DONT_UNDERSTAND = "看不懂,請換個說法再問一次";
+
+/** How one question's answer reads in the transcript. The four shapes stay
+ * distinguishable on purpose: a rejection must not look like a choice, and a
+ * note must not look like the answer itself. */
+function answerLine(question: string, picked: string | undefined, note: string): string {
+  const text = note.trim();
+  if (picked === DONT_UNDERSTAND) return `${question} → ${DONT_UNDERSTAND}`;
+  if (picked && text) return `${question} → ${picked}(補充:${text})`;
+  if (picked) return `${question} → ${picked}`;
+  if (text) return `${question} → 自訂:${text}`;
+  return `${question} → ${UNANSWERED}`;
+}
 
 export function AskUserCard({
   call,
@@ -58,6 +71,7 @@ export function AskUserCard({
 }) {
   const questions = parseQuestions(call.args ?? {});
   const [picked, setPicked] = useState<Record<number, string>>({});
+  const [notes, setNotes] = useState<Record<number, string>>({});
 
   if (!questions) return null;
 
@@ -72,9 +86,7 @@ export function AskUserCard({
   const single = questions.length === 1;
 
   const send = (chosen: Record<number, string>) => {
-    const lines = questions.map(
-      (q, i) => `${q.question} → ${chosen[i] ?? UNANSWERED}`,
-    );
+    const lines = questions.map((q, i) => answerLine(q.question, chosen[i], notes[i] ?? ""));
     onAnswer({ content: lines.join("\n"), answers: call.call_id });
   };
 
@@ -119,6 +131,38 @@ export function AskUserCard({
                 </button>
               );
             })}
+          </div>
+          {/* Added by the card, never by the agent — so the way out exists even
+              when a small model forgets to offer one. "看不懂" is a rejection of
+              the question, not an answer to it: the agent should re-ask in
+              plainer words rather than proceed on a choice never made. */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (single) send({ [i]: DONT_UNDERSTAND });
+                else setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }));
+              }}
+              style={{ padding: "4px 8px", cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}
+            >
+              看不懂
+            </button>
+            <input
+              type="text"
+              value={notes[i] ?? ""}
+              placeholder="補充,或自己回答"
+              onChange={(e) => setNotes((n) => ({ ...n, [i]: e.target.value }))}
+              style={{ flex: 1, minWidth: 0, padding: "4px 8px" }}
+            />
+            {single ? (
+              <button
+                type="button"
+                onClick={() => send(picked)}
+                style={{ padding: "4px 8px", flexShrink: 0, whiteSpace: "nowrap" }}
+              >
+                送出
+              </button>
+            ) : null}
           </div>
         </div>
       ))}
