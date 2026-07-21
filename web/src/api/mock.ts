@@ -871,6 +871,9 @@ export const mockApi: ApiClient = {
       role: "user",
       author: "default-user",
       content: args.content,
+      // grill-me: offline mode must record the answered question too, or a
+      // card answered here stays offering its buttons.
+      answers: args.answers,
     });
     publish(args.investigationId, {
       type: "user_message",

@@ -31,6 +31,7 @@ from agents import (
     ToolOutputImage,
 )
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
+from agents.agent import StopAtTools
 from agents.extensions.models.litellm_model import LitellmModel
 from openai.types.shared import Reasoning
 
@@ -463,7 +464,30 @@ def _agent_for(
         model=model,
         model_settings=model_settings,
         tools=tools,  # ty: ignore[invalid-argument-type]  # list[FunctionTool] ⊂ list[Tool]
+        tool_use_behavior=ask_user_stop_behaviour([t.name for t in tools]),
     )
+
+
+ASK_USER_TOOL = "ask_user"
+
+
+def ask_user_stop_behaviour(
+    tool_names: Sequence[str] | None,
+) -> StopAtTools | Literal["run_llm_again"]:
+    """End the turn when the agent asks the user something.
+
+    `ask_user` posts a question and does not wait for it — the answer arrives
+    as the user's next message, in the next turn. Without stopping here the
+    model keeps generating with no answer in hand, and what it generates is an
+    answer it made up. `StopAtTools` is the SDK's own mechanism for this, so
+    the guarantee is structural rather than an instruction the model may
+    ignore (local models routinely do).
+
+    Only applied when the turn actually has the tool: a blanket stop would end
+    every turn at its first tool call."""
+    if tool_names and ASK_USER_TOOL in tool_names:
+        return StopAtTools(stop_at_tool_names=[ASK_USER_TOOL])
+    return "run_llm_again"
 
 
 def _failover_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[str, str], None]:

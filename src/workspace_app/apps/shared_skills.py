@@ -35,6 +35,10 @@ SHARED_SKILLS: dict[str, Path] = {
     # #323: the meta-skill that teaches the agent to co-author a *workflow* (a runnable
     # workflow.json) with the user — the workflow analogue of author-skill.
     "author-workflow": SHARED_SKILLS_DIR / "author-workflow",
+    # grill-me: interview the user one decision at a time instead of guessing.
+    # Pairs with the `ask_user` tool — without it the agent can only ask in
+    # prose, which is what made this skill not worth having before.
+    "grill-me": SHARED_SKILLS_DIR / "grill-me",
 }
 
 
