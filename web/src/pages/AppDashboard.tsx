@@ -34,6 +34,7 @@ import { HelpButton } from "../components/HelpButton";
 import { Icon, type IconName } from "../components/Icon";
 import { OnboardingModal } from "../components/OnboardingModal";
 import { Skeleton } from "../components/Skeleton";
+import { AccessChip } from "../components/AccessChip";
 import { type ChipTone, chipStyle } from "../components/StatusChip";
 import { UserAvatar } from "../components/UserChip";
 import { useT } from "../lib/i18n";
@@ -44,7 +45,7 @@ import { useOnboarding } from "../hooks/useOnboarding";
 import { usePinned, useRecentlyViewed } from "../hooks/usePins";
 import { useAppItems, useAppManifest } from "../hooks/useResources";
 import { useUser, useUsers } from "../hooks/useUsers";
-import { isDiscoverableOnly, parseItemPermission } from "../lib/itemPermission";
+import { isDiscoverableOnly, itemVisibility, parseItemPermission } from "../lib/itemPermission";
 import { pxToRem } from "../lib/pxToRem";
 
 const DAY = 86_400_000;
@@ -438,10 +439,10 @@ export function AppDashboard() {
 
         {/* table */}
         <div style={{ flex: 1, overflow: "auto", padding: isNarrow ? "0 16px 16px" : "0 28px 28px" }}>
-          <div role="table" data-testid="dash-items" style={{ minWidth: isNarrow ? 560 : undefined, background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
+          <div role="table" data-testid="dash-items" style={{ minWidth: isNarrow ? 640 : undefined, background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
             <div role="row" style={{ display: "grid", gridTemplateColumns: GRID, padding: "10px 16px", borderBottom: "1px solid var(--paper-3)", alignItems: "center", gap: 10 }}>
               <div />
-              {[manifest.item.noun, manifest.labels[sevField] ?? "Severity", "Topic · product", "Owner", "Updated"].map((h) => (
+              {[manifest.item.noun, manifest.labels[sevField] ?? "Severity", "Topic · product", "Owner", "Access", "Updated"].map((h) => (
                 <div key={h} role="columnheader" style={{ fontSize: pxToRem(10), fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-paper-d)" }}>
                   {h}
                 </div>
@@ -501,7 +502,7 @@ export function AppDashboard() {
   );
 }
 
-const GRID = "32px 2.4fr 0.8fr 1.4fr 1.2fr 0.9fr";
+const GRID = "32px 2.4fr 0.8fr 1.4fr 1.2fr 0.8fr 0.9fr";
 
 function CapsLabel({ children }: { children: ReactNode }) {
   return (
@@ -710,6 +711,10 @@ function ItemRow({
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         <UserAvatar userId={item.owner} size={26} />
         <span style={{ fontSize: pxToRem(13), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owner.name}</span>
+      </div>
+
+      <div>
+        <AccessChip visibility={itemVisibility(item.permission)} />
       </div>
 
       <div style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>{ago(item.updated_time)}</div>

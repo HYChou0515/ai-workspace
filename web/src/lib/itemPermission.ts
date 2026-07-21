@@ -73,6 +73,15 @@ export function parseItemPermission(raw: unknown): ItemPermission | undefined {
   return raw as ItemPermission;
 }
 
+/** The item's effective visibility for DISPLAY (#578). An absent or malformed
+ * `permission` is `public` — that is the backend's rule (`WorkItemBase.permission`:
+ * absent ≡ public, legacy rows were never migrated), and it is precisely the row
+ * an owner scanning for "what have I left open?" must see flagged. Rendering it
+ * blank would hide the one case that matters. */
+export function itemVisibility(raw: unknown): ItemVisibility {
+  return parseItemPermission(raw)?.visibility ?? "public";
+}
+
 export function canWriteItem(
   permission: ItemPermission | undefined,
   currentUserId: string,
