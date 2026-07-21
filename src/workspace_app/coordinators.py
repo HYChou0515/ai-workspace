@@ -205,8 +205,10 @@ def build_coordinators(
     # #506 P6: the finalize-time semantic reconcile (suppress already-explained
     # candidates + cluster cross-run duplicates) needs an embedder. Built only when
     # one is wired; otherwise None ⇒ the coordinator stays exact-only (pre-P6). The
-    # wiki_text provider is the deterministic "already documented" grep net (loaded
-    # once per finalize; returns "" for a collection with no wiki).
+    # wiki_text provider is the deterministic "already written down" grep net for the
+    # TERM QUESTIONS only — don't ask a human what the wiki already says. Card
+    # proposals are graded against existing cards alone (#537). Loaded once per
+    # question batch; returns "" for a collection with no wiki.
     reconciler = (
         Reconciler(
             spec,

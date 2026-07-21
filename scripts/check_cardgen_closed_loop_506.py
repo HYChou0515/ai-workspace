@@ -23,6 +23,9 @@ Expectations (with well-separated domain pairs and the default conservative τ):
     same-concept, different words   -> SAME cluster   (sim >= cluster_tau)
     unrelated concept               -> NEW  cluster    (sim <  cluster_tau)
     candidate ≈ an existing card     -> grade "suppress" (sim >= suppress_tau)
+    (the wiki axis below is a TERM-QUESTION verdict only — a card proposal is
+     never graded against the wiki, #537; this script does not exercise
+     reconcile_proposals, which is why it never caught that bug)
     candidate related-but-adds       -> grade "update"   (suppress_tau > sim >= update_tau)
     candidate unrelated to any card  -> grade "new"
     term documented in the wiki      -> grade "suppress" reason=wiki (deterministic)

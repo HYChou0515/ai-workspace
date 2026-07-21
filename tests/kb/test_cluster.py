@@ -360,7 +360,7 @@ def test_reconciler_marks_update_when_partially_near_a_card() -> None:
     assert kept[0].target_card_id == card_id
 
 
-# ── wiki-grep safety net (⑥: already documented in the wiki → suppress) ───────
+# ── the wiki does NOT vote on card proposals (#537) ───────────────────────────
 
 
 def test_reconciler_keeps_a_proposal_the_wiki_merely_mentions() -> None:

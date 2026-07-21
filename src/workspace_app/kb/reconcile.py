@@ -69,12 +69,13 @@ def assign_cluster_key(
 
 @dataclass(frozen=True)
 class Grade:
-    """The reconcile verdict for one candidate against the collection's existing
-    cards + wiki. ``action`` is ``suppress`` (already explained → auto-drop, kept
-    only as an auditable ClusterMember), ``update`` (partially covered → suggest
-    editing ``target_card_id``), or ``new`` (a genuinely new concept). ``reason``
-    records WHY a suppress fired (``wiki`` grep hit vs ``near-card``) for the audit
-    view."""
+    """The reconcile verdict for one candidate against what the collection already
+    explains. ``action`` is ``suppress`` (already explained → auto-drop, kept only as
+    an auditable ClusterMember), ``update`` (partially covered → suggest editing
+    ``target_card_id``), or ``new`` (a genuinely new concept). ``reason`` records WHY
+    a suppress fired, for the audit view: ``near-card`` for either kind of candidate,
+    ``wiki`` only for a term question — ``wiki_hit`` is never set for a card proposal
+    (#537), see :meth:`Reconciler.reconcile_proposals`."""
 
     action: str  # "suppress" | "update" | "new"
     target_card_id: str | None = None

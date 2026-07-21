@@ -512,8 +512,10 @@ class CardGenCoordinator:
         existing = cards_with_ids_for_collections(self._spec, [cid])
         kept = [p for p in proposals if classify_against_existing(p, existing) != "skip"]
         # #506 P6: semantic reconcile over the exact-classified survivors — suppress
-        # already-explained candidates (near an existing card / documented in the
-        # wiki) and cluster cross-run duplicates. No reconciler → exact-only (pre-P6).
+        # candidates that duplicate an EXISTING CARD, and cluster cross-run duplicates.
+        # Proposals are deliberately NOT graded against the wiki (#537: a card and a
+        # wiki page are different sources, not substitutes); that axis belongs to the
+        # term questions raised below. No reconciler → exact-only (pre-P6).
         if self._reconciler is not None:
             kept = self._reconciler.reconcile_proposals(cid, run_id, kept, existing)
         # #511 P2: stamp ids up front so the first-class CardProposal rows share the

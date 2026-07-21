@@ -1,11 +1,12 @@
 /**
  * SuppressedAuditList (#506 P7) — the audit of what the reconcile step AUTO-DROPPED.
  *
- * When a candidate is already explained — its surface key appears in the collection
- * wiki, or it is a near-duplicate of an existing card — reconcile suppresses it
- * instead of adding it to the review queue (⑥). Those are never silently lost: each
- * is kept as an auditable member and listed here with WHY it was dropped, so a human
- * can verify nothing was wrongly discarded.
+ * When a candidate is already explained, reconcile suppresses it instead of adding
+ * it to the review queue (⑥). What counts as "already explained" depends on the kind:
+ * a CARD proposal only ever loses to a near-duplicate existing card, while a TERM
+ * QUESTION also loses to the wiki (don't ask what is already written down). Those are
+ * never silently lost: each is kept as an auditable member and listed here with WHY
+ * it was dropped, so a human can verify nothing was wrongly discarded.
  */
 import type { KbSuppressedItem } from "../../api/kb";
 import { type MsgKey, useT } from "../../lib/i18n";

@@ -97,7 +97,9 @@ class SuppressedItem(msgspec.Struct):
     shown only in the suppressed-audit view so a human can verify nothing was wrongly
     discarded. A dropped candidate is not on any run (it never became a proposal), so
     the audit reads straight from the suppressed ClusterMember: ``label`` (the term /
-    title) + ``reason`` (``wiki`` vs ``near-card``) are enough to review it."""
+    title) + ``reason`` are enough to review it. ``reason`` is kind-dependent: a
+    proposal can only ever be ``near-card``, while a term question may also be
+    ``wiki`` (already written down → not re-asked). See :mod:`kb.reconcile`."""
 
     collection_id: str
     collection_name: str
