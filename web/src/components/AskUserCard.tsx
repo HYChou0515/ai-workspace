@@ -149,22 +149,46 @@ export function AskUserCard({
                 if (single) send({ [i]: DONT_UNDERSTAND });
                 else setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }));
               }}
-              style={{ padding: "4px 8px", cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" }}
+              style={{
+                padding: "4px 10px",
+                borderWidth: 1,
+                borderStyle: "solid",
+                borderRadius: 6,
+                cursor: "pointer",
+                flexShrink: 0,
+                whiteSpace: "nowrap",
+              }}
             >
               看不懂
             </button>
             <input
               type="text"
               value={notes[i] ?? ""}
-              placeholder="補充,或自己回答"
+              placeholder="補充，或自己回答"
               onChange={(e) => setNotes((n) => ({ ...n, [i]: e.target.value }))}
-              style={{ flex: 1, minWidth: 0, padding: "4px 8px" }}
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: "4px 8px",
+                borderWidth: 1,
+                borderStyle: "solid",
+                borderRadius: 6,
+              }}
             />
             {single ? (
               <button
                 type="button"
                 onClick={() => send(picked)}
-                style={{ padding: "4px 8px", flexShrink: 0, whiteSpace: "nowrap" }}
+                style={{
+                  padding: "4px 12px",
+                  fontWeight: 600,
+                  borderWidth: 2,
+                  borderStyle: "solid",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  flexShrink: 0,
+                  whiteSpace: "nowrap",
+                }}
               >
                 送出
               </button>
