@@ -20,9 +20,9 @@
     "tools": [
       "exec", "read_file", "write_file", "edit_file", "list_files", "exists",
       "delete_file", "create_entity", "update_entity", "query_entity", "link_entity",
-      "ask_knowledge_base", "lookup_user", "save_skill", "save_workflow"
+      "ask_knowledge_base", "lookup_user", "ask_user", "save_skill", "save_workflow"
     ],
-    "skills": ["author-skill", "author-workflow"],
+    "skills": ["author-skill", "author-workflow", "grill-me"],
     "picker": [
       { "preset": "qwen3-local", "name": "PM · Qwen3 (local)" },
       { "preset": "claude-opus", "name": "PM · Claude Opus" },

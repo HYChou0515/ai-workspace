@@ -132,7 +132,9 @@ def test_the_agent_stops_at_this_tool():
 
     behaviour = ask_user_stop_behaviour(["read_file", "ask_user"])
 
-    # StopAtTools is a TypedDict — a plain dict at runtime.
+    # StopAtTools is a TypedDict — a plain dict at runtime, so this is an
+    # ordinary key read once the "run_llm_again" branch is ruled out.
+    assert behaviour != "run_llm_again"
     assert behaviour["stop_at_tool_names"] == ["ask_user"]
 
 

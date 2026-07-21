@@ -202,6 +202,7 @@ def test_disabled_tools_preserve_ceiling_order():
         "ask_knowledge_base",
         "request_wiki_update",
         "lookup_user",
+        "ask_user",
         "make_deck",
         "data-fetch",
         "csv-column-summary",
