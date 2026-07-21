@@ -362,9 +362,13 @@ def test_reconciler_marks_update_when_partially_near_a_card() -> None:
 # ── wiki-grep safety net (⑥: already documented in the wiki → suppress) ───────
 
 
-def test_reconciler_suppresses_a_proposal_documented_in_the_wiki() -> None:
-    """A proposal whose surface key already appears in the collection's wiki is
-    suppressed (the deterministic "already explained" net), even with no near card."""
+def test_reconciler_keeps_a_proposal_the_wiki_merely_mentions() -> None:
+    """A glossary card and a wiki page are NOT substitutes (#537 locked the three
+    sources as non-interchangeable), so "the wiki mentions this term" is not a
+    reason to withhold the card: the card is the cheap exact-key lookup, the wiki
+    is a reader sub-agent. Only an existing CARD may suppress a proposal — which
+    is why picking a wiki page as the card-gen source used to yield nothing at
+    all, every drafted key being present in the very corpus it was drafted from."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     existing = cards_with_ids_for_collections(spec, [cid])  # no cards
@@ -378,27 +382,9 @@ def test_reconciler_suppresses_a_proposal_documented_in_the_wiki() -> None:
     )
     p = ProposedCard(keys=["Gamma"], title="TAGZ", mode="new")
     kept = rec.reconcile_proposals(cid, "run1", [p], existing)
-    assert kept == []
-    supp = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"]
-    assert len(supp) == 1
-
-
-def test_reconciler_keeps_a_proposal_absent_from_the_wiki() -> None:
-    """The wiki net only fires on an actual hit — an undocumented term is kept."""
-    spec = make_spec(default_user="u")
-    cid = _collection(spec)
-    existing = cards_with_ids_for_collections(spec, [cid])
-    rec = Reconciler(
-        spec,
-        _TagEmb(),
-        cluster_tau=0.5,
-        suppress_tau=1.01,
-        update_tau=1.01,
-        wiki_text=lambda _cid: "This page is about something else entirely.",
-    )
-    p = ProposedCard(keys=["Gamma"], title="TAGZ", mode="new")
-    kept = rec.reconcile_proposals(cid, "run1", [p], existing)
     assert [x.keys for x in kept] == [["Gamma"]]
+    supp = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"]
+    assert supp == []
 
 
 def test_collection_wiki_text_concatenates_pages_only_when_wiki_is_on() -> None:

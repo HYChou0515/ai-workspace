@@ -173,10 +173,12 @@ class Reconciler:
     to one inbox row (⑤). Thresholds are collection-wide config hyperparameters.
 
     ``wiki_text`` is an injected ``(collection_id) -> str`` provider returning the
-    collection's whole wiki as one string (the deterministic "already documented in
-    the wiki" safety net — a candidate whose surface key appears there is
-    suppressed). Loaded ONCE per finalize (not per candidate) so the blob read isn't
-    repeated; ``None`` disables the wiki check. See :func:`collection_wiki_text`."""
+    collection's whole wiki as one string, used by :meth:`reconcile_term_questions`
+    ONLY: a term already written down anywhere needn't be asked of a human. Card
+    proposals are deliberately NOT graded against it — see the note in
+    :meth:`reconcile_proposals`. Loaded ONCE per batch (not per candidate) so the
+    blob read isn't repeated; ``None`` disables the wiki check. See
+    :func:`collection_wiki_text`."""
 
     def __init__(
         self,
@@ -209,25 +211,29 @@ class Reconciler:
         deterministic member id, so an accidental re-finalize can't double-count."""
         ensure_proposal_ids(proposals)
         self._project_cards(collection_id, existing)
-        # Load the collection's wiki ONCE (not per candidate); "" when disabled.
-        wiki_blob = self._wiki_text(collection_id).lower() if self._wiki_text and proposals else ""
         kept: list[ProposedCard] = []
         for p in proposals:
             norm_key = (derive_norm_keys(p.keys) or [""])[0]
             vec = self._embed(_card_text(norm_key, p.title))
-            # Already documented in the wiki? A hit on ANY surface key (substring,
-            # case-insensitive — same default as the search_wiki tool).
-            wiki = bool(wiki_blob) and any(k.strip() and k.lower() in wiki_blob for k in p.keys)
             state = "active"
             reason = ""
             if p.mode == "new":
+                # NOT graded against the wiki — only against existing CARDS. A card
+                # and a wiki page are different sources, not substitutes (#537): the
+                # card is the cheap deterministic exact-key lookup the KB agent is
+                # told to reach for FIRST, the wiki is a reader sub-agent two tiers
+                # up in cost. Suppressing the cheap source because the expensive one
+                # mentions the term inverts that order, and made "generate cards from
+                # a wiki page" a guaranteed no-op: every key drafted off a page is by
+                # construction present in the corpus being greped. The wiki check
+                # belongs on term QUESTIONS (don't ask what is already written down),
+                # which is where it stays — see reconcile_term_questions.
                 grade = grade_candidate(
                     self._spec,
                     collection_id=collection_id,
                     embedding=vec,
                     tau_high=self._suppress_tau,
                     tau_update=self._update_tau,
-                    wiki_hit=wiki,
                 )
                 if grade.action == "suppress":
                     state, reason = "suppressed", grade.reason
