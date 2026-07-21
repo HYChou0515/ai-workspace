@@ -29,6 +29,7 @@ from ..perm.scope import (
     GroupsProvider,
     collection_access_scope,
     conversation_access_scope,
+    graph_entity_access_scope,
     graph_evidence_access_scope,
     kbchat_access_scope,
     source_doc_access_scope,
@@ -45,7 +46,7 @@ from .eval import (
     eval_batch_stat_id,
     eval_run_id,
 )
-from .graph import GraphClaim, GraphMention
+from .graph import GraphClaim, GraphEntity, GraphEntityLink, GraphMention
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
@@ -94,6 +95,8 @@ __all__ = [
     "EvalBatchStat",
     "EvalResult",
     "GraphClaim",
+    "GraphEntity",
+    "GraphEntityLink",
     "GraphMention",
     "EvalRun",
     "eval_batch_stat_id",
@@ -225,6 +228,23 @@ def _groups_provider(spec: SpecStar) -> GroupsProvider:
     closure so `perm/` needn't import the `Group` resource (dependency direction:
     resources → perm)."""
     return lambda user: groups_of(spec, user)
+
+
+def _readable_collections_provider(
+    spec: SpecStar, superusers: frozenset[str]
+) -> Callable[[str], frozenset[str]]:
+    """#534 B — the collections a user may read the CONTENT of, for the shared
+    identity scope. Injected the same way (and for the same reason) as the groups
+    resolver: `perm/` must not import a resource. Collections are few and the
+    lookup is a point get per id, so listing them per request is cheap."""
+    from ..kb.collections import readable_collection_ids
+
+    def resolve(user: str) -> frozenset[str]:
+        crm = spec.get_resource_manager(Collection)
+        ids = [m.resource_id for m in crm.search_resources(None)]
+        return frozenset(readable_collection_ids(spec, ids, user, superusers=superusers))
+
+    return resolve
 
 
 def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> None:
@@ -701,6 +721,30 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("doc_read_content", list),
         ],
         access_scope=graph_evidence_access_scope(superusers, groups),
+    )
+    # #534 B: the vocabulary layer. It owns nothing — `GraphEntityLink` carries the
+    # claim that a mention belongs here, WITH the basis it was made on, so a wrong
+    # grouping costs a link and not a record. `collection_ids` is where its evidence
+    # lives and is what the scope reads: identity is shared across collections, so
+    # it cannot inherit one, and an access scope cannot ask another table what the
+    # caller may see. Empty ⇒ invisible (a bare name can leak).
+    spec.add_model(
+        GraphEntity,
+        indexed_fields=[
+            IndexableField("norm_keys", list),
+            IndexableField("kind_id", str),
+            IndexableField("collection_ids", list),
+        ],
+        access_scope=graph_entity_access_scope(
+            _readable_collections_provider(spec, superusers), superusers
+        ),
+    )
+    # The link's own visibility rides its entity (cascade Ref): a link to an entity
+    # you cannot see is not reachable, and its basis/evidence say nothing on their
+    # own. `state` indexed so the review queue is a query.
+    spec.add_model(
+        GraphEntityLink,
+        indexed_fields=["entity_id", "mention_id", IndexableField("state", str)],
     )
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a

@@ -154,3 +154,60 @@ class GraphMention(Struct):  # → resource "graph-mention"
     doc_visibility: str = ""
     doc_read_meta: list[str] = []
     doc_read_content: list[str] = []
+
+
+# The bases a link can rest on, ordered from "a person could go and check this"
+# to "the model thought they looked alike". The order IS the policy: everything
+# before `resembles` points at something verifiable — a deterministic rule, a
+# sentence in a document, an earlier human decision — so it applies on its own.
+# `resembles` points at nothing outside the model, so it waits for review. That
+# line is the same one this whole design keeps drawing: an assertion that can name
+# its evidence is worth more than one that merely sounds right.
+LINK_BASES = ("identical", "declared", "approved", "resembles")
+
+
+class GraphEntity(Struct):  # → resource "graph-entity"
+    """A shared identity — the vocabulary layer (#534 B).
+
+    It owns NOTHING. Saying "these mentions are the same thing" is a
+    ``GraphEntityLink``, so a wrong grouping costs a link rather than a record:
+    the mentions stay exactly as their documents wrote them, the mistake is
+    visible (an entry holding evidence that does not belong) and undoing it loses
+    nothing. That is what makes automating the decision acceptable at all.
+
+    Identity is shared ACROSS collections, so it cannot inherit one collection's
+    permission. ``collection_ids`` is the denormalized list of collections this
+    identity has evidence in, and the access scope asks whether the caller can
+    read any of them — an access scope is a predicate over ONE row and cannot ask
+    another table what the caller may see, so the answer has to travel on the row.
+    Empty ⇒ nothing vouches for this identity ⇒ nobody sees it: a name alone can
+    leak (a customer code, an unreleased part), so it must not appear on the
+    strength of merely existing.
+
+    ``kind_id`` points at ANOTHER ``GraphEntity`` — a kind ("機台", with aliases
+    "tool" / "設備") is an identity like any other, unified by the same mechanism,
+    so the merge code is written once and the taxonomy comes out of the data. The
+    recursion stops at a kind, whose own ``kind_id`` is empty.
+    """
+
+    canonical_name: str  # the display form — one of the surfaces a document used
+    norm_keys: list[str] = []  # every surface that resolves here (derived, indexed)
+    kind_id: str = ""  # → another GraphEntity; "" on a kind itself
+    collection_ids: list[str] = []  # where its evidence lives — drives visibility
+
+
+class GraphEntityLink(Struct):  # → resource "graph-entity-link"
+    """One claim that a mention belongs to an identity, WITH its basis.
+
+    Separate from both sides on purpose. On the mention it would rewrite the
+    primary layer, which must stay untouched; on the entity it would be an id list
+    with nowhere to record WHY — and a vocabulary whose links cannot be told apart
+    ("the document said so" vs "the model thought so") is one nobody can audit,
+    which brings back the silence the two-layer split existed to remove.
+    """
+
+    entity_id: Annotated[str, Ref("graph-entity", on_delete=OnDelete.cascade)]
+    mention_id: str  # → GraphMention (indexed; NOT a cascade Ref)
+    basis: str = "resembles"  # one of LINK_BASES
+    evidence: str = ""  # where to go and check: a chunk id, a rule name, a user id
+    state: str = "active"  # active | pending (awaiting review) | rejected
