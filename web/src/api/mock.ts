@@ -719,10 +719,12 @@ export const mockApi: ApiClient = {
     return { resource_id };
   },
 
-  async updateAppItem(_resourceRoute: string, id: string, data: Record<string, unknown>) {
+  async patchAppItemFields(_resourceRoute: string, id: string, patch: Record<string, unknown>) {
     await delay(10);
     const idx = _mockAppItems.findIndex((it) => it.resource_id === id);
-    if (idx >= 0) _mockAppItems[idx] = { ...(data as AppItem), resource_id: id };
+    // MERGE, matching the real PATCH. The old mock replaced the row wholesale,
+    // so it could never have shown the field loss the real PUT was causing.
+    if (idx >= 0) _mockAppItems[idx] = { ..._mockAppItems[idx], ...patch, resource_id: id };
     return { resource_id: id };
   },
 

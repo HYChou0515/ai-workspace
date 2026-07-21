@@ -67,15 +67,23 @@ export function useAppItem(
   return data;
 }
 
-/** Inline-edit one of an App item's fields (#89 P7b). specstar CRUD has no
- * partial PATCH, so we PUT the whole item with the one field changed, then
- * invalidate the item + list caches. Returns a `setField(name, value)` the
- * DomainField select/text editors call. */
+/** Inline-edit one of an App item's fields (#89 P7b): PATCH just that field,
+ * then invalidate the item + list caches. Returns a `setField(name, value)` the
+ * DomainField select/text editors call.
+ *
+ * It used to send `{ ...item, ...patch }` — the whole CACHED item — to specstar's
+ * replace-semantics PUT, on the mistaken premise (stated in this comment) that
+ * "specstar CRUD has no partial PATCH". It has one, and the backend test for this
+ * very flow always used it. The full-body write meant one field edit rewrote every
+ * field from a possibly-stale snapshot: a collaborator's concurrent change was
+ * reverted, and `permission` — deliberately left out of the body — was stored as
+ * its default `None`, which the backend reads as PUBLIC. Saving the settings of a
+ * private item published it. Send the diff; omitted now means untouched. */
 export function useUpdateItemField(slug: string, resourceRoute: string, item: AppItem) {
   const qc = useQueryClient();
   const mutation = useMutation({
     mutationFn: (patch: Record<string, unknown>) =>
-      api.updateAppItem(resourceRoute, item.resource_id, { ...item, ...patch }),
+      api.patchAppItemFields(resourceRoute, item.resource_id, patch),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.appItem(slug, item.resource_id) });
       void qc.invalidateQueries({ queryKey: qk.appItems(slug) });

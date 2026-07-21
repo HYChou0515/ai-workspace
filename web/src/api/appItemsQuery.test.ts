@@ -72,69 +72,80 @@ describe("getAppItem", () => {
 });
 
 /** Capture the body of the next write so we can assert what hits the wire. */
-function bodySpy() {
-  const bodies: Record<string, unknown>[] = [];
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      bodies.push(init?.body ? JSON.parse(String(init.body)) : {});
-      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-    }),
-  );
-  return bodies;
-}
 
-describe("updateAppItem", () => {
+// The item PUT was a FULL REPLACEMENT (specstar's own route says so: "replacing
+// it entirely"), fed from a CACHED copy of the item. Two consequences:
+//
+//   * `permission` was stripped to stop a stale copy reverting a share — but
+//     under replace semantics an omitted field is written as its default, and
+//     `WorkItemBase.permission` defaults to None, which the backend reads as
+//     PUBLIC. Saving settings on a private item published it.
+//   * every OTHER field was echoed back from the same stale cache, so a save
+//     also reverted whatever anyone else had changed since.
+//
+// A field edit is a partial update, so it must go over PATCH — which specstar
+// has had all along (`tests/api/test_investigation_update.py` already claims
+// this is how the FE edits items). Omitted then means "leave it alone".
+describe("patchAppItemFields", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  // #201: getAppItem flattens the server-owned revision metadata onto the item,
-  // so a read-modify-write (the model picker, inline severity/status edits)
-  // would echo `resource_id` back in the PUT body — and specstar 422s on that
-  // ("resource_id … is immutable"), silently dropping every item-field write.
-  // updateAppItem must send only the model struct fields.
-  it("strips server-generated metadata from the PUT body but keeps the edit", async () => {
-    const bodies = bodySpy();
-    const item = {
+  function requestSpy() {
+    const seen: { url: string; method?: string; body: unknown }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        seen.push({
+          url: String(input),
+          method: init?.method,
+          body: init?.body ? JSON.parse(String(init.body)) : undefined,
+        });
+        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+      }),
+    );
+    return seen;
+  }
+
+  it("PATCHes only the named fields, so nothing it did not mention can change", async () => {
+    const seen = requestSpy();
+    await realApi.patchAppItemFields("/rca-investigation", "INC-1", { status: "open" });
+
+    expect(seen[0].method).toBe("PATCH");
+    expect(seen[0].url).toContain("/rca-investigation/INC-1");
+    expect(seen[0].body).toEqual([{ op: "replace", path: "/status", value: "open" }]);
+  });
+
+  it("emits one op per field, in the caller's order", async () => {
+    const seen = requestSpy();
+    await realApi.patchAppItemFields("/rca-investigation", "INC-1", {
+      title: "Reflow drift",
+      severity: "P0",
+    });
+    expect(seen[0].body).toEqual([
+      { op: "replace", path: "/title", value: "Reflow drift" },
+      { op: "replace", path: "/severity", value: "P0" },
+    ]);
+  });
+
+  // Still stripped, but now it MEANS "leave it alone" instead of "clear it".
+  // `permission` has its own endpoint; the generic field editor must never be a
+  // second writer of it, whether it would widen or narrow access.
+  it("never carries `permission`, nor the immutable server-owned metadata", async () => {
+    const seen = requestSpy();
+    await realApi.patchAppItemFields("/rca-investigation", "INC-1", {
+      title: "Reflow drift",
+      permission: { visibility: "private" },
       resource_id: "INC-1",
       created_time: "2026-06-15T08:00:00Z",
       updated_time: "2026-06-20T12:00:00Z",
       created_by: "alice",
-      title: "Reflow drift",
-      owner: "alice",
-      attached_preset: "",
-    };
-    await realApi.updateAppItem("/rca-investigation", "INC-1", {
-      ...item,
-      attached_preset: "claude-opus",
     });
 
-    const sent = bodies[0]!;
-    expect(sent).not.toHaveProperty("resource_id");
-    expect(sent).not.toHaveProperty("created_time");
-    expect(sent).not.toHaveProperty("updated_time");
-    expect(sent).not.toHaveProperty("created_by");
-    // The model fields — including the edited one — still go through.
-    expect(sent.attached_preset).toBe("claude-opus");
-    expect(sent.title).toBe("Reflow drift");
-    expect(sent.owner).toBe("alice");
+    expect(seen[0].body).toEqual([{ op: "replace", path: "/title", value: "Reflow drift" }]);
   });
 
-  // #306 PR3: `permission` has its OWN endpoint (`PUT …/items/{id}/permission`).
-  // The generic item PUT is a read-modify-write off a cached item, so echoing
-  // `permission` back means any later field edit silently REVERTS a sharing
-  // change made in between (the cached copy still holds the pre-share value).
-  // Treat it like the other server-owned fields: never send it here.
-  it("strips `permission` so a field edit can never revert a sharing change", async () => {
-    const bodies = bodySpy();
-    await realApi.updateAppItem("/rca-investigation", "INC-1", {
-      title: "Reflow drift",
-      owner: "alice",
-      status: "open",
-      permission: { visibility: "private", read_chat: [] },
-    });
-
-    const sent = bodies[0]!;
-    expect(sent).not.toHaveProperty("permission");
-    expect(sent.status).toBe("open");
+  it("sends nothing at all when there is nothing to change", async () => {
+    const seen = requestSpy();
+    await realApi.patchAppItemFields("/rca-investigation", "INC-1", { permission: {} });
+    expect(seen).toHaveLength(0);
   });
 });

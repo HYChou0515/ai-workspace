@@ -202,26 +202,41 @@ export const realApi: ApiClient = {
     return json<{ resource_id: string }>(resp);
   },
 
-  async updateAppItem(resourceRoute: string, id: string, data: Record<string, unknown>) {
-    // #201: `getAppItem` flattens the server-owned revision metadata onto the
-    // item, so a read-modify-write (model picker, inline field edits) holds
-    // those keys. specstar rejects `resource_id` in a write body with a 422
-    // ("…is immutable"), which would silently drop the whole edit — so PUT only
-    // the model struct fields, never the ride-along metadata.
+  async patchAppItemFields(resourceRoute: string, id: string, patch: Record<string, unknown>) {
+    // Editing a field is a PARTIAL update, so it goes over PATCH (RFC 6902 ops —
+    // the shape `tests/api/test_investigation_update.py` has always documented as
+    // how the FE edits an item). Whatever this doesn't name is left untouched.
     //
-    // #306 PR3: `permission` is stripped for a different reason — it has its own
-    // endpoint (`PUT …/items/{id}/permission`). This PUT is a read-modify-write
-    // off a CACHED item, so echoing `permission` back means the next field edit
-    // replays a stale copy and silently REVERTS whatever the share dialog just
-    // set. Keeping it out makes the dedicated endpoint the only writer, so the
-    // revert is impossible regardless of how stale the cache is.
-    const body = { ...data };
-    for (const k of ["resource_id", "created_time", "updated_time", "created_by", "permission"])
-      delete body[k];
+    // It used to PUT, which specstar defines as replacing the resource ENTIRELY,
+    // fed from a cached copy of the item. That made omission destructive rather
+    // than neutral, and the damage was not theoretical:
+    //
+    //   * `permission` was omitted on purpose (#306 PR3, to stop a stale cached
+    //     copy from reverting a share) — and a replacement write therefore stored
+    //     the struct default, `None`, which the backend reads as PUBLIC
+    //     (`perm/scope.py` admits an isna() visibility). Saving the settings of a
+    //     PRIVATE item published it, silently.
+    //   * every other field was echoed back from that same cache, so a save also
+    //     reverted anything a collaborator had changed in the meantime.
+    //
+    // Under PATCH the omission finally means what it was always intended to mean:
+    // `permission` has its own endpoint (`PUT …/items/{id}/permission`) and this
+    // route simply is not a writer of it. Same for the server-owned revision
+    // metadata `getAppItem` flattens onto the item — specstar 422s on
+    // `resource_id` ("…is immutable"), which would drop the whole edit (#201).
+    const ops = Object.entries(patch)
+      .filter(
+        ([k]) =>
+          !["resource_id", "created_time", "updated_time", "created_by", "permission"].includes(k),
+      )
+      .map(([path, value]) => ({ op: "replace", path: `/${path}`, value }));
+    // An empty patch is not an empty replacement — send nothing rather than ask
+    // the server to write a revision that changes nothing.
+    if (ops.length === 0) return { resource_id: id };
     const resp = await apiFetch(`${resourceRoute}/${encodeURIComponent(id)}`, {
-      method: "PUT",
+      method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(ops),
     });
     return json<{ resource_id: string }>(resp);
   },

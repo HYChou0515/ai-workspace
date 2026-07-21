@@ -170,3 +170,42 @@ def test_setter_404_for_an_unknown_app():
     client, _ = _client_and_spec(holder)
     r = client.put("/a/bogusapp/items/x/permission", json={"visibility": "public"})
     assert r.status_code == 404
+
+
+def test_editing_a_field_does_not_touch_the_item_s_access():
+    """The FE edits item fields with a PARTIAL update, and a partial update must
+    leave `permission` exactly as it was.
+
+    This is a contract pin, not decoration. The FE used to send the whole cached
+    item to specstar's PUT — which replaces the resource ENTIRELY — with
+    `permission` deliberately stripped out. A replacement write stores the struct
+    default for anything omitted, `permission` defaults to ``None``, and ``None``
+    reads as PUBLIC (`perm/scope.py` admits an isna() visibility). So saving the
+    settings of a private item published it, with nothing on screen to say so.
+
+    If specstar's PATCH ever stops preserving omitted fields, this fails here
+    rather than in production as a silent disclosure.
+    """
+    holder = {"id": "alice"}
+    client, spec = _client_and_spec(holder)
+    rid = client.post("/a/rca/items", json={"title": "Old"}).json()["resource_id"]
+
+    # New items are private (item_routes: setdefault permission=private).
+    before = client.get(f"/rca-investigation/{rid}").json()
+    before = before.get("data", before)
+    assert before["permission"]["visibility"] == "private"
+
+    r = client.patch(
+        f"/rca-investigation/{rid}",
+        json=[{"op": "replace", "path": "/title", "value": "New"}],
+    )
+    assert r.status_code == 200
+
+    after = client.get(f"/rca-investigation/{rid}").json()
+    after = after.get("data", after)
+    assert after["title"] == "New"
+    assert after["permission"] == before["permission"], "a field edit rewrote the access control"
+
+    # The claim that actually matters: it is still not another user's to read.
+    holder["id"] = "mallory"
+    assert client.get(f"/rca-investigation/{rid}").status_code == 404
