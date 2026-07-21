@@ -23,7 +23,15 @@ import logging
 from specstar import QB, Count, Schema, SpecStar
 from specstar.types import TaskStatus
 
+from ...perm import Permission
 from ...resources import Collection, DocChunk
+from ...resources.kb import SourceDoc
+from ..doc_permission import (
+    collection_claim_mirror,
+    push_doc_override_to_claims,
+    push_mirror_to_claims,
+    reset_doc_override_on_claims,
+)
 from ..eval.sample import into_batches
 from ..llm import ILlm
 from .jobs import GraphJob, GraphJobPayload
@@ -48,6 +56,7 @@ class GraphCoordinator:
         self._batch_size = batch_size
         self._collection_rm = spec.get_resource_manager(Collection)
         self._chunk_rm = spec.get_resource_manager(DocChunk)
+        self._doc_rm = spec.get_resource_manager(SourceDoc)
 
         if message_queue_factory is None:
             from specstar.message_queue import SimpleMessageQueueFactory
@@ -89,8 +98,71 @@ class GraphCoordinator:
                 )
             )
 
+    def reconcile_mirrors(self, collection_id: str) -> None:
+        """#534 slice 2 — bring every claim in the collection back onto the CURRENT
+        read permission of the deck it came from, before extracting anything new.
+
+        This is where the backfill lives. Claims written before the mirror existed
+        carry no verdict at all, and the scope reads "never written" as invisible,
+        so they need a real write — ``rm.migrate`` cannot help, since it only
+        re-extracts indexed values from data that already holds them. Putting it at
+        the head of the job that already runs weekly means the backfill needs no
+        operator step and any later drift heals itself, rather than lingering until
+        someone notices.
+
+        The overridden decks are identified FIRST and then excluded from the
+        "no override" push, rather than being reset and re-tightened afterwards.
+        Resetting first would publish every tightened deck's numbers for the length
+        of the re-tightening loop — each push commits separately, so that window is
+        real — and would leave them published until the next run if the loop
+        stopped partway. Overrides are rare, so this is typically two bulk patches
+        for the whole collection, and a patch that changes nothing writes no
+        revision, so the steady-state cost is a read.
+        """
+        mirror = collection_claim_mirror(self._spec, collection_id)
+        owner = mirror["collection_created_by"]
+        push_mirror_to_claims(
+            self._spec,
+            collection_id,
+            visibility=mirror["collection_visibility"],
+            read_meta=mirror["collection_read_meta"],
+            read_content=mirror["collection_read_content"],
+            created_by=owner,
+        )
+        overridden = self._overridden_docs(collection_id)
+        for doc_id, override in overridden:
+            push_doc_override_to_claims(
+                self._spec,
+                doc_id,
+                visibility=override.visibility,
+                read_meta=list(override.read_meta),
+                read_content=list(override.read_content),
+                created_by=owner,
+            )
+        reset_doc_override_on_claims(
+            self._spec,
+            collection_id,
+            created_by=owner,
+            except_docs=[doc_id for doc_id, _ in overridden],
+        )
+
+    def _overridden_docs(self, collection_id: str) -> list[tuple[str, Permission]]:
+        """The decks in the collection carrying their OWN read override (#308).
+        Queried on the indexed ``permission.visibility``, which is only ever
+        written fresh, so an un-overridden deck is never in the candidate set."""
+        q = QB["collection_id"] == collection_id
+        q = q & QB["permission.visibility"].is_not_null()
+        out: list[tuple[str, Permission]] = []
+        for r in self._doc_rm.list_resources(q.build()):
+            doc = r.data
+            assert isinstance(doc, SourceDoc)
+            if doc.permission is not None:
+                out.append((r.info.resource_id, doc.permission))  # ty: ignore[unresolved-attribute]
+        return out
+
     def _split(self, payload: GraphJobPayload) -> None:
         cid = payload.collection_id
+        self.reconcile_mirrors(cid)
         for batch in into_batches(self._collection_doc_ids(cid), self._batch_size):
             self._job_rm.create(
                 GraphJob(

@@ -29,6 +29,7 @@ from ..perm.scope import (
     GroupsProvider,
     collection_access_scope,
     conversation_access_scope,
+    graph_claim_access_scope,
     kbchat_access_scope,
     source_doc_access_scope,
 )
@@ -606,9 +607,30 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #534: flat metric-claim table. collection_id (Ref, auto) + norm_metric +
     # period indexed to filter a metric's values across decks and (later) rollup;
     # source_doc_id indexed so a re-extraction can wipe+rewrite one doc's claims.
+    # #534 slice 2: the read-permission mirror is indexed so `graph_claim_access_scope`
+    # filters a claim by the DECK it came from at the storage layer — the auto-CRUD
+    # `GET /graph-claim` is otherwise wide open (spec-level permission default is
+    # AllowAll, so a model with no access_scope returns every collection's rows to
+    # any caller). `doc_read_content`, not `doc_read_meta`: a claim IS content.
+    # A pre-slice-2 row has NO cell for these (the fields weren't indexed when it
+    # was written), so the scope's `isna()` clause reads it as public until the
+    # backfill reaches it — strictly better than today's no-scope-at-all, never worse.
     spec.add_model(
         GraphClaim,
-        indexed_fields=["collection_id", "norm_metric", "period", "source_doc_id"],
+        indexed_fields=[
+            "collection_id",
+            "norm_metric",
+            "period",
+            "source_doc_id",
+            IndexableField("collection_visibility", str),
+            IndexableField("collection_read_meta", list),
+            IndexableField("collection_read_content", list),
+            IndexableField("collection_created_by", str),
+            IndexableField("doc_visibility", str),
+            IndexableField("doc_read_meta", list),
+            IndexableField("doc_read_content", list),
+        ],
+        access_scope=graph_claim_access_scope(superusers, groups),
     )
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a

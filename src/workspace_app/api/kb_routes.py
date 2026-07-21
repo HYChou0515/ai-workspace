@@ -36,7 +36,13 @@ from ..kb.collection_export import (
 )
 from ..kb.collection_import import import_collection
 from ..kb.doc_id import canonical_path, encode_doc_id
-from ..kb.doc_permission import collection_mirror_fields, denied_doc_ids, push_mirror_to_docs
+from ..kb.doc_permission import (
+    collection_mirror_fields,
+    denied_doc_ids,
+    push_doc_override_to_claims,
+    push_mirror_to_claims,
+    push_mirror_to_docs,
+)
 from ..kb.findability import (
     ProbeResult,
     ProbeSide,
@@ -44,6 +50,7 @@ from ..kb.findability import (
     doc_passages_in_top_k,
     probe_findability,
 )
+from ..kb.graph.write import wipe_doc_claims
 from ..kb.ingest import Ingestor, teardown_doc_chunks
 from ..kb.links import rewrite_md_links
 from ..kb.llm import ILlm
@@ -886,6 +893,18 @@ def register_kb_routes(
                 read_meta=new_perm.read_meta,
                 created_by=created_by,
             )
+            # #534 slice 2: one level further down — every metric claim extracted
+            # out of this collection carries its own copy of the same verdict, and
+            # a stale copy is a readable one.
+            await asyncio.to_thread(
+                push_mirror_to_claims,
+                spec,
+                collection_id,
+                visibility=new_perm.visibility,
+                read_meta=new_perm.read_meta,
+                read_content=new_perm.read_content,
+                created_by=created_by,
+            )
         # Notify users NEWLY granted any access (the actor + already-granted users
         # are not re-notified). Mirrors kb_chat_routes.share_chat.
         me = get_user_id()
@@ -1063,6 +1082,17 @@ def register_kb_routes(
         rm = spec.get_resource_manager(SourceDoc)
         with rm.using(owner):
             rm.update(doc_id, msgspec.structs.replace(doc, permission=new_perm))
+        # #534 slice 2: the deck's own verdict travels to the metrics extracted
+        # from it — read_content, because a claim IS content.
+        await asyncio.to_thread(
+            push_doc_override_to_claims,
+            spec,
+            doc_id,
+            visibility=new_perm.visibility,
+            read_meta=new_perm.read_meta,
+            read_content=new_perm.read_content,
+            created_by=owner,
+        )
         _sync_override_count(doc.collection_id, owner)
         me = get_user_id()
         notified = sorted(_granted_user_ids(new_perm) - _granted_user_ids(old_perm) - {me})
@@ -1087,6 +1117,18 @@ def register_kb_routes(
             rm = spec.get_resource_manager(SourceDoc)
             with rm.using(owner):
                 rm.update(doc_id, msgspec.structs.replace(doc, permission=None))
+            # #534 slice 2: reverting to pure inheritance is still a verdict —
+            # "public" — and the claims have to be told, or they stay locked after
+            # the deck itself is readable again.
+            await asyncio.to_thread(
+                push_doc_override_to_claims,
+                spec,
+                doc_id,
+                visibility="public",
+                read_meta=[],
+                read_content=[],
+                created_by=owner,
+            )
             _sync_override_count(doc.collection_id, owner)
         return PermissionOut(resource_id=doc_id, visibility="public", notified=[])
 
@@ -1960,6 +2002,11 @@ def register_kb_routes(
             # set for its surviving siblings — they resolve to it by file_id (no
             # re-home). Governs the chunks now that source_doc_id is not a cascade.
             teardown_doc_chunks(spec, did)
+            # #534 slice 2: the deck's extracted metrics go with it. A claim is
+            # keyed on its deck, not content-addressed like a chunk, so there is no
+            # refcount to consult — and an orphan would keep its last mirror
+            # (readable) beyond the reach of every fan-out.
+            wipe_doc_claims(spec, did)
             rm.permanently_delete(did)
 
         # #513 P7: cascade to attachments — a child SourceDoc (parent_doc_id ==
@@ -2045,6 +2092,11 @@ def register_kb_routes(
         assert wiki_coordinator is not None
         await wiki_coordinator.on_doc_deleted(doc_id)
         teardown_doc_chunks(spec, doc_id)
+        # #534 slice 2: a rename re-creates the doc under a NEW id, so the old id's
+        # claims would dangle forever — never wiped by a re-extraction (which only
+        # ever touches the id it is processing) and counted twice the next time the
+        # same deck is read.
+        wipe_doc_claims(spec, doc_id)
         rm.permanently_delete(doc_id)
         with rm.using(user=creator):
             rm.create(new_doc, resource_id=new_id)

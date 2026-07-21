@@ -7,13 +7,18 @@ resolution / cross-doc dedup is a later slice — this is a flat write.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
 from specstar import QB, SpecStar
+from specstar.types import ResourceIDNotFoundError
 
 from ...resources.graph import GraphClaim
+from ..doc_permission import doc_mirror_fields
 from ..llm import ILlm
 from .extract import extract_claims
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def norm_metric(metric: str) -> str:
@@ -21,6 +26,30 @@ def norm_metric(metric: str) -> str:
     casefold. (VALUE normalisation — parsing "1.2M" into a number — is a separate,
     later concern; this only canonicalises the NAME for filter / group.)"""
     return " ".join(metric.split()).casefold()
+
+
+def wipe_doc_claims(spec: SpecStar, source_doc_id: str) -> int:
+    """Drop every claim extracted from one deck. Returns how many went.
+
+    Called on the re-extraction path (wipe then rewrite, so tuning the prompt and
+    re-running never double-counts) AND whenever the deck itself is torn down. A
+    claim is keyed on its deck — unlike a chunk, which #104 made content-addressed
+    and therefore refcounted — so there is no shared-content question here: the
+    deck goes, its numbers go. An orphan would otherwise keep whatever mirror it
+    last held (readable), and no fan-out keyed on a live doc could ever reach it
+    again.
+
+    Hard-delete, not soft: a soft ``delete`` still shows up in ``list_resources``,
+    so a re-run would accumulate.
+    """
+    rm = spec.get_resource_manager(GraphClaim)
+    stale = [
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources((QB["source_doc_id"] == source_doc_id).build())
+    ]
+    for rid in stale:
+        rm.permanently_delete(rid)
+    return len(stale)
 
 
 def write_doc_claims(
@@ -35,14 +64,25 @@ def write_doc_claims(
     ``(chunk_id, text)`` pairs. Wipes the doc's existing GraphClaims first (a
     metas-only delete), then writes fresh. Returns the number written."""
     rm = spec.get_resource_manager(GraphClaim)
-    # Hard-delete (not soft): a soft ``delete`` still shows in list_resources, so
-    # a re-run would accumulate. permanently_delete wipes for real.
-    stale = [
-        r.info.resource_id  # ty: ignore[unresolved-attribute]
-        for r in rm.list_resources((QB["source_doc_id"] == source_doc_id).build())
-    ]
-    for rid in stale:
-        rm.permanently_delete(rid)
+    wipe_doc_claims(spec, source_doc_id)
+    # #534 slice 2: stamp the deck's effective read permission onto every claim.
+    # Read ONCE per doc — it can't change mid-extraction in any way this write
+    # could honour, and the permission fan-out re-pushes it if it does. Skipping it
+    # would not merely lose the filter: the claim scope treats an unwritten mirror
+    # as invisible, so the claims would be born unreadable.
+    #
+    # A doc that no longer exists is NOT an error here: #104 made a chunk
+    # content-addressed rather than bound to a deletable doc, so chunks outlive
+    # their deck. A vanished deck has no permission to inherit and nothing worth
+    # extracting, and one dangling doc must not fail the batch its neighbours ride
+    # in. The wipe above has already cleared what it left behind.
+    try:
+        mirror = doc_mirror_fields(spec, source_doc_id)
+    except ResourceIDNotFoundError:
+        _LOGGER.warning(
+            "graph: doc %s is gone; wiped its claims and skipped extraction", source_doc_id
+        )
+        return 0
     written = 0
     for chunk_id, text in chunks:
         for claim in extract_claims(llm, text):
@@ -56,6 +96,7 @@ def write_doc_claims(
                     value=claim.value,
                     period=claim.period,
                     unit=claim.unit,
+                    **mirror,
                 )
             )
             written += 1

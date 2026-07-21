@@ -250,3 +250,56 @@ def test_chunks_route_returns_empty_for_an_unknown_doc():
     r = client.get("/kb/documents/chunks?id=does-not-exist")
     assert r.status_code == 200
     assert r.json() == []
+
+
+def _spec_with_two_docs() -> tuple[SpecStar, str]:
+    """A collection holding two ingested docs — the fan-out's subject."""
+    spec = make_spec(default_user=lambda: "bob")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(Collection(name="c")).resource_id
+    ing = _ingestor(spec)
+    ing.store(collection_id=cid, user="bob", filename="a.md", data=b"one")
+    ing.store(collection_id=cid, user="bob", filename="b.md", data=b"two")
+    return spec, cid
+
+
+def test_push_mirror_to_docs_raises_when_a_doc_could_not_be_mirrored():
+    """#434: ``patch_many`` COLLECTS a row it could not write instead of raising,
+    so a doc left on the OLD (looser) mirror would otherwise be reported as a
+    successful tightening — a silent read leak. The fan-out must fail loudly."""
+    from specstar.types import PatchManyResult
+
+    from workspace_app.kb.doc_permission import push_mirror_to_docs
+
+    spec, cid = _spec_with_two_docs()
+    drm = spec.get_resource_manager(SourceDoc)
+    drm.patch_many = lambda *a, **k: PatchManyResult(  # ty: ignore[invalid-assignment]
+        patched=1, failures=[("doc-b", "denied")]
+    )
+    with pytest.raises(RuntimeError, match="doc-b"):
+        push_mirror_to_docs(spec, cid, visibility="private", read_meta=[], created_by="bob")
+
+
+def test_push_mirror_to_docs_retries_a_conflicted_doc():
+    """A doc whose revision moved between selection and write lands in
+    ``conflicts`` — expected while indexing writes to the same rows. The patch is
+    idempotent and a no-op costs no revision, so the fan-out RE-RUNS rather than
+    leaving that doc stale-visible; only a conflict that survives the retry raises."""
+    from specstar.types import PatchManyResult
+
+    from workspace_app.kb.doc_permission import push_mirror_to_docs
+
+    spec, cid = _spec_with_two_docs()
+    drm = spec.get_resource_manager(SourceDoc)
+    calls: list[int] = []
+
+    def flaky(*a, **k) -> PatchManyResult:
+        calls.append(1)
+        if len(calls) == 1:
+            return PatchManyResult(patched=1, conflicts=["doc-b"])
+        return PatchManyResult(patched=1)
+
+    drm.patch_many = flaky  # ty: ignore[invalid-assignment]
+    assert push_mirror_to_docs(spec, cid, visibility="private", read_meta=[], created_by="bob") == 2
+    assert len(calls) == 2
