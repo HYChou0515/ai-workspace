@@ -150,3 +150,46 @@ def test_the_reconcile_runs_without_a_model_at_all():
     reconcile_vocabulary(spec, llm=None)
     assert len(_links(spec, "active")) == 2
     assert _links(spec, "pending") == []
+
+
+class TestWhoGetsAsked:
+    """The narrowing decides how much the pass costs, and it has to work in both
+    scripts. Comparing single characters does not: Latin has 26 of them, so any
+    two English words share most of their letters and the test admits nearly every
+    pair — which is O(n²) model calls, the exact thing the narrowing exists to
+    prevent. Adjacent character PAIRS carry position, so they separate words in
+    both scripts."""
+
+    def test_unrelated_english_terms_are_not_asked_about(self):
+        from workspace_app.kb.graph.link import _MIN_OVERLAP, _overlap
+
+        for a, b in [
+            ("condition", "dose"),
+            ("adverse effect", "drug"),
+            ("causes", "contraindicated in"),
+            ("renal impairment", "lactic acidosis"),
+        ]:
+            assert _overlap(a, b) < _MIN_OVERLAP, (a, b)
+
+    def test_unrelated_chinese_terms_are_not_asked_about(self):
+        from workspace_app.kb.graph.link import _MIN_OVERLAP, _overlap
+
+        for a, b in [("疾病", "第二型糖尿病"), ("劑量", "腎功能不全")]:
+            assert _overlap(a, b) < _MIN_OVERLAP, (a, b)
+
+    def test_genuine_variants_still_reach_the_model(self):
+        from workspace_app.kb.graph.link import _MIN_OVERLAP, _overlap
+
+        for a, b in [
+            ("乳酸中毒", "乳酸性酸中毒"),
+            ("假焊", "假焊點"),
+            ("lactic acidosis", "lactic acidoses"),
+        ]:
+            assert _overlap(a, b) >= _MIN_OVERLAP, (a, b)
+
+    def test_a_one_character_term_still_compares(self):
+        """Nothing has adjacent pairs to compare, so it falls back to characters
+        rather than silently never matching anything."""
+        from workspace_app.kb.graph.link import _overlap
+
+        assert _overlap("鎢", "鎢") == 1.0

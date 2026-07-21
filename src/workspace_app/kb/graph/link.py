@@ -299,11 +299,31 @@ _JUDGE_PROMPT = (
 )
 
 
+def _bigrams(text: str) -> set[str]:
+    squashed = text.replace(" ", "")
+    if len(squashed) < 2:
+        return set(squashed)  # nothing to pair — fall back to the character itself
+    return {squashed[i : i + 2] for i in range(len(squashed) - 1)}
+
+
 def _overlap(a: str, b: str) -> float:
-    """Character-set overlap, as a fraction of the smaller term. Crude on purpose:
-    it decides only who gets ASKED, and the model and then a person both still
-    stand between it and any change to the vocabulary."""
-    left, right = set(a.replace(" ", "")), set(b.replace(" ", ""))
+    """How much two terms have in common, as a fraction of the smaller one.
+
+    ADJACENT CHARACTER PAIRS, not characters. Latin has twenty-six letters, so any
+    two English words share most of theirs — comparing characters admitted
+    "condition" against "dose" and asked the model about nearly every pair in the
+    corpus, which is the O(n²) cost the narrowing exists to prevent. It only ever
+    looked selective because the first corpus tried was Chinese, where the
+    character set is large enough to hide the flaw.
+
+    A pair carries position as well as identity, so it separates words in both
+    scripts while still matching real variants: 乳酸中毒 against 乳酸性酸中毒, or a
+    plural against its singular.
+
+    Crude on purpose either way — it decides only who gets ASKED, and the model
+    and then a person both still stand between it and any change.
+    """
+    left, right = _bigrams(a), _bigrams(b)
     if not left or not right:
         return 0.0
     return len(left & right) / min(len(left), len(right))
