@@ -201,6 +201,12 @@ class GraphEntity(Struct):  # → resource "graph-entity"
     norm_keys: list[str] = []  # every surface that resolves here (derived, indexed)
     kind_id: str = ""  # → another GraphEntity; "" on a kind itself
     collection_ids: list[str] = []  # where its evidence lives — drives visibility
+    # Set when this identity was absorbed into another: its keys and evidence
+    # moved there, and this row stays as a tombstone. Kept rather than deleted
+    # because a merge has to be undoable — a row that cannot say where it went is
+    # a dead end, and an empty identity with no explanation looks like corruption
+    # to whoever finds it next. Empty collections already make it invisible.
+    merged_into: str = ""
 
 
 class GraphEntityLink(Struct):  # → resource "graph-entity-link"

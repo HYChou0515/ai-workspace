@@ -761,6 +761,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("norm_keys", list),
             IndexableField("kind_id", str),
             IndexableField("collection_ids", list),
+            IndexableField("merged_into", str),
         ],
         access_scope=graph_entity_access_scope(
             _readable_collections_provider(spec, superusers), superusers

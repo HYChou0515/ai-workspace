@@ -171,3 +171,25 @@ def test_a_vanished_deck_is_wiped_and_skipped():
     )
     assert n == 0
     assert _mentions(spec, "deck-A") == []
+
+
+def test_a_mention_created_by_a_declaration_still_knows_where_it_came_from():
+    """The alias was read off a specific slide, so the row has to say which one.
+    Without it the page can name a document that mentions the term and not point
+    at anything in it — provenance that stops one step short is not provenance."""
+    spec = make_spec(default_user=lambda: "bob")
+    _deck(spec)
+    llm = _FakeLlm(
+        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
+        ' "aliases": [{"a": "回焊爐", "b": "Reflow Oven",'
+        ' "quote": "回焊爐(Reflow Oven)溫度過高"}]}'
+    )
+    write_doc_mentions(
+        spec,
+        llm,
+        collection_id="c1",
+        source_doc_id="deck-A",
+        chunks=[("deck-A#7", "回焊爐(Reflow Oven)溫度過高")],
+    )
+    by_surface = {m.surface: m for m in _mentions(spec, "deck-A")}
+    assert by_surface["Reflow Oven"].chunk_ids == ["deck-A#7"]

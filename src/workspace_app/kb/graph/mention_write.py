@@ -123,7 +123,7 @@ def write_doc_mentions(
     kinds: dict[str, str] = {}
     counts: dict[str, int] = {}
     chunk_ids: dict[str, list[str]] = {}
-    declared: list[tuple[str, str, str]] = []
+    declared: list[tuple[str, str, str, str]] = []
     stated: list[tuple[str, StatedRelationship]] = []
     for chunk_id, text in chunks:
         extraction = extract_entities(llm, text)
@@ -131,7 +131,7 @@ def write_doc_mentions(
         # out of here so the vocabulary can apply it without asking a person: the
         # quote is a sentence anyone can go and read, which is what separates a
         # reported declaration from the model's own impression.
-        declared.extend((a.a, a.b, a.quote) for a in extraction.aliases)
+        declared.extend((chunk_id, a.a, a.b, a.quote) for a in extraction.aliases)
         stated.extend((chunk_id, r) for r in extraction.relationships)
         for mention in extraction.mentions:
             key = norm_surface(mention.surface)
@@ -169,7 +169,7 @@ def write_doc_mentions(
 def _record_declarations(
     spec: SpecStar,
     source_doc_id: str,
-    declared: list[tuple[str, str, str]],
+    declared: list[tuple[str, str, str, str]],
     mirror: dict,
     collection_id: str,
 ) -> None:
@@ -181,7 +181,7 @@ def _record_declarations(
     travels with the pair when the vocabulary reads them.
     """
     rm = spec.get_resource_manager(GraphMention)
-    for a, b, quote in declared:
+    for chunk_id, a, b, quote in declared:
         for name, other in ((a, b), (b, a)):
             rid = mention_id(source_doc_id, name)
             try:
@@ -207,6 +207,7 @@ def _record_declarations(
                     surface=name,
                     norm_surface=norm_surface(name),
                     occurrences=1,
+                    chunk_ids=[chunk_id],
                     declared_same_as=[norm_surface(other)],
                     declared_quote=quote,
                     **mirror,

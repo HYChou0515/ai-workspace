@@ -230,7 +230,12 @@ def link_declared_aliases(spec: SpecStar) -> int:
             target = _entity_for_key(spec, other_key)
             if target is None or target == host:
                 continue
-            _absorb(spec, host, target, evidence=mention.declared_quote)
+            _absorb(
+                spec,
+                host,
+                target,
+                evidence=f"{mention.source_doc_id}: {mention.declared_quote}",
+            )
             applied += 1
     return applied
 
@@ -270,7 +275,10 @@ def _absorb(spec: SpecStar, host_id: str, other_id: str, *, evidence: str) -> No
             r.info.resource_id,  # ty: ignore[unresolved-attribute]
             msgspec.structs.replace(link, entity_id=host_id, basis="declared", evidence=evidence),
         )
-    rm.update(other_id, msgspec.structs.replace(other, norm_keys=[], collection_ids=[]))
+    rm.update(
+        other_id,
+        msgspec.structs.replace(other, norm_keys=[], collection_ids=[], merged_into=host_id),
+    )
 
 
 # How much two keys must have in common before the model is asked about them.

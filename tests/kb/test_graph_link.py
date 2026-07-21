@@ -220,7 +220,7 @@ def test_a_declaration_joins_two_identities_without_a_reviewer():
     assert len(live) == 1
     assert sorted(live[0].norm_keys) == sorted([norm_surface("回焊爐"), norm_surface("RO")])
     declared = [link for link in _links(spec) if link.basis == "declared"]
-    assert declared and declared[0].evidence == "回焊爐,以下簡稱 RO"
+    assert declared and declared[0].evidence == "deck-A: 回焊爐,以下簡稱 RO"
 
 
 def test_a_declaration_whose_numbers_disagree_is_refused():
@@ -249,3 +249,24 @@ def test_applying_declarations_twice_changes_nothing():
     before = len(_entities(spec)), len(_links(spec))
     assert link_declared_aliases(spec) == 0
     assert (len(_entities(spec)), len(_links(spec))) == before
+
+
+def test_an_absorbed_identity_says_where_it_went():
+    """It keeps no keys and no evidence, so nobody can reach it — but the row
+    stays, because a merge has to be undoable and a row that cannot say where it
+    went is a dead end. An unexplained empty identity also reads as corruption to
+    whoever finds it next."""
+    from workspace_app.kb.graph.link import link_declared_aliases
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _declaring_mention(spec, cid, "deck-A", "回焊爐", "RO", "回焊爐,以下簡稱 RO")
+    _mention(spec, cid, "deck-B", "RO")
+    link_identical_mentions(spec)
+    link_declared_aliases(spec)
+
+    host = [e for e in _entities(spec) if e.collection_ids]
+    ghost = [e for e in _entities(spec) if not e.collection_ids]
+    assert len(host) == 1 and len(ghost) == 1
+    assert ghost[0].merged_into
+    assert ghost[0].norm_keys == []
