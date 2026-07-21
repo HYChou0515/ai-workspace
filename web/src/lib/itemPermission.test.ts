@@ -7,24 +7,24 @@ const ME = "me1";
 
 describe("canWriteItem (mirrors backend perm/authorize for a write verb)", () => {
   it("the owner can always write (any visibility)", () => {
-    expect(canWriteItem({ visibility: "private" }, OWNER, OWNER)).toBe(true);
+    expect(canWriteItem({ visibility: "private" }, OWNER, OWNER, false)).toBe(true);
   });
   it("absent permission ≡ public → writable", () => {
-    expect(canWriteItem(undefined, ME, OWNER)).toBe(true);
+    expect(canWriteItem(undefined, ME, OWNER, false)).toBe(true);
   });
   it("public visibility → anyone writes", () => {
-    expect(canWriteItem({ visibility: "public" }, ME, OWNER)).toBe(true);
+    expect(canWriteItem({ visibility: "public" }, ME, OWNER, false)).toBe(true);
   });
   it("private + non-owner → read-only even if a grant lists them", () => {
-    expect(canWriteItem({ visibility: "private", edit_content: ["user:me1"] }, ME, OWNER)).toBe(false);
+    expect(canWriteItem({ visibility: "private", edit_content: ["user:me1"] }, ME, OWNER, false)).toBe(false);
   });
   it("restricted + granted a write verb (user or all) → writable", () => {
-    expect(canWriteItem({ visibility: "restricted", edit_content: ["user:me1"] }, ME, OWNER)).toBe(true);
-    expect(canWriteItem({ visibility: "restricted", add_content: ["all"] }, ME, OWNER)).toBe(true);
-    expect(canWriteItem({ visibility: "restricted", write_meta: ["user:me1"] }, ME, OWNER)).toBe(true);
+    expect(canWriteItem({ visibility: "restricted", edit_content: ["user:me1"] }, ME, OWNER, false)).toBe(true);
+    expect(canWriteItem({ visibility: "restricted", add_content: ["all"] }, ME, OWNER, false)).toBe(true);
+    expect(canWriteItem({ visibility: "restricted", write_meta: ["user:me1"] }, ME, OWNER, false)).toBe(true);
   });
   it("restricted + not granted → read-only", () => {
-    expect(canWriteItem({ visibility: "restricted", edit_content: ["user:someone"] }, ME, OWNER)).toBe(false);
+    expect(canWriteItem({ visibility: "restricted", edit_content: ["user:someone"] }, ME, OWNER, false)).toBe(false);
   });
 });
 
@@ -45,6 +45,8 @@ describe("parseItemPermission", () => {
 import {
   canConverse,
   canReadChat,
+  canReadItemContent,
+  hasItemVerb,
   isDiscoverableOnly,
   itemGrantsFromPermission,
   itemPermissionFromGrants,
@@ -54,23 +56,59 @@ import {
 describe("item read-verb lock helpers (grill D1)", () => {
   it("read_chat / converse gate independently under restricted", () => {
     const p = { visibility: "restricted" as const, read_chat: ["user:me1"] };
-    expect(canReadChat(p, ME, OWNER)).toBe(true);
-    expect(canConverse(p, ME, OWNER)).toBe(false); // orthogonal — enter but can't talk
+    expect(canReadChat(p, ME, OWNER, false)).toBe(true);
+    expect(canConverse(p, ME, OWNER, false)).toBe(false); // orthogonal — enter but can't talk
   });
   it("owner + public + private behave like authorize", () => {
-    expect(canReadChat({ visibility: "private" }, OWNER, OWNER)).toBe(true);
-    expect(canReadChat(undefined, ME, OWNER)).toBe(true); // absent ≡ public
-    expect(canConverse({ visibility: "private" }, ME, OWNER)).toBe(false);
+    expect(canReadChat({ visibility: "private" }, OWNER, OWNER, false)).toBe(true);
+    expect(canReadChat(undefined, ME, OWNER, false)).toBe(true); // absent ≡ public
+    expect(canConverse({ visibility: "private" }, ME, OWNER, false)).toBe(false);
   });
   it("isDiscoverableOnly = read_meta but not read_chat (the 🔒 locked row)", () => {
-    expect(isDiscoverableOnly({ visibility: "restricted", read_meta: ["user:me1"] }, ME, OWNER)).toBe(true);
+    expect(isDiscoverableOnly({ visibility: "restricted", read_meta: ["user:me1"] }, ME, OWNER, false)).toBe(true);
     expect(
       isDiscoverableOnly(
         { visibility: "restricted", read_meta: ["user:me1"], read_chat: ["user:me1"] },
         ME,
         OWNER,
+        false,
       ),
     ).toBe(false);
+  });
+});
+
+// The backend (`perm/authorize.py` step 2) lets a direct human superuser bypass
+// EVERY verb, and the item list scope honours that — so an admin sees other
+// people's private items. The FE read gates did not, so the admin could see the
+// row, enter the item, and then find the whole workspace missing: `hasItemVerb`
+// hit `visibility === "private"` and returned false. #543 fixed exactly one
+// helper (`canChangeItemPermission`); these four were left behind.
+describe("superuser bypasses every item read gate (mirrors authorize step 2)", () => {
+  const ROOT = "root";
+  const privatePerm = { visibility: "private" as const };
+
+  it("hasItemVerb grants any verb on a private item the superuser does not own", () => {
+    for (const verb of ["read_meta", "read_chat", "read_content", "converse", "execute"] as const) {
+      expect(hasItemVerb(privatePerm, ROOT, OWNER, verb, true)).toBe(true);
+      expect(hasItemVerb(privatePerm, ROOT, OWNER, verb, false)).toBe(false);
+    }
+  });
+
+  it("the read wrappers follow — this is the workspace that went blank", () => {
+    expect(canReadItemContent(privatePerm, ROOT, OWNER, true)).toBe(true);
+    expect(canReadChat(privatePerm, ROOT, OWNER, true)).toBe(true);
+    expect(canConverse(privatePerm, ROOT, OWNER, true)).toBe(true);
+  });
+
+  it("a superuser is never the 🔒 discoverable-only row (they can enter)", () => {
+    const discoverable = { visibility: "restricted" as const, read_meta: ["user:root"] };
+    expect(isDiscoverableOnly(discoverable, ROOT, OWNER, true)).toBe(false);
+    expect(isDiscoverableOnly(discoverable, ROOT, OWNER, false)).toBe(true);
+  });
+
+  it("canWriteItem too — the server accepts a superuser write, so don't hide it", () => {
+    expect(canWriteItem(privatePerm, ROOT, OWNER, true)).toBe(true);
+    expect(canWriteItem(privatePerm, ROOT, OWNER, false)).toBe(false);
   });
 });
 

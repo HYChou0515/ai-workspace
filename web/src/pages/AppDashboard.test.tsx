@@ -10,7 +10,10 @@ import { QueryWrap } from "../test/queryWrapper";
 import { AppDashboard } from "./AppDashboard";
 
 afterEach(cleanup);
-beforeEach(() => localStorage.clear());
+beforeEach(() => {
+  localStorage.clear();
+  isSuperuser.mockReturnValue(false);
+});
 
 function TrailProbe() {
   const trail = useBreadcrumbTrail();
@@ -28,6 +31,10 @@ function TrailProbe() {
 // Owner/current-user resolution is its own concern (useUsers tests); stub it so
 // the dashboard test stays hermetic and doesn't reach the network.
 vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "default-user" }));
+// Superuser status rides on `GET /me`; stub the hook so these tests never reach
+// the network and each case can pick the identity it needs.
+const isSuperuser = vi.fn(() => false);
+vi.mock("../hooks/useIsSuperuser", () => ({ useIsSuperuser: () => isSuperuser() }));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [],
   useUser: (id: string) => ({ id, name: id, section: "", email: "", photo_url: null }),
@@ -344,5 +351,36 @@ describe("AppDashboard — permission-disclosure locked item (grill D4/D5)", () 
     const btn = screen.getByRole("button", { name: /申請存取|Request access/ });
     fireEvent.click(btn);
     expect(reqSpy).toHaveBeenCalledWith("rca", "rca-investigation/9");
+  });
+
+  // The list scope (`work_item_access_scope`) lets a superuser see every item, and
+  // the backend lets them open it — but the row still rendered 🔒 "request access"
+  // because the FE gate never asked whether the viewer was an admin. Asking an
+  // admin to request access from themselves is the visible half of the bug whose
+  // other half was the blank workspace.
+  it("never locks the row for a superuser — they can open any item", async () => {
+    isSuperuser.mockReturnValue(true);
+    const { useAppItems } = await import("../hooks/useResources");
+    vi.mocked(useAppItems).mockReturnValue({
+      items: [
+        {
+          resource_id: "rca-investigation/9",
+          title: "Someone else's case",
+          owner: "someone-else",
+          created_by: "someone-else",
+          created_time: "",
+          // Discoverable to everyone, enterable only by one grantee — the exact
+          // shape that renders 🔒 for a normal user.
+          permission: { visibility: "restricted", read_meta: ["all"], read_chat: ["user:someone"] },
+        } as never,
+      ],
+      isPending: false,
+    } as never);
+
+    renderDash();
+
+    expect(screen.getByText("Someone else's case").closest("a")).not.toBeNull();
+    expect(screen.queryByText("🔒")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /申請存取|Request access/ })).toBeNull();
   });
 });

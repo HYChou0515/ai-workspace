@@ -10,14 +10,13 @@
  * read-only board before the permission is known).
  */
 
-import { canWriteItem, parseItemPermission } from "../lib/itemPermission";
+import { useItemAccess } from "./useItemAccess";
 import { useAppItem, useAppManifest } from "./useResources";
-import { useCurrentUser } from "./useCurrentUser";
 
 export function useItemCanWrite(slug: string, itemId: string): boolean {
   const manifest = useAppManifest(slug);
   const item = useAppItem(slug, manifest?.resource_route, itemId);
-  const currentUser = useCurrentUser();
+  const access = useItemAccess(item);
   if (!item) return true; // optimistic while the item / manifest is still loading
-  return canWriteItem(parseItemPermission(item.permission), currentUser, item.created_by);
+  return access.canWrite;
 }

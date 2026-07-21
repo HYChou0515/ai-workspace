@@ -117,7 +117,9 @@ export function canWriteItem(
   permission: ItemPermission | undefined,
   currentUserId: string,
   ownerId: string,
+  isSuperuser: boolean,
 ): boolean {
+  if (isSuperuser) return true; // authorize.py step 2 — a direct human superuser bypasses
   if (currentUserId === ownerId) return true; // the owner controls their resource
   if (!permission || permission.visibility === "public") return true; // absent ≡ public; public allows the verb
   if (permission.visibility === "private") return false; // non-owner + private
@@ -130,14 +132,26 @@ export function canWriteItem(
 
 /** #306 PR3 — mirror `perm/authorize` for ONE item verb, for the FE lock states
  * (hide the thread without read_chat, the files without read_content, disable the
- * composer without converse). Owner always allowed; absent ≡ public → allowed;
- * private → owner-only; restricted → granted (`user:<id>` or `all`). */
+ * composer without converse). Superuser bypasses; owner always allowed; absent ≡
+ * public → allowed; private → owner-only; restricted → granted (`user:<id>` or
+ * `all`).
+ *
+ * `isSuperuser` is REQUIRED, not an optional flag that defaults to false. The
+ * whole class of bug this fixes is a call site that simply never mentioned
+ * superusers: the item list scope honours them (`work_item_access_scope`), so an
+ * admin sees other people's private items — and then the workspace rendered
+ * nothing, because this returned false on `visibility === "private"`. A default
+ * would let the next call site reintroduce that silently; a required parameter
+ * makes the compiler ask. Prefer the `useItemAccess` hook over calling this
+ * directly — it supplies both identity bits from one place. */
 export function hasItemVerb(
   permission: ItemPermission | undefined,
   currentUserId: string,
   ownerId: string,
   verb: ItemVerb,
+  isSuperuser: boolean,
 ): boolean {
+  if (isSuperuser) return true; // authorize.py step 2 — before owner/visibility
   if (currentUserId === ownerId) return true;
   if (!permission || permission.visibility === "public") return true;
   if (permission.visibility === "private") return false;
@@ -171,16 +185,25 @@ export function canChangeItemPermission(
   );
 }
 
-export const canReadChat = (p: ItemPermission | undefined, u: string, o: string) =>
-  hasItemVerb(p, u, o, "read_chat");
-export const canReadItemContent = (p: ItemPermission | undefined, u: string, o: string) =>
-  hasItemVerb(p, u, o, "read_content");
-export const canConverse = (p: ItemPermission | undefined, u: string, o: string) =>
-  hasItemVerb(p, u, o, "converse");
+export const canReadChat = (p: ItemPermission | undefined, u: string, o: string, su: boolean) =>
+  hasItemVerb(p, u, o, "read_chat", su);
+export const canReadItemContent = (
+  p: ItemPermission | undefined,
+  u: string,
+  o: string,
+  su: boolean,
+) => hasItemVerb(p, u, o, "read_content", su);
+export const canConverse = (p: ItemPermission | undefined, u: string, o: string, su: boolean) =>
+  hasItemVerb(p, u, o, "converse", su);
 /** The disclosure case: sees the item exists (read_meta) but can't enter it
- * (no read_chat) — the 🔒 locked list row that offers "request access". */
-export const isDiscoverableOnly = (p: ItemPermission | undefined, u: string, o: string) =>
-  hasItemVerb(p, u, o, "read_meta") && !hasItemVerb(p, u, o, "read_chat");
+ * (no read_chat) — the 🔒 locked list row that offers "request access". A
+ * superuser is never locked out, so this is always false for them. */
+export const isDiscoverableOnly = (
+  p: ItemPermission | undefined,
+  u: string,
+  o: string,
+  su: boolean,
+) => hasItemVerb(p, u, o, "read_meta", su) && !hasItemVerb(p, u, o, "read_chat", su);
 
 const subjectUser = (s: string): string | null => (s.startsWith("user:") ? s.slice(5) : null);
 
