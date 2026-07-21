@@ -397,3 +397,55 @@ def test_rel_path_is_the_exact_inverse_of_norm():
     # round-trip: rel_path ∘ _norm and _norm ∘ rel_path both land on the key
     for form in ("./brief.md", "/brief.md", "brief.md", "/data/x.csv", "/.workflows/a.json"):
         assert _norm(rel_path(_norm(form))) == _norm(form)
+
+
+# ── move must not leave a half-done state (#588) ───────────────────────────
+# A move is read → write destination → delete source. If the delete fails the
+# destination write used to be kept, so the user got a 500 AND two copies: the
+# original still in place and a new one beside it. The docstring called that "a
+# harmless duplicate"; from the user's seat it is a mess they must now sort out
+# by hand, from an operation that reported failure.
+
+
+async def test_a_failed_source_delete_does_not_leave_a_duplicate():
+    f = await _files()
+    await f.write(WS, "/folder/a.txt", b"hi")
+
+    real = f._delete_with  # noqa: SLF001
+
+    async def _boom(ws, path, warm):
+        # Only the SOURCE refuses to go — the realistic case, and the one that
+        # used to strand a copy at the destination.
+        if path == "/folder/a.txt":
+            raise FileNotFound(path)
+        return await real(ws, path, warm)
+
+    f._delete_with = _boom  # noqa: SLF001  # ty: ignore[invalid-assignment]
+
+    with pytest.raises(FileNotFound):
+        await f.move(WS, "/folder/a.txt", "/a.txt")
+
+    # The move reported failure, so it must look like it never ran.
+    assert await f.exists(WS, "/folder/a.txt") is True  # source untouched
+    assert await f.exists(WS, "/a.txt") is False  # no orphan left behind
+
+
+async def test_move_resolves_the_backing_store_once_for_the_whole_operation():
+    """`read`, the destination write and the source delete each used to resolve
+    liveness independently. A sandbox can be reaped or rebuilt between them
+    (#345/#366), so the read and the delete could land on DIFFERENT stores —
+    which is how the delete comes to fail on a file the read just returned."""
+    f = await _files()
+    await f.write(WS, "/folder/a.txt", b"hi")
+    calls = 0
+    real_warm = f._warm  # noqa: SLF001
+
+    async def _counting(ws):
+        nonlocal calls
+        calls += 1
+        return await real_warm(ws)
+
+    f._warm = _counting  # noqa: SLF001  # ty: ignore[invalid-assignment]
+    await f.move(WS, "/folder/a.txt", "/a.txt")
+
+    assert calls == 1, f"liveness resolved {calls}× in one move — read and delete can diverge"
