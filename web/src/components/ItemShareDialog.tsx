@@ -8,6 +8,8 @@ import {
   type ItemRoleId,
   type ItemVerb,
   type ItemVisibility,
+  ITEM_VISIBILITY_HINT,
+  ITEM_VISIBILITY_LABEL,
   itemGrantsFromPermission,
   itemPermissionFromGrants,
   itemRoleDef,
@@ -195,11 +197,12 @@ export function ItemShareDialog({
   );
 }
 
-const VISIBILITIES: { id: ItemVisibility; label: string; hint: string }[] = [
-  { id: "private", label: "Private", hint: "Only you" },
-  { id: "restricted", label: "Restricted", hint: "You + specific people" },
-  { id: "public", label: "Public", hint: "Everyone in the workspace" },
-];
+// #578: copy comes from the one shared table, so the chip on the item row and
+// this dialog — reachable from that same row — can never disagree about what an
+// item's access means.
+const VISIBILITIES: { id: ItemVisibility; label: string; hint: string }[] = (
+  ["private", "restricted", "public"] as const
+).map((id) => ({ id, label: ITEM_VISIBILITY_LABEL[id], hint: ITEM_VISIBILITY_HINT[id] }));
 
 const panel: React.CSSProperties = { padding: 18, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 };
 const caption: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 };
