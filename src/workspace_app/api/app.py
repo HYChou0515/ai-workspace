@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -82,6 +82,33 @@ from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
 
 logger = logging.getLogger(__name__)
+
+
+def _reconcile_after_turn(
+    flush: Callable[[str], Awaitable[None]],
+    forget_usage: Callable[[str], None],
+) -> Callable[[str], Awaitable[None]]:
+    """The turn-end hook: settle the item's bytes, then stop trusting the size
+    we had for it.
+
+    A turn's `exec` calls write straight into the sandbox, so the facade's
+    cached measurement never learns about them — and turn end is exactly when
+    the FE refetches the usage bar, inside that cache's window. On a
+    host-managed-durable deployment nothing else refreshes it either: the
+    measurement is published by `SandboxSync.mirror`, which `registry._writeback`
+    returns before ever reaching on that branch.
+
+    Ordered flush-then-forget so the next read measures a settled workspace,
+    and the forget runs in `finally` so a failed flush cannot leave a number we
+    already know is wrong."""
+
+    async def _hook(item_id: str) -> None:
+        try:
+            await flush(item_id)
+        finally:
+            forget_usage(item_id)
+
+    return _hook
 
 
 def _ensure_insights_collection(spec: SpecStar, name: str) -> str:
@@ -1051,7 +1078,7 @@ def create_app(
         kb_max_searches_per_turn=kb_max_searches_per_turn,
         kb_max_searches_ceiling=kb_max_searches_ceiling,
         # #492: flush the item's live sandbox to durable at turn-end (guarantee 2).
-        flush_item=registry.flush,
+        flush_item=_reconcile_after_turn(registry.flush, files.forget_measurement),
         # #493 symptom 1 (504): detach a long turn from its POST past this deadline.
         send_await_timeout=send_await_timeout,
     )

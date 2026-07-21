@@ -461,6 +461,25 @@ class WorkspaceFiles:
         expired, so that user pays for it and sees its errors."""
         self._install(workspace_id, _Measurement(self._now(), total))
 
+    def forget_measurement(self, workspace_id: str) -> None:
+        """Drop the cached size after something changed the workspace *outside*
+        this facade, so the next read measures instead of serving a number that
+        is already wrong.
+
+        `_adjust` / `_forget` cover writes that come through here, but `exec`
+        writes straight into the sandbox and the facade never hears about it.
+        On a host-managed-durable deployment nothing else covers for that:
+        `record_measurement` is published by `SandboxSync.mirror`, and
+        `registry._writeback` returns before the mirror on that branch — so the
+        cache is only ever filled by a read that measured inline, and then
+        answers from that value for a whole window. Turn end, the one moment
+        the FE refetches the usage bar, lands inside it.
+
+        The public twin of `record_measurement`: the sweep installs, the turn
+        and terminal boundaries forget. Idempotent — callers fire it on every
+        turn, including ones that never measured anything."""
+        self._forget(workspace_id)
+
     def _install(self, workspace_id: str, measured: _Measurement) -> None:
         """Store a measurement, dropping any that have expired.
 
