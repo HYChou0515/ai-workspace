@@ -25,6 +25,15 @@ from ...resources.graph import (
 
 
 @dataclass(frozen=True)
+class Evidence:
+    """One place a name actually appeared, in the document's own words."""
+
+    source_doc_id: str
+    surface: str
+    text: str
+
+
+@dataclass(frozen=True)
 class Proposal:
     """One pending merge, with both sides and the reason already in hand — a
     reviewer fetching each side separately would make the queue unusable at any
@@ -35,6 +44,13 @@ class Proposal:
     name: str
     other_name: str
     why: str
+    # What each side actually looked like in the documents. Measured against a
+    # real model, `why` is the least trustworthy thing here — it justified merging
+    # two different machines with a sentence that read perfectly and described
+    # only one of them. A reviewer needs the documents' own words, not the model's
+    # account of them.
+    evidence: list[Evidence]
+    other_evidence: list[Evidence]
 
 
 @dataclass(frozen=True)
@@ -81,11 +97,11 @@ def list_proposals(spec: SpecStar, *, as_user: str | None = None) -> list[Propos
         if as_user is not None:
             stack.enter_context(lrm.using(as_user, apply_access_scope=True))  # ty: ignore[unknown-argument]
             stack.enter_context(erm.using(as_user, apply_access_scope=True))  # ty: ignore[unknown-argument]
-        out.extend(_gather_proposals(lrm, erm, seen))
+        out.extend(_gather_proposals(spec, lrm, erm, seen))
     return out
 
 
-def _gather_proposals(lrm, erm, seen: set[tuple[str, str]]) -> list[Proposal]:
+def _gather_proposals(spec: SpecStar, lrm, erm, seen: set[tuple[str, str]]) -> list[Proposal]:
     out: list[Proposal] = []
     for r in lrm.list_resources((QB["state"] == "pending").build()):
         link = r.data
@@ -107,7 +123,52 @@ def _gather_proposals(lrm, erm, seen: set[tuple[str, str]]) -> list[Proposal]:
                 name=host.canonical_name,
                 other_name=other.canonical_name,
                 why=link.evidence,
+                evidence=_evidence_for(spec, link.entity_id),
+                other_evidence=_evidence_for(spec, link.proposed_from),
             )
+        )
+    return out
+
+
+# Enough for a reviewer to recognise the thing; more would turn a queue into
+# reading material.
+_EVIDENCE_PER_SIDE = 3
+
+
+def _evidence_for(spec: SpecStar, entity_id: str) -> list[Evidence]:
+    """A few places this identity actually appeared, in the documents' own words.
+
+    The chunk is read without its own scope check because the MENTION was already
+    filtered by one and a chunk belongs to the same document — reaching it means
+    the caller could already read what it says.
+    """
+    from ...resources.kb import DocChunk
+
+    lrm = spec.get_resource_manager(GraphEntityLink)
+    mrm = spec.get_resource_manager(GraphMention)
+    crm = spec.get_resource_manager(DocChunk)
+    out: list[Evidence] = []
+    for r in lrm.list_resources((QB["entity_id"] == entity_id).build()):
+        link = r.data
+        assert isinstance(link, GraphEntityLink)
+        if link.state != "active" or not link.mention_id or len(out) >= _EVIDENCE_PER_SIDE:
+            continue
+        try:
+            mention = mrm.get(link.mention_id).data
+        except ResourceIDNotFoundError:
+            continue
+        assert isinstance(mention, GraphMention)
+        text = ""
+        for chunk_id in mention.chunk_ids:
+            try:
+                chunk = crm.get(chunk_id).data
+            except ResourceIDNotFoundError:
+                continue
+            if isinstance(chunk, DocChunk):
+                text = chunk.text
+                break
+        out.append(
+            Evidence(source_doc_id=mention.source_doc_id, surface=mention.surface, text=text)
         )
     return out
 

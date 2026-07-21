@@ -474,14 +474,30 @@ class GraphEntityOut(BaseModel):
     related: list[GraphRelatedOut]
 
 
+class GraphEvidenceOut(BaseModel):
+    """One place a name actually appeared, in the document's own words."""
+
+    source_doc_id: str
+    surface: str
+    text: str
+
+
 class GraphProposalOut(BaseModel):
-    """A merge waiting on a person, with both names and the reason in hand."""
+    """A merge waiting on a person — both names, and what each side actually
+    looked like in the documents.
+
+    The reason is the model's, and measured against a real one it is the least
+    trustworthy thing here: it justified merging two different machines with a
+    sentence that read perfectly and described only one of them. The evidence is
+    what a reviewer should be deciding on."""
 
     entity_id: str
     other_id: str
     name: str
     other_name: str
     why: str
+    evidence: list[GraphEvidenceOut]
+    other_evidence: list[GraphEvidenceOut]
 
 
 class DocDeletedOut(BaseModel):
@@ -1959,16 +1975,7 @@ def register_kb_routes(
     async def graph_proposals() -> list[GraphProposalOut]:
         """The merges waiting on a person — the only place this system asks for
         attention, so it shows one row per pair rather than per mention."""
-        return [
-            GraphProposalOut(
-                entity_id=p.entity_id,
-                other_id=p.proposed_from,
-                name=p.name,
-                other_name=p.other_name,
-                why=p.why,
-            )
-            for p in list_proposals(spec, as_user=get_user_id())
-        ]
+        return [_proposal_out(p) for p in list_proposals(spec, as_user=get_user_id())]
 
     @app.post("/kb/graph/proposals/{entity_id}/accept")
     async def graph_accept(entity_id: str, other: str = Query(...)) -> GraphEntityOut:
@@ -1989,14 +1996,25 @@ def register_kb_routes(
     def _require_proposal(entity_id: str, other: str) -> GraphProposalOut:
         for p in list_proposals(spec, as_user=get_user_id()):
             if (p.entity_id, p.proposed_from) == (entity_id, other):
-                return GraphProposalOut(
-                    entity_id=p.entity_id,
-                    other_id=p.proposed_from,
-                    name=p.name,
-                    other_name=p.other_name,
-                    why=p.why,
-                )
+                return _proposal_out(p)
         raise HTTPException(status_code=404, detail="no such proposal")
+
+    def _proposal_out(p) -> GraphProposalOut:
+        def ev(items):
+            return [
+                GraphEvidenceOut(source_doc_id=e.source_doc_id, surface=e.surface, text=e.text)
+                for e in items
+            ]
+
+        return GraphProposalOut(
+            entity_id=p.entity_id,
+            other_id=p.proposed_from,
+            name=p.name,
+            other_name=p.other_name,
+            why=p.why,
+            evidence=ev(p.evidence),
+            other_evidence=ev(p.other_evidence),
+        )
 
     @app.get("/kb/documents")
     async def render_document(doc_id: str = Query(alias="id")) -> RenderedDoc:

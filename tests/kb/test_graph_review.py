@@ -362,3 +362,41 @@ def test_a_predicate_the_vocabulary_has_not_reached_still_reads():
     link_identical_mentions(spec)
     page = entity_page(spec, _entity_id_named(spec, "回焊爐"), as_user="bob")
     assert [r.predicate for r in page.related] == ["造成"]
+
+
+def test_a_proposal_carries_what_each_side_actually_looked_like():
+    """Measured against a real model, the reason field is the least trustworthy
+    thing in the queue: it justified merging two DIFFERENT machines with a sentence
+    that read perfectly and described only one of them. A reviewer given that and
+    nothing else approves it.
+
+    So each side arrives with the documents it came from and the words around it.
+    Those are the documents' own sentences — the reviewer judges the evidence
+    rather than the model's account of it."""
+    from workspace_app.resources.kb import DocChunk
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    crm = spec.get_resource_manager(DocChunk)
+    for doc, text in (
+        ("deck-C", "錫膏印刷機(Stencil Printer)壓力不足會造成錫量不足"),
+        ("deck-D", "Stencil Printer pressure is monitored by SPI"),
+    ):
+        with crm.using("bob"):
+            crm.create(
+                DocChunk(collection_id=cid, source_doc_id=doc, seq=0, start=0, end=1, text=text),
+                resource_id=f"{doc}#0",
+            )
+    _mention(spec, cid, "deck-C", "錫膏印刷機")
+    _mention(spec, cid, "deck-D", "SPI")
+    link_identical_mentions(spec)
+    link_resembling_entities(
+        spec,
+        _Judge(
+            '{"groups": [{"names": ["SPI", "錫膏印刷機"], "why": "a machine that prints paste"}]}'
+        ),
+    )
+    (proposal,) = list_proposals(spec, as_user="bob")
+    seen = {(e.source_doc_id, e.text) for e in proposal.evidence + proposal.other_evidence}
+    assert ("deck-D", "Stencil Printer pressure is monitored by SPI") in seen
+    assert ("deck-C", "錫膏印刷機(Stencil Printer)壓力不足會造成錫量不足") in seen
