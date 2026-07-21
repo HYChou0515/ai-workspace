@@ -529,6 +529,7 @@ export const realApi: ApiClient = {
           max_kb_searches: args.maxKbSearches,
           apply_skills: args.applySkills,
           image_paths: args.imagePaths,
+          answers: args.answers,
         }),
         signal: args.signal,
       },

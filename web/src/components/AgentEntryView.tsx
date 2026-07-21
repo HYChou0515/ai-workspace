@@ -24,6 +24,7 @@ import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
 import { extractToolImages } from "../renderers/toolImages";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
+import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
 import { useUser } from "../hooks/useUsers";
 import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
@@ -162,8 +163,17 @@ export function EntryView({
   onReportWiki,
   fileUrl,
   currentUser,
+  onAnswerQuestion,
+  answeredQuestions,
 }: {
   entry: AgentEntry;
+  /** grill-me: send the user's answer to an `ask_user` question. Absent ⇒ the
+   * question renders as an ordinary tool card (replay / read-only surfaces),
+   * so it is never a dead end. */
+  onAnswerQuestion?: (answer: AskUserAnswer) => void;
+  /** Answers already given, by question call id — an answered question shows
+   * its answer instead of offering the buttons again. */
+  answeredQuestions?: Record<string, string>;
   onOpenCitation?: (c: MessageCitation) => void;
   /** Permission-disclosure: request read access to a withheld source (fires the
    * owner notification). Provided by chat surfaces; absent → no request button. */
@@ -203,6 +213,18 @@ export function EntryView({
     );
   }
   if (entry.kind === "tool_call") {
+    // grill-me: `ask_user` is a question, not a result — render it as choices
+    // the user can click. Falls through to the ordinary tool card when there
+    // is no way to answer (replay, read-only), so it is never a dead end.
+    if (entry.call.name === "ask_user" && onAnswerQuestion) {
+      return (
+        <AskUserCard
+          call={entry.call}
+          onAnswer={onAnswerQuestion}
+          answered={answeredQuestions?.[entry.call.call_id]}
+        />
+      );
+    }
     return (
       <ToolCallCard
         call={entry.call}

@@ -32,6 +32,11 @@ export type Message = {
   /** LLM reasoning channel (Qwen3 <thinking>, OpenAI o-series). */
   reasoning?: string | null;
   tool_call_id?: string | null;
+  /** grill-me: the `tool_call_id` of the `ask_user` question this message
+   * answers. Set when the user clicked an option instead of typing, so the
+   * card can attach the answer to its question and retire the buttons.
+   * Absent on every ordinary message. */
+  answers?: string | null;
   tool_name?: string | null;
   /** role=tool only — the tool call's arguments (for log reload). */
   tool_args?: Record<string, unknown> | null;
@@ -315,6 +320,9 @@ export type SendMessageArgs = {
   slug: string;
   investigationId: string;
   content: string;
+  /** grill-me: the `tool_call_id` of the `ask_user` question being answered.
+   * An answer is an ordinary message — this only records what it answers. */
+  answers?: string;
   signal?: AbortSignal;
   reasoningEffort?: ReasoningEffort;
   /** Knowledge-search depth for this turn's ask_knowledge_base lookups
