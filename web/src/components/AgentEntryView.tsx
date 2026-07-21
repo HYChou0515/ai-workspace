@@ -218,11 +218,16 @@ export function EntryView({
     // is no way to answer (replay, read-only), so it is never a dead end.
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (
-        <AskUserCard
-          call={entry.call}
-          onAnswer={onAnswerQuestion}
-          answered={answeredQuestions?.[entry.call.call_id]}
-        />
+        // 28 = the avatar column every assistant block is indented past. Flush
+        // left the question read as though it came from the page rather than
+        // from the agent that asked it.
+        <div style={{ marginLeft: 28 }}>
+          <AskUserCard
+            call={entry.call}
+            onAnswer={onAnswerQuestion}
+            answered={answeredQuestions?.[entry.call.call_id]}
+          />
+        </div>
       );
     }
     return (
