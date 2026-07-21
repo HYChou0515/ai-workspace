@@ -122,3 +122,13 @@ describe("EntityMergeList sourcing", () => {
     expect(link).toHaveAttribute("target", "_blank");
   });
 });
+
+describe("EntityMergeList framing", () => {
+  it("states the question in words rather than a symbol", () => {
+    /** The divider used to be "≟", a glyph rare enough that fonts substitute it
+     * at another size — it arrived tiny and read as a smudge. A sentence needs no
+     * font support and no legend. */
+    render(<EntityMergeList proposals={[PROPOSAL]} onAccept={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.getByText("這兩個是同一個東西嗎?")).toBeInTheDocument();
+  });
+});

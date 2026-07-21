@@ -713,6 +713,10 @@ export const messages = {
   // internally — and marks the reason as the model's claim, because measured
   // against a real one it is wrong about half the time and reads convincingly.
   "review.tab.merges": { "zh-TW": "身分合併", en: "Merges" },
+  "merge.question": {
+    "zh-TW": "這兩個是同一個東西嗎?",
+    en: "Are these the same thing?",
+  },
   "merge.same": { "zh-TW": "是同一個", en: "Same thing" },
   "merge.different": { "zh-TW": "不是同一個", en: "Different things" },
   "merge.whyLabel": { "zh-TW": "AI 認為:", en: "AI says:" },

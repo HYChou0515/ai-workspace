@@ -3566,16 +3566,24 @@
   border-radius: var(--radius-card);
   padding: 14px 16px;
 }
+.mrg__q {
+  margin: 0 0 10px;
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--text-paper);
+}
 .mrg__pair {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  gap: 14px;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
   align-items: start;
 }
-.mrg__vs {
-  color: var(--text-paper-d2);
-  font-size: var(--text-body);
-  align-self: center;
+/* A rule between the two, rather than a symbol on it: the divider's job is to
+   say "these are two separate things being compared", which a line does without
+   depending on a glyph the font may not carry. */
+.mrg__pair > :nth-child(2) {
+  border-left: 1px solid var(--paper-3);
+  padding-left: 18px;
 }
 .mrg__name {
   font-weight: 600;
@@ -3651,7 +3659,10 @@
   .mrg__pair {
     grid-template-columns: 1fr;
   }
-  .mrg__vs {
-    justify-self: start;
+  .mrg__pair > :nth-child(2) {
+    border-left: 0;
+    border-top: 1px solid var(--paper-3);
+    padding-left: 0;
+    padding-top: 12px;
   }
 }

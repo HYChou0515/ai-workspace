@@ -83,11 +83,13 @@ export function EntityMergeList({ proposals, onAccept, onReject }: Props) {
     <ul className="mrg">
       {proposals.map((p) => (
         <li className="mrg__row" key={`${p.entity_id}:${p.other_id}`}>
+          {/* The question in words. A glyph between the two columns said nothing
+              a reader could act on — "≟" is rare enough that fonts substitute it
+              at a different size, so it arrived tiny and looked like a smudge.
+              Saying what is being decided needs no font support and no legend. */}
+          <p className="mrg__q">{t("merge.question")}</p>
           <div className="mrg__pair">
             <Side name={p.name} evidence={p.evidence} />
-            <div className="mrg__vs" aria-hidden="true">
-              ≟
-            </div>
             <Side name={p.other_name} evidence={p.other_evidence} />
           </div>
           <p className="mrg__why">
