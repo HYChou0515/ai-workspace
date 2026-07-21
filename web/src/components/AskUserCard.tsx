@@ -177,7 +177,22 @@ export function AskUserCard({
         // a full card makes people pick something to escape it, and an invented
         // preference is worse than a missing one. The unanswered questions are
         // reported as unanswered so the agent knows what it still lacks.
-        <button type="button" onClick={() => send(picked)} style={{ alignSelf: "flex-start" }}>
+        // The primary action has to read as the primary action: unstyled it came
+        // out looking plainer than 看不懂 beside it, so the one button the user
+        // must press was the least button-like thing on the card.
+        <button
+          type="button"
+          onClick={() => send(picked)}
+          style={{
+            alignSelf: "flex-start",
+            padding: "6px 14px",
+            fontWeight: 600,
+            borderWidth: 2,
+            borderStyle: "solid",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
           送出
         </button>
       )}
