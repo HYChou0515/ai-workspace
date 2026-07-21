@@ -22,6 +22,7 @@ from collections.abc import Iterator
 from workspace_app.kb.graph.entity_extract import (
     DeclaredAlias,
     EntityMention,
+    StatedRelationship,
     extract_entities,
 )
 from workspace_app.kb.llm import ILlm
@@ -143,3 +144,59 @@ class TestDeclaredAliases:
         got = extract_entities(_FakeLlm('[{"surface": "SPI", "kind": "機台"}]'), "…")
         assert got.mentions == [EntityMention(surface="SPI", kind="機台")]
         assert got.aliases == []
+
+
+class TestRelationships:
+    """What the passage says CONNECTS two things — the third leg, and the one that
+    makes this a graph rather than a list.
+
+    It rides the SAME call as the mentions. The issue asked for joint extraction
+    for two reasons and both hold here: one pass instead of two on the scarcest
+    resource this feature has, and the connection is stated in the same sentence
+    that names its ends, so splitting them throws away the association and asks a
+    second model to guess it back.
+    """
+
+    def test_a_stated_relationship_is_returned(self):
+        llm = _FakeLlm(
+            '{"mentions": [], "aliases": [], "relationships": ['
+            '{"subject": "回焊爐", "predicate": "造成", "object": "空洞",'
+            ' "quote": "回焊爐溫度過高造成空洞"}]}'
+        )
+        got = extract_entities(llm, "回焊爐溫度過高造成空洞")
+        assert got.relationships == [
+            StatedRelationship(
+                subject="回焊爐", predicate="造成", object="空洞", quote="回焊爐溫度過高造成空洞"
+            )
+        ]
+
+    def test_the_predicate_is_free_text(self):
+        """ "造成" and "leads to" are one predicate written two ways, and that is
+        fine here — the predicates are unified by the same mechanism as everything
+        else, so the vocabulary of connections comes out of the corpus instead of
+        a list someone outside it wrote in advance."""
+        llm = _FakeLlm(
+            '{"relationships": [{"subject": "A", "predicate": "leads to", "object": "B"},'
+            ' {"subject": "C", "predicate": "造成", "object": "D"}]}'
+        )
+        assert [r.predicate for r in extract_entities(llm, "…").relationships] == [
+            "leads to",
+            "造成",
+        ]
+
+    def test_an_incomplete_relationship_is_dropped(self):
+        """A connection missing an end connects nothing."""
+        llm = _FakeLlm(
+            '{"relationships": [{"subject": "A", "predicate": "造成"},'
+            ' {"predicate": "造成", "object": "B"},'
+            ' {"subject": "A", "object": "B"}]}'
+        )
+        assert extract_entities(llm, "…").relationships == []
+
+    def test_a_relationship_needs_no_quote(self):
+        """Unlike an alias. An alias is APPLIED without review, so it has to point
+        at a sentence; a relationship is evidence like a mention, and its
+        provenance is the chunk it was read from — already recorded."""
+        llm = _FakeLlm('{"relationships": [{"subject": "A", "predicate": "造成", "object": "B"}]}')
+        (got,) = extract_entities(llm, "…").relationships
+        assert got.quote == ""

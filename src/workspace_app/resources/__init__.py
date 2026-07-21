@@ -48,7 +48,13 @@ from .eval import (
     eval_batch_stat_id,
     eval_run_id,
 )
-from .graph import GraphClaim, GraphEntity, GraphEntityLink, GraphMention
+from .graph import (
+    GraphClaim,
+    GraphEntity,
+    GraphEntityLink,
+    GraphMention,
+    GraphRelationship,
+)
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
@@ -100,6 +106,7 @@ __all__ = [
     "GraphEntity",
     "GraphEntityLink",
     "GraphMention",
+    "GraphRelationship",
     "EvalRun",
     "eval_batch_stat_id",
     "eval_run_id",
@@ -773,6 +780,28 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
         access_scope=graph_entity_access_scope(
             _readable_collections_provider(spec, superusers), superusers
         ),
+    )
+    # #534 B: the connections. Evidence like a mention — same mirror, same scope,
+    # same "the document goes, its rows go" lifecycle. The ends are surfaces, not
+    # entity ids: resolving them is the vocabulary's job and changes as it learns.
+    spec.add_model(
+        GraphRelationship,
+        indexed_fields=[
+            "collection_id",
+            "source_doc_id",
+            IndexableField("norm_subject", str),
+            IndexableField("norm_predicate", str),
+            IndexableField("norm_object", str),
+            IndexableField("collection_visibility", str),
+            IndexableField("collection_read_meta", list),
+            IndexableField("collection_read_content", list),
+            IndexableField("collection_created_by", str),
+            IndexableField("doc_visibility", str),
+            IndexableField("doc_read_meta", list),
+            IndexableField("doc_read_content", list),
+        ],
+        access_scope=graph_evidence_access_scope(superusers, groups),
+        event_handlers=[graph_mirror_event_handler(_collection_permission(spec))],
     )
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a

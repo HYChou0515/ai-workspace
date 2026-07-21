@@ -227,3 +227,55 @@ class GraphEntityLink(Struct):  # → resource "graph-entity-link"
     # proposal is the same absorption a declaration performs; rejecting it leaves
     # nothing behind, because nothing was changed to make it.
     proposed_from: str = ""
+
+
+def relationship_id(
+    source_doc_id: str, chunk_id: str, subject: str, predicate: str, obj: str
+) -> str:
+    """Content-addressed on what said it and what it said, so a re-extraction lands
+    on the same row and nothing accumulates."""
+    from ..kb.graph.normalize import norm_surface
+
+    parts = "\x00".join(
+        [source_doc_id, chunk_id, norm_surface(subject), norm_surface(predicate), norm_surface(obj)]
+    )
+    return f"r{hashlib.blake2b(parts.encode(), digest_size=16).hexdigest()}"
+
+
+class GraphRelationship(Struct):  # → resource "graph-relationship"
+    """What one document said connects two things — the leg that makes this a
+    graph rather than a list (#534 B).
+
+    Evidence, like a mention: never rewritten, keyed on what said it, and carrying
+    its document's read permission. It repeats a sentence's content — including,
+    when the document was explicit, the sentence itself — so it is exactly as
+    visible as that sentence.
+
+    The predicate is free text and unified by the same mechanism as a kind: "造成"
+    and "leads to" are one connection written two ways, and which connections
+    matter belongs to the corpus rather than to a list written in advance by
+    someone outside it.
+
+    The ends are SURFACES, not entity ids. Resolving them to identities is the
+    vocabulary's job and changes as the vocabulary learns; freezing an id here
+    would make this row a second place identity lives, and the two would drift.
+    """
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    source_doc_id: str
+    subject: str  # verbatim
+    predicate: str  # verbatim
+    object: str  # verbatim
+    norm_subject: str = ""  # derived comparison keys (indexed)
+    norm_predicate: str = ""
+    norm_object: str = ""
+    chunk_id: str = ""  # provenance: the slide it was read from
+    quote: str = ""  # the sentence, when the document stated it in so many words
+    # --- the read-permission mirror, identical to GraphClaim's (see there) ---
+    collection_visibility: str = ""
+    collection_read_meta: list[str] = []
+    collection_read_content: list[str] = []
+    collection_created_by: str = ""
+    doc_visibility: str = ""
+    doc_read_meta: list[str] = []
+    doc_read_content: list[str] = []

@@ -22,13 +22,53 @@ import msgspec
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from ...resources.graph import GraphMention, mention_id
+from ...resources.graph import (
+    GraphMention,
+    GraphRelationship,
+    mention_id,
+    relationship_id,
+)
 from ..doc_permission import doc_mirror_fields
 from ..llm import ILlm
-from .entity_extract import extract_entities
+from .entity_extract import StatedRelationship, extract_entities
 from .normalize import norm_surface
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _record_relationships(
+    spec: SpecStar,
+    source_doc_id: str,
+    stated: list[tuple[str, StatedRelationship]],
+    mirror: dict,
+    collection_id: str,
+) -> None:
+    """Persist what this document said connects two things.
+
+    The ends are stored as SURFACES. Resolving them to identities is the
+    vocabulary's job and changes as the vocabulary learns, so freezing an id here
+    would make this row a second place identity lives — and two places drift.
+    """
+    rm = spec.get_resource_manager(GraphRelationship)
+    for chunk_id, rel in stated:
+        rm.create(
+            GraphRelationship(
+                collection_id=collection_id,
+                source_doc_id=source_doc_id,
+                subject=rel.subject,
+                predicate=rel.predicate,
+                object=rel.object,
+                norm_subject=norm_surface(rel.subject),
+                norm_predicate=norm_surface(rel.predicate),
+                norm_object=norm_surface(rel.object),
+                chunk_id=chunk_id,
+                quote=rel.quote,
+                **mirror,
+            ),
+            resource_id=relationship_id(
+                source_doc_id, chunk_id, rel.subject, rel.predicate, rel.object
+            ),
+        )
 
 
 def wipe_doc_mentions(spec: SpecStar, source_doc_id: str) -> int:
@@ -39,14 +79,17 @@ def wipe_doc_mentions(spec: SpecStar, source_doc_id: str) -> int:
     is torn down — a mention is keyed on its document, so the document going means
     its mentions go.
     """
-    rm = spec.get_resource_manager(GraphMention)
-    stale = [
-        r.info.resource_id  # ty: ignore[unresolved-attribute]
-        for r in rm.list_resources((QB["source_doc_id"] == source_doc_id).build())
-    ]
-    for rid in stale:
-        rm.permanently_delete(rid)
-    return len(stale)
+    removed = 0
+    for model in (GraphMention, GraphRelationship):
+        rm = spec.get_resource_manager(model)
+        stale = [
+            r.info.resource_id  # ty: ignore[unresolved-attribute]
+            for r in rm.list_resources((QB["source_doc_id"] == source_doc_id).build())
+        ]
+        for rid in stale:
+            rm.permanently_delete(rid)
+        removed += len(stale)
+    return removed
 
 
 def write_doc_mentions(
@@ -81,6 +124,7 @@ def write_doc_mentions(
     counts: dict[str, int] = {}
     chunk_ids: dict[str, list[str]] = {}
     declared: list[tuple[str, str, str]] = []
+    stated: list[tuple[str, StatedRelationship]] = []
     for chunk_id, text in chunks:
         extraction = extract_entities(llm, text)
         # An equivalence the passage STATED, with the words that state it. Carried
@@ -88,6 +132,7 @@ def write_doc_mentions(
         # quote is a sentence anyone can go and read, which is what separates a
         # reported declaration from the model's own impression.
         declared.extend((a.a, a.b, a.quote) for a in extraction.aliases)
+        stated.extend((chunk_id, r) for r in extraction.relationships)
         for mention in extraction.mentions:
             key = norm_surface(mention.surface)
             surfaces.setdefault(key, mention.surface)
@@ -117,6 +162,7 @@ def write_doc_mentions(
             resource_id=mention_id(source_doc_id, surface),
         )
     _record_declarations(spec, source_doc_id, declared, mirror, collection_id)
+    _record_relationships(spec, source_doc_id, stated, mirror, collection_id)
     return len(surfaces)
 
 

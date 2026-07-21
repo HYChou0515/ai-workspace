@@ -48,9 +48,16 @@ _PROMPT = (
     '"a", "b", and "quote" — the words from the passage that say so, copied '
     "exactly. If the passage does not say it, do not list it: a resemblance you "
     "noticed is not a declaration.\n\n"
+    "Finally, list what the passage says CONNECTS two of those things — a cause, "
+    "a part, a step that follows another, a thing something is measured by. Give "
+    '"subject", "predicate", "object", and "quote" if the passage states it in so '
+    "many words. Use the passage's own wording for the predicate; there is no "
+    "fixed list.\n\n"
     "Output ONLY a JSON object:\n"
     '{{"mentions": [{{"surface": ..., "kind": ...}}], '
-    '"aliases": [{{"a": ..., "b": ..., "quote": ...}}]}}\n'
+    '"aliases": [{{"a": ..., "b": ..., "quote": ...}}], '
+    '"relationships": [{{"subject": ..., "predicate": ..., "object": ..., '
+    '"quote": ...}}]}}\n'
     "No prose.\n\nPassage:\n{text}"
 )
 
@@ -73,12 +80,34 @@ class DeclaredAlias:
 
 
 @dataclass(frozen=True)
+class StatedRelationship:
+    """What the passage says connects two things — the leg that makes this a graph
+    rather than a list.
+
+    The predicate is free text, like a kind: "造成" and "leads to" are one
+    connection written two ways, and they are unified afterwards by the same
+    mechanism as everything else, so the vocabulary of connections comes out of the
+    corpus instead of a list someone outside it wrote in advance.
+
+    No quote is required. An alias must point at a sentence because it is APPLIED
+    without review; a relationship is evidence like a mention, and its provenance
+    is the chunk it was read from, which is already recorded.
+    """
+
+    subject: str
+    predicate: str
+    object: str
+    quote: str = ""
+
+
+@dataclass(frozen=True)
 class Extraction:
-    """What one passage yielded: the things it talks about, and the equivalences
-    it states about them."""
+    """What one passage yielded: the things it talks about, the equivalences it
+    states about them, and what it says connects them."""
 
     mentions: list[EntityMention]
     aliases: list[DeclaredAlias]
+    relationships: list[StatedRelationship]
 
 
 @dataclass(frozen=True)
@@ -112,7 +141,7 @@ def extract_entities(llm: ILlm, text: str) -> Extraction:
     reply = llm.collect(_PROMPT.format(text=text))
     payload = _parse(reply)
     if payload is None:
-        return Extraction(mentions=[], aliases=[])
+        return Extraction(mentions=[], aliases=[], relationships=[])
     raw_mentions = payload.get("mentions")
     raw_aliases = payload.get("aliases")
     mentions: list[EntityMention] = []
@@ -136,7 +165,26 @@ def extract_entities(llm: ILlm, text: str) -> Extraction:
             _LOGGER.warning("extract_entities: dropped an alias whose quote is not in the passage")
             continue
         aliases.append(DeclaredAlias(a=a, b=b, quote=quote))
-    return Extraction(mentions=mentions, aliases=aliases)
+    raw_relationships = payload.get("relationships")
+    relationships: list[StatedRelationship] = []
+    for item in raw_relationships if isinstance(raw_relationships, list) else []:
+        if not isinstance(item, dict):
+            continue
+        subject = str(item.get("subject", "")).strip()
+        predicate = str(item.get("predicate", "")).strip()
+        obj = str(item.get("object", "")).strip()
+        if not (subject and predicate and obj):
+            continue  # a connection missing an end connects nothing
+        quote = str(item.get("quote", "")).strip()
+        relationships.append(
+            StatedRelationship(
+                subject=subject,
+                predicate=predicate,
+                object=obj,
+                quote=quote if quote in text else "",
+            )
+        )
+    return Extraction(mentions=mentions, aliases=aliases, relationships=relationships)
 
 
 def _parse(reply: str) -> dict[str, Any] | None:
@@ -155,11 +203,13 @@ def _parse(reply: str) -> dict[str, Any] | None:
             data = json.loads(reply[start : end + 1])
         except (json.JSONDecodeError, ValueError):
             continue
-        if isinstance(data, dict) and ("mentions" in data or "aliases" in data):
+        if isinstance(data, dict) and (
+            "mentions" in data or "aliases" in data or "relationships" in data
+        ):
             return data
         if isinstance(data, dict):
             continue  # a lone object from INSIDE a bare array — try the array shape
         if isinstance(data, list):
-            return {"mentions": data, "aliases": []}
+            return {"mentions": data, "aliases": [], "relationships": []}
     _LOGGER.warning("extract_entities: no usable JSON in the reply, dropping the batch")
     return None
