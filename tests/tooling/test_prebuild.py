@@ -1116,3 +1116,36 @@ def test_pip_can_never_install_into_the_shared_bundle(tmp_path: Path):
     the invariant is structural instead of an unenforced assumption."""
     launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
     assert "PIP_USER=1" in _argv_built_for(launch, "python", []).splitlines()
+
+
+def test_a_package_the_user_installed_wins_over_the_bundled_one(tmp_path: Path, monkeypatch):
+    """A user is entitled to upgrade pandas.
+
+    The launcher puts the carrier's site-packages on PYTHONPATH, and PYTHONPATH
+    is searched BEFORE the user site — so `pip install --upgrade pandas`
+    installed the new version and `import pandas` kept resolving the old one.
+    `pip list` agreed with the old one, and pip's "will lack sys.path precedence"
+    warning does not fire for this case, so there was no signal at all: reported
+    success, no effect. That is the same class of failure as the unshimmed pip,
+    reached through a different door.
+
+    It bites exactly the 20 packages the carrier ships (numpy / pandas / scipy /
+    matplotlib / pillow / openpyxl / python-pptx / lxml and their closure) —
+    which are the ones an agent is most likely to want a newer version of.
+    Anything NOT in the bundle was never affected.
+
+    So the user site goes FIRST. An incompatible version the user asked for then
+    shadows the curated stack — for that one sandbox, until it is reaped."""
+    home = tmp_path / "sandboxhome"
+    home.mkdir()
+    monkeypatch.setenv("SANDBOX_HOME", str(home))
+    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
+
+    dump = _argv_built_for(launch, "python", [])
+    line = next(ln for ln in dump.splitlines() if ln.startswith("PYTHONPATH="))
+    parts = line.removeprefix("PYTHONPATH=").split(":")
+
+    user_site = str(home / ".local" / "lib" / "python3.12" / "site-packages")
+    bundle_site = str(launch.parent / ".venv" / "lib" / "python3.12" / "site-packages")
+    assert user_site in parts, f"user site is not on the path at all: {parts}"
+    assert parts.index(user_site) < parts.index(bundle_site)

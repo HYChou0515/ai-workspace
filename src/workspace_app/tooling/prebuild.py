@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 _LAUNCH = """\
 #!/bin/sh
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
 # HOME (caches + any `pip --user` fallback) goes to a per-sandbox dir the exec
 # path passes as SANDBOX_HOME — NOT a shared /tmp. The unset fallback is a
 # fresh PRIVATE `mktemp -d`, never the shared pod /tmp: forgetting to set it
@@ -59,6 +58,15 @@ export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
 # unconditionally, so "a sandbox cannot edit the shared interpreter" is
 # structural rather than an unenforced assumption.
 export PIP_USER=1
+# The user site goes FIRST, ahead of the bundle's own packages. A user is
+# entitled to upgrade pandas: with the bundle first, `pip install --upgrade
+# pandas` installed the new version while `import pandas` kept resolving the old
+# one — and `pip list` agreed with the old one, and pip's "lacks sys.path
+# precedence" warning does not fire for this case, so there was no signal at all.
+# Reported success, no effect. Derived from HOME, hence set after it.
+mine="$HOME/.local/lib/python{ver}/site-packages"
+bundled="$here/.venv/lib/python{ver}/site-packages"
+export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 """
@@ -95,7 +103,6 @@ here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
 case "$called" in
   pip|pip[0-9]*) set -- -m pip "$@" ;;
 esac
-export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
 # HOME (caches + any `pip --user` install fallback) → a per-sandbox dir the exec
 # path passes as SANDBOX_HOME. A user's `pip install --break-system-packages X`
 # can't write the root-owned carrier venv, so pip defaults to `--user` = $HOME/
@@ -117,6 +124,15 @@ export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
 # unconditionally, so "a sandbox cannot edit the shared interpreter" is
 # structural rather than an unenforced assumption.
 export PIP_USER=1
+# The user site goes FIRST, ahead of the bundle's own packages. A user is
+# entitled to upgrade pandas: with the bundle first, `pip install --upgrade
+# pandas` installed the new version while `import pandas` kept resolving the old
+# one — and `pip list` agreed with the old one, and pip's "lacks sys.path
+# precedence" warning does not fire for this case, so there was no signal at all.
+# Reported success, no effect. Derived from HOME, hence set after it.
+mine="$HOME/.local/lib/python{ver}/site-packages"
+bundled="$here/.venv/lib/python{ver}/site-packages"
+export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$@"
 """
