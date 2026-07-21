@@ -29,7 +29,7 @@ from ..perm.scope import (
     GroupsProvider,
     collection_access_scope,
     conversation_access_scope,
-    graph_claim_access_scope,
+    graph_evidence_access_scope,
     kbchat_access_scope,
     source_doc_access_scope,
 )
@@ -45,7 +45,7 @@ from .eval import (
     eval_batch_stat_id,
     eval_run_id,
 )
-from .graph import GraphClaim
+from .graph import GraphClaim, GraphMention
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
@@ -94,6 +94,7 @@ __all__ = [
     "EvalBatchStat",
     "EvalResult",
     "GraphClaim",
+    "GraphMention",
     "EvalRun",
     "eval_batch_stat_id",
     "eval_run_id",
@@ -106,6 +107,20 @@ __all__ = [
     "sanity_result_id",
     "sanity_verdict_id",
 ]
+
+
+def _renormalize_mention(record: Any) -> Any:
+    """#534 B — recompute a mention's comparison keys under the CURRENT rules.
+    Same contract as ``_renormalize_claim``: edit the pure function, bump the
+    version, point a step here, run migrate."""
+    from ..kb.graph.normalize import norm_surface
+
+    assert isinstance(record, GraphMention)
+    return msgspec.structs.replace(
+        record,
+        norm_surface=norm_surface(record.surface),
+        norm_kind=norm_surface(record.kind),
+    )
 
 
 def _renormalize_claim(record: Any) -> Any:
@@ -662,7 +677,30 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("doc_read_meta", list),
             IndexableField("doc_read_content", list),
         ],
-        access_scope=graph_claim_access_scope(superusers, groups),
+        access_scope=graph_evidence_access_scope(superusers, groups),
+    )
+    # #534 B: the primary layer — what a document said, verbatim. Same evidence
+    # shape as a claim, so the same mirror and the same scope. `norm_surface` /
+    # `norm_kind` are indexed because the vocabulary layer groups on them, and
+    # they are derived state, so they are versioned like the claim keys are.
+    spec.add_model(
+        Schema(GraphMention, "v1").step(
+            None, _renormalize_mention, to="v1", source_type=GraphMention
+        ),
+        indexed_fields=[
+            "collection_id",
+            "source_doc_id",
+            IndexableField("norm_surface", str),
+            IndexableField("norm_kind", str),
+            IndexableField("collection_visibility", str),
+            IndexableField("collection_read_meta", list),
+            IndexableField("collection_read_content", list),
+            IndexableField("collection_created_by", str),
+            IndexableField("doc_visibility", str),
+            IndexableField("doc_read_meta", list),
+            IndexableField("doc_read_content", list),
+        ],
+        access_scope=graph_evidence_access_scope(superusers, groups),
     )
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a

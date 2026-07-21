@@ -74,6 +74,32 @@ def norm_metric(metric: str) -> str:
     return _SPACE_RUN.sub(" ", text).strip().casefold()
 
 
+def norm_surface(text: str) -> str:
+    """The grouping key for an ENTITY surface — deliberately gentler than
+    :func:`norm_metric`.
+
+    Removes width variants, case, whitespace runs and CJK word-gaps: pure typing
+    noise. Keeps everything :func:`norm_metric` strips for metric-specific
+    reasons, because on an entity those characters carry meaning:
+
+    * a **parenthetical** on a metric is a unit ("Revenue (USD)"), but on an
+      entity it is usually the document stating its own alias ("回焊爐(Reflow
+      Oven)") — the strongest evidence the vocabulary layer will ever get.
+      Folding it away here would merge the two surfaces into one row and destroy
+      that evidence before anything could read it;
+    * a **digit** is never noise. "RO-3" and "RO-4" are different machines, and
+      whether "RO-3" and "RO-03" are the same is a question about a naming
+      convention this rule has no way to answer. It declines to decide, which
+      leaves them separate — visible, and fixable with an alias.
+
+    Anything this rule fails to merge shows up as two rows in one vocabulary
+    entry's neighbourhood, which someone can see. Anything it merged wrongly
+    would be one row that quietly lost a distinction.
+    """
+    folded = _SPACE_RUN.sub(" ", _fold_width(text)).strip()
+    return _CJK_GAP.sub("", folded).casefold()
+
+
 # ── period ───────────────────────────────────────────────────────────
 
 _YEAR = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")

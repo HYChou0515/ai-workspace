@@ -1,12 +1,23 @@
 """Knowledge-graph resources (#534).
 
-Slice 1 ships one flat table, ``GraphClaim`` — an extracted metric measurement.
-Later slices add the full Graph* family (GraphEntity / GraphMention /
-GraphRelationship / GraphSummary) + entity resolution.
+Two layers, and the split is what makes the whole thing safe to automate:
+
+* **``GraphMention`` — the primary layer.** What a document said, verbatim, one
+  row per (document, surface). Written by extraction and never rewritten by a
+  later judgement.
+* **``GraphEntity`` — the vocabulary (a later slice).** Shared identity across
+  corpora. It does not own anything; it LINKS to mentions. So deciding that two
+  surfaces are the same thing adds a link rather than destroying a record, which
+  makes a wrong decision visible (an entry holding evidence that does not belong)
+  and free to undo.
+
+``GraphClaim`` (slice 1) is the same kind of evidence as a mention, specialised
+to a measurement.
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Annotated
 
 from msgspec import Struct
@@ -78,6 +89,68 @@ class GraphClaim(Struct):  # → resource "graph-claim"
     # ever written", which the scope reads as invisible. The default has to fail
     # CLOSED: a writer that forgets the mirror then loses rows (loud, someone
     # chases it) instead of publishing them (silent, nobody reports a leak).
+    doc_visibility: str = ""
+    doc_read_meta: list[str] = []
+    doc_read_content: list[str] = []
+
+
+def mention_id(source_doc_id: str, surface: str) -> str:
+    """The id of a mention — content-addressed on (document, normalised surface).
+
+    Derived rather than random so re-extraction is IDEMPOTENT: the same document
+    saying the same thing again lands on the same row, so the vocabulary's links
+    survive a prompt change, a model change or a re-run. A random id would break
+    every link on every re-extraction and reset the vocabulary to nothing, which
+    is the invariant #534 calls "identity stable across re-runs".
+
+    Hashed rather than composed from the parts because a surface can hold any
+    character (including the "/" a specstar id may not) and can be arbitrarily
+    long. The raw surface stays on the row for display; the id is opaque and is
+    never parsed.
+    """
+    from ..kb.graph.normalize import norm_surface
+
+    digest = hashlib.blake2b(
+        f"{source_doc_id}\x00{norm_surface(surface)}".encode(), digest_size=16
+    ).hexdigest()
+    return f"m{digest}"
+
+
+class GraphMention(Struct):  # → resource "graph-mention"
+    """One thing a document mentions — the primary layer (#534 B).
+
+    Evidence, not judgement: ``surface`` is exactly what the document wrote and
+    ``kind`` is the document's own word for what sort of thing it is. Neither is
+    normalised in place, neither is merged with anything, and nothing here is
+    rewritten when the vocabulary later decides two mentions name one thing —
+    that decision is a link, held on the other side.
+
+    ``kind`` is free text on purpose. The kinds that matter belong to the corpus,
+    and a fixed list could only be wrong expensively: anything outside it gets
+    forced into a neighbour. The labels ("機台" / "tool" / "設備") are unified by
+    the SAME mechanism that unifies everything else, so the taxonomy comes out of
+    the data instead of being imposed on it.
+
+    The ``norm_*`` keys are derived state, stored because grouping reads
+    ``indexed_data``, and therefore versioned: a rule change bumps the ``Schema``
+    and the migration step carries the new algorithm. The permission mirror is
+    the same seven fields a claim carries, read by the same scope — a mention is
+    content, so it is exactly as visible as the document it came from.
+    """
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    source_doc_id: str  # provenance: the deck/doc (indexed; NOT a cascade Ref)
+    surface: str  # verbatim, as the document wrote it
+    norm_surface: str = ""  # derived comparison key (indexed)
+    kind: str = ""  # the document's own word for the sort of thing
+    norm_kind: str = ""  # derived comparison key (indexed)
+    occurrences: int = 1  # how often the document mentions it — an importance signal
+    chunk_ids: list[str] = []  # provenance: the chunks/slides it appeared on
+    # --- the read-permission mirror, identical to GraphClaim's (see there) ---
+    collection_visibility: str = ""
+    collection_read_meta: list[str] = []
+    collection_read_content: list[str] = []
+    collection_created_by: str = ""
     doc_visibility: str = ""
     doc_read_meta: list[str] = []
     doc_read_content: list[str] = []

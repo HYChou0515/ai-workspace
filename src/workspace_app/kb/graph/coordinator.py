@@ -35,6 +35,7 @@ from ..doc_permission import (
 from ..eval.sample import into_batches
 from ..llm import ILlm
 from .jobs import GraphJob, GraphJobPayload
+from .mention_write import write_doc_mentions
 from .write import write_doc_claims
 
 _LOGGER = logging.getLogger(__name__)
@@ -174,12 +175,17 @@ class GraphCoordinator:
     def _batch(self, payload: GraphJobPayload) -> None:
         cid = payload.collection_id
         for doc_id in payload.doc_ids:
+            chunks = self._doc_chunks(doc_id)
             write_doc_claims(
-                self._spec,
-                self._llm,
-                collection_id=cid,
-                source_doc_id=doc_id,
-                chunks=self._doc_chunks(doc_id),
+                self._spec, self._llm, collection_id=cid, source_doc_id=doc_id, chunks=chunks
+            )
+            # #534 B: the primary layer, over the SAME chunks. Two passes for now —
+            # the issue's plan is one joint prompt for entities, relationships and
+            # claims, which halves the model time and keeps the signals together.
+            # Worth doing when relationships arrive and the joint signal actually
+            # matters; splitting them now keeps each extractor testable on its own.
+            write_doc_mentions(
+                self._spec, self._llm, collection_id=cid, source_doc_id=doc_id, chunks=chunks
             )
 
     # ── helpers ──────────────────────────────────────────────────────
