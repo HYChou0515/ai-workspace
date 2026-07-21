@@ -164,10 +164,14 @@ def _read_base_preamble() -> str:
 
 def _read_sandbox_preamble() -> str:
     """The shared sandbox preamble — `exec` / shell / python-via-exec guidance
-    prepended to every App whose `function.sandbox` is true. Split out from the
-    workspace `_base` preamble so a workspace App with no sandbox (e.g. the
-    `_template`) isn't told about an `exec` tool it doesn't have. A bundled
-    `_`-prefixed file so `discover_app_slugs` never mistakes it for an App."""
+    prepended when the item RESOLVES a sandbox tool (`_SANDBOX_TOOLS`), so an
+    agent is never told about an `exec` it doesn't have. Not the manifest's
+    `function.sandbox` flag: that is decided one layer up, while the profile
+    subset and the per-item `tool_prefs` pin decide three layers down, and the
+    two disagreed in both directions. `function.sandbox` still bounds what an
+    App may DECLARE (`validate_function_coherence`) — it just no longer stands in
+    for what an item ended up with. A bundled `_`-prefixed file so
+    `discover_app_slugs` never mistakes it for an App."""
     return (resources.files(_APPS_PKG) / "_sandbox.md").read_text("utf-8")
 
 
@@ -285,7 +289,16 @@ class AppCatalog:
             load_profile_appendix(app_slug, profile),
             skill_metas,
             preamble=_read_base_preamble() if manifest.function.workspace else "",
-            sandbox_preamble=_read_sandbox_preamble() if manifest.function.sandbox else "",
+            # Keyed off the RESOLVED tools, not `function.sandbox`. The flag is
+            # decided at manifest level, but whether this item can actually run a
+            # command is decided three layers later — by the profile subset and
+            # the per-item `tool_prefs` pin computed just above. Keying off the
+            # flag handed a page of `exec(cmd)` / `pip install` / "write a .py
+            # then run it" to agents with no way to run anything (`topic-hub`
+            # declares the flag and grants no `exec`), while #480 simultaneously
+            # told them `exec` was off and available on request — two halves of
+            # one prompt disagreeing, with nothing to raise.
+            sandbox_preamble=_read_sandbox_preamble() if _SANDBOX_TOOLS & set(tools) else "",
         )
         suggestions = list(prof.suggestions or manifest.agent.suggestions)
         name = next((p.name for p in manifest.agent.picker if p.preset == chosen), chosen)
