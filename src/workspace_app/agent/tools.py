@@ -1311,6 +1311,69 @@ async def mention_user_impl(
     return f"Notified {user_id} to come look at this investigation."
 
 
+# How many questions one `ask_user` call may carry. More than a handful stops
+# being a conversation and becomes a form the user has to fill in before the
+# agent will talk to them again.
+_MAX_QUESTIONS = 5
+# A single option is an announcement, not a choice — the user has nothing to
+# decide, and the agent should just say it instead of asking.
+_MIN_OPTIONS = 2
+
+
+async def ask_user_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    questions: list[dict[str, Any]],
+) -> str:
+    """Ask the user to choose between concrete options, and stop until they answer.
+
+    Use this when you need a decision only the user can make and guessing would
+    waste their time — which alternative to take, which of several readings of
+    an ambiguous request is right. Each question carries its own options, and
+    each option carries a short description of what choosing it means, so the
+    user can decide without asking you what the options are.
+
+    Pass up to five questions. Batch questions whose answers do NOT depend on
+    each other; ask one at a time when a later question only makes sense once
+    you know the earlier answer.
+
+    Your turn ends here. The user's answer arrives as their next message, and
+    you continue from there — so put everything they need in the question, and
+    do not answer it yourself.
+    """
+    if not questions:
+        return "error: ask_user needs at least one question"
+    if len(questions) > _MAX_QUESTIONS:
+        return (
+            f"error: ask_user takes at most {_MAX_QUESTIONS} questions "
+            f"(got {len(questions)}). Ask the most important ones first — the "
+            "rest can follow once these are answered."
+        )
+
+    lines: list[str] = []
+    for i, q in enumerate(questions, start=1):
+        text = str(q.get("question", "")).strip()
+        if not text:
+            return f"error: question {i} is empty"
+        options = q.get("options") or []
+        if len(options) < _MIN_OPTIONS:
+            return (
+                f"error: question {i} needs at least {_MIN_OPTIONS} options — "
+                "with fewer there is nothing for the user to choose between."
+            )
+        lines.append(f"{i}. {text}")
+        for opt in options:
+            label = str(opt.get("label", "")).strip()
+            desc = str(opt.get("description", "")).strip()
+            lines.append(f"   - {label}" + (f" — {desc}" if desc else ""))
+
+    # The options the UI renders come from this call's own `tool_args`, which
+    # the turn reducer already persists and streams (turns.py). This return
+    # value is what the MODEL sees, so it is a plain restatement — enough for
+    # the transcript to read sensibly, with no second copy of the schema to
+    # drift from the first.
+    return "Asked the user:\n" + "\n".join(lines)
+
+
 async def lookup_user_impl(ctx: RunContextWrapper[AgentToolContext], handle: str) -> str:
     """Look up a teammate in this shared workspace by their handle.
 
@@ -1954,6 +2017,7 @@ _IMPLS = {
     "delete_file": delete_file_impl,
     "mention_user": mention_user_impl,
     "lookup_user": lookup_user_impl,
+    "ask_user": ask_user_impl,
     "ask_knowledge_base": ask_knowledge_base_impl,
     "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
@@ -2029,7 +2093,7 @@ _LEGACY_TOOL_RENAMES = {"ls": "list_files"}
 # needs, so they build as non-strict. Entity fields are open by design (the
 # schema lives in the workspace, not the tool signature), so this is correct, not
 # a workaround.
-_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity"})
+_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity", "ask_user"})
 
 
 def builtin_tool_descriptions() -> dict[str, str]:
