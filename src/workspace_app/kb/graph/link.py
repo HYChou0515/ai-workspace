@@ -303,15 +303,23 @@ def link_resembling_entities(spec: SpecStar, llm: ILlm) -> int:
 _NAMES_PER_CALL = 60
 
 _GROUP_PROMPT = (
-    "Below is a list of terms taken from technical documents. Some of them are "
-    "different names for the SAME thing — a translation, an abbreviation, a "
-    "spelling variant, a fuller form of the same name.\n\n"
-    "Group ONLY those. Different equipment, different steps, a thing and a "
-    "measurement of it, a category and a member of it, and two different values "
-    "(500mg and 850mg, RO-3 and RO-4) are all DIFFERENT and must not be grouped.\n\n"
+    "Below is a list of terms taken from technical documents. Some are different "
+    "names for the SAME thing — a translation, an abbreviation, a spelling "
+    "variant, a fuller form of the same name.\n\n"
+    "Group ONLY those. Everything else is different, including pairs that are "
+    "closely related: a defect and the object it occurs on, a machine and another "
+    "machine in the same line, a property and a thing that has it, a category and "
+    "one of its members, and two different values.\n\n"
+    "For each group, the reason must say WHAT THE THING IS, in a few words, so a "
+    'reader can check it — "the machine that prints solder paste", not "synonyms" '
+    'or "related terms". If you cannot say what it is, the terms do not belong '
+    "together.\n\n"
     "Terms:\n{names}\n\n"
-    'Answer ONLY as JSON: {{"groups": [{{"names": ["…", "…"], "why": "<short>"}}]}}. '
-    "Return an empty list if nothing belongs together."
+    'Answer ONLY as JSON: {{"groups": [{{"names": ["…", "…"], "why": "<what it is>"}}]}}. '
+    "An empty list is the right answer when nothing belongs together.\n\n"
+    "A wrong grouping is expensive: it merges two different things into one and "
+    "everything recorded about either becomes attached to both. Leave a pair out "
+    "when unsure."
 )
 
 
