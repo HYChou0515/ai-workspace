@@ -316,16 +316,25 @@ async def resolve_skill_body(
     from .shared_skills import SHARED_SKILLS, load_shared_skill
 
     body = await load_workspace_skill(files, workspace_id, name)
-    if body is not None:
-        return body
-    if name in SHARED_SKILLS:
-        return augment_shared_skill_body(name, load_shared_skill(name), app_slug, profile)
-    if app_slug is not None and profile is not None:
+    if body is None and name in SHARED_SKILLS:
+        body = load_shared_skill(name)
+    if body is None and app_slug is not None and profile is not None:
         try:
-            return load_skill(app_slug, profile, name)
+            body = load_skill(app_slug, profile, name)
         except SkillError:
             return None
-    return None
+    if body is None:
+        return None
+    # #589: the derived reference is appended to whatever body we resolved, from
+    # ANY source. It used to hang off the shared branch alone, which was fine
+    # while a baked-in skill could never be copied into the workspace. Once it
+    # can, the workspace copy wins the precedence above — and a source-specific
+    # augmentation would silently stop firing, freezing the AI's idea of the
+    # workflow syntax on the day the skill was copied. That staleness is the one
+    # thing the derivation exists to prevent, so it cannot depend on provenance:
+    # the AUTHORED text is what gets copied and edited, the DERIVED part is
+    # recomputed every read and was never part of the body to begin with.
+    return augment_shared_skill_body(name, body, app_slug, profile)
 
 
 async def build_applied_skills_block(

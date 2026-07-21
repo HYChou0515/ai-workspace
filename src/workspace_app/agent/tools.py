@@ -1369,6 +1369,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
 
     # #298: a user+AI co-created skill in this workspace shadows any package
     # skill of the same name. Read live (uncached) — it may have just been saved.
+    from ..apps.skills import augment_shared_skill_body
+
     files = ctx.context.files
     inv = ctx.context.investigation_id
     if files is not None and inv is not None:
@@ -1377,11 +1379,19 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
         except SkillError as e:
             return f"error: {e}"
         if body is not None:
-            return body
+            # #589: the derived reference is appended to a body from ANY source.
+            # It used to hang off the shared branch below, which was fine while a
+            # baked-in skill could never be copied here. Once it can, this branch
+            # wins — and a source-specific augmentation would silently stop
+            # firing, freezing the workflow syntax the AI writes against on the
+            # day the skill was copied. The AUTHORED text is what gets copied and
+            # edited; the DERIVED part is recomputed every read.
+            return augment_shared_skill_body(
+                name, body, ctx.context.app_slug, ctx.context.template_profile
+            )
 
     # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
     from ..apps.shared_skills import SHARED_SKILLS, load_shared_skill
-    from ..apps.skills import augment_shared_skill_body
 
     if name in SHARED_SKILLS:
         try:

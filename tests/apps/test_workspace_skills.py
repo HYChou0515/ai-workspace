@@ -133,3 +133,23 @@ async def test_build_block_reads_workspace_live():
     await _put(files, inv, "fresh", "new", "body")
     out = await build_workspace_skills_block(files, inv)
     assert "- `fresh`: new" in out
+
+
+# #589: a baked-in skill is about to become copyable into the workspace, and
+# `resolve_skill_body` prefers the workspace copy. `author-workflow`'s static body
+# is deliberately purpose-only — the real DSL grammar and this app's capability
+# boundaries are DERIVED each time and appended, precisely so the skill text can
+# never go stale. Reading a copy from a different source must not silently drop
+# that: it would freeze the AI's idea of the workflow syntax on the day it was
+# copied, which is the one failure the derivation exists to prevent.
+async def test_derived_reference_is_appended_whatever_source_the_body_came_from():
+    from workspace_app.apps.skills import resolve_skill_body
+
+    files, inv = _files()
+    await _put(files, inv, "author-workflow", "author a workflow", "purpose only")
+
+    body = await resolve_skill_body(files, inv, "rca", "default", "author-workflow")
+
+    assert body is not None
+    assert "purpose only" in body
+    assert "machine-derived reference (always current)" in body
