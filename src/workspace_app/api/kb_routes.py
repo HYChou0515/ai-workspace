@@ -1923,7 +1923,11 @@ def register_kb_routes(
         return GraphEntityOut(
             id=entity_id,
             name=page.entity.canonical_name,
-            aliases=list(page.entity.norm_keys),
+            # The surfaces documents actually used, not the normalised keys.
+            # A key is lowercased and folded and nobody wrote it that way; putting
+            # one in front of a reader is exactly what the display-name rule
+            # exists to prevent, and an alias is a name like any other.
+            aliases=sorted({m.surface for m in page.mentions}),
             kind=kind,
             occurrences=page.occurrences,
             related=[

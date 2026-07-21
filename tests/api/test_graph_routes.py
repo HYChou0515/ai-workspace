@@ -165,3 +165,51 @@ def test_the_page_names_the_kind_once_the_vocabulary_has_run():
     eid = _seed(spec)
     reconcile_vocabulary(spec, llm=None)
     assert client.get(f"/kb/graph/entities/{eid}").json()["kind"] == "機台"
+
+
+def test_the_aliases_shown_are_words_someone_wrote():
+    """The keys are normalised — lowercased, folded — and nobody wrote them that
+    way. Showing "stencil printer" where the deck said "Stencil Printer" puts a
+    string no document contains in front of a reader, which is the one thing the
+    display name rule exists to prevent; the same rule has to hold for aliases."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _seed(spec)
+    mrm = spec.get_resource_manager(GraphMention)
+    cid = mrm.get(mention_id("deck-A", "回焊爐")).data
+    assert isinstance(cid, GraphMention)
+    with mrm.using("bob"):
+        mrm.create(
+            GraphMention(
+                collection_id=cid.collection_id,
+                source_doc_id="deck-B",
+                surface="Reflow Oven",
+                norm_surface=norm_surface("Reflow Oven"),
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=mention_id("deck-B", "Reflow Oven"),
+        )
+    from workspace_app.kb.graph.link import link_identical_mentions
+    from workspace_app.kb.graph.review import accept_proposal
+
+    link_identical_mentions(spec)
+    eid = _entity_id(spec, "回焊爐")
+    accept_proposal(spec, eid, _entity_id(spec, "Reflow Oven"), by="amy")
+    aliases = client.get(f"/kb/graph/entities/{eid}").json()["aliases"]
+    assert "Reflow Oven" in aliases  # as written, not "reflow oven"
+    assert "reflow oven" not in aliases
+
+
+def _entity_id(spec, name: str) -> str:
+    from specstar import QB as _QB
+
+    from workspace_app.resources.graph import GraphEntity
+
+    erm = spec.get_resource_manager(GraphEntity)
+    for r in erm.list_resources(_QB.all().build()):
+        assert isinstance(r.data, GraphEntity)
+        if r.data.canonical_name == name:
+            return r.info.resource_id
+    raise AssertionError(name)
