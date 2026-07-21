@@ -299,11 +299,17 @@ def _live_entities(spec: SpecStar) -> list[tuple[str, GraphEntity]]:
 
 
 def _existing_proposals(spec: SpecStar) -> set[tuple[str, str]]:
-    """Pairs already proposed, so a re-run neither re-asks the model nor stacks a
-    second copy of the same question in front of a person."""
+    """Pairs already raised, so a re-run neither re-asks the model nor stacks a
+    second copy of the same question in front of a person.
+
+    Includes pairs already DECIDED, not only those still waiting. A rejected pair
+    coming back next week would re-spend the model and re-ask the person who
+    already answered — which is how a review queue stops being read. The whole
+    point of asking is that the answer is kept.
+    """
     rm = spec.get_resource_manager(GraphEntityLink)
     out: set[tuple[str, str]] = set()
-    for r in rm.list_resources((QB["state"] == "pending").build()):
+    for r in rm.list_resources(QB.all().build()):
         link = r.data
         assert isinstance(link, GraphEntityLink)
         if link.proposed_from:
