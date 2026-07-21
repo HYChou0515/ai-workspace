@@ -39,7 +39,10 @@ export type AgentState = {
    * read_image round-trip); a text-only model ignores them. `opts.applySkills` (#380) loads the named skills
    * into THIS turn (one-shot, chosen from the Skills panel); the composer clears
    * them after sending. */
-  send: (content: string, opts?: { applySkills?: string[]; imagePaths?: string[] }) => Promise<void>;
+  send: (
+    content: string,
+    opts?: { applySkills?: string[]; imagePaths?: string[]; answers?: string },
+  ) => Promise<void>;
   /** @mention people to "come look" — notifies them, does NOT run the agent. */
   mention: (userIds: string[], note: string) => Promise<void>;
   cancel: () => void;
@@ -80,6 +83,9 @@ export function useAgentInternal(
           applySkills: opts?.applySkills,
           // Attached image workspace paths — a VLM main model reads them inline.
           imagePaths: opts?.imagePaths,
+          // grill-me: the `ask_user` question this message answers, when the
+          // user clicked an option instead of typing.
+          answers: opts?.answers,
         }),
       requestCancel: () => api.cancelMessage(slug, investigationId),
       undoTurns: async (turns) => {

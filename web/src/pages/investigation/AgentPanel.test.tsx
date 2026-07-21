@@ -614,3 +614,79 @@ describe("AgentPanel — my own messages sit on the right", () => {
     expect(screen.getAllByTestId("message-block")[1]).toHaveAttribute("data-mine", "false");
   });
 });
+
+describe("AgentPanel ask_user (grill-me)", () => {
+  function renderWithEntries(
+    entries: unknown[],
+    send = vi.fn(async (_content: string, _opts?: Record<string, unknown>) => {}),
+  ) {
+    const agent = { ...stubAgent(), send };
+    agent.log = { entries, streaming: false } as unknown as AgentState["log"];
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={agent}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+        />
+      </DialogProvider>,
+    );
+    return send;
+  }
+
+  const question = {
+    kind: "tool_call",
+    call: {
+      call_id: "call_1",
+      name: "ask_user",
+      status: "done",
+      args: {
+        questions: [
+          {
+            question: "Which storage backend?",
+            options: [
+              { label: "Postgres", description: "Durable" },
+              { label: "SQLite", description: "Zero setup" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  it("offers the question as buttons in the real panel", () => {
+    /* The card is only reached when the panel hands EntryView a way to answer.
+     * Testing the card alone passes whether or not anything ever wires it up —
+     * which is exactly how this shipped dead the first time. */
+    renderWithEntries([question]);
+
+    expect(screen.getByRole("button", { name: /Postgres/ })).toBeTruthy();
+  });
+
+  it("sends the answer with the question it answers", () => {
+    const send = renderWithEntries([question]);
+
+    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const [content, opts] = send.mock.calls[0];
+    expect(content).toContain("SQLite");
+    expect(opts).toMatchObject({ answers: "call_1" });
+  });
+
+  it("shows the answer instead of the buttons once answered", () => {
+    renderWithEntries([
+      question,
+      {
+        kind: "message",
+        message: { role: "user", content: "SQLite", answers: "call_1" },
+      },
+    ]);
+
+    expect(screen.queryByRole("button", { name: /Postgres/ })).toBeNull();
+  });
+});

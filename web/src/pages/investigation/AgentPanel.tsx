@@ -417,6 +417,19 @@ export function AgentPanel({
     setAppliedSkills([]);
   };
 
+  // grill-me: which `ask_user` questions already have an answer, so an
+  // answered card shows the answer instead of inviting a second, contradictory
+  // one (two tabs, or a scroll back to an older question).
+  const answeredQuestions = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const e of log.entries) {
+      if (e.kind === "message" && e.message.answers) {
+        out[e.message.answers] = e.message.content;
+      }
+    }
+    return out;
+  }, [log.entries]);
+
   const onChip = (label: string) => {
     if (log.streaming) return;
     void send(label);
@@ -498,6 +511,13 @@ export function AgentPanel({
           <EntryView
             key={i}
             entry={e}
+            // grill-me: answering an `ask_user` question is an ordinary send
+            // that records which question it answers.
+            onAnswerQuestion={(a) => {
+              if (log.streaming) return;
+              void send(a.content, { answers: a.answers });
+            }}
+            answeredQuestions={answeredQuestions}
             // #583: who is reading, so their own messages align right.
             currentUser={me}
             onOpenCitation={(c) =>
