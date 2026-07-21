@@ -47,6 +47,8 @@ from .schemas import (
     _MoveBody,
     _ReplaceBody,
     _SearchBody,
+    _SkillRefreshRequest,
+    _SkillRefreshResult,
     _WorkspaceUsage,
 )
 from .search import InvalidQuery, compile_query, path_selected, search_text
@@ -149,6 +151,29 @@ def register_file_routes(
 ) -> None:
     """Mount the workspace file / notebook / shell routes onto ``app``."""
 
+    @app.post("/a/{slug}/items/{item_id}/skills/{name}/refresh")
+    async def refresh_item_skill(
+        slug: str, item_id: str, name: str, body: _SkillRefreshRequest
+    ) -> _SkillRefreshResult:
+        """#589: bring this item's copy of a baked-in skill up to the version the
+        package now ships — per file, leaving anything edited here alone (those
+        come back in ``skipped``). ``force`` is "reset to factory": restore every
+        shipped file, including the edited ones.
+
+        Gated on ``edit_content``, unlike the automatic materialization that
+        happens when a skill is used. That one writes platform bytes into a
+        reserved path and is closer to restoring a snapshot than to authoring;
+        this one is a person deliberately rewriting workspace content, possibly
+        over someone else's edits."""
+        from ..apps.skills import refresh_skill
+
+        investigation_id = locator.require_access(slug, item_id, "edit_content")
+        profile = locator.profile_of(investigation_id)
+        result = await refresh_skill(files, investigation_id, slug, profile, name, force=body.force)
+        return _SkillRefreshResult(
+            updated=result.updated, skipped=result.skipped, removed=result.removed
+        )
+
     @app.get("/a/{slug}/items/{item_id}/skills")
     async def list_item_skills(slug: str, item_id: str) -> _ItemSkills:
         """#380: the skills picker state for this item — the App's declared shared
@@ -157,13 +182,26 @@ def register_file_routes(
         effective. Backs the Skills panel (list + toggle + apply). The effective
         state comes from the SAME `effective_item_skills` resolve the turn's prompt
         index uses, so the picker can't drift from what the agent sees."""
-        from ..apps.skills import effective_item_skills, workspace_skill_metas
+        from ..apps.skills import (
+            effective_item_skills,
+            skill_update_available,
+            workspace_skill_metas,
+        )
 
         investigation_id = locator.require_access(slug, item_id, "read_meta")
         profile = locator.profile_of(investigation_id)
         prefs = locator.skill_prefs_of(investigation_id)
         ws_metas = await workspace_skill_metas(files, investigation_id)
         states = effective_item_skills(slug, profile, prefs, ws_metas)
+        # Only a copy can have an update, so only copies are checked — this reads
+        # the package on every panel open and is deliberately kept off the turn's
+        # hot path.
+        updatable = {
+            s.name
+            for s in states
+            if s.is_copy
+            and await skill_update_available(files, investigation_id, slug, profile, s.name)
+        }
         return _ItemSkills(
             skills=[
                 _ItemSkillState(
@@ -172,6 +210,7 @@ def register_file_routes(
                     source=s.source,
                     default_on=s.default_on,
                     is_copy=s.is_copy,
+                    update_available=s.name in updatable,
                     pref=_skill_pref_state(prefs.get(s.name)),
                     effective=s.effective,
                 )

@@ -241,6 +241,14 @@ export const realApi: ApiClient = {
     return json<{ resource_id: string }>(resp);
   },
 
+  async refreshItemSkill(slug: string, itemId: string, name: string, body: { force: boolean }) {
+    const resp = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/skills/${encodeURIComponent(name)}/refresh`,
+      { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) },
+    );
+    return json<{ updated: string[]; skipped: string[]; removed: string[] }>(resp);
+  },
+
   async setItemPermission(slug, itemId, perm) {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/permission`,

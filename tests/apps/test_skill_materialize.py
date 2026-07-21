@@ -15,7 +15,11 @@ from pathlib import Path
 import pytest
 
 import workspace_app.apps.skills as skills_mod
-from workspace_app.apps.skills import resolve_skill_body
+from workspace_app.apps.skills import (
+    refresh_skill,
+    resolve_skill_body,
+    skill_update_available,
+)
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 
@@ -126,3 +130,213 @@ async def test_the_read_skill_tool_materializes_too(isolated_apps: Path):
     await read_skill_impl(RunContextWrapper(ctx), "triage")
 
     assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"print('hi')\n"
+
+
+# ─── refreshing a copy from upstream (#589 P5) ───────────────────────
+
+
+async def test_refresh_brings_an_untouched_file_up_to_the_shipped_version(isolated_apps: Path):
+    sd = _profile_skill(isolated_apps, "triage", files={"scripts/x.py": "v1\n"})
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
+
+    (sd / "scripts" / "x.py").write_text("v2\n")
+    result = await refresh_skill(files, inv, "rca", "local-lab", "triage")
+
+    assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v2\n"
+    assert result.updated == ["scripts/x.py"]
+
+
+# The people who use this feature exactly as intended — letting the AI tweak the
+# scripts — are the ones an overwriting update would hurt most. One press and
+# every tweak is gone, at the moment they least expect it.
+async def test_refresh_leaves_an_edited_file_alone_and_says_so(isolated_apps: Path):
+    sd = _profile_skill(isolated_apps, "triage", files={"scripts/x.py": "v1\n"})
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
+    await files.write(inv, "/.skill/triage/scripts/x.py", b"the AI improved this\n")
+
+    (sd / "scripts" / "x.py").write_text("v2\n")
+    result = await refresh_skill(files, inv, "rca", "local-lab", "triage")
+
+    assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"the AI improved this\n"
+    assert result.skipped == ["scripts/x.py"]
+    assert result.updated == []
+
+
+# A new version can add and drop files, not just change them. Dropping follows
+# the same rule as changing: a file the AI edited is its work now, so upstream
+# removing the original does not license deleting it.
+async def test_refresh_adds_new_files_and_drops_retired_untouched_ones(isolated_apps: Path):
+    sd = _profile_skill(
+        isolated_apps, "triage", files={"scripts/old.py": "old\n", "scripts/kept.py": "kept\n"}
+    )
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
+    await files.write(inv, "/.skill/triage/scripts/kept.py", b"the AI improved this\n")
+
+    (sd / "scripts" / "old.py").unlink()
+    (sd / "scripts" / "kept.py").unlink()
+    (sd / "scripts" / "new.py").write_text("new\n")
+    result = await refresh_skill(files, inv, "rca", "local-lab", "triage")
+
+    assert await files.read(inv, "/.skill/triage/scripts/new.py") == b"new\n"
+    assert result.removed == ["scripts/old.py"]
+    # Retired upstream, but edited here — still the AI's work, so it stays.
+    assert await files.read(inv, "/.skill/triage/scripts/kept.py") == b"the AI improved this\n"
+    assert result.skipped == ["scripts/kept.py"]
+
+
+# The escape hatch for everything the per-file rule refuses to touch. It is
+# destructive on purpose, and only ever because the user said so — never as a
+# side effect of using or updating the skill.
+async def test_reset_to_factory_overwrites_even_edited_files(isolated_apps: Path):
+    _profile_skill(isolated_apps, "triage", files={"scripts/x.py": "shipped\n"})
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
+    await files.write(inv, "/.skill/triage/scripts/x.py", b"the AI improved this\n")
+    await files.write(inv, "/.skill/triage/scripts/stray.py", b"invented here\n")
+
+    result = await refresh_skill(files, inv, "rca", "local-lab", "triage", force=True)
+
+    assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"shipped\n"
+    assert result.skipped == []
+    assert "scripts/x.py" in result.updated
+
+
+# The other half of the ask: a skill added under `sample-skills/`, shared across
+# apps rather than baked into one profile. It goes through a different registry
+# and a different loader, so "the profile path works" says nothing about it —
+# and shipping this one untested would repeat the exact mistake being fixed,
+# where a whole source did nothing and nobody noticed.
+async def test_a_shared_skill_ships_its_files_too(tmp_path: Path, monkeypatch):
+    from workspace_app.apps import shared_skills
+
+    src = tmp_path / "triage-shared"
+    (src / "scripts").mkdir(parents=True)
+    (src / "SKILL.md").write_text("---\nname: triage-shared\ndescription: d\n---\n\nrun it")
+    (src / "scripts" / "x.py").write_text("print('shared')\n")
+    monkeypatch.setitem(shared_skills.SHARED_SKILLS, "triage-shared", src)
+
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    body = await resolve_skill_body(files, inv, None, None, "triage-shared")
+
+    assert body is not None and "run it" in body
+    assert await files.read(inv, "/.skill/triage-shared/scripts/x.py") == b"print('shared')\n"
+
+
+# Without this the refresh control is a coin flip: it shows on every copy, and
+# pressing it when upstream has not moved does nothing visible. "Nothing
+# happened" is indistinguishable from "it is broken".
+async def test_reports_whether_upstream_has_moved_since_the_copy_was_made(isolated_apps: Path):
+    sd = _profile_skill(isolated_apps, "triage", files={"scripts/x.py": "v1\n"})
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
+
+    assert await skill_update_available(files, inv, "rca", "local-lab", "triage") is False
+
+    (sd / "scripts" / "x.py").write_text("v2\n")
+    assert await skill_update_available(files, inv, "rca", "local-lab", "triage") is True
+
+
+# Editing a file here is not an upstream change. Offering "update" for it would
+# invite the user to press a button whose only honest outcome is "skipped".
+async def test_a_local_edit_is_not_an_upstream_update(isolated_apps: Path):
+    _profile_skill(isolated_apps, "triage", files={"scripts/x.py": "v1\n"})
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
+    await files.write(inv, "/.skill/triage/scripts/x.py", b"the AI improved this\n")
+
+    assert await skill_update_available(files, inv, "rca", "local-lab", "triage") is False
+
+
+# The shape this feature was actually asked for: a real binary asset — a .pptx
+# template — that a script in the same skill opens and fills in. Nothing about it
+# is executable, so the "no exec bit" limit does not apply; what matters is that
+# the bytes survive verbatim, through a pipeline that had never carried anything
+# but markdown.
+async def test_a_binary_template_survives_byte_for_byte(isolated_apps: Path):
+    import zipfile
+
+    sd = _profile_skill(isolated_apps, "deck", files={"scripts/make.py": "from pptx import *\n"})
+    # A .pptx IS a zip of XML parts — real binary, with a header and null bytes.
+    tpl = sd / "assets" / "template.pptx"
+    tpl.parent.mkdir()
+    with zipfile.ZipFile(tpl, "w") as z:
+        z.writestr("[Content_Types].xml", "<Types/>")
+        z.writestr("ppt/media/image1.png", bytes(range(256)))
+    original = tpl.read_bytes()
+
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "deck")
+
+    landed = await files.read(inv, "/.skill/deck/assets/template.pptx")
+    assert landed == original
+    # Still a readable archive on the other side, not just equal bytes by luck.
+    import io
+
+    assert zipfile.ZipFile(io.BytesIO(landed)).read("ppt/media/image1.png") == bytes(range(256))
+
+
+# A skill written here has no upstream, so there is nothing to be behind and
+# nothing to pull. Both operations have to say so quietly rather than throw.
+async def test_a_hand_written_skill_has_nothing_to_refresh(isolated_apps: Path):
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    md = b"---\nname: mine\ndescription: d\n---\n\nmine"
+    await files.write(inv, "/.skill/mine/SKILL.md", md)
+
+    assert await skill_update_available(files, inv, "rca", "local-lab", "mine") is False
+    nothing = await refresh_skill(files, inv, "rca", "local-lab", "mine")
+    assert (nothing.updated, nothing.skipped, nothing.removed) == ([], [], [])
+
+
+# A skill can be retired from the package while copies of it live on. The copy is
+# the workspace's own now — it keeps working, it simply has no upstream left to
+# compare against or pull from.
+async def test_a_copy_outlives_the_skill_being_retired_upstream(isolated_apps: Path):
+    sd = _profile_skill(isolated_apps, "triage", files={"scripts/x.py": "v1\n"})
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
+
+    for child in sorted(sd.rglob("*"), reverse=True):
+        child.unlink() if child.is_file() else child.rmdir()
+    sd.rmdir()
+
+    assert await skill_update_available(files, inv, "rca", "local-lab", "triage") is False
+    assert (await refresh_skill(files, inv, "rca", "local-lab", "triage")).updated == []
+    assert await files.read(inv, "/.skill/triage/scripts/x.py") == b"v1\n"
+
+
+# Deleting a file is an edit like any other. Upstream changing it afterwards does
+# not license bringing it back — the AI removed it on purpose.
+async def test_a_file_the_ai_deleted_is_not_quietly_restored(isolated_apps: Path):
+    sd = _profile_skill(isolated_apps, "triage", files={"scripts/x.py": "v1\n"})
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "triage")
+    await files.delete(inv, "/.skill/triage/scripts/x.py")
+
+    (sd / "scripts" / "x.py").write_text("v2\n")
+    result = await refresh_skill(files, inv, "rca", "local-lab", "triage")
+
+    assert result.skipped == ["scripts/x.py"]
+    assert result.updated == []
+
+
+# A profile that ships skills of its own must not shadow a shared skill it does
+# not have: the lookup falls through rather than stopping at the profile.
+async def test_a_shared_skill_is_found_even_when_the_profile_ships_others(
+    isolated_apps: Path, tmp_path: Path, monkeypatch
+):
+    from workspace_app.apps import shared_skills
+
+    _profile_skill(isolated_apps, "other", files={"scripts/y.py": "y\n"})
+    src = tmp_path / "shared-one"
+    (src / "scripts").mkdir(parents=True)
+    (src / "SKILL.md").write_text("---\nname: shared-one\ndescription: d\n---\n\nshared body")
+    (src / "scripts" / "z.py").write_text("z\n")
+    monkeypatch.setitem(shared_skills.SHARED_SKILLS, "shared-one", src)
+
+    files, inv = WorkspaceFiles(MemoryFileStore()), "inv-1"
+    await resolve_skill_body(files, inv, "rca", "local-lab", "shared-one")
+
+    assert await files.read(inv, "/.skill/shared-one/scripts/z.py") == b"z\n"

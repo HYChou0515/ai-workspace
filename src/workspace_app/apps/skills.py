@@ -18,6 +18,7 @@ agent knows which skills apply) and reads the body on demand via the
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from collections.abc import Mapping
@@ -28,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 import msgspec
 
-from .skill_payload import ORIGIN_FILE, SkillSource, origin_for, skill_payload
+from .skill_payload import ORIGIN_FILE, SkillOrigin, SkillSource, origin_for, skill_payload
 
 if TYPE_CHECKING:
     from ..files import WorkspaceFiles
@@ -395,6 +396,120 @@ async def materialize_skill(
         f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}",
         msgspec.json.encode(origin_for(source, payload)),
     )
+
+
+async def skill_update_available(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> bool:
+    """Whether the package now ships something this copy does not have.
+
+    Compares what was SHIPPED (recorded in `.origin`) against what the package
+    ships now — deliberately not against the files on disk here. An edit made in
+    this workspace is not an upstream change, and offering "update" for it would
+    invite the user to press a button whose only honest outcome is "skipped".
+    """
+    from ..filestore.protocol import FileNotFound
+
+    try:
+        raw = await files.read(workspace_id, f"/{WORKSPACE_SKILL_DIR}/{name}/{ORIGIN_FILE}")
+    except FileNotFound:
+        return False
+    origin = msgspec.json.decode(raw, type=SkillOrigin)
+    found = _skill_source(app_slug, profile, name)
+    if found is None:
+        return False
+    _source, src_dir = found
+    return origin.files != origin_for(_source, skill_payload(src_dir)).files
+
+
+class SkillRefresh(msgspec.Struct, frozen=True):
+    """What a refresh actually did, per file. ``skipped`` is the interesting one:
+    those files were edited here, so they were left exactly as they are."""
+
+    updated: list[str]
+    skipped: list[str]
+    removed: list[str]
+
+
+async def refresh_skill(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+    *,
+    force: bool = False,
+) -> SkillRefresh:
+    """Bring a copied skill up to the version the package now ships.
+
+    ``force`` is "reset to factory": every shipped file is restored, including
+    ones edited here. It is destructive on purpose and only ever because the user
+    said so — never as a side effect of using or updating the skill.
+
+    Per file, never wholesale. A file still byte-identical to what was shipped is
+    replaced; a file that was edited here is left alone and reported. Overwriting
+    everything would delete the AI's tweaks — the very thing this feature exists
+    to allow — and doing it on an action labelled "update" would destroy them at
+    the moment the user least expects it.
+    """
+    from ..filestore.protocol import FileNotFound
+
+    root = f"/{WORKSPACE_SKILL_DIR}/{name}"
+    try:
+        raw = await files.read(workspace_id, f"{root}/{ORIGIN_FILE}")
+    except FileNotFound:
+        return SkillRefresh(updated=[], skipped=[], removed=[])
+    origin = msgspec.json.decode(raw, type=SkillOrigin)
+    found = _skill_source(app_slug, profile, name)
+    if found is None:
+        return SkillRefresh(updated=[], skipped=[], removed=[])
+    source, src_dir = found
+    payload = skill_payload(src_dir)
+
+    async def _unchanged(rel: str) -> bool:
+        """Whether the workspace copy still holds the bytes we shipped. Only ever
+        asked about a file the manifest records, so the lookup cannot miss."""
+        shipped = origin.files[rel]
+        try:
+            here = await files.read(workspace_id, f"{root}/{rel}")
+        except FileNotFound:
+            return False
+        return hashlib.sha256(here).hexdigest() == shipped
+
+    updated: list[str] = []
+    skipped: list[str] = []
+    for rel, data in payload.items():
+        if not force and origin.files.get(rel) == hashlib.sha256(data).hexdigest():
+            # Upstream did not touch this file, so there is nothing to bring —
+            # regardless of what happened to it here. "Nothing to bring" is not
+            # the same as "skipped": reporting it would bury the files the user
+            # actually needs to know about among every unchanged one.
+            continue
+        if not force and rel in origin.files and not await _unchanged(rel):
+            skipped.append(rel)
+            continue
+        await files.write(workspace_id, f"{root}/{rel}", data)
+        updated.append(rel)
+    removed: list[str] = []
+    for rel in origin.files:
+        if rel in payload:
+            continue
+        # Retired upstream. Dropping follows the same rule as changing: a file the
+        # AI edited is its work now, and upstream removing the original is not a
+        # licence to delete it.
+        if not force and not await _unchanged(rel):
+            skipped.append(rel)
+            continue
+        await files.delete(workspace_id, f"{root}/{rel}")
+        removed.append(rel)
+    await files.write(
+        workspace_id, f"{root}/{ORIGIN_FILE}", msgspec.json.encode(origin_for(source, payload))
+    )
+    return SkillRefresh(updated=sorted(updated), skipped=sorted(skipped), removed=sorted(removed))
 
 
 async def resolve_skill_body(
