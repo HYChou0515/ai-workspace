@@ -426,12 +426,15 @@ export interface ApiClient {
   getAppItem(resourceRoute: string, id: string): Promise<AppItem>;
   /** POST /a/{slug}/items — create an item (+ seed its profile); returns the id. */
   createAppItem(slug: string, body: Record<string, unknown>): Promise<{ resource_id: string }>;
-  /** PUT {resource_route}/{id} — replace an item (specstar CRUD update). Inline
-   * field edits read the item, change one field, and PUT the whole. */
-  updateAppItem(
+  /** PATCH {resource_route}/{id} — change SOME of an item's fields, leaving every
+   * field it does not name untouched. `patch` is the DIFF, never the whole item:
+   * a full-body write off a cached copy reverts whatever changed in between, and
+   * on specstar's replace-semantics PUT an omitted field is stored as its default
+   * — which for `permission` means the item silently becomes public. */
+  patchAppItemFields(
     resourceRoute: string,
     id: string,
-    data: Record<string, unknown>,
+    patch: Record<string, unknown>,
   ): Promise<{ resource_id: string }>;
   /** PUT /a/{slug}/items/{id}/permission — set an item's access control (#306 PR3).
    * `perm` is the full desired state; returns the newly-notified user ids. */
