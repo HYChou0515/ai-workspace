@@ -9,6 +9,7 @@ how a queue stops being read.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass
 
 import msgspec
@@ -41,17 +42,31 @@ class EntityPage:
     occurrences: int
 
 
-def list_proposals(spec: SpecStar) -> list[Proposal]:
+def list_proposals(spec: SpecStar, *, as_user: str | None = None) -> list[Proposal]:
     """Every merge waiting on a person, one row per pair rather than per mention.
 
     A proposal is stored as pending links (so accepting it is the same absorption
     every other basis performs), but a reviewer is answering ONE question about
     two identities, and showing them the same question once per mention would bury
     it.
+
+    With ``as_user`` the reads run inside the access scope, so a reviewer is never
+    shown a pair they could not have looked at — including the identity on the far
+    side of the proposal, which they would otherwise learn the name of.
     """
     lrm = spec.get_resource_manager(GraphEntityLink)
     erm = spec.get_resource_manager(GraphEntity)
     seen: set[tuple[str, str]] = set()
+    out: list[Proposal] = []
+    with ExitStack() as stack:
+        if as_user is not None:
+            stack.enter_context(lrm.using(as_user, apply_access_scope=True))  # ty: ignore[unknown-argument]
+            stack.enter_context(erm.using(as_user, apply_access_scope=True))  # ty: ignore[unknown-argument]
+        out.extend(_gather_proposals(lrm, erm, seen))
+    return out
+
+
+def _gather_proposals(lrm, erm, seen: set[tuple[str, str]]) -> list[Proposal]:
     out: list[Proposal] = []
     for r in lrm.list_resources((QB["state"] == "pending").build()):
         link = r.data
@@ -60,8 +75,11 @@ def list_proposals(spec: SpecStar) -> list[Proposal]:
         if not link.proposed_from or pair in seen:
             continue
         seen.add(pair)
-        host = erm.get(link.entity_id).data
-        other = erm.get(link.proposed_from).data
+        try:
+            host = erm.get(link.entity_id).data
+            other = erm.get(link.proposed_from).data
+        except ResourceIDNotFoundError:
+            continue  # one side is out of this reader's reach
         assert isinstance(host, GraphEntity) and isinstance(other, GraphEntity)
         out.append(
             Proposal(

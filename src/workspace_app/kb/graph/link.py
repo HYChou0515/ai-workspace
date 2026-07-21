@@ -79,6 +79,14 @@ def _set_kind(spec: SpecStar, entity_id: str, kind_id: str) -> None:
         rm.update(entity_id, msgspec.structs.replace(entity, kind_id=kind_id))
 
 
+def _mention_collection(spec: SpecStar, mention_id: str) -> list[str]:
+    """Where a mention's evidence lives, for the link that points at it."""
+    rm = spec.get_resource_manager(GraphMention)
+    mention = rm.get(mention_id).data
+    assert isinstance(mention, GraphMention)
+    return [mention.collection_id]
+
+
 def _link(spec: SpecStar, entity_id: str, mention_id: str) -> bool:
     """Record that a mention belongs to an identity. Returns whether it was new.
 
@@ -96,6 +104,7 @@ def _link(spec: SpecStar, entity_id: str, mention_id: str) -> bool:
             basis="identical",
             evidence="norm_surface",
             state="active",
+            collection_ids=_mention_collection(spec, mention_id),
         )
     )
     return True
@@ -355,6 +364,7 @@ def _propose(spec: SpecStar, host_id: str, other_id: str, *, why: str) -> int:
                 evidence=why,
                 state="pending",
                 proposed_from=other_id,
+                collection_ids=list(link.collection_ids),
             )
         )
         made = 1

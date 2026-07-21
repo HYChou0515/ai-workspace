@@ -197,3 +197,29 @@ def test_an_entity_with_no_readable_evidence_is_not_a_page_at_all():
     eid = row.info.resource_id  # ty: ignore[unresolved-attribute]
     with pytest.raises(ResourceIDNotFoundError):
         entity_page(spec, eid, as_user="alice")
+
+
+def test_a_link_is_hidden_from_someone_who_cannot_read_its_evidence():
+    """A link is not neutral bookkeeping — a declared one carries a sentence
+    quoted out of a document. Without a gate of its own, the auto-CRUD route hands
+    that sentence to anyone, whatever the entity page does."""
+    import pytest
+    from specstar.types import ResourceIDNotFoundError
+
+    from workspace_app.resources.graph import GraphEntityLink
+
+    spec = make_spec(default_user=lambda: "bob")
+    secret_cid = _private_collection(spec)
+    _mention(spec, secret_cid, "deck-S", "機密製程", private=True)
+    link_identical_mentions(spec)
+    lrm = spec.get_resource_manager(GraphEntityLink)
+    (row,) = list(lrm.list_resources(QB.all().build()))
+    lid = row.info.resource_id  # ty: ignore[unresolved-attribute]
+
+    with lrm.using("bob", apply_access_scope=True):  # ty: ignore[unknown-argument]
+        assert lrm.get(lid).data is not None
+    with (
+        lrm.using("alice", apply_access_scope=True),  # ty: ignore[unknown-argument]
+        pytest.raises(ResourceIDNotFoundError),
+    ):
+        lrm.get(lid)

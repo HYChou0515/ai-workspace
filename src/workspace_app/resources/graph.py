@@ -216,7 +216,12 @@ class GraphEntityLink(Struct):  # → resource "graph-entity-link"
     entity_id: Annotated[str, Ref("graph-entity", on_delete=OnDelete.cascade)]
     mention_id: str  # → GraphMention (indexed; NOT a cascade Ref)
     basis: str = "resembles"  # one of LINK_BASES
-    evidence: str = ""  # where to go and check: a chunk id, a rule name, a user id
+    evidence: str = ""  # where to go and check: a quoted sentence, a rule, a user id
+    # The collection the linked mention's evidence lives in, copied at creation.
+    # A link is not neutral bookkeeping: its `evidence` can hold a sentence quoted
+    # out of a document, so it needs the same "can you read where this came from"
+    # gate its mention does. One element, so the identity scope serves both.
+    collection_ids: list[str] = []
     state: str = "active"  # active | pending (awaiting review) | rejected
     # On a PENDING proposal: the identity this link would absorb. Accepting the
     # proposal is the same absorption a declaration performs; rejecting it leaves

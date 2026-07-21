@@ -745,7 +745,15 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # own. `state` indexed so the review queue is a query.
     spec.add_model(
         GraphEntityLink,
-        indexed_fields=["entity_id", "mention_id", IndexableField("state", str)],
+        indexed_fields=[
+            "entity_id",
+            "mention_id",
+            IndexableField("state", str),
+            IndexableField("collection_ids", list),
+        ],
+        access_scope=graph_entity_access_scope(
+            _readable_collections_provider(spec, superusers), superusers
+        ),
     )
     spec.add_model(SanityResult, indexed_fields=["model"])
     # #231: one fitness verdict per model (current-only). model indexed so a
