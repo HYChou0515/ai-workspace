@@ -454,6 +454,21 @@ class CodeEmbedderSettings:
 
 
 @dataclass(frozen=True)
+class DisclosureSettings:
+    """#605: the permission-disclosure switch — "there IS an answer, but you
+    can't read it" (withheld sources + the request-access channel).
+
+    ``enabled`` (default True): every KB turn runs the scores-only disclosure
+    probe over the user's discoverable collections. ``false`` is the operator
+    kill switch — the probe is skipped entirely (one fewer ANN query per
+    kb_search; faster) and no turn produces withheld sources. Per-chat UI
+    toggles narrow this further; they can never turn disclosure ON when the
+    operator switched it off here."""
+
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class ImageEmbedderSettings:
     """#519: which image embedder populates/queries ``DocChunk.embedding_img``.
 
@@ -523,6 +538,8 @@ class KbSettings:
     # ceilings). Independent from `retrieval_llm` — that names which LLM
     # to call; this controls how many calls and how aggressively.
     retrieval: RetrievalSettings = field(default_factory=RetrievalSettings)
+    # #605: permission disclosure ("answer exists, no permission") on/off.
+    disclosure: DisclosureSettings = field(default_factory=DisclosureSettings)
     # #506: reconcile / cluster-sweeper thresholds (dedup duplicate proposals +
     # questions across runs). See ClusterSettings.
     cluster: ClusterSettings = field(default_factory=ClusterSettings)

@@ -214,6 +214,33 @@ def test_kb_chat_probes_unselected_restricted_collections():
     assert unpicked in runner.seen
 
 
+def test_kb_chat_skips_the_probe_when_disclosure_is_disabled():
+    """#605 P3: create_app(kb_disclosure_enabled=False) — the operator kill
+    switch: the turn's disclosure universe is empty even though a discoverable
+    collection exists, so the probe never runs."""
+    runner = _DiscoverableCapturingRunner()
+    spec = make_spec()
+    from workspace_app.perm import Permission
+    from workspace_app.resources.kb import Collection
+
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("someone-else"):
+        rm.create(Collection(name="x", permission=Permission(visibility="restricted")))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,  # ty: ignore[invalid-argument-type]
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+        kb_disclosure_enabled=False,
+    )
+    client = TestClient(app)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q"})
+    assert runner.seen == []
+
+
 class _OrphanToolRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield ToolEnd(call_id="ghost", output="stray output")

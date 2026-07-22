@@ -435,6 +435,9 @@ def register_kb_chat_routes(
     # #334: upper bound a per-message pick (`_MsgBody.max_kb_searches`) may
     # request — the composer's value is clamped to [0, this].
     max_searches_ceiling: int = 10,
+    # #605: the operator disclosure switch (create_app threads
+    # settings.kb.disclosure.enabled). False ⇒ empty probe universe, probe off.
+    disclosure_enabled: bool = True,
     # The KB chat turn's output ceilings (same knobs the RCA turn gets).
     tool_output_max_chars: int = 200_000,
     exec_output_max_chars: int = 30_000,
@@ -788,11 +791,15 @@ def register_kb_chat_routes(
         # defect: unpicked = unprobed = undisclosable). The searched scope below
         # still subtracts only the IN-SCOPE discoverable ids; explicit
         # exclusions stay excluded (#551 — deliberate is deliberate).
-        _probe_universe = all_discoverable_collection_ids(
-            spec,
-            get_user_id(),
-            excluded=chat.excluded_collection_ids or (),
-            superusers=superusers,
+        _probe_universe = (
+            all_discoverable_collection_ids(
+                spec,
+                get_user_id(),
+                excluded=chat.excluded_collection_ids or (),
+                superusers=superusers,
+            )
+            if disclosure_enabled
+            else []
         )
         ctx = AgentToolContext(
             tool_output_max_chars=tool_output_max_chars,

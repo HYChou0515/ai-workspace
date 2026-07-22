@@ -309,6 +309,11 @@ def create_app(
     # composer's value is clamped to [0, this]). __main__ threads
     # `settings.kb.max_searches_ceiling` (default 10).
     kb_max_searches_ceiling: int = 10,
+    # #605: permission disclosure ("answer exists, no permission") master switch.
+    # __main__ threads `settings.kb.disclosure.enabled` (default True). False ⇒
+    # the KB chat turn + the ask_knowledge_base bridge hand the probe an empty
+    # universe, so it never runs and no turn produces withheld sources.
+    kb_disclosure_enabled: bool = True,
     # #506: reconcile / cluster-sweeper thresholds (dedup duplicate proposals +
     # questions). __main__ threads `settings.kb.cluster.*`; defaults here match
     # ClusterSettings so tests that don't pass them keep the shipped behaviour.
@@ -850,6 +855,7 @@ def create_app(
         history_max_context_tokens=history_max_context_tokens,
         max_searches_per_turn=kb_max_searches_per_turn,
         max_searches_ceiling=kb_max_searches_ceiling,
+        disclosure_enabled=kb_disclosure_enabled,
         # #397: KB chat's request_wiki_update tool submits corrections through this.
         wiki_coordinator=wiki_coordinator,
         # #304: chat visibility/write ACL — a superuser bypasses the per-verb gate.
@@ -889,6 +895,9 @@ def create_app(
         purpose_fallbacks=_purpose_fallbacks,
         get_user_id=get_user_id,
         max_searches=kb_max_searches_per_turn,
+        # #605: the operator disclosure switch — off ⇒ the sub-agent's probe
+        # universe stays empty on every ask_knowledge_base call.
+        disclosure_enabled=kb_disclosure_enabled,
         # #305: the sub-agent's collection scope is filtered to what the speaker
         # can read_content; a superuser speaker bypasses (they could read directly).
         superusers=superusers,

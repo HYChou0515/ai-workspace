@@ -54,6 +54,7 @@ def _bridge(
     holder: dict[str, str],
     *,
     superusers: frozenset[str] = frozenset(),
+    disclosure_enabled: bool = True,
 ) -> SubagentBridge:
     cfg = AgentConfig(name="kb", model="x", allowed_tools=["kb_search"])
     return SubagentBridge(
@@ -65,6 +66,7 @@ def _bridge(
         get_user_id=lambda: holder["id"],
         max_searches=None,
         superusers=superusers,
+        disclosure_enabled=disclosure_enabled,
     )
 
 
@@ -186,6 +188,23 @@ async def test_bridge_passes_discoverable_scope_and_bubbles_withheld_into_the_si
     assert runner.seen_discoverable == [disc]  # read_meta-only handed over as discoverable
     assert sink == [disc]  # the disclosed withheld source bubbled to the parent
     assert answer == "answer"
+
+
+async def test_bridge_skips_the_probe_when_disclosure_is_disabled():
+    """#605 P3: the operator kill switch — disclosure off means the sub-agent
+    gets an EMPTY discoverable set (the probe is skipped for free) and nothing
+    bubbles into the sink, even when discoverable collections exist."""
+    spec = make_spec()
+    holder = {"id": "alice"}
+    readable = _new_collection(spec, by="bob")
+    _new_collection(spec, by="bob", permission=Permission(visibility="restricted"))
+    runner = _DisclosingRunner()
+    sink: list[str] = []
+    await _bridge(spec, runner, holder, disclosure_enabled=False).run(
+        "kb_chat", "q", collection_ids=[readable], withheld_sink=sink
+    )
+    assert runner.seen_discoverable == []
+    assert sink == []
 
 
 async def test_bridge_probes_discoverable_collections_beyond_the_picked_scope():

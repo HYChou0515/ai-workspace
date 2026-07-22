@@ -442,6 +442,15 @@
 #     update_tau: 0.8                       #   >= this (but < suppress) → suggest updating that card
 #     merge_tau: 0.95                       #   background sweeper folds clusters within this sim
 #     sweep_interval_seconds: 900           #   how often the API sweep backfills + folds clusters
+#   disclosure:                             # issue #605: "answer exists, but you lack
+#     enabled: true                         #   permission" disclosure. true (default) = every
+#                                           #   KB turn runs a scores-only probe over the
+#                                           #   user's discoverable collections and surfaces
+#                                           #   withheld sources + request-access. false =
+#                                           #   probe skipped entirely (one fewer vector query
+#                                           #   per kb_search; no withheld anywhere). Per-chat
+#                                           #   UI toggles narrow this but can never re-enable
+#                                           #   a globally-off switch.
 #   max_searches_per_turn: 3                # issue #195: cap kb_search calls per KB-chat
 #                                           #   reply (+ the ask_knowledge_base bridge). Each
 #                                           #   search runs the expand/HyDE/rerank cascade and

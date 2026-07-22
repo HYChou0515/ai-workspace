@@ -1041,3 +1041,29 @@ def test_tool_output_ceiling_is_operator_tunable(tmp_path: Path):
     s = load(config_path=cfg, env={})
     assert s.exec.tool_output_max_chars == 12000
     assert s.exec.output_max_chars == 30_000  # the sibling knob keeps its default
+
+
+def test_kb_disclosure_enabled_defaults_to_true():
+    """#605: permission disclosure ships ON — a fresh deploy discloses "there IS
+    an answer you can't read" without any operator action."""
+    s = load(config_path=None, env={})
+    assert s.kb.disclosure.enabled is True
+
+
+def test_kb_disclosure_can_be_switched_off(tmp_path: Path):
+    """#605: the operator kill switch — off means the probe never runs (faster),
+    and no turn produces withheld sources."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("kb:\n  disclosure:\n    enabled: false\n", encoding="utf-8")
+    s = load(config_path=cfg, env={})
+    assert s.kb.disclosure.enabled is False
+
+
+def test_kb_image_embedder_kind_operator_override(tmp_path: Path):
+    """#598 dead-knob regression: the key was whitelisted + documented but never
+    CONSTRUCTED from the yaml, so `kind: perceptual` silently stayed `none`.
+    A whitelisted key must round-trip."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("kb:\n  image_embedder:\n    kind: perceptual\n", encoding="utf-8")
+    s = load(config_path=cfg, env={})
+    assert s.kb.image_embedder.kind == "perceptual"

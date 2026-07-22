@@ -63,6 +63,10 @@ class SubagentBridge:
         # spawns so a sub-agent can't run wider than the turn that asked it.
         tool_output_max_chars: int = 200_000,
         exec_output_max_chars: int = 30_000,
+        # #605: the operator disclosure switch. False ⇒ the sub-agent's
+        # discoverable set is empty, so the probe never runs and nothing is
+        # withheld — one fewer ANN query per kb_search.
+        disclosure_enabled: bool = True,
     ) -> None:
         self._spec = spec
         self._runner = runner
@@ -75,6 +79,7 @@ class SubagentBridge:
         self._wiki_consultant_factory = wiki_consultant_factory
         self._tool_output_max_chars = tool_output_max_chars
         self._exec_output_max_chars = exec_output_max_chars
+        self._disclosure_enabled = disclosure_enabled
 
     async def run(
         self,
@@ -150,7 +155,12 @@ class SubagentBridge:
             self._spec, ids, speaker, superusers=self._superusers
         )
         readable, discoverable = part.readable, part.discoverable
-        if purpose == "kb_chat":
+        if not self._disclosure_enabled:
+            # #605 P3: disclosure off ⇒ no probe universe at all — the tool skips
+            # the probe when nothing is discoverable, so the whole feature costs
+            # nothing. (The searched scope is untouched.)
+            discoverable = []
+        elif purpose == "kb_chat":
             # #605: the disclosure universe is every discoverable collection —
             # not just the picked scope. "There IS an answer you can't read"
             # must fire for a collection the speaker didn't (or couldn't) pick;
