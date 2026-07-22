@@ -670,7 +670,12 @@ describe("AgentPanel ask_user (grill-me)", () => {
   it("sends the answer with the question it answers", () => {
     const send = renderWithEntries([question]);
 
+    // A pick highlights; 送出 commits it — so a per-option note has time to be
+    // typed rather than the first click firing before the person finished.
     fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
+    expect(send).not.toHaveBeenCalled();
+    // Exact "送出" — the composer's own "Send" button also matches a loose regex.
+    fireEvent.click(screen.getByRole("button", { name: "送出" }));
 
     expect(send).toHaveBeenCalledTimes(1);
     const [content, opts] = send.mock.calls[0];

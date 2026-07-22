@@ -8,6 +8,21 @@
  * Answering sends an ordinary message that records which question it answers.
  * Nothing waits for it — the turn already ended at this tool, and the next
  * turn picks the answer up from the transcript.
+ *
+ * The args have a FIXED shape — `{question, options: [{label, description}]}` —
+ * guaranteed by the tool's strict schema (`ask_user_impl`, `agent/tools.py`).
+ * That is deliberately the BACKEND's job: it names the fields to the model so the
+ * model cannot send `option` instead of `label`. This card therefore EXPECTS the
+ * correct shape rather than guessing around a loose one — papering over malformed
+ * args here would just move the contract into the FE, where it drifts. The only
+ * concession is returning `null` (not throwing) for genuinely broken args, since
+ * a card that throws takes the whole transcript down.
+ *
+ * Layout: one option per row, each with its own supplement. A note about
+ * "Postgres" is about Postgres, so it sits on that row rather than in one shared
+ * box that could mean any option. Options are numbered, and a pick highlights
+ * rather than sending on the click — with a note to type, firing on the first
+ * click would send before the person finished.
  */
 import { useState } from "react";
 
@@ -18,9 +33,11 @@ type Question = { question: string; options: Option[] };
 
 export type AskUserAnswer = { content: string; answers: string };
 
-/** Read the questions out of model-produced args. Anything malformed yields
- * `null` so the card can render nothing — a card that throws would take the
- * whole transcript down with it. */
+/** Read the questions out of the tool args. The shape is fixed and enforced by
+ * the backend's strict schema, so this expects `{question, options:[{label,
+ * description}]}` and returns `null` — render nothing, never throw — if it does
+ * not get it. It does NOT guess alternative field names: that contract belongs
+ * to the tool, not here. */
 function parseQuestions(args: Record<string, unknown>): Question[] | null {
   const raw = args?.questions;
   if (!Array.isArray(raw) || raw.length === 0) return null;
@@ -52,7 +69,7 @@ const DONT_UNDERSTAND =
   "看不懂 — 可能是繞了一大圈、術語太多、字很多但沒重點,或用了我沒看過的詞。" +
   "請重問同一題:直接講、用我熟悉的字、短一點,需要的話給個例子。";
 
-/** How one question's answer reads in the transcript. The four shapes stay
+/** How one question's answer reads in the transcript. The shapes stay
  * distinguishable on purpose: a rejection must not look like a choice, and a
  * note must not look like the answer itself. */
 function answerLine(question: string, picked: string | undefined, note: string): string {
@@ -63,6 +80,52 @@ function answerLine(question: string, picked: string | undefined, note: string):
   if (text) return `${question} → 自訂:${text}`;
   return `${question} → ${UNANSWERED}`;
 }
+
+// Design-token styling so the card reads as part of the app rather than raw
+// browser chrome. Inline objects (this file is inline-styled), but every colour
+// comes from a declared token.
+const optionRow = (active: boolean): React.CSSProperties => ({
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  border: `1px solid ${active ? "var(--accent)" : "var(--paper-3)"}`,
+  background: active ? "var(--accent-soft)" : "var(--paper)",
+  borderRadius: 8,
+  padding: 8,
+});
+const numBadge = (active: boolean): React.CSSProperties => ({
+  flexShrink: 0,
+  width: 22,
+  height: 22,
+  borderRadius: 999,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: "0.78em",
+  fontWeight: 600,
+  color: active ? "var(--white)" : "var(--text-paper-d)",
+  background: active ? "var(--accent)" : "var(--paper-2)",
+});
+const noteInput: React.CSSProperties = {
+  flex: 1,
+  minWidth: 80,
+  padding: "4px 8px",
+  border: "1px solid var(--paper-3)",
+  borderRadius: 6,
+  background: "var(--paper)",
+  color: "var(--text-paper)",
+  fontSize: "0.9em",
+};
+const plainBtn: React.CSSProperties = {
+  padding: "5px 12px",
+  border: "1px solid var(--paper-3)",
+  background: "var(--paper-2)",
+  color: "var(--text-paper)",
+  borderRadius: 6,
+  cursor: "pointer",
+  flexShrink: 0,
+  whiteSpace: "nowrap",
+};
 
 export function AskUserCard({
   call,
@@ -76,8 +139,11 @@ export function AskUserCard({
   answered?: string;
 }) {
   const questions = parseQuestions(call.args ?? {});
+  // Chosen option per question; notes keyed by (question, label) so a note lives
+  // with the specific option it supplements.
   const [picked, setPicked] = useState<Record<number, string>>({});
-  const [notes, setNotes] = useState<Record<number, string>>({});
+  const [optNote, setOptNote] = useState<Record<string, string>>({});
+  const [freeText, setFreeText] = useState<Record<number, string>>({});
 
   if (!questions) return null;
 
@@ -89,137 +155,132 @@ export function AskUserCard({
     );
   }
 
-  const single = questions.length === 1;
-
-  const send = (chosen: Record<number, string>) => {
-    const lines = questions.map((q, i) => answerLine(q.question, chosen[i], notes[i] ?? ""));
+  const noteKey = (qi: number, label: string) => `${qi} ${label}`;
+  const send = () => {
+    const lines = questions.map((q, i) => {
+      const choice = picked[i];
+      if (choice === DONT_UNDERSTAND) return answerLine(q.question, choice, "");
+      const note = choice ? (optNote[noteKey(i, choice)] ?? "") : (freeText[i] ?? "");
+      return answerLine(q.question, choice, note);
+    });
     onAnswer({ content: lines.join("\n"), answers: call.call_id });
   };
 
   return (
-    <div data-testid="ask-user" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div data-testid="ask-user" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {questions.map((q, i) => (
-        <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        <div key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div style={{ fontWeight: 600 }}>{q.question}</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {q.options.map((opt) => {
-              const active = picked[i] === opt.label;
-              return (
-                <button
-                  key={opt.label}
-                  type="button"
-                  aria-pressed={active}
-                  onClick={() => {
-                    // A single question has nothing to wait for — one click is
-                    // the whole answer, so sending it immediately saves the
-                    // user a pointless second click.
-                    if (single) send({ [i]: opt.label });
-                    else setPicked((p) => ({ ...p, [i]: opt.label }));
-                  }}
-                  title={opt.description || undefined}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    gap: 2,
-                    padding: "6px 10px",
-                    textAlign: "left",
-                    borderWidth: active ? 2 : 1,
-                    borderStyle: "solid",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                  }}
-                >
-                  <span>{opt.label}</span>
-                  {opt.description ? (
-                    <span style={{ opacity: 0.7, fontSize: "0.85em" }}>{opt.description}</span>
-                  ) : null}
-                </button>
-              );
-            })}
+
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {q.options.map((opt, oi) => {
+                const active = picked[i] === opt.label;
+                return (
+                  <div key={opt.label} style={optionRow(active)}>
+                    <button
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
+                      title={opt.description || undefined}
+                      style={{
+                        display: "flex",
+                        alignItems: "flex-start",
+                        gap: 8,
+                        flex: "0 1 auto",
+                        minWidth: 0,
+                        background: "transparent",
+                        border: "none",
+                        padding: 0,
+                        textAlign: "left",
+                        cursor: "pointer",
+                        color: "var(--text-paper)",
+                      }}
+                    >
+                      <span style={numBadge(active)}>{oi + 1}</span>
+                      <span
+                        style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}
+                      >
+                        <span style={{ fontWeight: active ? 600 : 400 }}>{opt.label}</span>
+                        {opt.description ? (
+                          <span
+                            style={{
+                              opacity: 0.7,
+                              fontSize: "0.85em",
+                              color: "var(--text-paper-d)",
+                            }}
+                          >
+                            {opt.description}
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                    {/* This option's OWN supplement — a note about THIS choice,
+                        not one shared box that could mean any of them. */}
+                    <input
+                      type="text"
+                      aria-label={`補充:${opt.label}`}
+                      value={optNote[noteKey(i, opt.label)] ?? ""}
+                      placeholder="補充(選填)"
+                      onChange={(e) =>
+                        setOptNote((n) => ({ ...n, [noteKey(i, opt.label)]: e.target.value }))
+                      }
+                      onFocus={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
+                      style={noteInput}
+                    />
+                  </div>
+                );
+              })}
           </div>
+
           {/* Added by the card, never by the agent — so the way out exists even
-              when a small model forgets to offer one. "看不懂" is a rejection of
-              the question, not an answer to it: the agent should re-ask in
-              plainer words rather than proceed on a choice never made. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              when a small model forgets to offer one. "看不懂" rejects the
+              question; the input answers it in the user's own words. */}
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button
               type="button"
-              onClick={() => {
-                if (single) send({ [i]: DONT_UNDERSTAND });
-                else setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }));
-              }}
+              aria-pressed={picked[i] === DONT_UNDERSTAND}
+              onClick={() => setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }))}
               style={{
-                padding: "4px 10px",
-                borderWidth: 1,
-                borderStyle: "solid",
-                borderRadius: 6,
-                cursor: "pointer",
-                flexShrink: 0,
-                whiteSpace: "nowrap",
+                ...plainBtn,
+                borderColor: picked[i] === DONT_UNDERSTAND ? "var(--accent)" : "var(--paper-3)",
               }}
             >
               看不懂
             </button>
             <input
               type="text"
-              value={notes[i] ?? ""}
-              placeholder="補充，或自己回答"
-              onChange={(e) => setNotes((n) => ({ ...n, [i]: e.target.value }))}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                padding: "4px 8px",
-                borderWidth: 1,
-                borderStyle: "solid",
-                borderRadius: 6,
+              aria-label="自己回答"
+              value={freeText[i] ?? ""}
+              placeholder="以上皆非,自己回答"
+              onChange={(e) => {
+                const v = e.target.value;
+                setFreeText((n) => ({ ...n, [i]: v }));
+                // A free answer clears any picked option — it IS the answer now,
+                // so a leftover pick must not ride along with it.
+                if (v) setPicked((p) => (p[i] ? { ...p, [i]: "" } : p));
               }}
+              style={noteInput}
             />
-            {single ? (
-              <button
-                type="button"
-                onClick={() => send(picked)}
-                style={{
-                  padding: "4px 12px",
-                  fontWeight: 600,
-                  borderWidth: 2,
-                  borderStyle: "solid",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  flexShrink: 0,
-                  whiteSpace: "nowrap",
-                }}
-              >
-                送出
-              </button>
-            ) : null}
           </div>
         </div>
       ))}
-      {single ? null : (
-        // Sending without answering everything is allowed on purpose: forcing
-        // a full card makes people pick something to escape it, and an invented
-        // preference is worse than a missing one. The unanswered questions are
-        // reported as unanswered so the agent knows what it still lacks.
-        // The primary action has to read as the primary action: unstyled it came
-        // out looking plainer than 看不懂 beside it, so the one button the user
-        // must press was the least button-like thing on the card.
-        <button
-          type="button"
-          onClick={() => send(picked)}
-          style={{
-            alignSelf: "flex-start",
-            padding: "6px 14px",
-            fontWeight: 600,
-            borderWidth: 2,
-            borderStyle: "solid",
-            borderRadius: 6,
-            cursor: "pointer",
-          }}
-        >
-          送出
-        </button>
-      )}
+
+      <button
+        type="button"
+        onClick={send}
+        style={{
+          alignSelf: "flex-start",
+          padding: "6px 16px",
+          fontWeight: 600,
+          border: "1px solid var(--accent)",
+          background: "var(--accent)",
+          color: "var(--white)",
+          borderRadius: 6,
+          cursor: "pointer",
+        }}
+      >
+        送出
+      </button>
     </div>
   );
 }

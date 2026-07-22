@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import magic
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
@@ -1320,9 +1320,27 @@ _MAX_QUESTIONS = 5
 _MIN_OPTIONS = 2
 
 
+class AskOption(TypedDict):
+    """One choice offered for a question. Both fields are required so the tool's
+    schema is STRICT: an open ``dict[str, Any]`` gave the model no field names to
+    honour, so even a top model split between ``label`` and ``option`` — the shape
+    was the tool's to specify, not the model's to guess. ``description`` says what
+    picking it leads to; pass ``""`` when there is nothing to add."""
+
+    label: str
+    description: str
+
+
+class AskQuestion(TypedDict):
+    """One question and the concrete choices for it."""
+
+    question: str
+    options: list[AskOption]
+
+
 async def ask_user_impl(
     ctx: RunContextWrapper[AgentToolContext],
-    questions: list[dict[str, Any]],
+    questions: list[AskQuestion],
 ) -> str:
     """Ask the user to choose between concrete options, and stop until they answer.
 
@@ -2117,7 +2135,7 @@ _LEGACY_TOOL_RENAMES = {"ls": "list_files"}
 # needs, so they build as non-strict. Entity fields are open by design (the
 # schema lives in the workspace, not the tool signature), so this is correct, not
 # a workaround.
-_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity", "ask_user"})
+_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity"})
 
 
 def builtin_tool_descriptions() -> dict[str, str]:
