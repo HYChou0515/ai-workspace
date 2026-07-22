@@ -20,6 +20,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import asdict
+from typing import Any
 
 from ..events import AgentEvent, event_from_dict
 from .base import IEventBus, OnEvent
@@ -119,7 +120,15 @@ class AioPikaTransport(IAmqpTransport):
                 logger.warning("event_bus: outbound full, dropped a frame")
 
     async def _run(self) -> None:  # pragma: no cover - integration-only
-        import aio_pika  # ty: ignore[unresolved-import]
+        import importlib
+
+        # Loaded dynamically and pinned to Any so ty stays agnostic to whether the
+        # optional aio_pika extra is installed. A static `import aio_pika` makes its
+        # unresolved-import suppression flip used/unused across envs, and once the
+        # real types ARE visible ty rejects connect_robust(heartbeat=...) — aio_pika's
+        # overloads omit heartbeat that the runtime accepts via **kwargs. Typing the
+        # handle Any sidesteps both without a stale ignore comment. Integration-only.
+        aio_pika: Any = importlib.import_module("aio_pika")
 
         conn = await aio_pika.connect_robust(self._url, heartbeat=self._heartbeat)
         channel = await conn.channel()
