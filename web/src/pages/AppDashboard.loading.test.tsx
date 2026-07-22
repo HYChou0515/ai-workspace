@@ -10,7 +10,10 @@ import { AppDashboard } from "./AppDashboard";
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
 
-vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "alice" }));
+vi.mock("../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => "alice",
+  useCurrentUserState: () => ({ id: "alice", ready: true }),
+}));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [],
   useUser: (id: string) => ({ id, name: id, section: "", email: "", photo_url: null }),

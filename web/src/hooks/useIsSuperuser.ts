@@ -3,6 +3,27 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
 
+export type IsSuperuserState = {
+  isSuperuser: boolean;
+  /** True once `GET /me` SETTLED (resolved or failed). While false,
+   * `isSuperuser` is the safe-side placeholder `false`. */
+  ready: boolean;
+};
+
+/**
+ * Superuser status plus whether it has actually been established — the
+ * identity half of `useItemAccess`'s loading contract (see `useCurrentUserState`).
+ * A failed fetch counts as ready: the app then stays at `false`, as before.
+ */
+export function useIsSuperuserState(): IsSuperuserState {
+  const { data, isPending } = useQuery({
+    queryKey: qk.me,
+    queryFn: () => api.getMe(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  return { isSuperuser: data?.is_superuser ?? false, ready: !isPending };
+}
+
 /**
  * Whether the signed-in user is a superuser, read once from `GET /me` and cached
  * app-wide by TanStack Query (mirrors `useCurrentUser`).
@@ -12,10 +33,5 @@ import { qk } from "../api/queryKeys";
  * stays hidden until identity settles, never flashing in for a normal user.
  */
 export function useIsSuperuser(): boolean {
-  const { data } = useQuery({
-    queryKey: qk.me,
-    queryFn: () => api.getMe(),
-    staleTime: Number.POSITIVE_INFINITY,
-  });
-  return data?.is_superuser ?? false;
+  return useIsSuperuserState().isSuperuser;
 }

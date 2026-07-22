@@ -27,8 +27,14 @@ vi.mock("../../hooks/useAgent", () => ({
 }));
 
 const isSuperuser = vi.fn(() => false);
-vi.mock("../../hooks/useIsSuperuser", () => ({ useIsSuperuser: () => isSuperuser() }));
-vi.mock("../../hooks/useCurrentUser", () => ({ useCurrentUser: () => "root" }));
+vi.mock("../../hooks/useIsSuperuser", () => ({
+  useIsSuperuser: () => isSuperuser(),
+  useIsSuperuserState: () => ({ isSuperuser: isSuperuser(), ready: true }),
+}));
+vi.mock("../../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => "root",
+  useCurrentUserState: () => ({ id: "root", ready: true }),
+}));
 
 const manifest = {
   slug: "rca",

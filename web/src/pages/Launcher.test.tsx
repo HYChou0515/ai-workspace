@@ -26,7 +26,10 @@ function TrailProbe() {
   );
 }
 
-vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "alice" }));
+vi.mock("../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => "alice",
+  useCurrentUserState: () => ({ id: "alice", ready: true }),
+}));
 
 vi.mock("../hooks/useResources", () => ({
   useApps: vi.fn(() => [

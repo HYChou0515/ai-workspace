@@ -30,11 +30,17 @@ function TrailProbe() {
 
 // Owner/current-user resolution is its own concern (useUsers tests); stub it so
 // the dashboard test stays hermetic and doesn't reach the network.
-vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "default-user" }));
+vi.mock("../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => "default-user",
+  useCurrentUserState: () => ({ id: "default-user", ready: true }),
+}));
 // Superuser status rides on `GET /me`; stub the hook so these tests never reach
 // the network and each case can pick the identity it needs.
 const isSuperuser = vi.fn(() => false);
-vi.mock("../hooks/useIsSuperuser", () => ({ useIsSuperuser: () => isSuperuser() }));
+vi.mock("../hooks/useIsSuperuser", () => ({
+  useIsSuperuser: () => isSuperuser(),
+  useIsSuperuserState: () => ({ isSuperuser: isSuperuser(), ready: true }),
+}));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [],
   useUser: (id: string) => ({ id, name: id, section: "", email: "", photo_url: null }),
