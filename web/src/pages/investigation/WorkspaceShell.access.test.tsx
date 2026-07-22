@@ -116,4 +116,22 @@ describe("WorkspaceShell — who gets the IDE column", () => {
     expect(await screen.findByTestId("chat")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-locked")).not.toBeInTheDocument();
   });
+
+  // The middle tier: read_chat grants ENTRY, converse grants the composer.
+  // Without this pin, `readOnly={!_canConverse}` could regress to a constant
+  // and every test above would still pass (they only cover the two extremes).
+  it("mounts the chat read-only for a viewer granted read_chat but not converse", async () => {
+    const viewerItem = {
+      ...item,
+      permission: { visibility: "restricted", read_chat: ["user:root"] },
+    } as unknown as AppItem;
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell manifest={manifest} item={viewerItem} files={[]} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-locked")).not.toBeInTheDocument();
+    expect(chatReadOnly).toHaveBeenLastCalledWith(true);
+  });
 });

@@ -9,6 +9,7 @@ import {
   canChangeItemPermission,
   itemGrantsFromPermission,
   itemRoleDef,
+  itemVisibility,
   parseItemPermission,
 } from "../lib/itemPermission";
 import { pxToRem } from "../lib/pxToRem";
@@ -109,8 +110,28 @@ export function ItemAccessDialog({
   onClose: () => void;
 }) {
   const owner = (item.created_by as string) || (item.owner as string) || "";
-  const perm = parseItemPermission((item as Record<string, unknown>).permission);
+  const raw = (item as Record<string, unknown>).permission;
+  const perm = parseItemPermission(raw);
   const access = useSetItemPermission(manifest.slug, item.resource_id);
+  // #578's fail-closed rule, now applied to the WRITE path too: a permission
+  // that is PRESENT but unparseable (FE/BE version skew — a visibility literal
+  // this build doesn't know) must not be folded into public. The chip already
+  // says "unknown" for such rows; opening the editor with a guessed prefill
+  // would turn the guess into a PUT that also wipes whatever grants we failed
+  // to parse. Refuse to edit instead of guessing.
+  if (itemVisibility(raw) === "unknown") {
+    return (
+      <div role="alertdialog" aria-label="Access settings unreadable" data-testid="access-unreadable" style={unreadableBox}>
+        <span>
+          This {manifest.item.noun.toLowerCase()}’s access settings can’t be read by this version of
+          the app, so they can’t be edited here.
+        </span>
+        <button type="button" className="btn" data-variant="secondary" data-size="sm" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    );
+  }
   return (
     <ItemShareDialog
       itemName={(item.title as string) || manifest.item.noun}
@@ -160,6 +181,22 @@ function rosterOf(item: AppItem, perm: ItemPermission | undefined, owner: string
     }),
   ];
 }
+
+const unreadableBox: React.CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  margin: "auto",
+  width: "min(360px, 90vw)",
+  height: "fit-content",
+  background: "var(--paper)",
+  border: "1px solid var(--paper-3)",
+  borderRadius: 8,
+  padding: 16,
+  display: "grid",
+  gap: 12,
+  zIndex: 60,
+  fontSize: pxToRem(13),
+};
 
 const sidebarBody: React.CSSProperties = { padding: 12, display: "grid", gap: 10 };
 const popoverBody: React.CSSProperties = { minWidth: 240, padding: "10px 12px", display: "grid", gap: 8 };

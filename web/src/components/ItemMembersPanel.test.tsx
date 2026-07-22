@@ -115,6 +115,18 @@ describe("ItemMembersPanel", () => {
     expect(screen.getByTestId("share-dialog")).toHaveAttribute("data-visibility", "public");
   });
 
+  it("refuses to edit a permission it cannot parse — no dialog, no guessed prefill", async () => {
+    // #578's fail-closed rule: absent ≡ public, but present-and-UNPARSEABLE
+    // (FE/BE version skew — say a fourth visibility literal) is NOT folded in.
+    // The AccessChip already says "unknown" for such rows; opening the editor
+    // with a guessed Public prefill would turn that guess into a PUT that also
+    // wipes whatever grants the FE failed to parse.
+    render({ permission: { visibility: "experimental" } });
+    fireEvent.click(await screen.findByTestId("members-manage"));
+    expect(screen.getByTestId("access-unreadable")).toBeInTheDocument();
+    expect(screen.queryByTestId("share-dialog")).not.toBeInTheDocument();
+  });
+
   it("saves through the permission endpoint and closes", async () => {
     vi.mocked(api.setItemPermission).mockResolvedValue({ visibility: "public", notified: [] });
     render();
