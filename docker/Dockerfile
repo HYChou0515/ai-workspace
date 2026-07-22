@@ -51,6 +51,17 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ ./src/
 RUN uv sync --frozen --no-dev
 
+# Built-in shared skills + workflow templates. Their registries resolve the
+# source dir as `Path(__file__).parents[3] / "sample-skills"` — and with the
+# editable install above, `__file__` is `/app/src/workspace_app/...`, so
+# parents[3] is `/app`. These must therefore land at `/app/sample-skills` and
+# `/app/sample-workflows` or every built-in skill/template silently vanishes from
+# the picker (profile skills, which ship inside the package, are unaffected).
+# `sample-tools/` is NOT copied on purpose: a tool bundle is mounted, not read
+# from here. Keep in sync with apps/shared_skills.py + workflow/shared.py.
+COPY sample-skills/ ./sample-skills/
+COPY sample-workflows/ ./sample-workflows/
+
 # create_app mounts <repo>/web/dist at /; here <repo> == /app.
 COPY --from=web /web/dist ./web/dist
 
