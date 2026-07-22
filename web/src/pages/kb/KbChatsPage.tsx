@@ -16,7 +16,9 @@ import { Skeleton } from "../../components/Skeleton";
 import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useIsSuperuser } from "../../hooks/useIsSuperuser";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
+import { canManageAccess } from "../../lib/permission";
 import { kbChatLabel } from "./kbChatLabel";
 
 type Tab = "all" | "pinned" | "shared";
@@ -57,6 +59,7 @@ export function KbChatsPage({
   }, [refreshSignal, refetch]);
 
   const me = useCurrentUser();
+  const isSuperuser = useIsSuperuser();
   const dialog = useOptionalDialog();
   const pinned = usePersistentSet("kb:pinned-chats");
   const [tab, setTab] = useState<Tab>("all");
@@ -108,6 +111,10 @@ export function KbChatsPage({
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
   });
 
+  // Display/tab split only ("Shared with me", msgs-vs-owner-chip). The MANAGE
+  // buttons are gated separately below — rename (write_meta), share
+  // (change_permission) and delete (owner-or-superuser) all authorize a
+  // superuser server-side, and an owner-less row must never read as "mine".
   const isMine = (c: KbChatSummary) => (c.owner ?? me) === me;
   const sharedCount = chats.filter((c) => !isMine(c)).length;
   const pinnedCount = chats.filter((c) => pinned.has(c.resource_id)).length;
@@ -135,6 +142,7 @@ export function KbChatsPage({
 
   const row = (c: KbChatSummary) => {
     const owned = isMine(c);
+    const canManage = canManageAccess(c.owner, me, isSuperuser);
     const isPinned = pinned.has(c.resource_id);
     const label = kbChatLabel(c); // #357: title → name_hint → timestamp
     return (
@@ -190,7 +198,7 @@ export function KbChatsPage({
         >
           <Icon name="pin" size={14} />
         </button>
-        {owned && (
+        {canManage && (
           <>
             <button
               type="button"
@@ -215,7 +223,9 @@ export function KbChatsPage({
                   </div>
                   <UserPicker
                     selected={c.shared_with ?? []}
-                    exclude={[me]}
+                    // The owner needs no share row, and neither does the person
+                    // doing the sharing (a superuser managing someone else's chat).
+                    exclude={[me, c.owner ?? me]}
                     onToggle={(userId) =>
                       shareMut.mutate({
                         chatId: c.resource_id,

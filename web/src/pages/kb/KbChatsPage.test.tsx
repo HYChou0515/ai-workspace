@@ -239,4 +239,45 @@ describe("KbChatsPage", () => {
     // a shared (non-owned) chat has no delete/share controls
     expect(screen.queryByRole("button", { name: /Delete Alice's research/ })).toBeNull();
   });
+
+  // The row's Rename / Share / Delete mirror the backend gates (write_meta /
+  // change_permission / owner-or-superuser — kb_chat_routes), all of which
+  // authorize superusers. The superuser's list scope is UNRESTRICTED (they see
+  // every chat), yet `owned = (c.owner ?? me) === me` hid every manage button.
+  it("offers Rename/Share/Delete to a superuser on another user's chat", async () => {
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true });
+    const client = {
+      ...mockKbApi,
+      listChats: async () => [
+        {
+          resource_id: "chat:s1",
+          title: "Alice's research",
+          collection_ids: [],
+          message_count: 3,
+          owner: "alice",
+          shared_with: [],
+        },
+      ],
+    } as typeof mockKbApi;
+    render(<KbChatsPage client={client} />);
+
+    expect(await screen.findByRole("button", { name: "Delete Alice's research" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename Alice's research" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Share Alice's research" })).toBeInTheDocument();
+  });
+
+  it("does NOT treat an owner-less row as mine (unknown ≠ mine)", async () => {
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false });
+    const client = {
+      ...mockKbApi,
+      listChats: async () => [
+        { resource_id: "chat:x", title: "Orphan", collection_ids: [], message_count: 1 },
+      ],
+    } as typeof mockKbApi;
+    render(<KbChatsPage client={client} />);
+
+    expect(await screen.findByRole("button", { name: /^Orphan/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Delete Orphan" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Rename Orphan" })).toBeNull();
+  });
 });

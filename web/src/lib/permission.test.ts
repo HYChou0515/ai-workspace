@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   type CollectionPermission,
   EVERYONE,
+  canManageAccess,
   grantsFromPermission,
   permissionFromGrants,
   previewSubjects,
@@ -128,5 +129,30 @@ describe("previewSubjects — visibility semantics", () => {
     const p = withGrants();
     expect(previewSubjects("restricted", p, "read_content")).toEqual(["user:alice", "user:bob"]);
     expect(previewSubjects("restricted", p, "read_meta")).toEqual(["user:alice"]);
+  });
+});
+
+describe("canManageAccess — the owner-or-superuser gate for management affordances", () => {
+  it("lets the owner manage their own resource", () => {
+    expect(canManageAccess("alice", "alice", false)).toBe(true);
+  });
+
+  it("lets a superuser manage a resource they do not own (authorize.py step 2)", () => {
+    // The bug class this pins down: the control was `owner === me`, hiding the
+    // entry point from admins even though the backend authorises them.
+    expect(canManageAccess("alice", "root", true)).toBe(true);
+  });
+
+  it("hides the affordance from a plain non-owner", () => {
+    expect(canManageAccess("alice", "bob", false)).toBe(false);
+  });
+
+  it("treats an UNKNOWN owner as not-mine, not as mine", () => {
+    // `owner ?? me` gating treated "owner not loaded yet" as "my resource",
+    // flashing management buttons at non-owners while data settles.
+    expect(canManageAccess(undefined, "bob", false)).toBe(false);
+    expect(canManageAccess(null, "bob", false)).toBe(false);
+    // …but a superuser needs no owner fact at all.
+    expect(canManageAccess(undefined, "root", true)).toBe(true);
   });
 });

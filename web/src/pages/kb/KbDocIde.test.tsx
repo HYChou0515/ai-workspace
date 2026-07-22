@@ -6,6 +6,7 @@ import type { ReactElement } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../../api";
 import type { KbApi, KbDocument } from "../../api/kb";
 import { renderWithQuery as renderQ } from "../../test/queryWrapper";
 import { docHref } from "./kbLinks";
@@ -651,5 +652,17 @@ describe("KbDocIde", () => {
     // the editor header renders (the doc opened) but no Permissions button
     expect(await screen.findByTestId("kb-ide-status")).toHaveTextContent("/notes.md");
     expect(screen.queryByTestId("doc-permissions")).not.toBeInTheDocument();
+  });
+
+  it("offers the Permissions action to a superuser who is not the collection owner", async () => {
+    // The backend gate (_authorize_doc_permission) is owner OR superuser; the
+    // FE control was a bare owner string-compare, hiding it from admins.
+    const spy = vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true });
+    try {
+      await openDoc("someone-else");
+      expect(await screen.findByTestId("doc-permissions")).toBeInTheDocument();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -18,6 +18,14 @@
  * optimistically writable rather than flashing a read-only board), but a consumer
  * that renders CONTENT off these flags must gate on the item being loaded first,
  * or it will paint a full workspace for an item it hasn't seen yet.
+ *
+ * The IDENTITY half follows the same direction: until both identity queries
+ * settle (`useCurrentUserState` / `useIsSuperuserState`, resolved OR failed),
+ * the fallbacks ("default-user", not a superuser) describe a nobody, and
+ * computing verbs from them locked the owner/admin out of a cold deep-link's
+ * first paint (🔒 flash, vanished IDE — and `useEntityWrite` silently dropped
+ * writes made inside the window). Every verb is optimistic until identity
+ * settles; the server still enforces on every route either way.
  */
 
 import type { AppItem } from "../api/types";
@@ -29,8 +37,8 @@ import {
   isDiscoverableOnly,
   parseItemPermission,
 } from "../lib/itemPermission";
-import { useCurrentUser } from "./useCurrentUser";
-import { useIsSuperuser } from "./useIsSuperuser";
+import { useCurrentUserState } from "./useCurrentUser";
+import { useIsSuperuserState } from "./useIsSuperuser";
 
 export type ItemAccess = {
   /** Enter the item and watch its conversation (`read_chat`). */
@@ -46,8 +54,18 @@ export type ItemAccess = {
 };
 
 export function useItemAccess(item: AppItem | undefined): ItemAccess {
-  const me = useCurrentUser();
-  const isSuperuser = useIsSuperuser();
+  const { id: me, ready: meReady } = useCurrentUserState();
+  const { isSuperuser, ready: superuserReady } = useIsSuperuserState();
+  if (!(meReady && superuserReady)) {
+    // LOADING CONTRACT, identity half — see the module docstring.
+    return {
+      canReadChat: true,
+      canSeeFiles: true,
+      canConverse: true,
+      canWrite: true,
+      isDiscoverableOnly: false,
+    };
+  }
   // Owner-for-access is `created_by` (the real owner), not the display `owner`
   // field, which apps are free to repurpose as a domain assignee.
   const owner = item?.created_by ?? "";

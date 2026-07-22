@@ -165,6 +165,31 @@ export function permissionFromGrants(
   return next;
 }
 
+/** The owner-or-superuser gate for management affordances whose permission
+ * object the FE has NOT fetched at gate time (collection "Manage access", the
+ * per-doc Permissions dialog, a chat's rename/share/delete). Mirrors
+ * `perm/authorize.py` steps 2+4: a direct human superuser passes everything,
+ * the owner passes their own resource.
+ *
+ * An UNKNOWN owner (still loading / a legacy row without meta) is NOT the
+ * current user: gating on `owner ?? me` treated "don't know yet" as "mine" and
+ * flashed management buttons at non-owners. A `change_permission` delegate is
+ * not reflected here — these call sites have no permission object to consult —
+ * so a delegate simply doesn't see the shortcut; the server still honours them.
+ *
+ * `isSuperuser` is REQUIRED, same reasoning as `hasItemVerb`: the whole bug
+ * class this fixes is a call site that never mentioned superusers (`owner ===
+ * me`), leaving admins without an entry point the backend had always allowed.
+ * Prefer wiring it from `useIsSuperuser()`. */
+export function canManageAccess(
+  ownerId: string | null | undefined,
+  currentUserId: string,
+  isSuperuser: boolean,
+): boolean {
+  if (isSuperuser) return true; // authorize.py step 2 — before any owner fact
+  return ownerId != null && ownerId === currentUserId;
+}
+
 /** Display token for "anyone in the workspace" in the advanced preview — public
  * grants a verb to everyone without listing subjects (the backend just returns
  * True), so the preview shows this rather than a user list. Display-only. */

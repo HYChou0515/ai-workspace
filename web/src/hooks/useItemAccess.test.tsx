@@ -46,8 +46,9 @@ describe("useItemAccess", () => {
 
   // Deliberately NOT "everything false on a private item": every value there is
   // also the pre-resolution value, so such a test passes even if the hook never
-  // reads identity at all. Grant one verb, wait for THAT to turn true — proof the
-  // queries resolved — and only then assert the others are still denied.
+  // reads identity at all. Wait for a DENIED verb to turn false — pre-settle the
+  // hook is optimistic (all true), so a denial is proof identity resolved — and
+  // only then assert the grant survived.
   it("still denies the verbs a plain non-owner was not granted", async () => {
     signInAs("dave", false);
     const { result } = access({
@@ -55,8 +56,8 @@ describe("useItemAccess", () => {
       permission: { visibility: "restricted", read_meta: ["user:dave"], read_chat: ["user:dave"] },
     } as unknown as AppItem);
 
-    await waitFor(() => expect(result.current.canReadChat).toBe(true));
-    expect(result.current.canSeeFiles).toBe(false);
+    await waitFor(() => expect(result.current.canSeeFiles).toBe(false));
+    expect(result.current.canReadChat).toBe(true);
     expect(result.current.canConverse).toBe(false);
     expect(result.current.canWrite).toBe(false);
   });
@@ -78,5 +79,24 @@ describe("useItemAccess", () => {
 
     await waitFor(() => expect(result.current.isDiscoverableOnly).toBe(true));
     expect(result.current.canSeeFiles).toBe(false);
+  });
+
+  // The identity half of the LOADING CONTRACT: before `GET current user` / `GET
+  // /me` resolve, useCurrentUser says "default-user" and useIsSuperuser says
+  // false — which read as "a nobody". On a cold deep-link that locked the very
+  // people the item belongs to (owner, admin) out of the first paint: 🔒 rows,
+  // a vanished IDE column — and useEntityWrite silently DROPPED a write
+  // completed inside the window. Identity-pending must stay optimistic, same
+  // direction the contract already chose for a still-loading item.
+  it("stays optimistic while identity is still resolving (no pessimistic lock flash)", () => {
+    vi.mocked(api.getCurrentUser).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.getMe).mockReturnValue(new Promise(() => {}));
+    const { result } = access(privateItem);
+
+    expect(result.current.canReadChat).toBe(true);
+    expect(result.current.canSeeFiles).toBe(true);
+    expect(result.current.canConverse).toBe(true);
+    expect(result.current.canWrite).toBe(true);
+    expect(result.current.isDiscoverableOnly).toBe(false);
   });
 });

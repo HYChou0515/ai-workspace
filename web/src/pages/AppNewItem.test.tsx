@@ -14,7 +14,10 @@ const createAppItem = vi.fn().mockResolvedValue({ resource_id: "rca-investigatio
 const navigate = vi.fn();
 
 vi.mock("../api", () => ({ api: { createAppItem: (...a: unknown[]) => createAppItem(...a) } }));
-vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "default-user" }));
+vi.mock("../hooks/useCurrentUser", () => ({
+  useCurrentUser: () => "default-user",
+  useCurrentUserState: () => ({ id: "default-user", ready: true }),
+}));
 vi.mock("../hooks/useUsers", () => ({
   useUsers: () => [],
   useUser: (id: string) => ({ id, name: id, section: "", email: "", photo_url: null }),

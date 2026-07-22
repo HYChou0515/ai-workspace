@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { EditModeProvider } from "../../hooks/editMode";
@@ -45,7 +45,12 @@ vi.mock("../../components/MonacoEditor", () => ({
   ),
 }));
 
+// §E — the renderer derives the member's write permission through this hook;
+// stub the seam (its own decision tree is covered in useItemCanWrite.test).
+vi.mock("../../hooks/useItemCanWrite", () => ({ useItemCanWrite: vi.fn(() => true) }));
+
 import { EntityConflictError } from "../../api/entities";
+import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { RecordFileRenderer } from "./RecordFileRenderer";
 
 const ISSUE_TYPE = {
@@ -98,6 +103,24 @@ afterEach(() => {
 });
 
 describe("RecordFileRenderer (§C2)", () => {
+  // clearAllMocks wipes call history but ALSO the per-test return overrides —
+  // re-arm the default (writable member) before each test.
+  beforeEach(() => vi.mocked(useItemCanWrite).mockReturnValue(true));
+
+  it("shows a read-only member the record WITHOUT live write affordances (§E)", async () => {
+    // The renderer used to omit `canWrite`, and useEntityWrite's `?? true`
+    // default silently made every read-only member's editor look writable —
+    // fields enabled, Save active, and the save then 403'd server-side.
+    vi.mocked(useItemCanWrite).mockReturnValue(false);
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({ entities: [RECORD5], invalid: [] });
+
+    renderAt("/issues/5.md");
+
+    expect(await screen.findByLabelText("title")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
   it("renders the entity file editor for a record file and saves through the update route", async () => {
     mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
     mock.list.mockResolvedValue({ entities: [RECORD5], invalid: [] });

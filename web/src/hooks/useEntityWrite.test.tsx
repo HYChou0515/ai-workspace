@@ -25,7 +25,7 @@ const rec = (number: number, version: string, fields: Record<string, unknown> = 
   version,
 });
 
-function setup(entities: EntityInstance[], options?: UseEntityWriteOptions) {
+function setup(entities: EntityInstance[], options: UseEntityWriteOptions = { canWrite: true }) {
   const qc: QueryClient = makeTestQueryClient();
   qc.setQueryData<EntityList>(qk.entities.list(SLUG, ITEM, TYPE), { entities, invalid: [] });
   const { result } = renderHook(() => useEntityWrite(SLUG, ITEM, TYPE, options), {
