@@ -545,6 +545,14 @@ async def test_cancel_signals_the_epoch_even_when_the_runs_task_is_on_a_peer_pod
     assert result is True  # dispatched cross-pod, not a silent no-op
 
 
+async def test_cancel_unknown_run_is_a_noop(spec_instance: SpecStar):
+    async def _run(wf, inputs):
+        return {}
+
+    orch, _ = _orch(spec_instance, _run)
+    assert await orch.cancel("does-not-exist", "i") is False
+
+
 async def test_human_gate_suspends_then_decision_resumes(spec_instance: SpecStar):
     async def run(wf, inputs):
         d = await human_gate(

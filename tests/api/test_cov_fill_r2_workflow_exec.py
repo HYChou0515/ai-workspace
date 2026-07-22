@@ -200,3 +200,23 @@ async def test_drive_turn_aborts_the_run_after_a_stop(monkeypatch):
     # The next turn boundary must abort the run, not run another step.
     with pytest.raises(asyncio.CancelledError):
         await executor.drive_turn(item_id, rid, "u", "again", None)
+
+
+async def test_drive_turn_aborts_when_a_stop_lands_during_the_turn(monkeypatch):
+    """The post-turn check: a Stop that lands DURING a turn advances the epoch after
+    drive_turn's pre-check passed. It must abort at the boundary (essential when the
+    stopped turn is the run's LAST) — the watcher has already cancelled the turn."""
+    _spec, executor, item_id = _build(monkeypatch)
+    rid, _ = executor._locator.conversation_for(item_id)
+
+    real = executor._turn_engine.cancel_epoch
+    n = {"c": 0}
+
+    async def epoch(key: str) -> int:
+        n["c"] += 1
+        base = await real(key)
+        return base + (1 if n["c"] >= 3 else 0)  # 1=baseline, 2=pre-check, 3=post-check
+
+    monkeypatch.setattr(executor._turn_engine, "cancel_epoch", epoch)
+    with pytest.raises(asyncio.CancelledError):
+        await executor.drive_turn(item_id, rid, "u", "hi", None)
