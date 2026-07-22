@@ -27,6 +27,13 @@ _IMAGE_MIMES = {"image/png", "image/jpeg", "image/webp"}
 _IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
 
 
+def is_image_file(filename: str) -> bool:
+    """Whether *filename* is a raster image this KB image-embeds (#519). By
+    EXTENSION, mirroring ``code_lang.is_code_file`` — cheap, no byte sniff, and
+    the same set ``VlmImageParser`` describes."""
+    return filename.lower().endswith(_IMAGE_EXTENSIONS)
+
+
 class VlmImageParser(IParser):
     def __init__(self, describer: VlmDescriber | None) -> None:
         self._describer = describer

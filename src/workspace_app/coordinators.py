@@ -76,6 +76,7 @@ def build_ingestor(
     code_embedder: Embedder | None = None,
     parser_registry: object | None = None,
     image_fetcher: object | None = None,
+    image_embedder: object | None = None,
 ) -> Ingestor:
     """Build the KB ``Ingestor`` the index coordinator runs. Pipeline mode (P1)
     takes precedence; the legacy chunker stays for tests + offline runs that
@@ -90,6 +91,7 @@ def build_ingestor(
             code_embedder=code_embedder,
             parser_registry=parser_registry,  # ty: ignore[invalid-argument-type]
             image_fetcher=image_fetcher,  # ty: ignore[invalid-argument-type]
+            image_embedder=image_embedder,  # ty: ignore[invalid-argument-type]
         )
     return Ingestor(
         spec,
@@ -99,6 +101,7 @@ def build_ingestor(
         code_embedder=code_embedder,
         parser_registry=parser_registry,  # ty: ignore[invalid-argument-type]
         image_fetcher=image_fetcher,  # ty: ignore[invalid-argument-type]
+        image_embedder=image_embedder,  # ty: ignore[invalid-argument-type]
     )
 
 

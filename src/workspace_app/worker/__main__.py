@@ -48,6 +48,7 @@ def build_bundle(
         code_embedder=f.get_code_embedder(settings),
         parser_registry=f.get_parser_registry(settings),
         image_fetcher=f.get_image_fetcher(settings),
+        image_embedder=f.get_image_embedder(settings),
     )
     bundle = build_coordinators(
         spec,

@@ -645,6 +645,7 @@ def create_app(
         code_embedder=kb_code_embedder,
         parser_registry=kb_parser_registry,
         image_fetcher=kb_image_fetcher,
+        image_embedder=kb_image_embedder,
     )
     # #54: the code-sync sweeper (in api/lifecycle.py) reads the ingestor off
     # app.state at startup — the ingestor is built after the FastAPI app, so the

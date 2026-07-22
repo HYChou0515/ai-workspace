@@ -33,6 +33,7 @@ from .code_lang import is_code_file
 from .doc_id import canonical_path, encode_doc_id
 from .doc_permission import collection_mirror_fields
 from .embedder import Embedder
+from .image_embedder import ImageEmbedder
 from .image_fetcher import IImageFetcher
 from .image_refs import extract_image_urls
 from .index_cache import IndexCacheStore, compute_cache_key
@@ -44,6 +45,7 @@ from .parsers.llamaindex_readers import DocxParser, HtmlParser
 from .parsers.pdf import PdfParser
 from .parsers.slides import PptxParser
 from .parsers.tabular import CsvParser, ExcelParser
+from .parsers.vlm_image import is_image_file
 from .tokens import count_tokens
 from .upload_checks import UploadCheckRegistry, bundled_upload_checks
 
@@ -296,6 +298,7 @@ class Ingestor:
         parser_registry: ParserRegistry | None = None,
         upload_checks: UploadCheckRegistry | None = None,
         image_fetcher: IImageFetcher | None = None,
+        image_embedder: ImageEmbedder | None = None,
     ) -> None:
         """Doc-ingest mode (P1):
         - **`pipeline`** (production): LlamaIndex `IngestionPipeline`
@@ -317,6 +320,11 @@ class Ingestor:
         # embedder_id != 0, chunks are routed through this embedder and the
         # vector lands on DocChunk.embedding_alt instead of .embedding.
         self._code_embedder = code_embedder
+        # #519: image embedder for DocChunk.embedding_img. When wired, an image
+        # document's chunks carry a vector of the PIXELS (beside the VLM text
+        # description vector), so query-by-image has something to match. None ⇒
+        # the column stays unset, byte-for-byte the pre-#519 path.
+        self._image_embedder = image_embedder
         # Issue #39: pluggable parsers handle binary uploads. The
         # factory builds this from `kb.parsers: [...]` (custom) + the
         # bundled PDF/HTML/DOCX. Tests + offline callers that don't
@@ -986,6 +994,14 @@ class Ingestor:
         # (parser A's last chunk is seq N; parser B's first is N+1).
         use_alt = self._use_alt_for(collection_id, path)
         sfid = content_hash(data)
+        # #519: one image vector for the whole image doc, computed from the
+        # PIXELS. Every chunk of an image doc carries it, so the image dense arm
+        # ranks any of them and parent-merge collapses to the doc.
+        img_vec = (
+            self._image_embedder.embed_documents([data])[0]
+            if self._image_embedder is not None and is_image_file(path)
+            else None
+        )
         seq_offset = 0
         for parser_id, docs in packets:
             seq_offset += self._emit_packet(
@@ -996,6 +1012,7 @@ class Ingestor:
                 seq_base=seq_offset,
                 use_alt=use_alt,
                 source_file_id=sfid,
+                image_vec=img_vec,
             )
         return _IndexOutput(full_text or None, preview)
 
@@ -1010,6 +1027,7 @@ class Ingestor:
         use_alt: bool,
         source_file_id: str = "",
         deterministic: bool = False,
+        image_vec: list[float] | None = None,
     ) -> int:
         """Split + embed one parser packet's Documents into ``DocChunk`` rows,
         numbering ``seq`` from ``seq_base``. Returns the node count so the caller
@@ -1026,6 +1044,7 @@ class Ingestor:
             seq_base=seq_base,
             use_alt=use_alt,
             source_file_id=source_file_id,
+            image_vec=image_vec,
         )
         for chunk in chunks:
             if deterministic:
@@ -1044,6 +1063,7 @@ class Ingestor:
         seq_base: int,
         use_alt: bool,
         source_file_id: str = "",
+        image_vec: list[float] | None = None,
     ) -> list[DocChunk]:
         """Split + embed a parser packet's Documents into ``DocChunk`` objects,
         numbering ``seq`` from ``seq_base`` — but NOT persisted. The shared core
@@ -1074,6 +1094,7 @@ class Ingestor:
                     text=n.get_content(),
                     embedding=None if use_alt else (n.embedding or None),
                     embedding_alt=alt_vecs[i] if (use_alt and alt_vecs is not None) else None,
+                    embedding_img=image_vec,
                     parser_id=parser_id,
                     provenance=_collect_provenance(n.metadata),
                 )
