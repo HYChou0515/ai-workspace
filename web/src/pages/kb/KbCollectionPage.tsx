@@ -37,10 +37,11 @@ import { Icon, type IconName } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { Popover } from "../../components/Popover";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useIsSuperuser } from "../../hooks/useIsSuperuser";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { type MsgKey, useT } from "../../lib/i18n";
-import type { CollectionPermission } from "../../lib/permission";
+import { type CollectionPermission, canManageAccess } from "../../lib/permission";
 import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionFormat";
 import { CodeConnectionEditor } from "./CodeConnectionEditor";
 import { CodeSyncStatus } from "./CodeSyncStatus";
@@ -127,9 +128,12 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState("");
   const [confirmDel, setConfirmDel] = useState(false);
-  // #310: the share/permission dialog (owner-only). The current access state is
-  // fetched lazily when it opens; Save PUTs the full desired state.
+  // #310: the share/permission dialog (owner or superuser — the backend gate is
+  // change_permission, which authorize.py grants both; delegates are honoured
+  // server-side but get no shortcut here since the permission is fetched lazily).
+  // The current access state is fetched when it opens; Save PUTs the full state.
   const me = useCurrentUser();
+  const isSuperuser = useIsSuperuser();
   const [sharing, setSharing] = useState(false);
   // #101: a zip staged for "import into this collection", held until the user
   // picks how a path collision resolves (overwrite | skip). null ⇒ no dialog.
@@ -671,7 +675,7 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
                 <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); importIntoRef.current?.click(); }}>
                   <Icon name="upload" size={14} color="var(--text-paper-d)" /> Import into this collection
                 </button>
-                {selected.owner === me ? (
+                {canManageAccess(selected.owner, me, isSuperuser) ? (
                   <button type="button" role="menuitem" className="kb-menu__item" data-testid="manage-access" onClick={() => { close(); setSharing(true); }}>
                     <Icon name="users" size={14} color="var(--text-paper-d)" /> Manage access
                   </button>

@@ -11,6 +11,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../../api";
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
 import type { KbDocumentsPage } from "../../api/kb";
 import { uploadDocPath } from "./collectionFormat";
@@ -1041,5 +1042,49 @@ describe("KbCollectionsPage", () => {
     const colId = (await mockKbApi.listCollections()).find((c) => c.name === "kb")!.resource_id;
     await waitFor(() => expect(intoSpy).toHaveBeenCalledWith(colId, file, "skip"));
     intoSpy.mockRestore();
+  });
+});
+
+// The settings menu's "Manage access" entry mirrors the backend gate for
+// PUT /kb/collections/{id}/permission: owner OR superuser (authorize.py step 2).
+// It was `selected.owner === me`, which hid the entry point from admins — the
+// same bug class #580 fixed for items (canChangeItemPermission's doc comment).
+describe("KbCollectionPage — Manage access gate", () => {
+  beforeEach(() => _resetKbMock());
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const collections = async () => [col({ resource_id: "c1", name: "kb", owner: "alice" })];
+
+  it("offers Manage access to a superuser who is not the owner", async () => {
+    vi.spyOn(api, "getCurrentUser").mockResolvedValue("root");
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "root", is_superuser: true });
+    const client = {
+      listCollections: collections,
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
+    expect(await screen.findByTestId("manage-access")).toBeInTheDocument();
+  });
+
+  it("still hides Manage access from a plain non-owner", async () => {
+    vi.spyOn(api, "getCurrentUser").mockResolvedValue("bob");
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "bob", is_superuser: false });
+    const client = {
+      listCollections: collections,
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
+    // the menu is open (delete is there) but the access entry is not
+    expect(screen.getByRole("menuitem", { name: "Delete collection" })).toBeInTheDocument();
+    expect(screen.queryByTestId("manage-access")).not.toBeInTheDocument();
   });
 });
