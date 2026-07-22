@@ -5,10 +5,12 @@ uid/gid + cgroup isolation. When unprivileged user namespaces are available,
 `exec` runs each command inside a user+mount namespace chrooted onto the
 sandbox directory, so that:
 
-  * the user **workspace is `/root`** — the agent's cwd and `$HOME` (`~`). File
-    ops + `walk` are scoped here. The sandbox root (the chroot `/`) is the
-    **infra area**: system overlays + provisioned tools live there, OUTSIDE the
-    workspace, so they're never walked, synced, or shown in the file tree.
+  * the user **workspace is `/root`** — the agent's cwd. File ops + `walk` are
+    scoped here. `$HOME` (`~`) is a SEPARATE dir, `/.home`, in the infra area —
+    so a tool's profile/cache (e.g. LibreOffice's user installation) never
+    pollutes or locks on the synced workspace. The sandbox root (the chroot `/`)
+    is the **infra area**: system overlays + provisioned tools + `.home` live
+    there, OUTSIDE the workspace, so they're never walked, synced, or in the tree.
   * the host filesystem is not reachable, and system dirs (`/usr`, `/etc`)
     are bind-mounted read-only so the agent can't tamper with the host.
 
@@ -112,9 +114,11 @@ PATH="/tmp/.jailbin:$PATH"
 export PATH
 PROFILED
 chmod 644 "$ROOT/etc/profile.d/jailbin.sh"
-# The workspace is /root (the agent's ~/cwd); the sandbox root holds infra
-# (system overlays, provisioned tools) that the workspace walk never sees.
-exec /usr/sbin/chroot "$ROOT" /bin/sh -ec 'cd /root; export HOME=/root; exec "$@"' sh "$@"
+# cwd is the workspace (/root); HOME is /.home, a workspace sibling in the infra
+# area (never walked/synced, reaped with the sandbox) — so a tool that writes its
+# profile to $HOME (LibreOffice's user installation) doesn't pollute or lock on
+# the synced workspace. Mirrors the unjailed branch's HOME=<root>/.home.
+exec /usr/sbin/chroot "$ROOT" /bin/sh -ec 'cd /root; export HOME=/.home; exec "$@"' sh "$@"
 """
 
 
@@ -369,13 +373,23 @@ class LocalProcessSandbox:
             # — it is the jail catching up to the unjailed path.
             env["SANDBOX_HOME"] = f"/{_HOME}"
         else:
-            # No chroot: run directly in the workspace subdir, HOME → workspace.
+            # No chroot: run directly in the workspace subdir. cwd is the
+            # workspace (the user's files); HOME is the per-sandbox `.home`.
             argv = cmd
             sub_cwd = ws
-            env["HOME"] = str(ws)
-            # #393: route the carrier launcher's HOME (caches + any `pip --user`
-            # install fallback) to the per-sandbox `.home` (a workspace sibling,
-            # reaped with the sandbox), NOT a shared /tmp. Survives the `setpriv`
+            # HOME is the sandbox's own `.home`, NOT the workspace. A tool that
+            # writes its profile/cache to $HOME (LibreOffice's user installation
+            # is the one that surfaced this — `soffice` aborts "User installation
+            # could not be completed" when it can't create/lock its profile) must
+            # not land it in the workspace: there it is mirrored to (possibly NFS)
+            # durable, persists across turns, and pollutes the file tree + quota.
+            # `.home` is a workspace sibling in the infra area — never walked or
+            # synced, reaped with the sandbox — and `_provision` chowns it to the
+            # exec uid (0700). #393 moved only the CARRIER launcher's HOME here;
+            # this moves EVERY exec's, so a plain `soffice`/`git`/… works the same.
+            env["HOME"] = str(root / _HOME)
+            # SANDBOX_HOME names the same dir for the carrier launcher's
+            # `export HOME="${SANDBOX_HOME:-…}"` (#393). Survives the `setpriv`
             # wrap (no `--reset-env`) so the dropped uid's launcher reads it.
             env["SANDBOX_HOME"] = str(root / _HOME)
             # (Re)build + prepend the `python` shim so `python`/`python3*` route

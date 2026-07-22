@@ -56,3 +56,25 @@ async def test_what_a_jailed_exec_writes_to_home_is_there_for_the_next_one(tmp_p
     second = await sb.exec(h, ["sh", "-c", 'cat "$SANDBOX_HOME/marker"'])
     assert second.exit_code == 0, second.stderr
     assert second.stdout.decode().strip() == "kept"
+
+
+async def test_a_plain_exec_gets_home_off_the_synced_workspace(tmp_path) -> None:
+    """HOME for ANY exec — not just the carrier launcher — is the per-sandbox
+    `.home`, never the workspace.
+
+    A tool that writes its profile to ``$HOME`` must not land it in the workspace:
+    there it is mirrored to (possibly NFS) durable and persists across turns, and
+    LibreOffice — the tool that exposed this — then cannot create/lock its user
+    profile and aborts with "User installation could not be completed", so
+    ``soffice --convert-to pdf`` produces nothing in a sandbox while the KB parser
+    (app process, HOME=/root) converts the same deck fine. cwd stays the workspace
+    (the user's files); HOME is the config/cache home, a workspace sibling that is
+    never walked or synced. Completes #393, which moved only the carrier's HOME.
+    """
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec(), sandbox_id="pinned")
+    _argv, cwd, env = sb._exec_argv(h, ["true"])
+    home = Path(env["HOME"])
+    assert home == Path(cwd).parent / ".home"  # the infra-area sibling
+    assert home != Path(cwd)  # NOT the mirrored workspace
+    assert home.is_dir()  # provisioned + writable by the exec
