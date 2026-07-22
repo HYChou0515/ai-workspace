@@ -23,7 +23,8 @@ import { DialogProvider, useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
-import { DOC_ROLES, type CollectionPermission } from "../../lib/permission";
+import { useIsSuperuser } from "../../hooks/useIsSuperuser";
+import { DOC_ROLES, type CollectionPermission, canManageAccess } from "../../lib/permission";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
@@ -131,10 +132,12 @@ function KbDocIdeBody({
     void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(collectionId) });
   }, [qc, collectionId]);
 
-  // #308: only the COLLECTION owner (the backend authority for a per-doc override)
-  // is offered the per-doc "Permissions" action. Owner-ness is a string compare
-  // against the cached collection list; the endpoints re-check server-side.
+  // #308: the per-doc "Permissions" action is offered to whoever the backend
+  // authority (_authorize_doc_permission) accepts: the COLLECTION owner or a
+  // superuser. Owner-ness is a string compare against the cached collection
+  // list; the endpoints re-check server-side.
   const me = useCurrentUser();
+  const isSuperuser = useIsSuperuser();
   const collectionsQuery = useQuery({
     queryKey: qk.kb.collections,
     queryFn: () => client.listCollections(),
@@ -142,7 +145,7 @@ function KbDocIdeBody({
   const collectionOwner = collectionsQuery.data?.find(
     (c) => c.resource_id === collectionId,
   )?.owner;
-  const canManagePerms = collectionOwner != null && collectionOwner === me;
+  const canManagePerms = canManageAccess(collectionOwner, me, isSuperuser);
   // The doc whose per-doc read-override dialog is open (null = closed) — the same
   // shape as `tuneDoc`, opened from the editor header.
   const [permDoc, setPermDoc] = useState<KbDocument | null>(null);
