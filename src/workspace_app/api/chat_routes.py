@@ -74,17 +74,23 @@ def register_chat_routes(
         return Response(status_code=status.HTTP_202_ACCEPTED)
 
     @app.get("/a/{slug}/items/{item_id}/stream")
-    async def stream_investigation(slug: str, item_id: str) -> StreamingResponse:
+    async def stream_investigation(
+        slug: str, item_id: str, since: int | None = None
+    ) -> StreamingResponse:
         """#43: the shared per-investigation event stream. Every viewer subscribes
         here and sees all turns live (whoever sent them) + human messages +
         file-changed notices. Live-only — past messages load from the
-        conversation resource."""
+        conversation resource.
+
+        #43 reconnect replay: `?since=<seq>` (the last broadcast seq the client
+        saw) makes a reconnect first replay the events it missed on THIS pod
+        before going live; absent on a fresh connect."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         # subscribe_sse() registers the subscriber NOW (eagerly), so a turn that
         # starts between connect and first body-pull isn't missed. #455: tag the
         # viewer so a join/leave updates the item's presence roster.
         return StreamingResponse(
-            turn_engine.subscribe_sse(investigation_id, get_user_id()),
+            turn_engine.subscribe_sse(investigation_id, get_user_id(), since=since),
             media_type="text/event-stream",
         )
 
@@ -223,13 +229,18 @@ def register_chat_routes(
         return Response(status_code=status.HTTP_202_ACCEPTED)
 
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/stream")
-    async def stream_chat(slug: str, item_id: str, chat_id: str) -> StreamingResponse:
+    async def stream_chat(
+        slug: str, item_id: str, chat_id: str, since: int | None = None
+    ) -> StreamingResponse:
         """The chat's own live event stream (manual §3) — per-chat, unlike the
-        item-level stream which carries the default chat + item-wide events."""
+        item-level stream which carries the default chat + item-wide events.
+
+        `?since=<seq>` replays a same-pod reconnect's missed events (see
+        `stream_investigation`)."""
         investigation_id = locator.require_access(slug, item_id, "read_chat")
         locator.require_chat(slug, item_id, chat_id)
         return StreamingResponse(
-            turn_engine.subscribe_sse(locator.engine_key(investigation_id, chat_id)),
+            turn_engine.subscribe_sse(locator.engine_key(investigation_id, chat_id), since=since),
             media_type="text/event-stream",
         )
 

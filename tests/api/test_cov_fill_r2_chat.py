@@ -80,9 +80,22 @@ def _finite_sse(monkeypatch):
     ``client.get`` on the stream route terminates instead of blocking on the
     real infinite live queue. The handler body (``require_item`` /
     ``require_chat`` + ``return StreamingResponse(subscribe_sse(...))``) still
-    runs in full — which is the chat_routes.py coverage we're after."""
+    runs in full — which is the chat_routes.py coverage we're after.
 
-    def _fake_subscribe_sse(self, key: str, user_id: str = "") -> AsyncIterator[str]:
+    Yields the list of calls made to ``subscribe_sse`` (each a dict of the args
+    the route passed) so a test can assert the route forwarded ``?since=``."""
+    calls: list[dict] = []
+
+    def _fake_subscribe_sse(
+        self,
+        key: str,
+        user_id: str = "",
+        *,
+        since: int | None = None,
+        heartbeat_interval: float = 15.0,
+    ) -> AsyncIterator[str]:
+        calls.append({"key": key, "user_id": user_id, "since": since})
+
         async def _frames() -> AsyncIterator[str]:
             return
             yield  # pragma: no cover — marks this an async generator
@@ -90,6 +103,7 @@ def _finite_sse(monkeypatch):
         return _frames()
 
     monkeypatch.setattr(ChatTurnEngine, "subscribe_sse", _fake_subscribe_sse)
+    return calls
 
 
 def test_stream_investigation_route_body_runs(_finite_sse):
@@ -111,6 +125,36 @@ def test_stream_chat_route_body_runs(_finite_sse):
     r = client.get(f"/a/rca/items/{item_id}/chats/{chat_id}/stream")
     assert r.status_code == 200
     assert r.headers["content-type"].startswith("text/event-stream")
+
+
+def test_stream_investigation_forwards_since(_finite_sse):
+    """A reconnecting client's `?since=<seq>` reaches subscribe_sse so it can
+    replay the events missed during the gap."""
+    client = _harness()
+    item_id = _new_item(client)
+    r = client.get(f"/a/rca/items/{item_id}/stream?since=7")
+    assert r.status_code == 200
+    assert _finite_sse[-1]["since"] == 7
+
+
+def test_stream_investigation_defaults_since_to_none(_finite_sse):
+    """A fresh connect (no `?since=`) forwards `since=None` — no replay, today's
+    behavior."""
+    client = _harness()
+    item_id = _new_item(client)
+    r = client.get(f"/a/rca/items/{item_id}/stream")
+    assert r.status_code == 200
+    assert _finite_sse[-1]["since"] is None
+
+
+def test_stream_chat_forwards_since(_finite_sse):
+    """The per-chat stream forwards `?since=` too."""
+    client = _harness()
+    item_id = _new_item(client)
+    chat_id = client.post(f"/a/rca/items/{item_id}/chats", json={"title": "side"}).json()["chat_id"]
+    r = client.get(f"/a/rca/items/{item_id}/chats/{chat_id}/stream?since=4")
+    assert r.status_code == 200
+    assert _finite_sse[-1]["since"] == 4
 
 
 # ── 2) the defensive `title is None` 404 guards ──────────────────────

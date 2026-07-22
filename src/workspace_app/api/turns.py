@@ -17,7 +17,15 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable
+from collections import deque
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+)
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -388,13 +396,42 @@ class _WorkspaceSession:
     current_turn: asyncio.Task | None = None
     # queue → the subscriber's user id ("" for an anonymous stream, e.g. per-chat /
     # workflow streams that don't participate in presence). #455 tracks it here so
-    # a join/leave can broadcast the roster.
-    subscribers: dict[asyncio.Queue[AgentEvent], str] = field(default_factory=dict)
+    # a join/leave can broadcast the roster. Each queue element is a `(seq, event)`
+    # pair: `seq` is the broadcast sequence number (None for Presence + the close
+    # sentinel), carried so `subscribe_sse` can serialize it and resume clients.
+    subscribers: dict[asyncio.Queue[Any], str] = field(default_factory=dict)
+    # #43 reconnect replay: a per-session monotonic seq (never reset) + a bounded
+    # ring of recent `(seq, event)`. A viewer that reconnects to THIS pod replays
+    # the events it missed (`replay_since`). `buffer_maxlen` 0 ⇒ an always-empty
+    # ring (replay disabled) while seq still advances.
+    buffer_maxlen: int = 2000
+    _seq: int = 0
+    _buffer: deque[tuple[int, AgentEvent]] = field(default_factory=deque)
+
+    def __post_init__(self) -> None:
+        self._buffer = deque(maxlen=max(self.buffer_maxlen, 0))
 
     def publish(self, event: AgentEvent) -> None:
-        """Fan one event out to every live subscriber (#43 broadcast)."""
+        """Fan one event out to every live subscriber (#43 broadcast).
+
+        Every event except `Presence` takes the next monotonic `seq` and enters the
+        replay ring. `Presence` is an ephemeral roster snapshot (re-broadcast on
+        every join), so replaying a stale one is pointless — it carries no seq and
+        is never buffered."""
+        if isinstance(event, Presence):
+            seq: int | None = None
+        else:
+            self._seq += 1
+            seq = self._seq
+            self._buffer.append((seq, event))
         for q in self.subscribers:
-            q.put_nowait(event)
+            q.put_nowait((seq, event))
+
+    def replay_since(self, since: int) -> list[tuple[int, AgentEvent]]:
+        """The buffered `(seq, event)` a reconnecting `since`-client missed — those
+        with `seq > since`, oldest first. Empty when nothing newer was retained
+        (the client is current, or the gap outran the ring)."""
+        return [(s, e) for (s, e) in self._buffer if s > since]
 
     def close_subscribers(self) -> None:
         """End every live SSE response attached to this session.
@@ -404,7 +441,7 @@ class _WorkspaceSession:
         the one outcome that leaves it consistent with a conversation that was
         just closed or deleted."""
         for q in list(self.subscribers):
-            q.put_nowait(cast("AgentEvent", _CLOSE_STREAM))
+            q.put_nowait((None, _CLOSE_STREAM))
 
     def roster(self) -> list[str]:
         """The distinct, non-anonymous viewers currently subscribed (#455 presence)."""
@@ -422,9 +459,13 @@ class ChatTurnEngine:
         *,
         turn_control: ITurnControl | None = None,
         poll_interval: float = 0.5,
+        replay_buffer_events: int = 2000,
     ) -> None:
         self._runner = runner
         self._sessions: dict[str, _TurnSession] = {}
+        # #43 reconnect replay: how many recent broadcast events each session's ring
+        # buffer keeps so a same-pod reconnect can replay the gap. 0 disables it.
+        self._replay_buffer_events = replay_buffer_events
         # #113: every turn's event stream is wrapped so a degenerate repetition
         # loop is stopped (and the persisted message truncated) — see _events.
         # #43: collaborative per-investigation queue/worker sessions, separate
@@ -472,7 +513,9 @@ class ChatTurnEngine:
         return self._sessions.setdefault(key, _TurnSession())
 
     def _ws_session(self, key: str) -> _WorkspaceSession:
-        return self._ws_sessions.setdefault(key, _WorkspaceSession())
+        return self._ws_sessions.setdefault(
+            key, _WorkspaceSession(buffer_maxlen=self._replay_buffer_events)
+        )
 
     def close_streams(self, key: str) -> None:
         """End the live SSE responses for `key` without touching the turn itself.
@@ -663,7 +706,7 @@ class ChatTurnEngine:
         if session is not None:
             session.publish(event)
 
-    def subscribe(self, key: str, user_id: str = "") -> AsyncIterator[AgentEvent]:
+    def subscribe(self, key: str, user_id: str = "") -> AsyncGenerator[AgentEvent, None]:
         """#43: register a live broadcast subscriber and return an async iterator
         of its events. The endpoint wraps this in an SSE response; all viewers of
         an investigation share its single event stream. Live-only — the caller
@@ -674,15 +717,16 @@ class ChatTurnEngine:
         viewer (including this one, so it sees who's already here). An empty id (the
         per-chat / workflow streams) subscribes without touching presence."""
         session = self._ws_session(key)
-        q: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        q: asyncio.Queue[Any] = asyncio.Queue()
         session.subscribers[q] = user_id
         if user_id:
             session.publish(Presence(users=session.roster()))
 
-        async def _gen() -> AsyncIterator[AgentEvent]:
+        async def _gen() -> AsyncGenerator[AgentEvent, None]:
             try:
                 while True:
-                    yield await q.get()
+                    _seq, event = await q.get()
+                    yield cast("AgentEvent", event)
             finally:
                 session.subscribers.pop(q, None)
                 if user_id:
@@ -691,8 +735,13 @@ class ChatTurnEngine:
         return _gen()
 
     def subscribe_sse(
-        self, key: str, user_id: str = "", *, heartbeat_interval: float = 15.0
-    ) -> AsyncIterator[str]:
+        self,
+        key: str,
+        user_id: str = "",
+        *,
+        heartbeat_interval: float = 15.0,
+        since: int | None = None,
+    ) -> AsyncGenerator[str, None]:
         """#43: like `subscribe`, but yields SSE-encoded frames so the endpoint is
         a trivial `StreamingResponse(turn_engine.subscribe_sse(id))` wrapper.
 
@@ -703,24 +752,36 @@ class ChatTurnEngine:
         payload, ignored by EventSource, but it keeps the connection (and any idle
         timer) warm. This owns its queue directly (rather than wrapping
         `subscribe`) so the per-event timeout cancels only a `Queue.get`, never a
-        shared broadcast generator."""
+        shared broadcast generator.
+
+        #43 reconnect replay: `since` is the last broadcast `seq` the client saw.
+        A resumed stream first REPLAYS the buffered events it missed (`seq > since`),
+        in order, before going live — so a same-pod reconnect loses nothing. A
+        fresh connect (`since=None`) replays nothing, exactly as before. Attaching
+        the queue AND snapshotting the replay list happen in one synchronous
+        (no-await) block, so the replay/live boundary is a single seq: an event
+        published from here on lands on `q` (already attached) and is NOT in
+        `replay` — nothing is dropped or delivered twice."""
         session = self._ws_session(key)
-        q: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        q: asyncio.Queue[Any] = asyncio.Queue()
         session.subscribers[q] = user_id
+        replay = session.replay_since(since) if since is not None else []
         if user_id:
             session.publish(Presence(users=session.roster()))
 
-        async def _frames() -> AsyncIterator[str]:
+        async def _frames() -> AsyncGenerator[str, None]:
             try:
+                for s, e in replay:
+                    yield to_sse(e, s)
                 while True:
                     try:
-                        ev = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
+                        seq, ev = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
                     except TimeoutError:
                         yield ": heartbeat\n\n"  # SSE comment — keeps the stream warm
                         continue
                     if ev is _CLOSE_STREAM:
                         return  # the session went away — end the response, don't hang
-                    yield to_sse(ev)
+                    yield to_sse(cast("AgentEvent", ev), seq)
             finally:
                 session.subscribers.pop(q, None)
                 if user_id:

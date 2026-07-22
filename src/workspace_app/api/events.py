@@ -261,7 +261,14 @@ class CellDone:
 CellEvent = CellStream | CellDisplayData | CellError | CellDone
 
 
-def to_sse(event: AgentEvent | CellEvent) -> str:
-    """Serialize one event as an SSE 'data:' line (with trailing blank line)."""
-    payload = json.dumps(asdict(event))
-    return f"data: {payload}\n\n"
+def to_sse(event: AgentEvent | CellEvent, seq: int | None = None) -> str:
+    """Serialize one event as an SSE 'data:' line (with trailing blank line).
+
+    `seq` (when given) is the per-session broadcast sequence number — injected
+    into the JSON payload so a reconnecting client can resume with `?since=<seq>`
+    (the replay buffer in `turns.py`). It is a transport concern, carried in the
+    SSE JSON and never on the frozen event dataclasses."""
+    data = asdict(event)
+    if seq is not None:
+        data["seq"] = seq
+    return f"data: {json.dumps(data)}\n\n"
