@@ -242,6 +242,22 @@
 #   #   heartbeat_seconds: 600     # AMQP heartbeat — RAISE if slow index
 #   #                              # jobs run longer than this (else reaped)
 
+# ─── event bus (cross-pod live SSE streaming) ── [OPT] · [SCALE] ────
+# Fans a turn's live events to every pod, so a viewer's SSE streams
+# regardless of which pod runs the turn — kills the "還在準備" cross-pod
+# blindness under degraded sticky. `memory` (default) is in-process only
+# (single pod / tests, zero infra = today's behavior). `rabbitmq` (needs
+# the `rabbitmq` extra: `uv sync --extra rabbitmq`) fans out over the
+# broker for multipod; `url` empty ⇒ REUSE `message_queue.rabbitmq.url`
+# (same broker, credentials embedded in the amqp url). RabbitMQ is never a
+# hard dependency — publish is fire-and-forget and, when the broker is
+# down, cross-pod viewers degrade to the store-poll fallback.
+# event_bus:
+#   kind: memory                  # memory | rabbitmq
+#   # url: ${RABBITMQ_URL}        # empty → reuse message_queue.rabbitmq.url
+#   # exchange: rca_turn_events   # fanout exchange name
+#   # queue_max_length: 10000     # per-pod queue bound (drop oldest, backpressure)
+
 # ─── observability ────────────────────────────── [OPT] ─────────────
 # Two startup observability aids:
 #   1. Resolved-config dump — ALWAYS ON (no knob). On boot the fully

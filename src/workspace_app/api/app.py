@@ -51,6 +51,7 @@ from .context_card_routes import register_context_card_actions, register_context
 from .doc_question_routes import register_doc_question_routes
 from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
+from .event_bus import IEventBus
 from .file_routes import register_file_routes
 from .health_routes import (
     register_health_routes,
@@ -215,6 +216,11 @@ def create_app(
     # reconnect replays the gap (`?since=`); 0 disables. From
     # settings.server.turn_replay_buffer_events.
     turn_replay_buffer_events: int = 2000,
+    # Cross-pod live SSE event bus: fans a turn's events to every pod so a viewer
+    # streams regardless of which pod runs the turn. None ⇒ the engine's default
+    # in-memory bus (single pod / tests — a no-op via skip-own, today's behavior).
+    # __main__ passes factories.get_event_bus(settings) (memory | rabbitmq fanout).
+    event_bus: IEventBus | None = None,
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
@@ -799,6 +805,7 @@ def create_app(
         turn_control=turn_control,
         poll_interval=turn_cancel_poll_seconds,
         replay_buffer_events=turn_replay_buffer_events,
+        event_bus=event_bus,
     )
     # Exposed for introspection / tests of the #43 broadcast stream (the shared
     # per-investigation pub/sub lives on the engine).

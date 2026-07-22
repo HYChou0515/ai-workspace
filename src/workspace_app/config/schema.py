@@ -1011,6 +1011,22 @@ class MessageQueueSettings:
     rabbitmq: RabbitmqSettings = field(default_factory=RabbitmqSettings)
 
 
+@dataclass(frozen=True)
+class EventBusSettings:
+    """Cross-pod live SSE event bus — fan turn events to every pod so streaming works
+    regardless of which pod a viewer's SSE lands on (kills the "還在準備" cross-pod
+    blindness). `memory` = in-process only (single pod / tests, zero infra — today's
+    behavior); `rabbitmq` = fanout over the broker for multipod (needs the `rabbitmq`
+    extra). `url` empty ⇒ reuse `message_queue.rabbitmq.url` (same broker; credentials
+    embedded in the amqp url). `queue_max_length` bounds each pod's queue (backpressure
+    drops oldest — live events are ephemeral, the store backstops the final result)."""
+
+    kind: str = "memory"  # memory | rabbitmq
+    url: str = ""
+    exchange: str = "rca_turn_events"
+    queue_max_length: int = 10_000
+
+
 # ─── observability (config dump + LLM call log) ────────────────────────
 @dataclass(frozen=True)
 class LlmLogSettings:
@@ -1098,5 +1114,6 @@ class Settings:
     agents: AgentsSettings = field(default_factory=AgentsSettings)
     health: HealthSettings = field(default_factory=HealthSettings)
     message_queue: MessageQueueSettings = field(default_factory=MessageQueueSettings)
+    event_bus: EventBusSettings = field(default_factory=EventBusSettings)
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
     failover: FailoverSettings = field(default_factory=FailoverSettings)
