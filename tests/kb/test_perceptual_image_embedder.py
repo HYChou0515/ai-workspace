@@ -30,6 +30,7 @@ def _png(color: tuple[int, int, int], size: tuple[int, int] = (64, 64)) -> bytes
 def _gradient(flip: bool = False) -> bytes:
     img = Image.new("L", (64, 64))
     px = img.load()
+    assert px is not None
     for y in range(64):
         for x in range(64):
             px[x, y] = (63 - x if flip else x) * 4
@@ -41,7 +42,7 @@ def _gradient(flip: bool = False) -> bytes:
 def _cos(a: list[float], b: list[float]) -> float:
     import math
 
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0

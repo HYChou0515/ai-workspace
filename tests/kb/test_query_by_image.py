@@ -14,7 +14,6 @@ from __future__ import annotations
 import io
 
 import pytest
-from specstar import SpecStar
 
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder

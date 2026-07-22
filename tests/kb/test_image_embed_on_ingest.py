@@ -85,7 +85,7 @@ def test_an_ingested_image_carries_the_image_vector(spec: SpecStar):
     chunks = _chunks(spec, doc_id)
     assert chunks, "image produced no chunks"
     assert all(c.embedding_img is not None for c in chunks), "image vector not written"
-    assert all(len(c.embedding_img) == IMG_EMBED_DIM for c in chunks)
+    assert all(len(c.embedding_img or []) == IMG_EMBED_DIM for c in chunks)
     # And the text description vector still lives beside it — additive.
     assert all(c.embedding is not None for c in chunks)
 

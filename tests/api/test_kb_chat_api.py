@@ -1152,7 +1152,7 @@ async def test_fold_image_returns_the_decoded_bytes_for_query_by_image():
     second decode, no persistence."""
     import base64
 
-    from workspace_app.api.kb_chat_routes import _ImageInput, _fold_image
+    from workspace_app.api.kb_chat_routes import _fold_image, _ImageInput
     from workspace_app.kb.vlm import VlmDescriber
 
     vlm = _FakeVlm("a described chip")
