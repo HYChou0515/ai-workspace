@@ -302,6 +302,8 @@ def main() -> None:
             run_consumers=settings.server.run_consumers,
             # #349: poll cadence for the cross-pod turn-cancel epoch.
             turn_cancel_poll_seconds=settings.server.turn_cancel_poll_seconds,
+            # #43: per-session reconnect replay buffer size (0 disables).
+            turn_replay_buffer_events=settings.server.turn_replay_buffer_events,
             infer_modules_enhancements=infer_cfg.enhancements,
             infer_modules_reasoning_effort=infer_cfg.reasoning_effort,
             infer_modules_parallelism=infer_cfg.parallelism,

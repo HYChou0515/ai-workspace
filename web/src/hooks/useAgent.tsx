@@ -65,7 +65,7 @@ export function useAgentInternal(
       queryKey: qk.conversation(investigationId),
       filesKey: qk.files(investigationId),
       getThread: () => api.getConversation(investigationId),
-      subscribe: (signal) => api.subscribeInvestigation(slug, investigationId, signal),
+      subscribe: (signal, since) => api.subscribeInvestigation(slug, investigationId, signal, since),
       post: (content, opts) =>
         api.sendMessage({
           slug,
