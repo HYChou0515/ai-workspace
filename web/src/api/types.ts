@@ -546,7 +546,12 @@ export interface ApiClient {
   /** GET /a/{slug}/items/{id}/stream — #43: the long-lived broadcast every
    * viewer subscribes to. Yields ALL turns live (whoever sent them) plus the
    * broadcast-only `user_message` / `file_changed` events. */
-  subscribeInvestigation(slug: string, investigationId: string, signal?: AbortSignal): AsyncGenerator<AgentEvent>;
+  subscribeInvestigation(
+    slug: string,
+    investigationId: string,
+    signal?: AbortSignal,
+    since?: number,
+  ): AsyncGenerator<AgentEvent>;
   /** DELETE /a/{slug}/items/{id}/messages/current — tears the in-flight
    * agent turn down on the BE so the kernel/sandbox stop spending tokens.
    * Idempotent: safe to call when nothing's running. */

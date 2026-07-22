@@ -209,6 +209,13 @@ export type AgentEvent =
   | Presence
   | WorkflowEvent;
 
+/** The transport-level broadcast sequence carried on a live SSE event (injected
+ * by the server's replay buffer, see turns.py `to_sse`), or undefined. It is not
+ * a domain field — read it here rather than widening every member of the union. */
+export function eventSeq(ev: AgentEvent): number | undefined {
+  return (ev as { seq?: number }).seq;
+}
+
 /** Terminal events close the SSE stream and re-enable the composer. */
 export function isTerminal(ev: AgentEvent): boolean {
   return (

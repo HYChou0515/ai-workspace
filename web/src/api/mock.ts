@@ -833,6 +833,7 @@ export const mockApi: ApiClient = {
   async *subscribeInvestigation(_slug: string,
     id: string,
     signal?: AbortSignal,
+    _since?: number,
   ): AsyncGenerator<AgentEvent> {
     // #43: a local queue fed by `publish` (and drained here). Mirrors the live
     // long-lived broadcast: every viewer subscribes and sees all turns.

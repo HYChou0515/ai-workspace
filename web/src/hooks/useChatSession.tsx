@@ -2,7 +2,7 @@ import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AgentEvent } from "../events";
-import { isTerminal } from "../events";
+import { eventSeq, isTerminal } from "../events";
 import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
 import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
@@ -44,8 +44,10 @@ export type BroadcastChatTransport = {
   filesKey: QueryKey;
   /** Read the persisted thread. `null` = no thread yet. */
   getThread: () => Promise<ChatThread | null>;
-  /** The long-lived broadcast subscription. */
-  subscribe: (signal: AbortSignal) => AsyncIterable<AgentEvent>;
+  /** The long-lived broadcast subscription. `since` (passed only on a RECONNECT)
+   * asks the server to first replay the events after that broadcast seq — the
+   * same-pod gap — before resuming live. */
+  subscribe: (signal: AbortSignal, since?: number) => AsyncIterable<AgentEvent>;
   /** Enqueue a turn (202; the events arrive on the subscription). */
   post: (content: string, opts?: ChatSendOpts) => Promise<void>;
   /** Tell the backend to tear down the in-flight turn. Returning the promise
@@ -100,6 +102,11 @@ const GATEWAY_CUT = new Set([0, 502, 503, 504]);
 
 const isAbort = (err: unknown) => (err as { name?: string } | null)?.name === "AbortError";
 
+/** The transient "you may have missed a piece" notice shown while a dropped
+ * stream reconnects. Removed again if the reconnect's replay turns out contiguous
+ * (the same-pod buffer filled the gap), so it only stays for a real hole. */
+const GAP_BANNER = "連線中斷,這裡可能少了一段";
+
 export function useChatSession(
   transport: BroadcastChatTransport,
   pollMs: number = STORE_POLL_MS,
@@ -109,6 +116,14 @@ export function useChatSession(
   // Epoch ms of the last live event (or send) — gates the #202 store-poll so a
   // healthy same-pod stream is never polled over.
   const lastEventAtRef = useRef(0);
+  // #43 reconnect replay: the highest broadcast seq seen on this subscription so
+  // a reconnect can resume from it (`?since=`). Reset when the thread changes so a
+  // new thread's seqs (which restart at 1) are tracked, not shadowed by the old.
+  const maxSeqRef = useRef(0);
+  // Whether a gap banner was added on the last drop and is awaiting confirmation:
+  // the reconnect's first event decides if the replay filled the hole (remove) or
+  // a real gap remains (keep).
+  const gapBannerPendingRef = useRef(false);
   const [connection, setConnection] = useState<ChatConnection>({
     state: "connecting",
     receiving: false,
@@ -121,6 +136,13 @@ export function useChatSession(
     getThread: transport.getThread,
   });
 
+  // A new thread restarts the broadcast seq at 1, so forget the old thread's max
+  // or a stale, larger value would make every reconnect ask to resume past the
+  // new thread's events (replaying nothing) forever.
+  useEffect(() => {
+    maxSeqRef.current = 0;
+  }, [transport.threadKey]);
+
   // The long-lived broadcast subscription (#43) with the #493 auto-reconnect:
   // the stream can drop mid-turn (an idle ingress cut, a pod rollover). A dropped
   // stream used to be swallowed, leaving the viewer stuck forever. Instead, back
@@ -132,15 +154,44 @@ export function useChatSession(
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     void (async () => {
       let backoff = 1000;
+      // The FIRST subscribe of this effect is a fresh connect — no replay. Every
+      // later one is a RECONNECT and resumes from the last seq we saw, so the
+      // events emitted during the gap are replayed on the same pod.
+      let firstConnect = true;
       while (!stopped) {
+        const since = firstConnect ? undefined : maxSeqRef.current;
+        firstConnect = false;
+        let firstEventThisConnect = true;
         try {
           // Opening the stream clears the error, but NOT the attempt count: being
           // subscribed is not the same as receiving, and a socket that opens and
           // immediately dies would otherwise reset the counter every cycle and
           // make a sustained outage look like an endless first blip.
           setConnection((c) => (c.state === "live" ? c : { ...c, state: "live", error: null }));
-          for await (const ev of transport.subscribe(controller.signal)) {
+          for await (const ev of transport.subscribe(controller.signal, since)) {
             backoff = 1000; // a healthy stream resets the backoff
+            // Track the highest broadcast seq so the next reconnect resumes here.
+            const seq = eventSeq(ev);
+            if (seq !== undefined && seq > maxSeqRef.current) maxSeqRef.current = seq;
+            // On the first event after a reconnect, decide the fate of the gap
+            // banner: a contiguous replay (the very next seq) means the same-pod
+            // buffer filled the hole, so drop the banner; a jump means a real gap
+            // survived it, so keep it.
+            if (firstEventThisConnect) {
+              firstEventThisConnect = false;
+              if (gapBannerPendingRef.current) {
+                const contiguous = seq !== undefined && since !== undefined && seq === since + 1;
+                if (contiguous) {
+                  setLog((prev) => {
+                    const last = prev.entries[prev.entries.length - 1];
+                    return last?.kind === "banner" && last.text === GAP_BANNER
+                      ? { ...prev, entries: prev.entries.slice(0, -1) }
+                      : prev;
+                  });
+                }
+                gapBannerPendingRef.current = false;
+              }
+            }
             // A real TURN event is the proof the stream works — only now is the
             // outage over. Presence is excluded for the same reason as above: a
             // pod that is not running the turn still broadcasts it.
@@ -212,13 +263,13 @@ export function useChatSession(
           return midAnswer
             ? {
                 ...prev,
-                entries: [
-                  ...prev.entries,
-                  { kind: "banner", at: Date.now(), text: "連線中斷,這裡可能少了一段" },
-                ],
+                entries: [...prev.entries, { kind: "banner", at: Date.now(), text: GAP_BANNER }],
               }
             : prev;
         });
+        // Let the reconnect's first event confirm whether the replay filled the
+        // gap (remove the banner) or a real hole remains (keep it).
+        gapBannerPendingRef.current = true;
         await sleep(backoff);
         if (stopped) return;
         const fresh = await transport.getThread().catch(() => null);

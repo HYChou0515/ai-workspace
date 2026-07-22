@@ -52,7 +52,7 @@ export function useItemChat({
       // File edits are item-scoped: every chat of the item shares one workspace.
       filesKey: qk.files(itemId),
       getThread: () => client.getChat(slug, itemId, chatId),
-      subscribe: (signal) => client.subscribe(slug, itemId, chatId, signal),
+      subscribe: (signal, since) => client.subscribe(slug, itemId, chatId, signal, since),
       post: (content, opts) =>
         client.sendMessage({
           slug,

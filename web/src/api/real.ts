@@ -547,14 +547,17 @@ export const realApi: ApiClient = {
     }
   },
 
-  async *subscribeInvestigation(slug: string, 
+  async *subscribeInvestigation(slug: string,
     investigationId: string,
     signal?: AbortSignal,
+    since?: number,
   ): AsyncGenerator<AgentEvent> {
     // #43: the long-lived per-investigation broadcast — every viewer subscribes
     // and sees ALL turns live plus the broadcast-only user_message/file_changed.
+    // `since` (a reconnect) resumes the same-pod replay buffer from that seq.
+    const q = since !== undefined ? `?since=${since}` : "";
     const resp = await apiFetch(
-      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/stream`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/stream${q}`,
       { signal },
     );
     if (!resp.ok || !resp.body) {

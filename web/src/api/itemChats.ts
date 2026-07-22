@@ -154,8 +154,11 @@ export const itemChatApi = {
     itemId: string,
     chatId: string,
     signal?: AbortSignal,
+    since?: number,
   ): AsyncGenerator<AgentEvent> {
-    const r = await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}/stream`, { signal });
+    // `since` (a reconnect) resumes the same-pod replay buffer from that seq.
+    const q = since !== undefined ? `?since=${since}` : "";
+    const r = await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}/stream${q}`, { signal });
     if (!r.ok || !r.body) throw new HttpError(r.status, `stream failed: ${r.status}`);
     yield* parseSseStream(r.body) as AsyncGenerator<AgentEvent>;
   },
