@@ -1,0 +1,138 @@
+/*
+ * ask_user question card (grill-me) — styled with the shared design tokens
+ * (tokens.css) so it reads as part of the app, not a raw-HTML insert. The
+ * selected option lights up with the accent-soft fill + accent border, the same
+ * "chosen" treatment used elsewhere, so a multi-question card shows what you
+ * picked instead of a 1px border nobody can see.
+ */
+
+.ask-user {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ask-user__q {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ask-user__question {
+  font-family: var(--font-body);
+  font-weight: 600;
+  color: var(--text-paper);
+}
+
+.ask-user__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* An option — the app's card-button idiom: cream surface, hairline border,
+   btn radius. Hover lifts the border to the accent; selected fills it. */
+.ask-user__option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  text-align: left;
+  font-family: var(--font-body);
+  color: var(--text-paper);
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease;
+}
+
+.ask-user__option:hover {
+  border-color: var(--accent);
+}
+
+/* Selected — the clear "this is your pick" state (the whole point). */
+.ask-user__option[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ask-user__option-desc {
+  font-size: 0.8rem;
+  color: var(--text-paper-d);
+}
+
+.ask-user__option[aria-pressed="true"] .ask-user__option-desc {
+  color: var(--accent-h);
+}
+
+/* The always-present escape row: 看不懂 · note/free-text · 送出 */
+.ask-user__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 看不懂 — a quiet, secondary control (not a choice, a rejection). */
+.ask-user__dontget {
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 6px 12px;
+  font-family: var(--font-body);
+  color: var(--text-paper-d);
+  background: transparent;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  cursor: pointer;
+}
+
+.ask-user__dontget:hover {
+  border-color: var(--accent);
+  color: var(--text-paper);
+}
+
+.ask-user__note {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  font-family: var(--font-body);
+  color: var(--text-paper);
+  background: var(--paper);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+}
+
+.ask-user__note:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* 送出 — the one primary action; the accent solid so it reads as primary. */
+.ask-user__submit {
+  flex-shrink: 0;
+  white-space: nowrap;
+  align-self: flex-start;
+  padding: 6px 16px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  color: var(--white);
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-btn);
+  cursor: pointer;
+}
+
+.ask-user__submit:hover {
+  background: var(--accent-h);
+  border-color: var(--accent-h);
+}
+
+/* An answered question collapses to its answer, muted. */
+.ask-user__answered {
+  font-family: var(--font-body);
+  color: var(--text-paper-d);
+}

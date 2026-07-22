@@ -36,7 +36,10 @@ function parseQuestions(args: Record<string, unknown>): Question[] | null {
       const label = (o as { label?: unknown })?.label;
       if (typeof label !== "string" || !label) return null;
       const description = (o as { description?: unknown })?.description;
-      parsed.push({ label, description: typeof description === "string" ? description : "" });
+      parsed.push({
+        label,
+        description: typeof description === "string" ? description : "",
+      });
     }
     out.push({ question: text, options: parsed });
   }
@@ -55,7 +58,11 @@ const DONT_UNDERSTAND =
 /** How one question's answer reads in the transcript. The four shapes stay
  * distinguishable on purpose: a rejection must not look like a choice, and a
  * note must not look like the answer itself. */
-function answerLine(question: string, picked: string | undefined, note: string): string {
+function answerLine(
+  question: string,
+  picked: string | undefined,
+  note: string,
+): string {
   const text = note.trim();
   if (picked === DONT_UNDERSTAND) return `${question} → ${DONT_UNDERSTAND}`;
   if (picked && text) return `${question} → ${picked}(補充:${text})`;
@@ -83,7 +90,7 @@ export function AskUserCard({
 
   if (answered) {
     return (
-      <div data-testid="ask-user-answered" style={{ opacity: 0.8 }}>
+      <div data-testid="ask-user-answered" className="ask-user__answered">
         {answered}
       </div>
     );
@@ -92,22 +99,25 @@ export function AskUserCard({
   const single = questions.length === 1;
 
   const send = (chosen: Record<number, string>) => {
-    const lines = questions.map((q, i) => answerLine(q.question, chosen[i], notes[i] ?? ""));
+    const lines = questions.map((q, i) =>
+      answerLine(q.question, chosen[i], notes[i] ?? ""),
+    );
     onAnswer({ content: lines.join("\n"), answers: call.call_id });
   };
 
   return (
-    <div data-testid="ask-user" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div data-testid="ask-user" className="ask-user">
       {questions.map((q, i) => (
-        <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontWeight: 600 }}>{q.question}</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        <div key={i} className="ask-user__q">
+          <div className="ask-user__question">{q.question}</div>
+          <div className="ask-user__options">
             {q.options.map((opt) => {
               const active = picked[i] === opt.label;
               return (
                 <button
                   key={opt.label}
                   type="button"
+                  className="ask-user__option"
                   aria-pressed={active}
                   onClick={() => {
                     // A single question has nothing to wait for — one click is
@@ -117,22 +127,12 @@ export function AskUserCard({
                     else setPicked((p) => ({ ...p, [i]: opt.label }));
                   }}
                   title={opt.description || undefined}
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    alignItems: "flex-start",
-                    gap: 2,
-                    padding: "6px 10px",
-                    textAlign: "left",
-                    borderWidth: active ? 2 : 1,
-                    borderStyle: "solid",
-                    borderRadius: 6,
-                    cursor: "pointer",
-                  }}
                 >
                   <span>{opt.label}</span>
                   {opt.description ? (
-                    <span style={{ opacity: 0.7, fontSize: "0.85em" }}>{opt.description}</span>
+                    <span className="ask-user__option-desc">
+                      {opt.description}
+                    </span>
                   ) : null}
                 </button>
               );
@@ -142,53 +142,29 @@ export function AskUserCard({
               when a small model forgets to offer one. "看不懂" is a rejection of
               the question, not an answer to it: the agent should re-ask in
               plainer words rather than proceed on a choice never made. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div className="ask-user__row">
             <button
               type="button"
+              className="ask-user__dontget"
               onClick={() => {
                 if (single) send({ [i]: DONT_UNDERSTAND });
                 else setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }));
-              }}
-              style={{
-                padding: "4px 10px",
-                borderWidth: 1,
-                borderStyle: "solid",
-                borderRadius: 6,
-                cursor: "pointer",
-                flexShrink: 0,
-                whiteSpace: "nowrap",
               }}
             >
               看不懂
             </button>
             <input
               type="text"
+              className="ask-user__note"
               value={notes[i] ?? ""}
               placeholder="補充，或自己回答"
               onChange={(e) => setNotes((n) => ({ ...n, [i]: e.target.value }))}
-              style={{
-                flex: 1,
-                minWidth: 0,
-                padding: "4px 8px",
-                borderWidth: 1,
-                borderStyle: "solid",
-                borderRadius: 6,
-              }}
             />
             {single ? (
               <button
                 type="button"
+                className="ask-user__submit"
                 onClick={() => send(picked)}
-                style={{
-                  padding: "4px 12px",
-                  fontWeight: 600,
-                  borderWidth: 2,
-                  borderStyle: "solid",
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  flexShrink: 0,
-                  whiteSpace: "nowrap",
-                }}
               >
                 送出
               </button>
@@ -201,21 +177,10 @@ export function AskUserCard({
         // a full card makes people pick something to escape it, and an invented
         // preference is worse than a missing one. The unanswered questions are
         // reported as unanswered so the agent knows what it still lacks.
-        // The primary action has to read as the primary action: unstyled it came
-        // out looking plainer than 看不懂 beside it, so the one button the user
-        // must press was the least button-like thing on the card.
         <button
           type="button"
+          className="ask-user__submit"
           onClick={() => send(picked)}
-          style={{
-            alignSelf: "flex-start",
-            padding: "6px 14px",
-            fontWeight: 600,
-            borderWidth: 2,
-            borderStyle: "solid",
-            borderRadius: 6,
-            cursor: "pointer",
-          }}
         >
           送出
         </button>

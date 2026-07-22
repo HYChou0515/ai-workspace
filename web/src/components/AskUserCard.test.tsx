@@ -143,7 +143,9 @@ describe("AskUserCard", () => {
   it("stops offering the buttons once the question is answered", () => {
     /* An answered question must not invite a second answer — two tabs, or a
      * scroll back, would otherwise produce two contradictory answers. */
-    render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} answered="SQLite" />);
+    render(
+      <AskUserCard call={oneQuestion} onAnswer={vi.fn()} answered="SQLite" />,
+    );
 
     expect(screen.queryByRole("button", { name: /Postgres/ })).toBeNull();
     expect(screen.getByText(/SQLite/)).toBeTruthy();
@@ -227,5 +229,56 @@ describe("AskUserCard escape hatches", () => {
     fireEvent.click(screen.getByRole("button", { name: /Postgres/ }));
 
     expect(onAnswer).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AskUserCard selection highlight", () => {
+  const multi = {
+    call_id: "c1",
+    name: "ask_user",
+    status: "done" as const,
+    args: {
+      questions: [
+        {
+          question: "Format?",
+          options: [
+            { label: "PDF", description: "" },
+            { label: "HTML", description: "" },
+          ],
+        },
+        {
+          question: "Charts?",
+          options: [
+            { label: "Yes", description: "" },
+            { label: "No", description: "" },
+          ],
+        },
+      ],
+    },
+  };
+
+  it("marks the picked option as pressed so it can light up (multi-question)", () => {
+    render(<AskUserCard call={multi} onAnswer={vi.fn()} />);
+
+    const pdf = screen.getByRole("button", { name: /PDF/ });
+    const html = screen.getByRole("button", { name: /HTML/ });
+    // nothing chosen yet
+    expect(pdf.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(pdf);
+
+    // the chosen one is pressed (the CSS lights it up); its sibling is not
+    expect(pdf.getAttribute("aria-pressed")).toBe("true");
+    expect(html.getAttribute("aria-pressed")).toBe("false");
+    // a multi-question card does not send on a single pick — it waits for 送出
+    expect(screen.getByRole("button", { name: /送出/ })).toBeTruthy();
+  });
+
+  it("uses the shared option class rather than raw inline styles", () => {
+    // The whole reason for this change: the card was inline-styled and off-brand.
+    render(<AskUserCard call={multi} onAnswer={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /PDF/ }).className).toContain(
+      "ask-user__option",
+    );
   });
 });
