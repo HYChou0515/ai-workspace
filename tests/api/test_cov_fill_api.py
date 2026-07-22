@@ -305,5 +305,7 @@ async def test_subscribe_sse_encodes_a_published_event_frame():
     it = frames.__aiter__()
     engine._ws_session("inv").publish(MessageDelta(text="hi"))
     frame = await asyncio.wait_for(it.__anext__(), 3)
-    await frames.aclose()  # ty: ignore[unresolved-attribute]
-    assert frame == to_sse(MessageDelta(text="hi"))
+    await frames.aclose()
+    # The live frame carries the broadcast seq (1 — first event on the session) so
+    # a reconnecting client can resume with `?since=`.
+    assert frame == to_sse(MessageDelta(text="hi"), seq=1)
