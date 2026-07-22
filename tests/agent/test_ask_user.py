@@ -151,3 +151,25 @@ def test_no_tools_at_all_runs_normally(names):
     from workspace_app.api.litellm_runner import ask_user_stop_behaviour
 
     assert ask_user_stop_behaviour(names) == "run_llm_again"
+
+
+def test_ask_user_has_a_strict_schema_that_names_the_option_fields():
+    """The bug this pins: `ask_user` once took `list[dict[str, Any]]` and rode in
+    the non-strict set, so the model was shown an open object with no field names
+    to honour — and even a top model split between `label` and `option`, because
+    the shape was the tool's to specify, not the model's to guess. The fix is a
+    strict schema, so the field names are the API's contract, not a guess."""
+    from agents import function_tool
+
+    from workspace_app.agent.tools import _NONSTRICT_TOOLS, ask_user_impl
+
+    assert "ask_user" not in _NONSTRICT_TOOLS  # it is a fixed shape, not an open one
+
+    tool = function_tool(ask_user_impl, name_override="ask_user", strict_mode=True)
+    assert tool.strict_json_schema is True
+    option = tool.params_json_schema["$defs"]["AskOption"]
+    # The option's fields are named and closed — the model cannot send `option`
+    # instead of `label`, or any other stray key.
+    assert set(option["properties"]) == {"label", "description"}
+    assert set(option["required"]) == {"label", "description"}
+    assert option["additionalProperties"] is False
