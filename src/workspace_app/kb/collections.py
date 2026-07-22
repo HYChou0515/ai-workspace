@@ -166,7 +166,7 @@ def all_discoverable_collection_ids(
             continue
         data = r.data
         assert isinstance(data, Collection)
-        entries.append((rid, data.permission, r.info.created_by))
+        entries.append((rid, data.permission, r.info.created_by))  # ty: ignore[unresolved-attribute]
     part = partition_by_disclosure(
         actor, entries, superusers=superusers, discoverable_restricted=True
     )

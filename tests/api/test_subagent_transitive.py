@@ -218,7 +218,9 @@ async def test_bridge_skips_the_probe_when_nobody_consumes_withheld():
     _new_collection(spec, by="bob", permission=Permission(visibility="restricted"))
     runner = _DisclosingRunner()
     await _bridge(spec, runner, holder).run(
-        "kb_chat", "q", collection_ids=[readable]  # no withheld_sink
+        "kb_chat",
+        "q",
+        collection_ids=[readable],  # no withheld_sink
     )
     assert runner.seen_discoverable == []
 

@@ -203,7 +203,7 @@ def test_kb_chat_probes_unselected_restricted_collections():
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
-        runner=runner,  # ty: ignore[invalid-argument-type]
+        runner=runner,
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
     )
@@ -230,7 +230,7 @@ def test_kb_chat_skips_the_probe_when_disclosure_is_disabled():
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
-        runner=runner,  # ty: ignore[invalid-argument-type]
+        runner=runner,
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
         kb_disclosure_enabled=False,
@@ -259,7 +259,7 @@ def test_kb_chat_per_message_disclosure_off_skips_the_probe():
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
-        runner=runner,  # ty: ignore[invalid-argument-type]
+        runner=runner,
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
     )
