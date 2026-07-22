@@ -115,7 +115,11 @@ export function ItemAccessDialog({
     <ItemShareDialog
       itemName={(item.title as string) || manifest.item.noun}
       owner={owner}
-      value={perm ?? { visibility: "private" }}
+      // ABSENT ≡ public (the backend rule; itemVisibility renders such rows as
+      // Public). Prefilling "private" made the dialog contradict the chip and —
+      // worse — an owner who just hit Save silently locked an item everyone
+      // could open (#587 family: the dialog's guess became a write).
+      value={perm ?? { visibility: "public" }}
       busy={access.isPending}
       error={access.error}
       onSubmit={(next) => {

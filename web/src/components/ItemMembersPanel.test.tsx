@@ -16,8 +16,8 @@ vi.mock("./UserChip", () => ({
   UserChip: ({ userId }: { userId: string }) => <span>{userId}</span>,
 }));
 vi.mock("./ItemShareDialog", () => ({
-  ItemShareDialog: ({ onSubmit }: { onSubmit: (p: unknown) => void }) => (
-    <div data-testid="share-dialog">
+  ItemShareDialog: ({ value, onSubmit }: { value: { visibility: string }; onSubmit: (p: unknown) => void }) => (
+    <div data-testid="share-dialog" data-visibility={value.visibility}>
       <button type="button" data-testid="stub-save" onClick={() => onSubmit({ visibility: "public" })}>
         save
       </button>
@@ -103,6 +103,16 @@ describe("ItemMembersPanel", () => {
     render();
     fireEvent.click(await screen.findByTestId("members-manage"));
     expect(screen.getByTestId("share-dialog")).toBeInTheDocument();
+  });
+
+  it("prefills the dialog as Public when the item has NO permission (absent ≡ public)", async () => {
+    // The backend treats an absent permission as public, and the row's
+    // AccessChip says so. Prefilling the dialog "private" here meant an owner
+    // who opened it and hit Save silently locked an item everyone could open —
+    // the dialog and the chip contradicting each other (#587 family).
+    render({ permission: undefined });
+    fireEvent.click(await screen.findByTestId("members-manage"));
+    expect(screen.getByTestId("share-dialog")).toHaveAttribute("data-visibility", "public");
   });
 
   it("saves through the permission endpoint and closes", async () => {
