@@ -18,7 +18,9 @@ import { Popover } from "../../components/Popover";
 import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useIsSuperuser } from "../../hooks/useIsSuperuser";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
+import { canManageAccess } from "../../lib/permission";
 import { KbChatPanel } from "./KbChatPanel";
 
 function timeAgo(ms: number): string {
@@ -45,6 +47,7 @@ export function KbChatView({
 }) {
   const qc = useQueryClient();
   const me = useCurrentUser();
+  const isSuperuser = useIsSuperuser();
   const pinned = usePersistentSet("kb:pinned-chats");
   // Freeze the thread id at mount: when a fresh thread gets its real id mid-turn
   // the parent updates the chatId prop, but we must NOT swap threads under the
@@ -71,8 +74,11 @@ export function KbChatView({
     },
   });
 
+  // Display fallback only — the "started by" chip. The MANAGE gate below never
+  // reads it: `owner ?? me` treated an owner-less row as "mine".
   const owner = chat?.owner ?? me;
-  const isOwner = owner === me;
+  // Share mirrors the backend change_permission gate: owner OR superuser.
+  const canShare = chat != null && canManageAccess(chat.owner, me, isSuperuser);
   const sharedWith = chat?.shared_with ?? [];
   const isPinned = mountChatId != null && pinned.has(mountChatId);
   const msgs = chat?.messages.length ?? 0;
@@ -155,7 +161,7 @@ export function KbChatView({
             >
               <Icon name="pin" size={13} /> {isPinned ? "Pinned" : "Pin"}
             </button>
-            {isOwner && (
+            {canShare && (
               <Popover
                 align="end"
                 trigger={({ onClick, open }) => (

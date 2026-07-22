@@ -8,6 +8,7 @@ const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper:
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../../api";
 import type { KbApi, KbChatDetail } from "../../api/kb";
 import { mockKbApi } from "../../api/kbMock";
 import { KbChatView } from "./KbChatView";
@@ -103,5 +104,40 @@ describe("KbChatView header", () => {
         { role: "assistant", content: "hello", tool_name: "" },
       ],
     });
+  });
+});
+
+// The Share affordance mirrors the backend gate for POST /kb/chats/{id}/share
+// (change_permission): owner OR superuser. It was `owner === me` with an
+// `owner ?? me` fallback — hiding it from admins AND treating an owner-less
+// row as "mine".
+describe("KbChatView share gate", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("offers Share to a superuser who is not the owner", async () => {
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true });
+    const chat = { ...baseChat, owner: "someone-else" };
+    render(<KbChatView chatId="chat:1" client={chatClient(chat)} />);
+    await screen.findByText("Void thresholds");
+    expect(screen.getByRole("button", { name: /Share/ })).toBeInTheDocument();
+  });
+
+  it("hides Share from a plain non-owner reading a shared chat", async () => {
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false });
+    const chat = { ...baseChat, owner: "someone-else", shared_with: ["default-user"] };
+    render(<KbChatView chatId="chat:1" client={chatClient(chat)} />);
+    await screen.findByText("Void thresholds");
+    expect(screen.queryByRole("button", { name: /Share/ })).not.toBeInTheDocument();
+  });
+
+  it("does NOT treat an owner-less chat as mine (unknown ≠ mine)", async () => {
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false });
+    const chat = { ...baseChat, owner: undefined as unknown as string };
+    render(<KbChatView chatId="chat:1" client={chatClient(chat)} />);
+    await screen.findByText("Void thresholds");
+    expect(screen.queryByRole("button", { name: /Share/ })).not.toBeInTheDocument();
   });
 });
