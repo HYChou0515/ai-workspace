@@ -14,9 +14,13 @@ import asyncio
 import json
 from typing import Any
 
-from workspace_app.api import MessageDelta
+from workspace_app.api import MessageDelta, create_app
 from workspace_app.api.events import Presence
 from workspace_app.api.turns import ChatTurnEngine
+from workspace_app.config.schema import ServerSettings
+from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.resources import make_spec
+from workspace_app.sandbox.mock import MockSandbox
 
 
 class _Runner:
@@ -155,3 +159,21 @@ async def test_a_zero_length_buffer_disables_replay():
 
     await sub.aclose()
     await engine.forget(key)
+
+
+def test_replay_buffer_size_defaults_to_2000():
+    # The dataclass default is the single source of truth for the knob.
+    assert ServerSettings().turn_replay_buffer_events == 2000
+
+
+def test_create_app_wires_the_replay_buffer_size_into_the_engine():
+    # A size accepted in config but never read would be a dead knob — prove it
+    # reaches the engine that owns the broadcast sessions.
+    app = create_app(
+        spec=make_spec(default_user="u"),
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),  # ty: ignore[invalid-argument-type]
+        turn_replay_buffer_events=7,
+    )
+    assert app.state.turn_engine._replay_buffer_events == 7

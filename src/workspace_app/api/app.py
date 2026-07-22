@@ -211,6 +211,10 @@ def create_app(
     # in-pod fast-path is unaffected. Threaded from
     # settings.server.turn_cancel_poll_seconds.
     turn_cancel_poll_seconds: float = 0.5,
+    # #43 reconnect replay: recent broadcast events kept per session so a same-pod
+    # reconnect replays the gap (`?since=`); 0 disables. From
+    # settings.server.turn_replay_buffer_events.
+    turn_replay_buffer_events: int = 2000,
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
@@ -791,7 +795,10 @@ def create_app(
     # One turn engine drives the RCA workspace; one cancellable in-flight turn
     # per conversation, SSE streaming, cancel hook.
     turn_engine = ChatTurnEngine(
-        runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
+        runner,
+        turn_control=turn_control,
+        poll_interval=turn_cancel_poll_seconds,
+        replay_buffer_events=turn_replay_buffer_events,
     )
     # Exposed for introspection / tests of the #43 broadcast stream (the shared
     # per-investigation pub/sub lives on the engine).
@@ -826,7 +833,10 @@ def create_app(
         )
 
     kb_turn_engine = ChatTurnEngine(
-        runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
+        runner,
+        turn_control=turn_control,
+        poll_interval=turn_cancel_poll_seconds,
+        replay_buffer_events=turn_replay_buffer_events,
     )
     register_kb_chat_routes(
         api,

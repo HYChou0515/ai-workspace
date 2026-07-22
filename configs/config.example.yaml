@@ -73,6 +73,12 @@
 #                              # peer replica) the cancel latency equals this;
 #                              # the same-pod fast-path stays instant. Smaller =
 #                              # snappier cancel, more store reads per active turn.
+#   turn_replay_buffer_events: 2000  # #43: recent broadcast events each per-item
+#                              # session keeps in-pod so a same-pod reconnect
+#                              # replays the events missed during the gap
+#                              # (`GET .../stream?since=<seq>`). 0 disables replay
+#                              # (a reconnect degrades to store re-hydrate).
+#                              # ~200KB/session, only while a session is live.
 
 # ─── sandbox (agent execution environment) ──── [MUST] · [SCALE] ────
 # sandbox:
