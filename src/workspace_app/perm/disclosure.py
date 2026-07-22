@@ -44,6 +44,7 @@ def partition_by_disclosure(
     entries: Iterable[tuple[str, Permission | None, str]],
     *,
     superusers: frozenset[str] = frozenset(),
+    discoverable_restricted: bool = False,
 ) -> DisclosurePartition:
     """Split ``(id, permission, created_by)`` entries into the three disclosure
     tiers for ``actor``.
@@ -53,14 +54,26 @@ def partition_by_disclosure(
     ``discoverable``. Only when ``read_content`` is denied does ``read_meta`` decide
     between ``discoverable`` (existence known) and ``hidden`` (unknown). Both checks
     funnel through the single ``authorize`` decision point, so this stays a faithful
-    mirror of route/tool gating — no parallel policy."""
+    mirror of route/tool gating — no parallel policy.
+
+    ``discoverable_restricted`` is the caller's tier semantic (#605), forwarded to
+    ``authorize``: True (collections) puts an ungranted ``restricted`` resource in
+    ``discoverable``; the default keeps it ``hidden`` (private + invite-list
+    families: chats, items, per-doc overrides)."""
     readable: list[str] = []
     discoverable: list[str] = []
     hidden: list[str] = []
     for rid, perm, created_by in entries:
         if authorize(actor, "read_content", perm, created_by=created_by, superusers=superusers):
             readable.append(rid)
-        elif authorize(actor, "read_meta", perm, created_by=created_by, superusers=superusers):
+        elif authorize(
+            actor,
+            "read_meta",
+            perm,
+            created_by=created_by,
+            superusers=superusers,
+            discoverable_restricted=discoverable_restricted,
+        ):
             discoverable.append(rid)
         else:
             hidden.append(rid)

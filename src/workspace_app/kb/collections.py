@@ -196,7 +196,11 @@ def partition_collection_disclosure(
         data = rev.data
         assert isinstance(data, Collection)
         entries.append((cid, data.permission, rev.info.created_by))
-    return partition_by_disclosure(actor, entries, superusers=superusers)
+    # #605: collections are the discoverable-restricted family — a fresh
+    # restricted collection is visible-as-existing to every insider.
+    return partition_by_disclosure(
+        actor, entries, superusers=superusers, discoverable_restricted=True
+    )
 
 
 def resolve_withheld(spec: SpecStar, collection_ids: Iterable[str]) -> list[WithheldSource]:

@@ -162,7 +162,9 @@ def test_render_document_gates_on_live_collection_read_content():
     holder["id"] = "alice"
     assert client.get(f"/kb/documents?id={doc_id}").status_code == 403  # in scope, no read_content
     holder["id"] = "carol"
-    assert client.get(f"/kb/documents?id={doc_id}").status_code == 404  # not even read_meta
+    # #605: a restricted collection is existence-visible to every insider, so an
+    # ungranted stranger gets 403 (exists, unreadable) — 404 is reserved for private.
+    assert client.get(f"/kb/documents?id={doc_id}").status_code == 403
 
 
 def test_list_doc_chunks_gates_on_read_content():
@@ -176,7 +178,8 @@ def test_list_doc_chunks_gates_on_read_content():
     holder["id"] = "alice"
     assert client.get(f"/kb/documents/chunks?id={doc_id}").status_code == 403  # no read_content
     holder["id"] = "carol"
-    assert client.get(f"/kb/documents/chunks?id={doc_id}").status_code == 404  # no read_meta
+    # #605: exists, unreadable
+    assert client.get(f"/kb/documents/chunks?id={doc_id}").status_code == 403
 
 
 def test_collection_export_gates_on_read_content():
@@ -192,7 +195,7 @@ def test_collection_export_gates_on_read_content():
     holder["id"] = "alice"
     assert client.post(prep).status_code == 403  # in scope, no read_content
     holder["id"] = "carol"
-    assert client.post(prep).status_code == 404  # no read_meta
+    assert client.post(prep).status_code == 403  # #605: exists, unreadable
 
 
 def test_tightening_a_collection_fans_out_to_hide_its_docs_on_the_auto_crud_route():
