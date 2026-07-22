@@ -5,7 +5,11 @@ test (not run here); this locks the parts that DON'T need a broker.
 
 from __future__ import annotations
 
+import asyncio
+import os
 from collections.abc import Callable
+
+import pytest
 
 from workspace_app.api.event_bus import AioPikaTransport, IAmqpTransport, RabbitMQEventBus
 from workspace_app.api.events import MessageDelta
@@ -69,3 +73,32 @@ def test_defaults_to_the_aio_pika_transport():
     # stores config here (no connect until `start`), so this needs no broker.
     bus = RabbitMQEventBus(url="amqp://guest:guest@localhost/")
     assert isinstance(bus._transport, AioPikaTransport)
+
+
+@pytest.mark.integration
+async def test_real_broker_cross_pod_round_trip():
+    """The REAL aio_pika fanout path — needs aio_pika installed + a live broker at
+    $AMQP_URL. Two buses = two pods; a publish on one reaches the other's consumer.
+    Skipped (not failed) without a broker, so CI/unit runs are unaffected; this is
+    the only coverage of AioPikaTransport, exercised in a broker-equipped env."""
+    pytest.importorskip("aio_pika")
+    url = os.environ.get("AMQP_URL")
+    if not url:
+        pytest.skip("no $AMQP_URL — needs a live RabbitMQ broker")
+
+    received: list[tuple[str, str, object]] = []
+    got = asyncio.Event()
+    bus_a = RabbitMQEventBus(url=url, exchange="rca_test_events")
+    bus_b = RabbitMQEventBus(url=url, exchange="rca_test_events")
+
+    def on_event(key: str, origin: str, event: object) -> None:
+        received.append((key, origin, event))
+        got.set()
+
+    bus_a.start_consuming(lambda *_: None)
+    bus_b.start_consuming(on_event)
+    await asyncio.sleep(1.0)  # let both queues bind to the exchange
+
+    bus_a.publish("K", "podA", MessageDelta(text="real"))
+    await asyncio.wait_for(got.wait(), 5)
+    assert received == [("K", "podA", MessageDelta(text="real"))]
