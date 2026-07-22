@@ -1558,6 +1558,7 @@ def register_kb_routes(
     async def list_wiki_pages(collection_id: str) -> WikiTreeOut:
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "read_content")  # #607: wiki is derived content
         pages = await WikiFileStore(spec).ls(collection_id)
         return WikiTreeOut(pages=sorted(pages))
 
@@ -1566,6 +1567,7 @@ def register_kb_routes(
         from ..filestore.protocol import FileNotFound
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "read_content")  # #607
         try:
             data = await WikiFileStore(spec).read(collection_id, path)
         except FileNotFound as exc:
@@ -1599,6 +1601,7 @@ def register_kb_routes(
         from ..filestore.protocol import FileNotFound
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "edit_content")  # #607
         store = WikiFileStore(spec)
         try:
             data = await store.read(collection_id, from_)
@@ -1615,6 +1618,7 @@ def register_kb_routes(
         from ..filestore.protocol import FileNotFound
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "edit_content")  # #607
         store = WikiFileStore(spec)
         try:
             with store.acting_as(get_user_id()):
@@ -1625,6 +1629,7 @@ def register_kb_routes(
 
     @app.get("/kb/collections/{collection_id}/wiki/status")
     async def wiki_status(collection_id: str) -> WikiStatusOut:
+        _authorize_collection(collection_id, "read_content")  # #607: leaks page names / errors
         if wiki_coordinator is None:
             return WikiStatusOut(building=False, total=0, done=0)
         st = wiki_coordinator.status(collection_id)
@@ -1644,6 +1649,7 @@ def register_kb_routes(
         # passes, one per source — the coordinator serialises them). The
         # maintainer updates pages in place; this is the manual "refresh the
         # wiki" path. No-op (queued=0) when the wiki path isn't enabled.
+        _authorize_collection(collection_id, "edit_content")  # #607
         coll_rm = spec.get_resource_manager(Collection)
         try:
             coll = coll_rm.get(collection_id).data
@@ -1689,6 +1695,7 @@ def register_kb_routes(
         # fix links). PROSE wiki only (a code wiki is regenerated deterministically,
         # not reflected); queued=0/disabled when the wiki path isn't enabled or it's
         # a code collection. Progress shows on the same GET .../wiki/status poll.
+        _authorize_collection(collection_id, "edit_content")  # #607
         coll_rm = spec.get_resource_manager(Collection)
         try:
             coll = coll_rm.get(collection_id).data
@@ -1708,6 +1715,7 @@ def register_kb_routes(
         # this is the deliberate "start over" escape hatch.
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "edit_content")  # #607
         return WikiClearedOut(cleared=await WikiFileStore(spec).clear(collection_id))
 
     @app.post("/kb/collections/{collection_id}/wiki/corrections")
@@ -1719,6 +1727,7 @@ def register_kb_routes(
         # coordinator.submit_correction. 400 when the collection has no wiki (Q13).
         from ..kb.wiki.corrections import WikiNotEnabledError
 
+        _authorize_collection(collection_id, "edit_content")  # #607: queues a wiki rewrite
         if wiki_coordinator is None:
             raise HTTPException(status_code=400, detail="this collection has no wiki to correct")
         if not body.instruction.strip():
@@ -1746,6 +1755,7 @@ def register_kb_routes(
         # streams under the hood; run it off the event loop.
         from ..kb.wiki.correction_draft import QA, draft_correction
 
+        _authorize_collection(collection_id, "read_content")  # #607: reads to draft, no mutation
         answered = [QA(question=x.question, answer=x.answer) for x in body.answered]
         draft = await asyncio.to_thread(
             draft_correction,
@@ -2155,6 +2165,9 @@ def register_kb_routes(
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail="document not found") from exc
         assert isinstance(doc, SourceDoc)
+        # #607: writing a doc's parse guidance edits the collection's content — gate
+        # on the LIVE collection's edit_content (404 hides an invisible collection).
+        _authorize_collection(doc.collection_id, "edit_content")
         rm.update(doc_id, msgspec.structs.replace(doc, parser_guidance_override=body.guidance))
         return DocGuidanceOut(parser_guidance_override=body.guidance)
 
@@ -2166,6 +2179,7 @@ def register_kb_routes(
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         assert isinstance(doc, SourceDoc)
+        _authorize_collection(doc.collection_id, "edit_content")  # #607
         rm.update(doc_id, msgspec.structs.replace(doc, status="indexing"))
         # #390: force recompute — drop the cached result so the rebuild misses and
         # repopulates it (see reindex_collection).
@@ -2180,9 +2194,11 @@ def register_kb_routes(
         # chunks first, then the doc itself (hard delete — current-only data).
         rm = spec.get_resource_manager(SourceDoc)
         try:
-            rm.get(doc_id)
+            doc = rm.get(doc_id).data
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        assert isinstance(doc, SourceDoc)
+        _authorize_collection(doc.collection_id, "edit_content")  # #607
 
         async def _teardown_one(did: str) -> None:
             # #43: ask the wiki to un-fold this source BEFORE the row is gone — the
@@ -2240,6 +2256,7 @@ def register_kb_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         old = rev.data
         assert isinstance(old, SourceDoc)
+        _authorize_collection(old.collection_id, "edit_content")  # #607
         # #513 P7: an attachment (parent_doc_id set) may only be renamed WITHIN its
         # locked `{parent}/.att/` prefix — so a rename can't detach it from its
         # parent or escape the attachment namespace. Top-level docs are unrestricted.
