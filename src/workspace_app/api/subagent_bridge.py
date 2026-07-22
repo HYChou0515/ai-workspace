@@ -19,7 +19,11 @@ from ..agent.ask_kb import AskKbSpec
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import KbSearchBudget, WikiSearchBudget
 from ..kb.cited import record_citations
-from ..kb.collections import partition_collection_disclosure, resolve_effective_scope
+from ..kb.collections import (
+    all_discoverable_collection_ids,
+    partition_collection_disclosure,
+    resolve_effective_scope,
+)
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.wiki.consult import WikiConsultant
@@ -59,6 +63,10 @@ class SubagentBridge:
         # spawns so a sub-agent can't run wider than the turn that asked it.
         tool_output_max_chars: int = 200_000,
         exec_output_max_chars: int = 30_000,
+        # #605: the operator disclosure switch. False ⇒ the sub-agent's
+        # discoverable set is empty, so the probe never runs and nothing is
+        # withheld — one fewer ANN query per kb_search.
+        disclosure_enabled: bool = True,
     ) -> None:
         self._spec = spec
         self._runner = runner
@@ -71,6 +79,7 @@ class SubagentBridge:
         self._wiki_consultant_factory = wiki_consultant_factory
         self._tool_output_max_chars = tool_output_max_chars
         self._exec_output_max_chars = exec_output_max_chars
+        self._disclosure_enabled = disclosure_enabled
 
     async def run(
         self,
@@ -86,6 +95,10 @@ class SubagentBridge:
         ask_kb_spec: AskKbSpec | None = None,
         withheld_sink: list[str] | None = None,
         excluded_collection_ids: list[str] | None = None,
+        # #605: the caller's per-turn disclosure pick. None ⇒ the operator
+        # default (the constructor switch); False ⇒ skip the probe this call;
+        # True cannot re-enable a globally-off deploy.
+        disclosure: bool | None = None,
     ) -> tuple[str, list[Citation]]:
         """Generic sub-agent bridge — runs the sub-agent for `purpose`
         over every collection and returns its synthesized answer + the
@@ -146,6 +159,24 @@ class SubagentBridge:
             self._spec, ids, speaker, superusers=self._superusers
         )
         readable, discoverable = part.readable, part.discoverable
+        if not self._disclosure_enabled or disclosure is False or withheld_sink is None:
+            # #605: disclosure off — or NOBODY CONSUMES it (no withheld sink: an
+            # infer_modules-style holder has no message to attach withheld
+            # sources to) — ⇒ no probe universe at all. The tool skips the probe
+            # when nothing is discoverable, so the feature costs nothing here.
+            # (The searched scope is untouched.)
+            discoverable = []
+        elif purpose == "kb_chat":
+            # #605: the disclosure universe is every discoverable collection —
+            # not just the picked scope. "There IS an answer you can't read"
+            # must fire for a collection the speaker didn't (or couldn't) pick;
+            # explicit exclusions stay excluded (#551 — deliberate is deliberate).
+            discoverable = all_discoverable_collection_ids(
+                self._spec,
+                speaker,
+                excluded=excluded_collection_ids or (),
+                superusers=self._superusers,
+            )
         if ids and not readable and not discoverable:
             logger.warning(
                 "subagent_bridge: speaker %s can neither read nor discover any of the "

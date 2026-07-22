@@ -54,6 +54,7 @@ def _bridge(
     holder: dict[str, str],
     *,
     superusers: frozenset[str] = frozenset(),
+    disclosure_enabled: bool = True,
 ) -> SubagentBridge:
     cfg = AgentConfig(name="kb", model="x", allowed_tools=["kb_search"])
     return SubagentBridge(
@@ -65,6 +66,7 @@ def _bridge(
         get_user_id=lambda: holder["id"],
         max_searches=None,
         superusers=superusers,
+        disclosure_enabled=disclosure_enabled,
     )
 
 
@@ -186,6 +188,63 @@ async def test_bridge_passes_discoverable_scope_and_bubbles_withheld_into_the_si
     assert runner.seen_discoverable == [disc]  # read_meta-only handed over as discoverable
     assert sink == [disc]  # the disclosed withheld source bubbled to the parent
     assert answer == "answer"
+
+
+async def test_bridge_skips_the_probe_when_disclosure_is_disabled():
+    """#605 P3: the operator kill switch — disclosure off means the sub-agent
+    gets an EMPTY discoverable set (the probe is skipped for free) and nothing
+    bubbles into the sink, even when discoverable collections exist."""
+    spec = make_spec()
+    holder = {"id": "alice"}
+    readable = _new_collection(spec, by="bob")
+    _new_collection(spec, by="bob", permission=Permission(visibility="restricted"))
+    runner = _DisclosingRunner()
+    sink: list[str] = []
+    await _bridge(spec, runner, holder, disclosure_enabled=False).run(
+        "kb_chat", "q", collection_ids=[readable], withheld_sink=sink
+    )
+    assert runner.seen_discoverable == []
+    assert sink == []
+
+
+async def test_bridge_skips_the_probe_when_nobody_consumes_withheld():
+    """#605 P4: no withheld sink ⇒ no probe. A holder like infer_modules has no
+    message to attach withheld sources to — disclosure would be work nobody can
+    ever see, so the probe universe stays empty without even consulting the
+    config switch."""
+    spec = make_spec()
+    holder = {"id": "alice"}
+    readable = _new_collection(spec, by="bob")
+    _new_collection(spec, by="bob", permission=Permission(visibility="restricted"))
+    runner = _DisclosingRunner()
+    await _bridge(spec, runner, holder).run(
+        "kb_chat",
+        "q",
+        collection_ids=[readable],  # no withheld_sink
+    )
+    assert runner.seen_discoverable == []
+
+
+async def test_bridge_probes_discoverable_collections_beyond_the_picked_scope():
+    """#605 P2: the disclosure universe is every discoverable collection, not the
+    picked scope. A restricted collection alice never selected (and holds no
+    grant on) still reaches the sub-agent as discoverable — so "there IS an
+    answer you can't read" can finally fire for a collection she didn't (or
+    couldn't) think to pick."""
+    spec = make_spec()
+    holder = {"id": "alice"}
+    readable = _new_collection(spec, by="bob")  # public → the picked, searched scope
+    unpicked = _new_collection(
+        spec, by="bob", name="Fab-Yield", permission=Permission(visibility="restricted")
+    )
+    runner = _DisclosingRunner()
+    sink: list[str] = []
+    await _bridge(spec, runner, holder).run(
+        "kb_chat", "q", collection_ids=[readable], withheld_sink=sink
+    )
+    assert runner.seen_ids == [readable]  # searched scope: exactly what was picked
+    assert runner.seen_discoverable == [unpicked]  # never selected, still probed
+    assert sink == [unpicked]  # and it can bubble up as withheld
 
 
 async def test_bridge_still_runs_to_disclose_when_nothing_is_readable():

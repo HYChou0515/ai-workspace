@@ -774,6 +774,7 @@ def register_kb_routes(
             data.permission,
             created_by=row.resource.meta.created_by,
             superusers=superusers,
+            discoverable_restricted=True,  # #605: restricted collections list as existing
         )
 
     def _authorize_collection(collection_id: str, verb: Verb) -> tuple[Collection, str]:
@@ -793,7 +794,12 @@ def register_kb_routes(
         actor = _actor()
         vis = coll.permission.visibility if coll.permission is not None else "public(none)"
         if not authorize(
-            actor, "read_meta", coll.permission, created_by=created_by, superusers=superusers
+            actor,
+            "read_meta",
+            coll.permission,
+            created_by=created_by,
+            superusers=superusers,
+            discoverable_restricted=True,  # #605: a restricted collection 403s, never 404s
         ):
             # #494 observability: a deny on the permission gate now says who/why so a
             # future "why is this 404?" is diagnosable without code archaeology.
@@ -1049,7 +1055,12 @@ def register_kb_routes(
         # Otherwise the caller must at least be able to SEE the collection, or it's
         # a uniform 404 (no existence leak to someone who can't discover it).
         if not authorize(
-            actor, "read_meta", coll.permission, created_by=owner, superusers=superusers
+            actor,
+            "read_meta",
+            coll.permission,
+            created_by=owner,
+            superusers=superusers,
+            discoverable_restricted=True,  # #605: any insider may request access to restricted
         ):
             raise HTTPException(status_code=404, detail="collection not found")
         dedup_key = f"access_request:{collection_id}:{me}"

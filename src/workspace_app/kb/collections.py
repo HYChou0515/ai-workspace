@@ -140,6 +140,39 @@ def global_collection_ids(spec: SpecStar) -> list[str]:
     ]
 
 
+def all_discoverable_collection_ids(
+    spec: SpecStar,
+    user: str,
+    *,
+    excluded: Iterable[str] = (),
+    superusers: frozenset[str] = frozenset(),
+) -> list[str]:
+    """#605: the disclosure-probe UNIVERSE — every collection ``user`` may
+    see-exist but not read, across the WHOLE store, regardless of what the chat
+    selected. Pre-#605 the probe only saw the picked scope, so "there IS an
+    answer you can't read" could never fire for a collection the user didn't
+    (or couldn't) pick — which was the whole point of the feature. ``excluded``
+    (the chat's explicit exclusions, #551 semantics) is honoured: a deliberately
+    excluded collection doesn't come back through the disclosure channel.
+    Readable collections are NOT in the result (nothing to disclose — the user
+    could search them), and hidden ones (private / no read_meta) never are."""
+    rm = spec.get_resource_manager(Collection)
+    excl = set(excluded)
+    actor = Actor.human(user)
+    entries: list[tuple[str, Any, str]] = []
+    for r in rm.list_resources():
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        if rid in excl:
+            continue
+        data = r.data
+        assert isinstance(data, Collection)
+        entries.append((rid, data.permission, r.info.created_by))  # ty: ignore[unresolved-attribute]
+    part = partition_by_disclosure(
+        actor, entries, superusers=superusers, discoverable_restricted=True
+    )
+    return part.discoverable
+
+
 def resolve_effective_scope(
     spec: SpecStar,
     specified: Iterable[str] | None,
@@ -196,7 +229,11 @@ def partition_collection_disclosure(
         data = rev.data
         assert isinstance(data, Collection)
         entries.append((cid, data.permission, rev.info.created_by))
-    return partition_by_disclosure(actor, entries, superusers=superusers)
+    # #605: collections are the discoverable-restricted family — a fresh
+    # restricted collection is visible-as-existing to every insider.
+    return partition_by_disclosure(
+        actor, entries, superusers=superusers, discoverable_restricted=True
+    )
 
 
 def resolve_withheld(spec: SpecStar, collection_ids: Iterable[str]) -> list[WithheldSource]:

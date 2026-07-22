@@ -78,12 +78,25 @@ def authorize(
     *,
     created_by: str,
     superusers: frozenset[str] = frozenset(),
+    discoverable_restricted: bool = False,
 ) -> bool:
     """Whether `actor` may do `verb` on a resource owned by `created_by`.
 
     `permission is None` ≡ the resource is `public` (no object configured yet).
     The `read_meta` gate (404 when absent) is sequenced by the CALLER — it checks
     `read_meta` first, then the specific verb — so this function stays per-verb.
+
+    ``discoverable_restricted`` is the caller-declared TIER SEMANTIC for its
+    resource family (#605): True means `restricted` itself makes the EXISTENCE
+    visible — `read_meta` passes for every insider with no per-subject grant, so
+    a fresh restricted resource is discoverable (name/owner visible, disclosure
+    eligible) instead of behaving like `private`. Collections declare True (the
+    knowledge-sharing surface, where "there IS an answer you can't read" must be
+    tellable); resources that use restricted as "private + an invite list" — a
+    shared chat, a work item's member set, a per-doc tightening override — keep
+    the default False, so sharing with alice never announces existence to carol.
+    Content and every other verb stay grant-gated either way; `private` remains
+    fully hidden (404) in both modes.
     """
     # 1. Hard bars on the AI — never, whatever the ceiling / owner / superuser.
     if actor.is_ai and verb in AI_FORBIDDEN:
@@ -113,4 +126,9 @@ def authorize(
         return True
     if perm.visibility == "private":
         return False
+    if discoverable_restricted and verb == "read_meta":
+        # #605: this family's `restricted` means "every insider may know it
+        # exists" — see the docstring. Families that keep the default still
+        # need an explicit read_meta grant to be discoverable.
+        return True
     return _granted(actor, perm, verb)  # restricted

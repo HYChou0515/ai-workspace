@@ -121,3 +121,42 @@ def test_an_ai_driven_by_a_superuser_does_not_inherit_the_bypass():
     ai = Actor.ai("root", ceiling=frozenset({"read_content"}))
     su = frozenset({"root"})
     assert authorize(ai, "edit_content", perm, created_by=BOB, superusers=su) is False
+
+
+# ── #605: discoverable-restricted family — existence visible to every insider ──
+
+
+def test_a_discoverable_family_grants_read_meta_on_restricted_without_a_grant():
+    """#605: a caller that declares `discoverable_restricted=True` (collections)
+    makes `restricted` itself mean "everyone may know it exists" — read_meta
+    needs no per-subject grant, so a fresh restricted collection is
+    discoverable, not invisible."""
+    perm = Permission(visibility="restricted")  # no grants at all
+    stranger = Actor.human("stranger")
+    assert (
+        authorize(stranger, "read_meta", perm, created_by=BOB, discoverable_restricted=True) is True
+    )
+    # ...but existence is ALL it buys: content stays grant-gated.
+    assert (
+        authorize(stranger, "read_content", perm, created_by=BOB, discoverable_restricted=True)
+        is False
+    )
+
+
+def test_the_default_family_still_hides_ungranted_restricted():
+    """Resources that use restricted as "private + an invite list" (shared chats,
+    item member sets, per-doc overrides) keep the old semantic: no read_meta
+    grant ⇒ existence stays unknown (the uniform 404)."""
+    perm = Permission(visibility="restricted")
+    assert authorize(Actor.human("stranger"), "read_meta", perm, created_by=BOB) is False
+
+
+def test_private_stays_hidden_even_for_a_discoverable_family():
+    """The 404 is sacred: `discoverable_restricted` never touches private."""
+    perm = Permission(visibility="private")
+    assert (
+        authorize(
+            Actor.human("stranger"), "read_meta", perm, created_by=BOB, discoverable_restricted=True
+        )
+        is False
+    )

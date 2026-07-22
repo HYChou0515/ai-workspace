@@ -41,6 +41,7 @@ from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
 from ..kb.collections import (
+    all_discoverable_collection_ids,
     partition_collection_disclosure,
     resolve_effective_scope,
     resolve_withheld,
@@ -376,6 +377,10 @@ class _MsgBody(BaseModel):
     # the boolean "search wiki" toggle. Same shape/clamp as max_kb_searches (0 =
     # don't grep the wiki this reply, N = at most N greps, None = operator default).
     max_wiki_searches: int | None = None
+    # #605: per-chat disclosure toggle from the settings panel. None → operator
+    # default (`kb.disclosure.enabled`); False → skip the probe this reply
+    # (faster, no withheld). True cannot re-enable a globally-off switch.
+    disclosure: bool | None = None
 
 
 _IMAGE_QUERY_PREAMBLE = "[Attached image — described by the vision model]"
@@ -434,6 +439,9 @@ def register_kb_chat_routes(
     # #334: upper bound a per-message pick (`_MsgBody.max_kb_searches`) may
     # request — the composer's value is clamped to [0, this].
     max_searches_ceiling: int = 10,
+    # #605: the operator disclosure switch (create_app threads
+    # settings.kb.disclosure.enabled). False ⇒ empty probe universe, probe off.
+    disclosure_enabled: bool = True,
     # The KB chat turn's output ceilings (same knobs the RCA turn gets).
     tool_output_max_chars: int = 200_000,
     exec_output_max_chars: int = 30_000,
@@ -782,12 +790,30 @@ def register_kb_chat_routes(
             spec, _effective, get_user_id(), superusers=superusers
         )
         _discoverable = set(_disc.discoverable)
+        # #605: the disclosure PROBE universe is every discoverable collection in
+        # the store — not just the picked scope ("R級要選到才會揭露" was the
+        # defect: unpicked = unprobed = undisclosable). The searched scope below
+        # still subtracts only the IN-SCOPE discoverable ids; explicit
+        # exclusions stay excluded (#551 — deliberate is deliberate).
+        # Operator default AND the per-chat toggle must both allow: False skips,
+        # None inherits, True can't override a globally-off deploy.
+        _turn_disclosure = disclosure_enabled and body.disclosure is not False
+        _probe_universe = (
+            all_discoverable_collection_ids(
+                spec,
+                get_user_id(),
+                excluded=chat.excluded_collection_ids or (),
+                superusers=superusers,
+            )
+            if _turn_disclosure
+            else []
+        )
         ctx = AgentToolContext(
             tool_output_max_chars=tool_output_max_chars,
             exec_output_max_chars=exec_output_max_chars,
             retriever=retriever,
             collection_ids=[c for c in _effective if c not in _discoverable],
-            discoverable_collection_ids=_disc.discoverable,
+            discoverable_collection_ids=_probe_universe,
             # #308: exclude docs whose per-doc override blocks THIS speaker's
             # read_content, so the retriever never surfaces a doc tightened away
             # from them (empty when no doc in scope is overridden).

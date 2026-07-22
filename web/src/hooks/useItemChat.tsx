@@ -2,6 +2,7 @@ import { useMemo } from "react";
 
 import { itemChatApi, type ItemChatApi } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
+import { getKbDisclosure } from "../lib/kbDisclosure";
 import { getKbSearchMax } from "../lib/kbSearchMax";
 import {
   getStored as getKbEnhancementSelection,
@@ -66,6 +67,7 @@ export function useItemChat({
           // it, so the composer's stepper moved but nothing changed — the operator
           // default applied regardless, including when the user chose 0.
           maxKbSearches: getKbSearchMax(),
+          disclosure: getKbDisclosure(),
           // #380: skills queued in the Skills panel to apply THIS turn (one-shot).
           applySkills: opts?.applySkills,
           // Attached image workspace paths — a VLM main model reads them inline.

@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import { getStored } from "../lib/kbEnhancementMode";
+import { getKbDisclosure } from "../lib/kbDisclosure";
 import { getKbSearchMax } from "../lib/kbSearchMax";
 import { getKbWikiMax } from "../lib/kbWikiMax";
 import { renderWithQuery } from "../test/queryWrapper";
@@ -175,6 +176,20 @@ describe("ModelEffortPicker", () => {
     expect(value).toHaveTextContent("0");
     expect(getKbSearchMax()).toBe(0);
     expect(screen.getByRole("button", { name: "減少搜尋次數" })).toBeDisabled();
+  });
+
+  it("#605: the disclosure toggle is on by default, sticky when switched off", async () => {
+    renderWithQuery(
+      <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} retrieval />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+
+    const toggle = screen.getByLabelText("提示無權限的相關資料");
+    expect(toggle).toBeChecked(); // ships ON
+
+    await userEvent.click(toggle);
+    expect(toggle).not.toBeChecked();
+    expect(getKbDisclosure()).toBe(false); // sticky — the next send skips the probe
   });
 
   it("#537: the wiki control is an allowance stepper, present only where it applies", async () => {

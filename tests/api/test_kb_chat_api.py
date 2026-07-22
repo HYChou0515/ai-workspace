@@ -172,6 +172,106 @@ def test_kb_chat_turn_wires_spec_for_lookup_glossary():
     assert runner.seen_spec is not None
 
 
+class _DiscoverableCapturingRunner:
+    """Records the disclosure-probe universe the KB turn handed the agent."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] | None = None
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.seen = list(ctx.discoverable_collection_ids)
+        yield MessageDelta(text="ok")
+        yield RunDone()
+
+
+def test_kb_chat_probes_unselected_restricted_collections():
+    """#605 P2: a restricted collection the chat never selected (created by
+    someone else, no grants) still enters the turn's disclosure universe — so
+    "there IS an answer you can't read" can fire without the user having to
+    pick a collection they can't even use."""
+    runner = _DiscoverableCapturingRunner()
+    spec = make_spec()
+    from workspace_app.perm import Permission
+    from workspace_app.resources.kb import Collection
+
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("someone-else"):
+        unpicked = rm.create(
+            Collection(name="Fab-Yield", permission=Permission(visibility="restricted"))
+        ).resource_id
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+    )
+    client = TestClient(app)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q"})
+    assert runner.seen is not None
+    assert unpicked in runner.seen
+
+
+def test_kb_chat_skips_the_probe_when_disclosure_is_disabled():
+    """#605 P3: create_app(kb_disclosure_enabled=False) — the operator kill
+    switch: the turn's disclosure universe is empty even though a discoverable
+    collection exists, so the probe never runs."""
+    runner = _DiscoverableCapturingRunner()
+    spec = make_spec()
+    from workspace_app.perm import Permission
+    from workspace_app.resources.kb import Collection
+
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("someone-else"):
+        rm.create(Collection(name="x", permission=Permission(visibility="restricted")))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+        kb_disclosure_enabled=False,
+    )
+    client = TestClient(app)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q"})
+    assert runner.seen == []
+
+
+def test_kb_chat_per_message_disclosure_off_skips_the_probe():
+    """#605 P5: the composer's per-chat toggle rides the message body —
+    disclosure: false turns the probe off for this reply even though the
+    operator default is on."""
+    runner = _DiscoverableCapturingRunner()
+    spec = make_spec()
+    from workspace_app.perm import Permission
+    from workspace_app.resources.kb import Collection
+
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("someone-else"):
+        unpicked = rm.create(
+            Collection(name="x", permission=Permission(visibility="restricted"))
+        ).resource_id
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+    )
+    client = TestClient(app)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q", "disclosure": False})
+    assert runner.seen == []
+    # and back on (None/default) the same chat probes again
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q2"})
+    assert runner.seen is not None and unpicked in runner.seen
+
+
 class _OrphanToolRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield ToolEnd(call_id="ghost", output="stray output")

@@ -123,6 +123,8 @@ export const itemChatApi = {
      * was inert here and the operator default always won — including when the
      * user set 0. */
     maxKbSearches?: number;
+    /** #605: per-chat disclosure toggle (see kb.ts SendMessageArgs). */
+    disclosure?: boolean;
     /** #380: skills the user queued to apply THIS turn (one-shot, hard-preloaded).
      * Mirrors the item-level `api.sendMessage`; the chat endpoint shares the body. */
     applySkills?: string[];
@@ -140,6 +142,7 @@ export const itemChatApi = {
         reasoning_effort: args.reasoningEffort,
         enhancements: args.enhancements,
         max_kb_searches: args.maxKbSearches,
+        disclosure: args.disclosure,
         apply_skills: args.applySkills,
         image_paths: args.imagePaths,
         answers: args.answers,

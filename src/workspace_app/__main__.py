@@ -276,6 +276,7 @@ def main() -> None:
             # #195: per-turn kb_search cap for the KB chat turn + ask_knowledge_base
             # bridge (null in config ⇒ unlimited).
             kb_max_searches_per_turn=settings.kb.max_searches_per_turn,
+            kb_disclosure_enabled=settings.kb.disclosure.enabled,
             # #334: ceiling for the composer's per-message kb_search-count pick.
             kb_max_searches_ceiling=settings.kb.max_searches_ceiling,
             # #506: reconcile / cluster-sweeper thresholds (dedup dup proposals + Qs).

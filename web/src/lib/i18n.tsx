@@ -118,6 +118,13 @@ export const messages = {
   "wikimax.dec": { "zh-TW": "減少查百科次數", en: "Fewer wiki searches" },
   "wikimax.inc": { "zh-TW": "增加查百科次數", en: "More wiki searches" },
 
+  // #605: the "answer exists but you lack permission" disclosure toggle.
+  "disclosure.label": { "zh-TW": "提示無權限的相關資料", en: "Point out inaccessible sources" },
+  "disclosure.title": {
+    "zh-TW": "找到相關但你沒權限的資料時提醒你（可申請存取）；關閉可加快回覆",
+    en: "When an answer exists in a collection you can't read, say so (with request access); off is faster",
+  },
+
   // Agent activity entries (AgentEntryView): tool cards, reasoning, notices
   "tool.exec": { "zh-TW": "執行指令", en: "Run command" },
   "tool.read_file": { "zh-TW": "讀取檔案", en: "Read file" },

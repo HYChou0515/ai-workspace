@@ -30,6 +30,7 @@ from .schema import (
     ChunkerSettings,
     ClusterSettings,
     CodeEmbedderSettings,
+    DisclosureSettings,
     EmbedderSettings,
     EnhancementBool,
     EnhancementInt,
@@ -428,6 +429,7 @@ _TOP_SCHEMA: dict[str, Any] = {
         # non-dict value, like `parsers` below); timeout is a scalar float leaf.
         "image_fetch": _dataclass_keys(ImageFetchSettings),
         "image_embedder": _dataclass_keys(ImageEmbedderSettings),
+        "disclosure": _dataclass_keys(DisclosureSettings),
         "git": _dataclass_keys(GitSettings),
         # Issue #39: `kb.parsers` / `kb.parsers_disabled` are
         # list-of-strings leaves. The shape check below skips non-dict
@@ -700,6 +702,12 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             card_drafter=_build_retrieval_llm(d["kb"].get("card_drafter")),
             retrieval=_build_retrieval(d["kb"]["retrieval"]),
             cluster=_build(ClusterSettings, d["kb"].get("cluster", {})),
+            # #605: absent section ⇒ all defaults (enabled). The loader-schema
+            # whitelist alone does NOT apply yaml values — a key must ALSO be
+            # constructed here, or it's a dead knob (the #598 image_embedder
+            # lesson, one line below).
+            disclosure=_build(DisclosureSettings, d["kb"].get("disclosure", {})),
+            image_embedder=_build(ImageEmbedderSettings, d["kb"].get("image_embedder", {})),
             max_searches_per_turn=d["kb"]["max_searches_per_turn"],
             max_searches_ceiling=d["kb"]["max_searches_ceiling"],
             code_embedder=_build(CodeEmbedderSettings, d["kb"]["code_embedder"]),

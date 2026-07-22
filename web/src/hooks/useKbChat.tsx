@@ -9,6 +9,7 @@ import {
   toBodyEnhancements,
 } from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
+import { getKbDisclosure } from "../lib/kbDisclosure";
 import { getKbSearchMax } from "../lib/kbSearchMax";
 import { getKbWikiMax } from "../lib/kbWikiMax";
 import { EMPTY_LOG, type AgentLog, reduceAgent } from "../pages/investigation/agentLog";
@@ -108,6 +109,7 @@ export function useKbChat({
           agentName: getKbAgentName() ?? undefined,
           // #334: per-message cap on this reply's kb_search calls (0 = no search).
           maxKbSearches: getKbSearchMax(),
+          disclosure: getKbDisclosure(),
           // #506: per-message cap on this reply's wiki greps (replaces the toggle).
           maxWikiSearches: getKbWikiMax(),
         })) {

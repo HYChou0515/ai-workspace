@@ -347,6 +347,8 @@ export type SendMessageArgs = {
   /** #334: per-message cap on kb_search calls this turn (shared across the
    * turn's ask_knowledge_base calls). 0 = don't search; omitted = operator default. */
   maxKbSearches?: number;
+  /** #605: per-chat disclosure toggle (see kb.ts SendMessageArgs). */
+  disclosure?: boolean;
   /** #380: skills the user chose to APPLY this turn (skills picker "apply"
    * button). Each named skill's body is hard-preloaded into the turn; one-shot. */
   applySkills?: string[];

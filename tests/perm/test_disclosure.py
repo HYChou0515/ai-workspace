@@ -54,9 +54,32 @@ def test_restricted_with_read_meta_only_is_discoverable():
     assert _one(perm, Actor.human("alice")) == "discoverable"
 
 
-def test_restricted_ungranted_is_hidden():
+def test_restricted_ungranted_is_hidden_by_default():
+    """The DEFAULT family semantic: resources that use restricted as "private +
+    an invite list" (a shared chat, an item's member set) — sharing with carol
+    must not announce existence to alice."""
     perm = Permission(visibility="restricted", read_content=["user:carol"])
     assert _one(perm, Actor.human("alice")) == "hidden"
+
+
+def test_restricted_ungranted_is_discoverable_for_a_discoverable_family():
+    """#605: a family that declares `discoverable_restricted=True` (collections)
+    makes restricted itself existence-visible — an ungranted insider lands in
+    `discoverable` (may learn it exists and request access, never read it)."""
+    perm = Permission(visibility="restricted", read_content=["user:carol"])
+    part = partition_by_disclosure(
+        Actor.human("alice"),
+        [("c1", perm, "bob")],
+        discoverable_restricted=True,
+    )
+    assert part.discoverable == ["c1"]
+    # private stays hidden even in a discoverable family — the 404 is sacred.
+    part2 = partition_by_disclosure(
+        Actor.human("alice"),
+        [("c2", Permission(visibility="private"), "bob")],
+        discoverable_restricted=True,
+    )
+    assert part2.hidden == ["c2"]
 
 
 def test_private_non_owner_is_hidden_preserving_the_404():

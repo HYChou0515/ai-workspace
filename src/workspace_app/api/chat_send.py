@@ -292,6 +292,8 @@ class ChatSendService:
                 # apply to the KB-answer scope (bridge resolves (tier ∪ global) \
                 # excluded). infer_modules keeps its focused single collection.
                 excluded_collection_ids=hub_excluded if purpose == "kb_chat" else None,
+                # #605: the composer's per-chat disclosure toggle rides the body.
+                disclosure=body.disclosure if purpose == "kb_chat" else None,
             )
 
         # ONE bridge for every sub-agent the RCA tools may invoke
