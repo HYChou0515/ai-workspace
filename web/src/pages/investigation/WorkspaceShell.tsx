@@ -210,7 +210,13 @@ function ShellBody({
   // `useItemAccess` carries BOTH identity bits — the earlier inline call passed
   // only the user id, so an admin (who the backend lets in) lost the entire
   // workspace to the `private` branch with nothing on screen to explain it.
-  const { canSeeFiles: _canSeeFiles, canConverse: _canConverse } = useItemAccess(item);
+  // read_chat gates the chat column below (a locked pane, not a mounted shell
+  // streaming 403s); read_content the IDE column; converse the composer.
+  const {
+    canReadChat: _canReadChat,
+    canSeeFiles: _canSeeFiles,
+    canConverse: _canConverse,
+  } = useItemAccess(item);
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
   // toggle the sidebar / bottom panel.
@@ -553,6 +559,31 @@ function ShellBody({
                 "+ New chat" escape lives in the chat header, so a wedged chat is
                 never a dead end. The shell carries workflow launches as chats too,
                 so the old single-chat WorkflowRunSection is retired. */}
+            {!_canReadChat ? (
+              // The promised read_chat lock: a member who deep-links in without
+              // the verb gets a clean locked pane, not live chat chrome whose
+              // stream 403s underneath.
+              <div
+                data-testid="chat-locked"
+                style={{
+                  flex: 1,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  color: "var(--text-paper-d)",
+                  fontSize: pxToRem(13),
+                  padding: 16,
+                  textAlign: "center",
+                }}
+              >
+                <span aria-hidden style={{ fontSize: pxToRem(20) }}>
+                  🔒
+                </span>
+                <span>This conversation isn’t shared with you.</span>
+              </div>
+            ) : (
             <ItemChatShell
               readOnly={!_canConverse}
               slug={manifest.slug}
@@ -580,6 +611,7 @@ function ShellBody({
               onSaveToolPrefs={(prefs) => setField("attached_tool_prefs", prefs)}
               onSaveSkillPrefs={(prefs) => setField("attached_skill_prefs", prefs)}
             />
+            )}
           </div>
         </div>
 

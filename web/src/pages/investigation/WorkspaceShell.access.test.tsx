@@ -92,6 +92,22 @@ describe("WorkspaceShell — who gets the IDE column", () => {
     open();
     await waitFor(() => expect(screen.getByTestId("page-item")).toBeInTheDocument());
     expect(screen.queryByTitle("Search files")).not.toBeInTheDocument();
-    expect(chatReadOnly).toHaveBeenLastCalledWith(true);
+  });
+
+  // The destructure comment always promised to lock the panels the user lacks
+  // the verb for "instead of a raw 403 from the file / chat sub-route" — but
+  // only the file half was wired. The chat shell mounted regardless, so a
+  // member without read_chat got the live chat chrome and a bare 403 stream.
+  it("locks the chat pane for a member without read_chat instead of mounting the live chat", async () => {
+    open();
+    await waitFor(() => expect(screen.getByTestId("chat-locked")).toBeInTheDocument());
+    expect(screen.queryByTestId("chat")).not.toBeInTheDocument();
+  });
+
+  it("mounts the live chat for a superuser on someone else's private item", async () => {
+    isSuperuser.mockReturnValue(true);
+    open();
+    expect(await screen.findByTestId("chat")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-locked")).not.toBeInTheDocument();
   });
 });
