@@ -911,6 +911,8 @@ def kb_search_impl(
                 location=location,
                 exclude_doc_ids=ctx.context.exclude_doc_ids,  # #308: per-doc override
                 restrict_to_doc_ids=restrict,
+                # #519: a user-attached image on this turn adds an image→image arm.
+                query_image=ctx.context.query_image,
             )
 
         passages = list(run(anchor))
