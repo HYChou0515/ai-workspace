@@ -35,6 +35,7 @@ from .schema import (
     EnhancementBool,
     EnhancementInt,
     EnhancementSettings,
+    EventBusSettings,
     ExecSettings,
     FailoverSettings,
     FilestoreSettings,
@@ -453,6 +454,8 @@ _TOP_SCHEMA: dict[str, Any] = {
         "kind": set(),
         "rabbitmq": _dataclass_keys(RabbitmqSettings),
     },
+    # Cross-pod live SSE event bus (RabbitMQ fanout) key whitelist.
+    "event_bus": _dataclass_keys(EventBusSettings),
     # Observability feature B: the faithful LLM call log.
     "observability": {
         "llm_log": _dataclass_keys(LlmLogSettings),
@@ -732,6 +735,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             judge_llm=_build_retrieval_llm(d.get("health", {}).get("judge_llm")),
         ),
         message_queue=_build_message_queue(d["message_queue"]),
+        event_bus=_build(EventBusSettings, d["event_bus"]),
         observability=ObservabilitySettings(
             llm_log=_build(LlmLogSettings, d["observability"]["llm_log"]),
         ),

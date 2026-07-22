@@ -47,6 +47,7 @@
 | [plan-sanity-checks.md](plan-sanity-checks.md) | 開機健康檢查 / sanity matrix |
 | [plan-repetition-guard.md](plan-repetition-guard.md) | #113 重複迴圈偵測與優雅阻擋 |
 | [plan-turn-replay-buffer.md](plan-turn-replay-buffer.md) | 同台重連無損：#43 broadcast 加 in-pod seq + ring buffer，`?since=` replay 斷線期間漏掉的事件 |
+| [plan-event-bus-cross-pod-streaming.md](plan-event-bus-cross-pod-streaming.md) | 跨 pod live 串流：RabbitMQ fanout 事件匯流排（IEventBus，memory 預設 + rabbitmq），不再依賴 sticky |
 | [plan-skills-and-tools.md](plan-skills-and-tools.md) | Skills 與 tools 套件設計 |
 | [plan-sci-plot.md](plan-sci-plot.md) | #285 sci-plot 科學繪圖工具 |
 | [plan-read-image.md](plan-read-image.md) | #112 read_image：VLM-over-workspace-image 工具 |

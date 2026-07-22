@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
-from typing import Literal
+from dataclasses import asdict, dataclass, is_dataclass
+from typing import Any, Literal, get_args
 
 # #100: workflow phase/step events live in the `workflow` package (so the step
 # engine can emit them without importing the API layer) and are folded into the
@@ -272,3 +272,34 @@ def to_sse(event: AgentEvent | CellEvent, seq: int | None = None) -> str:
     if seq is not None:
         data["seq"] = seq
     return f"data: {json.dumps(data)}\n\n"
+
+
+def _flatten_union(tp: Any) -> list[Any]:
+    """Concrete members of a (possibly nested) type union, e.g. AgentEvent →
+    [MessageDelta, ToolStart, …] with WorkflowEvent's members folded in."""
+    args = get_args(tp)
+    if not args:
+        return [tp]
+    out: list[Any] = []
+    for a in args:
+        out.extend(_flatten_union(a))
+    return out
+
+
+# `type` discriminator → dataclass, built from the union so a new event type is
+# picked up automatically (no hand-maintained map to drift).
+_EVENT_BY_TYPE: dict[str, Any] = {
+    c.__dataclass_fields__["type"].default: c
+    for c in _flatten_union(AgentEvent)
+    if is_dataclass(c) and "type" in getattr(c, "__dataclass_fields__", {})
+}
+
+
+def event_from_dict(data: dict[str, Any]) -> AgentEvent:
+    """Reconstruct an AgentEvent from its `asdict` form — the inverse of `to_sse`'s
+    payload, for the cross-pod event bus (which ships events as JSON). Dispatches on
+    the `type` discriminator; the transport-only `seq` key (and any unknown key) is
+    dropped, since it is not a dataclass field."""
+    cls = _EVENT_BY_TYPE[str(data["type"])]
+    fields = cls.__dataclass_fields__
+    return cls(**{k: v for k, v in data.items() if k in fields})

@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import uuid
 from collections import deque
 from collections.abc import (
     AsyncGenerator,
@@ -38,6 +39,7 @@ from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
 from ..users.labels import speaker_label
 from ..users.protocol import UserDirectory
+from .event_bus import IEventBus, InMemoryEventBus
 from .events import (
     AgentEvent,
     AgentMetrics,
@@ -405,19 +407,23 @@ class _WorkspaceSession:
     # the events it missed (`replay_since`). `buffer_maxlen` 0 ⇒ an always-empty
     # ring (replay disabled) while seq still advances.
     buffer_maxlen: int = 2000
+    # Cross-pod fan-out (plan-event-bus-cross-pod-streaming): `publish` also sends
+    # non-Presence events to the shared bus tagged with `pod_id`; other pods' consumers
+    # deliver them via `deliver_from_bus`. `key` is this session's engine key (the bus
+    # routing key). None bus ⇒ local-only (a session built without an engine).
+    key: str = ""
+    bus: IEventBus | None = None
+    pod_id: str = ""
     _seq: int = 0
     _buffer: deque[tuple[int, AgentEvent]] = field(default_factory=deque)
 
     def __post_init__(self) -> None:
         self._buffer = deque(maxlen=max(self.buffer_maxlen, 0))
 
-    def publish(self, event: AgentEvent) -> None:
-        """Fan one event out to every live subscriber (#43 broadcast).
-
-        Every event except `Presence` takes the next monotonic `seq` and enters the
-        replay ring. `Presence` is an ephemeral roster snapshot (re-broadcast on
-        every join), so replaying a stale one is pointless — it carries no seq and
-        is never buffered."""
+    def _fanout(self, event: AgentEvent) -> None:
+        """Assign the seq (non-Presence), buffer it, and deliver to LOCAL subscribers
+        — the shared core of `publish` (a turn on THIS pod) and `deliver_from_bus`
+        (an event that arrived from another pod)."""
         if isinstance(event, Presence):
             seq: int | None = None
         else:
@@ -426,6 +432,23 @@ class _WorkspaceSession:
             self._buffer.append((seq, event))
         for q in self.subscribers:
             q.put_nowait((seq, event))
+
+    def publish(self, event: AgentEvent) -> None:
+        """Fan one event to every LOCAL subscriber (#43 broadcast) AND, for a turn
+        running on THIS pod, to the cross-pod bus so viewers on other pods stream it.
+
+        Every event except `Presence` takes the next monotonic `seq` and enters the
+        replay ring. `Presence` is an ephemeral, pod-local roster snapshot — never
+        buffered, and never bussed (a viewer on another pod is not in this roster)."""
+        self._fanout(event)
+        if self.bus is not None and not isinstance(event, Presence):
+            self.bus.publish(self.key, self.pod_id, event)
+
+    def deliver_from_bus(self, event: AgentEvent) -> None:
+        """Deliver an event that arrived from ANOTHER pod's turn: the same local
+        fan-out as `publish` but WITHOUT re-sending to the bus. That (plus skip-own
+        on the consumer) is what stops a fan-out loop/storm."""
+        self._fanout(event)
 
     def replay_since(self, since: int) -> list[tuple[int, AgentEvent]]:
         """The buffered `(seq, event)` a reconnecting `since`-client missed — those
@@ -460,12 +483,22 @@ class ChatTurnEngine:
         turn_control: ITurnControl | None = None,
         poll_interval: float = 0.5,
         replay_buffer_events: int = 2000,
+        event_bus: IEventBus | None = None,
+        pod_id: str | None = None,
     ) -> None:
         self._runner = runner
         self._sessions: dict[str, _TurnSession] = {}
         # #43 reconnect replay: how many recent broadcast events each session's ring
         # buffer keeps so a same-pod reconnect can replay the gap. 0 disables it.
         self._replay_buffer_events = replay_buffer_events
+        # Cross-pod live streaming (plan-event-bus): a turn's events go to LOCAL
+        # subscribers AND to this bus so viewers on OTHER pods stream them. Default is
+        # an in-memory bus (single pod / tests), where skip-own makes it a no-op — so
+        # existing behaviour is unchanged. `pod_id` tags this pod's publishes so its
+        # own consumer skips them. Multi-pod injects a RabbitMQEventBus.
+        self._pod_id = pod_id or uuid.uuid4().hex
+        self._event_bus = event_bus or InMemoryEventBus()
+        self._event_bus.start_consuming(self._on_bus_event)
         # #113: every turn's event stream is wrapped so a degenerate repetition
         # loop is stopped (and the persisted message truncated) — see _events.
         # #43: collaborative per-investigation queue/worker sessions, separate
@@ -514,8 +547,24 @@ class ChatTurnEngine:
 
     def _ws_session(self, key: str) -> _WorkspaceSession:
         return self._ws_sessions.setdefault(
-            key, _WorkspaceSession(buffer_maxlen=self._replay_buffer_events)
+            key,
+            _WorkspaceSession(
+                buffer_maxlen=self._replay_buffer_events,
+                key=key,
+                bus=self._event_bus,
+                pod_id=self._pod_id,
+            ),
         )
+
+    def _on_bus_event(self, key: str, origin: str, event: AgentEvent) -> None:
+        """A cross-pod event arrived on the bus. Skip our own (already delivered
+        locally); otherwise demux by key to this pod's local subscribers. No session
+        or no subscribers ⇒ nobody here is listening for `key`, so discard."""
+        if origin == self._pod_id:
+            return
+        session = self._ws_sessions.get(key)
+        if session is not None and session.subscribers:
+            session.deliver_from_bus(event)
 
     def close_streams(self, key: str) -> None:
         """End the live SSE responses for `key` without touching the turn itself.

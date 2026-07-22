@@ -33,6 +33,7 @@ from workspace_app.factories import (
     get_designed_pptx_vlm,
     get_doc_pipeline,
     get_embedder,
+    get_event_bus,
     get_filestore,
     get_image_embedder,
     get_image_fetcher,
@@ -305,6 +306,8 @@ def main() -> None:
             turn_cancel_poll_seconds=settings.server.turn_cancel_poll_seconds,
             # #43: per-session reconnect replay buffer size (0 disables).
             turn_replay_buffer_events=settings.server.turn_replay_buffer_events,
+            # Cross-pod live SSE event bus (memory default | rabbitmq fanout).
+            event_bus=get_event_bus(settings),
             infer_modules_enhancements=infer_cfg.enhancements,
             infer_modules_reasoning_effort=infer_cfg.reasoning_effort,
             infer_modules_parallelism=infer_cfg.parallelism,

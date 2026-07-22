@@ -129,6 +129,28 @@ def build_message_queue_factory(settings: Settings):  # -> IMessageQueueFactory
     raise ValueError(f"unknown message_queue.kind: {mq.kind!r} (use simple | rabbitmq)")
 
 
+def get_event_bus(settings: Settings):  # -> api.event_bus.IEventBus
+    """The cross-pod live SSE event bus: `memory` (default — single pod / tests, zero
+    infra) or `rabbitmq` (fanout over the broker for multipod). The RabbitMQ url
+    reuses `message_queue.rabbitmq` when `event_bus.url` is empty (same broker), so
+    the amqp credentials aren't duplicated. Construction does NOT open a connection
+    (the aio_pika transport connects lazily on `start_consuming`)."""
+    from .api.event_bus import InMemoryEventBus, RabbitMQEventBus
+
+    eb = settings.event_bus
+    if eb.kind == "memory":
+        return InMemoryEventBus()
+    if eb.kind == "rabbitmq":
+        rmq = settings.message_queue.rabbitmq
+        return RabbitMQEventBus(
+            url=eb.url or rmq.url,
+            exchange=eb.exchange,
+            queue_max_length=eb.queue_max_length,
+            heartbeat_seconds=rmq.heartbeat_seconds,
+        )
+    raise ValueError(f"unknown event_bus.kind: {eb.kind!r} (use memory | rabbitmq)")
+
+
 def get_spec(
     settings: Settings,
     get_user_id: Callable[[], str] | None = None,
