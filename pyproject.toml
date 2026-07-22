@@ -33,6 +33,12 @@ process-sandbox = [
     "scipy>=1.17.1",
     "seaborn>=0.13.2",
 ]
+# The cross-pod event bus's RabbitMQ backend (event_bus.kind: rabbitmq). Async
+# AMQP client — only needed on a multipod deploy that fans live SSE events over
+# the broker; the in-memory default needs nothing.
+rabbitmq = [
+    "aio-pika>=9.4.0",
+]
 
 [build-system]
 requires = ["hatchling"]

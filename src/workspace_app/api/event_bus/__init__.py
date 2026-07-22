@@ -2,5 +2,13 @@
 
 from .base import IEventBus, OnEvent
 from .memory import InMemoryEventBus
+from .rabbitmq import AioPikaTransport, IAmqpTransport, RabbitMQEventBus
 
-__all__ = ["IEventBus", "InMemoryEventBus", "OnEvent"]
+__all__ = [
+    "AioPikaTransport",
+    "IAmqpTransport",
+    "IEventBus",
+    "InMemoryEventBus",
+    "OnEvent",
+    "RabbitMQEventBus",
+]
