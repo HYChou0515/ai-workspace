@@ -30,33 +30,70 @@ export function docLabel(docId: string): string {
 export function CardAttachments({
   docIds,
   onDetach,
+  onAttach,
   editable,
 }: {
   docIds: string[];
   /** Detach one linked document (remove the reference_doc_ids entry). The file
    * itself is untouched — a sweeper never reaps it; it stays in the doc list. */
   onDetach?: (docId: string) => void;
+  /** Drop or pick file(s) to link. The card uploads them (the normal ingest
+   * pipeline) and links the resulting docs — "drop a picture on the card and
+   * it's there." Absent ⇒ no attach affordance. */
+  onAttach?: (files: FileList) => void;
   editable: boolean;
 }) {
-  if (docIds.length === 0) {
-    return editable ? (
-      <p className="kb-cards__none" data-testid="card-attachments-empty">
-        No linked documents.
-      </p>
-    ) : null;
-  }
+  const chips =
+    docIds.length === 0 ? (
+      editable ? (
+        <p className="kb-cards__none" data-testid="card-attachments-empty">
+          No linked documents.
+        </p>
+      ) : null
+    ) : (
+      <div className="kb-cards__attachments" data-testid="card-attachments">
+        {docIds.map((id) => (
+          <span key={id} className="kb-cards__chip" title={id}>
+            {docLabel(id)}
+            {editable && onDetach ? (
+              <button
+                type="button"
+                aria-label={`Detach ${docLabel(id)}`}
+                onClick={() => onDetach(id)}
+              >
+                ×
+              </button>
+            ) : null}
+          </span>
+        ))}
+      </div>
+    );
+
+  if (!editable || !onAttach) return chips;
+
   return (
-    <div className="kb-cards__attachments" data-testid="card-attachments">
-      {docIds.map((id) => (
-        <span key={id} className="kb-cards__chip" title={id}>
-          {docLabel(id)}
-          {editable && onDetach ? (
-            <button type="button" aria-label={`Detach ${docLabel(id)}`} onClick={() => onDetach(id)}>
-              ×
-            </button>
-          ) : null}
-        </span>
-      ))}
-    </div>
+    <>
+      {chips}
+      <label
+        className="kb-cards__attach-drop"
+        data-testid="card-attach-drop"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          if (e.dataTransfer.files.length) onAttach(e.dataTransfer.files);
+        }}
+      >
+        Drop an image or file here, or click to choose
+        <input
+          type="file"
+          data-testid="card-attach-input"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            if (e.target.files?.length) onAttach(e.target.files);
+            e.target.value = ""; // let the same file be picked again after a detach
+          }}
+        />
+      </label>
+    </>
   );
 }

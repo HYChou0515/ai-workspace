@@ -54,3 +54,36 @@ describe("CardAttachments", () => {
     expect(screen.queryByTestId("card-attachments-empty")).toBeNull();
   });
 });
+
+describe("CardAttachments — attach", () => {
+  const ids = [encodeURIComponent("c/u/a.png")];
+
+  it("hands a picked file to onAttach so the card can link it", async () => {
+    const onAttach = vi.fn();
+    render(<CardAttachments docIds={ids} editable onAttach={onAttach} />);
+
+    const input = screen.getByTestId("card-attach-input") as HTMLInputElement;
+    const file = new File([new Uint8Array([1, 2, 3])], "ring.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    expect(onAttach).toHaveBeenCalledTimes(1);
+    expect(onAttach.mock.calls[0][0][0].name).toBe("ring.png");
+  });
+
+  it("hands a dropped file to onAttach too", () => {
+    const onAttach = vi.fn();
+    render(<CardAttachments docIds={ids} editable onAttach={onAttach} />);
+
+    const zone = screen.getByTestId("card-attach-drop");
+    const file = new File([new Uint8Array([9])], "dropped.png", { type: "image/png" });
+    fireEvent.drop(zone, { dataTransfer: { files: [file] } });
+
+    expect(onAttach).toHaveBeenCalledTimes(1);
+    expect(onAttach.mock.calls[0][0][0].name).toBe("dropped.png");
+  });
+
+  it("shows no attach affordance when not editable", () => {
+    render(<CardAttachments docIds={ids} editable={false} onAttach={vi.fn()} />);
+    expect(screen.queryByTestId("card-attach-drop")).toBeNull();
+  });
+});

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render as rtlRender, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -333,5 +333,28 @@ describe("ContextCardsTab (#106)", () => {
       body: "b",
       reference_doc_ids: [keep], // drop.png unlinked, keep.pdf stays
     });
+  });
+
+  it("drop-to-create uploads a file and links the new document (#518)", async () => {
+    await mockKbApi.createContextCard({
+      collection_id: "col-1",
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "b",
+    });
+    const uploadSpy = vi.spyOn(mockKbApi, "uploadDocument");
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByText("Metal 4"));
+    await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
+
+    const input = screen.getByTestId("card-attach-input") as HTMLInputElement;
+    const file = new File(["pixels"], "diagram.png", { type: "image/png" });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    // the resulting doc shows up as a linked chip (await the async upload)...
+    expect(await screen.findByText("diagram.png")).toBeInTheDocument();
+    // ...having gone through the normal ingest pipeline
+    expect(uploadSpy).toHaveBeenCalledWith("col-1", file);
   });
 });

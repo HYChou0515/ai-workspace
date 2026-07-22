@@ -134,6 +134,34 @@ export function ContextCardsTab({
       void invalidate();
     },
   });
+  // #518 drop-to-create: upload dropped/picked files through the normal ingest
+  // pipeline (VLM-described, embedded — a first-class KB doc) and link the
+  // resulting doc ids onto the draft. "Drop a picture on the card and it's there."
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const attachMut = useMutation({
+    mutationFn: async (files: FileList): Promise<string[]> => {
+      const ids: string[] = [];
+      for (const file of Array.from(files)) {
+        ids.push(...(await client.uploadDocument(collectionId, file)));
+      }
+      return ids;
+    },
+    onSuccess: (ids) => {
+      setAttachError(null);
+      setDraft((cur) =>
+        cur
+          ? {
+              ...cur,
+              // dedupe — a re-dropped identical file returns the same doc id
+              reference_doc_ids: [...new Set([...cur.reference_doc_ids, ...ids])],
+            }
+          : cur,
+      );
+    },
+    onError: (e: unknown) => setAttachError(e instanceof Error ? e.message : "upload failed"),
+  });
+  const attachFiles = (files: FileList) => attachMut.mutate(files);
+
   const deleteMut = useMutation({
     mutationFn: (id: string) => client.deleteContextCard(id),
     onSuccess: () => {
@@ -322,7 +350,18 @@ export function ContextCardsTab({
                         reference_doc_ids: draft.reference_doc_ids.filter((x) => x !== docId),
                       })
                     }
+                    onAttach={attachFiles}
                   />
+                  {attachMut.isPending && (
+                    <p className="kb-cards__none" data-testid="card-attach-pending">
+                      Uploading…
+                    </p>
+                  )}
+                  {attachError && (
+                    <p className="kb-cards__error" role="alert">
+                      {attachError}
+                    </p>
+                  )}
                 </div>
               </>
             ) : (
