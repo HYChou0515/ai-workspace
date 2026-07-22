@@ -445,6 +445,10 @@ export type SendKbMessageArgs = {
    * number picker that replaced the boolean "search wiki" toggle). 0 = don't grep
    * the wiki this reply; omitted = operator default. The BE clamps to the ceiling. */
   maxWikiSearches?: number;
+  /** #605: per-chat disclosure toggle. false = skip the "answer exists but you
+   * lack permission" probe this reply (faster); omitted = operator default.
+   * true cannot re-enable a deploy whose operator switched disclosure off. */
+  disclosure?: boolean;
 };
 
 export type KbAgentConfig = {
@@ -1501,6 +1505,7 @@ export const realKbApi: KbApi = {
         enhancements: args.enhancements,
         agent_name: args.agentName,
         max_kb_searches: args.maxKbSearches,
+        disclosure: args.disclosure,
         max_wiki_searches: args.maxWikiSearches,
         image: args.image,
       }),

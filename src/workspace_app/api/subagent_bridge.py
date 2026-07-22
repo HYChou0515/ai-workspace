@@ -95,6 +95,10 @@ class SubagentBridge:
         ask_kb_spec: AskKbSpec | None = None,
         withheld_sink: list[str] | None = None,
         excluded_collection_ids: list[str] | None = None,
+        # #605: the caller's per-turn disclosure pick. None ⇒ the operator
+        # default (the constructor switch); False ⇒ skip the probe this call;
+        # True cannot re-enable a globally-off deploy.
+        disclosure: bool | None = None,
     ) -> tuple[str, list[Citation]]:
         """Generic sub-agent bridge — runs the sub-agent for `purpose`
         over every collection and returns its synthesized answer + the
@@ -155,7 +159,7 @@ class SubagentBridge:
             self._spec, ids, speaker, superusers=self._superusers
         )
         readable, discoverable = part.readable, part.discoverable
-        if not self._disclosure_enabled or withheld_sink is None:
+        if not self._disclosure_enabled or disclosure is False or withheld_sink is None:
             # #605: disclosure off — or NOBODY CONSUMES it (no withheld sink: an
             # infer_modules-style holder has no message to attach withheld
             # sources to) — ⇒ no probe universe at all. The tool skips the probe

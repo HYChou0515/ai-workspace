@@ -29,6 +29,7 @@ import {
   type EnhancementSelection,
 } from "../lib/kbEnhancementMode";
 import { useReasoningEffort } from "../lib/reasoningEffort";
+import { useKbDisclosure } from "../lib/kbDisclosure";
 import { KB_SEARCH_MAX_UI_MAX, useKbSearchMax } from "../lib/kbSearchMax";
 import { KB_WIKI_MAX_UI_MAX, useKbWikiMax } from "../lib/kbWikiMax";
 import { Icon } from "./Icon";
@@ -172,6 +173,35 @@ function DepthSliders({
   );
 }
 
+/** #605: the "answer exists but you lack permission" disclosure toggle. ON =
+ * every reply may point out relevant sources the user can't read (with a
+ * request-access affordance); OFF skips that probe — faster, nothing withheld. */
+function DisclosureToggle({
+  value,
+  onChange,
+}: {
+  value: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  const t = useT();
+  return (
+    <label
+      style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, cursor: "pointer" }}
+      title={t("disclosure.title")}
+    >
+      <input
+        type="checkbox"
+        checked={value}
+        aria-label={t("disclosure.label")}
+        onChange={(e) => onChange(e.target.checked)}
+      />
+      <span style={{ fontSize: pxToRem(12), color: "var(--text-paper)" }}>
+        {t("disclosure.label")}
+      </span>
+    </label>
+  );
+}
+
 /** #334: per-message cap on how many times this reply searches the KB. A plain
  * stepper (independent of the quick/standard/thorough depth dial — those govern
  * how hard EACH search digs; this governs HOW MANY searches). 0 = don't search. */
@@ -278,6 +308,7 @@ export function ModelEffortPicker({
   const [depthSel, setDepthMode, setDepthSlider] = useKbEnhancementMode();
   const [maxSearches, setMaxSearches] = useKbSearchMax();
   const [maxWiki, setMaxWiki] = useKbWikiMax();
+  const [disclosure, setDisclosure] = useKbDisclosure();
 
   if (models.length === 0) return null;
   const active = models.find((m) => m.name === selectedName) ?? models[0]!;
@@ -485,6 +516,7 @@ export function ModelEffortPicker({
                     max={KB_WIKI_MAX_UI_MAX}
                   />
                 )}
+                <DisclosureToggle value={disclosure} onChange={setDisclosure} />
               </div>
             )}
 

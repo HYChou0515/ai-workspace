@@ -377,6 +377,10 @@ class _MsgBody(BaseModel):
     # the boolean "search wiki" toggle. Same shape/clamp as max_kb_searches (0 =
     # don't grep the wiki this reply, N = at most N greps, None = operator default).
     max_wiki_searches: int | None = None
+    # #605: per-chat disclosure toggle from the settings panel. None → operator
+    # default (`kb.disclosure.enabled`); False → skip the probe this reply
+    # (faster, no withheld). True cannot re-enable a globally-off switch.
+    disclosure: bool | None = None
 
 
 _IMAGE_QUERY_PREAMBLE = "[Attached image — described by the vision model]"
@@ -791,6 +795,9 @@ def register_kb_chat_routes(
         # defect: unpicked = unprobed = undisclosable). The searched scope below
         # still subtracts only the IN-SCOPE discoverable ids; explicit
         # exclusions stay excluded (#551 — deliberate is deliberate).
+        # Operator default AND the per-chat toggle must both allow: False skips,
+        # None inherits, True can't override a globally-off deploy.
+        _turn_disclosure = disclosure_enabled and body.disclosure is not False
         _probe_universe = (
             all_discoverable_collection_ids(
                 spec,
@@ -798,7 +805,7 @@ def register_kb_chat_routes(
                 excluded=chat.excluded_collection_ids or (),
                 superusers=superusers,
             )
-            if disclosure_enabled
+            if _turn_disclosure
             else []
         )
         ctx = AgentToolContext(

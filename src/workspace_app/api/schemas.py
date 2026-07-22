@@ -32,6 +32,10 @@ class _MessageBody(BaseModel):
     # ask_knowledge_base call in the turn — #334 Q6). None → operator default;
     # a concrete value is clamped to [0, kb.max_searches_ceiling] (0 = don't search).
     max_kb_searches: int | None = None
+    # #605: per-chat disclosure toggle. None → operator default
+    # (kb.disclosure.enabled); False → this turn's ask_knowledge_base calls skip
+    # the probe (faster, no withheld). True cannot re-enable a globally-off deploy.
+    disclosure: bool | None = None
     # #380: skills the user chose to APPLY this turn (the skills picker's "apply"
     # button). Each named skill's full body is hard-preloaded into the turn with a
     # "use these now" instruction — a one-shot that overrides a disabled toggle and

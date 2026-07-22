@@ -241,6 +241,37 @@ def test_kb_chat_skips_the_probe_when_disclosure_is_disabled():
     assert runner.seen == []
 
 
+def test_kb_chat_per_message_disclosure_off_skips_the_probe():
+    """#605 P5: the composer's per-chat toggle rides the message body —
+    disclosure: false turns the probe off for this reply even though the
+    operator default is on."""
+    runner = _DiscoverableCapturingRunner()
+    spec = make_spec()
+    from workspace_app.perm import Permission
+    from workspace_app.resources.kb import Collection
+
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("someone-else"):
+        unpicked = rm.create(
+            Collection(name="x", permission=Permission(visibility="restricted"))
+        ).resource_id
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,  # ty: ignore[invalid-argument-type]
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+    )
+    client = TestClient(app)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q", "disclosure": False})
+    assert runner.seen == []
+    # and back on (None/default) the same chat probes again
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q2"})
+    assert runner.seen is not None and unpicked in runner.seen
+
+
 class _OrphanToolRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield ToolEnd(call_id="ghost", output="stray output")
