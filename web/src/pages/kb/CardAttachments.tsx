@@ -31,6 +31,8 @@ export function CardAttachments({
   docIds,
   onDetach,
   onAttach,
+  onOpen,
+  imageSrc,
   editable,
 }: {
   docIds: string[];
@@ -41,6 +43,16 @@ export function CardAttachments({
    * pipeline) and links the resulting docs — "drop a picture on the card and
    * it's there." Absent ⇒ no attach affordance. */
   onAttach?: (files: FileList) => void;
+  /** Open a linked document in the shared viewer drawer. A link you can't open
+   * is dead weight, so the filename becomes a button whenever an opener is
+   * wired — in preview as well as edit, since opening never mutates the card.
+   * Absent ⇒ the name is plain text. */
+  onOpen?: (docId: string) => void;
+  /** A displayable image URL for a linked doc, or undefined for non-images. An
+   * image attachment renders as an actual thumbnail (still click-to-open,
+   * still detachable) instead of a filename pill — a picture is worth more than
+   * its name. Absent resolver ⇒ everything is a pill. */
+  imageSrc?: (docId: string) => string | undefined;
   editable: boolean;
 }) {
   const chips =
@@ -52,20 +64,57 @@ export function CardAttachments({
       ) : null
     ) : (
       <div className="kb-cards__attachments" data-testid="card-attachments">
-        {docIds.map((id) => (
-          <span key={id} className="kb-cards__chip" title={id}>
-            {docLabel(id)}
-            {editable && onDetach ? (
-              <button
-                type="button"
-                aria-label={`Detach ${docLabel(id)}`}
-                onClick={() => onDetach(id)}
-              >
+        {docIds.map((id) => {
+          const label = docLabel(id);
+          const src = imageSrc?.(id);
+          const detach =
+            editable && onDetach ? (
+              <button type="button" aria-label={`Detach ${label}`} onClick={() => onDetach(id)}>
                 ×
               </button>
-            ) : null}
-          </span>
-        ))}
+            ) : null;
+
+          // An image shows itself — a thumbnail (click-to-open) beats a pill
+          // that just spells the filename.
+          if (src) {
+            const thumb = <img className="kb-cards__thumb" src={src} alt={label} />;
+            return (
+              <span key={id} className="kb-cards__thumb-wrap" title={id}>
+                {onOpen ? (
+                  <button
+                    type="button"
+                    className="kb-cards__thumb-open"
+                    aria-label={`Open ${label}`}
+                    onClick={() => onOpen(id)}
+                  >
+                    {thumb}
+                  </button>
+                ) : (
+                  thumb
+                )}
+                {detach}
+              </span>
+            );
+          }
+
+          return (
+            <span key={id} className="kb-cards__chip" title={id}>
+              {onOpen ? (
+                <button
+                  type="button"
+                  className="kb-cards__chip-open"
+                  aria-label={`Open ${label}`}
+                  onClick={() => onOpen(id)}
+                >
+                  {label}
+                </button>
+              ) : (
+                label
+              )}
+              {detach}
+            </span>
+          );
+        })}
       </div>
     );
 

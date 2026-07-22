@@ -87,3 +87,80 @@ describe("CardAttachments — attach", () => {
     expect(screen.queryByTestId("card-attach-drop")).toBeNull();
   });
 });
+
+describe("CardAttachments — open", () => {
+  const ids = [encodeURIComponent("c/u/a.png")];
+
+  it("opens a linked document when its name is clicked (a link that can't be opened is useless)", () => {
+    const onOpen = vi.fn();
+    render(<CardAttachments docIds={ids} editable onOpen={onOpen} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Open a.png/ }));
+
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith(ids[0]);
+  });
+
+  it("can open in read-only preview too — opening never mutates the card", () => {
+    const onOpen = vi.fn();
+    render(<CardAttachments docIds={ids} editable={false} onOpen={onOpen} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Open a.png/ }));
+
+    expect(onOpen).toHaveBeenCalledWith(ids[0]);
+  });
+
+  it("renders the name as plain text (not a button) when no opener is wired", () => {
+    render(<CardAttachments docIds={ids} editable={false} />);
+    expect(screen.getByText("a.png")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Open a.png/ })).toBeNull();
+  });
+});
+
+describe("CardAttachments — image thumbnails", () => {
+  const img = encodeURIComponent("c/u/diagram.png");
+  const pdf = encodeURIComponent("c/u/spec.pdf");
+
+  it("shows an image attachment as a real thumbnail, not a text pill", () => {
+    render(
+      <CardAttachments
+        docIds={[img]}
+        editable
+        imageSrc={(id) => (id === img ? "/api/blobs/hash1" : undefined)}
+      />,
+    );
+    const thumb = screen.getByRole("img", { name: /diagram.png/ });
+    expect(thumb).toHaveAttribute("src", "/api/blobs/hash1");
+    // and NOT the plain-text pill fallback
+    expect(screen.queryByText("diagram.png")).toBeNull();
+  });
+
+  it("opens the document when the thumbnail is clicked", () => {
+    const onOpen = vi.fn();
+    render(
+      <CardAttachments docIds={[img]} editable onOpen={onOpen} imageSrc={() => "/api/blobs/hash1"} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Open diagram.png/ }));
+    expect(onOpen).toHaveBeenCalledWith(img);
+  });
+
+  it("keeps a non-image attachment as a text pill", () => {
+    render(<CardAttachments docIds={[pdf]} editable imageSrc={() => undefined} />);
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(screen.getByText("spec.pdf")).toBeTruthy();
+  });
+
+  it("still lets an image be detached", () => {
+    const onDetach = vi.fn();
+    render(
+      <CardAttachments
+        docIds={[img]}
+        editable
+        onDetach={onDetach}
+        imageSrc={() => "/api/blobs/hash1"}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Detach diagram.png/ }));
+    expect(onDetach).toHaveBeenCalledWith(img);
+  });
+});

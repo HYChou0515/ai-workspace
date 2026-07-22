@@ -400,11 +400,24 @@ export const mockKbApi: KbApi = {
   async getSourceDocMeta(documentId) {
     const collection_id = documentId.split("/")[0] ?? "";
     const doc = (documents.get(collection_id) ?? []).find((d) => d.resource_id === documentId);
+    // The card thumbnails read content_type + file_id off the envelope (#518).
+    // A card's attachment ids are the opaque encode_doc_id tokens (not in the
+    // paginated doc list), so synthesise an image blob from the decoded name so
+    // thumbnails light up in mock mode / tests as they do against the real BE.
+    let decoded = documentId;
+    try {
+      decoded = decodeURIComponent(documentId);
+    } catch {
+      /* keep raw */
+    }
+    const isImg = /\.(png|jpe?g|webp|gif)$/i.test(decoded);
     return {
       quality_score: doc?.quality_score,
       quality_rationale: doc?.quality_rationale,
       quality_breakdown: doc?.quality_breakdown,
       parser_guidance_override: doc?.parser_guidance_override,
+      file_id: doc?.file_id ?? (isImg ? `mock-blob-${documentId}` : undefined),
+      content_type: doc?.content_type ?? (isImg ? "image/png" : undefined),
     };
   },
   async getDocChunks(documentId) {

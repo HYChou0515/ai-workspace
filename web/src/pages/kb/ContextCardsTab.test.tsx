@@ -357,4 +357,43 @@ describe("ContextCardsTab (#106)", () => {
     // ...having gone through the normal ingest pipeline
     expect(uploadSpy).toHaveBeenCalledWith("col-1", file);
   });
+
+  it("opens a linked document in the viewer when its chip is clicked (#518)", async () => {
+    // The link is worthless if a human can't open what it points at.
+    const ref = encodeURIComponent("col-1/u/spec.pdf");
+    await mockKbApi.createContextCard({
+      collection_id: "col-1",
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "b",
+      reference_doc_ids: [ref],
+    });
+    const onOpenDoc = vi.fn();
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} onOpenDoc={onOpenDoc} />);
+
+    await userEvent.click(await screen.findByText("Metal 4"));
+    await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
+    await userEvent.click(screen.getByRole("button", { name: /Open spec.pdf/ }));
+
+    expect(onOpenDoc).toHaveBeenCalledWith(ref);
+  });
+
+  it("renders an image attachment as a thumbnail, not a pill (#518)", async () => {
+    const png = encodeURIComponent("col-1/u/diagram.png");
+    await mockKbApi.createContextCard({
+      collection_id: "col-1",
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "b",
+      reference_doc_ids: [png],
+    });
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByText("Metal 4"));
+    await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
+
+    // the image shows itself (thumbnail), not a "diagram.png" text pill
+    expect(await screen.findByRole("img", { name: /diagram.png/ })).toBeInTheDocument();
+    expect(screen.queryByText("diagram.png")).not.toBeInTheDocument();
+  });
 });

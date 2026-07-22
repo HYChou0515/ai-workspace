@@ -7,10 +7,11 @@
  * sends them. A new card opens straight into Edit.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { CardAttachments } from "./CardAttachments";
+import { blobHref } from "./kbLinks";
 import ReactMarkdown from "react-markdown";
 import { useNavigate, useParams } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -42,9 +43,14 @@ const cardLabel = (c: KbContextCard) => c.title || c.keys[0] || "Untitled";
 export function ContextCardsTab({
   collectionId,
   client = kbApi,
+  onOpenDoc,
 }: {
   collectionId: string;
   client?: KbApi;
+  /** Open one of a card's linked documents in the shared viewer drawer. Wired
+   * from the collection page (the same `openDoc` the doc tree + citations use);
+   * absent ⇒ chips are non-clickable text. */
+  onOpenDoc?: (docId: string) => void;
 }) {
   const qc = useQueryClient();
   const t = useT();
@@ -57,6 +63,23 @@ export function ContextCardsTab({
     queryFn: () => client.listContextCards(collectionId),
   });
   const [draft, setDraft] = useState<Draft | null>(null);
+  // Resolve each linked doc's envelope (a cheap point-get) so an image
+  // attachment can show a real thumbnail instead of a filename pill. useQueries
+  // handles the dynamic list; content_type + file_id ride the envelope (#518).
+  const refIds = draft?.reference_doc_ids ?? [];
+  const refMetas = useQueries({
+    queries: refIds.map((id) => ({
+      queryKey: qk.kb.docMeta(id),
+      queryFn: () => client.getSourceDocMeta(id),
+    })),
+  });
+  const imageSrc = (docId: string): string | undefined => {
+    const i = refIds.indexOf(docId);
+    const meta = i >= 0 ? refMetas[i]?.data : undefined;
+    return meta?.content_type?.startsWith("image/") && meta.file_id
+      ? blobHref(meta.file_id)
+      : undefined;
+  };
   const [editing, setEditing] = useState(false); // existing card → preview first; New → edit
   const [term, setTerm] = useState("");
   const [query, setQuery] = useState("");
@@ -351,6 +374,8 @@ export function ContextCardsTab({
                       })
                     }
                     onAttach={attachFiles}
+                    imageSrc={imageSrc}
+                    {...(onOpenDoc ? { onOpen: onOpenDoc } : {})}
                   />
                   {attachMut.isPending && (
                     <p className="kb-cards__none" data-testid="card-attach-pending">
@@ -385,7 +410,12 @@ export function ContextCardsTab({
                     <p className="kb-cards__none">No explanation yet.</p>
                   )}
                 </article>
-                <CardAttachments docIds={draft.reference_doc_ids} editable={false} />
+                <CardAttachments
+                  docIds={draft.reference_doc_ids}
+                  editable={false}
+                  imageSrc={imageSrc}
+                  {...(onOpenDoc ? { onOpen: onOpenDoc } : {})}
+                />
               </div>
             )}
 
