@@ -466,6 +466,11 @@ export type KbContextCard = {
   norm_keys: string[];
   title: string;
   body: string;
+  /** #518: opaque doc-id tokens for the SourceDocs that back this card. A key
+   * hit scopes retrieval to these docs (#518) and the editor shows/edits them.
+   * Optional in the type (a card written before this field, or a fixture, omits
+   * it) — real specstar data always carries it, defaulting to []. */
+  reference_doc_ids?: string[];
 };
 
 /** Author input for create/update — no `norm_keys` (server-derived). */
@@ -474,6 +479,9 @@ export type KbContextCardInput = {
   keys: string[];
   title: string;
   body: string;
+  /** #518: opaque doc-id tokens. Omit to leave a card's links unchanged (the
+   * edit patch treats absent as "keep"); the card editor sends the full set. */
+  reference_doc_ids?: string[];
 };
 
 /** #175 自動 context card — where a proposed card came from (the audit "依據"). */

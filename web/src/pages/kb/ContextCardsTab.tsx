@@ -9,6 +9,8 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+
+import { CardAttachments } from "./CardAttachments";
 import ReactMarkdown from "react-markdown";
 import { useNavigate, useParams } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -24,8 +26,14 @@ import { lookupByName, scanPassage } from "./cardSearch";
 
 type SearchMode = "name" | "text";
 
-type Draft = { id: string | null; keys: string[]; title: string; body: string };
-const BLANK: Draft = { id: null, keys: [], title: "", body: "" };
+type Draft = {
+  id: string | null;
+  keys: string[];
+  title: string;
+  body: string;
+  reference_doc_ids: string[];
+};
+const BLANK: Draft = { id: null, keys: [], title: "", body: "", reference_doc_ids: [] };
 // URL sentinel for the unsaved new-card form (card ids are `card-…`, never this).
 const NEW_CARD = "new";
 
@@ -88,13 +96,25 @@ export function ContextCardsTab({
     // Only load the content here — `editing` is owned by the click handler (and
     // stays true through a just-authored card's save), so a refetch landing
     // mid-save can't bump us out of the editor.
-    if (c) setDraft({ id: c.id, keys: c.keys, title: c.title, body: c.body });
+    if (c)
+      setDraft({
+        id: c.id,
+        keys: c.keys,
+        title: c.title,
+        body: c.body,
+        reference_doc_ids: c.reference_doc_ids ?? [],
+      });
   }, [cardId, cards]);
 
   const saveMut = useMutation({
     mutationFn: async (d: Draft): Promise<string> => {
       if (d.id) {
-        await client.updateContextCard(d.id, { keys: d.keys, title: d.title, body: d.body });
+        await client.updateContextCard(d.id, {
+          keys: d.keys,
+          title: d.title,
+          body: d.body,
+          reference_doc_ids: d.reference_doc_ids,
+        });
         return d.id;
       }
       return client.createContextCard({
@@ -102,6 +122,7 @@ export function ContextCardsTab({
         keys: d.keys,
         title: d.title,
         body: d.body,
+        reference_doc_ids: d.reference_doc_ids,
       });
     },
     // Promote a just-authored draft to "editing the saved card" so a second
@@ -290,6 +311,19 @@ export function ContextCardsTab({
                     language="markdown"
                   />
                 </div>
+                <div className="kb-cards__attachments-field">
+                  <label className="kb-cards__label">Linked documents</label>
+                  <CardAttachments
+                    docIds={draft.reference_doc_ids}
+                    editable
+                    onDetach={(docId) =>
+                      setDraft({
+                        ...draft,
+                        reference_doc_ids: draft.reference_doc_ids.filter((x) => x !== docId),
+                      })
+                    }
+                  />
+                </div>
               </>
             ) : (
               <div className="kb-cards__preview">
@@ -312,6 +346,7 @@ export function ContextCardsTab({
                     <p className="kb-cards__none">No explanation yet.</p>
                   )}
                 </article>
+                <CardAttachments docIds={draft.reference_doc_ids} editable={false} />
               </div>
             )}
 

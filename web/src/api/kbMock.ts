@@ -627,6 +627,7 @@ export const mockKbApi: KbApi = {
       norm_keys: deriveNormKeys(input.keys),
       title: input.title,
       body: input.body,
+      reference_doc_ids: input.reference_doc_ids ?? [],
     });
     contextCards.set(input.collection_id, list);
     return id;

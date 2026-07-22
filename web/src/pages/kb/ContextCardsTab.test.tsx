@@ -182,6 +182,9 @@ describe("ContextCardsTab (#106)", () => {
       keys: ["reflow"],
       title: "Reflow zone",
       body: "Zone 3 at 245C.",
+      // #518: the save now carries the card's linked docs (empty for a fresh card)
+      // so a person editing a card can no longer silently wipe them.
+      reference_doc_ids: [],
     });
   });
 
@@ -228,6 +231,7 @@ describe("ContextCardsTab (#106)", () => {
       keys: ["M4"],
       title: "Metal 4",
       body: "new body",
+      reference_doc_ids: [],
     });
   });
 
@@ -272,5 +276,62 @@ describe("ContextCardsTab (#106)", () => {
     await userEvent.click(screen.getByRole("button", { name: /delete/i }));
 
     expect(spy).toHaveBeenCalledWith(card.id);
+  });
+
+  it("preserves a card's linked documents when only its body is edited (#518)", async () => {
+    // The whole reason the field is threaded through: before this, the editor
+    // sent {keys,title,body} and an edit silently wiped the links.
+    const ref = encodeURIComponent("col-1/u/spec.pdf");
+    await mockKbApi.createContextCard({
+      collection_id: "col-1",
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "old",
+      reference_doc_ids: [ref],
+    });
+    const spy = vi.spyOn(mockKbApi, "updateContextCard");
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByText("Metal 4"));
+    await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
+    // the linked doc is visible in the editor
+    expect(screen.getByText("spec.pdf")).toBeInTheDocument();
+    const body = await screen.findByLabelText("Explanation");
+    await userEvent.clear(body);
+    await userEvent.type(body, "new body");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(spy).toHaveBeenCalledWith(expect.any(String), {
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "new body",
+      reference_doc_ids: [ref], // survived the edit
+    });
+  });
+
+  it("detaching a linked document drops it on save (#518, detach = unlink)", async () => {
+    const keep = encodeURIComponent("col-1/u/keep.pdf");
+    const drop = encodeURIComponent("col-1/u/drop.png");
+    await mockKbApi.createContextCard({
+      collection_id: "col-1",
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "b",
+      reference_doc_ids: [keep, drop],
+    });
+    const spy = vi.spyOn(mockKbApi, "updateContextCard");
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByText("Metal 4"));
+    await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
+    await userEvent.click(screen.getByRole("button", { name: /Detach drop.png/ }));
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(spy).toHaveBeenCalledWith(expect.any(String), {
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "b",
+      reference_doc_ids: [keep], // drop.png unlinked, keep.pdf stays
+    });
   });
 });
