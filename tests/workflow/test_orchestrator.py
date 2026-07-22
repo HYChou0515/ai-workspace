@@ -519,6 +519,32 @@ async def test_stop_cancels_and_releases(spec_instance: SpecStar):
     assert await orch.cancel(run_id, "i4") is False
 
 
+async def test_cancel_signals_the_epoch_even_when_the_runs_task_is_on_a_peer_pod(
+    spec_instance: SpecStar,
+):
+    """A Stop landing on a pod that is NOT driving the run must still advance the
+    shared turn epoch — that is the signal the owning pod's in-flight turn watcher
+    (and its next drive_turn) observe to abort the run. Before, `cancel` returned
+    False and did nothing when the run's task was on a peer pod."""
+    stopped: list[str] = []
+
+    async def on_stop(key: str) -> None:
+        stopped.append(key)
+
+    async def _run(wf, inputs):  # never invoked — the run row is inserted directly
+        return {}
+
+    orch, _ = _orch(spec_instance, _run, on_stop=on_stop)
+    # A persisted RUNNING run whose driver task is NOT tracked here (driven elsewhere).
+    run_id = _insert_run(orch, item_id="i9", chat_id="c9", status=RunStatus.RUNNING)
+    assert run_id not in orch._tasks
+
+    result = await orch.cancel(run_id, "i9")
+
+    assert stopped == ["c9"]  # advanced the shared epoch for the run's key
+    assert result is True  # dispatched cross-pod, not a silent no-op
+
+
 async def test_human_gate_suspends_then_decision_resumes(spec_instance: SpecStar):
     async def run(wf, inputs):
         d = await human_gate(
