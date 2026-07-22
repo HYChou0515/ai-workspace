@@ -1,12 +1,15 @@
 /**
- * Command palette — ⌘P. Modal list of files in the investigation, with
- * fuzzy substring filtering. Pick one → opens it in the editor.
+ * Command palette — ⌘P. Modal list of files in the investigation, fuzzy-matched
+ * and ranked by relevance (so `wafmap` finds `wafer_map.csv`). A typed `/` also
+ * matches the `∕` slash look-alike a path may carry (see lib/fuzzy). Pick one →
+ * opens it in the editor.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { FileInfo } from "../../api/types";
 import { Icon } from "../../components/Icon";
+import { fuzzyFilter } from "../../lib/fuzzy";
 import { basename } from "./renderer";
 import { pxToRem } from "../../lib/pxToRem";
 
@@ -34,11 +37,10 @@ export function CommandPalette({
     }
   }, [open]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return files.slice(0, 50);
-    return files.filter((f) => f.path.toLowerCase().includes(q)).slice(0, 50);
-  }, [query, files]);
+  const filtered = useMemo(
+    () => fuzzyFilter(query, files, (f) => f.path).slice(0, 50),
+    [query, files],
+  );
 
   if (!open) return null;
 
