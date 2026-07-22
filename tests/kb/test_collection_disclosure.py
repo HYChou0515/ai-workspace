@@ -5,6 +5,7 @@ the FE renders.
 """
 
 from workspace_app.kb.collections import (
+    all_discoverable_collection_ids,
     partition_collection_disclosure,
     readable_collection_ids,
     resolve_withheld,
@@ -83,3 +84,36 @@ def test_resolve_withheld_dedupes_and_skips_deleted():
     # a repeated id (two sub-agents disclosed it) chips once; an unknown id is skipped
     out = resolve_withheld(spec, [cid, cid, "ghost"])
     assert out == [WithheldSource(collection_id=cid, name="R&D", owner="bob")]
+
+
+# ── #605: the probe universe — every discoverable collection, selection-free ───
+
+
+def test_all_discoverable_finds_an_unselected_restricted_collection():
+    """#605 P2: the disclosure universe is no longer the picked scope. A
+    restricted collection alice never selected (and has no grant on) is still
+    discoverable to her — so the probe can disclose it."""
+    spec = make_spec()
+    restricted = _coll(spec, by="bob", permission=Permission(visibility="restricted"))
+    _coll(spec, by="bob")  # a public one — readable, so NOT in the discoverable set
+    private = _coll(spec, by="bob", permission=Permission(visibility="private"))
+
+    out = all_discoverable_collection_ids(spec, "alice")
+    assert restricted in out
+    assert private not in out  # hidden stays silent — the 404 is sacred
+
+
+def test_all_discoverable_respects_an_explicit_exclusion():
+    """A collection the chat explicitly excluded must not come back through the
+    disclosure channel — exclusion is deliberate (#551 semantics)."""
+    spec = make_spec()
+    restricted = _coll(spec, by="bob", permission=Permission(visibility="restricted"))
+    out = all_discoverable_collection_ids(spec, "alice", excluded=[restricted])
+    assert restricted not in out
+
+
+def test_all_discoverable_is_empty_for_a_superuser_who_reads_everything():
+    spec = make_spec()
+    _coll(spec, by="bob", permission=Permission(visibility="restricted"))
+    out = all_discoverable_collection_ids(spec, "root", superusers=frozenset({"root"}))
+    assert out == []

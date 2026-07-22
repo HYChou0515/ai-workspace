@@ -19,7 +19,11 @@ from ..agent.ask_kb import AskKbSpec
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import KbSearchBudget, WikiSearchBudget
 from ..kb.cited import record_citations
-from ..kb.collections import partition_collection_disclosure, resolve_effective_scope
+from ..kb.collections import (
+    all_discoverable_collection_ids,
+    partition_collection_disclosure,
+    resolve_effective_scope,
+)
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.wiki.consult import WikiConsultant
@@ -146,6 +150,17 @@ class SubagentBridge:
             self._spec, ids, speaker, superusers=self._superusers
         )
         readable, discoverable = part.readable, part.discoverable
+        if purpose == "kb_chat":
+            # #605: the disclosure universe is every discoverable collection —
+            # not just the picked scope. "There IS an answer you can't read"
+            # must fire for a collection the speaker didn't (or couldn't) pick;
+            # explicit exclusions stay excluded (#551 — deliberate is deliberate).
+            discoverable = all_discoverable_collection_ids(
+                self._spec,
+                speaker,
+                excluded=excluded_collection_ids or (),
+                superusers=self._superusers,
+            )
         if ids and not readable and not discoverable:
             logger.warning(
                 "subagent_bridge: speaker %s can neither read nor discover any of the "

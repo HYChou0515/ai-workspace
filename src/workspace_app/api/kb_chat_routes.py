@@ -41,6 +41,7 @@ from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
 from ..kb.collections import (
+    all_discoverable_collection_ids,
     partition_collection_disclosure,
     resolve_effective_scope,
     resolve_withheld,
@@ -782,12 +783,23 @@ def register_kb_chat_routes(
             spec, _effective, get_user_id(), superusers=superusers
         )
         _discoverable = set(_disc.discoverable)
+        # #605: the disclosure PROBE universe is every discoverable collection in
+        # the store — not just the picked scope ("R級要選到才會揭露" was the
+        # defect: unpicked = unprobed = undisclosable). The searched scope below
+        # still subtracts only the IN-SCOPE discoverable ids; explicit
+        # exclusions stay excluded (#551 — deliberate is deliberate).
+        _probe_universe = all_discoverable_collection_ids(
+            spec,
+            get_user_id(),
+            excluded=chat.excluded_collection_ids or (),
+            superusers=superusers,
+        )
         ctx = AgentToolContext(
             tool_output_max_chars=tool_output_max_chars,
             exec_output_max_chars=exec_output_max_chars,
             retriever=retriever,
             collection_ids=[c for c in _effective if c not in _discoverable],
-            discoverable_collection_ids=_disc.discoverable,
+            discoverable_collection_ids=_probe_universe,
             # #308: exclude docs whose per-doc override blocks THIS speaker's
             # read_content, so the retriever never surfaces a doc tightened away
             # from them (empty when no doc in scope is overridden).

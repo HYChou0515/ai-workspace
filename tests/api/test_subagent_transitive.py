@@ -188,6 +188,28 @@ async def test_bridge_passes_discoverable_scope_and_bubbles_withheld_into_the_si
     assert answer == "answer"
 
 
+async def test_bridge_probes_discoverable_collections_beyond_the_picked_scope():
+    """#605 P2: the disclosure universe is every discoverable collection, not the
+    picked scope. A restricted collection alice never selected (and holds no
+    grant on) still reaches the sub-agent as discoverable — so "there IS an
+    answer you can't read" can finally fire for a collection she didn't (or
+    couldn't) think to pick."""
+    spec = make_spec()
+    holder = {"id": "alice"}
+    readable = _new_collection(spec, by="bob")  # public → the picked, searched scope
+    unpicked = _new_collection(
+        spec, by="bob", name="Fab-Yield", permission=Permission(visibility="restricted")
+    )
+    runner = _DisclosingRunner()
+    sink: list[str] = []
+    await _bridge(spec, runner, holder).run(
+        "kb_chat", "q", collection_ids=[readable], withheld_sink=sink
+    )
+    assert runner.seen_ids == [readable]  # searched scope: exactly what was picked
+    assert runner.seen_discoverable == [unpicked]  # never selected, still probed
+    assert sink == [unpicked]  # and it can bubble up as withheld
+
+
 async def test_bridge_still_runs_to_disclose_when_nothing_is_readable():
     # readable empty but discoverable present → do NOT short-circuit; run so the
     # motivating case (the only answer is behind read_content) still discloses.

@@ -172,6 +172,48 @@ def test_kb_chat_turn_wires_spec_for_lookup_glossary():
     assert runner.seen_spec is not None
 
 
+class _DiscoverableCapturingRunner:
+    """Records the disclosure-probe universe the KB turn handed the agent."""
+
+    def __init__(self) -> None:
+        self.seen: list[str] | None = None
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.seen = list(ctx.discoverable_collection_ids)
+        yield MessageDelta(text="ok")
+        yield RunDone()
+
+
+def test_kb_chat_probes_unselected_restricted_collections():
+    """#605 P2: a restricted collection the chat never selected (created by
+    someone else, no grants) still enters the turn's disclosure universe — so
+    "there IS an answer you can't read" can fire without the user having to
+    pick a collection they can't even use."""
+    runner = _DiscoverableCapturingRunner()
+    spec = make_spec()
+    from workspace_app.perm import Permission
+    from workspace_app.resources.kb import Collection
+
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("someone-else"):
+        unpicked = rm.create(
+            Collection(name="Fab-Yield", permission=Permission(visibility="restricted"))
+        ).resource_id
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=runner,  # ty: ignore[invalid-argument-type]
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+    )
+    client = TestClient(app)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q"})
+    assert runner.seen is not None
+    assert unpicked in runner.seen
+
+
 class _OrphanToolRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield ToolEnd(call_id="ghost", output="stray output")
