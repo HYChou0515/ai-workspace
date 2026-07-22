@@ -19,6 +19,10 @@ No real LLM / docker — ScriptedAgentRunner + MockSandbox + a fresh spec.
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 import workspace_app.api.app as app_mod
 from workspace_app.api import create_app
 from workspace_app.api.events import RunDone
@@ -177,3 +181,42 @@ async def test_wire_handle_binds_ask_llm_over_the_run_model(monkeypatch):
     wf2 = WorkflowHandle(store=executor._files, workspace_id=item_id)
     executor.wire_handle(wf2, "run-2", item_id, "u", "chat-1")
     assert wf2.ask_llm is None
+
+
+async def test_drive_turn_aborts_the_run_after_a_stop(monkeypatch):
+    """A Stop advances the run's turn epoch (`cancel_current`); `drive_turn` samples
+    a baseline on the first turn and aborts at the next boundary once the epoch has
+    moved past it — so a workflow RUN actually stops, not just its current turn.
+    Before, the run would step on after its turn was cancelled."""
+    _spec, executor, item_id = _build(monkeypatch)
+    rid, _ = executor._locator.conversation_for(item_id)  # the run's chat/turn key
+
+    # First turn establishes the run's cancel baseline and completes normally.
+    await executor.drive_turn(item_id, rid, "u", "hi", None)
+
+    # A Stop advances the shared epoch for the run's key (any pod would, via cancel).
+    await executor._turn_engine.cancel_current(rid)
+
+    # The next turn boundary must abort the run, not run another step.
+    with pytest.raises(asyncio.CancelledError):
+        await executor.drive_turn(item_id, rid, "u", "again", None)
+
+
+async def test_drive_turn_aborts_when_a_stop_lands_during_the_turn(monkeypatch):
+    """The post-turn check: a Stop that lands DURING a turn advances the epoch after
+    drive_turn's pre-check passed. It must abort at the boundary (essential when the
+    stopped turn is the run's LAST) — the watcher has already cancelled the turn."""
+    _spec, executor, item_id = _build(monkeypatch)
+    rid, _ = executor._locator.conversation_for(item_id)
+
+    real = executor._turn_engine.cancel_epoch
+    n = {"c": 0}
+
+    async def epoch(key: str) -> int:
+        n["c"] += 1
+        base = await real(key)
+        return base + (1 if n["c"] >= 3 else 0)  # 1=baseline, 2=pre-check, 3=post-check
+
+    monkeypatch.setattr(executor._turn_engine, "cancel_epoch", epoch)
+    with pytest.raises(asyncio.CancelledError):
+        await executor.drive_turn(item_id, rid, "u", "hi", None)

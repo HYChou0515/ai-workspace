@@ -698,6 +698,13 @@ class ChatTurnEngine:
             with contextlib.suppress(BaseException):
                 await turn
 
+    async def cancel_epoch(self, key: str) -> int:
+        """The current shared cancel epoch for `key`. The workflow driver samples a
+        run's epoch once as a baseline and re-checks it at each turn boundary — any
+        advance past the baseline (a Stop, on ANY pod, via `cancel_current`) tells it
+        to abort the whole run, not just the turn the watcher already cancelled."""
+        return await self._turn_control.current(key)
+
     def publish(self, key: str, event: AgentEvent) -> None:
         """#43: broadcast an externally-produced event (e.g. a human `UserMessage`
         or a `FileChanged`) on the investigation's stream. No-op if nobody has

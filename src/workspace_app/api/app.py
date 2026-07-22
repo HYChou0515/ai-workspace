@@ -1021,6 +1021,9 @@ def create_app(
         wire_handle=workflow_executor.wire_handle,
         publish=turn_engine.publish,
         release=workflow_executor.release,
+        # Cross-pod Stop: advance the run's turn epoch so a Stop reaches a run driven
+        # on any pod (cancels the in-flight turn; its drive_turn then aborts the run).
+        on_stop=turn_engine.cancel_current,
         notify_failure=workflow_executor.notify_failure,
         credentials=workflow_credentials,
         max_steps=workflow_max_steps,

@@ -136,6 +136,12 @@ class WorkflowOrchestrator:
     # stream alive for the decision card). ``chat_key`` identifies the run's chat/turn
     # session. Injected by the API layer; None ⇒ no-op.
     release: Callable[[str, bool, str], Awaitable[None]] | None = None
+    # Stop signal for the run's turn key (its chat/turn session): advances the SHARED
+    # turn epoch (wired to `ChatTurnEngine.cancel_current`). This is what makes a Stop
+    # reach a run driven on ANOTHER pod — the epoch cancels the in-flight turn there,
+    # and the owning pod's `drive_turn` observes the advance and aborts the run. None
+    # ⇒ no cross-pod signal (tests / single-pod fall back to the local task cancel).
+    on_stop: Callable[[str], Awaitable[None]] | None = None
     # In-app failure notification (manual §17). Injected by the API layer.
     notify_failure: Callable[[WorkflowRun], None] | None = None
     # Run-scoped credentials (manual §15): minted per run, injected into the
@@ -616,13 +622,33 @@ class WorkflowOrchestrator:
 
     # ── Stop & take over (§10) ────────────────────────────────────────
     async def cancel(self, run_id: str, item_id: str) -> bool:
-        """Stop a run mid-flight: cancel its task (the driver records ``cancelled``),
-        then release the sandbox so the item opens to interactive use. Returns False
-        when the run isn't running (already terminal / unknown)."""
+        """Stop a run mid-flight, from ANY pod.
+
+        Reads the run cross-pod (specstar) and advances the SHARED turn epoch
+        (`on_stop`) — that cancels the in-flight turn wherever it runs AND is what a
+        run driven on a peer pod observes at its next `drive_turn` to abort itself
+        (releasing on that pod). When the driver task is local, also cancel it and
+        release here, as before. Returns False only when the run is unknown or
+        already terminal.
+
+        Before, this returned False and did nothing whenever the task wasn't in this
+        pod's `_tasks` — so a Stop routed to a non-owning replica was a silent no-op,
+        and even a same-pod Stop only cancelled the DRIVER task, not the separate
+        in-flight turn task (which kept running until it finished on its own)."""
+        try:
+            data = self._get(run_id)
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return False
+        if data.status not in _ACTIVE:
+            return False
+        key = data.chat_id or item_id
+        # The cross-pod signal (also cancels the in-flight turn locally, if any).
+        if self.on_stop is not None:
+            await self.on_stop(key)
         task = self._tasks.get(run_id)
         if task is None or task.done():
-            return False
-        key = self._get(run_id).chat_id or item_id
+            logger.info("cancel: signalled run %s (item %s) — driven elsewhere", run_id, item_id)
+            return True
         task.cancel()
         with contextlib.suppress(BaseException):
             await task
