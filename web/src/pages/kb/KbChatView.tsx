@@ -183,7 +183,9 @@ export function KbChatView({
                     </div>
                     <UserPicker
                       selected={sharedWith}
-                      exclude={[owner]}
+                      // The owner needs no share row, and neither does the person
+                      // doing the sharing (a superuser managing someone else's chat).
+                      exclude={[owner, me]}
                       onToggle={(userId) =>
                         shareMut.mutate({ userId, on: !sharedWith.includes(userId) })
                       }
