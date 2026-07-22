@@ -23,8 +23,14 @@ import { qk } from "../api/queryKeys";
 
 export type UseEntityWriteOptions = {
   /** When false the surface is read-only (non-member, §E): every write is a
-   * no-op and callers hide their write affordances. Default true. */
-  canWrite?: boolean;
+   * no-op and callers hide their write affordances.
+   *
+   * REQUIRED — this used to be `canWrite?: boolean` defaulting to true, and
+   * the default is exactly what let RecordFileRenderer silently omit it: a
+   * read-only member got a live-looking editor whose Save 403'd server-side.
+   * A caller must now state where its write permission comes from
+   * (`useItemCanWrite(slug, itemId)` for item-scoped renderers). */
+  canWrite: boolean;
 };
 
 type UpdateVars = {
@@ -35,8 +41,8 @@ type UpdateVars = {
   body?: string;
 };
 
-export function useEntityWrite(slug: string, itemId: string, type: string, options?: UseEntityWriteOptions) {
-  const canWrite = options?.canWrite ?? true;
+export function useEntityWrite(slug: string, itemId: string, type: string, options: UseEntityWriteOptions) {
+  const canWrite = options.canWrite;
   const qc = useQueryClient();
   const [conflicts, setConflicts] = useState<number[]>([]);
 

@@ -19,6 +19,7 @@ import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
 import { useEntities, useEntityCatalog } from "../../hooks/useEntities";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
+import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { pxToRem } from "../../lib/pxToRem";
@@ -57,7 +58,10 @@ export function RecordFileRenderer({ path }: { path: string }) {
     : null;
   const entityName = type?.name ?? "";
   const listQ = useEntities(slug, itemId, entityName);
-  const write = useEntityWrite(slug, itemId, entityName);
+  // §E read-only gate — same wiring as AiYamlRenderer: a read-only member's
+  // editor renders disabled instead of offering a Save that 403s.
+  const canWrite = useItemCanWrite(slug, itemId);
+  const write = useEntityWrite(slug, itemId, entityName, { canWrite });
   const users = useUsers();
 
   // The tab-strip Edit toggle is the raw full-file escape hatch (fix a record the
