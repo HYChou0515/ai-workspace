@@ -2596,6 +2596,20 @@
   font-size: 0.75rem;
 }
 .kb-cards__chip button { border: 0; background: transparent; color: var(--text-paper-d); cursor: pointer; padding: 0 2px; }
+/* #518/#519 — a card's linked documents (chips) + the drop-to-attach zone.
+   The chips reuse the .kb-cards__chip idiom; the drop zone mirrors the dashed
+   .kb-cards__new affordance so "drop a picture on the card" reads as a target,
+   not plain text. Accent-soft on hover echoes the app's active-drop cue. */
+.kb-cards__attachments { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.kb-cards__attach-drop {
+  display: block; text-align: center; padding: 10px 12px; font-size: 0.75rem;
+  border: 1px dashed var(--paper-3); border-radius: var(--radius-btn);
+  background: transparent; color: var(--text-paper-d); cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.kb-cards__attach-drop:hover {
+  border-color: var(--accent); color: var(--accent); background: var(--accent-soft);
+}
 .kb-cards__term { flex: 1 1 120px; min-width: 120px; padding: 4px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); color: var(--text-paper); }
 .kb-cards__body { flex: 1 1 auto; min-height: 200px; }
 .kb-cards__actions { display: flex; gap: 8px; }
