@@ -155,10 +155,12 @@ class SubagentBridge:
             self._spec, ids, speaker, superusers=self._superusers
         )
         readable, discoverable = part.readable, part.discoverable
-        if not self._disclosure_enabled:
-            # #605 P3: disclosure off ⇒ no probe universe at all — the tool skips
-            # the probe when nothing is discoverable, so the whole feature costs
-            # nothing. (The searched scope is untouched.)
+        if not self._disclosure_enabled or withheld_sink is None:
+            # #605: disclosure off — or NOBODY CONSUMES it (no withheld sink: an
+            # infer_modules-style holder has no message to attach withheld
+            # sources to) — ⇒ no probe universe at all. The tool skips the probe
+            # when nothing is discoverable, so the feature costs nothing here.
+            # (The searched scope is untouched.)
             discoverable = []
         elif purpose == "kb_chat":
             # #605: the disclosure universe is every discoverable collection —

@@ -207,6 +207,22 @@ async def test_bridge_skips_the_probe_when_disclosure_is_disabled():
     assert sink == []
 
 
+async def test_bridge_skips_the_probe_when_nobody_consumes_withheld():
+    """#605 P4: no withheld sink ⇒ no probe. A holder like infer_modules has no
+    message to attach withheld sources to — disclosure would be work nobody can
+    ever see, so the probe universe stays empty without even consulting the
+    config switch."""
+    spec = make_spec()
+    holder = {"id": "alice"}
+    readable = _new_collection(spec, by="bob")
+    _new_collection(spec, by="bob", permission=Permission(visibility="restricted"))
+    runner = _DisclosingRunner()
+    await _bridge(spec, runner, holder).run(
+        "kb_chat", "q", collection_ids=[readable]  # no withheld_sink
+    )
+    assert runner.seen_discoverable == []
+
+
 async def test_bridge_probes_discoverable_collections_beyond_the_picked_scope():
     """#605 P2: the disclosure universe is every discoverable collection, not the
     picked scope. A restricted collection alice never selected (and holds no
