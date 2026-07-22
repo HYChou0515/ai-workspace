@@ -19,6 +19,10 @@ No real LLM / docker — ScriptedAgentRunner + MockSandbox + a fresh spec.
 
 from __future__ import annotations
 
+import asyncio
+
+import pytest
+
 import workspace_app.api.app as app_mod
 from workspace_app.api import create_app
 from workspace_app.api.events import RunDone
@@ -177,3 +181,22 @@ async def test_wire_handle_binds_ask_llm_over_the_run_model(monkeypatch):
     wf2 = WorkflowHandle(store=executor._files, workspace_id=item_id)
     executor.wire_handle(wf2, "run-2", item_id, "u", "chat-1")
     assert wf2.ask_llm is None
+
+
+async def test_drive_turn_aborts_the_run_after_a_stop(monkeypatch):
+    """A Stop advances the run's turn epoch (`cancel_current`); `drive_turn` samples
+    a baseline on the first turn and aborts at the next boundary once the epoch has
+    moved past it — so a workflow RUN actually stops, not just its current turn.
+    Before, the run would step on after its turn was cancelled."""
+    _spec, executor, item_id = _build(monkeypatch)
+    rid, _ = executor._locator.conversation_for(item_id)  # the run's chat/turn key
+
+    # First turn establishes the run's cancel baseline and completes normally.
+    await executor.drive_turn(item_id, rid, "u", "hi", None)
+
+    # A Stop advances the shared epoch for the run's key (any pod would, via cancel).
+    await executor._turn_engine.cancel_current(rid)
+
+    # The next turn boundary must abort the run, not run another step.
+    with pytest.raises(asyncio.CancelledError):
+        await executor.drive_turn(item_id, rid, "u", "again", None)

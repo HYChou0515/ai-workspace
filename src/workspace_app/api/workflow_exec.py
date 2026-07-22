@@ -89,6 +89,11 @@ class WorkflowExecutor:
         # keeps concurrent sub-turns off a shared conversation; a hosted multi-replica pool
         # can raise it in config to let a `map` run its agent turns wide.
         self._turn_concurrency = turn_concurrency
+        # Per-run cancel baseline: the shared turn epoch sampled on the run's first
+        # turn (keyed on its chat_key). `drive_turn` re-checks the epoch at each turn
+        # boundary; any advance past the baseline (a Stop, this pod or a peer's)
+        # aborts the run. Cleared when the run's session is released.
+        self._run_baseline: dict[str, int] = {}
 
     def upload_dir(self, slug: str, profile: str) -> str:
         """#198: the active profile's staging folder — the orchestrator threads it onto
@@ -124,6 +129,16 @@ class WorkflowExecutor:
         map elements' turns run on their own FIFO worker (real parallel) — while the
         conversation lookup + persist stay on ``chat_key`` (no orphan conversations). A
         transient sub-lane is forgotten after its turn so its session doesn't leak."""
+        # #349 cross-pod Stop: sample the run's cancel baseline once (its chat_key's
+        # shared epoch), then abort the whole run at each turn boundary if the epoch
+        # has advanced past it — a Stop on ANY pod advances it (`cancel_current`).
+        # Catches a Stop that lands mid-turn (the watcher already cancelled the turn)
+        # AND one that lands between turns.
+        if chat_key not in self._run_baseline:
+            self._run_baseline[chat_key] = await self._turn_engine.cancel_epoch(chat_key)
+        baseline = self._run_baseline[chat_key]
+        if await self._turn_engine.cancel_epoch(chat_key) > baseline:
+            raise asyncio.CancelledError  # Stop arrived before this turn ran
         await self._files.ensure_room_for(item_id, 1)
         try:
             rid = chat_key
@@ -176,6 +191,10 @@ class WorkflowExecutor:
         await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
         if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
             await self._turn_engine.forget(lane)
+        # A Stop that landed DURING this turn advanced the epoch past the baseline
+        # (the watcher already cancelled the turn) → abort the run, don't step on.
+        if await self._turn_engine.cancel_epoch(chat_key) > baseline:
+            raise asyncio.CancelledError
         return "\n".join(answer)
 
     async def run_sandbox(
@@ -410,6 +429,7 @@ class WorkflowExecutor:
             await self._registry.close_session(item_id)
         if terminal:
             await self._turn_engine.forget(chat_key)
+            self._run_baseline.pop(chat_key, None)
 
     def notify_failure(self, run: WorkflowRun) -> None:
         """In-app failure notification to the item's owner (manual §17)."""
