@@ -161,6 +161,35 @@ async def test_a_zero_length_buffer_disables_replay():
     await engine.forget(key)
 
 
+async def test_seq_is_monotonic_within_a_session_and_gcd_on_forget():
+    # seq never resets while the session lives (so `?since=` is unambiguous across
+    # a turn's many events), and `forget` drops the session AND its buffer, so a
+    # fresh session restarts at 1.
+    engine = _engine()
+    key = "inv"
+
+    warm = engine.subscribe_sse(key, heartbeat_interval=5.0)
+    for text in "abc":
+        engine.publish(key, MessageDelta(text=text))  # seq 1, 2, 3 — strictly climbing
+    await warm.aclose()
+
+    sub = engine.subscribe_sse(key, heartbeat_interval=5.0, since=1)
+    assert (await _read_frame(sub))["seq"] == 2
+    assert (await _read_frame(sub))["seq"] == 3
+    await sub.aclose()
+
+    await engine.forget(key)  # session + buffer gone
+
+    warm2 = engine.subscribe_sse(key, heartbeat_interval=5.0)
+    engine.publish(key, MessageDelta(text="d"))  # a fresh session → seq restarts at 1
+    await warm2.aclose()
+    sub2 = engine.subscribe_sse(key, heartbeat_interval=5.0, since=0)
+    f = await _read_frame(sub2)
+    assert (f["text"], f["seq"]) == ("d", 1)  # nothing from the forgotten session survived
+    await sub2.aclose()
+    await engine.forget(key)
+
+
 def test_replay_buffer_size_defaults_to_2000():
     # The dataclass default is the single source of truth for the knob.
     assert ServerSettings().turn_replay_buffer_events == 2000
