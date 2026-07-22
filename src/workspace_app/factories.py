@@ -476,12 +476,24 @@ def get_code_embedder(settings: Settings) -> Embedder | None:
 def get_image_embedder(settings: Settings) -> ImageEmbedder | None:
     """#513: the image embedder for ``DocChunk.embedding_img``.
 
-    None for now — the image model is an external-team deliverable (#513 P2 is
-    the empty socket), so retrieval stays text-only until it lands. P4 wires the
-    real adapter here (keyed off image-embedder config) and re-indexes to
-    backfill the image vectors; production injects it via
-    ``create_app(kb_image_embedder=...)``."""
-    return None
+    ``kb.image_embedder.kind`` selects the backend (#519): ``none`` (default)
+    keeps retrieval text-only, byte-for-byte the pre-#513 path; ``perceptual``
+    wires the dependency-light placeholder so query-by-image works out of the
+    box; ``hash`` is the byte-hash test stub. The real model (external team)
+    will be a fourth ``http`` kind wired here without touching the core.
+    Width always resolves to ``IMG_EMBED_DIM``; production may still inject a
+    custom adapter via ``create_app(kb_image_embedder=...)``."""
+    from .kb.image_embedder import HashImageEmbedder, PerceptualImageEmbedder
+    from .resources.kb import IMG_EMBED_DIM
+
+    kind = settings.kb.image_embedder.kind
+    if kind == "none":
+        return None
+    if kind == "perceptual":
+        return PerceptualImageEmbedder(dim=IMG_EMBED_DIM)
+    if kind == "hash":
+        return HashImageEmbedder(dim=IMG_EMBED_DIM)
+    raise ValueError(f"unknown kb.image_embedder.kind {kind!r} — expected none / perceptual / hash")
 
 
 def get_image_fetcher(settings: Settings) -> IImageFetcher | None:

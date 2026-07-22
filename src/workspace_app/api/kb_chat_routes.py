@@ -381,11 +381,17 @@ class _MsgBody(BaseModel):
 _IMAGE_QUERY_PREAMBLE = "[Attached image — described by the vision model]"
 
 
-async def _fold_image(content: str, image: _ImageInput, describer: VlmDescriber | None) -> str:
+async def _fold_image(
+    content: str, image: _ImageInput, describer: VlmDescriber | None
+) -> tuple[str, bytes]:
     """#513 P10: decode a TRANSIENT attached image, VLM-describe it, and append the
     caption to the query the agent searches with. The bytes are never persisted —
     the description rides this one turn only. The client-declared mime is advisory;
-    the decoded bytes are re-sniffed so a mislabelled / non-image upload is caught."""
+    the decoded bytes are re-sniffed so a mislabelled / non-image upload is caught.
+
+    Returns ``(folded_text, image_bytes)``: the caption for the text query, and the
+    same decoded bytes so the caller can set them on the turn for query-by-image
+    (#519) — one decode serves both the VLM-describe and the image→image arm."""
     if describer is None:
         raise HTTPException(
             status_code=400,
@@ -400,7 +406,7 @@ async def _fold_image(content: str, image: _ImageInput, describer: VlmDescriber 
     if not mime.startswith("image/"):
         raise HTTPException(status_code=400, detail=f"attachment is not an image (detected {mime})")
     caption = await asyncio.to_thread(describer.describe, data, mime)
-    return f"{content}\n\n{_IMAGE_QUERY_PREAMBLE}\n{caption}"
+    return f"{content}\n\n{_IMAGE_QUERY_PREAMBLE}\n{caption}", data
 
 
 class _ShareBody(BaseModel):
@@ -894,7 +900,9 @@ def register_kb_chat_routes(
         # "augment the agent's content, not the persisted message" pattern as the
         # #106 card pre-scan above. The image itself is never stored (not a KB doc).
         if body.image is not None:
-            agent_content = await _fold_image(agent_content, body.image, vlm_describer)
+            agent_content, ctx.query_image = await _fold_image(
+                agent_content, body.image, vlm_describer
+            )
 
         return await engine.stream(chat_id, agent_content, ctx, on_complete=persist)
 

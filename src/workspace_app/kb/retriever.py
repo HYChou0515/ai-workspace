@@ -498,6 +498,7 @@ class Retriever:
         depth: int | None = None,
         exclude_doc_ids: frozenset[str] = frozenset(),
         restrict_to_doc_ids: frozenset[str] = frozenset(),
+        query_image: bytes | None = None,
     ) -> list[RetrievedPassage]:
         """`enhancements` is the per-call override: any field set to a
         concrete value wins over the operator default for that knob,
@@ -643,6 +644,16 @@ class Retriever:
                 if qv_img is not None:
                     ranked_lists.append(dense(qv_img, "embedding_img"))
             ranked_lists.append(bm25_rank(q, corpus))
+
+        # #519 image→image arm: mounted only when the caller actually supplies a
+        # query image (kb_search image=…). One arm for the whole query — the
+        # query image is a single vector, not per text-query — ranking over
+        # embedding_img via `embed_query_image`. No query image, or no image
+        # embedder, ⇒ nothing appended, so a text search is untouched.
+        if query_image is not None and self._image_embedder is not None:
+            ranked_lists.append(
+                dense(self._image_embedder.embed_query_image(query_image), "embedding_img")
+            )
 
         # HyDE: embed N hypothetical answers (as pseudo-documents); each
         # adds another dense probe so retrieval matches answer-shaped

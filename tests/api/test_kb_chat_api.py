@@ -1144,3 +1144,20 @@ def test_invalid_base64_image_is_rejected():
     )
     assert r.status_code == 400
     assert "base64" in r.json()["detail"]
+
+
+async def test_fold_image_returns_the_decoded_bytes_for_query_by_image():
+    """#519: the same decoded image #514 VLM-describes is also handed back so the
+    route can set ctx.query_image — query-by-image reuses the transient image, no
+    second decode, no persistence."""
+    import base64
+
+    from workspace_app.api.kb_chat_routes import _fold_image, _ImageInput
+    from workspace_app.kb.vlm import VlmDescriber
+
+    vlm = _FakeVlm("a described chip")
+    img = _ImageInput(data=base64.b64encode(_PNG).decode(), mime="image/png")
+    folded, image_bytes = await _fold_image("what is this?", img, VlmDescriber(vlm))
+
+    assert "a described chip" in folded  # caption still folded into the text query
+    assert image_bytes == _PNG  # and the raw bytes come back for the image arm

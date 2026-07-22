@@ -265,6 +265,11 @@ class AgentToolContext:
     # result also reports the remaining budget so a small model spends frugally.
     # An app turn shares ONE instance across its ask_knowledge_base sub-agents.
     kb_search_budget: KbSearchBudget = field(default_factory=KbSearchBudget)
+    # #519: a transient query image for this turn — the user-attached image (the
+    # #513 P10 path) decoded once by the API. When set, kb_search adds an
+    # image→image arm over embedding_img. The KB agent has no workspace, so the
+    # image rides the context rather than a tool path arg. None ⇒ text-only.
+    query_image: bytes | None = None
     # #506: this turn's search_wiki budget — the symmetric wiki twin of
     # kb_search_budget. Default unlimited-but-counted, so the wiki maintainer/
     # reader (which never set it) keep grepping freely; the ask_knowledge_base

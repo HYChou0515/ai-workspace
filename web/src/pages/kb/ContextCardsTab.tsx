@@ -7,8 +7,11 @@
  * sends them. A new card opens straight into Edit.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+
+import { CardAttachments } from "./CardAttachments";
+import { blobHref } from "./kbLinks";
 import ReactMarkdown from "react-markdown";
 import { useNavigate, useParams } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -24,8 +27,14 @@ import { lookupByName, scanPassage } from "./cardSearch";
 
 type SearchMode = "name" | "text";
 
-type Draft = { id: string | null; keys: string[]; title: string; body: string };
-const BLANK: Draft = { id: null, keys: [], title: "", body: "" };
+type Draft = {
+  id: string | null;
+  keys: string[];
+  title: string;
+  body: string;
+  reference_doc_ids: string[];
+};
+const BLANK: Draft = { id: null, keys: [], title: "", body: "", reference_doc_ids: [] };
 // URL sentinel for the unsaved new-card form (card ids are `card-…`, never this).
 const NEW_CARD = "new";
 
@@ -34,9 +43,14 @@ const cardLabel = (c: KbContextCard) => c.title || c.keys[0] || "Untitled";
 export function ContextCardsTab({
   collectionId,
   client = kbApi,
+  onOpenDoc,
 }: {
   collectionId: string;
   client?: KbApi;
+  /** Open one of a card's linked documents in the shared viewer drawer. Wired
+   * from the collection page (the same `openDoc` the doc tree + citations use);
+   * absent ⇒ chips are non-clickable text. */
+  onOpenDoc?: (docId: string) => void;
 }) {
   const qc = useQueryClient();
   const t = useT();
@@ -49,6 +63,23 @@ export function ContextCardsTab({
     queryFn: () => client.listContextCards(collectionId),
   });
   const [draft, setDraft] = useState<Draft | null>(null);
+  // Resolve each linked doc's envelope (a cheap point-get) so an image
+  // attachment can show a real thumbnail instead of a filename pill. useQueries
+  // handles the dynamic list; content_type + file_id ride the envelope (#518).
+  const refIds = draft?.reference_doc_ids ?? [];
+  const refMetas = useQueries({
+    queries: refIds.map((id) => ({
+      queryKey: qk.kb.docMeta(id),
+      queryFn: () => client.getSourceDocMeta(id),
+    })),
+  });
+  const imageSrc = (docId: string): string | undefined => {
+    const i = refIds.indexOf(docId);
+    const meta = i >= 0 ? refMetas[i]?.data : undefined;
+    return meta?.content_type?.startsWith("image/") && meta.file_id
+      ? blobHref(meta.file_id)
+      : undefined;
+  };
   const [editing, setEditing] = useState(false); // existing card → preview first; New → edit
   const [term, setTerm] = useState("");
   const [query, setQuery] = useState("");
@@ -88,13 +119,25 @@ export function ContextCardsTab({
     // Only load the content here — `editing` is owned by the click handler (and
     // stays true through a just-authored card's save), so a refetch landing
     // mid-save can't bump us out of the editor.
-    if (c) setDraft({ id: c.id, keys: c.keys, title: c.title, body: c.body });
+    if (c)
+      setDraft({
+        id: c.id,
+        keys: c.keys,
+        title: c.title,
+        body: c.body,
+        reference_doc_ids: c.reference_doc_ids ?? [],
+      });
   }, [cardId, cards]);
 
   const saveMut = useMutation({
     mutationFn: async (d: Draft): Promise<string> => {
       if (d.id) {
-        await client.updateContextCard(d.id, { keys: d.keys, title: d.title, body: d.body });
+        await client.updateContextCard(d.id, {
+          keys: d.keys,
+          title: d.title,
+          body: d.body,
+          reference_doc_ids: d.reference_doc_ids,
+        });
         return d.id;
       }
       return client.createContextCard({
@@ -102,6 +145,7 @@ export function ContextCardsTab({
         keys: d.keys,
         title: d.title,
         body: d.body,
+        reference_doc_ids: d.reference_doc_ids,
       });
     },
     // Promote a just-authored draft to "editing the saved card" so a second
@@ -113,6 +157,34 @@ export function ContextCardsTab({
       void invalidate();
     },
   });
+  // #518 drop-to-create: upload dropped/picked files through the normal ingest
+  // pipeline (VLM-described, embedded — a first-class KB doc) and link the
+  // resulting doc ids onto the draft. "Drop a picture on the card and it's there."
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const attachMut = useMutation({
+    mutationFn: async (files: FileList): Promise<string[]> => {
+      const ids: string[] = [];
+      for (const file of Array.from(files)) {
+        ids.push(...(await client.uploadDocument(collectionId, file)));
+      }
+      return ids;
+    },
+    onSuccess: (ids) => {
+      setAttachError(null);
+      setDraft((cur) =>
+        cur
+          ? {
+              ...cur,
+              // dedupe — a re-dropped identical file returns the same doc id
+              reference_doc_ids: [...new Set([...cur.reference_doc_ids, ...ids])],
+            }
+          : cur,
+      );
+    },
+    onError: (e: unknown) => setAttachError(e instanceof Error ? e.message : "upload failed"),
+  });
+  const attachFiles = (files: FileList) => attachMut.mutate(files);
+
   const deleteMut = useMutation({
     mutationFn: (id: string) => client.deleteContextCard(id),
     onSuccess: () => {
@@ -290,6 +362,32 @@ export function ContextCardsTab({
                     language="markdown"
                   />
                 </div>
+                <div className="kb-cards__attachments-field">
+                  <label className="kb-cards__label">Linked documents</label>
+                  <CardAttachments
+                    docIds={draft.reference_doc_ids}
+                    editable
+                    onDetach={(docId) =>
+                      setDraft({
+                        ...draft,
+                        reference_doc_ids: draft.reference_doc_ids.filter((x) => x !== docId),
+                      })
+                    }
+                    onAttach={attachFiles}
+                    imageSrc={imageSrc}
+                    {...(onOpenDoc ? { onOpen: onOpenDoc } : {})}
+                  />
+                  {attachMut.isPending && (
+                    <p className="kb-cards__none" data-testid="card-attach-pending">
+                      Uploading…
+                    </p>
+                  )}
+                  {attachError && (
+                    <p className="kb-cards__error" role="alert">
+                      {attachError}
+                    </p>
+                  )}
+                </div>
               </>
             ) : (
               <div className="kb-cards__preview">
@@ -312,6 +410,12 @@ export function ContextCardsTab({
                     <p className="kb-cards__none">No explanation yet.</p>
                   )}
                 </article>
+                <CardAttachments
+                  docIds={draft.reference_doc_ids}
+                  editable={false}
+                  imageSrc={imageSrc}
+                  {...(onOpenDoc ? { onOpen: onOpenDoc } : {})}
+                />
               </div>
             )}
 

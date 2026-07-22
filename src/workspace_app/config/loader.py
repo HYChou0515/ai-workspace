@@ -41,6 +41,7 @@ from .schema import (
     HealthSettings,
     HistorySettings,
     HttpSandboxSettings,
+    ImageEmbedderSettings,
     ImageFetchSettings,
     KbSettings,
     LlmLogSettings,
@@ -426,6 +427,7 @@ _TOP_SCHEMA: dict[str, Any] = {
         # #513 P6: allowed_hosts is a list-of-strings leaf (shape walk skips its
         # non-dict value, like `parsers` below); timeout is a scalar float leaf.
         "image_fetch": _dataclass_keys(ImageFetchSettings),
+        "image_embedder": _dataclass_keys(ImageEmbedderSettings),
         "git": _dataclass_keys(GitSettings),
         # Issue #39: `kb.parsers` / `kb.parsers_disabled` are
         # list-of-strings leaves. The shape check below skips non-dict

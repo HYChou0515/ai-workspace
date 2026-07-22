@@ -449,6 +449,26 @@ class CodeEmbedderSettings:
 
 
 @dataclass(frozen=True)
+class ImageEmbedderSettings:
+    """#519: which image embedder populates/queries ``DocChunk.embedding_img``.
+
+    ``kind``:
+    - ``none`` (default) — no image embedder; retrieval stays text-only,
+      byte-for-byte the pre-#513 path. Existing deploys are unchanged.
+    - ``perceptual`` — the dependency-light placeholder that clusters
+      visually-similar images, so query-by-image works out of the box before
+      the real model lands. Image-only (no text→image), so text retrieval is
+      still byte-for-byte unchanged.
+    - ``hash`` — the byte-hash stub (exact-match only); for tests.
+
+    The real model (external team) will be a fourth kind (``http`` — a remote
+    service) wired here without touching the core, mirroring ``sandbox kind:
+    http``. Width always resolves to ``IMG_EMBED_DIM``."""
+
+    kind: str = "none"
+
+
+@dataclass(frozen=True)
 class ImageFetchSettings:
     """#513 P6: fetch an HTML/MD upload's externally-linked images (``<img src>``
     / ``![](url)``) from an internal image server so each becomes its own
@@ -521,6 +541,8 @@ class KbSettings:
     # image server (SSRF-allowlisted) into their own image SourceDocs. Empty
     # allowlist (default) ⇒ off — no fetch, ingest unchanged.
     image_fetch: ImageFetchSettings = field(default_factory=ImageFetchSettings)
+    # #519: image-embedding backend for DocChunk.embedding_img (query-by-image).
+    image_embedder: ImageEmbedderSettings = field(default_factory=ImageEmbedderSettings)
     git: GitSettings = field(default_factory=GitSettings)
     # Issue #39: the VLM the vision-backed parsers (image / PDF visual
     # pages / slides) call to turn pixels into searchable text. Same

@@ -342,6 +342,11 @@ export type KbDocMeta = {
    * shown in the expandable quality panel. Rides the SourceDoc envelope. */
   quality_breakdown?: Record<string, number>;
   parser_guidance_override?: string;
+  /** #518: the content blob hash + its mime, both already on the envelope's
+   * `content`. Lets a card render an image attachment as an actual thumbnail
+   * (`blobHref(file_id)`) instead of a filename pill — no extra round-trip. */
+  file_id?: string;
+  content_type?: string;
 };
 
 /** A resolved [n] marker — points at a span of a source document. */
@@ -466,6 +471,11 @@ export type KbContextCard = {
   norm_keys: string[];
   title: string;
   body: string;
+  /** #518: opaque doc-id tokens for the SourceDocs that back this card. A key
+   * hit scopes retrieval to these docs (#518) and the editor shows/edits them.
+   * Optional in the type (a card written before this field, or a fixture, omits
+   * it) — real specstar data always carries it, defaulting to []. */
+  reference_doc_ids?: string[];
 };
 
 /** Author input for create/update — no `norm_keys` (server-derived). */
@@ -474,6 +484,9 @@ export type KbContextCardInput = {
   keys: string[];
   title: string;
   body: string;
+  /** #518: opaque doc-id tokens. Omit to leave a card's links unchanged (the
+   * edit patch treats absent as "keep"); the card editor sends the full set. */
+  reference_doc_ids?: string[];
 };
 
 /** #175 自動 context card — where a proposed card came from (the audit "依據"). */
@@ -1086,14 +1099,19 @@ export const realKbApi: KbApi = {
     // open — both ride the SourceDoc envelope (metadata, no blob restore), so a
     // point-get is far cheaper than renderDocument's blob re-read + count queries.
     const url = `/source-doc/${encodeURIComponent(documentId)}`;
-    const env: { data: Partial<KbDocMeta> } = await (
-      await ok(await apiFetch(url), "read document meta")
-    ).json();
+    const env: {
+      data: Partial<KbDocMeta> & {
+        content?: { file_id?: string; content_type?: string };
+      };
+    } = await (await ok(await apiFetch(url), "read document meta")).json();
     return {
       quality_score: env.data.quality_score,
       quality_rationale: env.data.quality_rationale,
       quality_breakdown: env.data.quality_breakdown,
       parser_guidance_override: env.data.parser_guidance_override,
+      // file_id + content_type live on the envelope's `content` blob (#518).
+      file_id: env.data.content?.file_id,
+      content_type: env.data.content?.content_type,
     };
   },
   async getDocChunks(documentId) {

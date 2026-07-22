@@ -1052,8 +1052,14 @@ export function DocumentsTab() {
 }
 
 export function CardsTab() {
-  const { collection, client } = useCollectionOutlet();
-  return <ContextCardsTab collectionId={collection.resource_id} client={client} />;
+  const { collection, client, openDoc } = useCollectionOutlet();
+  return (
+    <ContextCardsTab
+      collectionId={collection.resource_id}
+      client={client}
+      onOpenDoc={openDoc}
+    />
+  );
 }
 
 export function ReviewTab() {
