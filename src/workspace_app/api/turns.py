@@ -589,15 +589,21 @@ class ChatTurnEngine:
         worker proceeds to the next; its completion future is then resolved."""
         while True:
             content, ctx, on_complete, on_turn_end, fut = await session.queue.get()
-            # #349: stamp the CURRENT epoch without bumping — a new collaborative
-            # message must NOT supersede the running turn (they serialize via this
-            # queue), but an explicit Stop (which DOES bump) on any pod still
-            # aborts it through the watcher.
-            my_epoch = await self._turn_control.current(key)
+            # Make the turn cancellable BEFORE reading the epoch. `current()` awaits
+            # (a specstar round-trip); a Stop landing in that window must find the
+            # turn via the same-pod fast-path (`cancel_current` reads `current_turn`)
+            # — otherwise its `advance()` bumps the epoch, this stamp reads the
+            # already-bumped value, and the watcher's `> my_epoch` never trips, so
+            # the Stop is silently lost (the intermittent "Stop does nothing").
             turn = asyncio.create_task(
                 self._run_turn(content, ctx, on_complete, on_turn_end, session.publish)
             )
             session.current_turn = turn
+            # #349: stamp the CURRENT epoch without bumping — a new collaborative
+            # message must NOT supersede the running turn (they serialize via this
+            # queue), but an explicit Stop (which DOES bump) on any pod still aborts
+            # it through the watcher.
+            my_epoch = await self._turn_control.current(key)
             self._spawn_watcher(key, my_epoch, turn)
             logger.info("turns: worker %s turn started (epoch %d)", key, my_epoch)
             # The turn persists its own (partial) result via on_complete even
