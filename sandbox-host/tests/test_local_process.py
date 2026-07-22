@@ -663,6 +663,21 @@ async def test_unjailed_exec_sets_sandbox_home_to_private_per_sandbox_dir(tmp_pa
     assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # .home invisible
 
 
+async def test_a_plain_exec_gets_home_off_the_synced_workspace(tmp_path):
+    """HOME for ANY exec is the per-sandbox `.home`, not the workspace — so a tool
+    that writes its profile to $HOME (LibreOffice's user installation) doesn't
+    land it on the mirrored/persisted workspace, where it can't create/lock and
+    `soffice` aborts "User installation could not be completed". Mirror of the
+    app-side change; completes #393 (which moved only the carrier's HOME)."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec())
+    _argv, cwd, env = sb._exec_argv(h, ["true"])
+    home = Path(env["HOME"])
+    assert home == Path(cwd).parent / ".home"  # infra-area sibling, never synced
+    assert home != Path(cwd)  # NOT the mirrored workspace
+    assert home.is_dir()
+
+
 async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback(tmp_path):
     """A carrier provisioned AFTER the first exec (the `provision_tools` path)
     must be picked up: the per-exec shim re-points `python` from the
