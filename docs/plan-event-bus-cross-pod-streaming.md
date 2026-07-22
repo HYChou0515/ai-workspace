@@ -137,22 +137,36 @@ class EventBusSettings:
 
 ## Definition of Done (verify against these)
 
-- [ ] Two `ChatTurnEngine`s sharing ONE `InMemoryEventBus` (= two pods): a turn on
+Verified after #611 merged (`8c60fee6`); the one coverage-gate gap is closed by the
+follow-up carrying this update. Each item cites the test that proves it.
+
+- [x] Two `ChatTurnEngine`s sharing ONE `InMemoryEventBus` (= two pods): a turn on
       engine A streams to a viewer subscribed on engine B (cross-pod delivery).
-- [ ] Multi-chat isolation: two keys on the bus never cross-talk.
-- [ ] Multi-viewer same chat, different pods: both stream.
-- [ ] skip-own: a same-pod viewer gets each event exactly once (never doubled).
-- [ ] No re-publish loop: a bus-delivered event is not re-sent to the bus.
-- [ ] Single-pod / existing tests: `InMemoryEventBus` default is a no-op (skip-own),
+      — `test_a_turn_on_one_pod_streams_to_a_viewer_on_another_pod`.
+- [x] Multi-chat isolation: two keys on the bus never cross-talk.
+      — `test_events_do_not_cross_between_chats`.
+- [x] Multi-viewer same chat, different pods: both stream.
+      — `test_two_viewers_of_one_chat_on_different_pods_both_stream`.
+- [x] skip-own: a same-pod viewer gets each event exactly once (never doubled).
+      — `test_a_same_pod_viewer_gets_each_event_once_not_doubled`.
+- [x] No re-publish loop: a bus-delivered event is not re-sent to the bus.
+      — `test_a_bus_delivered_event_is_not_republished` (`_CountingBus.origins == ["A"]`).
+- [x] Single-pod / existing tests: `InMemoryEventBus` default is a no-op (skip-own),
       behavior unchanged; existing suite untouched.
-- [ ] `publish` never blocks/crashes a turn when the bus is down; degrades to local +
-      store-poll.
-- [ ] Config: `event_bus.kind` default `memory` (unchanged); `rabbitmq` selects
+      — `test_single_pod_bus_is_a_noop`; CI unit suite green on `8c60fee6`.
+- [x] `publish` never blocks/crashes a turn when the bus is down; degrades to local +
+      store-poll. — `test_publish_is_fire_and_forget_when_the_broker_is_down`;
+      `_WorkspaceSession.publish` runs `_fanout` (local) BEFORE `bus.publish`.
+- [x] Config: `event_bus.kind` default `memory` (unchanged); `rabbitmq` selects
       `RabbitMQEventBus`; url reuses `message_queue.rabbitmq.url` when unset.
-- [ ] whole-project `ty` clean; `ruff check` + `format --check` clean.
-- [ ] 100% coverage gate (full local suite); CI unit suite green. `RabbitMQEventBus`
+      — `test_event_bus_factory.py` (4 tests).
+- [x] whole-project `ty` clean; `ruff check` + `format --check` clean.
+      — local exit 0; CI `backend-lint` green.
+- [x] 100% coverage gate (full local suite); CI unit suite green. `RabbitMQEventBus`
       real-broker behavior is an `@pytest.mark.integration` test (unit tests use
-      `InMemoryEventBus`).
+      `InMemoryEventBus`). — `api/event_bus/*` reports 100% (the one unreachable
+      `_on_message` guard branch is `# pragma: no branch`); `events.py` new decoder
+      100%; `test_real_broker_cross_pod_round_trip` passes against a live broker.
 
 ## TDD phases (flat integer; commit per phase)
 

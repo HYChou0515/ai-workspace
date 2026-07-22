@@ -81,7 +81,11 @@ class RabbitMQEventBus(IEventBus):
         except Exception:  # noqa: BLE001
             logger.warning("event_bus: dropped a malformed frame", exc_info=True)
             return
-        if self._on_event is not None:
+        # `start_consuming` sets `_on_event` BEFORE it calls `transport.start`, and the
+        # transport only delivers after `start` — so a frame can never arrive with the
+        # consumer unwired. The guard is a type-narrowing (`OnEvent | None`) formality;
+        # its None side is unreachable by construction, hence no-branch.
+        if self._on_event is not None:  # pragma: no branch
             self._on_event(msg["key"], msg["origin"], event)
 
 
