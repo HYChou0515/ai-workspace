@@ -461,6 +461,20 @@ class GraphRelatedOut(BaseModel):
     chunk_id: str
 
 
+class GraphClaimOut(BaseModel):
+    """#628: one number stated on a slide that names this entity — co-location,
+    read-time, so the figure arrives with enough provenance to open and check."""
+
+    metric: str  # verbatim, as the document wrote it
+    norm_metric: str  # the grouping key (conflict detection groups on this)
+    value: str  # verbatim — never reformatted
+    unit: str
+    period: str
+    norm_period: str
+    source_doc_id: str
+    chunk_id: str
+
+
 class GraphEntityOut(BaseModel):
     """One identity and everything the corpus said about it that the caller may
     read. Assembled from the links, so nothing is stored twice."""
@@ -472,6 +486,7 @@ class GraphEntityOut(BaseModel):
     occurrences: int
     mentions: list[GraphMentionOut]
     related: list[GraphRelatedOut]
+    claims: list[GraphClaimOut]
 
 
 class GraphEvidenceOut(BaseModel):
@@ -2012,6 +2027,19 @@ def register_kb_routes(
                     evidence=by_mention[mention_id(m.source_doc_id, m.surface)].evidence,
                 )
                 for m in page.mentions
+            ],
+            claims=[
+                GraphClaimOut(
+                    metric=c.metric,
+                    norm_metric=c.norm_metric,
+                    value=c.value,
+                    unit=c.unit,
+                    period=c.period,
+                    norm_period=c.norm_period,
+                    source_doc_id=c.source_doc_id,
+                    chunk_id=c.chunk_id,
+                )
+                for c in page.claims
             ],
         )
 
