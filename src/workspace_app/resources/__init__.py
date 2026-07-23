@@ -300,7 +300,11 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # user → the groups they're in (`groups_of`) is a `members.contains(user)`
     # query, not a scan. No access_scope / permission (owner-managed via routes),
     # so resolving groups can't recurse into a permission check.
-    spec.add_model(Group, indexed_fields=["members"])
+    # `members`/`maintainers`/`owner` indexed so `groups_of` and the management
+    # page's "groups I own/maintain/belong to" are queries, not scans. #608: pre-608
+    # rows have `owner=None` (creator is owner) — they're covered by the indexed
+    # `created_by` meta, so no `rm.migrate` backfill is needed for the new fields.
+    spec.add_model(Group, indexed_fields=["members", "maintainers", "owner"])
     # #307: the user → groups resolver every #262 access_scope + write checker
     # folds in (so a `group:<id>` grant covers its members). Injected here — it
     # needs `spec` to query the Group model, which keeps `perm/` free of a resource
