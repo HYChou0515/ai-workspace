@@ -51,7 +51,7 @@ function render(override: Record<string, unknown> = {}, m: AppManifest = manifes
 
 function signInAs(id: string, isSuperuser = false) {
   vi.mocked(api.getCurrentUser).mockResolvedValue(id);
-  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser });
+  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser, groups: [] });
 }
 
 beforeEach(() => signInAs("alice"));

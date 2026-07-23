@@ -245,7 +245,7 @@ describe("KbChatsPage", () => {
   // authorize superusers. The superuser's list scope is UNRESTRICTED (they see
   // every chat), yet `owned = (c.owner ?? me) === me` hid every manage button.
   it("offers Rename/Share/Delete to a superuser on another user's chat", async () => {
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true, groups: [] });
     const client = {
       ...mockKbApi,
       listChats: async () => [
@@ -267,7 +267,7 @@ describe("KbChatsPage", () => {
   });
 
   it("does NOT treat an owner-less row as mine (unknown ≠ mine)", async () => {
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false, groups: [] });
     const client = {
       ...mockKbApi,
       listChats: async () => [

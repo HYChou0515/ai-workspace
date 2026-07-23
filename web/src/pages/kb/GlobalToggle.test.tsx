@@ -42,7 +42,7 @@ function client(over: Partial<KbApi> = {}): KbApi {
 
 describe("GlobalToggle", () => {
   it("is hidden for a non-superuser", async () => {
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "u", is_superuser: false });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "u", is_superuser: false, groups: [] });
     render(<GlobalToggle collection={coll({})} client={client()} />);
     // The query resolves to is_superuser:false → the control never renders.
     await waitFor(() => expect(api.getMe).toHaveBeenCalled());
@@ -50,14 +50,14 @@ describe("GlobalToggle", () => {
   });
 
   it("shows the toggle for a superuser, reflecting is_global", async () => {
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "u", is_superuser: true });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "u", is_superuser: true, groups: [] });
     render(<GlobalToggle collection={coll({ is_global: true })} client={client()} />);
     const box = await screen.findByTestId("kb-global-toggle");
     expect(box).toBeChecked();
   });
 
   it("calls setCollectionGlobal on change (superuser)", async () => {
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "u", is_superuser: true });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "u", is_superuser: true, groups: [] });
     const setCollectionGlobal = vi.fn(async (id: string, v: boolean) => ({
       resource_id: id,
       is_global: v,

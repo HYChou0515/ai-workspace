@@ -1060,7 +1060,7 @@ describe("KbCollectionPage — Manage access gate", () => {
 
   it("offers Manage access to a superuser who is not the owner", async () => {
     vi.spyOn(api, "getCurrentUser").mockResolvedValue("root");
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "root", is_superuser: true });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "root", is_superuser: true, groups: [] });
     const client = {
       listCollections: collections,
       listDocuments: async () => page([]),
@@ -1074,7 +1074,7 @@ describe("KbCollectionPage — Manage access gate", () => {
 
   it("still hides Manage access from a plain non-owner", async () => {
     vi.spyOn(api, "getCurrentUser").mockResolvedValue("bob");
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "bob", is_superuser: false });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "bob", is_superuser: false, groups: [] });
     const client = {
       listCollections: collections,
       listDocuments: async () => page([]),

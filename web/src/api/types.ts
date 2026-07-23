@@ -413,9 +413,10 @@ export interface ApiClient {
   /** Id of the signed-in user (`GET /me`). The whole FE reads identity through
    * this; real auth swaps only the backend resolution. */
   getCurrentUser(): Promise<string>;
-  /** The signed-in user's id + superuser flag (`GET /me`). Superuser gates
-   * system-wide controls (e.g. the collection "Global" toggle). */
-  getMe(): Promise<{ id: string; is_superuser: boolean }>;
+  /** The signed-in user's id + superuser flag + group ids (`GET /me`). Superuser
+   * gates system-wide controls (e.g. the collection "Global" toggle); `groups`
+   * lets the FE resolve a `group:<id>` grant to the current viewer (#608). */
+  getMe(): Promise<{ id: string; is_superuser: boolean; groups: string[] }>;
   /** GET /users — the company directory (small; fetch once, filter on the FE). */
   getUsers(): Promise<User[]>;
   /** GET /notifications — the current user's notifications, newest first. */

@@ -67,12 +67,12 @@ function open(override: Partial<Record<string, unknown>> = {}) {
 /** Sign in as someone other than the item's owner (`alice`). */
 function signInAs(id: string, isSuperuser = false) {
   vi.mocked(api.getCurrentUser).mockResolvedValue(id);
-  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser });
+  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser, groups: [] });
 }
 
 beforeEach(() => {
   vi.mocked(api.getCurrentUser).mockResolvedValue("alice");
-  vi.mocked(api.getMe).mockResolvedValue({ id: "alice", is_superuser: false });
+  vi.mocked(api.getMe).mockResolvedValue({ id: "alice", is_superuser: false, groups: [] });
 });
 afterEach(cleanup);
 

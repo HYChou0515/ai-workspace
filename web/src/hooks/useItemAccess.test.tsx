@@ -18,7 +18,7 @@ const privateItem = {
 
 function signInAs(id: string, isSuperuser: boolean) {
   vi.mocked(api.getCurrentUser).mockResolvedValue(id);
-  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser });
+  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser, groups: [] });
 }
 
 function access(item: AppItem) {
