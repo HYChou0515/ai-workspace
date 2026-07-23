@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as importlib_version
 from pathlib import Path
 from typing import Any, cast
 
@@ -79,6 +81,7 @@ from .subagent_bridge import SubagentBridge
 from .tools_routes import register_tools_routes
 from .turn_context import TurnContextBuilder
 from .turns import ChatTurnEngine
+from .version_header import VersionHeaderMiddleware
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
 
@@ -551,6 +554,18 @@ def create_app(
         openapi_url="/api/openapi.json",
         swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
     )
+
+    # Version-skew handshake: EVERY response (errors included) carries the
+    # backend version so the SPA — which bakes its own build version — can spot
+    # a cached old bundle talking to a new api and reload itself at a safe
+    # moment (the v2026.07.23 old-FE incident). A pure ASGI middleware, NOT
+    # BaseHTTPMiddleware (which wraps response bodies — this app streams SSE);
+    # header injection at http.response.start touches nothing else.
+    try:
+        _app_version = importlib_version("workspace-app")
+    except PackageNotFoundError:  # editable/odd envs — the FE treats "" as "no skew"
+        _app_version = ""
+    app.add_middleware(VersionHeaderMiddleware, version=_app_version)
 
     @app.exception_handler(WorkspaceFull)
     async def _workspace_full(_request: Request, exc: WorkspaceFull) -> JSONResponse:
