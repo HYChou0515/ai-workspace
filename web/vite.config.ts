@@ -1,7 +1,25 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+// Version-skew handshake: bake the SAME version string the backend serves
+// (pyproject.toml is the single source; `make release` bumps it) so the
+// bundle can compare itself against the api's X-App-Version header.
+const appVersion = (() => {
+  try {
+    const toml = readFileSync(resolve(__dirname, "../pyproject.toml"), "utf-8");
+    return /^version = "([^"]+)"/m.exec(toml)?.[1] ?? "";
+  } catch {
+    return ""; // no pyproject in sight (isolated FE build) — skew checks disable
+  }
+})();
+
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   // Sub-path deploys (e.g. company.com/my-svc/rca): set VITE_BASE_PATH at build.
   // Bakes asset URLs + import.meta.env.BASE_URL, which the router basename and
   // the API fetch prefix both read. Default "/" (root).
