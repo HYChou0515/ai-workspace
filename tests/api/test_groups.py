@@ -206,6 +206,55 @@ def test_membership_edits_are_idempotent_noops():
     assert _members(client, gid) == {"alice"}
 
 
+# ── #608 P3: /me groups, the pickable list, work-item group scope ────────────
+
+
+def test_me_returns_the_callers_group_ids():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    holder["id"] = "alice"  # a member's /me carries the group id (for FE gating)
+    assert gid in client.get("/me").json()["groups"]
+    holder["id"] = "carol"  # a non-member's does not
+    assert gid not in client.get("/me").json().get("groups", [])
+
+
+def test_pickable_lists_every_group_with_counts_but_never_member_ids():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", name="eng", members=["alice", "carol"])
+    # a total stranger to the group can still pick it (org-canonical: grant to anyone)
+    holder["id"] = "zoe"
+    rows = client.get("/groups/pickable").json()
+    row = next(r for r in rows if r["resource_id"] == gid)
+    assert row["name"] == "eng"
+    assert row["member_count"] == 2
+    assert "members" not in row  # the actual member ids are never exposed here
+
+
+def test_group_grant_on_a_work_item_is_resolved_in_list_scope():
+    from workspace_app.apps.rca.model import RcaInvestigation
+
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    rm = spec.get_resource_manager(RcaInvestigation)
+    with rm.using("bob"):
+        iid = rm.create(
+            RcaInvestigation(
+                title="t",
+                owner="bob",
+                permission=Permission(visibility="restricted", read_meta=[f"group:{gid}"]),
+            )
+        ).resource_id
+    holder["id"] = "alice"  # member via the group → the item shows in her list
+    ids = {e["revision_info"]["resource_id"] for e in client.get("/rca-investigation").json()}
+    assert iid in ids
+    holder["id"] = "carol"  # non-member → hidden
+    ids = {e["revision_info"]["resource_id"] for e in client.get("/rca-investigation").json()}
+    assert iid not in ids
+
+
 # ── the payoff: a group grant covers its members ─────────────────────────────
 
 

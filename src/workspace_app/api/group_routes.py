@@ -59,6 +59,17 @@ class GroupOut(BaseModel):
     maintainers: list[str] = []
 
 
+class PickableGroupOut(BaseModel):
+    """#608 — a group as the share-dialog picker sees it: enough to grant to it,
+    but NOT the member ids (org-canonical groups are grantable by anyone, so this
+    is world-readable — member ids would leak the whole org's membership)."""
+
+    resource_id: str
+    name: str
+    description: str
+    member_count: int
+
+
 def register_group_routes(
     app: FastAPI | APIRouter,
     spec: SpecStar,
@@ -157,6 +168,22 @@ def register_group_routes(
         ]:
             seen.setdefault(rev.info.resource_id, rev)
         return [_out(rev) for rev in seen.values()]
+
+    @app.get("/groups/pickable")
+    async def list_pickable_groups() -> list[PickableGroupOut]:
+        # #608: every group, name + count only — the share dialog grants `group:<id>`
+        # to any of them (org-canonical). Declared BEFORE `/groups/{group_id}` so the
+        # literal path wins over the param match.
+        return [
+            PickableGroupOut(
+                resource_id=rev.info.resource_id,
+                name=data.name,
+                description=data.description,
+                member_count=len(data.members),
+            )
+            for rev in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+            if isinstance((data := rev.data), Group)
+        ]
 
     @app.get("/groups/{group_id}")
     async def get_group(group_id: str) -> GroupOut:

@@ -60,6 +60,7 @@ def register_meta_routes(
     activity: ActivityLog,
     monitor: IMonitor,
     superusers: frozenset[str] = frozenset(),
+    groups_provider: Callable[[str], frozenset[str]] | None = None,
 ) -> None:
     """Mount the platform meta routes onto ``app``."""
 
@@ -67,9 +68,12 @@ def register_meta_routes(
     async def get_me() -> dict:
         """The signed-in user (resolved from the auth seam via the directory).
         ``is_superuser`` lets the FE gate superuser-only affordances (e.g. the
-        global-collection toggle) without hardcoding the operator's superuser set."""
+        global-collection toggle) without hardcoding the operator's superuser set.
+        ``groups`` (#608) are the ids of the groups the user belongs to, so the FE
+        gate helpers can resolve a `group:<id>` grant to the current viewer."""
         me = get_user_id()
-        return {**users.get(me).to_dict(), "is_superuser": me in superusers}
+        groups = sorted(groups_provider(me)) if groups_provider is not None else []
+        return {**users.get(me).to_dict(), "is_superuser": me in superusers, "groups": groups}
 
     @app.get("/users")
     async def list_users() -> list[dict]:

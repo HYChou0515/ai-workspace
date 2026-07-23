@@ -20,7 +20,7 @@ from importlib import import_module, resources
 from specstar import SpecStar
 
 from ..perm.checker import work_item_permission_event_handler
-from ..perm.scope import work_item_access_scope
+from ..perm.scope import GroupsProvider, work_item_access_scope
 from .base import IndexedFields, WorkItemBase
 
 
@@ -80,7 +80,12 @@ def resource_route(slug: str) -> str:
     return "/" + re.sub(r"(?<!^)(?=[A-Z])", "-", app_model(slug).__name__).lower()
 
 
-def register_apps(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> None:
+def register_apps(
+    spec: SpecStar,
+    superusers: frozenset[str] = frozenset(),
+    *,
+    groups_provider: GroupsProvider | None = None,
+) -> None:
     """`add_model` every discovered App's WorkItem resource with its indexes.
 
     #306: every WorkItem also gets the shared `Permission` enforcement — the
@@ -90,7 +95,10 @@ def register_apps(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     see `perm.checker`). Appended to EVERY App's indexes here, so an App's
     `model.py` needs no permission boilerplate. A legacy item written before the
     index has no `permission` → `visibility` is null → treated public (the scope's
-    `is_null` branch), so no migration changes visibility."""
+    `is_null` branch), so no migration changes visibility.
+
+    #608: `groups_provider` is threaded into `work_item_access_scope` so a
+    `group:<id>` grant on an item resolves in the storage-list scope too."""
     perm_indexes: IndexedFields = [
         ("permission.visibility", str),
         ("permission.read_meta", list),
@@ -99,6 +107,6 @@ def register_apps(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
         spec.add_model(
             model,
             indexed_fields=[*indexed_fields, *perm_indexes],
-            access_scope=work_item_access_scope(superusers),
+            access_scope=work_item_access_scope(superusers, groups_provider),
             event_handlers=[work_item_permission_event_handler(superusers)],
         )

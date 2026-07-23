@@ -51,6 +51,7 @@ def test_me_falls_back_to_a_placeholder_for_an_unknown_id():
         "email": "",
         "photo_url": None,
         "is_superuser": False,  # a plain user — the FE hides superuser-only affordances
+        "groups": [],  # #608 — no group memberships
     }
 
 
