@@ -11,6 +11,7 @@ one over HashEmbedder vectors.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterator
 
 from specstar import QB
@@ -95,14 +96,19 @@ def _app(spec):
     )
 
 
-def _drain(client: TestClient, model: str, *, rounds: int = 400) -> list[dict]:
-    """Poll the auto route until every job row is terminal. Each request runs the
-    app's event loop, which is what advances the in-process consumers — the
-    number of rounds actually used is the diagnostic (0 progress = dead loop)."""
-    for _ in range(rounds):
+def _drain(client: TestClient, model: str, *, deadline_s: float = 180.0) -> list[dict]:
+    """Poll the auto route until every job row is terminal. Under `with
+    TestClient` the app's event loop runs continuously on the portal thread, so
+    the consumers progress during the real sleeps — time-based (not
+    round-based) because a loaded CI runner legitimately needs minutes where a
+    laptop needs seconds (the first CI run flaked exactly there)."""
+    deadline = time.monotonic() + deadline_s
+    rows: list[dict] = []
+    while time.monotonic() < deadline:
         rows = client.get(f"/api/{model}/data").json()
         if rows and all(r["status"] in _TERMINAL for r in rows):
             return rows
+        time.sleep(0.25)
     raise AssertionError(f"{model} jobs never drained: {rows}")
 
 
