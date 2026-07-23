@@ -128,6 +128,8 @@ export const messages = {
   "entity.mentions": { "zh-TW": "哪些文件提到它", en: "Where it appears" },
   "entity.noMentions": { "zh-TW": "沒有你可讀的出處。", en: "No readable evidence." },
   "entity.related": { "zh-TW": "它和誰有關", en: "How it connects" },
+  "entity.claims": { "zh-TW": "它的數字", en: "Its numbers" },
+  "entity.claimConflict": { "zh-TW": "數字對不上", en: "figures disagree" },
   "entity.basis.identical": { "zh-TW": "同名", en: "same name" },
   "entity.basis.resembles": { "zh-TW": "名稱相近", en: "similar name" },
   "entity.basis.declared": { "zh-TW": "AI 併入", en: "merged by AI" },

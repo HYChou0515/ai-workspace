@@ -42,6 +42,19 @@ type Related = {
   source_doc_id: string;
 };
 
+// #628: a number stated on a slide that names this entity — co-located, so it
+// arrives with the slide it came from.
+type Claim = {
+  metric: string;
+  norm_metric: string;
+  value: string;
+  unit: string;
+  period: string;
+  norm_period: string;
+  source_doc_id: string;
+  chunk_id: string;
+};
+
 type Entity = {
   id: string;
   name: string;
@@ -50,6 +63,7 @@ type Entity = {
   occurrences: number;
   mentions: Mention[];
   related: Related[];
+  claims: Claim[];
 };
 
 async function fetchEntity(id: string): Promise<Entity | null> {
@@ -57,6 +71,22 @@ async function fetchEntity(id: string): Promise<Entity | null> {
   if (resp.status === 404) return null; // unknown OR unreadable — same face
   if (!resp.ok) throw new Error(`entity ${resp.status}`);
   return resp.json();
+}
+
+/** #628: two decks giving different figures for the same metric in the same
+ * period is exactly what a reader must not miss — group on the normalised
+ * keys, flag every group with more than one distinct value. */
+function conflictKeys(claims: Claim[]): Set<string> {
+  const values = new Map<string, Set<string>>();
+  for (const c of claims) {
+    const k = `${c.norm_metric} ${c.norm_period}`;
+    const vals = values.get(k) ?? new Set<string>();
+    vals.add(c.value);
+    values.set(k, vals);
+  }
+  return new Set(
+    [...values].filter(([, vals]) => vals.size > 1).map(([k]) => k),
+  );
 }
 
 /** Link bases are engine vocabulary — the page speaks the reader's. */
@@ -102,6 +132,7 @@ export function GraphEntityPage() {
   const e = q.data as Entity;
   const aliases = e.aliases.filter((a) => a !== e.name);
   const docCount = new Set(e.mentions.map((m) => m.source_doc_id)).size;
+  const conflicts = conflictKeys(e.claims);
 
   return (
     <div className="ent-page" data-testid="entity-page">
@@ -148,6 +179,42 @@ export function GraphEntityPage() {
           other_entity_id: r.other_entity_id,
         }))}
       />
+
+      {/* #628 — the numbers stated on slides that name this entity. Verbatim
+          values with their slide; disagreeing figures for the same metric and
+          period wear a badge instead of silently coexisting. */}
+      {e.claims.length > 0 && (
+        <section className="ent-page__section">
+          <h2 className="ent-page__h2">{t("entity.claims")}</h2>
+          <ul className="ent-page__list" data-testid="entity-claims">
+            {e.claims.map((c, i) => {
+              const conflicted = conflicts.has(`${c.norm_metric} ${c.norm_period}`);
+              return (
+                <li className="ent-page__mention" key={`${c.source_doc_id}:${c.chunk_id}:${i}`}>
+                  <a
+                    className="ent-page__docchip"
+                    href={docHref(c.source_doc_id, c.value)}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={c.source_doc_id}
+                  >
+                    {docLabel(c.source_doc_id)}
+                  </a>
+                  <span className="ent-page__claim-metric">{c.metric}</span>
+                  <span className="ent-page__claim-value">
+                    {c.value}
+                    {c.unit ? <span className="ent-page__claim-unit">{c.unit}</span> : null}
+                  </span>
+                  {c.period ? <span className="ent-page__claim-period">{c.period}</span> : null}
+                  {conflicted ? (
+                    <span className="ent-page__conflict">{t("entity.claimConflict")}</span>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       <section className="ent-page__section">
         <h2 className="ent-page__h2">{t("entity.mentions")}</h2>
