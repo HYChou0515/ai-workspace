@@ -1234,9 +1234,15 @@ def register_kb_routes(
         operator persists a good guidance separately via PATCH /collection. The
         re-parse re-runs the parser (VLM), so this is offloaded off the loop."""
         try:
-            spec.get_resource_manager(SourceDoc).get(body.doc_id)
+            doc = spec.get_resource_manager(SourceDoc).get(body.doc_id).data
         except ResourceIDNotFoundError:
             raise HTTPException(status_code=404, detail="document not found") from None
+        assert isinstance(doc, SourceDoc)
+        # #607: the probe returns the doc's CONTENT (ranked passage snippets), so it
+        # inherits the read gate `render_document` uses — collection read_content +
+        # any per-doc #308 override — before any retrieval / re-parse runs.
+        _authorize_collection(doc.collection_id, "read_content")
+        _authorize_doc_content(doc)
         result = await asyncio.to_thread(
             probe_findability,
             spec,
@@ -1258,9 +1264,14 @@ def register_kb_routes(
         re-parses the doc first (the After box). Retrieve / dry-run / LLM stream are
         all blocking, so they run in a worker thread feeding an async SSE queue."""
         try:
-            spec.get_resource_manager(SourceDoc).get(body.doc_id)
+            doc = spec.get_resource_manager(SourceDoc).get(body.doc_id).data
         except ResourceIDNotFoundError:
             raise HTTPException(status_code=404, detail="document not found") from None
+        assert isinstance(doc, SourceDoc)
+        # #607: streams an answer synthesised from this doc's full passages — same
+        # content read gate as `render_document` / the probe, before any retrieval.
+        _authorize_collection(doc.collection_id, "read_content")
+        _authorize_doc_content(doc)
         k = max(1, min(body.k, 100))
 
         async def gen() -> AsyncIterator[str]:
@@ -1727,7 +1738,12 @@ def register_kb_routes(
         # coordinator.submit_correction. 400 when the collection has no wiki (Q13).
         from ..kb.wiki.corrections import WikiNotEnabledError
 
-        _authorize_collection(collection_id, "edit_content")  # #607: queues a wiki rewrite
+        # #607: reporting a wiki error is a READER-tier action — the fix is applied
+        # by the trusted background corrector, recorded on the immune page, not by
+        # the reporter. read_content ALSO keeps this consistent with the agent tool
+        # `request_wiki_update`, which converges on the same coordinator call with
+        # no edit gate (CLAUDE.md: two rules for one operation guarantee drift).
+        _authorize_collection(collection_id, "read_content")
         if wiki_coordinator is None:
             raise HTTPException(status_code=400, detail="this collection has no wiki to correct")
         if not body.instruction.strip():
@@ -1910,6 +1926,10 @@ def register_kb_routes(
         collections dashboard's `latest_doc`, specstar #406) plus the same
         collection-scoped IndexRun metas search the list uses. Metas-only, no
         row materialisation — cheap enough to tick every 1.5s."""
+        # #607: mirrors the documents LIST gate — the counts, latest activity and
+        # per-run keys (which embed indexing doc paths) belong to whoever may read
+        # the collection's content.
+        _authorize_collection(collection_id, "read_content")
         rm = spec.get_resource_manager(SourceDoc)
         rows = rm.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
             by=QB["status"],

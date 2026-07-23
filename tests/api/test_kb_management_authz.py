@@ -142,51 +142,68 @@ def test_superuser_manages_a_doc_in_a_private_collection():
 
 # --- wiki routes -----------------------------------------------------------
 
-WIKI_READS = [
-    ("get", "/kb/collections/{cid}/wiki"),
-    ("get", "/kb/collections/{cid}/wiki/status"),
+# read_content tier: reading the wiki, polling status, and REPORTING an error
+# (submit/draft) — the fix is applied by the trusted background corrector, so
+# reporting is a reader-tier action that matches the `request_wiki_update` tool.
+WIKI_READ_TIER = [
+    ("get", "/kb/collections/{cid}/wiki", None),
+    ("get", "/kb/collections/{cid}/wiki/status", None),
+    ("post", "/kb/collections/{cid}/wiki/corrections", {"instruction": "fix it"}),
+    ("post", "/kb/collections/{cid}/wiki/corrections/draft", {"question": "q", "answer": "a"}),
 ]
 
-WIKI_MUTATIONS = [
+WIKI_EDIT_TIER = [
     ("post", "/kb/collections/{cid}/wiki/move?from=A.md&to=B.md", None),
     ("delete", "/kb/collections/{cid}/wiki/page?path=A.md", None),
     ("post", "/kb/collections/{cid}/wiki/rebuild", None),
     ("post", "/kb/collections/{cid}/wiki/reflect", None),
     ("delete", "/kb/collections/{cid}/wiki", None),
-    ("post", "/kb/collections/{cid}/wiki/corrections", {"instruction": "fix it"}),
 ]
 
 
-@pytest.mark.parametrize("method,path", WIKI_READS)
-def test_wiki_reads_require_read_content(method: str, path: str):
+@pytest.mark.parametrize("method,path,body", WIKI_READ_TIER)
+def test_wiki_read_tier_requires_read_content(method: str, path: str, body: dict | None):
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
     cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
-    _set_permission(spec, cid, Permission(visibility="private"))
+    # alice HAS read_content; carol sees it exists (read_meta) but not its content.
+    _set_permission(
+        spec,
+        cid,
+        Permission(visibility="restricted", read_meta=["user:carol"], read_content=["user:alice"]),
+    )
     url = path.format(cid=cid)
+    kw = {"json": body} if body is not None else {}
+    holder["id"] = "alice"
+    # past the gate — may 200 or a benign 400 (no wiki), but never an auth denial.
+    assert getattr(client, method)(url, **kw).status_code != 403
+    holder["id"] = "carol"
+    # read_meta is NOT enough: read_content is required (proves the verb, not just
+    # existence). A restricted collection is existence-visible, so this is 403.
+    assert getattr(client, method)(url, **kw).status_code == 403
     holder["id"] = "mallory"
-    # a stranger to a private collection cannot read its wiki — 404 hides it.
-    assert getattr(client, method)(url).status_code == 404
-    holder["id"] = "bob"
-    # the owner is not denied (200 or a benign empty result, never an auth error).
-    assert getattr(client, method)(url).status_code not in (401, 403, 404)
+    _set_permission(spec, cid, Permission(visibility="private"))
+    assert getattr(client, method)(url, **kw).status_code == 404
 
 
 def test_get_wiki_page_requires_read_content():
-    """A written page: the owner reads it (200), a private-collection stranger is
-    404 (hidden by the gate, not merely a missing page)."""
+    """A written page: the owner reads it (200), a read_meta-only member is 403
+    (verb required), a private-collection stranger is 404 (hidden, not missing)."""
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
     cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
     page = f"/kb/collections/{cid}/wiki/page?path=Home.md"
     assert client.put(page, content=b"# Home").status_code == 200
-    _set_permission(spec, cid, Permission(visibility="private"))
+    _set_permission(spec, cid, Permission(visibility="restricted", read_meta=["user:carol"]))
     assert client.get(page).status_code == 200  # bob (owner) reads it
+    holder["id"] = "carol"
+    assert client.get(page).status_code == 403  # sees it exists, not its content
     holder["id"] = "mallory"
+    _set_permission(spec, cid, Permission(visibility="private"))
     assert client.get(page).status_code == 404  # hidden, not "missing page"
 
 
-@pytest.mark.parametrize("method,path,body", WIKI_MUTATIONS)
+@pytest.mark.parametrize("method,path,body", WIKI_EDIT_TIER)
 def test_wiki_mutations_require_edit_content(method: str, path: str, body: dict | None):
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
@@ -196,7 +213,50 @@ def test_wiki_mutations_require_edit_content(method: str, path: str, body: dict 
     url = path.format(cid=cid)
     kw = {"json": body} if body is not None else {}
     holder["id"] = "alice"
-    assert getattr(client, method)(url, **kw).status_code == 403
+    assert getattr(client, method)(url, **kw).status_code == 403  # read_content is not edit
+    holder["id"] = "bob"
+    # the OWNER is never denied by the gate (may 404/400 for business reasons — a
+    # missing page, no wiki — but never a 403). Proves the gate isn't over-strict.
+    assert getattr(client, method)(url, **kw).status_code != 403
     holder["id"] = "mallory"
     _set_permission(spec, cid, Permission(visibility="private"))
     assert getattr(client, method)(url, **kw).status_code == 404
+
+
+# --- findability + documents-status: read a doc's content / a collection's -----
+#     indexing state — same read_content gate as render_document / the list.
+
+FINDABILITY = [
+    ("/kb/findability/probe", "doc"),
+    ("/kb/findability/answer", "doc"),
+]
+
+
+@pytest.mark.parametrize("url,kind", FINDABILITY)
+def test_findability_endpoints_require_read_content(url: str, kind: str):
+    holder = {"id": "bob"}
+    client, spec, cid, doc_id = _bobs_doc(holder)
+    _set_permission(spec, cid, Permission(visibility="restricted", read_meta=["user:carol"]))
+    body = {"doc_id": doc_id, "question": "what is this"}
+    # a read_meta-only member sees the doc exists but cannot distil its content —
+    # blocked at the gate, before any retrieval / LLM runs.
+    holder["id"] = "carol"
+    assert client.post(url, json=body).status_code == 403
+    holder["id"] = "mallory"
+    _set_permission(spec, cid, Permission(visibility="private"))
+    assert client.post(url, json=body).status_code == 404
+
+
+def test_documents_status_requires_read_content():
+    holder = {"id": "bob"}
+    client, spec, cid, _doc_id = _bobs_doc(holder)
+    url = f"/kb/collections/{cid}/documents/status"
+    _set_permission(spec, cid, Permission(visibility="restricted", read_meta=["user:carol"]))
+    holder["id"] = "bob"
+    assert client.get(url).status_code == 200  # owner sees the indexing state
+    holder["id"] = "carol"
+    # read_meta only: the counts / latest activity / per-run doc paths stay hidden.
+    assert client.get(url).status_code == 403
+    holder["id"] = "mallory"
+    _set_permission(spec, cid, Permission(visibility="private"))
+    assert client.get(url).status_code == 404
