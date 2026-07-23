@@ -166,7 +166,7 @@ def register_group_routes(
             *rm.list_resources(QB["maintainers"].contains(me).build()),
             *rm.list_resources(QB["members"].contains(me).build()),
         ]:
-            seen.setdefault(rev.info.resource_id, rev)
+            seen.setdefault(rev.info.resource_id, rev)  # ty: ignore[unresolved-attribute]
         return [_out(rev) for rev in seen.values()]
 
     @app.get("/groups/pickable")
@@ -176,7 +176,7 @@ def register_group_routes(
         # literal path wins over the param match.
         return [
             PickableGroupOut(
-                resource_id=rev.info.resource_id,
+                resource_id=rev.info.resource_id,  # ty: ignore[unresolved-attribute]
                 name=data.name,
                 description=data.description,
                 member_count=len(data.members),
