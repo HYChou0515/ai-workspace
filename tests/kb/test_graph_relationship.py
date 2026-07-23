@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from specstar import QB
 from specstar.types import Binary, ResourceIDNotFoundError
 
-from workspace_app.kb.graph.mention_write import write_doc_mentions
+from workspace_app.kb.graph.doc_write import write_doc_graph
 from workspace_app.kb.graph.normalize import norm_surface
 from workspace_app.kb.llm import ILlm
 from workspace_app.perm import Permission
@@ -71,7 +71,7 @@ def _relationships(spec) -> list[GraphRelationship]:
 def test_a_stated_connection_is_stored_with_its_ends_and_provenance():
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         _FakeLlm(_REPLY),
         collection_id="c1",
@@ -90,7 +90,7 @@ def test_re_extraction_replaces_rather_than_accumulates():
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
     for _ in range(2):
-        write_doc_mentions(
+        write_doc_graph(
             spec,
             _FakeLlm(_REPLY),
             collection_id="c1",
@@ -107,7 +107,7 @@ def test_a_connection_is_as_visible_as_the_document_that_stated_it():
 
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec, private=True)
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         _FakeLlm(_REPLY),
         collection_id="c1",
@@ -131,7 +131,7 @@ def test_a_deleted_deck_takes_its_connections_with_it():
 
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         _FakeLlm(_REPLY),
         collection_id="c1",

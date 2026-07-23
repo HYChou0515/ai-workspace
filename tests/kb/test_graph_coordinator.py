@@ -14,19 +14,17 @@ from workspace_app.resources.kb import Collection, DocChunk, SourceDoc
 
 
 class _FakeLlm(ILlm):
-    """Stateless (thread-safe under parallel batch jobs). Answers whichever
-    extractor asked, keyed on a word only that prompt contains — the batch runs
-    both over the same chunks."""
+    """Stateless (thread-safe under parallel batch jobs). #630 P4: there is ONE
+    extraction prompt per chunk now, so one joint answer serves both layers."""
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
-        if "surface" in prompt:
-            yield '[{"surface": "回焊爐", "kind": "機台"}]', False
-        else:
-            yield (
-                '[{"subject": "回焊爐", "attribute": "Revenue", "period": "Q3",'
-                ' "value": "1.2M", "unit": "USD"}]',
-                False,
-            )
+        yield (
+            '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
+            ' "aliases": [], "relationships": [],'
+            ' "attributes": [{"subject": "回焊爐", "attribute": "Revenue",'
+            ' "period": "Q3", "value": "1.2M", "unit": "USD"}]}',
+            False,
+        )
 
 
 def _mk_collection(spec, name: str, *, use_graph: bool, docs: list[tuple[str, str]]) -> str:

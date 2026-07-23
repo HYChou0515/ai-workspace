@@ -15,8 +15,7 @@ from specstar.types import ResourceIDNotFoundError
 
 from ...resources.graph import GraphClaim
 from ..doc_permission import doc_mirror_fields
-from ..llm import ILlm
-from .extract import extract_claims
+from .entity_extract import Extraction
 from .normalize import norm_attribute as _norm_attribute
 from .normalize import norm_period, norm_surface, norm_unit
 
@@ -49,14 +48,14 @@ def wipe_doc_claims(spec: SpecStar, source_doc_id: str) -> int:
 
 def write_doc_claims(
     spec: SpecStar,
-    llm: ILlm,
+    extracted: Iterable[tuple[str, Extraction]],
     *,
     collection_id: str,
     source_doc_id: str,
-    chunks: Iterable[tuple[str, str]],
 ) -> int:
-    """Extract + idempotently persist one doc's attribute statements. ``chunks`` is
-    ``(chunk_id, text)`` pairs. Wipes the doc's existing GraphClaims first (a
+    """Idempotently persist one doc's attribute statements from an ALREADY-
+    extracted pass — ``(chunk_id, Extraction)`` pairs (#630 P4: one model call
+    per chunk feeds both layers). Wipes the doc's existing GraphClaims first (a
     metas-only delete), then writes fresh. Returns the number written."""
     rm = spec.get_resource_manager(GraphClaim)
     wipe_doc_claims(spec, source_doc_id)
@@ -79,8 +78,8 @@ def write_doc_claims(
         )
         return 0
     written = 0
-    for chunk_id, text in chunks:
-        for claim in extract_claims(llm, text):
+    for chunk_id, extraction in extracted:
+        for claim in extraction.attributes:
             rm.create(
                 GraphClaim(
                     collection_id=collection_id,

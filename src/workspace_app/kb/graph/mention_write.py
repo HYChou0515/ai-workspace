@@ -29,8 +29,7 @@ from ...resources.graph import (
     relationship_id,
 )
 from ..doc_permission import doc_mirror_fields
-from ..llm import ILlm
-from .entity_extract import StatedRelationship, extract_entities
+from .entity_extract import Extraction, StatedRelationship
 from .normalize import norm_surface
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,14 +93,14 @@ def wipe_doc_mentions(spec: SpecStar, source_doc_id: str) -> int:
 
 def write_doc_mentions(
     spec: SpecStar,
-    llm: ILlm,
+    extracted: Iterable[tuple[str, Extraction]],
     *,
     collection_id: str,
     source_doc_id: str,
-    chunks: Iterable[tuple[str, str]],
 ) -> int:
-    """Extract + idempotently persist one document's mentions. ``chunks`` is
-    ``(chunk_id, text)`` pairs. Returns the number of distinct things written.
+    """Idempotently persist one document's mentions from an ALREADY-extracted
+    pass — ``(chunk_id, Extraction)`` pairs (#630 P4). Returns the number of
+    distinct things written.
 
     A document that no longer exists is not an error: chunks outlive their deck
     (#104 made a chunk content-addressed), a vanished deck has no permission to
@@ -125,8 +124,7 @@ def write_doc_mentions(
     chunk_ids: dict[str, list[str]] = {}
     declared: list[tuple[str, str, str, str]] = []
     stated: list[tuple[str, StatedRelationship]] = []
-    for chunk_id, text in chunks:
-        extraction = extract_entities(llm, text)
+    for chunk_id, extraction in extracted:
         # An equivalence the passage STATED, with the words that state it. Carried
         # out of here so the vocabulary can apply it without asking a person: the
         # quote is a sentence anyone can go and read, which is what separates a

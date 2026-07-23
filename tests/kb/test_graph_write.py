@@ -2,8 +2,8 @@ from collections.abc import Iterator
 
 from specstar import QB
 
+from workspace_app.kb.graph.doc_write import write_doc_graph
 from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
-from workspace_app.kb.graph.write import write_doc_claims
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim
@@ -59,13 +59,14 @@ def test_norm_attribute_collapses_whitespace_and_casefolds():
 
 def test_write_doc_claims_persists_with_norm_and_provenance():
     llm = _FakeLlm(
-        '[{"subject": "Acme", "attribute": "Revenue", "period": "Q3",'
+        '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+        ' [{"subject": "Acme", "attribute": "Revenue", "period": "Q3",'
         ' "value": "1.2M", "unit": "USD"},'
-        ' {"subject": "Acme", "attribute": "Head Count", "value": "340"}]'
+        ' {"subject": "Acme", "attribute": "Head Count", "value": "340"}]}'
     )
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    n = write_doc_claims(
+    _, n = write_doc_graph(
         spec, llm, collection_id="c1", source_doc_id="deck-A", chunks=[("deck-A#0", "t")]
     )
     assert n == 2
@@ -78,16 +79,22 @@ def test_write_doc_claims_persists_with_norm_and_provenance():
 def test_write_doc_claims_is_idempotent_wipe_then_rewrite():
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_claims(
+    write_doc_graph(
         spec,
-        _FakeLlm('[{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]'),
+        _FakeLlm(
+            '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+            ' [{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]}'
+        ),
         collection_id="c1",
         source_doc_id="deck-A",
         chunks=[("deck-A#0", "x")],
     )
-    write_doc_claims(
+    write_doc_graph(
         spec,
-        _FakeLlm('[{"subject": "Acme", "attribute": "Revenue", "value": "1.3M"}]'),
+        _FakeLlm(
+            '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+            ' [{"subject": "Acme", "attribute": "Revenue", "value": "1.3M"}]}'
+        ),
         collection_id="c1",
         source_doc_id="deck-A",
         chunks=[("deck-A#0", "x")],
@@ -107,7 +114,10 @@ def test_write_doc_claims_stamps_the_deck_permission_mirror():
     from workspace_app.perm import Permission
     from workspace_app.resources.kb import Collection, SourceDoc
 
-    llm = _FakeLlm('[{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]')
+    llm = _FakeLlm(
+        '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+        ' [{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]}'
+    )
     spec = make_spec(default_user=lambda: "bob")
     crm = spec.get_resource_manager(Collection)
     with crm.using("bob"):
@@ -129,7 +139,7 @@ def test_write_doc_claims_stamps_the_deck_permission_mirror():
                 permission=Permission(visibility="restricted", read_content=["user:amy"]),
             )
         ).resource_id
-    write_doc_claims(
+    write_doc_graph(
         spec, llm, collection_id=cid, source_doc_id=doc_id, chunks=[(f"{doc_id}#0", "t")]
     )
     (claim,) = _claims(spec, doc_id)
@@ -147,7 +157,10 @@ def test_write_doc_claims_mirrors_an_untightened_deck_as_public():
 
     from workspace_app.resources.kb import Collection, SourceDoc
 
-    llm = _FakeLlm('[{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]')
+    llm = _FakeLlm(
+        '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+        ' [{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]}'
+    )
     spec = make_spec(default_user=lambda: "bob")
     crm = spec.get_resource_manager(Collection)
     with crm.using("bob"):
@@ -163,7 +176,7 @@ def test_write_doc_claims_mirrors_an_untightened_deck_as_public():
                 collection_created_by="bob",
             )
         ).resource_id
-    write_doc_claims(
+    write_doc_graph(
         spec, llm, collection_id=cid, source_doc_id=doc_id, chunks=[(f"{doc_id}#0", "t")]
     )
     (claim,) = _claims(spec, doc_id)
@@ -178,9 +191,12 @@ def test_write_doc_claims_wipes_and_skips_a_doc_that_no_longer_exists():
     returns 0 rather than failing the whole batch on one dangling doc."""
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_claims(
+    write_doc_graph(
         spec,
-        _FakeLlm('[{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]'),
+        _FakeLlm(
+            '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+            ' [{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]}'
+        ),
         collection_id="c1",
         source_doc_id="deck-A",
         chunks=[("deck-A#0", "x")],
@@ -189,9 +205,12 @@ def test_write_doc_claims_wipes_and_skips_a_doc_that_no_longer_exists():
     from workspace_app.resources.kb import SourceDoc
 
     spec.get_resource_manager(SourceDoc).permanently_delete("deck-A")
-    n = write_doc_claims(
+    _, n = write_doc_graph(
         spec,
-        _FakeLlm('[{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]'),
+        _FakeLlm(
+            '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+            ' [{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]}'
+        ),
         collection_id="c1",
         source_doc_id="deck-A",
         chunks=[("deck-A#0", "x")],
@@ -228,9 +247,12 @@ def test_write_doc_claims_reads_the_collection_verdict_live_not_the_decks_copy()
                 collection_created_by="bob",
             )
         ).resource_id
-    write_doc_claims(
+    write_doc_graph(
         spec,
-        _FakeLlm('[{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]'),
+        _FakeLlm(
+            '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+            ' [{"subject": "Acme", "attribute": "Revenue", "value": "1.2M"}]}'
+        ),
         collection_id=cid,
         source_doc_id=doc_id,
         chunks=[(f"{doc_id}#0", "t")],
@@ -248,8 +270,9 @@ def test_write_doc_claims_stamps_every_comparison_key():
     from workspace_app.resources.kb import Collection, SourceDoc
 
     llm = _FakeLlm(
-        '[{"subject": "Acme  Corp", "attribute": "Revenue (USD)", "period": "2024年第三季",'
-        ' "value": "1.2M", "unit": "美元"}]'
+        '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+        ' [{"subject": "Acme  Corp", "attribute": "Revenue (USD)",'
+        ' "period": "2024年第三季", "value": "1.2M", "unit": "美元"}]}'
     )
     spec = make_spec(default_user=lambda: "bob")
     crm = spec.get_resource_manager(Collection)
@@ -266,7 +289,7 @@ def test_write_doc_claims_stamps_every_comparison_key():
                 collection_created_by="bob",
             )
         ).resource_id
-    write_doc_claims(
+    write_doc_graph(
         spec, llm, collection_id=cid, source_doc_id=doc_id, chunks=[(f"{doc_id}#0", "t")]
     )
     (claim,) = _claims(spec, doc_id)
@@ -340,11 +363,13 @@ def test_write_doc_claims_records_whose_attribute_it_is():
     that is what lets either of them meet an identity later; the attribute name
     gets the harsher key, since "RO-3" vs "RO-04" distinctions never apply to it."""
     llm = _FakeLlm(
-        '[{"subject": "回焊爐", "attribute": "良率", "value": "98.7", "unit": "%", "period": "Q3"}]'
+        '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+        ' [{"subject": "回焊爐", "attribute": "良率", "value": "98.7",'
+        ' "unit": "%", "period": "Q3"}]}'
     )
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_claims(
+    write_doc_graph(
         spec, llm, collection_id="c1", source_doc_id="deck-A", chunks=[("deck-A#0", "t")]
     )
     (claim,) = _claims(spec, "deck-A")
@@ -360,10 +385,13 @@ def test_write_doc_claims_records_whose_attribute_it_is():
 def test_a_textual_setting_is_written_like_any_other_attribute():
     """The #630 regression guard at the persistence layer: this used to be
     unrepresentable, so nothing reached the table at all."""
-    llm = _FakeLlm('[{"subject": "N5 TV0", "attribute": "recipe", "value": "PPOOIXUX"}]')
+    llm = _FakeLlm(
+        '{"mentions": [], "aliases": [], "relationships": [], "attributes":'
+        ' [{"subject": "N5 TV0", "attribute": "recipe", "value": "PPOOIXUX"}]}'
+    )
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_claims(
+    write_doc_graph(
         spec, llm, collection_id="c1", source_doc_id="deck-A", chunks=[("deck-A#0", "t")]
     )
     (claim,) = _claims(spec, "deck-A")

@@ -35,14 +35,14 @@ class _ScriptedLlm(ILlm):
     parallel batch jobs, and one instance serves BOTH pipelines."""
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
-        if "gives some THING a VALUE" in prompt:  # graph: attribute extractor
+        if "surface" in prompt:  # graph: the one joint extraction (#630 P4)
             yield (
-                '[{"subject": "回焊爐", "attribute": "Yield", "period": "Q3",'
-                ' "value": "98.7", "unit": "%"}]',
+                '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
+                ' "aliases": [], "relationships": [],'
+                ' "attributes": [{"subject": "回焊爐", "attribute": "Yield",'
+                ' "period": "Q3", "value": "98.7", "unit": "%"}]}',
                 False,
             )
-        elif "surface" in prompt:  # graph: mention extractor
-            yield '{"mentions": [{"surface": "回焊爐", "kind": "機台"}], "relations": []}', False
         elif "just 'yes' or 'no'" in prompt:  # eval: answerability filter
             yield "yes", False
         elif "question that this passage directly answers" in prompt:  # eval: generate
