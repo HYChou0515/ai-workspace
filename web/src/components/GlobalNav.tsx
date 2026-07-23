@@ -6,12 +6,16 @@
  * and the current breadcrumb trail published by the active page.
  */
 
+import { useQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
+import { groupsApi } from "../api/groups";
 import type { HealthApi } from "../api/health";
+import { qk } from "../api/queryKeys";
 import { useT } from "../lib/i18n";
 import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
+import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { useReviewBadgeCount } from "../hooks/useReviewInbox";
 import { useApps } from "../hooks/useResources";
 import { AppIcon } from "./AppIcon";
@@ -81,6 +85,15 @@ function Switcher() {
   const apps = useApps();
   const { pathname } = useLocation();
   const t = useT();
+  // #608: the Groups link is shown to superusers (who create groups) and to
+  // anyone who owns / maintains / belongs to one. The query is cached app-wide
+  // and degrades to hidden if it can't load.
+  const isSuperuser = useIsSuperuser();
+  const { data: myGroups = [] } = useQuery({
+    queryKey: qk.groups,
+    queryFn: () => groupsApi.listGroups(),
+  });
+  const showGroups = isSuperuser || myGroups.length > 0;
   return (
     <Popover
       align="start"
@@ -122,6 +135,9 @@ function Switcher() {
           <FixedLink to="/kb" icon="layers" label="Knowledge base" pathname={pathname} />
           <FixedLink to="/review" icon="check" label={t("review.title")} pathname={pathname} />
           <FixedLink to="/diagnostics" icon="sparkle" label="Diagnostics" pathname={pathname} />
+          {showGroups && (
+            <FixedLink to="/groups" icon="users" label="Groups" pathname={pathname} />
+          )}
         </div>
       )}
     </Popover>
