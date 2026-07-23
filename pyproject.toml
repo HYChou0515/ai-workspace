@@ -1,6 +1,6 @@
 [project]
 name = "workspace-app"
-version = "2026.7.15"
+version = "2026.7.23"
 description = "Workspace management app with pluggable sandbox + agent runtime"
 requires-python = ">=3.12"
 dependencies = [

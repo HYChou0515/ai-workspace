@@ -11,6 +11,99 @@ ship with the code, so the running version is always current. Do not hand-edit
 generated sections — they are regenerated on the next `make release`.
 
 ---
+## [2026.07.23] — 2026-07-23
+
+### Added
+
+- Permission disclosure — surface withheld answers instead of dropping them
+- Index-back substring/fuzzy ?qb= queries on ContextCard.norm_keys (kb)
+- Per-WorkItem permission control (enter / read / converse / write)
+- ITokenService seam for per-user external API tokens (tokens)
+- Global collections — a curated baseline the AI always consults
+- Surface auto-generate-cards as a settings toggle + move Global into settings
+- #534 slice 1 — metric-claim extraction (+ specstar 0.13.0a1) (graph)
+- Say when the live stream drops instead of going quiet (chat)
+- A metric claim is only as visible as the deck it came from (#534)
+- App item 表上直接看得到 access（public / restricted / private） (#578)
+- My own chat messages align right, with a real name on them (web)
+- 甲 — deterministic naming, stored as versioned state (#534)
+- Ask_user — let the agent ask the user a real question, and ship grill-me
+- 內建 skill 帶著 scripts / references / 檔案一起走 (#589)
+- B — the knowledge graph's entity and relationship layers (#534)
+- Query-by-image (placeholder embedder) + context-card attachments UI (#519/#518) (kb)
+- ⌘P 檔案面板改真 fuzzy,且輸入 / 能命中 ∕ (web)
+- Permission disclosure completion — discoverable restricted, selection-free probe, three-layer switch (#605)
+- Cross-pod live SSE streaming via RabbitMQ fanout (event-bus)
+
+### Fixed
+
+- Don't generate cards / build wiki from still-indexing docs — defer to the index hook (kb)
+- Seed an App item's files before the WorkItem exists (seed/warm race) (items)
+- Make WorkItem access actually changeable — and manageable from both roster surfaces (#306)
+- Measure the workspace quota against the live workspace, and enforce it everywhere (#538)
+- Unweld the wiki from document search — three sources the KB agent picks between (#537)
+- Gate whole operations, and measure from the sweep not the request (#538 follow-up)
+- Converge the chat hooks, then stop losing responses and hanging turns
+- Agent 看到的 workspace 路徑一律相對，消滅 /foo 誤讀
+- Every tool output has a ceiling; list_files reads one directory (agent)
+- Stop losing turns — persist, drain and recover instead of dropping them (turns)
+- A reload during a live turn no longer looks idle (chat)
+- Never let an action produce no reaction at all (chat)
+- The sandbox measures itself — quota stops living in app memory (#538)
+- Image-to-knowledge 的 term prompt 會被小模型抄成說明文字 (workflow)
+- Kb_search 第一次呼叫必失敗 — 補上「不填要放什麼」這句從沒說過的話
+- Promote-to-kb 背景任務測試要讓 event loop 活著(而不是加 retry) (test)
+- Uploads that worked stop being reported as failures, and exec timeouts stop rebuilding sandboxes
+- Wire the poll's failure reporting, and stop hiding a failed Stop (chat)
+- Mark the hole, give up on a turn that never began, and answer the last two silent actions (chat)
+- One limit, one measurement — and disk_usage really runs du (#538)
+- 「全部重新讀取」改成射後不理的 job，並明確回報已送出 (#569)
+- The quota measures what the user can see and delete (#538)
+- 「重建 wiki」改成射後不理的 job（與 #569 同一題） (#571)
+- 給每份卡在「處理中」的文件一個終點 (#573)
+- A card proposal is graded against CARDS, not against the wiki (#506)
+- A superuser sees the workspace, not an empty shell (web)
+- The usage bar goes stale after a turn on host-managed durable (#538)
+- One python, one pip — and a login shell that keeps them (sandbox)
+- Read_image 每次都失敗——包裝層把工具輸出當成字串 (#584)
+- Saving a work item's settings no longer publishes it (web)
+- 移動工作區檔案失敗時不再留下兩份，而且會說明原因 (#588)
+- 內建 skills / workflow templates 沒被打包進 image (docker)
+- Strict tool schema so the model can't guess field names (ask_user)
+- Plain exec 的 HOME 改指 per-sandbox .home，不再是 workspace (sandbox)
+- Same-pod reconnect replay — in-pod broadcast buffer (?since=) (turns)
+- Stop stamp race — cancel reliably in the epoch-stamp window (turns)
+- Cross-pod Stop actually stops the run (via the shared turn epoch) (workflow)
+- Admin 誤擋全面修正——KB 側 owner-only 閘接上 superuser、absent/unknown permission 語意、身分載入閃爍 (web)
+
+### Performance
+
+- Bound the legacy chunk count to its collection (#103)
+- Retriever.search stops loading the whole collection (kb)
+- Cap the BM25 corpus, and fix kb.retrieval knobs being silently ignored (kb)
+
+### Documentation
+
+- Document the doc-chunk v6 text-index backfill
+- Document sparse_corpus_cap and the two quality knobs
+- Plan-issue-520 的「另開 issue」已是 #551,不再是待辦
+
+## [2026.07.16] — 2026-07-16
+
+### Added
+
+- Main agent reads images directly — inline attachments + read_image hands back the raw image (vlm)
+- Defect Library — generic KB platform extensions (P2/P6/P7/P8/P9/P10); customization removed (#513)
+
+### Fixed
+
+- Item create never strands the user (backend best-effort seed + FE surfaces errors)
+
+### Performance
+
+- Never load a member's embedding on the review path (#508)
+- Stop rebuilding the file tree quadratically on every render (web)
+
 ## [2026.07.15] — 2026-07-15
 
 ### Added

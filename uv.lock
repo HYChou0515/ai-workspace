@@ -3910,7 +3910,7 @@ wheels = [
 
 [[package]]
 name = "workspace-app"
-version = "2026.7.15"
+version = "2026.7.23"
 source = { editable = "." }
 dependencies = [
     { name = "cairosvg" },
