@@ -123,6 +123,9 @@ export const itemChatApi = {
      * was inert here and the operator default always won — including when the
      * user set 0. */
     maxKbSearches?: number;
+    /** #537 follow-up: the wiki twin — caps this turn's ask_knowledge_base wiki
+     * consults in total. Same dropped-at-the-POST hazard as `answers` above. */
+    maxWikiSearches?: number;
     /** #605: per-chat disclosure toggle (see kb.ts SendMessageArgs). */
     disclosure?: boolean;
     /** #380: skills the user queued to apply THIS turn (one-shot, hard-preloaded).
@@ -142,6 +145,7 @@ export const itemChatApi = {
         reasoning_effort: args.reasoningEffort,
         enhancements: args.enhancements,
         max_kb_searches: args.maxKbSearches,
+        max_wiki_searches: args.maxWikiSearches,
         disclosure: args.disclosure,
         apply_skills: args.applySkills,
         image_paths: args.imagePaths,

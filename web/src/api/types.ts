@@ -347,6 +347,9 @@ export type SendMessageArgs = {
   /** #334: per-message cap on kb_search calls this turn (shared across the
    * turn's ask_knowledge_base calls). 0 = don't search; omitted = operator default. */
   maxKbSearches?: number;
+  /** #537 follow-up: the wiki twin — caps the turn's ask_knowledge_base wiki
+   * consults. 0 = no wiki; omitted = operator default. */
+  maxWikiSearches?: number;
   /** #605: per-chat disclosure toggle (see kb.ts SendMessageArgs). */
   disclosure?: boolean;
   /** #380: skills the user chose to APPLY this turn (skills picker "apply"

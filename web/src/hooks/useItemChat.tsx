@@ -4,6 +4,7 @@ import { itemChatApi, type ItemChatApi } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
 import { getKbDisclosure } from "../lib/kbDisclosure";
 import { getKbSearchMax } from "../lib/kbSearchMax";
+import { getKbWikiMax } from "../lib/kbWikiMax";
 import {
   getStored as getKbEnhancementSelection,
   toBodyEnhancements,
@@ -67,6 +68,8 @@ export function useItemChat({
           // it, so the composer's stepper moved but nothing changed — the operator
           // default applied regardless, including when the user chose 0.
           maxKbSearches: getKbSearchMax(),
+          // #537 follow-up: the wiki twin (sticky shared with the KB chat).
+          maxWikiSearches: getKbWikiMax(),
           disclosure: getKbDisclosure(),
           // #380: skills queued in the Skills panel to apply THIS turn (one-shot).
           applySkills: opts?.applySkills,

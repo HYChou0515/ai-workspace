@@ -125,4 +125,25 @@ describe("itemChatApi body fields", () => {
     const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
     expect(body).toMatchObject({ content: "SQLite", answers: "call_1" });
   });
+
+  it("sends the composer's kb + wiki search picks (#537 follow-up)", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init: { body?: BodyInit | null }) =>
+        new Response("", { status: 202 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await itemChatApi.sendMessage({
+      slug: "rca",
+      itemId: "INC-1",
+      chatId: "c1",
+      content: "q",
+      maxKbSearches: 2,
+      maxWikiSearches: 1,
+    });
+
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(body.max_kb_searches).toBe(2);
+    expect(body.max_wiki_searches).toBe(1);
+  });
 });
