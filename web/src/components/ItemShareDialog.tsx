@@ -172,6 +172,7 @@ export function ItemShareDialog({
                         Remove
                       </button>
                     </div>
+                    {!custom && <span style={roleHint}>{itemRoleDef(g.role).hint}</span>}
                     {custom && (
                       <div data-testid={`item-custom-${g.userId}`} style={customBox}>
                         {ITEM_ROLE_VERBS.map((verb) => (
@@ -220,41 +221,44 @@ export function ItemShareDialog({
                   style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}
                 >
                   {groupGrants.map((g) => (
-                    <li key={g.groupId} style={grantRow}>
-                      <span style={groupPill}>
-                        <Icon name="users" size={13} color="var(--text-paper-d)" />
-                        <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
-                        {groupCount(g.groupId) != null && (
-                          <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
-                            · {groupCount(g.groupId)}
-                          </span>
-                        )}
-                      </span>
-                      <select
-                        aria-label={`Role for ${groupName(g.groupId)}`}
-                        data-testid={`item-group-role-${g.groupId}`}
-                        value={g.role}
-                        className="inline-edit"
-                        onChange={(e) => setGroupRole(g.groupId, e.target.value as ItemRoleId)}
-                        style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
-                      >
-                        {ITEM_ROLES.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.label}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        data-testid={`item-group-remove-${g.groupId}`}
-                        aria-label={`Remove ${groupName(g.groupId)}`}
-                        onClick={() => removeGroup(g.groupId)}
-                        className="btn"
-                        data-variant="danger"
-                        data-size="sm"
-                      >
-                        Remove
-                      </button>
+                    <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
+                      <div style={grantRow}>
+                        <span style={groupPill}>
+                          <Icon name="users" size={13} color="var(--text-paper-d)" />
+                          <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
+                          {groupCount(g.groupId) != null && (
+                            <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
+                              · {groupCount(g.groupId)}
+                            </span>
+                          )}
+                        </span>
+                        <select
+                          aria-label={`Role for ${groupName(g.groupId)}`}
+                          data-testid={`item-group-role-${g.groupId}`}
+                          value={g.role}
+                          className="inline-edit"
+                          onChange={(e) => setGroupRole(g.groupId, e.target.value as ItemRoleId)}
+                          style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                        >
+                          {ITEM_ROLES.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          data-testid={`item-group-remove-${g.groupId}`}
+                          aria-label={`Remove ${groupName(g.groupId)}`}
+                          onClick={() => removeGroup(g.groupId)}
+                          className="btn"
+                          data-variant="danger"
+                          data-size="sm"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <span style={roleHint}>{itemRoleDef(g.role).hint}</span>
                     </li>
                   ))}
                 </ul>
@@ -302,6 +306,11 @@ const caption: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: 
 const errorText: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: "var(--err)", lineHeight: 1.5 };
 const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const roleHint: React.CSSProperties = {
+  paddingLeft: 2,
+  fontSize: pxToRem(11),
+  color: "var(--text-paper-d2)",
+};
 const groupPill: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",

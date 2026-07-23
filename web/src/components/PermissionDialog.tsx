@@ -14,6 +14,7 @@ import {
   groupGrantsFromPermission,
   permissionFromGrants,
   previewSubjects,
+  roleDef,
 } from "../lib/permission";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
@@ -130,32 +131,35 @@ export function PermissionDialog({
             {grants.length > 0 && (
               <ul data-testid="grant-list" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}>
                 {grants.map((g) => (
-                  <li key={g.userId} style={grantRow}>
-                    <UserChip userId={g.userId} />
-                    <select
-                      aria-label={`Role for ${g.userId}`}
-                      data-testid={`role-${g.userId}`}
-                      value={g.role}
-                      onChange={(e) => setRole(g.userId, e.target.value as RoleId)}
-                      className="inline-edit"
-                      style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
-                    >
-                      {roles.map((r) => (
-                        <option key={r.id} value={r.id}>
-                          {r.label}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${g.userId}`}
-                      onClick={() => toggleUser(g.userId)}
-                      className="btn"
-                      data-variant="danger"
-                      data-size="sm"
-                    >
-                      Remove
-                    </button>
+                  <li key={g.userId} style={{ display: "grid", gap: 2 }}>
+                    <div style={grantRow}>
+                      <UserChip userId={g.userId} />
+                      <select
+                        aria-label={`Role for ${g.userId}`}
+                        data-testid={`role-${g.userId}`}
+                        value={g.role}
+                        onChange={(e) => setRole(g.userId, e.target.value as RoleId)}
+                        className="inline-edit"
+                        style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                      >
+                        {roles.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${g.userId}`}
+                        onClick={() => toggleUser(g.userId)}
+                        className="btn"
+                        data-variant="danger"
+                        data-size="sm"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <span style={roleHint}>{roleDef(g.role).hint}</span>
                   </li>
                 ))}
               </ul>
@@ -189,41 +193,44 @@ export function PermissionDialog({
                     style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}
                   >
                     {groupGrants.map((g) => (
-                      <li key={g.groupId} style={grantRow}>
-                        <span style={groupPill}>
-                          <Icon name="users" size={13} color="var(--text-paper-d)" />
-                          <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
-                          {groupCount(g.groupId) != null && (
-                            <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
-                              · {groupCount(g.groupId)}
-                            </span>
-                          )}
-                        </span>
-                        <select
-                          aria-label={`Role for ${groupName(g.groupId)}`}
-                          data-testid={`group-role-${g.groupId}`}
-                          value={g.role}
-                          onChange={(e) => setGroupRole(g.groupId, e.target.value as RoleId)}
-                          className="inline-edit"
-                          style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
-                        >
-                          {roles.map((r) => (
-                            <option key={r.id} value={r.id}>
-                              {r.label}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          data-testid={`group-remove-${g.groupId}`}
-                          aria-label={`Remove ${groupName(g.groupId)}`}
-                          onClick={() => removeGroup(g.groupId)}
-                          className="btn"
-                          data-variant="danger"
-                          data-size="sm"
-                        >
-                          Remove
-                        </button>
+                      <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
+                        <div style={grantRow}>
+                          <span style={groupPill}>
+                            <Icon name="users" size={13} color="var(--text-paper-d)" />
+                            <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
+                            {groupCount(g.groupId) != null && (
+                              <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
+                                · {groupCount(g.groupId)}
+                              </span>
+                            )}
+                          </span>
+                          <select
+                            aria-label={`Role for ${groupName(g.groupId)}`}
+                            data-testid={`group-role-${g.groupId}`}
+                            value={g.role}
+                            onChange={(e) => setGroupRole(g.groupId, e.target.value as RoleId)}
+                            className="inline-edit"
+                            style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                          >
+                            {roles.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            data-testid={`group-remove-${g.groupId}`}
+                            aria-label={`Remove ${groupName(g.groupId)}`}
+                            onClick={() => removeGroup(g.groupId)}
+                            className="btn"
+                            data-variant="danger"
+                            data-size="sm"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                        <span style={roleHint}>{roleDef(g.role).hint}</span>
                       </li>
                     ))}
                   </ul>
@@ -303,6 +310,11 @@ const caption: React.CSSProperties = {
 const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 
 const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const roleHint: React.CSSProperties = {
+  paddingLeft: 2,
+  fontSize: pxToRem(11),
+  color: "var(--text-paper-d2)",
+};
 const groupPill: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
