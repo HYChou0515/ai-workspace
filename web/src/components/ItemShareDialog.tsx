@@ -18,6 +18,7 @@ import {
   itemRoleDef,
 } from "../lib/itemPermission";
 import { pxToRem } from "../lib/pxToRem";
+import { Icon } from "./Icon";
 import { ModalShell } from "./ModalShell";
 import { UserChip } from "./UserChip";
 import { UserPicker } from "./UserPicker";
@@ -60,6 +61,8 @@ export function ItemShareDialog({
   // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
   const groupName = (id: string) =>
     pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
+  const groupCount = (id: string): number | null =>
+    pickableGroups.find((g) => g.resource_id === id)?.member_count ?? null;
   const addGroup = (id: string) =>
     setGroupGrants((g) =>
       id && !g.some((x) => x.groupId === id) ? [...g, { groupId: id, role: "participant" }] : g,
@@ -148,6 +151,7 @@ export function ItemShareDialog({
                         data-testid={`item-role-${g.userId}`}
                         value={custom ? "custom" : g.role}
                         onChange={(e) => setRole(g.userId, e.target.value as ItemRoleId | "custom")}
+                        className="inline-edit"
                         style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                       >
                         {ITEM_ROLES.map((r) => (
@@ -197,9 +201,10 @@ export function ItemShareDialog({
                   aria-label="Add a group"
                   value=""
                   onChange={(e) => addGroup(e.target.value)}
-                  style={{ fontSize: pxToRem(12) }}
+                  className="inline-edit"
+                  style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                 >
-                  <option value="">Add a group…</option>
+                  <option value="">+ Add a group…</option>
                   {pickableGroups
                     .filter((pg) => !groupGrants.some((x) => x.groupId === pg.resource_id))
                     .map((pg) => (
@@ -216,11 +221,20 @@ export function ItemShareDialog({
                 >
                   {groupGrants.map((g) => (
                     <li key={g.groupId} style={grantRow}>
-                      <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
+                      <span style={groupPill}>
+                        <Icon name="users" size={13} color="var(--text-paper-d)" />
+                        <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
+                        {groupCount(g.groupId) != null && (
+                          <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
+                            · {groupCount(g.groupId)}
+                          </span>
+                        )}
+                      </span>
                       <select
                         aria-label={`Role for ${groupName(g.groupId)}`}
                         data-testid={`item-group-role-${g.groupId}`}
                         value={g.role}
+                        className="inline-edit"
                         onChange={(e) => setGroupRole(g.groupId, e.target.value as ItemRoleId)}
                         style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                       >
@@ -288,6 +302,14 @@ const caption: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: 
 const errorText: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: "var(--err)", lineHeight: 1.5 };
 const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const groupPill: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "3px 8px",
+  borderRadius: 999,
+  background: "var(--paper-2)",
+};
 const customBox: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",

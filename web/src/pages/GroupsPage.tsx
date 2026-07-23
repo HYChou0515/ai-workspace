@@ -278,19 +278,17 @@ function Roster({
           </button>
         )}
       </div>
-      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}>
+      <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexWrap: "wrap", gap: 6 }}>
         {ids.length === 0 && (
-          <li style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(12) }}>None</li>
+          <li style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(12) }}>None yet</li>
         )}
         {ids.map((id) => (
-          <li key={id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <li key={id} style={memberPill}>
             <UserChip userId={id} size={18} />
             {canManage && (
               <button
                 type="button"
-                className="btn"
-                data-variant="ghost"
-                data-size="sm"
+                className="tag-remove"
                 aria-label={`Remove ${id} from ${groupName}`}
                 onClick={() => onRemove(id)}
               >
@@ -455,6 +453,15 @@ const rowHead: React.CSSProperties = { display: "flex", justifyContent: "space-b
 const chip: React.CSSProperties = { fontSize: pxToRem(11), padding: "1px 8px", borderRadius: 999, background: "var(--paper-2)", color: "var(--text-paper-d)" };
 const editor: React.CSSProperties = { marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--paper-3)", display: "grid", gap: 14 };
 const pickerBox: React.CSSProperties = { border: "1px solid var(--paper-3)", borderRadius: 6, padding: 6 };
+const memberPill: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  padding: "3px 6px 3px 8px",
+  borderRadius: 999,
+  background: "var(--paper-2)",
+  fontSize: pxToRem(12),
+};
 const modalOverlay: React.CSSProperties = { position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 };
 const modalCard: React.CSSProperties = { background: "var(--paper)", borderRadius: 10, padding: 20, width: "min(440px, 92vw)", display: "grid" };
 const field: React.CSSProperties = { display: "grid", gap: 4, marginBottom: 10 };
