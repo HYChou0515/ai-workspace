@@ -1,3 +1,5 @@
+import { noteStreamEnd, noteStreamStart } from "../lib/versionSkew";
+
 import type { AgentEvent } from "../events";
 
 /**
@@ -8,6 +10,19 @@ import type { AgentEvent } from "../events";
  * see plan-backend.md "small-model retry-with-feedback").
  */
 export async function* parseSseStream<T = AgentEvent>(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<T> {
+  // Version-skew: a live stream is an UNSAFE moment to reload — register it so
+  // a detected skew waits for the last stream to close (see lib/versionSkew).
+  noteStreamStart();
+  try {
+    yield* _parseSseStreamInner<T>(body);
+  } finally {
+    noteStreamEnd();
+  }
+}
+
+async function* _parseSseStreamInner<T>(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<T> {
   const reader = body.getReader();

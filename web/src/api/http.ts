@@ -11,13 +11,20 @@
  */
 
 // "/my-svc/rca/" → "/my-svc/rca"; "/" → "". SPA-route links only.
+import { checkVersionHeader } from "../lib/versionSkew";
+
 export const API_BASE = import.meta.env.BASE_URL.replace(/\/+$/, "");
 
 // Root of every backend URL (#177). "" + "/api" → "/api"; "/sub" + "/api" → "/sub/api".
 export const API_PREFIX = `${API_BASE}/api`;
 
-export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(API_PREFIX + path, init);
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const resp = await fetch(API_PREFIX + path, init);
+  // Version-skew handshake: a stale cached bundle against a newer api reloads
+  // itself at a safe moment (the v2026.07.23 incident). Passive — reads one
+  // header, never blocks or fails the call.
+  checkVersionHeader(resp);
+  return resp;
 }
 
 /**
