@@ -133,6 +133,11 @@ export const messages = {
   "entity.basis.declared": { "zh-TW": "AI 併入", en: "merged by AI" },
   "entity.basis.approved": { "zh-TW": "人工核可", en: "approved" },
   "entity.basis.other": { "zh-TW": "其他依據", en: "other" },
+  "entity.graphAria": { "zh-TW": "實體關聯圖", en: "Entity graph" },
+  "entity.strayTitle": {
+    "zh-TW": "語料提到了它，但它還不是詞彙表裡的實體。",
+    en: "Named by the corpus, but not yet an entity in the vocabulary.",
+  },
   "diag.tab.retrieval": { "zh-TW": "檢索評測", en: "Retrieval eval" },
   "eval.blurb": {
     "zh-TW": "對每個知識庫自動出題，量測「搜尋能不能找回出處」。",

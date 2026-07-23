@@ -22,6 +22,7 @@ import { Skeleton } from "../../components/Skeleton";
 import { useT } from "../../lib/i18n";
 import type { MsgKey } from "../../lib/i18n";
 import { docLabel } from "./CardAttachments";
+import { EntityGraph } from "./EntityGraph";
 import { docHref } from "./kbLinks";
 
 type Mention = {
@@ -129,6 +130,24 @@ export function GraphEntityPage() {
           )}
         </div>
       </header>
+
+      {/* The identity AS a graph — centre node, evidence on the left, relations
+          on the right. The lists below stay as the receipts. */}
+      <EntityGraph
+        name={e.name}
+        kind={e.kind}
+        docs={e.mentions.map((m) => ({
+          source_doc_id: m.source_doc_id,
+          surface: m.surface,
+          occurrences: m.occurrences,
+        }))}
+        rels={e.related.map((r) => ({
+          direction: r.direction,
+          predicate: r.predicate,
+          other_name: r.other_name,
+          other_entity_id: r.other_entity_id,
+        }))}
+      />
 
       <section className="ent-page__section">
         <h2 className="ent-page__h2">{t("entity.mentions")}</h2>

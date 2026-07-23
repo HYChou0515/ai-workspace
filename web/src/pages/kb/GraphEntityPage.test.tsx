@@ -60,13 +60,18 @@ describe("GraphEntityPage (#534)", () => {
     renderAt("graph-entity:1");
 
     expect((await screen.findAllByText(/回焊爐/)).length).toBeGreaterThan(0);
-    expect(screen.getByText("機台")).toBeInTheDocument();
+    expect(screen.getAllByText("機台").length).toBeGreaterThan(0); // hero + graph centre
     expect(screen.getByText("Reflow Oven")).toBeInTheDocument(); // alias chip
-    expect(screen.getByText("deck-A")).toBeInTheDocument(); // evidence doc link (label falls back to the raw id)
+    // evidence doc appears as a GRAPH NODE and in the receipts list below
+    expect(screen.getAllByText("deck-A").length).toBeGreaterThan(1);
     expect(screen.getByText("同名")).toBeInTheDocument(); // basis translated, not "identical"
-    // the relation links to the OTHER identity's page
-    const rel = screen.getByRole("link", { name: "產線三" });
-    expect(rel).toHaveAttribute("href", "/kb/graph/entities/graph-entity:2");
+    // the graph renders, and the relation links to the OTHER identity's page
+    expect(screen.getByTestId("entity-graph")).toBeInTheDocument();
+    const rels = screen.getAllByRole("link", { name: "產線三" });
+    expect(rels.length).toBeGreaterThan(0);
+    for (const rel of rels) {
+      expect(rel).toHaveAttribute("href", "/kb/graph/entities/graph-entity:2");
+    }
   });
 
   it("renders not-found for a 404 — unknown and unreadable look the same", async () => {
