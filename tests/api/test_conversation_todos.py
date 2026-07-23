@@ -5,6 +5,8 @@ persisted on the shared backend keyed by conversation id (point key, no scan).
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 from agents import RunContextWrapper
 
 import workspace_app.api.app as app_mod
@@ -199,7 +201,7 @@ def test_update_todos_failure_does_not_notify_the_sink():
         )
     )
 
-    update_todos_impl(ctx, todos=[{"text": "b", "status": "done"}])
+    update_todos_impl(ctx, todos=[cast("Any", {"text": "b", "status": "done"})])
 
     assert seen == []
 
@@ -291,10 +293,41 @@ def test_update_todos_rejects_an_unknown_status_and_writes_nothing():
     ctx = RunContextWrapper(AgentToolContext(spec=spec, conversation_id="conv-1", acting_user="u1"))
     update_todos_impl(ctx, todos=[{"text": "a", "status": "pending"}])
 
-    out = update_todos_impl(ctx, todos=[{"text": "b", "status": "done"}])
+    out = update_todos_impl(ctx, todos=[cast("Any", {"text": "b", "status": "done"})])
 
     assert out.startswith("error:")
     assert "pending" in out  # names the allowed statuses
     stored = read_todos(spec, "conv-1")
     assert stored is not None
     assert [(t.text, t.status) for t in stored.items] == [("a", "pending")]
+
+
+def test_update_todos_is_in_the_default_workspace_toolset():
+    """`build_tools(None)` (a turn whose config carries no allowed_tools — the
+    bare/no-config fallback paths) hands out `_WORKSPACE_TOOLS`, a SECOND
+    default set independent of the app.json ceiling. Keep the todo tool in
+    both, or those turns silently lack it. (App-catalog turns materialize the
+    ceiling and were never affected — the #613 live-probe failure that led
+    here turned out to be the $ref schema + a truncating num_ctx.)"""
+    from workspace_app.agent import build_tools
+
+    names = [t.name for t in build_tools(None)]
+    assert "update_todos" in names
+
+
+def test_update_todos_schema_is_inline_with_an_enum_status():
+    """Live-probe regression (qwen3:14b via Ollama): a `$defs`/`$ref` tool
+    schema renders badly through local chat templates — the model either
+    claims the tool "is not available" or emits `status` as a mangled object.
+    The built tool's schema must be fully inlined, `$defs`-free, and carry the
+    status enum so a small model can only produce valid statuses."""
+    import json
+
+    from workspace_app.agent import build_tools
+
+    tool = next(t for t in build_tools(["update_todos"]) if t.name == "update_todos")
+    schema = tool.params_json_schema
+    text = json.dumps(schema)
+    assert "$ref" not in text and "$defs" not in text
+    items = schema["properties"]["todos"]["items"]
+    assert items["properties"]["status"]["enum"] == ["pending", "in_progress", "completed"]

@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 import magic
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
@@ -2053,7 +2053,7 @@ class TodoArg(TypedDict):
     """One todo item: what to do, and where it stands."""
 
     text: str
-    status: str
+    status: Literal["pending", "in_progress", "completed"]
 
 
 def update_todos_impl(
@@ -2169,6 +2169,10 @@ _WORKSPACE_TOOLS = [
     "infer_modules",
     "mention_user",
     "lookup_user",
+    # #613: the default-on todo checklist. Presets with `allowed_tools: null`
+    # (every bundled workspace preset) resolve THIS set — the app.json ceiling
+    # alone doesn't reach them (the live-probe regression).
+    "update_todos",
 ]
 
 # Legacy tool names in a *stored* `allowed_tools` list, mapped to their current
@@ -2270,6 +2274,31 @@ def _with_absent_convention(tool: FunctionTool) -> FunctionTool:
     return dataclasses.replace(tool, description=desc)
 
 
+def _inline_schema_refs(schema: dict[str, Any]) -> dict[str, Any]:
+    """Resolve local ``#/$defs/...`` refs in a tool's JSON schema and drop the
+    ``$defs`` block plus pydantic's decorative ``title``s. Semantically the
+    identical schema — but local chat templates (Ollama qwen3, #613 live probe)
+    render a ``$ref`` tool so poorly the model either declares it "not
+    available" or mangles the nested args (``status: {"title": ...}``).
+    Depth-capped so a (hypothetical) recursive schema degrades instead of
+    looping — none of our tools are recursive."""
+    defs = schema.get("$defs", {})
+
+    def walk(node: Any, depth: int = 0) -> Any:
+        if depth > 12 or not isinstance(node, (dict, list)):
+            return node
+        if isinstance(node, list):
+            return [walk(v, depth + 1) for v in node]
+        ref = node.get("$ref", "")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            target = defs.get(ref.rsplit("/", 1)[-1], {})
+            rest = {k: v for k, v in node.items() if k != "$ref"}
+            return walk({**target, **rest}, depth + 1)
+        return {k: walk(v, depth + 1) for k, v in node.items() if k != "title"}
+
+    return walk({k: v for k, v in schema.items() if k != "$defs"})
+
+
 def build_tools(
     allowed: list[str] | None = None,
     *,
@@ -2299,6 +2328,13 @@ def build_tools(
         for n in names
         if n in _IMPLS
     ]
+    # #613 live-probe fix: pydantic renders a nested TypedDict param as
+    # `$defs` + `$ref`, which local chat templates (Ollama qwen3) present so
+    # poorly the model either declares the tool "not available" or emits nested
+    # args as mangled objects. Inlining local refs is semantically the same
+    # JSON Schema, and every provider accepts it — so flatten for all builtins.
+    for t in tools:
+        t.params_json_schema = _inline_schema_refs(t.params_json_schema)
     if app_slug is not None and profile is not None:
         from ..apps.skills import merged_profile_skills
 

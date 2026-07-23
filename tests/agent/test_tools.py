@@ -350,6 +350,7 @@ def test_build_tools_returns_the_workspace_set_by_default():
         "infer_modules",
         "mention_user",
         "lookup_user",
+        "update_todos",  # #613
     }
     assert "kb_search" not in names
     assert all(isinstance(t, FunctionTool) for t in tools)
