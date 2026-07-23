@@ -113,21 +113,33 @@ export const ITEM_VISIBILITY_HINT: Record<ItemVisibility, string> = {
   private: "Only the owner",
 };
 
+/** #608 — does any subject the caller holds (their `user:<id>`, `all`, or a
+ * `group:<id>` for a group they belong to) appear in a verb's grant list? Mirrors
+ * the backend `Actor.subjects & grants`. `groups` are the caller's group ids
+ * (from `/me`); empty means "we don't know their groups", which fails closed. */
+function grantsAnySubject(
+  grants: string[] | undefined,
+  currentUserId: string,
+  groups: string[],
+): boolean {
+  if (!Array.isArray(grants)) return false;
+  if (grants.includes(`user:${currentUserId}`) || grants.includes("all")) return true;
+  return groups.some((g) => grants.includes(`group:${g}`));
+}
+
 export function canWriteItem(
   permission: ItemPermission | undefined,
   currentUserId: string,
   ownerId: string,
   isSuperuser: boolean,
+  groups: string[] = [],
 ): boolean {
   if (isSuperuser) return true; // authorize.py step 2 — a direct human superuser bypasses
   if (currentUserId === ownerId) return true; // the owner controls their resource
   if (!permission || permission.visibility === "public") return true; // absent ≡ public; public allows the verb
   if (permission.visibility === "private") return false; // non-owner + private
-  const me = `user:${currentUserId}`; // restricted → granted any write verb
-  return WRITE_VERBS.some((verb) => {
-    const grants = permission[verb];
-    return Array.isArray(grants) && (grants.includes(me) || grants.includes("all"));
-  });
+  // restricted → granted any write verb, directly or via a group
+  return WRITE_VERBS.some((verb) => grantsAnySubject(permission[verb], currentUserId, groups));
 }
 
 /** #306 PR3 — mirror `perm/authorize` for ONE item verb, for the FE lock states
@@ -150,15 +162,13 @@ export function hasItemVerb(
   ownerId: string,
   verb: ItemVerb,
   isSuperuser: boolean,
+  groups: string[] = [],
 ): boolean {
   if (isSuperuser) return true; // authorize.py step 2 — before owner/visibility
   if (currentUserId === ownerId) return true;
   if (!permission || permission.visibility === "public") return true;
   if (permission.visibility === "private") return false;
-  const grants = permission[verb];
-  return (
-    Array.isArray(grants) && (grants.includes(`user:${currentUserId}`) || grants.includes("all"))
-  );
+  return grantsAnySubject(permission[verb], currentUserId, groups); // #608: user OR group
 }
 
 /** #306 PR3 — who may open the sharing UI, mirroring `perm/authorize.py` step 5.
@@ -177,24 +187,33 @@ export function canChangeItemPermission(
   currentUserId: string,
   ownerId: string,
   isSuperuser: boolean,
+  groups: string[] = [],
 ): boolean {
   if (currentUserId === ownerId || isSuperuser) return true;
-  const grants = permission?.change_permission;
-  return (
-    Array.isArray(grants) && (grants.includes(`user:${currentUserId}`) || grants.includes("all"))
-  );
+  return grantsAnySubject(permission?.change_permission, currentUserId, groups); // #608
 }
 
-export const canReadChat = (p: ItemPermission | undefined, u: string, o: string, su: boolean) =>
-  hasItemVerb(p, u, o, "read_chat", su);
+export const canReadChat = (
+  p: ItemPermission | undefined,
+  u: string,
+  o: string,
+  su: boolean,
+  groups: string[] = [],
+) => hasItemVerb(p, u, o, "read_chat", su, groups);
 export const canReadItemContent = (
   p: ItemPermission | undefined,
   u: string,
   o: string,
   su: boolean,
-) => hasItemVerb(p, u, o, "read_content", su);
-export const canConverse = (p: ItemPermission | undefined, u: string, o: string, su: boolean) =>
-  hasItemVerb(p, u, o, "converse", su);
+  groups: string[] = [],
+) => hasItemVerb(p, u, o, "read_content", su, groups);
+export const canConverse = (
+  p: ItemPermission | undefined,
+  u: string,
+  o: string,
+  su: boolean,
+  groups: string[] = [],
+) => hasItemVerb(p, u, o, "converse", su, groups);
 /** The disclosure case: sees the item exists (read_meta) but can't enter it
  * (no read_chat) — the 🔒 locked list row that offers "request access". A
  * superuser is never locked out, so this is always false for them. */
@@ -203,9 +222,12 @@ export const isDiscoverableOnly = (
   u: string,
   o: string,
   su: boolean,
-) => hasItemVerb(p, u, o, "read_meta", su) && !hasItemVerb(p, u, o, "read_chat", su);
+  groups: string[] = [],
+) =>
+  hasItemVerb(p, u, o, "read_meta", su, groups) && !hasItemVerb(p, u, o, "read_chat", su, groups);
 
 const subjectUser = (s: string): string | null => (s.startsWith("user:") ? s.slice(5) : null);
+const subjectGroup = (s: string): string | null => (s.startsWith("group:") ? s.slice(6) : null);
 
 /** The deepest nested ITEM role a verb set fully satisfies (grill D2); `null` when
  * it doesn't even reach Discoverable (no read_meta), and `"custom"` conceptually
@@ -258,22 +280,58 @@ export function itemGrantsFromPermission(perm: ItemPermission, owner: string): I
   return grants.sort((a, b) => a.userId.localeCompare(b.userId));
 }
 
-/** Encode the dialog's per-user grants back into a full permission (PUT = replace),
- * STARTING from `original` so unmanaged verbs + every non-user subject (groups,
- * `all`) survive. A grant with an explicit `verbs` set (Custom) writes exactly
- * those; otherwise the role's verb bundle is used. */
+/** #608 — a grant to a whole group on an item (role only; no Custom per-verb for
+ * groups in v1). */
+export type ItemGroupGrant = { groupId: string; role: ItemRoleId };
+
+/** Decode a permission's GROUP grants into (group, role) rows for the item share
+ * dialog (#608). Mirrors {@link itemGrantsFromPermission} but for `group:<id>`
+ * subjects; each group is shown at the deepest ladder role its verbs satisfy. */
+export function itemGroupGrantsFromPermission(perm: ItemPermission): ItemGroupGrant[] {
+  const byGroup = new Map<string, Set<string>>();
+  for (const verb of ITEM_ROLE_VERBS) {
+    for (const subject of perm[verb] ?? []) {
+      const gidv = subjectGroup(subject);
+      if (gidv === null) continue;
+      const set = byGroup.get(gidv) ?? new Set<string>();
+      set.add(verb);
+      byGroup.set(gidv, set);
+    }
+  }
+  const grants: ItemGroupGrant[] = [];
+  for (const [groupId, verbs] of byGroup) {
+    if (verbs.size === 0) continue;
+    grants.push({ groupId, role: itemRoleForVerbs(verbs) ?? "discoverable" });
+  }
+  return grants.sort((a, b) => a.groupId.localeCompare(b.groupId));
+}
+
+/** Encode the dialog's per-user + per-group grants back into a full permission
+ * (PUT = replace), STARTING from `original` so unmanaged verbs + the `all` wildcard
+ * survive. A user grant with an explicit `verbs` set (Custom) writes exactly those;
+ * otherwise the role's verb bundle is used. Group grants (#608) are rebuilt from
+ * `groupGrants` so a group grant round-trips and can be removed — passing none
+ * DROPS existing group grants (the dialog decodes + passes them, like user grants). */
 export function itemPermissionFromGrants(
   visibility: ItemVisibility,
   grants: ItemGrant[],
   original: ItemPermission,
+  groupGrants: ItemGroupGrant[] = [],
 ): ItemPermission {
   const next: ItemPermission = { ...original, visibility };
   for (const verb of ITEM_ROLE_VERBS) {
-    const kept = (original[verb] ?? []).filter((s) => subjectUser(s) === null);
+    // keep only subjects the dialog doesn't manage (`all`, future kinds); drop old
+    // user AND group grants — both are rebuilt below.
+    const kept = (original[verb] ?? []).filter(
+      (s) => subjectUser(s) === null && subjectGroup(s) === null,
+    );
     const users = grants
       .filter((g) => (g.verbs.size > 0 ? g.verbs.has(verb) : itemRoleDef(g.role).verbs.includes(verb)))
       .map((g) => `user:${g.userId}`);
-    next[verb] = Array.from(new Set([...kept, ...users]));
+    const groups = groupGrants
+      .filter((g) => itemRoleDef(g.role).verbs.includes(verb))
+      .map((g) => `group:${g.groupId}`);
+    next[verb] = Array.from(new Set([...kept, ...users, ...groups]));
   }
   return next;
 }

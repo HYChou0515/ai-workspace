@@ -38,6 +38,7 @@ import { PermissionDialog } from "../../components/PermissionDialog";
 import { Popover } from "../../components/Popover";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useIsSuperuser } from "../../hooks/useIsSuperuser";
+import { usePickableGroups } from "../../hooks/usePickableGroups";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { type MsgKey, useT } from "../../lib/i18n";
@@ -134,6 +135,7 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
   // The current access state is fetched when it opens; Save PUTs the full state.
   const me = useCurrentUser();
   const isSuperuser = useIsSuperuser();
+  const pickableGroups = usePickableGroups();
   const [sharing, setSharing] = useState(false);
   // #101: a zip staged for "import into this collection", held until the user
   // picks how a path collision resolves (overwrite | skip). null ⇒ no dialog.
@@ -724,6 +726,7 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
               resourceName={selected.name}
               owner={selected.owner}
               value={permQuery.data}
+              pickableGroups={pickableGroups}
               busy={setPermMut.isPending}
               onSubmit={(perm) => setPermMut.mutate(perm)}
               onClose={() => setSharing(false)}

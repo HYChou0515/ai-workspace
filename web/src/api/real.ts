@@ -108,8 +108,10 @@ export const realApi: ApiClient = {
     return me.id;
   },
   async getMe() {
-    const me = await json<{ id: string; is_superuser?: boolean }>(await apiFetch("/me"));
-    return { id: me.id, is_superuser: me.is_superuser ?? false };
+    const me = await json<{ id: string; is_superuser?: boolean; groups?: string[] }>(
+      await apiFetch("/me"),
+    );
+    return { id: me.id, is_superuser: me.is_superuser ?? false, groups: me.groups ?? [] };
   },
   async getUsers() {
     return json<User[]>(await apiFetch("/users"));

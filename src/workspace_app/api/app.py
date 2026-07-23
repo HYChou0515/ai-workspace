@@ -33,6 +33,7 @@ from ..resources import (
     AgentConfig,
     CheckRun,
 )
+from ..resources.groups import groups_of
 from ..resources.kb import EMBED_DIM, Collection
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxNotFound, SandboxSpec
 from ..sync import SandboxSync
@@ -646,6 +647,9 @@ def create_app(
         activity=activity,
         monitor=monitor,
         superusers=superusers,
+        # #608: /me carries the caller's group ids so the FE can resolve a
+        # `group:<id>` grant to the current viewer (same resolver the access_scopes use).
+        groups_provider=lambda u: groups_of(spec, u),
     )
 
     # #106: context-card create/update custom actions must register on the spec

@@ -30,7 +30,7 @@ function renderCanWrite(currentUser: string, isSuperuser = false) {
   // `useIsSuperuser` reads `GET /me`; leaving `api.getMe` unmocked makes the query
   // reject and fall back to the same `false` by accident — the test would pass for
   // the wrong reason and go blind to a later regression.
-  vi.mocked(api.getMe).mockResolvedValue({ id: currentUser, is_superuser: isSuperuser });
+  vi.mocked(api.getMe).mockResolvedValue({ id: currentUser, is_superuser: isSuperuser, groups: [] });
   const qc = makeTestQueryClient();
   return renderHook(() => useItemCanWrite("pm", "pm-project/1"), {
     wrapper: ({ children }) => <QueryWrap client={qc}>{children}</QueryWrap>,
@@ -42,7 +42,7 @@ describe("useItemCanWrite (#455 §E)", () => {
     vi.mocked(api.getAppManifest).mockResolvedValue(manifest);
     vi.mocked(api.getAppItem).mockReturnValue(new Promise(() => {})); // never resolves
     vi.mocked(api.getCurrentUser).mockResolvedValue("bob");
-    vi.mocked(api.getMe).mockResolvedValue({ id: "bob", is_superuser: false });
+    vi.mocked(api.getMe).mockResolvedValue({ id: "bob", is_superuser: false, groups: [] });
     const qc = makeTestQueryClient();
     const { result } = renderHook(() => useItemCanWrite("pm", "pm-project/1"), {
       wrapper: ({ children }) => <QueryWrap client={qc}>{children}</QueryWrap>,

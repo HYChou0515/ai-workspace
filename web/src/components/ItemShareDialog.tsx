@@ -1,9 +1,11 @@
 import { useState } from "react";
 
+import type { PickableGroup } from "../api/groups";
 import {
   ITEM_ROLES,
   ITEM_ROLE_VERBS,
   type ItemGrant,
+  type ItemGroupGrant,
   type ItemPermission,
   type ItemRoleId,
   type ItemVerb,
@@ -11,10 +13,12 @@ import {
   ITEM_VISIBILITY_HINT,
   ITEM_VISIBILITY_LABEL,
   itemGrantsFromPermission,
+  itemGroupGrantsFromPermission,
   itemPermissionFromGrants,
   itemRoleDef,
 } from "../lib/itemPermission";
 import { pxToRem } from "../lib/pxToRem";
+import { Icon } from "./Icon";
 import { ModalShell } from "./ModalShell";
 import { UserChip } from "./UserChip";
 import { UserPicker } from "./UserPicker";
@@ -30,6 +34,7 @@ export function ItemShareDialog({
   value,
   busy = false,
   error = null,
+  pickableGroups = [],
   onSubmit,
   onClose,
 }: {
@@ -41,13 +46,30 @@ export function ItemShareDialog({
    * the dialog, which stays open — a silent failure is indistinguishable from
    * "the setting didn't stick". */
   error?: string | null;
+  /** #608 — every group the caller may grant to (name + count). Empty ⇒ hidden. */
+  pickableGroups?: PickableGroup[];
   onSubmit: (perm: ItemPermission) => void;
   onClose: () => void;
 }) {
   const [visibility, setVisibility] = useState<ItemVisibility>(value.visibility);
   const [grants, setGrants] = useState<ItemGrant[]>(() => itemGrantsFromPermission(value, owner));
+  const [groupGrants, setGroupGrants] = useState<ItemGroupGrant[]>(() =>
+    itemGroupGrantsFromPermission(value),
+  );
 
-  const next = () => itemPermissionFromGrants(visibility, grants, value);
+  const next = () => itemPermissionFromGrants(visibility, grants, value, groupGrants);
+  // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
+  const groupName = (id: string) =>
+    pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
+  const groupCount = (id: string): number | null =>
+    pickableGroups.find((g) => g.resource_id === id)?.member_count ?? null;
+  const addGroup = (id: string) =>
+    setGroupGrants((g) =>
+      id && !g.some((x) => x.groupId === id) ? [...g, { groupId: id, role: "participant" }] : g,
+    );
+  const setGroupRole = (id: string, role: ItemRoleId) =>
+    setGroupGrants((g) => g.map((x) => (x.groupId === id ? { ...x, role } : x)));
+  const removeGroup = (id: string) => setGroupGrants((g) => g.filter((x) => x.groupId !== id));
 
   const toggleUser = (id: string) =>
     setGrants((g) =>
@@ -129,6 +151,7 @@ export function ItemShareDialog({
                         data-testid={`item-role-${g.userId}`}
                         value={custom ? "custom" : g.role}
                         onChange={(e) => setRole(g.userId, e.target.value as ItemRoleId | "custom")}
+                        className="inline-edit"
                         style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                       >
                         {ITEM_ROLES.map((r) => (
@@ -149,6 +172,7 @@ export function ItemShareDialog({
                         Remove
                       </button>
                     </div>
+                    {!custom && <span style={roleHint}>{itemRoleDef(g.role).hint}</span>}
                     {custom && (
                       <div data-testid={`item-custom-${g.userId}`} style={customBox}>
                         {ITEM_ROLE_VERBS.map((verb) => (
@@ -167,6 +191,79 @@ export function ItemShareDialog({
                 );
               })}
             </ul>
+          )}
+
+          {pickableGroups.length > 0 && (
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="caps">Groups</span>
+                <select
+                  data-testid="item-group-select"
+                  aria-label="Add a group"
+                  value=""
+                  onChange={(e) => addGroup(e.target.value)}
+                  className="inline-edit"
+                  style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                >
+                  <option value="">+ Add a group…</option>
+                  {pickableGroups
+                    .filter((pg) => !groupGrants.some((x) => x.groupId === pg.resource_id))
+                    .map((pg) => (
+                      <option key={pg.resource_id} value={pg.resource_id}>
+                        {pg.name} · {pg.member_count}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              {groupGrants.length > 0 && (
+                <ul
+                  data-testid="item-group-list"
+                  style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}
+                >
+                  {groupGrants.map((g) => (
+                    <li key={g.groupId} style={{ display: "grid", gap: 2 }}>
+                      <div style={grantRow}>
+                        <span style={groupPill}>
+                          <Icon name="users" size={13} color="var(--text-paper-d)" />
+                          <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
+                          {groupCount(g.groupId) != null && (
+                            <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
+                              · {groupCount(g.groupId)}
+                            </span>
+                          )}
+                        </span>
+                        <select
+                          aria-label={`Role for ${groupName(g.groupId)}`}
+                          data-testid={`item-group-role-${g.groupId}`}
+                          value={g.role}
+                          className="inline-edit"
+                          onChange={(e) => setGroupRole(g.groupId, e.target.value as ItemRoleId)}
+                          style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                        >
+                          {ITEM_ROLES.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          data-testid={`item-group-remove-${g.groupId}`}
+                          aria-label={`Remove ${groupName(g.groupId)}`}
+                          onClick={() => removeGroup(g.groupId)}
+                          className="btn"
+                          data-variant="danger"
+                          data-size="sm"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <span style={roleHint}>{itemRoleDef(g.role).hint}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -209,6 +306,19 @@ const caption: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: 
 const errorText: React.CSSProperties = { margin: 0, fontSize: pxToRem(12), color: "var(--err)", lineHeight: 1.5 };
 const radioRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
 const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", gap: 8 };
+const roleHint: React.CSSProperties = {
+  paddingLeft: 2,
+  fontSize: pxToRem(11),
+  color: "var(--text-paper-d2)",
+};
+const groupPill: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "3px 8px",
+  borderRadius: 999,
+  background: "var(--paper-2)",
+};
 const customBox: React.CSSProperties = {
   display: "flex",
   flexWrap: "wrap",

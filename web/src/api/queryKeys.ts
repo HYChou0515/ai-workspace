@@ -13,6 +13,10 @@ export const qk = {
   me: ["me"] as const,
   users: ["users"] as const,
   notifications: ["notifications"] as const,
+  // #608 — logical groups. `groups` = the management list (what I own/maintain/
+  // belong to); `pickableGroups` = every group, name+count, for the share picker.
+  groups: ["groups"] as const,
+  pickableGroups: ["groups", "pickable"] as const,
 
   investigations: ["investigations"] as const,
   investigation: (id: string) => ["investigation", id] as const,

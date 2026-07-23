@@ -657,7 +657,7 @@ describe("KbDocIde", () => {
   it("offers the Permissions action to a superuser who is not the collection owner", async () => {
     // The backend gate (_authorize_doc_permission) is owner OR superuser; the
     // FE control was a bare owner string-compare, hiding it from admins.
-    const spy = vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true });
+    const spy = vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true, groups: [] });
     try {
       await openDoc("someone-else");
       expect(await screen.findByTestId("doc-permissions")).toBeInTheDocument();
