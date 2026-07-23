@@ -118,6 +118,7 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
         "kb_search",
         "ask_wiki",
         "lookup_glossary",
+        "lookup_entity",
         "request_wiki_update",
     ]
     prompt = kb.system_prompt  # ty: ignore[unresolved-attribute]
