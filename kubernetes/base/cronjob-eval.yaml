@@ -8,7 +8,8 @@
 # route exist, and the eval worker (or an all-in-one API with RUN_CONSUMERS=true)
 # must be consuming the `eval` JobType.
 #
-# Tune: `schedule` (cron, UTC — e.g. "0 2 * * 6" for Saturdays only), the
+# Tune: `schedule` (cron, in `timeZone` Asia/Taipei — e.g. "0 2 * * 6" for
+# Saturdays only; needs Kubernetes ≥1.27 for the GA timeZone field), the
 # `sample_size`, and the `run_label`. Auth: this POSTs unauthenticated to the
 # in-cluster ClusterIP service; if the deploy gates the create route, add the
 # appropriate auth header to the curl below.
@@ -17,7 +18,8 @@ kind: CronJob
 metadata:
   name: rca-eval-nightly
 spec:
-  schedule: "0 2 * * *" # 02:00 UTC daily
+  schedule: "0 2 * * *" # 02:00 Asia/Taipei, nightly (UTC would be 10:00 Taipei — mid-workday)
+  timeZone: "Asia/Taipei"
   concurrencyPolicy: Forbid # never overlap two eval runs
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
