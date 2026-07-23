@@ -1234,9 +1234,15 @@ def register_kb_routes(
         operator persists a good guidance separately via PATCH /collection. The
         re-parse re-runs the parser (VLM), so this is offloaded off the loop."""
         try:
-            spec.get_resource_manager(SourceDoc).get(body.doc_id)
+            doc = spec.get_resource_manager(SourceDoc).get(body.doc_id).data
         except ResourceIDNotFoundError:
             raise HTTPException(status_code=404, detail="document not found") from None
+        assert isinstance(doc, SourceDoc)
+        # #607: the probe returns the doc's CONTENT (ranked passage snippets), so it
+        # inherits the read gate `render_document` uses — collection read_content +
+        # any per-doc #308 override — before any retrieval / re-parse runs.
+        _authorize_collection(doc.collection_id, "read_content")
+        _authorize_doc_content(doc)
         result = await asyncio.to_thread(
             probe_findability,
             spec,
@@ -1258,9 +1264,14 @@ def register_kb_routes(
         re-parses the doc first (the After box). Retrieve / dry-run / LLM stream are
         all blocking, so they run in a worker thread feeding an async SSE queue."""
         try:
-            spec.get_resource_manager(SourceDoc).get(body.doc_id)
+            doc = spec.get_resource_manager(SourceDoc).get(body.doc_id).data
         except ResourceIDNotFoundError:
             raise HTTPException(status_code=404, detail="document not found") from None
+        assert isinstance(doc, SourceDoc)
+        # #607: streams an answer synthesised from this doc's full passages — same
+        # content read gate as `render_document` / the probe, before any retrieval.
+        _authorize_collection(doc.collection_id, "read_content")
+        _authorize_doc_content(doc)
         k = max(1, min(body.k, 100))
 
         async def gen() -> AsyncIterator[str]:
@@ -1558,6 +1569,7 @@ def register_kb_routes(
     async def list_wiki_pages(collection_id: str) -> WikiTreeOut:
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "read_content")  # #607: wiki is derived content
         pages = await WikiFileStore(spec).ls(collection_id)
         return WikiTreeOut(pages=sorted(pages))
 
@@ -1566,6 +1578,7 @@ def register_kb_routes(
         from ..filestore.protocol import FileNotFound
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "read_content")  # #607
         try:
             data = await WikiFileStore(spec).read(collection_id, path)
         except FileNotFound as exc:
@@ -1599,6 +1612,7 @@ def register_kb_routes(
         from ..filestore.protocol import FileNotFound
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "edit_content")  # #607
         store = WikiFileStore(spec)
         try:
             data = await store.read(collection_id, from_)
@@ -1615,6 +1629,7 @@ def register_kb_routes(
         from ..filestore.protocol import FileNotFound
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "edit_content")  # #607
         store = WikiFileStore(spec)
         try:
             with store.acting_as(get_user_id()):
@@ -1625,6 +1640,7 @@ def register_kb_routes(
 
     @app.get("/kb/collections/{collection_id}/wiki/status")
     async def wiki_status(collection_id: str) -> WikiStatusOut:
+        _authorize_collection(collection_id, "read_content")  # #607: leaks page names / errors
         if wiki_coordinator is None:
             return WikiStatusOut(building=False, total=0, done=0)
         st = wiki_coordinator.status(collection_id)
@@ -1644,6 +1660,7 @@ def register_kb_routes(
         # passes, one per source — the coordinator serialises them). The
         # maintainer updates pages in place; this is the manual "refresh the
         # wiki" path. No-op (queued=0) when the wiki path isn't enabled.
+        _authorize_collection(collection_id, "edit_content")  # #607
         coll_rm = spec.get_resource_manager(Collection)
         try:
             coll = coll_rm.get(collection_id).data
@@ -1689,6 +1706,7 @@ def register_kb_routes(
         # fix links). PROSE wiki only (a code wiki is regenerated deterministically,
         # not reflected); queued=0/disabled when the wiki path isn't enabled or it's
         # a code collection. Progress shows on the same GET .../wiki/status poll.
+        _authorize_collection(collection_id, "edit_content")  # #607
         coll_rm = spec.get_resource_manager(Collection)
         try:
             coll = coll_rm.get(collection_id).data
@@ -1708,6 +1726,7 @@ def register_kb_routes(
         # this is the deliberate "start over" escape hatch.
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "edit_content")  # #607
         return WikiClearedOut(cleared=await WikiFileStore(spec).clear(collection_id))
 
     @app.post("/kb/collections/{collection_id}/wiki/corrections")
@@ -1719,6 +1738,12 @@ def register_kb_routes(
         # coordinator.submit_correction. 400 when the collection has no wiki (Q13).
         from ..kb.wiki.corrections import WikiNotEnabledError
 
+        # #607: reporting a wiki error is a READER-tier action — the fix is applied
+        # by the trusted background corrector, recorded on the immune page, not by
+        # the reporter. read_content ALSO keeps this consistent with the agent tool
+        # `request_wiki_update`, which converges on the same coordinator call with
+        # no edit gate (CLAUDE.md: two rules for one operation guarantee drift).
+        _authorize_collection(collection_id, "read_content")
         if wiki_coordinator is None:
             raise HTTPException(status_code=400, detail="this collection has no wiki to correct")
         if not body.instruction.strip():
@@ -1746,6 +1771,7 @@ def register_kb_routes(
         # streams under the hood; run it off the event loop.
         from ..kb.wiki.correction_draft import QA, draft_correction
 
+        _authorize_collection(collection_id, "read_content")  # #607: reads to draft, no mutation
         answered = [QA(question=x.question, answer=x.answer) for x in body.answered]
         draft = await asyncio.to_thread(
             draft_correction,
@@ -1900,6 +1926,10 @@ def register_kb_routes(
         collections dashboard's `latest_doc`, specstar #406) plus the same
         collection-scoped IndexRun metas search the list uses. Metas-only, no
         row materialisation — cheap enough to tick every 1.5s."""
+        # #607: mirrors the documents LIST gate — the counts, latest activity and
+        # per-run keys (which embed indexing doc paths) belong to whoever may read
+        # the collection's content.
+        _authorize_collection(collection_id, "read_content")
         rm = spec.get_resource_manager(SourceDoc)
         rows = rm.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
             by=QB["status"],
@@ -2155,6 +2185,9 @@ def register_kb_routes(
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail="document not found") from exc
         assert isinstance(doc, SourceDoc)
+        # #607: writing a doc's parse guidance edits the collection's content — gate
+        # on the LIVE collection's edit_content (404 hides an invisible collection).
+        _authorize_collection(doc.collection_id, "edit_content")
         rm.update(doc_id, msgspec.structs.replace(doc, parser_guidance_override=body.guidance))
         return DocGuidanceOut(parser_guidance_override=body.guidance)
 
@@ -2166,6 +2199,7 @@ def register_kb_routes(
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         assert isinstance(doc, SourceDoc)
+        _authorize_collection(doc.collection_id, "edit_content")  # #607
         rm.update(doc_id, msgspec.structs.replace(doc, status="indexing"))
         # #390: force recompute — drop the cached result so the rebuild misses and
         # repopulates it (see reindex_collection).
@@ -2180,9 +2214,11 @@ def register_kb_routes(
         # chunks first, then the doc itself (hard delete — current-only data).
         rm = spec.get_resource_manager(SourceDoc)
         try:
-            rm.get(doc_id)
+            doc = rm.get(doc_id).data
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        assert isinstance(doc, SourceDoc)
+        _authorize_collection(doc.collection_id, "edit_content")  # #607
 
         async def _teardown_one(did: str) -> None:
             # #43: ask the wiki to un-fold this source BEFORE the row is gone — the
@@ -2240,6 +2276,7 @@ def register_kb_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         old = rev.data
         assert isinstance(old, SourceDoc)
+        _authorize_collection(old.collection_id, "edit_content")  # #607
         # #513 P7: an attachment (parent_doc_id set) may only be renamed WITHIN its
         # locked `{parent}/.att/` prefix — so a rename can't detach it from its
         # parent or escape the attachment namespace. Top-level docs are unrestricted.
