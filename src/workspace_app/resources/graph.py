@@ -25,18 +25,30 @@ from specstar import OnDelete, Ref
 
 
 class GraphClaim(Struct):  # → resource "graph-claim"
-    """One extracted metric measurement — flat, queryable evidence (#534 slice 1).
+    """One statement a document made about a thing — 「誰 · 什麼屬性 · 值」 (#534
+    slice 1, re-cut by #630).
+
+    The value's TYPE is not a gate: "98.7" and "PPOOIXUX" are the same kind of
+    fact, and the earlier numeric-only cut made half of them unrepresentable (see
+    #630 and the #628 survey — no builder in the field gates on type). Two
+    qualifier layers, following every mature graph model: ``unit`` belongs to the
+    VALUE ("98.7" + "%" is one quantity); ``period`` belongs to the STATEMENT
+    (when it held), not to what the value is.
+
+    Rows written before #630 carry no subject and cannot be given one after the
+    fact — the extraction never asked for it. They are re-created by the next
+    per-doc extraction, which wipes then rewrites.
 
     Collection-scoped (permission inherits like SourceDoc / DocChunk via the
     cascade ``Ref``); ``source_doc_id`` / ``chunk_id`` are the provenance back to
     the source deck/slide. ``value`` is stored VERBATIM ("1.2M", "15%") —
     normalisation (parse → number + unit) is a later, app-side concern.
 
-    Indexed: ``collection_id`` (Ref, auto), ``norm_metric`` + ``period`` (filter a
-    metric's values across decks and, later, rollup grouping), ``source_doc_id``
-    (so a re-extraction can wipe + rewrite one doc's claims). ``norm_metric`` is
-    the server-computed normalised key; ``metric`` keeps the raw surface form for
-    display.
+    Indexed: ``collection_id`` (Ref, auto), ``norm_subject`` / ``norm_attribute``
+    / ``norm_value`` / ``norm_period`` (find a thing's statements, group an
+    attribute across decks, and look up who holds a value), ``source_doc_id`` (so
+    a re-extraction can wipe + rewrite one doc's claims). The ``norm_*`` keys are
+    server-computed; the raw surfaces beside them are what a person reads.
 
     #534 slice 2: the ``collection_*`` / ``doc_*`` fields are a denormalized
     mirror of the READ permission of the deck this claim came from, so
@@ -52,9 +64,19 @@ class GraphClaim(Struct):  # → resource "graph-claim"
 
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
     source_doc_id: str  # provenance: the deck/doc (indexed; NOT a cascade Ref)
-    norm_metric: str  # normalised metric key (indexed) — filter / group on this
-    metric: str  # raw surface form (display)
-    value: str  # verbatim value ("1.2M", "15%")
+    # #630: WHOSE attribute this is. Normalised with `norm_surface` — the same
+    # rule entity surfaces use — because that is what lets a claim meet an
+    # identity at all; a key computed by a different rule could never match one.
+    norm_subject: str  # (indexed) — find every statement about one thing
+    subject: str  # raw surface form (display), exactly as the passage wrote it
+    norm_attribute: str  # normalised attribute key (indexed) — filter / group
+    attribute: str  # raw surface form (display)
+    value: str  # verbatim value, whatever its type ("1.2M", "15%", "PPOOIXUX")
+    # #630: the value's key, ALSO `norm_surface` — a value that some document
+    # elsewhere talks about as a subject is that identity, and matching the two
+    # requires one shared rule. Indexed so "who has this as an attribute value"
+    # is a query (「PPOO 系列被哪些機台使用」).
+    norm_value: str = ""
     period: str = ""  # raw surface form (display)
     unit: str = ""  # raw surface form (display)
     # #534 甲: the comparison keys, DERIVED from the raw surfaces above by the pure

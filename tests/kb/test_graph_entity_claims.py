@@ -1,12 +1,16 @@
-"""#534 — the numbers land on the entity (claims join the backbone).
+"""#630 — a statement lands on the thing it NAMES, not the slide it shared.
 
-Before this, GraphClaim was a write-only island: "回焊爐 Q3 良率 98.7%" was
-extracted but never attached to 回焊爐, so the entity page had names and arrows
-but no data. The join is CO-LOCATION, read-time: a claim belongs on the page
-when its ``chunk_id`` is one of the chunks a readable mention of this entity
-was seen in — the number was stated on a slide that talks about the thing. No
-schema change, no re-extraction, and a wrong association costs nothing to fix
-(re-linking mentions moves the numbers with them).
+#628 filed a figure by co-location: the claim carried no subject, so the only
+handle available was "it was on a slide this entity was mentioned on". That is a
+guess, and it gets worse the more a slide talks about — a deck covering ten
+machines smeared every number across all ten.
+
+Since #630 the extraction records whose attribute it is, so the binding is what
+the passage said: ``norm_subject`` meets the entity's ``norm_keys``. The two
+tests below are deliberately the cases where the old rule and the new one give
+OPPOSITE answers — a claim about this thing on a slide with no mention of it
+(co-location said no, the subject says yes), and a claim about something else on
+the very slide the mention sits on (co-location said yes, the subject says no).
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ from __future__ import annotations
 from specstar import SpecStar
 
 from workspace_app.kb.graph.link import link_identical_mentions
-from workspace_app.kb.graph.normalize import norm_metric, norm_surface
+from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.kb.graph.review import entity_page
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim, GraphEntity, GraphMention, mention_id
@@ -56,9 +60,10 @@ def _claim(
     spec: SpecStar,
     cid: str,
     *,
-    doc: str,
-    chunk: str,
-    metric: str = "良率",
+    subject: str,
+    doc: str = "deck-A",
+    chunk: str = "deck-A#0",
+    attribute: str = "良率",
     value: str = "98.7",
     period: str = "Q3",
     doc_visibility: str = "public",
@@ -70,9 +75,12 @@ def _claim(
                 collection_id=cid,
                 source_doc_id=doc,
                 chunk_id=chunk,
-                norm_metric=norm_metric(metric),
-                metric=metric,
+                norm_subject=norm_surface(subject),
+                subject=subject,
+                norm_attribute=norm_attribute(attribute),
+                attribute=attribute,
                 value=value,
+                norm_value=norm_surface(value),
                 period=period,
                 norm_period=period.casefold(),
                 unit="%",
@@ -90,45 +98,50 @@ def _cid(spec: SpecStar) -> str:
     raise AssertionError("no collection")
 
 
-def test_a_number_stated_beside_the_entity_lands_on_its_page():
+def test_a_statement_about_this_thing_lands_even_from_a_slide_that_never_names_it():
+    """Co-location said no; the subject says yes. A summary slide can state a
+    machine's yield without repeating its name in a form the mention captured."""
     spec = make_spec()
     eid = _seed(spec)
-    cid = _cid(spec)
-    _claim(spec, cid, doc="deck-A", chunk="deck-A#0")  # same slide as the mention
+    _claim(spec, _cid(spec), subject="回焊爐", chunk="deck-A#7")
 
     page = entity_page(spec, eid, as_user="alice")
 
     assert len(page.claims) == 1
-    claim = page.claims[0]
-    assert claim.metric == "良率"
-    assert claim.value == "98.7"
-    assert claim.source_doc_id == "deck-A"
+    assert page.claims[0].subject == "回焊爐"
+    assert page.claims[0].value == "98.7"
 
 
-def test_a_number_from_an_unrelated_slide_stays_off_the_page():
-    """Same doc, different slide — the co-location rule is the CHUNK, not the
-    document: a deck can talk about ten machines and its numbers must not smear
-    across all of them."""
+def test_a_statement_about_something_else_stays_off_even_on_the_very_same_slide():
+    """Co-location said yes; the subject says no. This is the smearing #630 kills:
+    one slide, ten machines, ten numbers — each belongs to exactly one of them."""
     spec = make_spec()
     eid = _seed(spec)
-    cid = _cid(spec)
-    _claim(spec, cid, doc="deck-A", chunk="deck-A#7")  # a slide with no mention
+    _claim(spec, _cid(spec), subject="產線三", chunk="deck-A#0")
 
     page = entity_page(spec, eid, as_user="alice")
 
     assert page.claims == []
 
 
-def test_an_unreadable_docs_number_never_arrives():
-    """The claim's own access scope filters it — same one the auto routes use."""
+def test_the_subject_is_matched_the_way_names_are_matched():
+    """Typing noise is not identity — the subject key is `norm_surface`, the same
+    rule the entity's own keys are built with, which is what lets them meet."""
     spec = make_spec()
     eid = _seed(spec)
-    cid = _cid(spec)
-    _claim(spec, cid, doc="deck-A", chunk="deck-A#0", doc_visibility="private")
+    _claim(spec, _cid(spec), subject="回 焊 爐")
 
     page = entity_page(spec, eid, as_user="alice")
-    assert page.claims == []
 
+    assert len(page.claims) == 1
+
+
+def test_a_statement_from_an_unreadable_document_never_arrives():
+    """The claim's own access scope filters it — the same one the auto routes use."""
+    spec = make_spec()
+    eid = _seed(spec)
+    _claim(spec, _cid(spec), subject="回焊爐", doc_visibility="private")
+
+    assert entity_page(spec, eid, as_user="alice").claims == []
     # the owner still sees it — hidden by permission, not lost
-    owner_page = entity_page(spec, eid, as_user="bob")
-    assert len(owner_page.claims) == 1
+    assert len(entity_page(spec, eid, as_user="bob").claims) == 1

@@ -15,7 +15,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.graph.link import link_identical_mentions
-from workspace_app.kb.graph.normalize import norm_metric, norm_surface
+from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim, GraphEntity, GraphMention, mention_id
@@ -231,8 +231,10 @@ def test_the_entity_page_carries_the_numbers_stated_beside_it():
                 collection_id=cid,
                 source_doc_id="deck-A",
                 chunk_id="deck-A#0",
-                norm_metric=norm_metric("良率"),
-                metric="良率",
+                norm_subject=norm_surface("回焊爐"),
+                subject="回焊爐",
+                norm_attribute=norm_attribute("良率"),
+                attribute="良率",
                 value="98.7",
                 period="Q3",
                 norm_period="q3",
@@ -246,8 +248,8 @@ def test_the_entity_page_carries_the_numbers_stated_beside_it():
     body = client.get(f"/kb/graph/entities/{eid}").json()
     assert len(body["claims"]) == 1
     c = body["claims"][0]
-    assert c["metric"] == "良率"
-    assert c["norm_metric"] == norm_metric("良率")
+    assert c["attribute"] == "良率"
+    assert c["norm_attribute"] == norm_attribute("良率")
     assert c["value"] == "98.7"
     assert c["unit"] == "%"
     assert c["period"] == "Q3"

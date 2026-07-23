@@ -1,4 +1,4 @@
-"""Persist a doc's metric claims (#534 slice 1).
+"""Persist a doc's attribute statements (#534 slice 1, re-cut by #630).
 
 Idempotent per-doc: re-extracting a doc WIPES its existing GraphClaims then
 writes fresh, so tuning the prompt and re-running never double-counts. Entity
@@ -17,8 +17,8 @@ from ...resources.graph import GraphClaim
 from ..doc_permission import doc_mirror_fields
 from ..llm import ILlm
 from .extract import extract_claims
-from .normalize import norm_metric as _norm_metric
-from .normalize import norm_period, norm_unit
+from .normalize import norm_attribute as _norm_attribute
+from .normalize import norm_period, norm_surface, norm_unit
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ def write_doc_claims(
     source_doc_id: str,
     chunks: Iterable[tuple[str, str]],
 ) -> int:
-    """Extract + idempotently persist one doc's metric claims. ``chunks`` is
+    """Extract + idempotently persist one doc's attribute statements. ``chunks`` is
     ``(chunk_id, text)`` pairs. Wipes the doc's existing GraphClaims first (a
     metas-only delete), then writes fresh. Returns the number written."""
     rm = spec.get_resource_manager(GraphClaim)
@@ -86,9 +86,12 @@ def write_doc_claims(
                     collection_id=collection_id,
                     source_doc_id=source_doc_id,
                     chunk_id=chunk_id,
-                    norm_metric=_norm_metric(claim.metric),
-                    metric=claim.metric,
+                    norm_subject=norm_surface(claim.subject),
+                    subject=claim.subject,
+                    norm_attribute=_norm_attribute(claim.attribute),
+                    attribute=claim.attribute,
                     value=claim.value,
+                    norm_value=norm_surface(claim.value),
                     period=claim.period,
                     norm_period=norm_period(claim.period),
                     unit=claim.unit,

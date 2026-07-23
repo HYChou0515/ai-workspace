@@ -14,7 +14,7 @@ from specstar import SpecStar
 
 from workspace_app.kb.graph.link import link_identical_mentions, reconcile_vocabulary
 from workspace_app.kb.graph.lookup import entity_card
-from workspace_app.kb.graph.normalize import norm_metric, norm_surface
+from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import (
@@ -93,8 +93,10 @@ def _seed(spec: SpecStar, *, private: bool = False) -> str:
                 collection_id=cid,
                 source_doc_id="deck-A",
                 chunk_id="deck-A#0",
-                norm_metric=norm_metric("良率"),
-                metric="良率",
+                norm_subject=norm_surface("回焊爐"),
+                subject="回焊爐",
+                norm_attribute=norm_attribute("良率"),
+                attribute="良率",
                 value="98.7",
                 period="Q3",
                 norm_period="q3",

@@ -35,8 +35,10 @@ def _claim(cid: str, **mirror) -> GraphClaim:
     return GraphClaim(
         collection_id=cid,
         source_doc_id="deck-A",
-        norm_metric="revenue",
-        metric="Revenue",
+        norm_subject="acme",
+        subject="Acme",
+        norm_attribute="revenue",
+        attribute="Revenue",
         value="999M",
         **mirror,
     )

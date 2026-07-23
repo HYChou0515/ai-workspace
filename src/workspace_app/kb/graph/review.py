@@ -85,9 +85,9 @@ class EntityPage:
     links: list[GraphEntityLink]
     occurrences: int
     related: list[Related]
-    # #534: the numbers stated beside this entity — claims whose chunk is one a
-    # readable mention was seen in (co-location; the join that puts DATA on the
-    # graph instead of only names and arrows).
+    # #534/#630: what documents STATED about this identity — attribute
+    # statements whose subject resolves here. This is the join that puts DATA on
+    # the graph instead of only names and arrows.
     claims: list[GraphClaim]
 
 
@@ -293,7 +293,7 @@ def entity_page(spec: SpecStar, entity_id: str, *, as_user: str) -> EntityPage:
             links.append(link)
             mentions.append(mention)
         related = _related(spec, entity, as_user=as_user)
-        claims = _claims_beside(spec, mentions, as_user=as_user)
+        claims = _claims_about(spec, entity, as_user=as_user)
     return EntityPage(
         entity=entity,
         mentions=mentions,
@@ -304,34 +304,37 @@ def entity_page(spec: SpecStar, entity_id: str, *, as_user: str) -> EntityPage:
     )
 
 
-def _claims_beside(
-    spec: SpecStar, mentions: list[GraphMention], *, as_user: str
-) -> list[GraphClaim]:
-    """The numbers stated on the slides where these mentions were seen.
+def _claims_about(spec: SpecStar, entity: GraphEntity, *, as_user: str) -> list[GraphClaim]:
+    """Every statement a document made ABOUT this identity.
 
-    Co-location, not attribution: a claim joins the page when its ``chunk_id`` is
-    one of the chunks a READABLE mention was seen in — the deck said the number
-    on a slide that talks about the thing. The chunk, not the document, is the
-    unit: a deck covering ten machines must not smear its numbers across all
-    ten. Reads under the claim's own registered access scope (the same one the
-    auto routes use), so an unreadable deck's numbers never arrive — no second
+    The binding is what the passage SAID: a statement names its subject (#630),
+    and the subject's key is built by the same rule as the identity's own keys,
+    so the two meet directly. #628 had to guess by co-location — "the number was
+    on a slide this thing was mentioned on" — which smeared every figure on a
+    ten-machine slide across all ten and missed any figure stated on a slide
+    that never repeated the name. Both rules are not kept: two rules for one
+    question guarantee one of them is wrong somewhere and nobody knows where.
+
+    Reads under the claim's own registered access scope (the same one the auto
+    routes use), so an unreadable deck's statements never arrive — no second
     permission rule here to drift.
     """
-    wanted: dict[str, set[str]] = {}
-    for m in mentions:
-        wanted.setdefault(m.source_doc_id, set()).update(m.chunk_ids)
-    if not wanted:
+    if not entity.norm_keys:
         return []
     crm = spec.get_resource_manager(GraphClaim)
     out: list[GraphClaim] = []
+    seen: set[str] = set()
     with crm.using(as_user, apply_access_scope=True):  # ty: ignore[unknown-argument]
-        for doc_id, chunk_ids in wanted.items():
-            for r in crm.list_resources((QB["source_doc_id"] == doc_id).build()):
+        for key in entity.norm_keys:
+            for r in crm.list_resources((QB["norm_subject"] == key).build()):
                 claim = r.data
                 assert isinstance(claim, GraphClaim)
-                if claim.chunk_id in chunk_ids:
-                    out.append(claim)
-    out.sort(key=lambda c: (c.norm_metric, c.norm_period, c.source_doc_id))
+                rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+                if rid in seen:
+                    continue  # two keys of one identity can match one statement
+                seen.add(rid)
+                out.append(claim)
+    out.sort(key=lambda c: (c.norm_attribute, c.norm_period, c.source_doc_id))
     return out
 
 

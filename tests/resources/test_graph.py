@@ -25,9 +25,12 @@ def test_graph_claim_round_trip(spec_instance: SpecStar):
         GraphClaim(
             collection_id="c1",
             source_doc_id="deck-A",
-            norm_metric="營收",
-            metric="營收",
+            norm_subject="acme",
+            subject="Acme",
+            norm_attribute="營收",
+            attribute="營收",
             value="1.2M",
+            norm_value="1.2m",
             period="FY24 Q3",
             unit="USD",
             chunk_id="deck-A#7",
@@ -36,7 +39,8 @@ def test_graph_claim_round_trip(spec_instance: SpecStar):
     got = rm.get(rev.resource_id).data
     assert isinstance(got, GraphClaim)
     assert got.collection_id == "c1"
-    assert got.norm_metric == "營收"
+    assert got.norm_attribute == "營收"
+    assert got.subject == "Acme"
     assert got.value == "1.2M"
     assert got.period == "FY24 Q3"
     assert got.confidence == 1.0

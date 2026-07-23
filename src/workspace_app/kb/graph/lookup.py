@@ -66,10 +66,10 @@ def _render(spec: SpecStar, page: EntityPage, *, as_user: str) -> str:
     lines.append(f"Mentioned {page.occurrences} times across {len(docs)} documents.")
 
     if page.claims:
-        lines += ["", "## Numbers stated beside it"]
+        lines += ["", "## What the documents state about it"]
         for c in page.claims:
             period = f" ({c.period})" if c.period else ""
-            lines.append(f"- {c.metric} = {c.value}{c.unit}{period} [{c.source_doc_id}]")
+            lines.append(f"- {c.attribute} = {c.value}{c.unit}{period} [{c.source_doc_id}]")
 
     lines += ["", "## Documents that mention it"]
     for m in page.mentions:
