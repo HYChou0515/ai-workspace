@@ -747,6 +747,18 @@ def get_kb_quality_judge_llm(settings: Settings) -> ILlm | None:
     return _llm_from_chain(resolve_llm_chain(settings, ref))
 
 
+def get_goal_checker_llm(settings: Settings) -> ILlm | None:
+    """#613 P3: the cheap LLM that judges "does the chat's goal condition hold?"
+    after each turn. Resolution: `goal.checker` if set, else reuse
+    `kb.retrieval_llm` (a deploy with a cheap retrieval model gets goal checking
+    for free — setting a goal is the opt-in, not a second config key). Both
+    unset ⇒ `None` = auto-continue off — and the /goal routes DISCLOSE that on
+    the wire (`checker_enabled`) so a set goal is never a silently dead knob.
+    Inherits the referenced preset's failover chain like every other role."""
+    ref = settings.goal.checker or settings.kb.retrieval_llm
+    return _llm_from_chain(resolve_llm_chain(settings, ref))
+
+
 def get_sanity_judge_llm(settings: Settings) -> ILlm | None:
     """The LLM-as-judge for the Diagnostics sanity matrix (#231): scores each cell
     pass/fail (ai_grade/ai_note) and writes the per-model fitness verdict.

@@ -40,6 +40,7 @@ from .schema import (
     FailoverSettings,
     FilestoreSettings,
     GitSettings,
+    GoalSettings,
     HealthSettings,
     HistorySettings,
     HttpSandboxSettings,
@@ -448,6 +449,12 @@ _TOP_SCHEMA: dict[str, Any] = {
         # kb.retrieval_llm / kb.card_drafter (preset ref + optional overrides).
         "judge_llm": "__retrieval_llm__",
     },
+    # #613 P3: per-chat goal auto-continue — checker LLM (usage-entry shape
+    # like health.judge_llm) + the hard round budget.
+    "goal": {
+        "checker": "__retrieval_llm__",
+        "max_rounds": set(),
+    },
     "agents": "__agents__",  # sentinel — handled by _check_agents_keys
     # Issue #58/#59: durable wiki-maintenance queue backend selection.
     "message_queue": {
@@ -654,6 +661,10 @@ def _check_retrieval_llm_reference(merged: dict[str, Any], *, source: str) -> No
         ("kb.deck_vlm", kb.get("deck_vlm")),
         ("kb.quality_judge", kb.get("quality_judge")),
         ("kb.wiki.llm", wiki.get("llm") if isinstance(wiki, dict) else None),
+        # #231's judge was missing from this list — a typo'd preset name silently
+        # disabled AI scoring (the dead-knob class); locked in alongside #613's.
+        ("health.judge_llm", merged.get("health", {}).get("judge_llm")),
+        ("goal.checker", merged.get("goal", {}).get("checker")),
     ]
     for path, ref in refs:
         if not isinstance(ref, dict):
@@ -733,6 +744,10 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             checks=list(d.get("health", {}).get("checks", [])),
             checks_disabled=list(d.get("health", {}).get("checks_disabled", [])),
             judge_llm=_build_retrieval_llm(d.get("health", {}).get("judge_llm")),
+        ),
+        goal=GoalSettings(
+            checker=_build_retrieval_llm(d.get("goal", {}).get("checker")),
+            max_rounds=int(d.get("goal", {}).get("max_rounds", GoalSettings().max_rounds)),
         ),
         message_queue=_build_message_queue(d["message_queue"]),
         event_bus=_build(EventBusSettings, d["event_bus"]),

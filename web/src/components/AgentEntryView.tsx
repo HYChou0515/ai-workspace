@@ -242,6 +242,26 @@ export function EntryView({
   if (entry.kind === "mention") {
     return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
   }
+  if (entry.kind === "goal_note") {
+    // #613 P3: the goal driver's outcome marker — a quiet status line, like a
+    // mention (informational, not part of the dialogue).
+    return (
+      <div
+        data-testid="goal-note"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 8px",
+          fontSize: pxToRem(12),
+          color: "var(--text-paper-d)",
+          borderLeft: "2px solid var(--accent)",
+        }}
+      >
+        <span>{entry.text}</span>
+      </div>
+    );
+  }
   if (entry.kind === "phase") {
     return <PhaseDivider phase={entry.phase} />;
   }

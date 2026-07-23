@@ -30,6 +30,7 @@ import { NewItemPicker } from "./NewItemPicker";
 import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
 import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
 import { WorkflowLaunchMenu } from "./WorkflowLaunchMenu";
+import { TodoPanel } from "./TodoPanel";
 import { WorkflowProgress } from "./WorkflowProgress";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
@@ -429,6 +430,16 @@ function ItemChatPanel({
           stopping={cancel.isPending}
         />
       )}
+
+      {/* #613: the agent's todo checklist for THIS chat — pinned above the feed
+          like the workflow progress. Locks editing while a turn streams. */}
+      <TodoPanel
+        slug={slug}
+        itemId={itemId}
+        chatId={chat.chat_id}
+        streaming={agent.log.streaming}
+        readOnly={!!readOnly}
+      />
 
       {gate && (
         <div

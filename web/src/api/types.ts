@@ -22,7 +22,15 @@ export type Status =
 
 /* ------------------------- Domain models ------------------------- */
 
-export type MessageRole = "user" | "assistant" | "tool" | "system" | "mention" | "error";
+// #613 P3: `goal` = the goal driver's outcome marker (met / exhausted) — FE-only.
+export type MessageRole =
+  | "user"
+  | "assistant"
+  | "tool"
+  | "system"
+  | "mention"
+  | "goal"
+  | "error";
 
 export type Message = {
   role: MessageRole;

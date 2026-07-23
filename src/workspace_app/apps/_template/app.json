@@ -16,7 +16,7 @@
   "function": { "workspace": true, "sandbox": false, "terminal": false },
   "agent": {
     "prompt_file": "prompts/system.md",
-    "tools": ["ask_user", "read_file", "write_file", "edit_file", "list_files", "exists", "delete_file", "save_workflow"],
+    "tools": ["ask_user", "update_todos", "read_file", "write_file", "edit_file", "list_files", "exists", "delete_file", "save_workflow"],
     "skills": ["author-skill", "author-workflow", "grill-me"],
     "picker": [{ "preset": "qwen3-local", "name": "My App · Qwen3 (local)" }],
     "suggestions": [{ "label": "Summarise", "prompt": "Summarise this item." }]

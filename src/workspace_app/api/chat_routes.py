@@ -11,6 +11,7 @@ they live next to ``create_app``; these routes only address chats and delegate.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
@@ -21,6 +22,7 @@ from ..resources import Conversation
 from ..workflow.orchestrator import WorkflowOrchestrator
 from .activity import ActivityLog
 from .chat_info import chat_info_from_resource, item_run_status
+from .events import GoalUpdated, TodosUpdated
 from .item_conversation_perm import item_conversation_mirror
 from .locator import ItemLocator
 from .promote import promote_chat_to_kb
@@ -28,9 +30,15 @@ from .rca_messages import undo_cut_index
 from .schemas import (
     _ChatInfo,
     _CreateChatBody,
+    _GoalBody,
+    _GoalOut,
+    _GoalWire,
     _MentionBody,
     _MessageBody,
     _RenameChatBody,
+    _TodoItemWire,
+    _TodosBody,
+    _TodosOut,
     _UndoOut,
 )
 from .timeutil import now_ms
@@ -57,6 +65,8 @@ def register_chat_routes(
     kb_chat_pipeline: object | None,
     send_into: SendInto,
     record_mention: RecordMention,
+    goal_max_rounds: int = 3,
+    goal_checker_enabled: bool = True,
 ) -> None:
     """Mount the RCA workspace + multi-chat routes onto ``app``."""
     conv_rm = spec.get_resource_manager(Conversation)
@@ -204,6 +214,13 @@ def register_chat_routes(
             await workflow_orchestrator.cancel(conv.run_id, investigation_id)
         await turn_engine.forget(locator.engine_key(investigation_id, rid))
         conv_rm.delete(rid)
+        # #613: drop the chat's point-key side rows too — a deleted chat must
+        # not strand its todo checklist or goal (they key on this rid).
+        from ..resources.conversation_goal import clear_goal
+        from ..resources.conversation_todos import clear_todos
+
+        clear_todos(spec, rid)
+        clear_goal(spec, rid)
         # Deleting the DEFAULT chat promotes another one, and the default keys on
         # the ITEM id while every other chat keys on its own — so the promoted
         # chat's engine key just changed under anyone watching it. Their stream
@@ -243,6 +260,101 @@ def register_chat_routes(
             turn_engine.subscribe_sse(locator.engine_key(investigation_id, chat_id), since=since),
             media_type="text/event-stream",
         )
+
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/todos")
+    async def get_chat_todos(slug: str, item_id: str, chat_id: str) -> _TodosOut:
+        """#613: the chat's current todo checklist — the pinned panel's initial
+        hydration (live updates ride the stream as `TodosUpdated`). A chat that
+        never had todos reads as an empty list, not a 404."""
+        from ..resources.conversation_todos import read_todos
+
+        locator.require_access(slug, item_id, "read_chat")
+        rid, _conv = locator.require_chat(slug, item_id, chat_id)
+        stored = read_todos(spec, rid)
+        items = stored.items if stored is not None else []
+        # Stored statuses were validated on write; the cast bridges the stored
+        # `str` to the wire Literal (pydantic re-validates at construction).
+        return _TodosOut(
+            items=[cast("Any", _TodoItemWire)(text=t.text, status=t.status) for t in items]
+        )
+
+    @app.put("/a/{slug}/items/{item_id}/chats/{chat_id}/todos")
+    async def put_chat_todos(slug: str, item_id: str, chat_id: str, body: _TodosBody) -> _TodosOut:
+        """#613: a user edit of the checklist — whole-list REPLACE (the same
+        semantics as the agent's `update_todos` tool; the FE locks editing while
+        a turn streams, so the two writers don't interleave). The new list is
+        broadcast on the chat's stream so other viewers' panels follow."""
+        from ..resources.conversation_todos import TodoItem, upsert_todos
+
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        rid, _conv = locator.require_chat(slug, item_id, chat_id)
+        upsert_todos(
+            spec,
+            rid,
+            [TodoItem(text=t.text, status=t.status) for t in body.items],
+            user=get_user_id(),
+        )
+        turn_engine.publish(
+            locator.engine_key(investigation_id, rid),
+            TodosUpdated(items=[{"text": t.text, "status": t.status} for t in body.items]),
+        )
+        return _TodosOut(items=body.items)
+
+    def _goal_wire(goal) -> _GoalWire:
+        return _GoalWire(
+            condition=goal.condition,
+            set_by=goal.set_by,
+            rounds_used=goal.rounds_used,
+            state=goal.state,
+            max_rounds=goal_max_rounds,
+        )
+
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/goal")
+    async def get_chat_goal(slug: str, item_id: str, chat_id: str) -> _GoalOut:
+        """#613 P3: the chat's goal (condition + state + rounds) — the panel's
+        hydration. A chat with no goal reads as null, not a 404."""
+        from ..resources.conversation_goal import read_goal
+
+        locator.require_access(slug, item_id, "read_chat")
+        rid, _conv = locator.require_chat(slug, item_id, chat_id)
+        goal = read_goal(spec, rid)
+        return _GoalOut(
+            goal=_goal_wire(goal) if goal is not None else None,
+            checker_enabled=goal_checker_enabled,
+        )
+
+    @app.put("/a/{slug}/items/{item_id}/chats/{chat_id}/goal")
+    async def put_chat_goal(slug: str, item_id: str, chat_id: str, body: _GoalBody) -> _GoalOut:
+        """#613 P3: set (or replace) the chat's completion condition. The goal
+        starts `active` with a fresh round budget; each turn-end check drives it
+        from there. Broadcast so other viewers' panels follow."""
+        from ..resources.conversation_goal import ConversationGoal, upsert_goal
+
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        rid, _conv = locator.require_chat(slug, item_id, chat_id)
+        goal = ConversationGoal(conversation_id=rid, condition=body.condition, set_by=get_user_id())
+        upsert_goal(spec, goal, user=get_user_id())
+        out = _goal_wire(goal)
+        turn_engine.publish(
+            locator.engine_key(investigation_id, rid),
+            GoalUpdated(goal=out.model_dump()),
+        )
+        return _GoalOut(goal=out, checker_enabled=goal_checker_enabled)
+
+    @app.delete(
+        "/a/{slug}/items/{item_id}/chats/{chat_id}/goal",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_chat_goal(slug: str, item_id: str, chat_id: str) -> Response:
+        """#613 P3: clear the chat's goal — auto-continue stops at the next
+        checkpoint (the driver re-reads the row before every continuation)."""
+        from ..resources.conversation_goal import clear_goal
+
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        rid, _conv = locator.require_chat(slug, item_id, chat_id)
+        clear_goal(spec, rid)
+        turn_engine.publish(locator.engine_key(investigation_id, rid), GoalUpdated(goal=None))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.delete(
         "/a/{slug}/items/{item_id}/chats/{chat_id}/messages/current",

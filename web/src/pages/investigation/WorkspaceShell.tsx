@@ -2560,6 +2560,10 @@ function PanelBody({
           // #100: a workflow phase boundary in the log view.
           return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={`— ${e.phase} —`} />;
         }
+        if (e.kind === "goal_note") {
+          // #613 P3: the goal driver's outcome marker (met / exhausted).
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={e.text} />;
+        }
         if (e.kind === "step") {
           // #100: a workflow step's live line (deterministic-phase movement).
           const glyph =

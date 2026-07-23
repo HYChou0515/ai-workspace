@@ -20,7 +20,7 @@
     "context_files": ["collections.json"],
     "tools": [
       "exec", "read_file", "read_image", "write_file", "edit_file", "list_files", "exists",
-      "delete_file", "ask_knowledge_base", "request_wiki_update", "lookup_user", "ask_user", "make_deck", "data-fetch",
+      "delete_file", "ask_knowledge_base", "request_wiki_update", "lookup_user", "ask_user", "update_todos", "make_deck", "data-fetch",
       "csv-column-summary", "sci-plot", "rca-tools", "python-stack", "save_skill", "save_workflow"
     ],
     "skills": ["author-skill", "author-workflow", "grill-me"],

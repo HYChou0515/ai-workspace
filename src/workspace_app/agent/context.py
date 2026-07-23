@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from ..kb.wiki.sources import IWikiSources
     from ..resources import AgentConfig
     from ..resources.conversation import Citation
+    from ..resources.conversation_todos import TodoItem
     from ..resources.kb import RetrievedPassage
     from ..tooling.registry import PackageInfo
     from ..users.protocol import User, UserDirectory
@@ -283,6 +284,16 @@ class AgentToolContext:
     # context cards stamp `created_by`/`updated_by` as this user). Set per-turn
     # from the message author; empty for contexts with no card-write tools.
     acting_user: str = ""
+    # #613: the owning chat thread's Conversation resource id, for conversation-
+    # scoped tool state (the `update_todos` checklist). Set by the chat turn
+    # builder only — workflow / KB / test contexts leave it None, and the todo
+    # tool then reports itself unavailable instead of writing anywhere.
+    conversation_id: str | None = None
+    # #613: sink the todo tool calls with the freshly-written list after a
+    # successful whole-overwrite, so the runner can stream a live TodosUpdated
+    # event to the FE panel. Set per-run by the runner (like on_exec_output);
+    # None ⇒ persisted-only (no live update).
+    on_todos_updated: Callable[[list[TodoItem]], None] | None = None
     # #429 P10: the event-dispatch sink the agent's entity tools (create/update/
     # link_entity) publish a post-commit EntityWriteEvent to, so an AI-authored
     # entity change fires on_event workflows exactly like a UI or workflow write —

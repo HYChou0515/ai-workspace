@@ -17,7 +17,7 @@
   "function": { "workspace": true, "sandbox": true, "terminal": false },
   "agent": {
     "prompt_file": "prompts/system.md",
-    "tools": ["ask_user", 
+    "tools": ["ask_user", "update_todos", 
       "read_file",
       "read_image",
       "write_file",

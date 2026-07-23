@@ -17,6 +17,7 @@ from workspace_app.api.events import (
     RestoreProgress,
     RunDone,
     RunError,
+    TodosUpdated,
     ToolEnd,
     ToolLog,
     ToolStart,
@@ -39,6 +40,9 @@ _SAMPLES = [
     UserMessage(content="hi", author="alice"),
     FileChanged(path="/a.py", by="alice", kind="modified"),
     StepOutput(phase="commit", name="ingest", text="line\n", key="f.pdf"),
+    # #613: the live todo-checklist update (list-of-dicts payload, JSON-native
+    # so the cross-pod bus roundtrip reconstructs it exactly).
+    TodosUpdated(items=[{"text": "fix the bug", "status": "in_progress"}]),
 ]
 
 

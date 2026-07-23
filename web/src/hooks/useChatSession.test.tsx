@@ -65,6 +65,75 @@ describe("useChatSession", () => {
     );
   });
 
+  // #613: `todos_updated` is panel state, not transcript — it must land in the
+  // todos query cache (whole-list replace) and never fold into the log.
+  it("writes todos_updated into the todos cache and keeps it out of the log", async () => {
+    const { QueryClientProvider } = await import("@tanstack/react-query");
+    const { makeTestQueryClient } = await import("../test/queryWrapper");
+    const qc = makeTestQueryClient();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const items = [{ text: "fix bug", status: "in_progress" }];
+    const t = fakeTransport({
+      todosKey: ["todos", "c1"],
+      subscribe: async function* () {
+        yield { type: "todos_updated", items } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+    const { result } = renderHook(() => useChatSession(t, 60_000), { wrapper });
+    await waitFor(() => expect(qc.getQueryData(["todos", "c1"])).toEqual(items));
+    // Only the hydrated user message — the todo event added no entry.
+    expect(result.current.log.entries).toHaveLength(1);
+  });
+
+  // #613 P3: `goal_updated` merges into the goal cache (keeping the cached
+  // deploy-level checker flag) and never folds into the log; a terminal goal
+  // state also refetches the thread so the persisted marker appears.
+  it("merges goal_updated into the goal cache and refetches on a terminal state", async () => {
+    const { QueryClientProvider } = await import("@tanstack/react-query");
+    const { makeTestQueryClient } = await import("../test/queryWrapper");
+    const qc = makeTestQueryClient();
+    qc.setQueryData(["goal", "c1"], { goal: null, checker_enabled: false });
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const met = {
+      condition: "done",
+      set_by: "me",
+      rounds_used: 1,
+      state: "met",
+      max_rounds: 3,
+    };
+    const MARKED = {
+      messages: [
+        { role: "user" as const, content: "q" },
+        { role: "goal" as const, content: "目標已達成:done" },
+      ],
+    };
+    const getThread = vi.fn().mockResolvedValueOnce(THREAD).mockResolvedValue(MARKED);
+    const t = fakeTransport({
+      getThread,
+      goalKey: ["goal", "c1"],
+      subscribe: async function* () {
+        yield { type: "goal_updated", goal: met } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+    const { result } = renderHook(() => useChatSession(t, 60_000), { wrapper });
+    await waitFor(() =>
+      expect(qc.getQueryData(["goal", "c1"])).toEqual({ goal: met, checker_enabled: false }),
+    );
+    // met ⇒ thread re-read AND reconciled into the visible log, so the persisted
+    // `role="goal"` marker appears live (the #613 live probe: it only showed
+    // after a manual reload when this merely invalidated the cache).
+    await waitFor(() => expect(getThread.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() =>
+      expect(result.current.log.entries.some((e) => e.kind === "goal_note")).toBe(true),
+    );
+  });
+
   it("folds stream events and re-reads the thread on a terminal event", async () => {
     const getThread = vi.fn().mockResolvedValue(THREAD);
     const t = fakeTransport({

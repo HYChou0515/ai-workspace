@@ -168,6 +168,11 @@ def create_app(
     # #231: LLM-as-judge for the sanity matrix (ai_grade/ai_note + per-model
     # verdict). None ⇒ AI scoring off. __main__ passes get_sanity_judge_llm.
     sanity_judge_llm: ILlm | None = None,
+    # #613 P3: the cheap turn-end goal checker (factories.get_goal_checker_llm)
+    # + the hard auto-continue budget (settings.goal.max_rounds). None checker ⇒
+    # goals never auto-continue, and the /goal routes disclose it on the wire.
+    goal_checker_llm: ILlm | None = None,
+    goal_max_rounds: int = 3,
     insights_collection_name: str = "Investigations Knowledge",
     kb_llm: ILlm | None = None,
     # #356: the LLM the Tune-parsing "Try answer" path streams through — the
@@ -1094,6 +1099,15 @@ def create_app(
     from ..workflow.triggers import discover_event_triggers
 
     register_event_watermark(spec)
+    # #613: the per-conversation todo checklist — same post-apply registration (no
+    # bare CRUD routes; the gated /todos chat routes are the only wire surface),
+    # and same in-request rationale: the routes must not depend on the lifespan
+    # having run first. Idempotent, so the lifespan's call is belt-and-suspenders.
+    from ..resources.conversation_goal import register_conversation_goal
+    from ..resources.conversation_todos import register_conversation_todos
+
+    register_conversation_todos(spec)
+    register_conversation_goal(spec)
     event_dispatcher = EventTriggerDispatcher(
         triggers=discover_event_triggers,
         app_of_item=locator.slug_of,
@@ -1143,6 +1157,8 @@ def create_app(
         # across the turn's ask_knowledge_base calls); default + ceiling from config.
         kb_max_searches_per_turn=kb_max_searches_per_turn,
         kb_max_searches_ceiling=kb_max_searches_ceiling,
+        goal_checker_llm=goal_checker_llm,
+        goal_max_rounds=goal_max_rounds,
         # #492: flush the item's live sandbox to durable at turn-end (guarantee 2).
         flush_item=_reconcile_after_turn(registry.flush, files.forget_measurement),
         # #493 symptom 1 (504): detach a long turn from its POST past this deadline.
@@ -1162,6 +1178,8 @@ def create_app(
         kb_chat_pipeline=kb_chat_pipeline,
         send_into=chat_send_svc.send,
         record_mention=mention_svc.record,
+        goal_max_rounds=goal_max_rounds,
+        goal_checker_enabled=goal_checker_llm is not None,
     )
 
     # ---- Files API (plan-backend §3.8) ----

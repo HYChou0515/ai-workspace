@@ -203,6 +203,7 @@ def test_disabled_tools_preserve_ceiling_order():
         "request_wiki_update",
         "lookup_user",
         "ask_user",
+        "update_todos",  # #613
         "make_deck",
         "data-fetch",
         "csv-column-summary",

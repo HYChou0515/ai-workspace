@@ -120,6 +120,29 @@ export type Presence = {
   users: string[];
 };
 
+/** #613: the agent rewrote this conversation's todo checklist (whole-list
+ * replace via the `update_todos` tool). `items` is the NEW full list in order —
+ * the pinned panel swaps its state wholesale. Ephemeral on the stream; the
+ * durable copy is refetched on load. Mirrors api/events.py TodosUpdated. */
+export type TodosUpdated = {
+  type: "todos_updated";
+  items: { text: string; status: "pending" | "in_progress" | "completed" }[];
+};
+
+/** #613 P3: the chat's goal changed — set / cleared / state or round moved.
+ * `goal` is the panel's whole new state, or null when cleared. Mirrors
+ * api/events.py GoalUpdated. */
+export type GoalUpdated = {
+  type: "goal_updated";
+  goal: {
+    condition: string;
+    set_by: string;
+    rounds_used: number;
+    state: "active" | "met" | "exhausted";
+    max_rounds: number;
+  } | null;
+};
+
 /* ------------------------------------------------------------------ */
 /* Workflow run events (#100, manual §12) — phase/step observability.   */
 /* Ride the same per-item stream; the FE overlays them on the manifest  */
@@ -204,6 +227,8 @@ export type AgentEvent =
   | AgentMetrics
   | FailoverSwitch
   | RestoreProgress
+  | TodosUpdated
+  | GoalUpdated
   | UserMessage
   | FileChanged
   | Presence

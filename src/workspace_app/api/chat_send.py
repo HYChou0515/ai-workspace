@@ -36,7 +36,7 @@ from ..kb.collections import (
 )
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink
-from .events import UserMessage
+from .events import GoalUpdated, UserMessage
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
     from ..files import WorkspaceFiles
     from ..filestore.protocol import FileStore
+    from ..kb.llm import ILlm
     from ..kb.retriever import Enhancements
     from ..resources.kb import Citation
     from ..users import UserDirectory
@@ -107,6 +108,8 @@ class ChatSendService:
         infer_modules_reasoning_effort: str | None,
         kb_max_searches_per_turn: int | None = None,
         kb_max_searches_ceiling: int = 10,
+        goal_checker_llm: ILlm | None = None,
+        goal_max_rounds: int = 3,
         flush_item: Callable[[str], Awaitable[None]],
         send_await_timeout: float = 25.0,
     ) -> None:
@@ -125,6 +128,10 @@ class ChatSendService:
         self._infer_modules_reasoning_effort = infer_modules_reasoning_effort
         self._kb_max_searches_per_turn = kb_max_searches_per_turn
         self._kb_max_searches_ceiling = kb_max_searches_ceiling
+        # #613 P3: the goal auto-continue driver. None checker ⇒ the whole
+        # feature is inert (and the /goal routes disclose that on the wire).
+        self._goal_checker = goal_checker_llm
+        self._goal_max_rounds = goal_max_rounds
         # #492: flush this item's live sandbox to durable at turn-end (guarantee
         # (2)'s Y=1 turn) — a no-op when the item is cold.
         self._flush_item = flush_item
@@ -140,6 +147,9 @@ class ChatSendService:
         # Strong references to in-flight sends (see `send`): asyncio keeps only a
         # weak one, so an un-referenced task can be collected mid-flight.
         self._inflight: set[asyncio.Task[None]] = set()
+        # #613 P3: strong refs to detached goal follow-up tasks (same GC hazard
+        # as _inflight — an unreferenced task can vanish mid-flight).
+        self._goal_tasks: set[asyncio.Task[None]] = set()
 
     async def send(
         self,
@@ -148,6 +158,7 @@ class ChatSendService:
         conv: Conversation,
         engine_key: str,
         body: _MessageBody,
+        author: str | None = None,
     ) -> None:
         """Append the user message, build the turn ctx and enqueue it — see
         :meth:`_send` — but do it in a task this request only WATCHES.
@@ -174,10 +185,129 @@ class ChatSendService:
         that will never come; clearing space needs no agent, because deleting
         from the file tree is never quota-gated."""
         await self._files.ensure_room_for(investigation_id, 1)
-        task = asyncio.create_task(self._send(investigation_id, rid, conv, engine_key, body))
+        task = asyncio.create_task(
+            self._send(investigation_id, rid, conv, engine_key, body, author=author)
+        )
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
         await asyncio.shield(task)
+
+    # ── #613 P3: goal auto-continue ─────────────────────────────────────
+
+    def _maybe_continue_goal(
+        self,
+        produced: list[TurnMessage],
+        investigation_id: str,
+        rid: str,
+        engine_key: str,
+        author: str,
+    ) -> None:
+        """Turn-persisted hook: judge the chat's goal and maybe drive another
+        round. Runs inside the turn task (the worker is awaiting it), so the
+        follow-up is spawned DETACHED — awaiting it here would deadlock the
+        queue. A turn that ended in an error (incl. the user's Stop →
+        cancelled) never auto-continues: a human just intervened, and running
+        away from them is the one unforgivable behaviour."""
+        if self._goal_checker is None:
+            return
+        if any(m.role == "error" for m in produced):
+            return
+        task = asyncio.create_task(self._goal_followup(investigation_id, rid, engine_key, author))
+        self._goal_tasks.add(task)
+        task.add_done_callback(self._goal_tasks.discard)
+
+    async def _goal_followup(
+        self, investigation_id: str, rid: str, engine_key: str, author: str
+    ) -> None:
+        """One goal checkpoint: cheap-LLM verdict → met / continue / exhaust.
+
+        The round is bumped BEFORE the continuation is enqueued (a crash must
+        not forget spent rounds and loop from zero), and the engine's cancel
+        epoch is sampled around the check so a user's Stop while we were
+        judging stands — the same baseline pattern as the workflow driver."""
+        from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
+
+        from ..resources.conversation_goal import read_goal, upsert_goal
+        from .goal_checker import check_goal_met, transcript_tail
+        from .schemas import _MessageBody
+
+        try:
+            goal = read_goal(self._spec, rid)
+            if goal is None or goal.state != "active":
+                return
+            baseline = await self._turn_engine.cancel_epoch(engine_key)
+            conv = self._conv_rm.get(rid).data
+            assert isinstance(conv, Conversation)
+            checker = self._goal_checker
+            assert checker is not None  # guarded by _maybe_continue_goal
+            met = await asyncio.to_thread(
+                check_goal_met, checker, goal.condition, transcript_tail(conv.messages)
+            )
+            # Re-read: the user may have cleared or replaced the goal while the
+            # checker ran — their edit wins over our stale verdict.
+            current = read_goal(self._spec, rid)
+            if current is None or current.state != "active" or current.condition != goal.condition:
+                return
+            if met:
+                current.state = "met"
+                upsert_goal(self._spec, current, user=current.set_by)
+                self._append_goal_marker(rid, f"目標已達成:{current.condition}")
+                self._publish_goal(engine_key, current)
+                return
+            if current.rounds_used >= self._goal_max_rounds:
+                current.state = "exhausted"
+                upsert_goal(self._spec, current, user=current.set_by)
+                self._append_goal_marker(
+                    rid,
+                    f"目標尚未達成,自動續跑額度({self._goal_max_rounds} 輪)已用完,"
+                    f"交還給你:{current.condition}",
+                )
+                self._publish_goal(engine_key, current)
+                return
+            current.rounds_used += 1
+            upsert_goal(self._spec, current, user=current.set_by)
+            self._publish_goal(engine_key, current)
+            if await self._turn_engine.cancel_epoch(engine_key) != baseline:
+                return  # the user hit Stop while we were judging — stand down
+            fresh = self._conv_rm.get(rid).data
+            assert isinstance(fresh, Conversation)
+            body = _MessageBody(
+                content=(
+                    f"[goal] 尚未達成,繼續朝目標推進(第 {current.rounds_used}/"
+                    f"{self._goal_max_rounds} 輪):{current.condition}"
+                )
+            )
+            # Through the full send path (quota gate, visible user message,
+            # broadcast) — as the goal's setter, since this task has no request
+            # context to resolve a user from.
+            await self.send(
+                investigation_id, rid, fresh, engine_key, body, author=current.set_by or author
+            )
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return  # the chat was deleted mid-flight
+
+    def _append_goal_marker(self, rid: str, text: str) -> None:
+        """A `role="goal"` marker in the thread — rendered by the FE, and by
+        design never replayed into LLM history (`history_items` only folds
+        user/assistant/tool/error; #199's lesson rules out `system`)."""
+        conv = self._conv_rm.get(rid).data
+        assert isinstance(conv, Conversation)
+        conv.messages.append(Message(role="goal", content=text, created_at=now_ms()))
+        self._conv_rm.update(rid, conv)
+
+    def _publish_goal(self, engine_key: str, goal) -> None:  # noqa: ANN001 — ConversationGoal (late import cycle)
+        self._turn_engine.publish(
+            engine_key,
+            GoalUpdated(
+                goal={
+                    "condition": goal.condition,
+                    "set_by": goal.set_by,
+                    "rounds_used": goal.rounds_used,
+                    "state": goal.state,
+                    "max_rounds": self._goal_max_rounds,
+                }
+            ),
+        )
 
     async def _send(
         self,
@@ -186,6 +316,7 @@ class ChatSendService:
         conv: Conversation,
         engine_key: str,
         body: _MessageBody,
+        author: str | None = None,
     ) -> None:
         """Append the user message to conversation ``rid``, build the RCA turn ctx
         from ITS history, and enqueue the turn on ``engine_key`` (item_id for the
@@ -193,7 +324,7 @@ class ChatSendService:
         and chat-scoped message endpoints."""
         # #43: stamp the sender so a shared workspace's chat shows who said what,
         # and broadcast the message to live viewers (below, before the turn runs).
-        author = self._get_user_id()
+        author = author or self._get_user_id()
         created = now_ms()
         conv.messages.append(
             Message(
@@ -315,6 +446,8 @@ class ChatSendService:
             # #380: skills applied THIS turn — so read_skill exempts them from the
             # disable gate (their bodies are already preloaded into the prompt).
             apply_skills=body.apply_skills or [],
+            # #613: this thread's Conversation id — the update_todos tool's row key.
+            conversation_id=rid,
         )
 
         # Source A (#…): a vision-capable main model reads attached images
@@ -371,6 +504,11 @@ class ChatSendService:
                 {"investigation_id": investigation_id},
             )
             logger.info("chat_send: turn completed for item %s", investigation_id)
+            # #613 P3: the turn is persisted — maybe the chat's goal wants another
+            # round. Spawned DETACHED: persist runs inside the turn task (the
+            # worker is awaiting it), so awaiting a follow-up turn here would
+            # deadlock — the queue only advances once this task ends.
+            self._maybe_continue_goal(produced, investigation_id, rid, engine_key, author)
 
         # Topic Hub §6: prepend the App's context_files (e.g. MEMORY.md +
         # collections.json) as a labelled, authoritative block — re-derived fresh from

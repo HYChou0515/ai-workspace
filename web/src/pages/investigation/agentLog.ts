@@ -59,6 +59,8 @@ export type AgentEntry =
   | { kind: "message"; message: Message; at?: number }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
+  // #613 P3: a persisted goal marker (met / exhausted) — FE-only, never LLM history.
+  | { kind: "goal_note"; text: string; at?: number }
   | { kind: "step"; step: StepView; at?: number }
   | { kind: "phase"; phase: string; at?: number }
   | { kind: "banner"; text: string; at?: number };
@@ -142,6 +144,9 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
         note: m.content,
         at: m.created_at ?? undefined,
       });
+    } else if (m.role === "goal") {
+      // #613 P3: the goal driver's outcome marker (達成 / 額度用盡).
+      entries.push({ kind: "goal_note", text: m.content, at: m.created_at ?? undefined });
     } else if (m.role === "error") {
       // #37: a persisted terminal failure — rendered as a banner so a
       // reloaded thread shows the turn died (matching the live error
@@ -183,7 +188,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
 /** Entries that carry the conversation itself — the ones the backend persists.
  * `step` / `phase` / live banners are stream-only chrome and are deliberately
  * NOT counted, so their presence can't disguise a store that is behind. */
-const CONTENT_KINDS = new Set(["message", "tool_call", "mention"]);
+const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note"]);
 
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;

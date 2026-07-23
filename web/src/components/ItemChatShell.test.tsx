@@ -130,6 +130,18 @@ const NO_WORKFLOW_PROFILES: ProfileDTO[] = [
 ];
 
 describe("ItemChatShell", () => {
+  // #613: the pinned todo checklist rides above the feed for the active chat.
+  it("mounts the todo checklist panel for the active chat", async () => {
+    const { itemTodosApi } = await import("../api/itemTodos");
+    vi.spyOn(itemTodosApi, "getTodos").mockResolvedValue([
+      { text: "fix bug", status: "in_progress" },
+    ]);
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    render();
+    await waitFor(() => expect(screen.getByTestId("todo-panel")).toBeInTheDocument());
+    expect(await screen.findByText("fix bug")).toBeInTheDocument();
+  });
+
   it("renders the chat switcher and a single New picker listing the profile's workflows", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     render();

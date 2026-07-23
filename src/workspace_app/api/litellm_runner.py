@@ -56,6 +56,7 @@ from .events import (
     RestoreProgress,
     RunDone,
     RunError,
+    TodosUpdated,
     ToolCallParseError,
     ToolEnd,
     ToolLog,
@@ -488,6 +489,19 @@ def _failover_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[st
     return emit
 
 
+def _todos_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[list[Any]], None]:
+    """#613: a per-turn sink that turns the `update_todos` tool's freshly-written
+    list into a live ``TodosUpdated`` event on this turn's stream, so the FE's
+    pinned checklist panel updates while the turn is still running. Items become
+    plain ``{"text", "status"}`` dicts (the wire shape). ``put_nowait`` is safe —
+    the tool fires on the same event loop that drains the queue."""
+
+    def emit(items: list[Any]) -> None:
+        queue.put_nowait(TodosUpdated(items=[{"text": t.text, "status": t.status} for t in items]))
+
+    return emit
+
+
 # Retry hints for the three ways a small model botches a tool call (#76).
 # Each addresses a DISTINCT failure so the model can actually self-correct;
 # the old code collapsed all of them into the "one tool call" hint, which
@@ -894,6 +908,9 @@ class LitellmAgentRunner:
         ctx.on_restore_progress = lambda done, total: queue.put_nowait(
             RestoreProgress(done=done, total=total)
         )
+        # #613: the update_todos tool streams its freshly-written checklist here so
+        # the FE's pinned panel updates live mid-turn.
+        ctx.on_todos_updated = _todos_emitter(queue)
         resolve_key = await self._key_resolver(ctx)
         agent = _agent_for(
             ctx.agent_config,

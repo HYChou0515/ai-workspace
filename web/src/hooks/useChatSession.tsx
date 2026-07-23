@@ -42,6 +42,15 @@ export type BroadcastChatTransport = {
   queryKey: QueryKey;
   /** react-query key to invalidate when a `file_changed` event arrives. */
   filesKey: QueryKey;
+  /** #613: react-query key the chat's todo checklist lives under — a
+   * `todos_updated` event writes the new list straight into it (and a terminal
+   * event invalidates it, the backstop for updates missed while disconnected).
+   * Optional: transports without a todo surface just omit it. */
+  todosKey?: QueryKey;
+  /** #613 P3: react-query key the chat's goal lives under — a `goal_updated`
+   * event merges the new goal state into it; a terminal goal state (met /
+   * exhausted) also refetches the thread so the persisted marker appears. */
+  goalKey?: QueryKey;
   /** Read the persisted thread. `null` = no thread yet. */
   getThread: () => Promise<ChatThread | null>;
   /** The long-lived broadcast subscription. `since` (passed only on a RECONNECT)
@@ -213,8 +222,39 @@ export function useChatSession(
               void qc.invalidateQueries({ queryKey: transport.filesKey });
               continue;
             }
+            if (ev.type === "todos_updated") {
+              // #613: the agent rewrote the todo checklist — the event carries
+              // the whole new list, so write it straight into the cache (no
+              // refetch). Not a transcript event; it never folds into the log.
+              if (transport.todosKey) qc.setQueryData(transport.todosKey, ev.items);
+              continue;
+            }
+            if (ev.type === "goal_updated") {
+              // #613 P3: merge the new goal state (the event has no
+              // checker_enabled — that's deploy config, keep the cached one).
+              if (transport.goalKey) {
+                qc.setQueryData(
+                  transport.goalKey,
+                  (old: { checker_enabled?: boolean } | undefined) => ({
+                    goal: ev.goal,
+                    checker_enabled: old?.checker_enabled ?? true,
+                  }),
+                );
+              }
+              // A terminal goal state persists a marker message AFTER the turn's
+              // own terminal refetch — pull the thread again so it shows up.
+              if (ev.goal === null || ev.goal.state !== "active") {
+                void qc.invalidateQueries({ queryKey: transport.queryKey });
+              }
+              continue;
+            }
             setLog((prev) => reduceAgent(prev, ev));
             if (isTerminal(ev)) {
+              // #613: catch up on todo updates missed while disconnected — the
+              // stream has no replay across pods, but the turn just ended, so
+              // one refetch reconciles the panel cheaply.
+              if (transport.todosKey)
+                void qc.invalidateQueries({ queryKey: transport.todosKey });
               // Re-snapshot from the store — it carries the BE-attached
               // `ask_knowledge_base` citations the stream doesn't emit.
               const fresh = await transport.getThread();
