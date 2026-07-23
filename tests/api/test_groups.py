@@ -1,7 +1,10 @@
-"""#307 — a flat, owner-managed logical Group, and the payoff: granting
-`group:<id>` on a resource's Permission covers every current member (resolved via
-`groups_of` → `Actor.groups` / `subjects_of`, so the read access_scope + the write
-checker both honour it).
+"""#307 + #608 — org-canonical Groups.
+
+A Group is created by a SUPERUSER who designates an owner (#608). The owner
+manages members + maintainers, can transfer ownership, and can delete; a
+maintainer manages MEMBERS only; a superuser bypasses everything. Granting
+`group:<id>` on a resource's Permission then covers every current member
+(resolved via `groups_of` → `Actor.groups` / `subjects_of`).
 
 Tests drive the HTTP surface as different users through a mutable `holder["id"]`.
 """
@@ -17,9 +20,11 @@ from workspace_app.sandbox.mock import MockSandbox
 
 from ._client import TestClient
 
+ROOT = frozenset({"root"})
+
 
 def _client_and_spec(
-    holder: dict[str, str], *, superusers: frozenset[str] = frozenset()
+    holder: dict[str, str], *, superusers: frozenset[str] = ROOT
 ) -> tuple[TestClient, SpecStar]:
     spec = make_spec(default_user=lambda: holder["id"], superusers=superusers)
     app = create_app(
@@ -33,6 +38,25 @@ def _client_and_spec(
     return TestClient(app), spec
 
 
+def _mk(
+    client: TestClient,
+    holder: dict[str, str],
+    *,
+    owner: str,
+    name: str = "eng",
+    members: list[str] | None = None,
+) -> str:
+    """Create a group AS the superuser `root`, designating `owner`, then restore
+    the acting user. Groups are superuser-created in the org-canonical model."""
+    prev = holder["id"]
+    holder["id"] = "root"
+    gid = client.post(
+        "/groups", json={"name": name, "owner": owner, "members": members or []}
+    ).json()["resource_id"]
+    holder["id"] = prev
+    return gid
+
+
 def _new_collection(spec: SpecStar, *, by: str, permission: Permission | None = None) -> str:
     rm = spec.get_resource_manager(Collection)
     with rm.using(by):
@@ -43,74 +67,140 @@ def _members(client: TestClient, gid: str) -> set[str]:
     return set(client.get(f"/groups/{gid}").json()["members"])
 
 
-# ── Group CRUD + membership ──────────────────────────────────────────────────
+# ── #608 governance: who may create / delegate / transfer ────────────────────
 
 
-def test_group_crud_and_membership_is_owner_managed():
+def test_only_a_superuser_creates_a_group():
+    holder = {"id": "alice"}
+    client, _ = _client_and_spec(holder)
+    # a plain user can no longer create their own group (org-canonical model)
+    assert client.post("/groups", json={"name": "rogue"}).status_code == 403
+    holder["id"] = "root"
+    assert client.post("/groups", json={"name": "eng"}).status_code == 200
+
+
+def test_superuser_designates_an_owner_who_then_manages_members():
+    holder = {"id": "root"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    # bob (the designated owner, NOT the creator root) manages membership
+    holder["id"] = "bob"
+    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["carol"]}).status_code == 204
+    assert _members(client, gid) == {"alice", "carol"}
+    # the group shows up in bob's own /groups list (owner-by-field, not created_by)
+    assert any(g["resource_id"] == gid for g in client.get("/groups").json())
+
+
+def test_owner_delegates_to_a_maintainer_who_manages_members_only():
     holder = {"id": "bob"}
     client, _ = _client_and_spec(holder)
-    gid = client.post("/groups", json={"name": "eng", "members": ["alice"]}).json()["resource_id"]
-    assert _members(client, gid) == {"alice"}
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    # owner delegates member-management to dave
+    assert client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["dave"]}).status_code == 204
+    holder["id"] = "dave"
+    # a maintainer manages MEMBERS...
+    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["erin"]}).status_code == 204
+    assert _members(client, gid) == {"alice", "erin"}
+    # ...but cannot delegate further, transfer, or delete (owner-only)
+    assert client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["zoe"]}).status_code == 403
+    assert client.put(f"/groups/{gid}/owner", json={"owner": "dave"}).status_code == 403
+    assert client.delete(f"/groups/{gid}").status_code == 403
 
-    # owner adds a member (self is never added as a "member" — they're the manager)
-    add = client.post(f"/groups/{gid}/members", json={"user_ids": ["carol", "bob"]})
-    assert add.status_code == 204
-    assert _members(client, gid) == {"alice", "carol"}
 
-    # a member can list + read the group they're in, but not manage it
-    holder["id"] = "alice"
-    assert any(g["resource_id"] == gid for g in client.get("/groups").json())
+def test_a_plain_member_cannot_manage_maintainers():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    holder["id"] = "alice"  # a member sees the group (403 to manage), not a stranger (404)
+    assert client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["x"]}).status_code == 403
+    holder["id"] = "zoe"
+    assert client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["x"]}).status_code == 404
+
+
+def test_owner_can_transfer_ownership():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    assert client.put(f"/groups/{gid}/owner", json={"owner": "dave"}).status_code == 200
+    # the old owner is now unrelated to the group — 404 (no existence leak), not 403
+    assert client.delete(f"/groups/{gid}").status_code == 404
+    # the new owner has it
+    holder["id"] = "dave"
+    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["frank"]}).status_code == 204
+    assert client.delete(f"/groups/{gid}").status_code == 204
+
+
+def test_maintainer_removal_and_read_visibility():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob")
+    client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["dave"]})
+    # a maintainer may READ the group they help manage
+    holder["id"] = "dave"
     assert client.get(f"/groups/{gid}").status_code == 200
-    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["dan"]}).status_code == 403
+    assert any(g["resource_id"] == gid for g in client.get("/groups").json())
+    # owner removes the maintainer → dave loses management
+    holder["id"] = "bob"
+    assert client.delete(f"/groups/{gid}/maintainers/dave").status_code == 204
+    holder["id"] = "dave"
+    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["x"]}).status_code == 404
 
+
+def test_a_superuser_manages_maintainers_and_transfer_on_any_group():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob")
+    holder["id"] = "root"
+    assert client.post(f"/groups/{gid}/maintainers", json={"user_ids": ["dave"]}).status_code == 204
+    assert client.put(f"/groups/{gid}/owner", json={"owner": "carol"}).status_code == 200
+
+
+# ── membership management (owner or maintainer) ──────────────────────────────
+
+
+def test_member_read_and_stranger_hidden():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    # a member reads + lists the group, but can't manage it
+    holder["id"] = "alice"
+    assert client.get(f"/groups/{gid}").status_code == 200
+    assert any(g["resource_id"] == gid for g in client.get("/groups").json())
+    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["dan"]}).status_code == 403
     # a stranger can't see it at all (404, no existence leak) and it's not in their list
     holder["id"] = "zoe"
     assert client.get(f"/groups/{gid}").status_code == 404
     assert client.get("/groups").json() == []
 
-    # owner removes a member + deletes the group
-    holder["id"] = "bob"
+
+def test_owner_edits_and_deletes():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=["alice"])
+    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["carol"]}).status_code == 204
+    assert _members(client, gid) == {"alice", "carol"}
     assert client.delete(f"/groups/{gid}/members/carol").status_code == 204
     assert _members(client, gid) == {"alice"}
     assert client.delete(f"/groups/{gid}").status_code == 204
     assert client.get(f"/groups/{gid}").status_code == 404
 
 
-def test_a_stranger_cannot_manage_or_delete_a_group():
-    holder = {"id": "bob"}
-    client, _ = _client_and_spec(holder)
-    gid = client.post("/groups", json={"name": "eng"}).json()["resource_id"]
-    holder["id"] = "zoe"  # can't even see it → 404 (not 403)
-    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["x"]}).status_code == 404
-    assert client.delete(f"/groups/{gid}/members/x").status_code == 404
-    assert client.delete(f"/groups/{gid}").status_code == 404
-
-
-def test_a_superuser_can_read_and_manage_any_group():
-    holder = {"id": "bob"}
-    client, _ = _client_and_spec(holder, superusers=frozenset({"root"}))
-    gid = client.post("/groups", json={"name": "eng"}).json()["resource_id"]
-    holder["id"] = "root"
-    assert client.get(f"/groups/{gid}").status_code == 200  # superuser reads any group
-    assert client.post(f"/groups/{gid}/members", json={"user_ids": ["alice"]}).status_code == 204
-    assert _members(client, gid) == {"alice"}
-
-
 def test_missing_group_is_404_everywhere():
-    holder = {"id": "bob"}
+    holder = {"id": "root"}
     client, _ = _client_and_spec(holder)
     assert client.get("/groups/ghost").status_code == 404
     assert client.post("/groups/ghost/members", json={"user_ids": ["x"]}).status_code == 404
     assert client.delete("/groups/ghost/members/x").status_code == 404
+    assert client.post("/groups/ghost/maintainers", json={"user_ids": ["x"]}).status_code == 404
+    assert client.delete("/groups/ghost/maintainers/x").status_code == 404
+    assert client.put("/groups/ghost/owner", json={"owner": "x"}).status_code == 404
     assert client.delete("/groups/ghost").status_code == 404
 
 
 def test_membership_edits_are_idempotent_noops():
-    """Adding an already-present member / removing a non-member is a 204 no-op (no
-    spurious write)."""
     holder = {"id": "bob"}
     client, _ = _client_and_spec(holder)
-    gid = client.post("/groups", json={"name": "eng", "members": ["alice"]}).json()["resource_id"]
+    gid = _mk(client, holder, owner="bob", members=["alice"])
     assert client.post(f"/groups/{gid}/members", json={"user_ids": ["alice"]}).status_code == 204
     assert client.delete(f"/groups/{gid}/members/nobody").status_code == 204
     assert _members(client, gid) == {"alice"}
@@ -120,12 +210,9 @@ def test_membership_edits_are_idempotent_noops():
 
 
 def test_group_read_grant_on_a_collection_covers_members():
-    """Granting `group:<id>` read_meta on a restricted collection makes it visible
-    to every member (resolved at query time by the access_scope) and to nobody
-    else."""
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
-    gid = client.post("/groups", json={"name": "eng", "members": ["alice"]}).json()["resource_id"]
+    gid = _mk(client, holder, owner="bob", members=["alice"])
     cid = _new_collection(
         spec, by="bob", permission=Permission(visibility="restricted", read_meta=[f"group:{gid}"])
     )
@@ -136,11 +223,9 @@ def test_group_read_grant_on_a_collection_covers_members():
 
 
 def test_group_write_grant_on_a_collection_lets_a_member_edit():
-    """A `group:<id>` write_meta grant is honoured by the per-verb write checker's
-    group-aware actor — a member (not the owner) can edit the collection."""
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
-    gid = client.post("/groups", json={"name": "eng", "members": ["alice"]}).json()["resource_id"]
+    gid = _mk(client, holder, owner="bob", members=["alice"])
     cid = _new_collection(
         spec,
         by="bob",
@@ -157,11 +242,9 @@ def test_group_write_grant_on_a_collection_lets_a_member_edit():
 
 
 def test_losing_group_membership_revokes_the_grant():
-    """Membership is resolved live — removing a user from the group immediately
-    drops their group-derived access to the collection."""
     holder = {"id": "bob"}
     client, spec = _client_and_spec(holder)
-    gid = client.post("/groups", json={"name": "eng", "members": ["alice"]}).json()["resource_id"]
+    gid = _mk(client, holder, owner="bob", members=["alice"])
     cid = _new_collection(
         spec, by="bob", permission=Permission(visibility="restricted", read_meta=[f"group:{gid}"])
     )
