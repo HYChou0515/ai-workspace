@@ -647,16 +647,14 @@ def create_app(
     # BEFORE apply() so they materialise into routes (norm_keys derived in-write).
     register_context_card_actions(spec)
 
-    # #208: the first real backend hit — specstar materialises every model's
-    # schema here (create_all), so a down/unreachable Postgres hangs the whole
-    # boot at this line with no message. Narrate it (and let pg_connect_timeout
-    # turn the hang into a fast, clear error). Prime suspect for the silent stall.
-    # #177: generate specstar's CRUD routes onto the /api router (not the app),
-    # but DON'T include it yet — more hand-written routes are added to `api`
-    # below; we include it once, after all routes exist, before spec.openapi.
-    with boot_step("apply spec to backend (DB schema)"):
-        spec.apply(app, router=api, auto_include=False)
-
+    # Job-model auto routes: the ingestor + every coordinator `add_model` their
+    # job models (index / wiki / card-gen / graph / eval), and — same rule as the
+    # #106 card actions above — a model must be registered BEFORE apply() or its
+    # CRUD routes never materialise. They used to be built after apply: the
+    # schemas showed up in openapi.json with no endpoints using them, and
+    # POST /api/graph-job (creating a job row IS the enqueue) didn't exist.
+    # Construction only registers; nothing here touches the DB (create_all runs
+    # at apply, which is also why _ensure_insights_collection stays below).
     # KB chatbot subsystem: ingestion + collection/document/render routes.
     # Embedder/Chunker are swappable; defaults are offline-friendly (production
     # injects a LiteLLM embedder for real semantic search).
@@ -685,10 +683,6 @@ def create_app(
     # app.state for the same reason — it is built here, after the FastAPI app, so the
     # already-constructed lifespan closures can't capture it directly.
     app.state.kb_embedder = embedder
-    # P2: ensure the "Investigations Knowledge" collection exists at boot so
-    # the chat-promote path always has a target. Idempotent (re-uses a
-    # collection with the same name).
-    insights_collection_id = _ensure_insights_collection(spec, insights_collection_name)
     # #312: the background job coordinators are built by the shared
     # `build_coordinators` composition root — the SAME one the standalone worker
     # entrypoint uses — so the API can run as a pure producer (its consumers
@@ -723,6 +717,21 @@ def create_app(
         wiki_llm_base_url=wiki_llm_base_url,
         wiki_llm_api_key=wiki_llm_api_key,
     )
+
+    # #208: the first real backend hit — specstar materialises every model's
+    # schema here (create_all), so a down/unreachable Postgres hangs the whole
+    # boot at this line with no message. Narrate it (and let pg_connect_timeout
+    # turn the hang into a fast, clear error). Prime suspect for the silent stall.
+    # #177: generate specstar's CRUD routes onto the /api router (not the app),
+    # but DON'T include it yet — more hand-written routes are added to `api`
+    # below; we include it once, after all routes exist, before spec.openapi.
+    with boot_step("apply spec to backend (DB schema)"):
+        spec.apply(app, router=api, auto_include=False)
+
+    # P2: ensure the "Investigations Knowledge" collection exists at boot so
+    # the chat-promote path always has a target. Idempotent (re-uses a
+    # collection with the same name).
+    insights_collection_id = _ensure_insights_collection(spec, insights_collection_name)
     wiki_coordinator = coordinators.wiki
     index_coordinator = coordinators.index
     app.state.wiki_coordinator = wiki_coordinator
