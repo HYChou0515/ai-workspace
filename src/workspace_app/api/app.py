@@ -792,10 +792,6 @@ def create_app(
         ingestor,
         wiki_coordinator,
         index_coordinator=index_coordinator,
-        # The job producers: the graph/eval run routes fire these (None ⇒ the
-        # matching LLM isn't wired; routes answer status="disabled").
-        graph_coordinator=coordinators.graph,
-        eval_coordinator=eval_coordinator,
         retriever=kb_retriever,
         get_user_id=get_user_id,
         superusers=superusers,
