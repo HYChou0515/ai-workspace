@@ -106,7 +106,13 @@ describe("useChatSession", () => {
       state: "met",
       max_rounds: 3,
     };
-    const getThread = vi.fn().mockResolvedValue(THREAD);
+    const MARKED = {
+      messages: [
+        { role: "user" as const, content: "q" },
+        { role: "goal" as const, content: "目標已達成:done" },
+      ],
+    };
+    const getThread = vi.fn().mockResolvedValueOnce(THREAD).mockResolvedValue(MARKED);
     const t = fakeTransport({
       getThread,
       goalKey: ["goal", "c1"],
@@ -119,9 +125,13 @@ describe("useChatSession", () => {
     await waitFor(() =>
       expect(qc.getQueryData(["goal", "c1"])).toEqual({ goal: met, checker_enabled: false }),
     );
-    expect(result.current.log.entries).toHaveLength(1); // not a transcript event
-    // met ⇒ thread refetch (hydration + the marker catch-up).
+    // met ⇒ thread re-read AND reconciled into the visible log, so the persisted
+    // `role="goal"` marker appears live (the #613 live probe: it only showed
+    // after a manual reload when this merely invalidated the cache).
     await waitFor(() => expect(getThread.mock.calls.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() =>
+      expect(result.current.log.entries.some((e) => e.kind === "goal_note")).toBe(true),
+    );
   });
 
   it("folds stream events and re-reads the thread on a terminal event", async () => {
