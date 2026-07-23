@@ -183,6 +183,7 @@ class TurnContextBuilder:
         acting_user: str,
         speaker: User | None,
         apply_skills: list[str] | None = None,
+        conversation_id: str | None = None,
     ) -> AgentToolContext:
         """The full interactive RCA/workspace-chat turn context (`_send_into`)."""
         session = await self._registry.session(item_id)
@@ -224,6 +225,11 @@ class TurnContextBuilder:
             submit_wiki_correction=(
                 self._wiki_coordinator.submit_correction if self._wiki_coordinator else None
             ),
+            # #613: which chat thread this turn belongs to — the update_todos
+            # tool's row key. Chat turns only; build_workflow_turn never sets it
+            # (workflow runs have their own progress UI), so on workflow turns
+            # the tool reports itself unavailable.
+            conversation_id=conversation_id,
         )
 
     async def build_workflow_turn(

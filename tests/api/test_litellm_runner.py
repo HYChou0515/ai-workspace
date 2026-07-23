@@ -23,6 +23,7 @@ from workspace_app.api.events import (
     RestoreProgress,
     RunDone,
     RunError,
+    TodosUpdated,
     ToolEnd,
     ToolStart,
     to_sse,
@@ -66,6 +67,25 @@ def test_restore_progress_serializes_to_an_sse_frame():
     frame = to_sse(RestoreProgress(done=3, total=10))
     assert '"type": "restore_progress"' in frame
     assert '"done": 3' in frame and '"total": 10' in frame
+
+
+def test_todos_emitter_pushes_a_todos_updated_event():
+    """#613: the update_todos tool's sink turns the freshly-written list into a
+    live TodosUpdated on the turn's queue (plain-dict items, wire-ready)."""
+    from workspace_app.api.litellm_runner import _todos_emitter
+    from workspace_app.resources.conversation_todos import TodoItem
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _todos_emitter(queue)([TodoItem(text="fix the bug", status="in_progress")])
+    assert queue.get_nowait() == TodosUpdated(
+        items=[{"text": "fix the bug", "status": "in_progress"}]
+    )
+
+
+def test_todos_updated_serializes_to_an_sse_frame():
+    frame = to_sse(TodosUpdated(items=[{"text": "a", "status": "pending"}]))
+    assert '"type": "todos_updated"' in frame
+    assert '"text": "a"' in frame and '"status": "pending"' in frame
 
 
 def test_final_tokens_prefers_exact_but_falls_back_when_zero_or_absent():

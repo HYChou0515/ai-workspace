@@ -2049,6 +2049,49 @@ async def link_entity_impl(
     return f"Linked {type_name} #{number} {field} → #{target}."
 
 
+class TodoArg(TypedDict):
+    """One todo item: what to do, and where it stands."""
+
+    text: str
+    status: str
+
+
+def update_todos_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    todos: list[TodoArg],
+) -> str:
+    """Maintain this conversation's visible todo checklist (whole-list REPLACE).
+
+    Use it for multi-step work (3+ distinct steps): write the full plan as todos
+    up front, then call again after each step with the SAME list, statuses
+    updated. Every call REPLACES the entire list — always pass every item you
+    want kept, in order; an item you leave out disappears.
+
+    Each todo is `{text, status}`: `text` is one short, concrete step; `status`
+    is exactly one of `pending` / `in_progress` / `completed`. Keep at most ONE
+    item `in_progress` at a time. The user sees this list live next to the chat,
+    so keep it truthful — mark an item `completed` only when it is actually
+    done. Returns a confirmation."""
+    from ..resources.conversation_todos import TODO_STATUSES, TodoItem, upsert_todos
+
+    spec = ctx.context.spec
+    conversation_id = ctx.context.conversation_id
+    if spec is None or conversation_id is None:
+        return "error: update_todos is unavailable on this turn (no conversation context)"
+    for t in todos:
+        if t["status"] not in TODO_STATUSES:
+            return (
+                f"error: invalid status {t['status']!r} for todo {t['text']!r} — "
+                f"use one of {', '.join(TODO_STATUSES)}"
+            )
+    items = [TodoItem(text=t["text"], status=t["status"]) for t in todos]
+    upsert_todos(spec, conversation_id, items, user=ctx.context.acting_user)
+    if ctx.context.on_todos_updated is not None:
+        ctx.context.on_todos_updated(items)
+    done = sum(1 for i in items if i.status == "completed")
+    return f"Todo list updated ({done}/{len(items)} completed)."
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -2103,6 +2146,10 @@ _IMPLS = {
     "update_entity": update_entity_impl,
     "query_entity": query_entity_impl,
     "link_entity": link_entity_impl,
+    # #613: the agent-maintained per-conversation todo checklist (whole-list
+    # replace). Chat turns only — build_workflow_turn sets no conversation_id,
+    # so on workflow turns the tool reports itself unavailable.
+    "update_todos": update_todos_impl,
 }
 
 # The RCA workspace toolset — what `build_tools(None)` hands out. It includes

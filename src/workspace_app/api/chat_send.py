@@ -315,6 +315,8 @@ class ChatSendService:
             # #380: skills applied THIS turn — so read_skill exempts them from the
             # disable gate (their bodies are already preloaded into the prompt).
             apply_skills=body.apply_skills or [],
+            # #613: this thread's Conversation id — the update_todos tool's row key.
+            conversation_id=rid,
         )
 
         # Source A (#…): a vision-capable main model reads attached images

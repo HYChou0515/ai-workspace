@@ -1070,6 +1070,13 @@ def create_app(
     from ..workflow.triggers import discover_event_triggers
 
     register_event_watermark(spec)
+    # #613: the per-conversation todo checklist — same post-apply registration (no
+    # bare CRUD routes; the gated /todos chat routes are the only wire surface),
+    # and same in-request rationale: the routes must not depend on the lifespan
+    # having run first. Idempotent, so the lifespan's call is belt-and-suspenders.
+    from ..resources.conversation_todos import register_conversation_todos
+
+    register_conversation_todos(spec)
     event_dispatcher = EventTriggerDispatcher(
         triggers=discover_event_triggers,
         app_of_item=locator.slug_of,

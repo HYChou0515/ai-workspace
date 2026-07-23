@@ -139,6 +139,25 @@ class _ChatInfo(BaseModel):
     key for the list (#132). None only if the revision time is unavailable."""
 
 
+class _TodoItemWire(BaseModel):
+    """#613: one todo on the wire — mirrors `resources.conversation_todos.TodoItem`."""
+
+    text: str
+    status: Literal["pending", "in_progress", "completed"]
+
+
+class _TodosBody(BaseModel):
+    # #613: a user edit of the chat's todo checklist — whole-list REPLACE, the
+    # same semantics as the agent's `update_todos` tool.
+    items: list[_TodoItemWire]
+
+
+class _TodosOut(BaseModel):
+    """#613: the chat's current todo checklist (the pinned panel's hydration)."""
+
+    items: list[_TodoItemWire]
+
+
 class _MentionBody(BaseModel):
     user_ids: list[str]
     note: str = ""

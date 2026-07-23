@@ -21,6 +21,7 @@ from ..resources import Conversation
 from ..workflow.orchestrator import WorkflowOrchestrator
 from .activity import ActivityLog
 from .chat_info import chat_info_from_resource, item_run_status
+from .events import TodosUpdated
 from .item_conversation_perm import item_conversation_mirror
 from .locator import ItemLocator
 from .promote import promote_chat_to_kb
@@ -31,6 +32,9 @@ from .schemas import (
     _MentionBody,
     _MessageBody,
     _RenameChatBody,
+    _TodoItemWire,
+    _TodosBody,
+    _TodosOut,
     _UndoOut,
 )
 from .timeutil import now_ms
@@ -243,6 +247,41 @@ def register_chat_routes(
             turn_engine.subscribe_sse(locator.engine_key(investigation_id, chat_id), since=since),
             media_type="text/event-stream",
         )
+
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/todos")
+    async def get_chat_todos(slug: str, item_id: str, chat_id: str) -> _TodosOut:
+        """#613: the chat's current todo checklist — the pinned panel's initial
+        hydration (live updates ride the stream as `TodosUpdated`). A chat that
+        never had todos reads as an empty list, not a 404."""
+        from ..resources.conversation_todos import read_todos
+
+        locator.require_access(slug, item_id, "read_chat")
+        rid, _conv = locator.require_chat(slug, item_id, chat_id)
+        stored = read_todos(spec, rid)
+        items = stored.items if stored is not None else []
+        return _TodosOut(items=[_TodoItemWire(text=t.text, status=t.status) for t in items])
+
+    @app.put("/a/{slug}/items/{item_id}/chats/{chat_id}/todos")
+    async def put_chat_todos(slug: str, item_id: str, chat_id: str, body: _TodosBody) -> _TodosOut:
+        """#613: a user edit of the checklist — whole-list REPLACE (the same
+        semantics as the agent's `update_todos` tool; the FE locks editing while
+        a turn streams, so the two writers don't interleave). The new list is
+        broadcast on the chat's stream so other viewers' panels follow."""
+        from ..resources.conversation_todos import TodoItem, upsert_todos
+
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        rid, _conv = locator.require_chat(slug, item_id, chat_id)
+        upsert_todos(
+            spec,
+            rid,
+            [TodoItem(text=t.text, status=t.status) for t in body.items],
+            user=get_user_id(),
+        )
+        turn_engine.publish(
+            locator.engine_key(investigation_id, rid),
+            TodosUpdated(items=[{"text": t.text, "status": t.status} for t in body.items]),
+        )
+        return _TodosOut(items=body.items)
 
     @app.delete(
         "/a/{slug}/items/{item_id}/chats/{chat_id}/messages/current",
