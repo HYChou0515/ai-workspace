@@ -8,7 +8,7 @@ import asyncio
 import logging
 import posixpath
 from collections.abc import AsyncIterator, Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.aggregates import Count, ForeignAggregate, Max, Sum
-from specstar.types import Binary, ResourceIDNotFoundError
+from specstar.types import Binary, ResourceIDNotFoundError, TaskStatus
 
 from ..files.zip_download import (
     DownloadPrepared,
@@ -43,6 +43,7 @@ from ..kb.doc_permission import (
     push_mirror_to_claims,
     push_mirror_to_docs,
 )
+from ..kb.eval.coordinator import EvalCoordinator
 from ..kb.findability import (
     ProbeResult,
     ProbeSide,
@@ -50,6 +51,8 @@ from ..kb.findability import (
     doc_passages_in_top_k,
     probe_findability,
 )
+from ..kb.graph.coordinator import GraphCoordinator
+from ..kb.graph.jobs import GraphJob
 from ..kb.graph.mention_write import wipe_doc_mentions
 from ..kb.graph.review import accept_proposal, entity_page, list_proposals, reject_proposal
 from ..kb.graph.write import wipe_doc_claims
@@ -60,6 +63,7 @@ from ..kb.preview import is_structured_text, preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
 from ..perm import Actor, Permission, Verb, Visibility, authorize
+from ..resources.eval import EvalResult, EvalRun
 from ..resources.graph import mention_id
 from ..resources.groups import groups_of
 from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
@@ -209,6 +213,73 @@ class WikiPageDeletedOut(BaseModel):
     """Result of DELETE /kb/collections/:id/wiki/page — the removed path."""
 
     deleted: str
+
+
+class GraphRunOut(BaseModel):
+    """Result of POST /kb/graph/run — dispatched | already_running | disabled."""
+
+    status: str = "dispatched"
+
+
+class GraphJobsOut(BaseModel):
+    """GET /kb/graph/jobs — the pass at a glance: job counts per queue status
+    (pending/processing/… as specstar's TaskStatus values) + latest activity."""
+
+    total: int
+    counts: dict[str, int]
+    latest_ms: int = 0
+
+
+class EvalRunIn(BaseModel):
+    """POST /kb/eval/run body. ``run_label`` "" ⇒ a server-generated timestamp
+    label; ``sample_size`` 0 ⇒ the coordinator's whole-corpus default."""
+
+    run_label: str = ""
+    seed: str = ""
+    sample_size: int = 0
+
+
+class EvalRunOut(BaseModel):
+    """Result of POST /kb/eval/run — dispatched | disabled (+ the label the run
+    is filed under, so the caller can poll /kb/eval/runs for it)."""
+
+    status: str = "dispatched"
+    run_label: str = ""
+
+
+class EvalRunRow(BaseModel):
+    """One (collection, run) join-state row — fan-out progress at a glance."""
+
+    collection_id: str
+    run_label: str
+    status: str
+    total: int
+    done: int
+    failed: int
+
+
+class EvalRunsOut(BaseModel):
+    runs: list[EvalRunRow]
+
+
+class EvalResultRow(BaseModel):
+    """One collection's finished metrics for one run (#535: recall@k + MRR)."""
+
+    collection_id: str
+    run_label: str
+    seed: str = ""
+    sample_size: int = 0
+    n_generated: int = 0
+    n_kept: int = 0
+    n_dropped: int = 0
+    recall_chunk: dict[str, float] = {}
+    mrr_chunk: float = 0.0
+    recall_doc: dict[str, float] = {}
+    mrr_doc: float = 0.0
+
+
+class EvalResultsOut(BaseModel):
+    results: list[EvalResultRow]
 
 
 class WikiRebuildOut(BaseModel):
@@ -674,6 +745,10 @@ def register_kb_routes(
     superusers: frozenset[str] = frozenset(),
     answer_llm: ILlm,
     answer_system_prompt: str = "",
+    # The job producers (the engines' ignition — see the graph/eval run routes).
+    # None ⇒ the matching LLM isn't wired; the routes answer status="disabled".
+    graph_coordinator: GraphCoordinator | None = None,
+    eval_coordinator: EvalCoordinator | None = None,
 ) -> None:
     def _collection_out(row, cited: dict[str, int]) -> CollectionOut:
         """Build a card from one ``exp_aggregate_by`` group row: the Collection
@@ -2071,6 +2146,114 @@ def register_kb_routes(
             kind=p.kind,
             other_kind=p.other_kind,
         )
+
+    @app.post("/kb/graph/run")
+    async def run_graph_extraction() -> GraphRunOut:
+        """#534 — fire a whole metric-extraction pass (scan every ``use_graph``
+        collection, fan out splits, finish with a vocabulary reconcile). The
+        engine + worker always existed; this is the ignition it never had.
+        Superuser-only: a full-corpus LLM sweep is an operator action."""
+        if get_user_id() not in superusers:
+            raise HTTPException(status_code=403, detail="only a superuser may start a graph run")
+        if graph_coordinator is None:
+            return GraphRunOut(status="disabled")
+        # #571 anti-mash (PROCESSING included): while any job of the previous
+        # pass is still live, another press coalesces instead of stacking a
+        # second full-corpus sweep.
+        active = spec.get_resource_manager(GraphJob).count_resources(
+            QB["status"].in_([TaskStatus.PENDING.value, TaskStatus.PROCESSING.value]).build()
+        )
+        if active:
+            return GraphRunOut(status="already_running")
+        graph_coordinator.enqueue_dispatch()
+        return GraphRunOut(status="dispatched")
+
+    @app.get("/kb/graph/jobs")
+    async def graph_jobs_overview() -> GraphJobsOut:
+        """#534 — job counts per status so an operator can watch a pass move
+        (or spot it stuck) without kubectl. One GROUP BY push-down over the
+        indexed ``status`` (the #103 aggregate pattern); metas-only. Superuser
+        like the trigger — job counts describe the whole corpus."""
+        if get_user_id() not in superusers:
+            raise HTTPException(status_code=403, detail="only a superuser may view graph jobs")
+        rows = spec.get_resource_manager(GraphJob).exp_aggregate_by(  # ty: ignore[unresolved-attribute]
+            by=QB["status"],
+            aggregates={"n": Count(), "latest": Max(QB.updated_time())},
+        )
+        counts: dict[str, int] = {}
+        latest = 0
+        for row in rows:
+            status = row.key if isinstance(row.key, str) and row.key else "unknown"
+            assert isinstance(row.n, int)
+            counts[status] = counts.get(status, 0) + row.n
+            if isinstance(row.latest, datetime):
+                latest = max(latest, _ms(row.latest))
+        return GraphJobsOut(total=sum(counts.values()), counts=counts, latest_ms=latest)
+
+    @app.post("/kb/eval/run")
+    async def run_retrieval_eval(body: EvalRunIn) -> EvalRunOut:
+        """#535 — fire a retrieval-eval pass (synthetic questions → recall@k /
+        MRR per collection). Same ignition gap as graph: the fan-out engine and
+        worker always existed, nothing ever enqueued the dispatch. Superuser —
+        it burns LLM across the whole corpus."""
+        if get_user_id() not in superusers:
+            raise HTTPException(status_code=403, detail="only a superuser may start an eval run")
+        if eval_coordinator is None:
+            return EvalRunOut(status="disabled", run_label="")
+        label = body.run_label or datetime.now(UTC).strftime("run-%Y%m%d-%H%M%S")
+        eval_coordinator.enqueue_dispatch(label, seed=body.seed, sample_size=body.sample_size)
+        return EvalRunOut(status="dispatched", run_label=label)
+
+    @app.get("/kb/eval/runs")
+    async def list_eval_runs() -> EvalRunsOut:
+        """#535 — every (collection, run) fan-out state: is a pass moving, done,
+        or stuck. Small table (one row per collection × run) — a plain list."""
+        if get_user_id() not in superusers:
+            raise HTTPException(status_code=403, detail="only a superuser may view eval runs")
+        rm = spec.get_resource_manager(EvalRun)
+        rows = []
+        for r in rm.list_resources(QB.all().build()):
+            data = r.data
+            assert isinstance(data, EvalRun)
+            rows.append(
+                EvalRunRow(
+                    collection_id=data.collection_id,
+                    run_label=data.run_label,
+                    status=data.status,
+                    total=data.total,
+                    done=len(data.done),
+                    failed=len(data.failed),
+                )
+            )
+        return EvalRunsOut(runs=rows)
+
+    @app.get("/kb/eval/results")
+    async def list_eval_results() -> EvalResultsOut:
+        """#535 — the metrics themselves: recall@k / MRR per (collection, run).
+        This is the baseline the whole issue exists to produce."""
+        if get_user_id() not in superusers:
+            raise HTTPException(status_code=403, detail="only a superuser may view eval results")
+        rm = spec.get_resource_manager(EvalResult)
+        out = []
+        for r in rm.list_resources(QB.all().build()):
+            data = r.data
+            assert isinstance(data, EvalResult)
+            out.append(
+                EvalResultRow(
+                    collection_id=data.collection_id,
+                    run_label=data.run_label,
+                    seed=data.seed,
+                    sample_size=data.sample_size,
+                    n_generated=data.n_generated,
+                    n_kept=data.n_kept,
+                    n_dropped=data.n_dropped,
+                    recall_chunk=dict(data.recall_chunk),
+                    mrr_chunk=data.mrr_chunk,
+                    recall_doc=dict(data.recall_doc),
+                    mrr_doc=data.mrr_doc,
+                )
+            )
+        return EvalResultsOut(results=out)
 
     @app.get("/kb/documents")
     async def render_document(doc_id: str = Query(alias="id")) -> RenderedDoc:
