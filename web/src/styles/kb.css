@@ -3765,7 +3765,6 @@
 .ent-page__claim-value { font-family: var(--font-display); font-size: var(--text-display-sm); font-weight: 640; color: var(--text-paper); font-variant-numeric: tabular-nums; }
 .ent-page__claim-unit { font-size: var(--text-small); color: var(--text-paper-d); margin-left: 2px; font-family: var(--font-body); font-weight: 400; }
 .ent-page__claim-period { font-family: var(--font-mono); font-size: var(--text-small); color: var(--text-paper-d); background: var(--paper-2); border-radius: var(--radius-chip); padding: 2px 8px; }
-.ent-page__conflict { margin-left: auto; font-size: var(--text-small); font-weight: 600; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: var(--radius-chip); padding: 1px 8px; white-space: nowrap; }
 .mrg__entity { color: inherit; text-decoration: none; }
 .mrg__entity:hover { color: var(--accent); text-decoration: underline; }
 

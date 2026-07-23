@@ -107,29 +107,27 @@ describe("GraphEntityPage (#534)", () => {
     expect(section).toHaveTextContent("%");
     expect(section).toHaveTextContent("Q3");
     expect(section).toHaveTextContent("deck-A"); // the slide it came from
-    // one figure, one voice — nothing disagrees
-    expect(screen.queryByText("數字對不上")).not.toBeInTheDocument();
   });
 
-  it("flags figures that disagree for the same metric and period (#628)", async () => {
-    const disagreeing = {
+  it("reports every document's figure without adjudicating between them (#628)", async () => {
+    // Two decks state different Q3 yields. The page shows both, attributed —
+    // deciding which is right is the reader's call, not the system's.
+    const both = {
       ...ENTITY,
-      claims: [
-        CLAIM,
-        { ...CLAIM, value: "95.0", source_doc_id: "deck-B", chunk_id: "deck-B#0" },
-      ],
+      claims: [CLAIM, { ...CLAIM, value: "95.0", source_doc_id: "deck-B", chunk_id: "deck-B#0" }],
     };
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify(disagreeing), { status: 200 })),
+      vi.fn(async () => new Response(JSON.stringify(both), { status: 200 })),
     );
     renderAt("graph-entity:1");
 
     const section = await screen.findByTestId("entity-claims");
     expect(section).toHaveTextContent("98.7");
     expect(section).toHaveTextContent("95.0");
-    // both rows of the disagreeing pair wear the badge
-    expect(screen.getAllByText("數字對不上")).toHaveLength(2);
+    expect(section).toHaveTextContent("deck-B");
+    // no verdict of any kind is rendered
+    expect(section.querySelector(".ent-page__conflict")).toBeNull();
   });
 
   it("hides the numbers section when there are none (#628)", async () => {
