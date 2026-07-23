@@ -145,11 +145,13 @@ def test_superuser_manages_a_doc_in_a_private_collection():
 # read_content tier: reading the wiki, polling status, and REPORTING an error
 # (submit/draft) — the fix is applied by the trusted background corrector, so
 # reporting is a reader-tier action that matches the `request_wiki_update` tool.
+# NOTE: corrections/DRAFT is gated the same way but tested separately — its
+# allowed path calls a real LLM (no Ollama in CI), so only its denials (which
+# short-circuit at the gate, before the LLM) are asserted below.
 WIKI_READ_TIER = [
     ("get", "/kb/collections/{cid}/wiki", None),
     ("get", "/kb/collections/{cid}/wiki/status", None),
     ("post", "/kb/collections/{cid}/wiki/corrections", {"instruction": "fix it"}),
-    ("post", "/kb/collections/{cid}/wiki/corrections/draft", {"question": "q", "answer": "a"}),
 ]
 
 WIKI_EDIT_TIER = [
@@ -184,6 +186,23 @@ def test_wiki_read_tier_requires_read_content(method: str, path: str, body: dict
     holder["id"] = "mallory"
     _set_permission(spec, cid, Permission(visibility="private"))
     assert getattr(client, method)(url, **kw).status_code == 404
+
+
+def test_wiki_corrections_draft_requires_read_content():
+    """corrections/DRAFT is read_content-gated like the rest of the read tier, but
+    its allowed path runs a real LLM (unavailable in CI) — so assert only the
+    denials, which short-circuit at the gate before any LLM call."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    url = f"/kb/collections/{cid}/wiki/corrections/draft"
+    body = {"question": "q", "answer": "a"}
+    _set_permission(spec, cid, Permission(visibility="restricted", read_meta=["user:carol"]))
+    holder["id"] = "carol"
+    assert client.post(url, json=body).status_code == 403  # read_meta is not read_content
+    holder["id"] = "mallory"
+    _set_permission(spec, cid, Permission(visibility="private"))
+    assert client.post(url, json=body).status_code == 404
 
 
 def test_get_wiki_page_requires_read_content():
