@@ -52,6 +52,8 @@ export function useItemChat({
       queryKey: qk.itemChat(slug, itemId, chatId),
       // File edits are item-scoped: every chat of the item shares one workspace.
       filesKey: qk.files(itemId),
+      // #613: this chat's todo checklist — live `todos_updated` events land here.
+      todosKey: qk.itemChatTodos(slug, itemId, chatId),
       getThread: () => client.getChat(slug, itemId, chatId),
       subscribe: (signal, since) => client.subscribe(slug, itemId, chatId, signal, since),
       post: (content, opts) =>

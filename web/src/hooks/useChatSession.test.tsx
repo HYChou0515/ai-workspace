@@ -65,6 +65,29 @@ describe("useChatSession", () => {
     );
   });
 
+  // #613: `todos_updated` is panel state, not transcript — it must land in the
+  // todos query cache (whole-list replace) and never fold into the log.
+  it("writes todos_updated into the todos cache and keeps it out of the log", async () => {
+    const { QueryClientProvider } = await import("@tanstack/react-query");
+    const { makeTestQueryClient } = await import("../test/queryWrapper");
+    const qc = makeTestQueryClient();
+    const wrapper = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={qc}>{children}</QueryClientProvider>
+    );
+    const items = [{ text: "fix bug", status: "in_progress" }];
+    const t = fakeTransport({
+      todosKey: ["todos", "c1"],
+      subscribe: async function* () {
+        yield { type: "todos_updated", items } as AgentEvent;
+        await new Promise<void>(() => {});
+      },
+    });
+    const { result } = renderHook(() => useChatSession(t, 60_000), { wrapper });
+    await waitFor(() => expect(qc.getQueryData(["todos", "c1"])).toEqual(items));
+    // Only the hydrated user message — the todo event added no entry.
+    expect(result.current.log.entries).toHaveLength(1);
+  });
+
   it("folds stream events and re-reads the thread on a terminal event", async () => {
     const getThread = vi.fn().mockResolvedValue(THREAD);
     const t = fakeTransport({
