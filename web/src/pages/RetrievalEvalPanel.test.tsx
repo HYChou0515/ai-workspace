@@ -53,15 +53,15 @@ function stubFetch() {
 }
 
 describe("RetrievalEvalPanel (#535)", () => {
-  it("shows the metrics table and the in-flight run", async () => {
+  it("shows the metric cards and the in-flight run", async () => {
     stubFetch();
     render(<RetrievalEvalPanel />, { wrapper: QueryWrap });
 
-    expect(await screen.findByTestId("eval-table")).toBeInTheDocument();
+    expect(await screen.findByTestId("eval-results")).toBeInTheDocument();
     expect(screen.getByText("run-1")).toBeInTheDocument();
-    expect(screen.getByText("0.33")).toBeInTheDocument(); // R@1
-    expect(screen.getByText("0.61")).toBeInTheDocument(); // MRR
-    expect(await screen.findByTestId("eval-running")).toHaveTextContent("run-2 — 2/4");
+    expect(screen.getByText("33%")).toBeInTheDocument(); // top-1 hit rate as a percentage
+    expect(screen.getByText("0.61")).toBeInTheDocument(); // the chunk rank score numeral
+    expect(await screen.findByTestId("eval-running")).toHaveTextContent("2/4");
   });
 
   it("the run button fires a dispatch job through the auto route", async () => {

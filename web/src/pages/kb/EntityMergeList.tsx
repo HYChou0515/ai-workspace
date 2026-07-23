@@ -14,6 +14,7 @@
  */
 import { Link } from "react-router-dom";
 import { useT } from "../../lib/i18n";
+import { docLabel } from "./CardAttachments";
 import { docHref } from "./kbLinks";
 
 export type MergeEvidence = {
@@ -78,8 +79,9 @@ function Side({
                 href={docHref(e.source_doc_id, e.text || e.surface)}
                 target="_blank"
                 rel="noreferrer"
+                title={e.source_doc_id}
               >
-                {e.source_doc_id}
+                {docLabel(e.source_doc_id)}
               </a>
               <span className="mrg__quote">{e.text || e.surface}</span>
             </li>

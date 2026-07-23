@@ -1,11 +1,12 @@
 /**
- * #535 — the retrieval-eval face the engine never had.
+ * #535 — the retrieval-eval face: fire a pass, read the quality of retrieval.
  *
- * The fan-out pipeline (synthetic questions → recall@k / MRR per collection)
- * always produced `EvalResult` rows; until #622 nothing could fire it, and no
- * page showed the metrics. This panel does both, on specstar's own surface:
- * POST /api/eval-job (creating the dispatch row IS the enqueue), read back
- * /api/eval-run (fan-out progress) + /api/eval-result (the metrics).
+ * One card per (knowledge base × run). The two questions a reader actually has
+ * — "does retrieval find the source passage?" and "does it at least find the
+ * right document?" — each get a big MRR numeral plus recall@k meters, in plain
+ * words. Jargon stays out of the surface; the legend explains the two numbers
+ * once. POST /api/eval-job (the auto route IS the enqueue) fires a pass;
+ * in-flight runs show as live progress bars.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -42,6 +43,48 @@ async function rows<T>(path: string): Promise<T[]> {
 }
 
 const KS = ["1", "3", "5", "10"];
+
+function pct(v: number): string {
+  return `${Math.round(v * 100)}%`;
+}
+
+/** One metric family — a big MRR numeral beside four recall@k meters. */
+function MetricGroup({
+  title,
+  mrr,
+  recall,
+}: {
+  title: string;
+  mrr: number;
+  recall: Record<string, number>;
+}) {
+  const t = useT();
+  return (
+    <div className="eval-card__group">
+      <div className="eval-card__group-title">{title}</div>
+      <div className="eval-card__group-body">
+        <div className="eval-card__mrr">
+          <span className="eval-card__mrr-num">{mrr.toFixed(2)}</span>
+          <span className="eval-card__mrr-label">{t("eval.mrr")}</span>
+        </div>
+        <div className="eval-card__bars">
+          {KS.map((k) => {
+            const v = recall[k] ?? 0;
+            return (
+              <div className="eval-card__bar" key={k} title={t("eval.recallTitle", { k })}>
+                <span className="eval-card__bar-k">{t("eval.topK", { k })}</span>
+                <span className="eval-card__bar-track">
+                  <span className="eval-card__bar-fill" style={{ width: pct(v) }} />
+                </span>
+                <span className="eval-card__bar-v">{pct(v)}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function RetrievalEvalPanel() {
   const t = useT();
@@ -80,14 +123,19 @@ export function RetrievalEvalPanel() {
   });
 
   const running = (runs.data ?? []).filter((r) => r.status === "running");
+  const shown = (results.data ?? []).filter((r) => r.n_kept > 0);
 
   return (
     <div className="eval-panel" data-testid="eval-panel">
       <div className="eval-panel__bar">
-        <p className="eval-panel__blurb">{t("eval.blurb")}</p>
+        <div>
+          <p className="eval-panel__blurb">{t("eval.blurb")}</p>
+          {/* The two numbers, explained once — never again per row. */}
+          <p className="eval-panel__legend">{t("eval.legend")}</p>
+        </div>
         <button
           type="button"
-          className="kb-btn"
+          className="eval-panel__fire"
           disabled={fire.isPending}
           onClick={() => fire.mutate()}
         >
@@ -102,52 +150,49 @@ export function RetrievalEvalPanel() {
 
       {running.length > 0 && (
         <ul className="eval-panel__running" data-testid="eval-running">
-          {running.map((r) => (
-            <li key={`${r.collection_id}:${r.run_label}`}>
-              {names.get(r.collection_id) ?? r.collection_id} · {r.run_label} —{" "}
-              {r.done.length}/{r.total}
-            </li>
-          ))}
+          {running.map((r) => {
+            const doneN = r.done.length;
+            const frac = r.total > 0 ? doneN / r.total : 0;
+            return (
+              <li key={`${r.collection_id}:${r.run_label}`} className="eval-panel__run">
+                <span className="eval-panel__run-name">
+                  {names.get(r.collection_id) ?? r.collection_id}
+                </span>
+                <span className="eval-panel__run-label">{r.run_label}</span>
+                <span className="eval-card__bar-track eval-panel__run-track">
+                  <span className="eval-card__bar-fill" style={{ width: pct(frac) }} />
+                </span>
+                <span className="eval-panel__run-count">
+                  {doneN}/{r.total}
+                </span>
+              </li>
+            );
+          })}
         </ul>
       )}
 
       {results.isPending ? (
         <Skeleton style={{ height: 180 }} />
-      ) : (results.data ?? []).length === 0 ? (
+      ) : shown.length === 0 ? (
         <p className="rvw__empty" data-testid="eval-empty">
           {t("eval.empty")}
         </p>
       ) : (
-        <table className="eval-panel__table" data-testid="eval-table">
-          <thead>
-            <tr>
-              <th>{t("eval.col.collection")}</th>
-              <th>{t("eval.col.run")}</th>
-              <th>{t("eval.col.kept")}</th>
-              {KS.map((k) => (
-                <th key={k}>R@{k}</th>
-              ))}
-              <th>MRR</th>
-              <th>{t("eval.col.docMrr")}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(results.data ?? [])
-              .filter((r) => r.n_kept > 0) // an empty collection's zero-row says nothing
-              .map((r) => (
-                <tr key={`${r.collection_id}:${r.run_label}`}>
-                  <td>{names.get(r.collection_id) ?? r.collection_id}</td>
-                  <td>{r.run_label}</td>
-                  <td>{r.n_kept}</td>
-                  {KS.map((k) => (
-                    <td key={k}>{(r.recall_chunk[k] ?? 0).toFixed(2)}</td>
-                  ))}
-                  <td>{r.mrr_chunk.toFixed(2)}</td>
-                  <td>{r.mrr_doc.toFixed(2)}</td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
+        <div className="eval-panel__grid" data-testid="eval-results">
+          {shown.map((r) => (
+            <article className="eval-card" key={`${r.collection_id}:${r.run_label}`}>
+              <header className="eval-card__head">
+                <h3 className="eval-card__kb">{names.get(r.collection_id) ?? r.collection_id}</h3>
+                <span className="eval-card__run">{r.run_label}</span>
+              </header>
+              <p className="eval-card__sample">
+                {t("eval.sample", { kept: String(r.n_kept), gen: String(r.n_generated) })}
+              </p>
+              <MetricGroup title={t("eval.chunkTitle")} mrr={r.mrr_chunk} recall={r.recall_chunk} />
+              <MetricGroup title={t("eval.docTitle")} mrr={r.mrr_doc} recall={r.recall_doc} />
+            </article>
+          ))}
+        </div>
       )}
     </div>
   );

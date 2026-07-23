@@ -160,8 +160,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
               {t("diag.subtitle")}
             </p>
           </div>
-          {tab === "retrieval" && <RetrievalEvalPanel />}
-        {tab === "checks" && (
+          {tab === "checks" && (
             <button
               type="button"
               disabled={running}
@@ -227,6 +226,8 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
         </div>
 
         {tab === "traces" && <TelemetryPanel />}
+
+        {tab === "retrieval" && <RetrievalEvalPanel />}
 
         {tab === "matrix" && (
           <>

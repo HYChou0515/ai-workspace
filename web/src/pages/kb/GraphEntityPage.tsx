@@ -3,12 +3,15 @@
  *
  * The backend (`GET /kb/graph/entities/{id}`) existed with no consumer: the
  * Merges tab could ask "are these the same thing?" but nobody could OPEN an
- * identity to see its documents, aliases and relations. This page is that
- * missing face; the merge cards' entity names link here.
+ * identity to see its documents, aliases and relations. This page is that face:
+ * a hero (name · kind · how often the corpus talks about it), then the
+ * evidence — each document that named it, in that document's own words — and
+ * the relations. Internal vocabulary (link bases, raw doc ids) is translated
+ * at this boundary: bases become plain words, doc ids become filenames.
  *
  * Permission note: the endpoint reads AS the caller — an identity nothing
- * readable vouches for is a 404, which renders as "not found" (not an empty
- * page), so a bare name can't leak.
+ * readable vouches for is a 404, rendered as "not found" (unknown and
+ * unreadable look the same), so a bare name can't leak.
  */
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
@@ -17,6 +20,8 @@ import { apiFetch } from "../../api/http";
 import { qk } from "../../api/queryKeys";
 import { Skeleton } from "../../components/Skeleton";
 import { useT } from "../../lib/i18n";
+import type { MsgKey } from "../../lib/i18n";
+import { docLabel } from "./CardAttachments";
 import { docHref } from "./kbLinks";
 
 type Mention = {
@@ -53,6 +58,22 @@ async function fetchEntity(id: string): Promise<Entity | null> {
   return resp.json();
 }
 
+/** Link bases are engine vocabulary — the page speaks the reader's. */
+function basisKey(basis: string): MsgKey {
+  switch (basis) {
+    case "identical":
+      return "entity.basis.identical";
+    case "resembles":
+      return "entity.basis.resembles";
+    case "declared":
+      return "entity.basis.declared";
+    case "approved":
+      return "entity.basis.approved";
+    default:
+      return "entity.basis.other";
+  }
+}
+
 export function GraphEntityPage() {
   const t = useT();
   const { entityId = "" } = useParams();
@@ -78,42 +99,61 @@ export function GraphEntityPage() {
     );
   }
   const e = q.data as Entity;
+  const aliases = e.aliases.filter((a) => a !== e.name);
+  const docCount = new Set(e.mentions.map((m) => m.source_doc_id)).size;
+
   return (
     <div className="ent-page" data-testid="entity-page">
-      <header className="ent-page__head">
+      <header className="ent-page__hero">
+        <p className="ent-page__eyebrow">{t("entity.eyebrow")}</p>
         <h1 className="ent-page__name">
           {e.name}
-          {e.kind ? <span className="mrg__kind">{e.kind}</span> : null}
+          {e.kind ? <span className="ent-page__kind">{e.kind}</span> : null}
         </h1>
-        <p className="ent-page__meta">
-          {t("entity.occurrences", { n: String(e.occurrences) })}
-          {e.aliases.filter((a) => a !== e.name).length > 0
-            ? ` · ${t("entity.aliases")}: ${e.aliases.filter((a) => a !== e.name).join("、")}`
-            : null}
-        </p>
+        <div className="ent-page__stats">
+          <span className="ent-page__stat">
+            <strong>{e.occurrences}</strong> {t("entity.stat.occ")}
+          </span>
+          <span className="ent-page__stat">
+            <strong>{docCount}</strong> {t("entity.stat.docs")}
+          </span>
+          {aliases.length > 0 && (
+            <span className="ent-page__stat ent-page__stat--aliases">
+              {t("entity.aliases")}
+              {aliases.map((a) => (
+                <span className="ent-page__alias" key={a}>
+                  {a}
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
       </header>
 
-      <section>
+      <section className="ent-page__section">
         <h2 className="ent-page__h2">{t("entity.mentions")}</h2>
         {e.mentions.length === 0 ? (
           <p className="rvw__empty">{t("entity.noMentions")}</p>
         ) : (
-          <ul className="mrg__ev" data-testid="entity-mentions">
+          <ul className="ent-page__list" data-testid="entity-mentions">
             {e.mentions.map((m) => (
-              <li key={`${m.source_doc_id}:${m.surface}`}>
+              <li className="ent-page__mention" key={`${m.source_doc_id}:${m.surface}`}>
                 <a
-                  className="mrg__doc"
+                  className="ent-page__docchip"
                   href={docHref(m.source_doc_id, m.surface)}
                   target="_blank"
                   rel="noreferrer"
+                  title={m.source_doc_id}
                 >
-                  {m.source_doc_id}
+                  {docLabel(m.source_doc_id)}
                 </a>
-                <span className="mrg__quote">
-                  {m.surface}
-                  {m.occurrences > 1 ? ` ×${m.occurrences}` : ""}
-                  {m.basis ? ` — ${m.basis}` : ""}
+                <span className="ent-page__surface">
+                  「{m.surface}」
+                  {m.occurrences > 1 ? (
+                    <span className="ent-page__times">×{m.occurrences}</span>
+                  ) : null}
                 </span>
+                <span className="ent-page__basis">{t(basisKey(m.basis))}</span>
               </li>
             ))}
           </ul>
@@ -121,22 +161,43 @@ export function GraphEntityPage() {
       </section>
 
       {e.related.length > 0 && (
-        <section>
+        <section className="ent-page__section">
           <h2 className="ent-page__h2">{t("entity.related")}</h2>
-          <ul className="mrg__ev" data-testid="entity-related">
+          <ul className="ent-page__list" data-testid="entity-related">
             {e.related.map((r, i) => (
-              <li key={`${r.predicate}:${r.other_entity_id}:${i}`}>
-                <span className="mrg__quote">
-                  {r.direction === "in" ? `${r.other_name} ${r.predicate}` : `${r.predicate} `}
+              <li className="ent-page__mention" key={`${r.predicate}:${r.other_entity_id}:${i}`}>
+                <span className="ent-page__surface">
+                  {r.direction === "in" ? (
+                    <>
+                      {r.other_entity_id ? (
+                        <Link
+                          className="ent-page__rel"
+                          to={`/kb/graph/entities/${r.other_entity_id}`}
+                        >
+                          {r.other_name}
+                        </Link>
+                      ) : (
+                        r.other_name
+                      )}{" "}
+                      {r.predicate} {e.name}
+                    </>
+                  ) : (
+                    <>
+                      {e.name} {r.predicate}{" "}
+                      {r.other_entity_id ? (
+                        <Link
+                          className="ent-page__rel"
+                          to={`/kb/graph/entities/${r.other_entity_id}`}
+                        >
+                          {r.other_name}
+                        </Link>
+                      ) : (
+                        r.other_name
+                      )}
+                    </>
+                  )}
                 </span>
-                {r.other_entity_id ? (
-                  <Link className="mrg__doc" to={`/kb/graph/entities/${r.other_entity_id}`}>
-                    {r.direction === "in" ? e.name : r.other_name}
-                  </Link>
-                ) : (
-                  <span>{r.other_name}</span>
-                )}
-                {r.quote ? <span className="mrg__quote">「{r.quote}」</span> : null}
+                {r.quote ? <span className="ent-page__quote">「{r.quote}」</span> : null}
               </li>
             ))}
           </ul>

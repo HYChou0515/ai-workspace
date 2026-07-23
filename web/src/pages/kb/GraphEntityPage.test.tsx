@@ -59,10 +59,11 @@ describe("GraphEntityPage (#534)", () => {
     );
     renderAt("graph-entity:1");
 
-    expect(await screen.findByText("回焊爐")).toBeInTheDocument();
+    expect((await screen.findAllByText(/回焊爐/)).length).toBeGreaterThan(0);
     expect(screen.getByText("機台")).toBeInTheDocument();
-    expect(screen.getByText(/Reflow Oven/)).toBeInTheDocument(); // alias line
-    expect(screen.getByText("deck-A")).toBeInTheDocument(); // evidence doc link
+    expect(screen.getByText("Reflow Oven")).toBeInTheDocument(); // alias chip
+    expect(screen.getByText("deck-A")).toBeInTheDocument(); // evidence doc link (label falls back to the raw id)
+    expect(screen.getByText("同名")).toBeInTheDocument(); // basis translated, not "identical"
     // the relation links to the OTHER identity's page
     const rel = screen.getByRole("link", { name: "產線三" });
     expect(rel).toHaveAttribute("href", "/kb/graph/entities/graph-entity:2");
