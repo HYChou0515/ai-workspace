@@ -900,8 +900,8 @@ export const messages = {
   "goal.title": { "zh-TW": "目標", en: "Goal" },
   "goal.set": { "zh-TW": "設定目標", en: "Set goal" },
   "goal.placeholder": {
-    "zh-TW": "完成條件,例如:報告寫完並存檔",
-    en: "Completion condition, e.g. the report is written and saved",
+    "zh-TW": "設定完成條件…",
+    en: "Set a completion condition…",
   },
   "goal.clear": { "zh-TW": "清除", en: "Clear" },
   "goal.round": { "zh-TW": "續跑 {k}/{n} 輪", en: "round {k}/{n}" },

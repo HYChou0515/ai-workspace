@@ -101,8 +101,8 @@ export function TodoPanel({
       style={{
         display: "flex",
         flexDirection: "column",
-        gap: 6,
-        padding: "8px 12px",
+        gap: 4,
+        padding: "6px 10px",
         borderBottom: "1px solid var(--paper-3)",
       }}
     >
@@ -117,12 +117,17 @@ export function TodoPanel({
         <span style={{ flex: 1 }} />
         <button
           type="button"
-          className="btn"
-          data-variant="secondary"
-          data-size="sm"
           data-testid="todo-toggle"
           aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
+          style={{
+            border: "none",
+            background: "none",
+            cursor: "pointer",
+            fontSize: pxToRem(11),
+            color: "var(--text-paper-d)",
+            padding: "0 2px",
+          }}
         >
           {expanded ? t("todos.collapse") : t("todos.expand")}
         </button>
@@ -131,9 +136,9 @@ export function TodoPanel({
       {expanded && goal !== null && (
         <div
           data-testid="goal-row"
-          style={{ display: "flex", alignItems: "center", gap: 8, fontSize: pxToRem(12) }}
+          style={{ display: "flex", alignItems: "center", gap: 6, fontSize: pxToRem(12), minHeight: 22 }}
         >
-          <span style={{ fontWeight: 600 }}>{t("goal.title")}</span>
+          <span style={{ fontWeight: 600, color: "var(--text-paper-d)" }}>{t("goal.title")}</span>
           <span style={{ flex: 1 }}>{goal.condition}</span>
           {goal.state === "active" && (
             <span data-testid="goal-rounds" style={{ color: "var(--text-paper-d)" }}>
@@ -153,14 +158,15 @@ export function TodoPanel({
           {!readOnly && (
             <button
               type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
+              className="tag-remove"
               data-testid="goal-clear"
+              aria-label={t("goal.clear")}
+              title={t("goal.clear")}
               disabled={goalLocked}
               onClick={() => clearGoal.mutate()}
+              style={{ border: "none", background: "none", fontSize: pxToRem(13), padding: "0 2px" }}
             >
-              {t("goal.clear")}
+              ×
             </button>
           )}
         </div>
@@ -174,13 +180,23 @@ export function TodoPanel({
         </div>
       )}
       {expanded && goal === null && !readOnly && (
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: pxToRem(12), fontWeight: 600, color: "var(--text-paper-d)" }}>
+            {t("goal.title")}
+          </span>
           <input
             data-testid="goal-input"
+            className="inline-edit"
             value={goalDraft}
             disabled={goalLocked}
             placeholder={t("goal.placeholder")}
             onChange={(e) => setGoalDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && goalDraft.trim()) {
+                setGoal.mutate(goalDraft.trim());
+                setGoalDraft("");
+              }
+            }}
             style={{ flex: 1, fontSize: pxToRem(12) }}
           />
           <button
@@ -203,11 +219,11 @@ export function TodoPanel({
       )}
 
       {expanded && (
-        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 4 }}>
+        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
           {items.map((it, idx) => (
             <li
               key={`${idx}-${it.text}`}
-              style={{ display: "flex", alignItems: "center", gap: 8, fontSize: pxToRem(12) }}
+              style={{ display: "flex", alignItems: "center", gap: 6, fontSize: pxToRem(12), minHeight: 20 }}
             >
               <input
                 type="checkbox"
@@ -235,13 +251,13 @@ export function TodoPanel({
               {!readOnly && (
                 <button
                   type="button"
-                  className="btn"
-                  data-variant="secondary"
-                  data-size="sm"
+                  className="tag-remove"
                   data-testid="todo-remove"
                   aria-label={t("todos.remove")}
+                  title={t("todos.remove")}
                   disabled={locked}
                   onClick={() => remove(idx)}
+                  style={{ border: "none", background: "none", fontSize: pxToRem(13), padding: "0 2px" }}
                 >
                   ×
                 </button>
@@ -252,9 +268,10 @@ export function TodoPanel({
       )}
 
       {expanded && !readOnly && (
-        <div style={{ display: "flex", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <input
             data-testid="todo-add-input"
+            className="inline-edit"
             value={draft}
             disabled={locked}
             placeholder={t("todos.add.placeholder")}
