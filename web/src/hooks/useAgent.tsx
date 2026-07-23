@@ -8,6 +8,7 @@ import {
 } from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import { getKbSearchMax } from "../lib/kbSearchMax";
+import { getKbWikiMax } from "../lib/kbWikiMax";
 import type { AgentLog } from "../pages/investigation/agentLog";
 import {
   type BroadcastChatTransport,
@@ -78,6 +79,8 @@ export function useAgentInternal(
           // #334: per-message kb_search-count cap, shared across this turn's
           // ask_knowledge_base calls.
           maxKbSearches: getKbSearchMax(),
+          // #537 follow-up: the wiki twin (sticky shared with the KB chat).
+          maxWikiSearches: getKbWikiMax(),
           // #380: skills the user queued in the Skills panel to apply THIS turn
           // (hard-loaded into the agent's context). Empty/absent → nothing forced.
           applySkills: opts?.applySkills,
