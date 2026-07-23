@@ -1,8 +1,6 @@
 """Characterization tests filling coverage gaps in the agent layer.
 
 Targets (uncovered before this file):
-  - decide_then_act.py: __getattr__ passthrough (102), _prep with no system
-    instructions (140->142), stream_response FINAL + TOOL paths (244-324).
   - tools.py: search_wiki error/skip branches (268-269, 274-275, 278-279),
     read_source missing-sources / missing-ref (322, 337), _read_step_names
     short-row + blank-line loop branches (483->482, 487->486),
@@ -15,15 +13,11 @@ conventions (ScriptedAgentRunner / HashEmbedder style).
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
-from typing import Any
 
-import litellm
 from agents import RunContextWrapper, function_tool
 
 from workspace_app.agent import AgentToolContext
-from workspace_app.agent.decide_then_act import DecideThenActModel
 from workspace_app.agent.tools import (
     _parse_module_json,
     _read_step_names,
@@ -43,119 +37,6 @@ def write_file(path: str, content: str) -> str:
 
 def _resp(content: str) -> SimpleNamespace:
     return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
-
-
-# ── decide_then_act.py ───────────────────────────────────────────────
-
-
-def test_getattr_passes_through_to_inner_model():
-    """line 102: attribute reads the wrapper doesn't define fall through to the
-    inner model (the #69 trace reads `.model` this way)."""
-    inner = SimpleNamespace(model="m", custom_attr="from-inner")
-    wrapper = DecideThenActModel(
-        inner,  # ty: ignore[invalid-argument-type]
-        model="ollama_chat/qwen3:14b",
-        base_url=None,
-        api_key=None,
-    )
-    # `custom_attr` isn't a DecideThenActModel attribute → __getattr__ → inner.
-    assert wrapper.custom_attr == "from-inner"
-
-
-def test_prep_without_system_instructions_keeps_messages_unprefixed():
-    """branch 140->142: when system_instructions is falsy, no system message is
-    prepended — the converted input messages are returned as-is."""
-    msgs = DecideThenActModel._prep("just the task", None)
-    assert all(m.get("role") != "system" for m in msgs)
-
-
-def _model() -> DecideThenActModel:
-    inner = SimpleNamespace(model="m")
-    return DecideThenActModel(
-        inner,  # ty: ignore[invalid-argument-type]
-        model="ollama_chat/qwen3:14b",
-        base_url=None,
-        api_key=None,
-    )
-
-
-async def _stream(model: DecideThenActModel, tools: list[Any]) -> list[Any]:
-    out: list[Any] = []
-    async for ev in model.stream_response(
-        "sys",
-        "do the task",
-        None,
-        tools,
-        None,
-        [],
-        None,
-        previous_response_id=None,
-        conversation_id=None,
-        prompt=None,
-    ):
-        out.append(ev)
-    return out
-
-
-async def test_stream_response_final_delegates_to_inner_with_tools_stripped(monkeypatch):
-    """lines 244-265: a `final` decision streams the answer from the inner model
-    with an EMPTY tool list (so it can only emit text)."""
-    captured: dict[str, Any] = {}
-
-    async def fake_acompletion(**kwargs):
-        # the DECISION sub-call → pick `final`.
-        return _resp(json.dumps({"action": "final"}))
-
-    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
-
-    sentinel = object()
-
-    async def inner_stream(*args, **kwargs):
-        # args[3] is the tools list the wrapper forwards (stripped to []).
-        captured["tools"] = args[3]
-        yield sentinel
-
-    inner = SimpleNamespace(model="m", stream_response=inner_stream)
-    model = DecideThenActModel(
-        inner,  # ty: ignore[invalid-argument-type]
-        model="ollama_chat/qwen3:14b",
-        base_url=None,
-        api_key=None,
-    )
-
-    out = await _stream(model, [write_file])
-    assert out == [sentinel]  # the inner stream's events flow through unchanged
-    assert captured["tools"] == []  # tools stripped so inner can only produce text
-
-
-async def test_stream_response_tool_replays_call_through_stream_handler(monkeypatch):
-    """lines 267-324: a tool decision runs the structured ARGS step, then replays
-    the call through ChatCmplStreamHandler so the Runner extracts + executes it.
-    We assert the streamed events carry a function_call for the chosen tool."""
-
-    async def fake_acompletion(**kwargs):
-        schema = kwargs["response_format"]["json_schema"]["schema"]
-        if "action" in schema["properties"]:
-            return _resp(json.dumps({"action": "write_file"}))
-        return _resp(json.dumps({"path": "memory/x.md", "content": "the note"}))
-
-    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
-
-    events = await _stream(_model(), [write_file])
-    # The fake stream is shaped into the SDK's response events; somewhere in the
-    # output there must be a function_call naming our tool with the structured
-    # args. We inspect any output items the completed event carries.
-    names: list[str] = []
-    for ev in events:
-        item = getattr(ev, "item", None)
-        if item is not None and getattr(item, "type", "") == "function_call":
-            names.append(item.name)
-        resp = getattr(ev, "response", None)
-        if resp is not None:
-            for it in getattr(resp, "output", []) or []:
-                if getattr(it, "type", "") == "function_call":
-                    names.append(it.name)
-    assert "write_file" in names
 
 
 # ── tools.py: search_wiki branches ───────────────────────────────────

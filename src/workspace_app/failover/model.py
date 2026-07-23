@@ -3,7 +3,7 @@
 The KB side wraps ``ILlm`` / ``IVlm``; the agent side speaks the OpenAI Agents
 SDK ``Model`` interface, so this is the async sibling of ``FallbackLlm``. It
 wraps an ordered :class:`LlmEndpoint` chain, materialising the inner SDK model
-for an endpoint (a ``LitellmModel`` / ``DecideThenActModel`` / …) only when its
+for an endpoint (a ``LitellmModel`` / ``RepairingModel`` / …) only when its
 turn comes, and shares the SAME process-global cooldown registry as every other
 role.
 
