@@ -157,3 +157,90 @@ def history_budget(
         return None
     usable = int(limit.tokens * (1.0 - margin_ratio))
     return max(0, usable - max(0, overhead_tokens) - max(0, reply_reserve))
+
+
+# ── learning the ceiling from the traffic (#624 P3) ──────────────────
+#
+# A provider that truncates instead of rejecting tells us nothing on the way in.
+# On the way out it does: the reported `prompt_tokens` is what it ACTUALLY read.
+# Comparing that against what we believe we sent turns an invisible failure into
+# a measurement — and the measured value is its effective window.
+
+#: How far below our estimate the reported count must fall before we call it a
+#: cut. The estimate itself runs ~15% off, so the gap has to clear that by a wide
+#: margin; a false positive here would trim a user's memory on every later turn.
+_TRUNCATION_RATIO = 0.6
+
+#: Prompts below this are too small to judge — a short turn legitimately reports
+#: a small count, and a ceiling "learned" from one would be nonsense.
+_TRUNCATION_FLOOR_TOKENS = 1_000
+
+
+def detect_truncation(*, sent_estimate: int, reported_prompt_tokens: int | None) -> int | None:
+    """The endpoint's effective window if it silently truncated this request,
+    else ``None``.
+
+    Evidence, not suspicion: the provider says it read ``reported_prompt_tokens``
+    while we believe we sent ``sent_estimate``. A reported count far below what
+    we sent means the front was dropped — the very failure that has no error, no
+    warning, and no other symptom except a model that "forgets" and then
+    confidently makes something up. Absent/zero usage is silence, not evidence
+    (Ollama often streams usage as 0), and a reported count *above* our estimate
+    just means we under-counted.
+    """
+    if not reported_prompt_tokens or reported_prompt_tokens <= 0:
+        return None
+    if sent_estimate < _TRUNCATION_FLOOR_TOKENS:
+        return None
+    if reported_prompt_tokens >= sent_estimate * _TRUNCATION_RATIO:
+        return None
+    return reported_prompt_tokens
+
+
+class LimitLearner:
+    """Per-endpoint memory of the ceiling, learned from observation or rejection.
+
+    Two ways in, with deliberately different burdens of proof:
+
+    - ``learn_exact`` — a rejection stated the limit. That is a fact; take it.
+    - ``observe`` — we *inferred* a cut from reported usage. Requires
+      ``confirmations`` sightings before it governs anything, because acting on a
+      single odd reading would trim every subsequent turn of that conversation.
+
+    In-memory and per-pod on purpose: it is a cache, not a source of truth. A pod
+    re-learns within a turn or two, a model swapped behind an endpoint corrects
+    itself, and nothing durable can go stale and quietly mis-govern a deploy.
+    """
+
+    def __init__(self, *, confirmations: int = 2) -> None:
+        self._confirmations = max(1, confirmations)
+        self._learned: dict[tuple[str, str], int] = {}
+        self._pending: dict[tuple[str, str], list[int]] = {}
+
+    @staticmethod
+    def _key(model: str, base_url: str | None) -> tuple[str, str]:
+        return (model or "", base_url or "")
+
+    def get(self, model: str, base_url: str | None) -> int | None:
+        """The learned ceiling for this endpoint, or None if not established."""
+        return self._learned.get(self._key(model, base_url))
+
+    def learn_exact(self, model: str, base_url: str | None, *, limit: int) -> None:
+        """Record a ceiling the endpoint stated outright (a rejection). Replaces
+        any previous value — endpoints get re-pointed at different models."""
+        if limit > 0:
+            self._learned[self._key(model, base_url)] = limit
+            self._pending.pop(self._key(model, base_url), None)
+
+    def observe(self, model: str, base_url: str | None, *, limit: int) -> None:
+        """Record an INFERRED ceiling (from a detected truncation). Governs only
+        once seen ``confirmations`` times; the smallest sighting wins, since the
+        real window cannot be larger than the least we ever got through."""
+        if limit <= 0:
+            return
+        key = self._key(model, base_url)
+        seen = self._pending.setdefault(key, [])
+        seen.append(limit)
+        if len(seen) >= self._confirmations:
+            self._learned[key] = min(seen)
+            self._pending.pop(key, None)

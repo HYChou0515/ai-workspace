@@ -286,6 +286,26 @@ class ChatSendService:
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return  # the chat was deleted mid-flight
 
+    def _notice_history_trimmed(self, rid: str, engine_key: str, dropped: int) -> None:
+        """Tell the thread that older messages no longer reach the model (#624).
+
+        Written once per conversation: the horizon only moves outward, so a
+        notice per turn would repeat the same fact forever. `role="notice"` is
+        rendered by the FE and never replayed into LLM history (`history_items`
+        only folds user/assistant/tool/error) — so telling the user costs the
+        model nothing."""
+        conv = self._conv_rm.get(rid).data
+        assert isinstance(conv, Conversation)
+        if any(m.role == "notice" for m in conv.messages):
+            return  # already told, at the transition
+        text = (
+            f"較早的 {dropped} 則訊息已超出 AI 一次能讀的範圍,從這輪起不會被讀到。"
+            "需要它記得那些內容的話,請開一個新對話。"
+        )
+        conv.messages.append(Message(role="notice", content=text, created_at=now_ms()))
+        self._conv_rm.update(rid, conv)
+        logger.info("chat_send: history trimmed (%d messages) for chat %s", dropped, rid)
+
     def _append_goal_marker(self, rid: str, text: str) -> None:
         """A `role="goal"` marker in the thread — rendered by the FE, and by
         design never replayed into LLM history (`history_items` only folds
@@ -462,6 +482,13 @@ class ChatSendService:
             # #613: this thread's Conversation id — the update_todos tool's row key.
             conversation_id=rid,
         )
+
+        # #624: the turn had to leave part of the thread out. Say so — once, at
+        # the transition. A silent cut is indistinguishable from the model being
+        # forgetful, which is how this stayed invisible for so long; a notice on
+        # EVERY subsequent turn would become wallpaper just as fast.
+        if ctx.history_trimmed:
+            self._notice_history_trimmed(rid, engine_key, ctx.history_trimmed)
 
         # Source A (#…): a vision-capable main model reads attached images
         # directly — inline them into this turn's user message so the model sees

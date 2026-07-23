@@ -2560,6 +2560,10 @@ function PanelBody({
           // #100: a workflow phase boundary in the log view.
           return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={`— ${e.phase} —`} />;
         }
+        if (e.kind === "notice") {
+          // #624: the context horizon moved.
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+        }
         if (e.kind === "goal_note") {
           // #613 P3: the goal driver's outcome marker (met / exhausted).
           return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={e.text} />;

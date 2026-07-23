@@ -84,6 +84,7 @@ class TurnContextBuilder:
         infer_modules_parallelism: int,
         history_max_messages: int,
         history_max_context_tokens: int,
+        context_limit: int | None = None,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     ) -> None:
         self._sandbox = sandbox
@@ -106,6 +107,9 @@ class TurnContextBuilder:
         self._infer_modules_parallelism = infer_modules_parallelism
         self._history_max_messages = history_max_messages
         self._history_max_context_tokens = history_max_context_tokens
+        # #624: the operator's declared ceiling for this deploy's endpoint. None ⇒
+        # resolve per turn (catalog lookup), and `unknown` ⇒ do not trim at all.
+        self._context_limit = context_limit
         self._wiki_coordinator = wiki_coordinator
         # #429 P10: the event-dispatch sink stamped onto every agent turn's ctx so an
         # agent's entity write fires on_event workflows. Set after construction by the
@@ -113,6 +117,80 @@ class TurnContextBuilder:
         # so it can't be a constructor arg — mirrors orchestrator.entity_write_sink).
         # None ⇒ no dispatch wired (tests / deployments with no triggers pay nothing).
         self.entity_write_sink: EntityWriteSink | None = None
+
+    def _budget_for(self, agent_config: AgentConfig | None) -> int | None:
+        """Tokens left for replayed history on this turn, or ``None`` for "no
+        ceiling known — do not trim" (#624).
+
+        ``None`` and ``0`` are deliberately different answers: ``None`` means we
+        do not know the ceiling and must not amputate on a guess, while ``0``
+        means we DO know it and the prompt alone already fills it — there is
+        genuinely no room for history. Collapsing them (both "falsy") makes the
+        second case silently behave like the first, which is the opposite of
+        what it needs.
+
+        The ceiling is resolved per turn because it belongs to the *endpoint*
+        this config points at: an operator override first, else the model
+        registry. A self-hosted model behind an OpenAI-compatible endpoint is in
+        no registry, so `unknown` is the expected answer there — and `unknown`
+        must mean "send it all", never "fall back to some number", which is how
+        24,000 came to govern a window nobody had measured.
+
+        The overhead subtracted is real, not assumed: the system prompt (which
+        since #480 carries every tool's documentation) plus the tool schemas that
+        ride alongside it. The old budget could see neither, so an 18.5k-token
+        prompt and a 24k history budget were aimed at a 40,960-token model.
+        """
+        from ..context_budget import (
+            catalog_limit,
+            estimate_tokens,
+            history_budget,
+            resolve_context_limit,
+        )
+
+        if agent_config is None:
+            return None
+        limit = resolve_context_limit(
+            configured=self._context_limit,
+            learned=None,  # P3 feeds this from observed usage
+            catalog=catalog_limit(agent_config.model),
+        )
+        overhead = estimate_tokens(agent_config.system_prompt or "") + self._tools_tokens(
+            agent_config
+        )
+        budget = history_budget(limit, overhead_tokens=overhead)
+        if budget is None:
+            return None
+        # `_fit_token_budget` always keeps the newest message (dropping the turn's
+        # own context is worse than a slight overflow), so a floor of 1 expresses
+        # "no room for history" without colliding with 0 = "budget disabled".
+        return max(1, budget)
+
+    def _tools_tokens(self, agent_config: AgentConfig) -> int:
+        """Estimated cost of the tool schemas sent alongside the prompt. Built
+        per turn (~12 ms) rather than guessed — a guess here is the same class of
+        defect as the constant it replaces. Any failure degrades to 0 rather than
+        breaking the turn."""
+        import json
+
+        from ..agent import build_tools
+        from ..context_budget import estimate_tokens
+
+        try:
+            tools = build_tools(agent_config.allowed_tools or None)
+            payload = json.dumps(
+                [
+                    {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.params_json_schema,
+                    }
+                    for t in tools
+                ]
+            )
+        except Exception:  # noqa: BLE001 — sizing must never break a turn
+            return 0
+        return estimate_tokens(payload)
 
     def _common(
         self,
@@ -124,6 +202,25 @@ class TurnContextBuilder:
         history_messages: list[Message],
     ) -> dict[str, Any]:
         """The fields identical across every RCA turn shape (interactive + workflow)."""
+        # #624: capture whether history had to be cut, so the send path can say so
+        # in the thread. The cut used to be unspeakable — nothing recorded it.
+        cut: list[int] = []
+        history = history_items(
+            history_messages,
+            max_messages=self._history_max_messages,
+            # The token ceiling is DERIVED from what this endpoint can actually
+            # take, minus what the prompt + tool schemas already spend — not a
+            # constant. An unknown ceiling yields 0 ⇒ no trim (we send it all and
+            # learn the real limit from the response), unless an operator has set
+            # the legacy manual cap.
+            max_tokens=(
+                derived
+                if (derived := self._budget_for(agent_config)) is not None
+                else self._history_max_context_tokens
+            ),
+            users=self._users,
+            on_trim=cut.append,
+        )
         return dict(
             investigation_id=item_id,
             sandbox=self._sandbox,
@@ -148,12 +245,8 @@ class TurnContextBuilder:
             read_file_max_chars=self._read_file_max_chars,
             tool_output_max_chars=self._tool_output_max_chars,
             exec_output_max_chars=self._exec_output_max_chars,
-            history=history_items(
-                history_messages,
-                max_messages=self._history_max_messages,
-                max_tokens=self._history_max_context_tokens,
-                users=self._users,
-            ),
+            history=history,
+            history_trimmed=cut[0] if cut else 0,
             packages=self._packages or [],
             prebuilt_dir=self._prebuilt_dir,
             app_slug=self._locator.slug_of(item_id),

@@ -284,6 +284,13 @@ class AgentToolContext:
     # context cards stamp `created_by`/`updated_by` as this user). Set per-turn
     # from the message author; empty for contexts with no card-write tools.
     acting_user: str = ""
+    # #624: how many history messages this turn had to leave out because they
+    # would not fit the endpoint's context window. 0 = nothing was cut (the
+    # normal case, and the default when no ceiling is known — we send it all
+    # rather than amputate on a guess). The send path turns a non-zero value
+    # into a visible notice in the thread: a silent cut is indistinguishable
+    # from the model simply forgetting, which is the whole of #624.
+    history_trimmed: int = 0
     # #613: the owning chat thread's Conversation resource id, for conversation-
     # scoped tool state (the `update_todos` checklist). Set by the chat turn
     # builder only — workflow / KB / test contexts leave it None, and the todo
