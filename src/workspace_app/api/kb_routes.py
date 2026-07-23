@@ -488,6 +488,9 @@ class GraphEntityOut(BaseModel):
     mentions: list[GraphMentionOut]
     related: list[GraphRelatedOut]
     claims: list[GraphClaimOut]
+    # #630 P5: the same statements read from the far end — what OTHER things
+    # hold this identity as a value ("which machines run this recipe").
+    value_of: list[GraphClaimOut]
 
 
 class GraphEvidenceOut(BaseModel):
@@ -2042,6 +2045,20 @@ def register_kb_routes(
                     chunk_id=c.chunk_id,
                 )
                 for c in page.claims
+            ],
+            value_of=[
+                GraphClaimOut(
+                    attribute=c.attribute,
+                    norm_attribute=c.norm_attribute,
+                    subject=c.subject,
+                    value=c.value,
+                    unit=c.unit,
+                    period=c.period,
+                    norm_period=c.norm_period,
+                    source_doc_id=c.source_doc_id,
+                    chunk_id=c.chunk_id,
+                )
+                for c in page.value_of
             ],
         )
 

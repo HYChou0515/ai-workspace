@@ -40,16 +40,32 @@ const ENTITY = {
     },
   ],
   claims: [],
+  value_of: [],
 };
 
 // #628: one number stated on a slide that names the entity.
 const CLAIM = {
-  metric: "良率",
-  norm_metric: "良率",
+  attribute: "良率",
+  norm_attribute: "良率",
+  subject: "回焊爐",
   value: "98.7",
   unit: "%",
   period: "Q3",
   norm_period: "q3",
+  source_doc_id: "deck-A",
+  chunk_id: "deck-A#0",
+};
+
+// #630 P5: the same table from the far end — a machine that runs this recipe.
+const HELD_BY = {
+  attribute: "recipe",
+  norm_attribute: "recipe",
+  subject: "回焊爐",
+  value: "PPOOIXUX",
+  norm_value: "ppooixux",
+  unit: "",
+  period: "",
+  norm_period: "",
   source_doc_id: "deck-A",
   chunk_id: "deck-A#0",
 };
@@ -138,5 +154,29 @@ describe("GraphEntityPage (#534)", () => {
     renderAt("graph-entity:1");
     await screen.findByTestId("entity-page");
     expect(screen.queryByTestId("entity-claims")).not.toBeInTheDocument();
+  });
+});
+
+describe("GraphEntityPage — the value side (#630)", () => {
+  const renderWith = (extra: Record<string, unknown>) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ ...ENTITY, ...extra }), { status: 200 })),
+    );
+    renderAt("graph-entity:1");
+  };
+
+  it("shows which things hold this identity as a value", async () => {
+    renderWith({ name: "PPOOIXUX", value_of: [HELD_BY] });
+    const section = await screen.findByTestId("entity-value-of");
+    expect(section).toHaveTextContent("回焊爐");
+    expect(section).toHaveTextContent("recipe");
+    expect(section).toHaveTextContent("deck-A");
+  });
+
+  it("hides that section when nothing holds it", async () => {
+    renderWith({ claims: [CLAIM] });
+    await screen.findByTestId("entity-claims");
+    expect(screen.queryByTestId("entity-value-of")).not.toBeInTheDocument();
   });
 });

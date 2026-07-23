@@ -256,3 +256,60 @@ def test_the_entity_page_carries_the_numbers_stated_beside_it():
     assert c["norm_period"] == "q3"
     assert c["source_doc_id"] == "deck-A"
     assert c["chunk_id"] == "deck-A#0"
+
+
+def test_the_entity_response_reads_the_statement_table_from_both_ends():
+    """#630 P5 over HTTP: a value some document also discusses is an identity,
+    and its page answers "who has this as a value" (「這個 recipe 被哪些機台使用」)."""
+    from workspace_app.kb.graph.normalize import norm_attribute
+
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _seed(spec)
+    crm = spec.get_resource_manager(Collection)
+    cid = next(iter(crm.list_resources(QB.all().build()))).info.resource_id  # ty: ignore[unresolved-attribute]
+    mrm = spec.get_resource_manager(GraphMention)
+    with mrm.using("bob"):
+        mrm.create(
+            GraphMention(
+                collection_id=cid,
+                source_doc_id="deck-R",
+                surface="PPOOIXUX",
+                norm_surface=norm_surface("PPOOIXUX"),
+                kind="recipe",
+                norm_kind=norm_surface("recipe"),
+                occurrences=1,
+                chunk_ids=["deck-R#0"],
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=mention_id("deck-R", "PPOOIXUX"),
+        )
+    rm = spec.get_resource_manager(GraphClaim)
+    with rm.using("bob"):
+        rm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-A",
+                chunk_id="deck-A#0",
+                norm_subject=norm_surface("回焊爐"),
+                subject="回焊爐",
+                norm_attribute=norm_attribute("recipe"),
+                attribute="recipe",
+                value="PPOOIXUX",
+                norm_value=norm_surface("PPOOIXUX"),
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            )
+        )
+    link_identical_mentions(spec)
+
+    rid = _entity_id(spec, "PPOOIXUX")
+    body = client.get(f"/kb/graph/entities/{rid}").json()
+    (held,) = body["value_of"]
+    assert held["subject"] == "回焊爐"
+    assert held["attribute"] == "recipe"
+    assert held["source_doc_id"] == "deck-A"
+    assert body["claims"] == []  # the recipe itself has no attributes stated

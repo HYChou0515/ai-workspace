@@ -145,3 +145,101 @@ def test_a_statement_from_an_unreadable_document_never_arrives():
     assert entity_page(spec, eid, as_user="alice").claims == []
     # the owner still sees it — hidden by permission, not lost
     assert len(entity_page(spec, eid, as_user="bob").claims) == 1
+
+
+def _mention(spec: SpecStar, cid: str, *, doc: str, surface: str, kind: str = "") -> None:
+    mrm = spec.get_resource_manager(GraphMention)
+    with mrm.using("bob"):
+        mrm.create(
+            GraphMention(
+                collection_id=cid,
+                source_doc_id=doc,
+                surface=surface,
+                norm_surface=norm_surface(surface),
+                kind=kind,
+                norm_kind=norm_surface(kind),
+                occurrences=1,
+                chunk_ids=[f"{doc}#0"],
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=mention_id(doc, surface),
+        )
+
+
+def _entity_named(spec: SpecStar, name: str) -> str:
+    erm = spec.get_resource_manager(GraphEntity)
+    for r in erm.list_resources():
+        if isinstance(r.data, GraphEntity) and r.data.canonical_name == name:
+            return r.info.resource_id  # ty: ignore[unresolved-attribute]
+    raise AssertionError(f"no entity named {name}")
+
+
+def test_a_value_that_documents_also_discuss_can_be_asked_who_holds_it():
+    """#630 P5 — the answer to 「PPOO 系列被哪些機台使用」.
+
+    A value is not promoted by a decision at extraction time; it simply IS an
+    identity once some document talks about it as a subject, because that is the
+    only thing that makes an identity exist here at all. Then "who has this as an
+    attribute value" is a lookup, not a guess.
+    """
+    spec = make_spec()
+    cid = _cid_or_create(spec)
+    # deck-A states the setting; deck-B talks about the recipe itself, which is
+    # what gives it an identity.
+    _claim(spec, cid, subject="回焊爐", attribute="recipe", value="PPOOIXUX", period="")
+    _mention(spec, cid, doc="deck-A", surface="回焊爐", kind="機台")
+    _mention(spec, cid, doc="deck-B", surface="PPOOIXUX", kind="recipe")
+    link_identical_mentions(spec)
+
+    page = entity_page(spec, _entity_named(spec, "PPOOIXUX"), as_user="alice")
+
+    assert [c.subject for c in page.value_of] == ["回焊爐"]
+    assert page.value_of[0].attribute == "recipe"
+    # …and it is not confused with what the recipe itself has attributes FOR
+    assert page.claims == []
+
+
+def test_the_thing_holding_the_value_still_shows_the_statement_as_its_own():
+    """The same statement reads from both ends: the machine HAS the recipe, the
+    recipe IS HELD BY the machine. One row, two directions — never duplicated."""
+    spec = make_spec()
+    cid = _cid_or_create(spec)
+    _claim(spec, cid, subject="回焊爐", attribute="recipe", value="PPOOIXUX", period="")
+    _mention(spec, cid, doc="deck-A", surface="回焊爐", kind="機台")
+    _mention(spec, cid, doc="deck-B", surface="PPOOIXUX", kind="recipe")
+    link_identical_mentions(spec)
+
+    machine = entity_page(spec, _entity_named(spec, "回焊爐"), as_user="alice")
+    assert [c.value for c in machine.claims] == ["PPOOIXUX"]
+    assert machine.value_of == []
+
+
+def test_an_unreadable_holder_never_arrives_through_the_back_direction():
+    """The reverse lookup is a read like any other — same access scope, no
+    second rule. A private deck's setting must not leak by being asked from the
+    value's side."""
+    spec = make_spec()
+    cid = _cid_or_create(spec)
+    _claim(
+        spec,
+        cid,
+        subject="回焊爐",
+        attribute="recipe",
+        value="PPOOIXUX",
+        period="",
+        doc_visibility="private",
+    )
+    _mention(spec, cid, doc="deck-B", surface="PPOOIXUX", kind="recipe")
+    link_identical_mentions(spec)
+    eid = _entity_named(spec, "PPOOIXUX")
+
+    assert entity_page(spec, eid, as_user="alice").value_of == []
+    assert len(entity_page(spec, eid, as_user="bob").value_of) == 1
+
+
+def _cid_or_create(spec: SpecStar) -> str:
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        return crm.create(Collection(name="c")).resource_id

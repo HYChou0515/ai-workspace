@@ -158,3 +158,55 @@ def test_close_names_are_offered_when_nothing_matches_exactly():
     card = entity_card(spec, "回焊爐 溫度", as_user="alice")
     assert "not found" in card.lower()
     assert "回焊爐" in card  # the near miss, so the agent can re-ask
+
+
+def test_the_card_answers_who_holds_this_value():
+    """#630 P5 — the dossier reads the statement table from both ends, so asking
+    about a recipe tells you which machines run it (「PPOO 系列被哪些機台使用」)."""
+    from workspace_app.kb.graph.normalize import norm_attribute as _na
+
+    spec = make_spec()
+    cid = _seed(spec)
+    grm = spec.get_resource_manager(GraphClaim)
+    with grm.using("bob"):
+        grm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-A",
+                chunk_id="deck-A#0",
+                norm_subject=norm_surface("回焊爐"),
+                subject="回焊爐",
+                norm_attribute=_na("recipe"),
+                attribute="recipe",
+                value="PPOOIXUX",
+                norm_value=norm_surface("PPOOIXUX"),
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            )
+        )
+    mrm = spec.get_resource_manager(GraphMention)
+    with mrm.using("bob"):
+        mrm.create(
+            GraphMention(
+                collection_id=cid,
+                source_doc_id="deck-D",
+                surface="PPOOIXUX",
+                norm_surface=norm_surface("PPOOIXUX"),
+                kind="recipe",
+                norm_kind=norm_surface("recipe"),
+                occurrences=1,
+                chunk_ids=["deck-D#0"],
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=mention_id("deck-D", "PPOOIXUX"),
+        )
+    link_identical_mentions(spec)
+
+    card = entity_card(spec, "PPOOIXUX", as_user="alice")
+
+    assert "回焊爐" in card
+    assert "recipe" in card
+    assert "deck-A" in card

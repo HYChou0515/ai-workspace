@@ -89,6 +89,12 @@ class EntityPage:
     # statements whose subject resolves here. This is the join that puts DATA on
     # the graph instead of only names and arrows.
     claims: list[GraphClaim]
+    # #630 P5: the same table read from the other end — statements where this
+    # identity is the VALUE. 「PPOO 系列被哪些機台使用」 is exactly this query. A
+    # value was never PROMOTED by a decision at extraction time: it is an
+    # identity once some document talks about it as a subject, which is the only
+    # thing that makes any identity exist here.
+    value_of: list[GraphClaim]
 
 
 def list_proposals(
@@ -294,6 +300,7 @@ def entity_page(spec: SpecStar, entity_id: str, *, as_user: str) -> EntityPage:
             mentions.append(mention)
         related = _related(spec, entity, as_user=as_user)
         claims = _claims_about(spec, entity, as_user=as_user)
+        value_of = _claims_valuing(spec, entity, as_user=as_user)
     return EntityPage(
         entity=entity,
         mentions=mentions,
@@ -301,6 +308,7 @@ def entity_page(spec: SpecStar, entity_id: str, *, as_user: str) -> EntityPage:
         occurrences=sum(m.occurrences for m in mentions),
         related=related,
         claims=claims,
+        value_of=value_of,
     )
 
 
@@ -319,6 +327,27 @@ def _claims_about(spec: SpecStar, entity: GraphEntity, *, as_user: str) -> list[
     routes use), so an unreadable deck's statements never arrive — no second
     permission rule here to drift.
     """
+    return _claims_keyed(spec, entity, "norm_subject", as_user=as_user)
+
+
+def _claims_valuing(spec: SpecStar, entity: GraphEntity, *, as_user: str) -> list[GraphClaim]:
+    """Every statement that gives some OTHER thing this identity as its value.
+
+    The same rows as :func:`_claims_about`, read from the far end — one row, two
+    directions, never a second copy. This is what makes a value that documents
+    also discuss into a first-class thing you can open: 「這個 recipe 被哪些機台
+    使用」 is a lookup on ``norm_value``, not a scan. Nothing was promoted to get
+    here; the identity exists because a document talked about it.
+    """
+    return _claims_keyed(spec, entity, "norm_value", as_user=as_user)
+
+
+def _claims_keyed(
+    spec: SpecStar, entity: GraphEntity, field: str, *, as_user: str
+) -> list[GraphClaim]:
+    """Statements whose ``field`` key is one of this identity's keys, read AS the
+    caller so the claim's own access scope filters — no second permission rule
+    to drift, in either direction."""
     if not entity.norm_keys:
         return []
     crm = spec.get_resource_manager(GraphClaim)
@@ -326,7 +355,7 @@ def _claims_about(spec: SpecStar, entity: GraphEntity, *, as_user: str) -> list[
     seen: set[str] = set()
     with crm.using(as_user, apply_access_scope=True):  # ty: ignore[unknown-argument]
         for key in entity.norm_keys:
-            for r in crm.list_resources((QB["norm_subject"] == key).build()):
+            for r in crm.list_resources((QB[field] == key).build()):
                 claim = r.data
                 assert isinstance(claim, GraphClaim)
                 rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
