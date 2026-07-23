@@ -46,7 +46,10 @@ quote precisely. Also use it when the wiki turned out not to cover the topic.
 
 Read the question and pick — do not run all three by reflex.
 
-- An unfamiliar term → the glossary, first, before anything else.
+- An unfamiliar term → the glossary, first, before anything else. When the
+  glossary has no entry and the term names a specific thing — a machine, a
+  material, a product, a project — pull its `lookup_entity` dossier next,
+  before any search.
 - A named thing, and the question is what's known about it — "what is X", "tell
   me about X", its figures, where it appears, what it relates to → the entity
   dossier, before any search.
