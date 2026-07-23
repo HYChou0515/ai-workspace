@@ -16,9 +16,9 @@ const privateItem = {
   permission: { visibility: "private" },
 } as unknown as AppItem;
 
-function signInAs(id: string, isSuperuser: boolean) {
+function signInAs(id: string, isSuperuser: boolean, groups: string[] = []) {
   vi.mocked(api.getCurrentUser).mockResolvedValue(id);
-  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser, groups: [] });
+  vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser, groups });
 }
 
 function access(item: AppItem) {
@@ -79,6 +79,40 @@ describe("useItemAccess", () => {
 
     await waitFor(() => expect(result.current.isDiscoverableOnly).toBe(true));
     expect(result.current.canSeeFiles).toBe(false);
+  });
+
+  // #608: access granted VIA a group the caller belongs to must light up their
+  // affordances — the server resolves the group grant, so the FE must too (else
+  // the button is hidden on an item the user can actually edit).
+  it("opens affordances for a member granted access through a group", async () => {
+    signInAs("frank", false, ["eng"]); // frank is in group eng
+    const { result } = access({
+      ...privateItem,
+      permission: {
+        visibility: "restricted",
+        read_meta: ["group:eng"],
+        read_chat: ["group:eng"],
+        read_content: ["group:eng"],
+        edit_content: ["group:eng"],
+      },
+    } as unknown as AppItem);
+
+    await waitFor(() => expect(result.current.canWrite).toBe(true));
+    expect(result.current.canSeeFiles).toBe(true);
+    expect(result.current.canReadChat).toBe(true);
+    expect(result.current.isDiscoverableOnly).toBe(false);
+  });
+
+  it("denies a user NOT in the granted group", async () => {
+    signInAs("grace", false, ["hr"]); // grace is in hr, not eng
+    const { result } = access({
+      ...privateItem,
+      permission: { visibility: "restricted", read_meta: ["group:eng"], read_content: ["group:eng"] },
+    } as unknown as AppItem);
+
+    // grace has read_meta via... no — she's not in eng, so she sees nothing.
+    await waitFor(() => expect(result.current.canSeeFiles).toBe(false));
+    expect(result.current.canReadChat).toBe(false);
   });
 
   // The identity half of the LOADING CONTRACT: before `GET current user` / `GET

@@ -113,21 +113,33 @@ export const ITEM_VISIBILITY_HINT: Record<ItemVisibility, string> = {
   private: "Only the owner",
 };
 
+/** #608 — does any subject the caller holds (their `user:<id>`, `all`, or a
+ * `group:<id>` for a group they belong to) appear in a verb's grant list? Mirrors
+ * the backend `Actor.subjects & grants`. `groups` are the caller's group ids
+ * (from `/me`); empty means "we don't know their groups", which fails closed. */
+function grantsAnySubject(
+  grants: string[] | undefined,
+  currentUserId: string,
+  groups: string[],
+): boolean {
+  if (!Array.isArray(grants)) return false;
+  if (grants.includes(`user:${currentUserId}`) || grants.includes("all")) return true;
+  return groups.some((g) => grants.includes(`group:${g}`));
+}
+
 export function canWriteItem(
   permission: ItemPermission | undefined,
   currentUserId: string,
   ownerId: string,
   isSuperuser: boolean,
+  groups: string[] = [],
 ): boolean {
   if (isSuperuser) return true; // authorize.py step 2 — a direct human superuser bypasses
   if (currentUserId === ownerId) return true; // the owner controls their resource
   if (!permission || permission.visibility === "public") return true; // absent ≡ public; public allows the verb
   if (permission.visibility === "private") return false; // non-owner + private
-  const me = `user:${currentUserId}`; // restricted → granted any write verb
-  return WRITE_VERBS.some((verb) => {
-    const grants = permission[verb];
-    return Array.isArray(grants) && (grants.includes(me) || grants.includes("all"));
-  });
+  // restricted → granted any write verb, directly or via a group
+  return WRITE_VERBS.some((verb) => grantsAnySubject(permission[verb], currentUserId, groups));
 }
 
 /** #306 PR3 — mirror `perm/authorize` for ONE item verb, for the FE lock states
@@ -150,15 +162,13 @@ export function hasItemVerb(
   ownerId: string,
   verb: ItemVerb,
   isSuperuser: boolean,
+  groups: string[] = [],
 ): boolean {
   if (isSuperuser) return true; // authorize.py step 2 — before owner/visibility
   if (currentUserId === ownerId) return true;
   if (!permission || permission.visibility === "public") return true;
   if (permission.visibility === "private") return false;
-  const grants = permission[verb];
-  return (
-    Array.isArray(grants) && (grants.includes(`user:${currentUserId}`) || grants.includes("all"))
-  );
+  return grantsAnySubject(permission[verb], currentUserId, groups); // #608: user OR group
 }
 
 /** #306 PR3 — who may open the sharing UI, mirroring `perm/authorize.py` step 5.
@@ -177,24 +187,33 @@ export function canChangeItemPermission(
   currentUserId: string,
   ownerId: string,
   isSuperuser: boolean,
+  groups: string[] = [],
 ): boolean {
   if (currentUserId === ownerId || isSuperuser) return true;
-  const grants = permission?.change_permission;
-  return (
-    Array.isArray(grants) && (grants.includes(`user:${currentUserId}`) || grants.includes("all"))
-  );
+  return grantsAnySubject(permission?.change_permission, currentUserId, groups); // #608
 }
 
-export const canReadChat = (p: ItemPermission | undefined, u: string, o: string, su: boolean) =>
-  hasItemVerb(p, u, o, "read_chat", su);
+export const canReadChat = (
+  p: ItemPermission | undefined,
+  u: string,
+  o: string,
+  su: boolean,
+  groups: string[] = [],
+) => hasItemVerb(p, u, o, "read_chat", su, groups);
 export const canReadItemContent = (
   p: ItemPermission | undefined,
   u: string,
   o: string,
   su: boolean,
-) => hasItemVerb(p, u, o, "read_content", su);
-export const canConverse = (p: ItemPermission | undefined, u: string, o: string, su: boolean) =>
-  hasItemVerb(p, u, o, "converse", su);
+  groups: string[] = [],
+) => hasItemVerb(p, u, o, "read_content", su, groups);
+export const canConverse = (
+  p: ItemPermission | undefined,
+  u: string,
+  o: string,
+  su: boolean,
+  groups: string[] = [],
+) => hasItemVerb(p, u, o, "converse", su, groups);
 /** The disclosure case: sees the item exists (read_meta) but can't enter it
  * (no read_chat) — the 🔒 locked list row that offers "request access". A
  * superuser is never locked out, so this is always false for them. */
@@ -203,7 +222,9 @@ export const isDiscoverableOnly = (
   u: string,
   o: string,
   su: boolean,
-) => hasItemVerb(p, u, o, "read_meta", su) && !hasItemVerb(p, u, o, "read_chat", su);
+  groups: string[] = [],
+) =>
+  hasItemVerb(p, u, o, "read_meta", su, groups) && !hasItemVerb(p, u, o, "read_chat", su, groups);
 
 const subjectUser = (s: string): string | null => (s.startsWith("user:") ? s.slice(5) : null);
 const subjectGroup = (s: string): string | null => (s.startsWith("group:") ? s.slice(6) : null);

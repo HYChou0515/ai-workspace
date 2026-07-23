@@ -2,7 +2,7 @@ import { useState } from "react";
 
 import type { AppItem, AppManifest } from "../api/types";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { useIsSuperuser } from "../hooks/useIsSuperuser";
+import { useIsSuperuserState } from "../hooks/useIsSuperuser";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useSetItemPermission } from "../hooks/useResources";
 import {
@@ -50,11 +50,11 @@ export function ItemMembersPanel({
   onManage?: () => void;
 }) {
   const me = useCurrentUser();
-  const isSuperuser = useIsSuperuser();
+  const { isSuperuser, groups } = useIsSuperuserState();
   const [sharing, setSharing] = useState(false);
   const owner = (item.created_by as string) || (item.owner as string) || "";
   const perm = parseItemPermission((item as Record<string, unknown>).permission);
-  const canManage = canChangeItemPermission(perm, me, owner, isSuperuser);
+  const canManage = canChangeItemPermission(perm, me, owner, isSuperuser, groups);
   const label = manifest.labels?.members ?? "Members";
 
   return (

@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
 import type { AppItem, AppManifest, CloseStatus, FileInfo } from "../../api/types";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
-import { useIsSuperuser } from "../../hooks/useIsSuperuser";
+import { useIsSuperuserState } from "../../hooks/useIsSuperuser";
 import { useItemAccess } from "../../hooks/useItemAccess";
 import { canChangeItemPermission, parseItemPermission } from "../../lib/itemPermission";
 import { DomainField } from "../../components/DomainField";
@@ -642,7 +642,7 @@ export function EditItemModal({
   onSubmit: (patch: Record<string, unknown>) => void;
 }) {
   const me = useCurrentUser();
-  const isSuperuser = useIsSuperuser();
+  const { isSuperuser, groups } = useIsSuperuserState();
   const [sharing, setSharing] = useState(false);
   const owner = (item.created_by as string) || (item.owner as string) || "";
   const perm = parseItemPermission((item as Record<string, unknown>).permission);
@@ -651,7 +651,7 @@ export function EditItemModal({
   // verb and honours `change_permission` delegates, so an admin could open any
   // item's Edit modal yet had no button to change its access. Mirror the server's
   // rule exactly (public never confers change_permission — see the helper).
-  const canManageAccess = canChangeItemPermission(perm, me, owner, isSuperuser);
+  const canManageAccess = canChangeItemPermission(perm, me, owner, isSuperuser, groups);
   return (
     <ModalShell
       onClose={onClose}

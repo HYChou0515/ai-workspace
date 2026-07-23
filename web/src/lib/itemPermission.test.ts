@@ -232,3 +232,24 @@ describe("itemGroupGrantsFromPermission (#608)", () => {
     ]);
   });
 });
+
+describe("group grants resolve for the caller's groups (#608 gating)", () => {
+  const ME = "erin";
+  const OWN = "owner9";
+  it("hasItemVerb grants a verb held via a group the caller belongs to", () => {
+    const p = { visibility: "restricted" as const, read_content: ["group:eng"] };
+    expect(hasItemVerb(p, ME, OWN, "read_content", false, ["eng"])).toBe(true);
+    expect(hasItemVerb(p, ME, OWN, "read_content", false, ["hr"])).toBe(false); // not in eng
+    expect(hasItemVerb(p, ME, OWN, "read_content", false, [])).toBe(false); // no groups known
+  });
+  it("canWriteItem honours a group write grant", () => {
+    const p = { visibility: "restricted" as const, edit_content: ["group:eng"] };
+    expect(canWriteItem(p, ME, OWN, false, ["eng"])).toBe(true);
+    expect(canWriteItem(p, ME, OWN, false, [])).toBe(false);
+  });
+  it("canChangeItemPermission honours a group change_permission grant", () => {
+    const p = { visibility: "restricted" as const, change_permission: ["group:eng"] };
+    expect(canChangeItemPermission(p, ME, OWN, false, ["eng"])).toBe(true);
+    expect(canChangeItemPermission(p, ME, OWN, false, [])).toBe(false);
+  });
+});

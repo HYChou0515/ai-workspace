@@ -5,15 +5,19 @@ import { qk } from "../api/queryKeys";
 
 export type IsSuperuserState = {
   isSuperuser: boolean;
+  /** #608 — the caller's group ids, so the gate helpers can resolve a
+   * `group:<id>` grant to the current viewer. Empty until settled / no groups. */
+  groups: string[];
   /** True once `GET /me` SETTLED (resolved or failed). While false,
    * `isSuperuser` is the safe-side placeholder `false`. */
   ready: boolean;
 };
 
 /**
- * Superuser status plus whether it has actually been established — the
- * identity half of `useItemAccess`'s loading contract (see `useCurrentUserState`).
- * A failed fetch counts as ready: the app then stays at `false`, as before.
+ * Superuser status + group ids plus whether identity has actually been
+ * established — the identity half of `useItemAccess`'s loading contract (see
+ * `useCurrentUserState`). A failed fetch counts as ready: the app then stays at
+ * `false` / no groups, as before.
  */
 export function useIsSuperuserState(): IsSuperuserState {
   const { data, isPending } = useQuery({
@@ -21,7 +25,11 @@ export function useIsSuperuserState(): IsSuperuserState {
     queryFn: () => api.getMe(),
     staleTime: Number.POSITIVE_INFINITY,
   });
-  return { isSuperuser: data?.is_superuser ?? false, ready: !isPending };
+  return {
+    isSuperuser: data?.is_superuser ?? false,
+    groups: data?.groups ?? [],
+    ready: !isPending,
+  };
 }
 
 /**
