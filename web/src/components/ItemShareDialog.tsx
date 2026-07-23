@@ -57,7 +57,9 @@ export function ItemShareDialog({
   );
 
   const next = () => itemPermissionFromGrants(visibility, grants, value, groupGrants);
-  const groupName = (id: string) => pickableGroups.find((g) => g.resource_id === id)?.name ?? id;
+  // Unresolvable (deleted / not visible) → "Unknown group", still removable (#608).
+  const groupName = (id: string) =>
+    pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
   const addGroup = (id: string) =>
     setGroupGrants((g) =>
       id && !g.some((x) => x.groupId === id) ? [...g, { groupId: id, role: "participant" }] : g,

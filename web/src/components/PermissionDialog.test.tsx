@@ -231,3 +231,22 @@ describe("PermissionDialog — group grants (#608)", () => {
     expect(saved.read_meta).not.toContain("group:eng");
   });
 });
+
+describe("PermissionDialog — unresolvable group grant (#608)", () => {
+  it("labels a group we can't resolve as 'Unknown group' (still removable)", () => {
+    const onSubmit = vi.fn();
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        // a grant to a group that isn't in the pickable list (deleted / not visible)
+        value={perm({ read_meta: ["group:ghost"], read_content: ["group:ghost"] })}
+        pickableGroups={[{ resource_id: "eng", name: "Engineering", description: "", member_count: 2 }]}
+        onSubmit={onSubmit}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("Unknown group")).toBeInTheDocument();
+    expect(screen.getByTestId("group-remove-ghost")).toBeInTheDocument();
+  });
+});

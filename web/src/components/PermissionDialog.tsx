@@ -61,8 +61,10 @@ export function PermissionDialog({
   const [advanced, setAdvanced] = useState(false);
 
   const next = () => permissionFromGrants(visibility, grants, value, groupGrants);
+  // A grant whose group we can't resolve (deleted, or not visible to us) reads as
+  // "Unknown group" — the owner can still remove it — rather than a raw id (#608).
   const groupName = (id: string) =>
-    pickableGroups.find((g) => g.resource_id === id)?.name ?? id;
+    pickableGroups.find((g) => g.resource_id === id)?.name ?? "Unknown group";
 
   const toggleUser = (id: string) =>
     setGrants((g) =>
