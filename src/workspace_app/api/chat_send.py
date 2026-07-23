@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import magic
 
-from ..agent.context import KbSearchBudget
+from ..agent.context import KbSearchBudget, WikiSearchBudget
 from ..filestore.protocol import FileNotFound
 from ..kb.collections import (
     collection_ids_from_json,
@@ -243,6 +243,16 @@ class ChatSendService:
                 ceiling=self._kb_max_searches_ceiling,
             )
         )
+        # #537 follow-up: the wiki twin — one turn-wide allowance shared the same
+        # way. Always passed, so the sub-agent's wiki cap is the user's pick (or
+        # the operator default) instead of the old unstated-→-unlimited.
+        wiki_budget = WikiSearchBudget(
+            max_calls=resolve_max_searches(
+                body.max_wiki_searches,
+                default=self._kb_max_searches_per_turn,
+                ceiling=self._kb_max_searches_ceiling,
+            )
+        )
 
         async def _run_subagent_with_depth(
             purpose: str,
@@ -267,6 +277,7 @@ class ChatSendService:
                 reff = body.reasoning_effort
                 colls = collection_ids
                 bud = kb_budget
+                wiki_bud = wiki_budget
             elif purpose == "infer_modules":
                 enh, reff = (
                     self._infer_modules_enhancements,
@@ -274,8 +285,9 @@ class ChatSendService:
                 )
                 colls = infer_coll_ids
                 bud = None
+                wiki_bud = None
             else:  # pragma: no cover
-                enh, reff, colls, bud = None, None, None, None
+                enh, reff, colls, bud, wiki_bud = None, None, None, None, None
             return await self._subagent_bridge.run(
                 purpose,
                 payload,
@@ -285,6 +297,7 @@ class ChatSendService:
                 reasoning_effort=reff,
                 collection_ids=colls,
                 budget=bud,
+                wiki_budget=wiki_bud,
                 # Permission-disclosure: forward the parent turn's withheld
                 # accumulator so the KB sub-agent's disclosed sources bubble up.
                 withheld_sink=withheld_sink,

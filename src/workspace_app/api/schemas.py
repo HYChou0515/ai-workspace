@@ -32,6 +32,10 @@ class _MessageBody(BaseModel):
     # ask_knowledge_base call in the turn — #334 Q6). None → operator default;
     # a concrete value is clamped to [0, kb.max_searches_ceiling] (0 = don't search).
     max_kb_searches: int | None = None
+    # #537 follow-up: the wiki twin — caps the turn's ask_knowledge_base wiki
+    # consults IN TOTAL, same sharing and clamp. None → operator default (the
+    # sub-agent's wiki used to be unlimited when the app turn stated nothing).
+    max_wiki_searches: int | None = None
     # #605: per-chat disclosure toggle. None → operator default
     # (kb.disclosure.enabled); False → this turn's ask_knowledge_base calls skip
     # the probe (faster, no withheld). True cannot re-enable a globally-off deploy.
