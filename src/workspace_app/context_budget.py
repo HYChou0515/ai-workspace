@@ -244,3 +244,73 @@ class LimitLearner:
         if len(seen) >= self._confirmations:
             self._learned[key] = min(seen)
             self._pending.pop(key, None)
+
+
+# ── the rejection path (#624 P4) ─────────────────────────────────────
+#
+# A provider that rejects an over-long request is being helpful: the message
+# states its ceiling. Today that information is discarded and the same prompt is
+# re-sent up to three times, each attempt carrying an appended "try again" hint
+# that makes it *longer*. None of those attempts can succeed.
+
+#: Phrases that mark a 400 as "too long" rather than "malformed". Matched
+#: loosely because the exact wording differs across OpenAI-compatible servers,
+#: but narrowly enough that an ordinary bad request is not swept in — halving
+#: the history cannot fix a bad parameter, and retrying one at all is waste.
+_OVERFLOW_MARKERS = (
+    "maximum context length",
+    "context_length_exceeded",
+    "prompt is too long",
+    "too many tokens",
+    "reduce the length",
+    "max_model_len",
+)
+
+_LIMIT_PATTERNS = (
+    # "This model's maximum context length is 32768 tokens"
+    r"maximum context length is (\d+)",
+    # "max_model_len (8192)" / "max_model_len=8192"
+    r"max_model_len[^\d]{0,4}(\d+)",
+    # "9000 tokens > 8192" — the ceiling is the right-hand side
+    r"\d+\s*tokens?\s*>\s*(\d+)",
+)
+
+
+def is_context_overflow(message: str) -> bool:
+    """Whether this provider error means "the prompt did not fit".
+
+    The distinction is the whole point: a length rejection is worth acting on
+    (shrink and retry, and remember the ceiling), while every other 400 is
+    deterministic and must fail immediately instead of burning three identical
+    attempts."""
+    low = (message or "").lower()
+    return any(marker in low for marker in _OVERFLOW_MARKERS)
+
+
+def parse_limit_from_error(message: str) -> int | None:
+    """The ceiling the endpoint stated in its rejection, or None.
+
+    None means "it did not say" — never a fallback number. A ceiling invented
+    here would go on to govern every later turn of every conversation on this
+    endpoint."""
+    import re
+
+    for pattern in _LIMIT_PATTERNS:
+        m = re.search(pattern, message or "", flags=re.IGNORECASE)
+        if m:
+            value = _positive(int(m.group(1)))
+            if value is not None:
+                return value
+    return None
+
+
+def halve_history(messages: list[Any]) -> list[Any]:
+    """Drop the older half, keeping the newest — the productive retry.
+
+    Converges in a handful of rounds (40 → 20 → 10 → …) and floors at one
+    message: a single message that alone exceeds the window is a fail-loud case
+    ("this message is too large", naming it), never something to loop on.
+    """
+    if len(messages) <= 1:
+        return list(messages)
+    return list(messages[len(messages) // 2 :])

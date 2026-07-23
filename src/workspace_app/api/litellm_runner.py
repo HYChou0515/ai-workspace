@@ -551,6 +551,17 @@ def diagnose_error(exc: BaseException) -> str:
         return _MALFORMED_HINT
     if "timeout" in low or "timed out" in low:
         return "The previous step timed out. Take a smaller step and try again."
+    # #624: a length rejection must NOT get the catch-all "try again" — that
+    # hint is appended to the very prompt that was too long, so it makes the
+    # next attempt bigger. Say what would actually help instead.
+    from ..context_budget import is_context_overflow
+
+    if is_context_overflow(low):
+        return (
+            "The previous attempt was rejected because the request was too long "
+            "for this model's context window. Work with less material at a time "
+            "and keep your answer shorter."
+        )
     return f"The previous attempt failed: {msg[:200]}. Try again."
 
 
@@ -679,7 +690,9 @@ def _emit_llm_trace(
         _LOGGER.debug("llm trace emission failed", exc_info=True)
 
 
-def _should_retry(*, progress_made: bool, attempt: int, max_retries: int) -> bool:
+def _should_retry(
+    *, progress_made: bool, attempt: int, max_retries: int, error_text: str = ""
+) -> bool:
     """Decide whether to restart the turn after `_run_once` raised.
 
     Issue #26: the agents-SDK can't resume a stream mid-turn — a restart
@@ -688,10 +701,32 @@ def _should_retry(*, progress_made: bool, attempt: int, max_retries: int) -> boo
     nothing user-visible has streamed yet (the early small-model JSON-parse
     failures we hand a hint back for). Once there's progress, showing the
     error wins over clobbering the chat.
+
+    #624: it must also look at WHAT failed. This used to consider only
+    "did anything stream" and "how many attempts", so a deterministic
+    rejection — the prompt did not fit, a parameter was malformed — was
+    re-sent unchanged up to three times. Each attempt failed identically, and
+    the hint appended between them ("the previous attempt failed… try again")
+    was added to a prompt that was already too long. A `400` is the provider
+    telling us the request is wrong; repeating it is not a strategy.
     """
     if progress_made:
         return False
+    if error_text and _is_deterministic_rejection(error_text):
+        return False
     return attempt <= max_retries
+
+
+def _is_deterministic_rejection(message: str) -> bool:
+    """Whether this error will fail identically no matter how often we resend.
+
+    Length rejections and malformed-request errors are decided by the request
+    itself, so a retry is pure latency. Everything else (timeouts, blips,
+    small-model JSON garble) keeps the #76 retry-with-a-hint behaviour."""
+    from ..context_budget import is_context_overflow
+
+    low = (message or "").lower()
+    return is_context_overflow(low) or "invalid_request_error" in low
 
 
 # ── non-streaming escape hatch (WORKSPACE_AGENT_STREAM=0) ─────────────────────
@@ -852,7 +887,10 @@ class LitellmAgentRunner:
             except Exception as exc:  # noqa: BLE001 — every other failure becomes a hint or final error
                 attempt += 1
                 if not _should_retry(
-                    progress_made=progress_made, attempt=attempt, max_retries=self._max_retries
+                    progress_made=progress_made,
+                    attempt=attempt,
+                    max_retries=self._max_retries,
+                    error_text=f"{type(exc).__name__}: {exc}",
                 ):
                     _LOGGER.warning(
                         "litellm_runner: turn stopped after %d attempt(s), not retrying "

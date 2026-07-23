@@ -10,7 +10,6 @@ from __future__ import annotations
 
 from workspace_app.context_budget import LimitLearner, detect_truncation
 
-
 # ── the observation ─────────────────────────────────────────────────
 
 
