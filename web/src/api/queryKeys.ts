@@ -137,6 +137,9 @@ export const qk = {
     // The doc IDE's cheap open-a-doc metadata (rationale + parser guidance) —
     // separate from `doc` (the heavy render, used by the citation drawer).
     docMeta: (id: string) => ["kb", "doc-meta", id] as const,
+    graphEntity: (id: string) => ["kb", "graph-entity", id] as const,
+    evalRuns: () => ["kb", "eval-runs"] as const,
+    evalResults: () => ["kb", "eval-results"] as const,
     docChunks: (id: string) => ["kb", "doc-chunks", id] as const,
     // Issue #50: the LLM wiki browser. (Wiki *page content* is cached under the
     // shared `qk.file(scopeId, path)` key via the wiki IDE's buffer, not a

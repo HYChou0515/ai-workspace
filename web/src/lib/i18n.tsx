@@ -119,6 +119,44 @@ export const messages = {
   "wikimax.inc": { "zh-TW": "增加查百科次數", en: "More wiki searches" },
 
   // #605: the "answer exists but you lack permission" disclosure toggle.
+  // #534/#535: the graph entity page + the retrieval-eval panel.
+  "entity.missing": { "zh-TW": "找不到這個實體，或你沒有權限看它。", en: "This entity doesn't exist, or you can't see it." },
+  "entity.eyebrow": { "zh-TW": "知識圖譜實體", en: "Knowledge-graph entity" },
+  "entity.stat.occ": { "zh-TW": "次出現", en: "occurrences" },
+  "entity.stat.docs": { "zh-TW": "份文件提到", en: "documents" },
+  "entity.aliases": { "zh-TW": "也叫", en: "Also called" },
+  "entity.mentions": { "zh-TW": "哪些文件提到它", en: "Where it appears" },
+  "entity.noMentions": { "zh-TW": "沒有你可讀的出處。", en: "No readable evidence." },
+  "entity.related": { "zh-TW": "它和誰有關", en: "How it connects" },
+  "entity.basis.identical": { "zh-TW": "同名", en: "same name" },
+  "entity.basis.resembles": { "zh-TW": "名稱相近", en: "similar name" },
+  "entity.basis.declared": { "zh-TW": "AI 併入", en: "merged by AI" },
+  "entity.basis.approved": { "zh-TW": "人工核可", en: "approved" },
+  "entity.basis.other": { "zh-TW": "其他依據", en: "other" },
+  "entity.graphAria": { "zh-TW": "實體關聯圖", en: "Entity graph" },
+  "entity.strayTitle": {
+    "zh-TW": "語料提到了它，但它還不是詞彙表裡的實體。",
+    en: "Named by the corpus, but not yet an entity in the vocabulary.",
+  },
+  "diag.tab.retrieval": { "zh-TW": "檢索評測", en: "Retrieval eval" },
+  "eval.blurb": {
+    "zh-TW": "對每個知識庫自動出題，量測「搜尋能不能找回出處」。",
+    en: "Auto-generated questions per knowledge base — can search find the source again?",
+  },
+  "eval.legend": {
+    "zh-TW": "前 k 名命中率＝出處排進前 k 名的比例；命中排名分數＝出處平均排名的倒數（1.00＝永遠第一名）。",
+    en: "Top-k hit rate = how often the source ranks in the top k; rank score = mean reciprocal rank (1.00 = always first).",
+  },
+  "eval.run": { "zh-TW": "跑一輪評測", en: "Run evaluation" },
+  "eval.fireFailed": { "zh-TW": "評測沒有啟動，請稍後再試。", en: "The evaluation didn't start — try again." },
+  "eval.empty": { "zh-TW": "還沒有評測結果。按「跑一輪評測」開始。", en: "No results yet. Press Run evaluation to start." },
+  "eval.sample": { "zh-TW": "以 {kept} 題評測（自動出題 {gen} 題）", en: "{kept} questions scored (of {gen} generated)" },
+  "eval.chunkTitle": { "zh-TW": "找回出處段落", en: "Finds the source passage" },
+  "eval.docTitle": { "zh-TW": "找回出處文件", en: "Finds the source document" },
+  "eval.mrr": { "zh-TW": "命中排名分數", en: "rank score" },
+  "eval.topK": { "zh-TW": "前 {k} 名", en: "top {k}" },
+  "eval.recallTitle": { "zh-TW": "出處排進前 {k} 名的比例", en: "How often the source ranks in the top {k}" },
+
   "disclosure.label": { "zh-TW": "提示無權限的相關資料", en: "Point out inaccessible sources" },
   "disclosure.title": {
     "zh-TW": "找到相關但你沒權限的資料時提醒你（可申請存取）；關閉可加快回覆",

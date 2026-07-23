@@ -12,7 +12,9 @@
  * model's reason is present but labelled as the model's. A reviewer weighs it;
  * they do not take it as the finding.
  */
+import { Link } from "react-router-dom";
 import { useT } from "../../lib/i18n";
+import { docLabel } from "./CardAttachments";
 import { docHref } from "./kbLinks";
 
 export type MergeEvidence = {
@@ -43,17 +45,22 @@ type Props = {
 function Side({
   name,
   kind,
+  entityId,
   evidence,
 }: {
   name: string;
   kind?: string;
+  entityId: string;
   evidence: MergeEvidence[];
 }) {
   const t = useT();
   return (
     <div className="mrg__side">
       <div className="mrg__name">
-        {name}
+        {/* #534: the identity page — every doc that named it, aliases, relations. */}
+        <Link className="mrg__entity" to={`/kb/graph/entities/${entityId}`}>
+          {name}
+        </Link>
         {kind ? <span className="mrg__kind">{kind}</span> : null}
       </div>
       {evidence.length === 0 ? (
@@ -72,8 +79,9 @@ function Side({
                 href={docHref(e.source_doc_id, e.text || e.surface)}
                 target="_blank"
                 rel="noreferrer"
+                title={e.source_doc_id}
               >
-                {e.source_doc_id}
+                {docLabel(e.source_doc_id)}
               </a>
               <span className="mrg__quote">{e.text || e.surface}</span>
             </li>
@@ -103,8 +111,8 @@ export function EntityMergeList({ proposals, onAccept, onReject }: Props) {
               Saying what is being decided needs no font support and no legend. */}
           <p className="mrg__q">{t("merge.question")}</p>
           <div className="mrg__pair">
-            <Side name={p.name} kind={p.kind} evidence={p.evidence} />
-            <Side name={p.other_name} kind={p.other_kind} evidence={p.other_evidence} />
+            <Side name={p.name} kind={p.kind} entityId={p.entity_id} evidence={p.evidence} />
+            <Side name={p.other_name} kind={p.other_kind} entityId={p.other_id} evidence={p.other_evidence} />
           </div>
           {p.kind && p.other_kind && p.kind !== p.other_kind ? (
             /* The shape the model's worst mistakes take: a machine grouped with a

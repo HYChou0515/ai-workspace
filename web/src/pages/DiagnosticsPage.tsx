@@ -18,6 +18,7 @@ import { Icon } from "../components/Icon";
 import { type ChipTone } from "../components/StatusChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { type MsgKey, useT } from "../lib/i18n";
+import { RetrievalEvalPanel } from "./RetrievalEvalPanel";
 import { SanityQuestions } from "./SanityQuestions";
 import { SanityTable } from "./SanityTable";
 import { SanityVerdicts } from "./SanityVerdicts";
@@ -89,7 +90,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
   const queryClient = useQueryClient();
   const t = useT();
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: t("diag.crumb") }]);
-  const [tab, setTab] = useState<"checks" | "traces" | "matrix">("checks");
+  const [tab, setTab] = useState<"checks" | "traces" | "matrix" | "retrieval">("checks");
   const { data } = useQuery({
     queryKey: qk.health,
     queryFn: () => client.getChecks(),
@@ -113,7 +114,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
     >
       <div
         style={{
-          maxWidth: tab === "matrix" ? 1180 : 760,
+          maxWidth: tab === "matrix" || tab === "retrieval" ? 1180 : 760,
           margin: "0 auto",
           padding: "28px 20px 60px",
         }}
@@ -197,6 +198,8 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
               // #171: "Activity" (not the OTel jargon "Traces") on the tab; the
               // route/state key stays "traces".
               ["traces", t("diag.tab.activity")],
+              // #535: the retrieval-eval face — fire a pass, read recall@k/MRR.
+              ["retrieval", t("diag.tab.retrieval")],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -223,6 +226,8 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
         </div>
 
         {tab === "traces" && <TelemetryPanel />}
+
+        {tab === "retrieval" && <RetrievalEvalPanel />}
 
         {tab === "matrix" && (
           <>
