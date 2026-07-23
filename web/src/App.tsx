@@ -10,6 +10,7 @@ import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
+import { GraphEntityPage } from "./pages/kb/GraphEntityPage";
 import { ReviewPage } from "./pages/kb/ReviewPage";
 import { Launcher } from "./pages/Launcher";
 import { ReleasesPage } from "./pages/ReleasesPage";
@@ -47,6 +48,7 @@ export function AppRoutes() {
             clarification questions) across every readable collection, in one
             filterable table. Absorbs the old (invisible) /clarifications page. */}
         <Route path="/review" element={<ReviewPage />} />
+        <Route path="/kb/graph/entities/:entityId" element={<GraphEntityPage />} />
         <Route path="/clarifications" element={<Navigate to="/review" replace />} />
         {/* #230: the platform help / intro page (usage guides + release notes +
             an AI that answers how-to questions over the Help collection). */}

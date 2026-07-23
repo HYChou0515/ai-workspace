@@ -119,6 +119,26 @@ export const messages = {
   "wikimax.inc": { "zh-TW": "增加查百科次數", en: "More wiki searches" },
 
   // #605: the "answer exists but you lack permission" disclosure toggle.
+  // #534/#535: the graph entity page + the retrieval-eval panel.
+  "entity.missing": { "zh-TW": "找不到這個實體，或你沒有權限看它。", en: "This entity doesn't exist, or you can't see it." },
+  "entity.occurrences": { "zh-TW": "出現 {n} 次", en: "{n} occurrences" },
+  "entity.aliases": { "zh-TW": "別名", en: "Aliases" },
+  "entity.mentions": { "zh-TW": "提到它的文件", en: "Documents that name it" },
+  "entity.noMentions": { "zh-TW": "沒有可讀的出處。", en: "No readable evidence." },
+  "entity.related": { "zh-TW": "關聯", en: "Relations" },
+  "diag.tab.retrieval": { "zh-TW": "檢索評測", en: "Retrieval eval" },
+  "eval.blurb": {
+    "zh-TW": "對每個知識庫出合成問題，量測檢索找回出處的能力（recall@k / MRR）。",
+    en: "Synthetic questions per knowledge base — how well retrieval finds the source (recall@k / MRR).",
+  },
+  "eval.run": { "zh-TW": "跑一輪評測", en: "Run evaluation" },
+  "eval.fireFailed": { "zh-TW": "評測沒有啟動，請稍後再試。", en: "The evaluation didn't start — try again." },
+  "eval.empty": { "zh-TW": "還沒有評測結果。按「跑一輪評測」開始。", en: "No results yet. Press Run evaluation to start." },
+  "eval.col.collection": { "zh-TW": "知識庫", en: "Knowledge base" },
+  "eval.col.run": { "zh-TW": "回合", en: "Run" },
+  "eval.col.kept": { "zh-TW": "題數", en: "Questions" },
+  "eval.col.docMrr": { "zh-TW": "文件 MRR", en: "Doc MRR" },
+
   "disclosure.label": { "zh-TW": "提示無權限的相關資料", en: "Point out inaccessible sources" },
   "disclosure.title": {
     "zh-TW": "找到相關但你沒權限的資料時提醒你（可申請存取）；關閉可加快回覆",
