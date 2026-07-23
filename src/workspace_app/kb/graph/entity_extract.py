@@ -55,7 +55,8 @@ _PROMPT = (
     "(what is being given, in the passage's own words — 良率 / recipe / 供應商 / "
     'temperature; no fixed list), "value" (VERBATIM, keep the original formatting: '
     '"1.2M", "98.7", "PPOOIXUX", "Ar/O2" — never convert, round or translate), '
-    '"unit" (what belongs to the value: "%", "USD", "°C", else empty) and "period" '
+    '"unit" (what belongs to the value: "%", "USD", "°C" — leave it EMPTY when the '
+    'value already spells it out, e.g. value "98.7%" needs no unit) and "period" '
     '(when it holds: "FY24 Q3", "2025 上半年", else empty).\n\n'
     "Finally, list what the passage says CONNECTS two of those things — a cause, "
     "a part, a step that follows another, a thing something is measured by. Give "

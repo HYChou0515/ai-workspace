@@ -180,3 +180,21 @@ describe("GraphEntityPage — the value side (#630)", () => {
     expect(screen.queryByTestId("entity-value-of")).not.toBeInTheDocument();
   });
 });
+
+describe("GraphEntityPage — unit rendering (#630)", () => {
+  it("does not print a unit the value already carries", async () => {
+    // Live models fill both fields from the same characters: value "98.7%" AND
+    // unit "%". Concatenating would show 98.7%%.
+    const doubled = { ...CLAIM, value: "98.7%", unit: "%" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ ...ENTITY, claims: [doubled] }), { status: 200 }),
+      ),
+    );
+    renderAt("graph-entity:1");
+    const section = await screen.findByTestId("entity-claims");
+    expect(section.textContent).toContain("98.7%");
+    expect(section.textContent).not.toContain("98.7%%");
+  });
+});

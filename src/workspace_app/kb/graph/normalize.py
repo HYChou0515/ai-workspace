@@ -217,3 +217,18 @@ def norm_unit(unit: str) -> str:
     if not text:
         return ""
     return _UNIT_ALIASES.get(text, text)
+
+
+def display_value(value: str, unit: str) -> str:
+    """The value as a reader should see it, with its unit exactly once.
+
+    The value is captured VERBATIM and the unit is captured separately, so a
+    passage writing "98.7%" yields both — a live model fills in each field from
+    the same characters. Concatenating gives "98.7%%". The document's own wording
+    wins; the unit is appended only when the value does not already carry it.
+    """
+    value = value.strip()
+    unit = unit.strip()
+    if not unit or value.endswith(unit):
+        return value
+    return f"{value}{unit}"

@@ -189,7 +189,12 @@ export function GraphEntityPage() {
                   <span className="ent-page__claim-metric">{c.attribute}</span>
                   <span className="ent-page__claim-value">
                     {c.value}
-                    {c.unit ? <span className="ent-page__claim-unit">{c.unit}</span> : null}
+                    {/* The unit is captured beside the verbatim value, so a
+                        passage writing "98.7%" fills BOTH fields — printing them
+                        back to back gives "98.7%%". The document's wording wins. */}
+                    {c.unit && !c.value.endsWith(c.unit) ? (
+                      <span className="ent-page__claim-unit">{c.unit}</span>
+                    ) : null}
                   </span>
                 {c.period ? <span className="ent-page__claim-period">{c.period}</span> : null}
               </li>

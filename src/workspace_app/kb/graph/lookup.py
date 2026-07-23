@@ -23,7 +23,7 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ...resources.graph import GraphEntity
-from .normalize import norm_surface
+from .normalize import display_value, norm_surface
 from .review import EntityPage, entity_page
 
 # A did-you-mean longer than this stops helping the agent pick and starts
@@ -70,7 +70,8 @@ def _render(spec: SpecStar, page: EntityPage, *, as_user: str) -> str:
         lines += ["", "## What the documents state about it"]
         for c in page.claims:
             period = f" ({c.period})" if c.period else ""
-            lines.append(f"- {c.attribute} = {c.value}{c.unit}{period} [{c.source_doc_id}]")
+            shown = display_value(c.value, c.unit)
+            lines.append(f"- {c.attribute} = {shown}{period} [{c.source_doc_id}]")
 
     if page.value_of:
         # #630 P5: the statement table read from the far end — what runs this
