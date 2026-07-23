@@ -60,7 +60,7 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 | `AgentToolContext` | `src/workspace_app/agent/context.py` | dual-flavour context | RCA：sandbox/filestore/sync（`chat_send.py:ChatSendService.send` + `turn_context.py:build_chat_turn`）；KB：retriever + collection_ids、無 sandbox（`kb_chat_routes` + `answer_question`） |
 | `_SyncHook` | `src/workspace_app/api/registry.py` | Protocol | `src/workspace_app/sync/sandbox_sync.py:SandboxSync` |
 | `AgentEvent` | `src/workspace_app/api/events.py` | tagged dataclass union | `web/src/events.ts`（FE 鏡像） |
-| inner SDK Model wrap | `src/workspace_app/api/litellm_runner.py:_agent_for._build_model` | swap | `LitellmModel`、`agent/repairing_model.py:RepairingModel`、`agent/decide_then_act.py:DecideThenActModel`、`failover/model.py:FallbackModel` |
+| inner SDK Model wrap | `src/workspace_app/api/litellm_runner.py:_agent_for._build_model` | swap | `LitellmModel`、`agent/repairing_model.py:RepairingModel`、`failover/model.py:FallbackModel` |
 
 `AgentRunner` 只有一個方法 `run(prompt, ctx) -> AsyncIterator[AgentEvent]`：驅動一場 turn、邊發事件邊 yield，最後以 terminal 事件收尾（`RunDone`/`RunError`/…）。實作這個就能換掉整個 agent 引擎——只要 yield 出 FE 看得懂的 `AgentEvent` union，其他都不用動。一般失敗應該被「surface 成 `RunError`」而不是 raise，這樣 SSE 才能乾淨關閉。
 
@@ -147,7 +147,7 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 ## 與其他子系統的關係
 
 - **上游組裝**：[啟動與組裝根](boot-and-config.md) 的 `create_app` 接出兩個 engine、`runner`、`InvestigationRegistry`，並注冊 KB / KB-chat / RCA 路由。
-- **下游 agent 執行**：[Agent 執行時](agent-runtime.md) 提供 `AgentToolContext`、`build_tools`/`tooling.registry`、以及 `_agent_for._build_model` 換進的 Model 包裝（`RepairingModel`/`DecideThenActModel`/`FallbackModel`），底層走 OpenAI Agents SDK + LiteLLM/Ollama。
+- **下游 agent 執行**：[Agent 執行時](agent-runtime.md) 提供 `AgentToolContext`、`build_tools`/`tooling.registry`、以及 `_agent_for._build_model` 換進的 Model 包裝（`RepairingModel`/`FallbackModel`），底層走 OpenAI Agents SDK + LiteLLM/Ollama。
 - **Sandbox/檔案**：[Sandbox、FileStore 與同步](sandbox-and-filestore.md) — `InvestigationRegistry.peek_handle` 決定檔案操作走 warm sandbox 或 FileStore 快照；`_SyncHook` 即 `SandboxSync`。
 - **KB 攝取/檢索**：`kb_routes` 的上傳把文件 enqueue 給 [知識庫:攝取與索引](kb-ingest-index.md)（#312 `build_coordinators`）；`kb_chat_routes` + `answer_question` 走 [知識庫:檢索與 Agent](kb-retrieval-agent.md) 的 retriever 與 `[n]` 解析。
 - **App / Workflow**：[App 平台](apps-platform.md) 的 items 經 `chat_send.py:ChatSendService.send`（舊 `_send_into`）進 RCA broadcast；[Workflow 引擎](workflow-engine.md) 的 step 事件折進 `AgentEvent` union 並搭 #43 stream 廣播。

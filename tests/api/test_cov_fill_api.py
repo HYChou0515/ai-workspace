@@ -7,8 +7,6 @@ Targets (uncovered before this file):
   - kb_routes.py: wiki_status / rebuild_wiki when no coordinator (468), rebuild
     of an unknown collection 404 (489-490), and a real documents page so the
     per-doc chunk-count loop runs (553->547 / 554).
-  - litellm_runner.py: _agent_for wraps the model in DecideThenActModel when the
-    WORKSPACE_AGENT_DECIDE_THEN_ACT toggle is on (317-319).
   - turns.py: subscribe_sse SSE-encodes a broadcast event (the `yield to_sse(ev)`
     branch); it owns its queue + heartbeats, so it's consumed bounded, not drained.
 
@@ -271,21 +269,6 @@ async def test_documents_page_counts_chunks_per_doc():
         (row,) = page["items"]
         # The chunk-count loop ran and bucketed at least one chunk for this doc.
         assert row["chunks"] >= 1
-
-
-# ── litellm_runner.py: decide-then-act toggle ────────────────────────
-
-
-def test_agent_for_uses_decide_then_act_model_when_toggled(monkeypatch):
-    """lines 317-319: with WORKSPACE_AGENT_DECIDE_THEN_ACT on, _agent_for wraps
-    the model in DecideThenActModel instead of the default RepairingModel."""
-    monkeypatch.setenv("WORKSPACE_AGENT_DECIDE_THEN_ACT", "1")
-    from workspace_app.agent.decide_then_act import DecideThenActModel
-    from workspace_app.api.litellm_runner import _agent_for
-    from workspace_app.resources import AgentConfig
-
-    agent = _agent_for(AgentConfig(name="ws"))
-    assert isinstance(agent.model, DecideThenActModel)
 
 
 # ── turns.py: subscribe_sse SSE-encodes each broadcast event ─────────

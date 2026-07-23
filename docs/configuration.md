@@ -432,7 +432,6 @@ observability:
 | `WORKSPACE_APP_CONFIG` | 改讀哪個 `config.yaml`（優先於 `./config.yaml`，低於 `--config`） |
 | `WORKSPACE_LLM_LOG` | `0` = 關掉 LLM 呼叫記錄（不用改 config 的正式 off-switch） |
 | `WORKSPACE_AGENT_STREAM` | `0` = 非串流逃生門（agent 一次抓完整回應，不逐字串流） |
-| `WORKSPACE_AGENT_DECIDE_THEN_ACT` | 開啟結構化 decide-then-act |
 | `WORKSPACE_TOOLS_DIR` | 預建工具包目錄（等同 `tools` 區塊；`prebuilt` 模式的產物路徑） |
 | `KB_EMBED_DIM` | **嵌入維度**（明確指定，優先最高）。設錯會毀掉向量欄 |
 | `KB_EMBED_MODEL` | 沒設 `KB_EMBED_DIM` 時，用模型名去內建表推維度（單旋鈕設法） |
