@@ -1067,3 +1067,65 @@ def test_kb_image_embedder_kind_operator_override(tmp_path: Path):
     cfg.write_text("kb:\n  image_embedder:\n    kind: perceptual\n", encoding="utf-8")
     s = load(config_path=cfg, env={})
     assert s.kb.image_embedder.kind == "perceptual"
+
+
+def test_goal_section_loads_checker_and_max_rounds(tmp_path: Path):
+    """#613 P3: `goal.checker` (usage-entry preset ref) + `goal.max_rounds`
+    survive the whitelist AND are constructed into `GoalSettings` — the loader
+    must both accept and BUILD them (the #598 dead-knob class)."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            agents:
+              presets:
+                cheap:
+                  model: "ollama/qwen3:4b"
+            goal:
+              checker:
+                preset: "cheap"
+              max_rounds: 5
+        """),
+        encoding="utf-8",
+    )
+    settings = load(config_path=cfg, env={})
+    assert settings.goal.max_rounds == 5
+    assert settings.goal.checker is not None
+    assert settings.goal.checker.preset == "cheap"
+
+
+def test_goal_defaults_when_absent(tmp_path: Path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("", encoding="utf-8")
+    settings = load(config_path=cfg, env={})
+    assert settings.goal.checker is None
+    assert settings.goal.max_rounds == 3
+
+
+def test_goal_checker_referencing_unknown_preset_raises(tmp_path: Path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            goal:
+              checker:
+                preset: "made-up-checker"
+        """),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="made-up-checker"):
+        load(config_path=cfg, env={})
+
+
+def test_health_judge_llm_referencing_unknown_preset_raises(tmp_path: Path):
+    """#231's judge ref was missing from the existence check — a typo'd preset
+    silently disabled AI scoring. Locked in alongside #613's goal.checker."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            health:
+              judge_llm:
+                preset: "made-up-judge"
+        """),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="made-up-judge"):
+        load(config_path=cfg, env={})

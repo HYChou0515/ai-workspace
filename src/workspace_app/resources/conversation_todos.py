@@ -69,6 +69,13 @@ def upsert_todos(
             rm.create(rec, resource_id=conversation_id, status=RevisionStatus.draft)
 
 
+def clear_todos(spec: SpecStar, conversation_id: str) -> None:
+    """Drop the todos row (the chat was deleted). Idempotent."""
+    rm = spec.get_resource_manager(ConversationTodos)
+    with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
+        rm.delete(conversation_id)
+
+
 def read_todos(spec: SpecStar, conversation_id: str) -> ConversationTodos | None:
     """The conversation's current todo list, or None when none was ever written."""
     rm = spec.get_resource_manager(ConversationTodos)

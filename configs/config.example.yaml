@@ -714,6 +714,24 @@
 #     # reasoning_effort: low               # ← none|low|medium|high
 #   # judge_llm: null                       # ← off (default): no AI scoring
 
+
+# ─── Chat goals: turn-end checker + auto-continue budget (#613) ─ [OPT] ──
+#
+# A user can set a per-chat GOAL (a completion condition). After each turn a
+# cheap LLM judges whether it holds; while it doesn't, the chat auto-continues
+# with a visible `[goal]` message — bounded hard by `max_rounds`, then it
+# parks as "exhausted" for a human. `goal.checker` picks that judge LLM (same
+# usage-entry shape as `kb.retrieval_llm`); omitted it falls back to
+# `kb.retrieval_llm`, and with BOTH unset goals never auto-continue (the UI
+# discloses this instead of failing silently).
+#
+# goal:
+#   checker:
+#     preset: kb-retrieval                  # ← any bundled LLM-only preset
+#     # model: openai/gpt-4o-mini           # ← optional inline model override
+#     # reasoning_effort: low               # ← none|low|medium|high
+#   max_rounds: 3                           # ← auto-continue budget per goal
+
 # ─── prompt_file value forms ────────────────────────────────────────
 #   pkg:<dotted-package>/<file.md>   bundled (ships with the wheel)
 #   /absolute/path.md                absolute filesystem path

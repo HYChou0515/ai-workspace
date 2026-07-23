@@ -896,6 +896,21 @@ export const messages = {
   "wf.metrics.steps": { "zh-TW": "步驟", en: "Steps" },
   "wf.metrics.retries": { "zh-TW": "重試 {n}", en: "{n} retries" },
   "wf.runs.title": { "zh-TW": "執行紀錄", en: "Runs" },
+  // #613 P3: the chat goal (completion condition + bounded auto-continue).
+  "goal.title": { "zh-TW": "目標", en: "Goal" },
+  "goal.set": { "zh-TW": "設定目標", en: "Set goal" },
+  "goal.placeholder": {
+    "zh-TW": "完成條件,例如:報告寫完並存檔",
+    en: "Completion condition, e.g. the report is written and saved",
+  },
+  "goal.clear": { "zh-TW": "清除", en: "Clear" },
+  "goal.round": { "zh-TW": "續跑 {k}/{n} 輪", en: "round {k}/{n}" },
+  "goal.met": { "zh-TW": "已達成", en: "Met" },
+  "goal.exhausted": { "zh-TW": "額度用盡,交還給你", en: "Budget spent — back to you" },
+  "goal.noChecker": {
+    "zh-TW": "此部署未設定目標檢查模型,目標不會自動續跑",
+    en: "No goal checker is configured on this deploy — the goal will not auto-continue",
+  },
   // #613: the pinned todo checklist next to the chat.
   "todos.title": { "zh-TW": "待辦清單", en: "To-dos" },
   "todos.expand": { "zh-TW": "展開", en: "Show" },

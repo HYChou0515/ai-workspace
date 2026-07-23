@@ -370,9 +370,11 @@ def build_lifespan(
         # #613: the per-conversation todo checklist the update_todos tool overwrites.
         # Same post-apply timing so specstar never emits bare CRUD routes for it —
         # FE reads/writes go through dedicated, permission-gated endpoints (P2).
+        from ..resources.conversation_goal import register_conversation_goal
         from ..resources.conversation_todos import register_conversation_todos
 
         register_conversation_todos(spec)
+        register_conversation_goal(spec)
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold

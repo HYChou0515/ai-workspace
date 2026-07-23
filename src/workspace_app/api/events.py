@@ -196,6 +196,17 @@ class TodosUpdated:
 
 
 @dataclass(frozen=True)
+class GoalUpdated:
+    """#613 P3: the chat's goal changed — set / cleared / state or round moved.
+    `goal` is the panel's whole new state as a plain JSON dict (condition /
+    set_by / rounds_used / state / max_rounds), or None when cleared — the FE
+    swaps its goal display wholesale, same contract as `TodosUpdated`."""
+
+    goal: dict[str, Any] | None
+    type: Literal["goal_updated"] = "goal_updated"
+
+
+@dataclass(frozen=True)
 class Presence:
     """#455: the live roster of an item's stream — the distinct users currently
     subscribed to its `/stream`. Broadcast whenever a viewer joins or leaves, so
@@ -221,6 +232,7 @@ AgentEvent = (
     | FailoverSwitch  # #249/#131: chat model switched mid-turn (ephemeral notice)
     | RestoreProgress  # #492 P11: cold-wake snapshot restore progress (ephemeral)
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
+    | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)
     | Presence  # #455: broadcast-only (live viewer roster on the item stream)

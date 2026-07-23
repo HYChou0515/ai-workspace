@@ -1109,6 +1109,24 @@ class ToolsSettings:
     mode: str = "prebuilt"  # "prebuilt" | "uv-run"
 
 
+@dataclass(frozen=True)
+class GoalSettings:
+    """#613 P3: per-chat goal auto-continue knobs.
+
+    - ``checker``: the cheap LLM that judges "does the goal condition hold?"
+      after each turn. Same usage-entry shape + preset cascade as
+      ``kb.retrieval_llm`` (a preset with ``fallbacks`` becomes a busy-aware
+      ``FallbackLlm``). ``None`` ⇒ fall back to ``kb.retrieval_llm``'s
+      resolution, then the main ``llm`` — a set goal must never be a dead knob.
+    - ``max_rounds``: how many auto-continue turns one goal may spend before it
+      parks as ``exhausted`` (work-hours semantics; the off-hours budget is
+      #615). The cap is hard — a small model's verdict is not trusted with an
+      unbounded loop."""
+
+    checker: RetrievalLlmRef | None = None
+    max_rounds: int = 3
+
+
 # ─── top-level Settings ────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Settings:
@@ -1130,6 +1148,7 @@ class Settings:
     kb: KbSettings = field(default_factory=KbSettings)
     agents: AgentsSettings = field(default_factory=AgentsSettings)
     health: HealthSettings = field(default_factory=HealthSettings)
+    goal: GoalSettings = field(default_factory=GoalSettings)
     message_queue: MessageQueueSettings = field(default_factory=MessageQueueSettings)
     event_bus: EventBusSettings = field(default_factory=EventBusSettings)
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)

@@ -7,9 +7,9 @@ place. Pure data — no behaviour.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from .kb_chat_routes import EnhancementsInput
 
@@ -156,6 +156,32 @@ class _TodosOut(BaseModel):
     """#613: the chat's current todo checklist (the pinned panel's hydration)."""
 
     items: list[_TodoItemWire]
+
+
+class _GoalBody(BaseModel):
+    # #613 P3: set the chat's completion condition (whole replace; one goal per
+    # chat). Stripped and non-blank — a blank goal is a 422, not an empty row.
+    condition: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class _GoalWire(BaseModel):
+    """#613 P3: the chat's goal as the panel sees it."""
+
+    condition: str
+    set_by: str
+    rounds_used: int
+    state: Literal["active", "met", "exhausted"]
+    max_rounds: int
+    """The auto-continue budget (config `goal.max_rounds`) — so the panel can
+    show `rounds_used/max_rounds` without a second endpoint."""
+
+
+class _GoalOut(BaseModel):
+    goal: _GoalWire | None
+    checker_enabled: bool = True
+    """Whether this deploy has a goal-checker LLM wired (`goal.checker` /
+    `kb.retrieval_llm`). False ⇒ the panel warns that a set goal will NOT
+    auto-continue — a set goal must never be a silently dead knob."""
 
 
 class _MentionBody(BaseModel):

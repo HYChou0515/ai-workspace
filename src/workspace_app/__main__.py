@@ -35,6 +35,7 @@ from workspace_app.factories import (
     get_embedder,
     get_event_bus,
     get_filestore,
+    get_goal_checker_llm,
     get_image_embedder,
     get_image_fetcher,
     get_infer_modules_run_config,
@@ -280,6 +281,9 @@ def main() -> None:
             kb_disclosure_enabled=settings.kb.disclosure.enabled,
             # #334: ceiling for the composer's per-message kb_search-count pick.
             kb_max_searches_ceiling=settings.kb.max_searches_ceiling,
+            # #613 P3: the turn-end goal checker + the hard auto-continue budget.
+            goal_checker_llm=get_goal_checker_llm(settings),
+            goal_max_rounds=settings.goal.max_rounds,
             # #506: reconcile / cluster-sweeper thresholds (dedup dup proposals + Qs).
             kb_cluster_tau=settings.kb.cluster.cluster_tau,
             kb_cluster_suppress_tau=settings.kb.cluster.suppress_tau,

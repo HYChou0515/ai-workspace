@@ -129,6 +129,20 @@ export type TodosUpdated = {
   items: { text: string; status: "pending" | "in_progress" | "completed" }[];
 };
 
+/** #613 P3: the chat's goal changed — set / cleared / state or round moved.
+ * `goal` is the panel's whole new state, or null when cleared. Mirrors
+ * api/events.py GoalUpdated. */
+export type GoalUpdated = {
+  type: "goal_updated";
+  goal: {
+    condition: string;
+    set_by: string;
+    rounds_used: number;
+    state: "active" | "met" | "exhausted";
+    max_rounds: number;
+  } | null;
+};
+
 /* ------------------------------------------------------------------ */
 /* Workflow run events (#100, manual §12) — phase/step observability.   */
 /* Ride the same per-item stream; the FE overlays them on the manifest  */
@@ -214,6 +228,7 @@ export type AgentEvent =
   | FailoverSwitch
   | RestoreProgress
   | TodosUpdated
+  | GoalUpdated
   | UserMessage
   | FileChanged
   | Presence

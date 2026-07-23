@@ -78,6 +78,9 @@ export const qk = {
   // events write into this key, GET hydrates it).
   itemChatTodos: (slug: string, itemId: string, chatId: string) =>
     ["itemChatTodos", slug, itemId, chatId] as const,
+  // #613 P3: one chat's goal (condition + state + rounds; `goal_updated` live).
+  itemChatGoal: (slug: string, itemId: string, chatId: string) =>
+    ["itemChatGoal", slug, itemId, chatId] as const,
 
   // #100 workflows: per-App profiles (which carry a workflow) + an item's runs.
   workflowProfiles: (slug: string) => ["workflowProfiles", slug] as const,
