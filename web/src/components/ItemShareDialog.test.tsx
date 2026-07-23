@@ -63,3 +63,40 @@ describe("ItemShareDialog", () => {
     expect((screen.getByTestId("item-visibility-private") as HTMLInputElement).checked).toBe(true);
   });
 });
+
+describe("ItemShareDialog — group grants (#608)", () => {
+  const pickable = [{ resource_id: "eng", name: "Engineering", description: "", member_count: 12 }];
+  const openG = (value: ItemPermission, onSubmit = vi.fn()) => {
+    render(
+      <ItemShareDialog
+        itemName="INC-1"
+        owner="bob"
+        value={value}
+        pickableGroups={pickable}
+        onSubmit={onSubmit}
+        onClose={vi.fn()}
+      />,
+    );
+    return onSubmit;
+  };
+
+  it("shows an existing group grant by name and keeps it on save", () => {
+    const onSubmit = openG({
+      visibility: "restricted",
+      read_meta: ["group:eng"],
+      read_chat: ["group:eng"],
+    });
+    expect(screen.getByText("Engineering")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("item-share-save"));
+    const saved = onSubmit.mock.calls[0][0] as ItemPermission;
+    expect(saved.read_chat).toContain("group:eng");
+  });
+
+  it("adds a group grant from the picker", () => {
+    const onSubmit = openG({ visibility: "restricted" });
+    fireEvent.change(screen.getByTestId("item-group-select"), { target: { value: "eng" } });
+    fireEvent.click(screen.getByTestId("item-share-save"));
+    const saved = onSubmit.mock.calls[0][0] as ItemPermission;
+    expect(saved.read_meta).toContain("group:eng");
+  });
+});

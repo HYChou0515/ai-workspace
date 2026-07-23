@@ -1,9 +1,11 @@
 import { useState } from "react";
 
+import type { PickableGroup } from "../api/groups";
 import {
   ITEM_ROLES,
   ITEM_ROLE_VERBS,
   type ItemGrant,
+  type ItemGroupGrant,
   type ItemPermission,
   type ItemRoleId,
   type ItemVerb,
@@ -11,6 +13,7 @@ import {
   ITEM_VISIBILITY_HINT,
   ITEM_VISIBILITY_LABEL,
   itemGrantsFromPermission,
+  itemGroupGrantsFromPermission,
   itemPermissionFromGrants,
   itemRoleDef,
 } from "../lib/itemPermission";
@@ -30,6 +33,7 @@ export function ItemShareDialog({
   value,
   busy = false,
   error = null,
+  pickableGroups = [],
   onSubmit,
   onClose,
 }: {
@@ -41,13 +45,26 @@ export function ItemShareDialog({
    * the dialog, which stays open — a silent failure is indistinguishable from
    * "the setting didn't stick". */
   error?: string | null;
+  /** #608 — every group the caller may grant to (name + count). Empty ⇒ hidden. */
+  pickableGroups?: PickableGroup[];
   onSubmit: (perm: ItemPermission) => void;
   onClose: () => void;
 }) {
   const [visibility, setVisibility] = useState<ItemVisibility>(value.visibility);
   const [grants, setGrants] = useState<ItemGrant[]>(() => itemGrantsFromPermission(value, owner));
+  const [groupGrants, setGroupGrants] = useState<ItemGroupGrant[]>(() =>
+    itemGroupGrantsFromPermission(value),
+  );
 
-  const next = () => itemPermissionFromGrants(visibility, grants, value);
+  const next = () => itemPermissionFromGrants(visibility, grants, value, groupGrants);
+  const groupName = (id: string) => pickableGroups.find((g) => g.resource_id === id)?.name ?? id;
+  const addGroup = (id: string) =>
+    setGroupGrants((g) =>
+      id && !g.some((x) => x.groupId === id) ? [...g, { groupId: id, role: "participant" }] : g,
+    );
+  const setGroupRole = (id: string, role: ItemRoleId) =>
+    setGroupGrants((g) => g.map((x) => (x.groupId === id ? { ...x, role } : x)));
+  const removeGroup = (id: string) => setGroupGrants((g) => g.filter((x) => x.groupId !== id));
 
   const toggleUser = (id: string) =>
     setGrants((g) =>
@@ -167,6 +184,66 @@ export function ItemShareDialog({
                 );
               })}
             </ul>
+          )}
+
+          {pickableGroups.length > 0 && (
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="caps">Groups</span>
+                <select
+                  data-testid="item-group-select"
+                  aria-label="Add a group"
+                  value=""
+                  onChange={(e) => addGroup(e.target.value)}
+                  style={{ fontSize: pxToRem(12) }}
+                >
+                  <option value="">Add a group…</option>
+                  {pickableGroups
+                    .filter((pg) => !groupGrants.some((x) => x.groupId === pg.resource_id))
+                    .map((pg) => (
+                      <option key={pg.resource_id} value={pg.resource_id}>
+                        {pg.name} · {pg.member_count}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              {groupGrants.length > 0 && (
+                <ul
+                  data-testid="item-group-list"
+                  style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}
+                >
+                  {groupGrants.map((g) => (
+                    <li key={g.groupId} style={grantRow}>
+                      <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
+                      <select
+                        aria-label={`Role for ${groupName(g.groupId)}`}
+                        data-testid={`item-group-role-${g.groupId}`}
+                        value={g.role}
+                        onChange={(e) => setGroupRole(g.groupId, e.target.value as ItemRoleId)}
+                        style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                      >
+                        {ITEM_ROLES.map((r) => (
+                          <option key={r.id} value={r.id}>
+                            {r.label}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        data-testid={`item-group-remove-${g.groupId}`}
+                        aria-label={`Remove ${groupName(g.groupId)}`}
+                        onClick={() => removeGroup(g.groupId)}
+                        className="btn"
+                        data-variant="danger"
+                        data-size="sm"
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           )}
         </div>
       )}

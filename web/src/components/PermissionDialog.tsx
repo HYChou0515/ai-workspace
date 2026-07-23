@@ -1,14 +1,17 @@
 import { useState } from "react";
 
+import type { PickableGroup } from "../api/groups";
 import {
   ALL_VERBS,
   COLLECTION_ROLES,
   type CollectionPermission,
   type Grant,
+  type GroupGrant,
   type RoleDef,
   type RoleId,
   type Visibility,
   grantsFromPermission,
+  groupGrantsFromPermission,
   permissionFromGrants,
   previewSubjects,
 } from "../lib/permission";
@@ -30,6 +33,7 @@ export function PermissionDialog({
   busy = false,
   roles = COLLECTION_ROLES,
   caption: captionText = "Choose who can access this collection.",
+  pickableGroups = [],
   onSubmit,
   onClose,
 }: {
@@ -43,14 +47,22 @@ export function PermissionDialog({
   roles?: RoleDef[];
   /** Sub-heading under the title — resource-specific copy. */
   caption?: string;
+  /** #608 — every group the caller may grant to (name + count). Empty ⇒ the group
+   * section is hidden (the caller didn't load them / the feature is off). */
+  pickableGroups?: PickableGroup[];
   onSubmit: (perm: CollectionPermission) => void;
   onClose: () => void;
 }) {
   const [visibility, setVisibility] = useState<Visibility>(value.visibility);
   const [grants, setGrants] = useState<Grant[]>(() => grantsFromPermission(value, owner));
+  const [groupGrants, setGroupGrants] = useState<GroupGrant[]>(() =>
+    groupGrantsFromPermission(value),
+  );
   const [advanced, setAdvanced] = useState(false);
 
-  const next = () => permissionFromGrants(visibility, grants, value);
+  const next = () => permissionFromGrants(visibility, grants, value, groupGrants);
+  const groupName = (id: string) =>
+    pickableGroups.find((g) => g.resource_id === id)?.name ?? id;
 
   const toggleUser = (id: string) =>
     setGrants((g) =>
@@ -60,6 +72,13 @@ export function PermissionDialog({
     );
   const setRole = (id: string, role: RoleId) =>
     setGrants((g) => g.map((x) => (x.userId === id ? { ...x, role } : x)));
+  const addGroup = (id: string) =>
+    setGroupGrants((g) =>
+      id && !g.some((x) => x.groupId === id) ? [...g, { groupId: id, role: "viewer" }] : g,
+    );
+  const setGroupRole = (id: string, role: RoleId) =>
+    setGroupGrants((g) => g.map((x) => (x.groupId === id ? { ...x, role } : x)));
+  const removeGroup = (id: string) => setGroupGrants((g) => g.filter((x) => x.groupId !== id));
 
   const preview = next();
 
@@ -134,6 +153,66 @@ export function PermissionDialog({
                   </li>
                 ))}
               </ul>
+            )}
+
+            {pickableGroups.length > 0 && (
+              <div style={{ display: "grid", gap: 6 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="caps">Groups</span>
+                  <select
+                    data-testid="group-grant-select"
+                    aria-label="Add a group"
+                    value=""
+                    onChange={(e) => addGroup(e.target.value)}
+                    style={{ fontSize: pxToRem(12) }}
+                  >
+                    <option value="">Add a group…</option>
+                    {pickableGroups
+                      .filter((pg) => !groupGrants.some((x) => x.groupId === pg.resource_id))
+                      .map((pg) => (
+                        <option key={pg.resource_id} value={pg.resource_id}>
+                          {pg.name} · {pg.member_count}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                {groupGrants.length > 0 && (
+                  <ul
+                    data-testid="group-grant-list"
+                    style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4 }}
+                  >
+                    {groupGrants.map((g) => (
+                      <li key={g.groupId} style={grantRow}>
+                        <span style={{ fontSize: pxToRem(13) }}>{groupName(g.groupId)}</span>
+                        <select
+                          aria-label={`Role for ${groupName(g.groupId)}`}
+                          data-testid={`group-role-${g.groupId}`}
+                          value={g.role}
+                          onChange={(e) => setGroupRole(g.groupId, e.target.value as RoleId)}
+                          style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
+                        >
+                          {roles.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.label}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          data-testid={`group-remove-${g.groupId}`}
+                          aria-label={`Remove ${groupName(g.groupId)}`}
+                          onClick={() => removeGroup(g.groupId)}
+                          className="btn"
+                          data-variant="danger"
+                          data-size="sm"
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             )}
           </div>
         )}

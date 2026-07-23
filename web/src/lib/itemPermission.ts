@@ -206,6 +206,7 @@ export const isDiscoverableOnly = (
 ) => hasItemVerb(p, u, o, "read_meta", su) && !hasItemVerb(p, u, o, "read_chat", su);
 
 const subjectUser = (s: string): string | null => (s.startsWith("user:") ? s.slice(5) : null);
+const subjectGroup = (s: string): string | null => (s.startsWith("group:") ? s.slice(6) : null);
 
 /** The deepest nested ITEM role a verb set fully satisfies (grill D2); `null` when
  * it doesn't even reach Discoverable (no read_meta), and `"custom"` conceptually
@@ -258,22 +259,58 @@ export function itemGrantsFromPermission(perm: ItemPermission, owner: string): I
   return grants.sort((a, b) => a.userId.localeCompare(b.userId));
 }
 
-/** Encode the dialog's per-user grants back into a full permission (PUT = replace),
- * STARTING from `original` so unmanaged verbs + every non-user subject (groups,
- * `all`) survive. A grant with an explicit `verbs` set (Custom) writes exactly
- * those; otherwise the role's verb bundle is used. */
+/** #608 — a grant to a whole group on an item (role only; no Custom per-verb for
+ * groups in v1). */
+export type ItemGroupGrant = { groupId: string; role: ItemRoleId };
+
+/** Decode a permission's GROUP grants into (group, role) rows for the item share
+ * dialog (#608). Mirrors {@link itemGrantsFromPermission} but for `group:<id>`
+ * subjects; each group is shown at the deepest ladder role its verbs satisfy. */
+export function itemGroupGrantsFromPermission(perm: ItemPermission): ItemGroupGrant[] {
+  const byGroup = new Map<string, Set<string>>();
+  for (const verb of ITEM_ROLE_VERBS) {
+    for (const subject of perm[verb] ?? []) {
+      const gidv = subjectGroup(subject);
+      if (gidv === null) continue;
+      const set = byGroup.get(gidv) ?? new Set<string>();
+      set.add(verb);
+      byGroup.set(gidv, set);
+    }
+  }
+  const grants: ItemGroupGrant[] = [];
+  for (const [groupId, verbs] of byGroup) {
+    if (verbs.size === 0) continue;
+    grants.push({ groupId, role: itemRoleForVerbs(verbs) ?? "discoverable" });
+  }
+  return grants.sort((a, b) => a.groupId.localeCompare(b.groupId));
+}
+
+/** Encode the dialog's per-user + per-group grants back into a full permission
+ * (PUT = replace), STARTING from `original` so unmanaged verbs + the `all` wildcard
+ * survive. A user grant with an explicit `verbs` set (Custom) writes exactly those;
+ * otherwise the role's verb bundle is used. Group grants (#608) are rebuilt from
+ * `groupGrants` so a group grant round-trips and can be removed — passing none
+ * DROPS existing group grants (the dialog decodes + passes them, like user grants). */
 export function itemPermissionFromGrants(
   visibility: ItemVisibility,
   grants: ItemGrant[],
   original: ItemPermission,
+  groupGrants: ItemGroupGrant[] = [],
 ): ItemPermission {
   const next: ItemPermission = { ...original, visibility };
   for (const verb of ITEM_ROLE_VERBS) {
-    const kept = (original[verb] ?? []).filter((s) => subjectUser(s) === null);
+    // keep only subjects the dialog doesn't manage (`all`, future kinds); drop old
+    // user AND group grants — both are rebuilt below.
+    const kept = (original[verb] ?? []).filter(
+      (s) => subjectUser(s) === null && subjectGroup(s) === null,
+    );
     const users = grants
       .filter((g) => (g.verbs.size > 0 ? g.verbs.has(verb) : itemRoleDef(g.role).verbs.includes(verb)))
       .map((g) => `user:${g.userId}`);
-    next[verb] = Array.from(new Set([...kept, ...users]));
+    const groups = groupGrants
+      .filter((g) => itemRoleDef(g.role).verbs.includes(verb))
+      .map((g) => `group:${g.groupId}`);
+    next[verb] = Array.from(new Set([...kept, ...users, ...groups]));
   }
   return next;
 }

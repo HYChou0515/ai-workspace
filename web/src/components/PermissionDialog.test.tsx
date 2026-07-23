@@ -169,3 +169,65 @@ describe("PermissionDialog", () => {
     expect(screen.getByText("Tighten who can read this document.")).toBeInTheDocument();
   });
 });
+
+describe("PermissionDialog — group grants (#608)", () => {
+  const pickable = [
+    { resource_id: "eng", name: "Engineering", description: "", member_count: 12 },
+    { resource_id: "hr", name: "HR", description: "", member_count: 4 },
+  ];
+
+  it("shows an existing group grant by name and keeps it on save", () => {
+    const onSubmit = vi.fn();
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={perm({ read_meta: ["group:eng"], read_content: ["group:eng"] })}
+        pickableGroups={pickable}
+        onSubmit={onSubmit}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("Engineering")).toBeInTheDocument(); // resolved name, not the id
+    expect(screen.getByTestId("group-role-eng")).toHaveValue("viewer");
+    fireEvent.click(screen.getByTestId("permission-save"));
+    const saved = onSubmit.mock.calls[0][0] as CollectionPermission;
+    expect(saved.read_content).toEqual(["group:eng"]); // round-tripped, not wiped
+  });
+
+  it("adds a group grant from the picker", () => {
+    const onSubmit = vi.fn();
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={perm()}
+        pickableGroups={pickable}
+        onSubmit={onSubmit}
+        onClose={() => {}}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("group-grant-select"), { target: { value: "eng" } });
+    fireEvent.click(screen.getByTestId("permission-save"));
+    const saved = onSubmit.mock.calls[0][0] as CollectionPermission;
+    expect(saved.read_meta).toContain("group:eng");
+  });
+
+  it("removes a group grant", () => {
+    const onSubmit = vi.fn();
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={perm({ read_meta: ["group:eng"], read_content: ["group:eng"] })}
+        pickableGroups={pickable}
+        onSubmit={onSubmit}
+        onClose={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("group-remove-eng"));
+    fireEvent.click(screen.getByTestId("permission-save"));
+    const saved = onSubmit.mock.calls[0][0] as CollectionPermission;
+    expect(saved.read_meta).not.toContain("group:eng");
+  });
+});

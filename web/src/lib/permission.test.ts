@@ -5,6 +5,7 @@ import {
   EVERYONE,
   canManageAccess,
   grantsFromPermission,
+  groupGrantsFromPermission,
   permissionFromGrants,
   previewSubjects,
   roleForVerbs,
@@ -65,7 +66,7 @@ describe("grantsFromPermission", () => {
 });
 
 describe("permissionFromGrants", () => {
-  it("writes each grant's role verbs and keeps group / all + unmanaged verbs", () => {
+  it("writes each grant's role verbs and keeps the all wildcard + unmanaged verbs", () => {
     const original = empty("private");
     original.read_meta = ["group:eng", "all", "user:stale"];
     original.change_permission = ["user:admin"]; // unmanaged verb — must survive
@@ -73,12 +74,13 @@ describe("permissionFromGrants", () => {
       "restricted",
       [{ userId: "alice", role: "editor" }],
       original,
+      [{ groupId: "eng", role: "viewer" }], // group grants are now round-tripped explicitly
     );
     expect(next.visibility).toBe("restricted");
-    // stale user grant dropped; group + all kept; alice added
+    // stale user grant dropped; `all` kept; alice added; eng round-tripped as viewer
     expect(new Set(next.read_meta)).toEqual(new Set(["group:eng", "all", "user:alice"]));
-    expect(next.edit_content).toEqual(["user:alice"]);
-    expect(next.add_content).toEqual(["user:alice"]);
+    expect(next.edit_content).toEqual(["user:alice"]); // eng is viewer, not edit
+    expect(new Set(next.add_content)).toEqual(new Set(["user:alice"]));
     // an unmanaged verb is preserved verbatim
     expect(next.change_permission).toEqual(["user:admin"]);
   });
@@ -154,5 +156,44 @@ describe("canManageAccess — the owner-or-superuser gate for management afforda
     expect(canManageAccess(null, "bob", false)).toBe(false);
     // …but a superuser needs no owner fact at all.
     expect(canManageAccess(undefined, "root", true)).toBe(true);
+  });
+});
+
+describe("group grants (#608)", () => {
+  it("decodes group: subjects into (group, role) at their highest tier", () => {
+    const perm = empty();
+    perm.read_meta = ["group:eng", "group:hr", "user:alice", "all"];
+    perm.read_content = ["group:eng", "group:hr"];
+    perm.add_content = ["group:eng"];
+    expect(groupGrantsFromPermission(perm)).toEqual([
+      { groupId: "eng", role: "collaborator" },
+      { groupId: "hr", role: "viewer" },
+    ]);
+  });
+
+  it("rebuilds group grants on save AND keeps user grants + the all wildcard", () => {
+    const original = empty("private");
+    original.read_meta = ["all", "user:stalegroupless"];
+    original.read_content = ["group:old"]; // an existing group grant to be replaced
+    const next = permissionFromGrants(
+      "restricted",
+      [{ userId: "alice", role: "viewer" }],
+      original,
+      [{ groupId: "eng", role: "editor" }],
+    );
+    // `all` survives; the stale group grant is gone; eng gets the editor verbs;
+    // alice keeps viewer.
+    expect(new Set(next.read_meta)).toEqual(new Set(["all", "user:alice", "group:eng"]));
+    expect(new Set(next.read_content)).toEqual(new Set(["user:alice", "group:eng"]));
+    expect(next.edit_content).toEqual(["group:eng"]);
+  });
+
+  it("with no groupGrants passed, DROPS existing group grants (dialog must round-trip them)", () => {
+    // Documents the contract: the dialog decodes group grants into state and
+    // passes them back, or they're wiped — mirrors how user grants already work.
+    const original = empty("restricted");
+    original.read_meta = ["group:eng", "all"];
+    const next = permissionFromGrants("restricted", [], original);
+    expect(next.read_meta).toEqual(["all"]);
   });
 });

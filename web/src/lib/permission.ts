@@ -95,12 +95,18 @@ export const DOC_ROLES: RoleDef[] = COLLECTION_ROLES.filter((r) => r.id === "vie
 const ROLE_VERBS: Set<string> = new Set(COLLECTION_ROLES.flatMap((r) => r.verbs));
 
 const USER_PREFIX = "user:";
+const GROUP_PREFIX = "group:";
 
 export const userSubject = (id: string): string => `${USER_PREFIX}${id}`;
+export const groupSubject = (id: string): string => `${GROUP_PREFIX}${id}`;
 
 /** The user id inside a `user:<id>` subject, or null for a group / `all` subject. */
 export const subjectUser = (subject: string): string | null =>
   subject.startsWith(USER_PREFIX) ? subject.slice(USER_PREFIX.length) : null;
+
+/** The group id inside a `group:<id>` subject, or null otherwise (#608). */
+export const subjectGroup = (subject: string): string | null =>
+  subject.startsWith(GROUP_PREFIX) ? subject.slice(GROUP_PREFIX.length) : null;
 
 export const roleDef = (id: RoleId): RoleDef =>
   COLLECTION_ROLES.find((r) => r.id === id) ?? COLLECTION_ROLES[0];
@@ -118,6 +124,31 @@ export function roleForVerbs(verbs: Set<string>): RoleId | null {
 }
 
 export type Grant = { userId: string; role: RoleId };
+/** #608 — a grant to a whole group, decoded from `group:<id>` subjects. */
+export type GroupGrant = { groupId: string; role: RoleId };
+
+/** Decode a permission's GROUP grants into (group, role) rows for the dialog
+ * (#608). Mirrors {@link grantsFromPermission} but for `group:<id>` subjects;
+ * `all`/`user:` subjects are ignored here. A group appears once, at its highest
+ * role. */
+export function groupGrantsFromPermission(perm: CollectionPermission): GroupGrant[] {
+  const verbsByGroup = new Map<string, Set<string>>();
+  for (const verb of ROLE_VERBS) {
+    for (const subject of perm[verb as CollectionVerb] ?? []) {
+      const gidv = subjectGroup(subject);
+      if (gidv === null) continue;
+      const set = verbsByGroup.get(gidv) ?? new Set<string>();
+      set.add(verb);
+      verbsByGroup.set(gidv, set);
+    }
+  }
+  const grants: GroupGrant[] = [];
+  for (const [groupId, verbs] of verbsByGroup) {
+    const role = roleForVerbs(verbs);
+    if (role !== null) grants.push({ groupId, role });
+  }
+  return grants.sort((a, b) => a.groupId.localeCompare(b.groupId));
+}
 
 /** Decode a permission's USER grants into (user, role) rows for the dialog. Group
  * / `all` subjects are ignored here (the dialog manages users only; they're
@@ -145,22 +176,30 @@ export function grantsFromPermission(perm: CollectionPermission, owner: string):
 /** Encode the dialog's state back into a full permission (PUT = replace), STARTING
  * from `original` so everything the dialog doesn't manage survives: unmanaged
  * verbs (read_chat / change_permission / …) verbatim, and — for managed verbs —
- * every non-user subject (group grants from #307, the `all` wildcard). Only the
- * `user:` subjects of role-verbs are rebuilt from `grants`. */
+ * the `all` wildcard. Both `user:` grants and `group:` grants (#608) of role-verbs
+ * are rebuilt from `grants` / `groupGrants` — so a group grant round-trips and can
+ * be removed, not just preserved. */
 export function permissionFromGrants(
   visibility: Visibility,
   grants: Grant[],
   original: CollectionPermission,
+  groupGrants: GroupGrant[] = [],
 ): CollectionPermission {
   const next: CollectionPermission = { ...original, visibility };
   for (const verb of ROLE_VERBS) {
     const key = verb as CollectionVerb;
-    // keep the non-user subjects (groups, `all`); drop the old user grants
-    const kept = (original[key] ?? []).filter((s) => subjectUser(s) === null);
+    // keep only subjects the dialog doesn't manage (the `all` wildcard, any future
+    // subject kind); drop the old user AND group grants — they're rebuilt below.
+    const kept = (original[key] ?? []).filter(
+      (s) => subjectUser(s) === null && subjectGroup(s) === null,
+    );
     const users = grants
       .filter((g) => roleDef(g.role).verbs.includes(key))
       .map((g) => userSubject(g.userId));
-    next[key] = Array.from(new Set([...kept, ...users]));
+    const groups = groupGrants
+      .filter((g) => roleDef(g.role).verbs.includes(key))
+      .map((g) => groupSubject(g.groupId));
+    next[key] = Array.from(new Set([...kept, ...users, ...groups]));
   }
   return next;
 }

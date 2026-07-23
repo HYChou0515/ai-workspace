@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { AppItem, AppManifest } from "../api/types";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
+import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useSetItemPermission } from "../hooks/useResources";
 import {
   type ItemPermission,
@@ -113,6 +114,7 @@ export function ItemAccessDialog({
   const raw = (item as Record<string, unknown>).permission;
   const perm = parseItemPermission(raw);
   const access = useSetItemPermission(manifest.slug, item.resource_id);
+  const pickableGroups = usePickableGroups();
   // #578's fail-closed rule, now applied to the WRITE path too: a permission
   // that is PRESENT but unparseable (FE/BE version skew — a visibility literal
   // this build doesn't know) must not be folded into public. The chip already
@@ -141,6 +143,7 @@ export function ItemAccessDialog({
       // worse — an owner who just hit Save silently locked an item everyone
       // could open (#587 family: the dialog's guess became a write).
       value={perm ?? { visibility: "public" }}
+      pickableGroups={pickableGroups}
       busy={access.isPending}
       error={access.error}
       onSubmit={(next) => {

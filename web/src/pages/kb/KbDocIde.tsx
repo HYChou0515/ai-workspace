@@ -24,6 +24,7 @@ import { Icon } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useIsSuperuser } from "../../hooks/useIsSuperuser";
+import { usePickableGroups } from "../../hooks/usePickableGroups";
 import { DOC_ROLES, type CollectionPermission, canManageAccess } from "../../lib/permission";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
@@ -138,6 +139,7 @@ function KbDocIdeBody({
   // list; the endpoints re-check server-side.
   const me = useCurrentUser();
   const isSuperuser = useIsSuperuser();
+  const pickableGroups = usePickableGroups();
   const collectionsQuery = useQuery({
     queryKey: qk.kb.collections,
     queryFn: () => client.listCollections(),
@@ -440,6 +442,7 @@ function KbDocIdeBody({
                   resourceName={permDoc.path}
                   owner={collectionOwner}
                   value={permQuery.data}
+                  pickableGroups={pickableGroups}
                   roles={DOC_ROLES}
                   caption="Choose who can read this document. It can only restrict access further than the collection — never widen it."
                   busy={setPermMut.isPending || clearPermMut.isPending}
