@@ -364,12 +364,6 @@ export function KbChatPanel({
               selectedName={pickedAgent}
               onSelectModel={setPickedAgent}
               retrieval
-              // #537 follow-up: always offer the wiki allowance, matching the
-              // ever-present document-search stepper — hiding it when no
-              // in-scope collection kept a wiki read as "nowhere to pick the
-              // wiki count". With no wiki the allowance simply has nothing to
-              // spend on; the backend still withholds the tool.
-              wikiBudget
             />
             {log.streaming ? (
               <button type="button" className="kb-btn kb-btn--stop" onClick={cancel}>

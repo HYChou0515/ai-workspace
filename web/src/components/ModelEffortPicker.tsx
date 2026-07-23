@@ -288,18 +288,15 @@ export function ModelEffortPicker({
   selectedName,
   onSelectModel,
   retrieval = false,
-  wikiBudget = false,
 }: {
   models: PickerEntry[];
   /** Active entry name; null = the deploy default (first entry). */
   selectedName: string | null;
   onSelectModel: (name: string) => void;
-  /** KB surface: include the knowledge-search depth section. */
+  /** Retrieval surface: include the knowledge-search depth section — the
+   * document-search AND wiki allowance steppers (#537 follow-up: both always
+   * offered; the app turn forwards them to its KB sub-agent). */
   retrieval?: boolean;
-  /** #537: show the wiki allowance — how many times this reply may consult the
-   * wiki. KB chat only: an app composer delegates the whole question to the KB
-   * agent, which picks its own sources (#270), so there is nothing to set there. */
-  wikiBudget?: boolean;
 }) {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -504,18 +501,16 @@ export function ModelEffortPicker({
                 )}
                 <SearchMaxStepper value={maxSearches} onChange={setMaxSearches} />
                 {advanced && <DepthSliders sel={depthSel} onSlider={setDepthSlider} />}
-                {wikiBudget && (
-                  <SearchMaxStepper
-                    value={maxWiki}
-                    onChange={setMaxWiki}
-                    labelKey="wikimax.label"
-                    titleKey="wikimax.title"
-                    zeroKey="wikimax.zero"
-                    decKey="wikimax.dec"
-                    incKey="wikimax.inc"
-                    max={KB_WIKI_MAX_UI_MAX}
-                  />
-                )}
+                <SearchMaxStepper
+                  value={maxWiki}
+                  onChange={setMaxWiki}
+                  labelKey="wikimax.label"
+                  titleKey="wikimax.title"
+                  zeroKey="wikimax.zero"
+                  decKey="wikimax.dec"
+                  incKey="wikimax.inc"
+                  max={KB_WIKI_MAX_UI_MAX}
+                />
                 <DisclosureToggle value={disclosure} onChange={setDisclosure} />
               </div>
             )}
