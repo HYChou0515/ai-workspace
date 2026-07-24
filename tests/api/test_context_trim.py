@@ -140,6 +140,20 @@ def test_an_unknown_ceiling_never_trims_and_never_notices():
 # ── adversarial-review follow-ups ────────────────────────────────────
 
 
+def _bare_builder():
+    """A TurnContextBuilder without its service bundle — `_budget_for` needs only
+    the ceiling knobs. One helper so a new field is added in one place rather
+    than in every test that reaches past `__init__`."""
+    from workspace_app.api.turn_context import TurnContextBuilder
+
+    builder = TurnContextBuilder.__new__(TurnContextBuilder)
+    builder._context_limit = None
+    builder.learned_limit_fn = None
+    builder._catalog_cache = {}
+    builder._catalog_fn = lambda model: None  # the registry knows nothing by default
+    return builder
+
+
 def test_sizing_measures_the_same_tool_set_the_runner_sends():
     """M5: `allowed_tools or None` is the alias `_agent_for` warns about in ten
     lines of comment — `[]` means "no tools", not "use the defaults". Sizing
@@ -158,17 +172,13 @@ def test_an_unknown_ceiling_really_takes_the_unknown_branch():
     """T17: the previous version of this test claimed to exercise the unknown
     path but the model WAS in the registry (budget 28,356) — it passed only
     because the messages were short. Assert the branch itself."""
-    from workspace_app.api.turn_context import TurnContextBuilder
     from workspace_app.resources import AgentConfig
 
     unknown_model = AgentConfig(
         name="t", model="openai/some-self-hosted-model-no-registry-knows", system_prompt="s"
     )
-    builder = TurnContextBuilder.__new__(TurnContextBuilder)
-    builder._context_limit = None
-    builder.learned_limit_fn = None
 
-    assert builder._budget_for(unknown_model) is None
+    assert _bare_builder()._budget_for(unknown_model) is None
 
 
 def test_kb_chat_is_not_left_without_any_ceiling():
@@ -198,15 +208,11 @@ def test_what_the_runner_learned_changes_what_the_next_turn_sends():
     all for the self-hosted models that are exactly the case this rung exists
     for.
     """
-    from workspace_app.api.turn_context import TurnContextBuilder
     from workspace_app.resources import AgentConfig
 
     # A self-hosted name no registry knows — the production shape.
     cfg = AgentConfig(name="t", model="openai/some-self-hosted-model", system_prompt="s")
-    builder = TurnContextBuilder.__new__(TurnContextBuilder)
-    builder._context_limit = None
-    builder._tool_output_max_chars = 0
-    builder.learned_limit_fn = None
+    builder = _bare_builder()
 
     assert builder._budget_for(cfg) is None, "nothing known yet ⇒ send it all"
 
@@ -353,3 +359,27 @@ def test_the_notice_never_reaches_the_model():
 
     assert [i["role"] for i in items] == ["user", "assistant"]
     assert not any("不會被讀到" in str(i) for i in items)
+
+
+async def test_the_catalog_rung_does_not_block_the_event_loop():
+    """§9.12: `catalog_limit` reads like a table lookup and is not — litellm
+    resolves an `ollama/*` name by asking the daemon, with no timeout (measured:
+    129,781 ms against an address that does not answer). `_budget_for` calls it
+    on EVERY turn, from inside `async def build_chat_turn`, and the bundled
+    default model is `ollama/*` — so a dev deploy whose Ollama host stops
+    answering freezes the whole pod for over two minutes.
+    """
+    import time
+
+    from workspace_app.resources import AgentConfig
+
+    cfg = AgentConfig(name="t", model="ollama/qwen3:14b", system_prompt="s")
+    builder = _bare_builder()
+    builder._catalog_fn = lambda model: (time.sleep(0.5), 40_960)[1]  # a hanging daemon
+
+    started = time.perf_counter()
+    got = builder._budget_for(cfg)
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 0.2, f"the catalog rung blocked the event loop for {elapsed:.2f}s"
+    assert got is None, "not back yet ⇒ unknown, which already means 'send it all'"

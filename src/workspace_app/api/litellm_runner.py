@@ -46,6 +46,7 @@ from ..agent.tools import build_tools
 from ..context_budget import (
     ContextLimit,
     LimitLearner,
+    deferred_lookup,
     detect_truncation,
     estimate_messages,
     estimate_tokens,
@@ -864,8 +865,6 @@ class LitellmAgentRunner:
         self._limits = LimitLearner()
         # Endpoints already asked (value or None), so a silent one is asked once.
         self._probed: dict[tuple[str, str], int | None] = {}
-        # Strong refs to in-flight probes (asyncio keeps only a weak one).
-        self._probe_tasks: set[asyncio.Task[None]] = set()
         # The endpoint-asking seam. A plain attribute (not a method) so it is an
         # injectable dependency like the other sinks here — every failure inside
         # `probe_context_limit` already degrades to None.
@@ -1120,33 +1119,14 @@ class LitellmAgentRunner:
         known = self._limits.get(model, base_url)
         if known is not None:
             return known
-        key = (model or "", base_url or "")
-        if key not in self._probed:
-            self._probed[key] = None  # claim it: one probe per endpoint, ever
-            self._start_probe(key, model, base_url)
-        return self._probed.get(key)
-
-    def _start_probe(self, key: tuple[str, str], model: str, base_url: str | None) -> None:
-        """Ask the endpoint, without ever doing it on the event loop.
-
-        A sync caller (a worker, a test) has no loop to block, so it just asks;
-        anything running under asyncio hands the blocking POST to a thread."""
-
-        def _ask() -> None:
-            probed = self._probe(base_url or self._base_url, model)
-            self._probed[key] = probed
-            if probed is not None:
-                self._limits.learn_exact(model, base_url, limit=probed)
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            _ask()  # no loop to protect
-            return
-        task = loop.create_task(asyncio.to_thread(_ask))
-        # asyncio keeps only a weak reference; drop ours when it finishes.
-        self._probe_tasks.add(task)
-        task.add_done_callback(self._probe_tasks.discard)
+        probed = deferred_lookup(
+            self._probed,
+            (model or "", base_url or ""),
+            lambda: self._probe(base_url or self._base_url, model),
+        )
+        if probed is not None:
+            self._limits.learn_exact(model, base_url, limit=probed)
+        return probed
 
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None

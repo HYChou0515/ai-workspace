@@ -1,7 +1,10 @@
 """How much context we may use, and how much we are using (#624).
 
-Three pure pieces, deliberately free of I/O so the arithmetic is testable and
-the wiring (P2+) can decide *when* to apply it:
+The arithmetic here is pure, so it is testable and the wiring (P2+) decides
+*when* to apply it. The two pieces that are NOT pure are named as such:
+``catalog_limit`` does network I/O despite reading like a table lookup, and
+``deferred_lookup`` is the mechanism that keeps it — and the ``/tokenize`` probe
+— off the event loop.
 
 - ``resolve_context_limit`` — the ladder that answers "how many tokens may this
   endpoint take?", and says ``unknown`` when nothing can answer. Inventing a
@@ -23,7 +26,9 @@ no known ceiling we send everything and learn the real limit from the response
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -32,6 +37,52 @@ from .kb.tokens import count_tokens
 logger = logging.getLogger(__name__)
 
 LimitSource = Literal["config", "learned", "catalog", "unknown"]
+
+#: Strong refs to in-flight deferred lookups — asyncio keeps only a weak one, so
+#: an unreferenced task can be collected mid-flight.
+_INFLIGHT: set[asyncio.Task[None]] = set()
+
+
+def deferred_lookup(cache: dict[Any, Any], key: Any, compute: Callable[[], Any]) -> Any:  # noqa: ANN401 — deliberately value-agnostic
+    """A value that may do I/O, read from a place that must not block (#624).
+
+    Two rungs of the ceiling ladder are read from ``_budget_for``, which runs
+    inside ``async def build_chat_turn``, and both do network I/O: the
+    ``/tokenize`` probe (a synchronous POST, 3s timeout) and ``catalog_limit``,
+    which looks like a table lookup and is not — litellm resolves an ``ollama/*``
+    name by asking the daemon, with no timeout at all. Measured against an
+    address that does not answer: **129,781 ms**, with the pod's whole event loop
+    frozen for all of it.
+
+    So: return what is cached, and otherwise answer ``None`` — which needs no
+    compensating design, because ``unknown`` already means "send it all" (§3).
+    The value is computed in a thread and is there for the next turn. A caller
+    with no running loop has nothing to protect, so it simply computes.
+
+    Failure is cached as silence: a broken endpoint retried every turn is how one
+    outage becomes a thread per message.
+    """
+    if key in cache:
+        return cache[key]
+
+    def _fill() -> None:
+        try:
+            cache[key] = compute()
+        except Exception:  # noqa: BLE001 — a lookup must never break a turn
+            logger.debug("deferred lookup failed for %r", key, exc_info=True)
+            cache[key] = None
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _fill()
+        return cache[key]
+    cache[key] = None  # claim it: one lookup per key, however many turns arrive
+    task = loop.create_task(asyncio.to_thread(_fill))
+    _INFLIGHT.add(task)
+    task.add_done_callback(_INFLIGHT.discard)
+    return None
+
 
 #: Headroom kept back from the resolved ceiling to absorb estimator error. The
 #: CJK estimate runs ~15% off against a real tokenizer, so aiming exactly at the
@@ -98,11 +149,17 @@ def resolve_context_limit(
 def catalog_limit(model: str) -> int | None:
     """The registry's input-token ceiling for ``model``, or None when unknown.
 
-    Covers hosted models and ``ollama/*``; a self-hosted model behind an
-    OpenAI-compatible endpoint (the production shape) is *not* in any registry,
-    so None is the honest and expected answer there — never a fallback number.
-    Import is local and every failure degrades to None: a registry lookup must
-    not be able to break a turn."""
+    **This does network I/O.** It reads like a table lookup and mostly is one —
+    hosted models really are in litellm's bundled map — but an ``ollama/*`` name
+    is NOT in that map: litellm resolves it by asking the daemon, with no
+    timeout. Measured against an address that does not answer: 129,781 ms. So
+    every caller on a request path must reach it through ``deferred_lookup``,
+    never directly.
+
+    A self-hosted model behind an OpenAI-compatible endpoint (the production
+    shape) is in no registry, so None is the honest and expected answer there —
+    never a fallback number. Import is local and every failure degrades to None:
+    a registry lookup must not be able to break a turn."""
     if not model:
         return None
     try:

@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agent.context import AgentToolContext
-from ..context_budget import estimate_tokens
+from ..context_budget import catalog_limit, estimate_tokens
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .turns import history_items
@@ -124,6 +124,12 @@ class TurnContextBuilder:
         # (tests, replay) has nothing to learn from. None ⇒ the ladder simply
         # skips that rung.
         self.learned_limit_fn: Callable[[str, str | None], int | None] | None = None
+        # #624 §9.12: the catalog rung, memoised per model and filled OFF the
+        # event loop (see `deferred_lookup`). `_catalog_fn` is a plain attribute
+        # rather than a direct call so a test can stand in for the slow, untimed
+        # registry lookup — the hazard itself is what needs driving.
+        self._catalog_cache: dict[str, int | None] = {}
+        self._catalog_fn: Callable[[str], int | None] = catalog_limit
 
     def _overhead_for(self, agent_config: AgentConfig | None, item_id: str) -> int:
         """Tokens spent before any history: the system prompt + tool schemas."""
@@ -177,7 +183,7 @@ class TurnContextBuilder:
         prompt and a 24k history budget were aimed at a 40,960-token model.
         """
         from ..context_budget import (
-            catalog_limit,
+            deferred_lookup,
             estimate_tokens,
             history_budget,
             resolve_context_limit,
@@ -191,7 +197,16 @@ class TurnContextBuilder:
             # runner's learner — the adversarial review caught this as a dangling
             # `learned=None  # P3 feeds this` comment that nothing ever fed.
             learned=self._learned_limit(agent_config),
-            catalog=catalog_limit(agent_config.model),
+            # #624 §9.12: NOT a table lookup, whatever its name says — litellm
+            # resolves an `ollama/*` name by asking the daemon, untimed (measured
+            # 129,781 ms against an address that does not answer). This runs on
+            # every turn, inside `async def build_chat_turn`, so it is deferred
+            # off the loop like the probe.
+            catalog=deferred_lookup(
+                self._catalog_cache,
+                agent_config.model,
+                lambda: self._catalog_fn(agent_config.model),
+            ),
         )
         overhead = estimate_tokens(agent_config.system_prompt or "")
         overhead += self._tools_tokens(agent_config, app_slug=app_slug, profile=profile)
