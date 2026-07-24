@@ -7,10 +7,11 @@
  * Registered as the `table` kind in `viewKindRegistry`.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
-import { refOptions, traverseColumn } from "./refTraversal";
+import type { User } from "../../api/types";
+import { refOptions, type RefOption, traverseColumn } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
 import { filterEntities, sortEntities, type SortDir } from "./tableOps";
@@ -244,11 +245,10 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
                     const opts = fieldSpec?.role === "ref" && refIndex ? refOptions(fieldSpec, refIndex) : undefined;
                     return (
                       <td key={c} {...td}>
-                        <RoleField
-                          widget={fieldSpec ? widgetForRole(fieldSpec.role) : "readonly"}
-                          name={fieldSpec?.name ?? c}
+                        <EditableCell
+                          column={c}
+                          fieldSpec={fieldSpec}
                           value={e.fields[c]}
-                          values={fieldSpec?.values}
                           users={users}
                           refOptions={opts}
                           disabled={busy || readOnly}
@@ -280,6 +280,106 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
       </div>
     </div>
   );
+}
+
+/** A table value cell. To keep the grid narrow + readable it shows the value as
+ * plain text at rest and swaps to the shared `RoleField` editor only on click /
+ * focus (#3): a row of always-on native selects + date pickers made the table
+ * far wider than its pane, pushing the last columns (DUE / PROGRESS) off-screen.
+ * Compute-on-read / read-only cells stay text (never editable). Discrete widgets
+ * (select / actor / ref) close on pick; the rest close when focus leaves. */
+function EditableCell({
+  column,
+  fieldSpec,
+  value,
+  users,
+  refOptions: opts,
+  disabled,
+  onCommit,
+}: {
+  column: string;
+  fieldSpec: EntityFieldSpec | undefined;
+  value: unknown;
+  users?: User[];
+  refOptions?: RefOption[];
+  disabled?: boolean;
+  onCommit: (next: unknown) => void;
+}) {
+  const widget = fieldSpec ? widgetForRole(fieldSpec.role) : "readonly";
+  const [editing, setEditing] = useState(false);
+  const name = fieldSpec?.name ?? column;
+  const display = cellDisplay(fieldSpec, value, users);
+
+  // Compute-on-read (backref/rollup) or a read-only member: text, never editable.
+  if (widget === "readonly" || disabled) {
+    return <span className="ev-readonly">{display}</span>;
+  }
+
+  if (!editing) {
+    return (
+      <button type="button" className="ev-cell" aria-label={`edit ${name}`} onClick={() => setEditing(true)}>
+        {display || <span className="ev-cell__empty">—</span>}
+      </button>
+    );
+  }
+
+  // Native selects commit onChange with focus intact → close on pick. Text /
+  // date / daterange commit on blur, so closing on blur covers them.
+  const closeOnCommit = widget === "select" || widget === "actor" || widget === "ref";
+  return (
+    <span
+      className="ev-cell__edit"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setEditing(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") setEditing(false);
+      }}
+    >
+      <AutoFocus>
+        <RoleField
+          widget={widget}
+          name={name}
+          value={value}
+          values={fieldSpec?.values}
+          users={users}
+          refOptions={opts}
+          onCommit={(next) => {
+            onCommit(next);
+            if (closeOnCommit) setEditing(false);
+          }}
+        />
+      </AutoFocus>
+    </span>
+  );
+}
+
+/** Focus the first control the moment a cell enters edit mode, so a click on the
+ * text cell lands the caret / opens the picker without a second click. */
+function AutoFocus({ children }: { children: React.ReactNode }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    ref.current?.querySelector<HTMLElement>("input,select,textarea")?.focus();
+  }, []);
+  return (
+    <span ref={ref} style={{ display: "contents" }}>
+      {children}
+    </span>
+  );
+}
+
+/** The at-rest text for a value cell — the resolved actor name / `N%` progress /
+ * else the generic field text. */
+function cellDisplay(fieldSpec: EntityFieldSpec | undefined, value: unknown, users?: User[]): string {
+  if (fieldSpec?.role === "actor") {
+    const id = fieldText(value);
+    return id ? (users?.find((u) => u.id === id)?.name ?? id) : "";
+  }
+  if (fieldSpec?.role === "progress") {
+    if (value == null || value === "") return "";
+    return `${Math.max(0, Math.min(100, Number(value) || 0))}%`;
+  }
+  return fieldText(value);
 }
 
 /** Map each field with a lint warning to its message (for a yellow cell mark). */

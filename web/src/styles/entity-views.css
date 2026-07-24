@@ -273,6 +273,11 @@
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
+  /* Fixed layout so the table fills the pane and long values (a wordy title)
+   * truncate in-cell instead of stretching the column and pushing later columns
+   * (DUE / PROGRESS) off-screen (#3). Columns share the width evenly; the # and
+   * select boxes get fixed minimal widths below. */
+  table-layout: fixed;
   font-size: var(--text-body-sm);
 }
 .ev-table thead th {
@@ -285,6 +290,8 @@
   text-align: left;
   vertical-align: middle;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* second header row (filters) shouldn't cast the caps styling. */
 .ev-table thead tr.ev-table__filters th {
@@ -338,13 +345,41 @@
   font-size: var(--text-xs);
   color: var(--text-paper-d);
   text-align: right;
-  width: 1%;
+  width: 44px;
   white-space: nowrap;
 }
 .ev-table__check {
-  width: 1%;
+  width: 36px;
   white-space: nowrap;
   text-align: center;
+}
+/* At-rest value cell: plain text (no native select / date-picker chrome) so the
+ * grid reads as data AND stays narrow — a row of always-on controls pushed the
+ * DUE / PROGRESS columns off-screen (#3). Click / focus swaps in the editor. */
+.ev-table tbody .ev-cell {
+  display: block;
+  width: 100%;
+  height: 26px;
+  line-height: 24px;
+  padding: 0 var(--space-8);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-btn);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+.ev-table tbody .ev-cell:hover,
+.ev-table tbody .ev-cell:focus-visible {
+  border-color: var(--paper-3);
+  background: var(--white);
+}
+.ev-cell__empty {
+  color: var(--text-paper-d2);
 }
 /* inline cells: chrome only on interaction, so data-heavy tables stay calm. */
 .ev-table tbody .ev-field {
