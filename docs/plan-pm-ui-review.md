@@ -28,6 +28,7 @@ NOT the real overflow cause).
 | 3 | **Board cards not editable** → wanted a ⋯ menu. | Each card gets a `⋯` Popover: **Edit** (modal wrapping `EntityFileEditor`) + **Open file** (`{records_path}/N.md`). `EntityViewProps` gains `onSave`/`onOpenRecord`, wired from `AiYamlRenderer`; the menu/modal stop pointerdown so they never arm a drag. **Delete deferred** — no backend entity-delete route. | ✅ done |
 | 4 | **Table "text cut"**: DUE / PROGRESS clipped off the right edge. | Real cause (browser-confirmed): every cell was an always-on native `<select>`/date input + long titles expanded columns, so the table was far wider than the pane. Fix: value cells render **text at rest, editor on click** (`EditableCell`), + `table-layout: fixed; width:100%` so columns share the pane and long values truncate in-cell. (`min-width:0` containment landed first but was insufficient alone.) | ✅ done |
 | 5 | **`ref` field (milestone) is a raw number box** in the create/edit forms — "只能填數字很怪". A ref points at another entity, so a bare number is meaningless. | Render a `#N <title>` **picker** wherever a ref is edited (the table already did). Wire `refOptionsForField(type, refIndex, name)` into every edit surface. | ✅ done |
+| 6 | **Left-sidebar member panel ignores visibility + hides group grants**: `ItemMembersPanel`'s `rosterOf` lists owner + `members` ∪ *user* grantees regardless of visibility — so a **public** item shows "you and him" (misleading) and **private** still shows others (who have no access); and a granted **group** (#608) never appears (only `itemGrantsFromPermission` = users is used, not `itemGroupGrantsFromPermission`). | **Decided (user):** panel shows the `AccessChip` + reflects visibility — **public** → "Everyone can access this."; **private** → "Only you."; **restricted** → the roster (owner + user grants + **group grant rows**, resolving group name/count via `usePickableGroups` like `ItemShareDialog`, "Unknown group" fallback). Browser-verified (public→Everyone, private→Only you, restricted→roster + group row). | ✅ done |
 
 ### Phase 5 sub-steps
 
@@ -47,6 +48,8 @@ NOT the real overflow cause).
 - [x] Real-browser verify: create modal + card Edit modal show a milestone
       dropdown (`#1 v1.0 Launch …`), not a number box.
 - [x] Commit + push to #640.
+
+| 7 | **Top-bar `👥 N` Members popover feels redundant** (user). It's the same `ItemMembersPanel` as the sidebar (Members mode), so it duplicates the roster; the head-count is noise for the dominant solo/private case and doesn't answer the question that matters (visibility). | **Decided (user): A.** Top bar shows an `AccessChip` (Public/Restricted/Private); clicking it opens "Manage access…" for whoever may change access (else read-only). The member-count popover is removed; the roster lives in the Members sidebar. Browser-verified. | ✅ done |
 
 ## Open decisions (for the user)
 
