@@ -45,6 +45,13 @@ describe("entity-views.css", () => {
     expect(CSS).toContain(".ev-board__col--degraded");
   });
 
+  it("distinguishes gantt task bars from the today marker by colour", () => {
+    const today = CSS.match(/\.ev-gantt__today\s*\{[^}]*\}/)?.[0] ?? "";
+    const bar = CSS.match(/\.ev-gantt__bar\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(today).toMatch(/--accent/); // the today line stays the one red signal
+    expect(bar).not.toMatch(/--accent\b/); // bars must not reuse it, or they blend in
+  });
+
   it("only references declared design tokens (no hardcoded brand colors)", () => {
     // Guard against a stray hex on a fill — everything routes through tokens.
     // Box-shadows are the one sanctioned rgba() exception (no shadow token).
