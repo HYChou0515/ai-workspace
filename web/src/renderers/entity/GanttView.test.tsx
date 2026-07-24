@@ -115,7 +115,7 @@ describe("GanttView", () => {
     expect(screen.getByText("Jan 2026")).toBeInTheDocument();
   });
 
-  it("fills a wide pane by extending the dated grid past the data (no empty gap)", () => {
+  it("fits a short project to the measured pane so it fills the width by default", () => {
     class FakeRO {
       constructor(private cb: ResizeObserverCallback) {}
       observe() {
@@ -125,9 +125,11 @@ describe("GanttView", () => {
       disconnect() {}
     }
     vi.stubGlobal("ResizeObserver", FakeRO);
-    // data lives entirely in January; a 900px pane must extend the grid onward
+    // an 11-day project (daysBetween 10) in a 900px pane (750 after the gutter)
+    // auto-fits to the day-anchor density (28px/day) instead of staying tiny at
+    // the week density (10px/day → 100px) — so the bar stretches to fill.
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-15" })] })} />);
-    expect(screen.getByText("Feb 2026")).toBeInTheDocument();
+    expect(screen.getByTestId("bar-1").style.width).toBe("280px");
     vi.unstubAllGlobals();
   });
 

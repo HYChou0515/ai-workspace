@@ -22,6 +22,7 @@ import {
   applyDrag,
   axisFor,
   canvasWidthFor,
+  clampPpd,
   daysBetween,
   deltaDays,
   type DragMode,
@@ -85,7 +86,9 @@ function groupLanes(rows: Row[], groupField: string | undefined, type: EntityVie
 export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: EntityViewProps) {
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
-  const [ppd, setPpd] = useState<number>(PPD_ANCHORS.week);
+  // null ⇒ auto-fit the whole project to the measured pane (fills the width on
+  // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
+  const [manualPpd, setManualPpd] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
   // Measure the scroll pane so a short project can FILL its width (max(pane,
   // content)) instead of hugging a half-empty card; a long one still scrolls.
@@ -112,9 +115,15 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   const minDate = rows.map((r) => r.span.start).reduce((m, s) => (s < m ? s : m));
   const maxDate = rows.map((r) => r.span.end).reduce((m, e) => (e > m ? e : m));
   const totalDays = daysBetween(minDate, maxDate) + 1;
-  // Fill the pane when the data is short, scroll when it's long; the dated grid
-  // then extends across the whole canvas so there is no empty gap.
-  const canvasWidth = canvasWidthFor(totalDays, ppd, paneWidth - GUTTER);
+  // Default density fits the whole project into the pane (fills the width with
+  // no empty gap); once measured, the user's slider choice takes over. Fall back
+  // to the week anchor before the pane is measured (first paint / SSR).
+  const paneAvail = paneWidth - GUTTER;
+  const fitPpd = paneAvail > 0 ? clampPpd(paneAvail / totalDays) : PPD_ANCHORS.week;
+  const ppd = manualPpd ?? fitPpd;
+  // Fill the pane when the project is short, scroll when it's long; the dated
+  // grid then spans the whole canvas so there is no empty gap.
+  const canvasWidth = canvasWidthFor(totalDays, ppd, paneAvail);
   const visibleDays = visibleDaysFor(canvasWidth, ppd);
   const xOf = (date: string) => daysBetween(minDate, date) * ppd;
 
@@ -163,7 +172,7 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
             step={0.001}
             value={ppdToSlider(ppd)}
             aria-label="zoom"
-            onChange={(e) => setPpd(sliderToPpd(Number(e.target.value)))}
+            onChange={(e) => setManualPpd(sliderToPpd(Number(e.target.value)))}
           />
           <div className="ev-gantt__zoom-anchors">
             {ZOOMS.map((z) => (
@@ -174,7 +183,7 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
                 data-active={Math.abs(ppd - PPD_ANCHORS[z]) < 0.5 || undefined}
                 style={{ left: `${ppdToSlider(PPD_ANCHORS[z]) * 100}%` }}
                 aria-label={`zoom ${z}`}
-                onClick={() => setPpd(PPD_ANCHORS[z])}
+                onClick={() => setManualPpd(PPD_ANCHORS[z])}
               >
                 {z}
               </button>
