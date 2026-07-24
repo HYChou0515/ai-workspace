@@ -14,8 +14,8 @@
 | Slice | 內容 | Issue | PR | 狀態 |
 | --- | --- | --- | --- | --- |
 | 一 | 數字掛上 entity + `lookup_entity` 檔案卡工具 | [#628](https://github.com/HYChou0515/ai-workspace/issues/628) | #629 | P1–P7 完成(draft) |
-| 二 | 抽取端統一「誰·什麼屬性·值」,不用型別當分界 | [#630](https://github.com/HYChou0515/ai-workspace/issues/630) | #631 | P1–P6 完成,P7 部分(draft) |
-| 三 | 名字對上就自動注入檔案卡(不再問模型要不要查) | [#633](https://github.com/HYChou0515/ai-workspace/issues/633) | — | P1–P2 完成 |
+| 二 | 抽取端統一「誰·什麼屬性·值」,不用型別當分界 | [#630](https://github.com/HYChou0515/ai-workspace/issues/630) | #631 | **P1–P7 完成**(draft) |
+| 三 | 名字對上就自動注入檔案卡(不再問模型要不要查) | [#633](https://github.com/HYChou0515/ai-workspace/issues/633) | — | **P1–P6 完成** |
 
 ---
 
@@ -122,8 +122,7 @@
       attributes,每個 chunk 從 2 次 LLM 降為 1 次。
 - [x] **P5/P6** 值升格:值被文件當主體談過 → 它就是 entity → 反查
       「誰把它當值用」(`value_of`)。API + 前端「誰用了它」+ 檔案卡。
-- [x] **P7 部分**:真模型驗收 + 單位重複的缺陷修正
-- [ ] **P7 未完**:見 slice 三(模型不查圖的問題)
+- [x] **P7**:真模型驗收 + 單位重複的缺陷修正;模型不查圖的問題移交 slice 三解決
 
 ### 真模型驗收(qwen3-14b)
 
@@ -187,12 +186,32 @@ N5 TV0 · 使用的 POR recipe = 'PPOOIXUX'      ← 以前整條進不來
 - [x] **P1** 名字索引:`name → tuple[id]`、最短長度門檻、硬上限 + `dropped`
       計數(絕不靜默截斷)
 - [x] **P2** 比對:問句 → 候選 → set 交集 → 邊界驗證
-- [ ] **P3** 注入區塊:精簡卡渲染 + 三道界(entity 數 / 每個的陳述數 / 字元數)
+- [x] **P3** 注入區塊:精簡卡渲染 + 三道界(entity 數 / 每個的陳述數 / 字元數)
       + 同名揭露
-- [ ] **P4** 接線:KB chat turn(#106 的同一處);持久化訊息不變
-- [ ] **P5** 同名缺陷:`lookup.entity_card` 現在遇到同名多個就 `return` 第一個
-- [ ] **P6** 驗收:真模型跑「回焊爐是什麼?」必須答出 POR recipe;沒進圖的問題
-      不受影響;量測每則訊息新增的延遲
+- [x] **P4** 接線:KB chat turn(#106 的同一處);持久化訊息不變;
+      索引快取(TTL + 重建失敗續用舊的)
+- [x] **P5** 同名缺陷:`entity_card` 不再默默取第一個
+- [x] **P6** 驗收(見下)
+
+### 驗收結果(qwen3-14b,真模型)
+
+| 情境 | 結果 |
+| --- | --- |
+| 「回焊爐是什麼?它用什麼 recipe?」(四次失敗的那句) | ✅ 答出 **POR recipe = PPOOIXUX**、位於產線三、與空洞有關,逐條附出處;並誠實區分「知識庫沒有直接定義」與一般理解 |
+| 「PPOOIXUX 被哪些機台使用?」(反查) | ✅ 答出回焊爐(deck-A)+ 產線三(deck-B),且**零工具呼叫** — 注入就夠了 |
+| 「什麼是傅立葉轉換?」(圖上沒有的東西) | ✅ 不受影響,注入區塊為空 |
+
+延遲(5000 個 entity):
+
+| | |
+| --- | --- |
+| 冷啟動建索引 | 262 ms(每 TTL 一次) |
+| 命中的訊息 | 297 ms |
+| 未命中的訊息 | **0.01 ms** |
+
+命中的 297 ms 對一個數十秒的 turn 不算大,但它原本**同步跑在 event loop 上**
+— 正是 [#569](https://github.com/HYChou0515/ai-workspace/issues/569) 讓整個 pod
+停擺的形狀。已改為 `asyncio.to_thread`(同 KB ingestion 的慣例)。
 
 ---
 
@@ -211,9 +230,18 @@ N5 TV0 · 使用的 POR recipe = 'PPOOIXUX'      ← 以前整條進不來
 
 ## 8 · 已知缺口(記著,尚未排程)
 
-- **`lookup.entity_card` 同名取第一個** — #633 P5 會修。
+- ~~`lookup.entity_card` 同名取第一個~~ — #633 P5 已修(改為揭露有幾個)。
+- **注入用 `entity_page` 偏重**(297 ms/命中):它撈了 mentions / links /
+  related,而注入只需要 claims + value_of + 少數 related。已在執行緒外跑,
+  所以不阻塞;若之後成為瓶頸,可以做一個更窄的讀取路徑。
 - **glossary 的載入方式有同樣的擴展性問題**(每則訊息撈整批卡進記憶體比對),
   卡片數量長大後會是同一個坑。
+- 🔴 **`ContextCard` / `DocQuestion` 沒有 access_scope** —
+  [#635](https://github.com/HYChou0515/ai-workspace/issues/635)。本 slice 的圖譜
+  注入是以呼叫者身分讀的,但它旁邊的 glossary 注入不是,而且這兩個 model 連
+  specstar 自動 CRUD 路由都敞開:**任何登入者可讀所有 collection 的卡片本文與
+  提問內容**。已用 `tests/api/test_kb_model_scope_audit.py` 的 `xfail(strict)`
+  釘住 — 修好時會 XPASS 而失敗,強迫拿掉標記。
 - **值也會被當成 mention** — 真模型會把 `98.7%` 列為一個「東西」(kind=value),
   於是它會有自己的節點。按 §2 的共識判準它不該升格。影響輕微(沒人會去點),
   但會污染實體清單與合併提案。

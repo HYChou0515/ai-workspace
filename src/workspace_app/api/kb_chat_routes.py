@@ -451,6 +451,12 @@ def _load_graph_names(spec: SpecStar) -> dict[str, tuple[str, ...]]:
     return names
 
 
+def _graph_block_for(spec: SpecStar, text: str, as_user: str) -> str:
+    """Build the injection block. Blocking on purpose — the caller hands it to a
+    thread so specstar's synchronous reads never sit on the event loop."""
+    return entity_block(spec, _name_index(spec).get(), text, as_user=as_user)
+
+
 def _name_index(spec: SpecStar) -> NameIndexCache:
     cache = _NAME_INDEXES.get(id(spec))
     if cache is None:
@@ -965,9 +971,12 @@ def register_kb_chat_routes(
         # attempts). Names the question mentions are resolved here and their
         # facts ride along. Reads AS the caller; a stale index only means a name
         # is not offered yet — `lookup_entity` still finds it.
-        graph_block = entity_block(
-            spec, _name_index(spec).get(), body.content, as_user=get_user_id()
-        )
+        # Off the loop (measured 297 ms on a hit, 0.01 ms on a miss, plus a
+        # ~260 ms index build once per TTL): specstar reads are blocking, and a
+        # blocking call inside an async handler stalls every other request on
+        # this pod — the #569 shape. The miss path is cheap but the hit path is
+        # not, and the hit path is the one users notice.
+        graph_block = await asyncio.to_thread(_graph_block_for, spec, body.content, get_user_id())
         if graph_block:
             agent_content = f"{graph_block}\n\n{agent_content}"
 
