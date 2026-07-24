@@ -82,3 +82,47 @@ def test_no_base_url_is_not_probed():
     """Nothing to ask — don't invent a request."""
     assert probe_context_limit(base_url="", model="m", client=_client(_Resp(200, {}))) is None
     assert probe_context_limit(base_url=None, model="m", client=_client(_Resp(200, {}))) is None
+
+
+# ── the wiring (adversarial review: the probe had no caller) ─────────
+
+
+def test_the_runner_consults_the_probe_for_an_unknown_endpoint():
+    """A probe nobody calls is documentation, not a feature. When the endpoint
+    answers, that number must reach the ladder — it is the only source that
+    knows the truth for a self-hosted model no registry has heard of."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    runner = LitellmAgentRunner(base_url="http://vllm")
+    runner._probe = lambda base_url, model: 32768  # the endpoint answered
+
+    assert runner.learned_limit("self-hosted-qwen", "http://vllm") == 32768
+
+
+def test_a_silent_probe_leaves_the_ladder_untouched():
+    """404 / timeout / not-vLLM is the NORMAL path — it must add nothing, not
+    poison the ladder with a zero or a guess."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    runner = LitellmAgentRunner(base_url="http://ollama")
+    runner._probe = lambda base_url, model: None
+
+    assert runner.learned_limit("m", "http://ollama") is None
+
+
+def test_the_probe_is_asked_once_per_endpoint():
+    """It is a startup nicety, not a per-turn dependency — asking every turn
+    would add a round-trip to each message for a value that does not change."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    calls: list[str] = []
+    runner = LitellmAgentRunner(base_url="http://vllm")
+
+    def _probe(base_url, model):
+        calls.append(model)
+        return 8192
+
+    runner._probe = _probe
+    for _ in range(3):
+        runner.learned_limit("m", "http://vllm")
+    assert calls == ["m"], "the answer must be cached, not re-asked"

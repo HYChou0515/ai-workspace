@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agent.context import AgentToolContext
+from ..context_budget import estimate_tokens
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .turns import history_items
@@ -123,6 +124,16 @@ class TurnContextBuilder:
         # (tests, replay) has nothing to learn from. None ⇒ the ladder simply
         # skips that rung.
         self.learned_limit_fn: Callable[[str, str | None], int | None] | None = None
+
+    def _overhead_for(self, agent_config: AgentConfig | None, item_id: str) -> int:
+        """Tokens spent before any history: the system prompt + tool schemas."""
+        if agent_config is None:
+            return 0
+        return estimate_tokens(agent_config.system_prompt or "") + self._tools_tokens(
+            agent_config,
+            app_slug=self._locator.slug_of(item_id),
+            profile=self._locator.profile_of(item_id),
+        )
 
     def _learned_limit(self, agent_config: AgentConfig) -> int | None:
         """What the endpoint stated in a past rejection, via the runner's
@@ -290,6 +301,7 @@ class TurnContextBuilder:
             exec_output_max_chars=self._exec_output_max_chars,
             history=history,
             history_trimmed=cut[0] if cut else 0,
+            context_overhead_tokens=self._overhead_for(agent_config, item_id),
             packages=self._packages or [],
             prebuilt_dir=self._prebuilt_dir,
             app_slug=self._locator.slug_of(item_id),

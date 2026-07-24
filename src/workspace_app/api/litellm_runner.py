@@ -45,10 +45,13 @@ from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
 from ..context_budget import (
     LimitLearner,
+    detect_truncation,
+    estimate_tokens,
     halve_history,
     is_context_overflow,
     parse_limit_from_error,
 )
+from ..context_probe import probe_context_limit
 from ..resources import AgentConfig
 from ..tokens import ITokenService
 from ..tooling.registry import PackageInfo, build_function_tools
@@ -697,6 +700,20 @@ def _emit_llm_trace(
         _LOGGER.debug("llm trace emission failed", exc_info=True)
 
 
+def _sent_estimate(ctx: AgentToolContext, prompt: str) -> int:
+    """Roughly how many tokens this request carried: the per-turn overhead the
+    context builder already measured (system prompt + tool schemas), plus the
+    replayed history and this turn's message (#624).
+
+    Only ever compared against the provider's own figure with a wide ratio, so
+    it needs to be the right order of magnitude, not exact — and the overhead
+    term is reused rather than recomputed so the comparison costs nothing."""
+    total = max(0, ctx.context_overhead_tokens)
+    if ctx.history:
+        total += estimate_tokens(str(ctx.history))
+    return total + estimate_tokens(prompt or "")
+
+
 def _should_retry(
     *, progress_made: bool, attempt: int, max_retries: int, error_text: str = ""
 ) -> bool:
@@ -798,6 +815,14 @@ class LitellmAgentRunner:
         # cache that re-learns in one turn, never a durable claim that can go
         # stale and quietly mis-govern a deploy.
         self._limits = LimitLearner()
+        # Endpoints already asked (value or None), so a silent one is asked once.
+        self._probed: dict[tuple[str, str], int | None] = {}
+        # The endpoint-asking seam. A plain attribute (not a method) so it is an
+        # injectable dependency like the other sinks here — every failure inside
+        # `probe_context_limit` already degrades to None.
+        self._probe: Callable[[str | None, str], int | None] = lambda base_url, model: (
+            probe_context_limit(base_url=base_url, model=model)
+        )
         self._max_turns = max_turns
         # Chat LLM endpoint (global; see factories.Settings). None → LiteLLM's
         # own provider env / Ollama defaults.
@@ -966,11 +991,58 @@ class LitellmAgentRunner:
                 feedback = diagnose_error(exc)
                 yield classify_retry_event(exc, feedback)
 
+    def _note_prompt_usage(
+        self, ctx: AgentToolContext, *, sent_estimate: int, reported: int | None
+    ) -> None:
+        """Compare what we believe we sent against what the provider says it
+        read, and learn the endpoint's real window from the gap (#624).
+
+        This is the ONLY signal a silently-truncating provider gives. Ollama
+        drops the front of an over-long request with no error and no warning —
+        the model then answers, fluently, from a prompt it never fully saw
+        (measured: 3,983 of 8,755 tokens read, and it invented a project code
+        rather than saying it did not know). The usage figure was already being
+        collected for the UI's ↑ counter and thrown away for this purpose.
+
+        Inferences need confirming before they govern anything; see
+        ``LimitLearner``."""
+        if ctx.agent_config is None:
+            return
+        cut = detect_truncation(sent_estimate=sent_estimate, reported_prompt_tokens=reported)
+        if cut is None:
+            return
+        _LOGGER.warning(
+            "litellm_runner: provider read %d of ~%d estimated tokens — it truncated "
+            "silently; treating %d as its window (model=%s)",
+            reported or 0,
+            sent_estimate,
+            cut,
+            ctx.agent_config.model,
+        )
+        self._limits.observe(ctx.agent_config.model, self._base_url, limit=cut)
+
     def learned_limit(self, model: str, base_url: str | None) -> int | None:
-        """The ceiling this endpoint stated in a past rejection, if any (#624).
-        Read by the turn-context builder so the next turn's budget is derived
-        from what the endpoint actually said rather than from a guess."""
-        return self._limits.get(model, base_url)
+        """What we know about this endpoint's real ceiling (#624).
+
+        Read by the turn-context builder so a turn's budget comes from what the
+        endpoint actually told us rather than from a guess. Two sources, in
+        order: what a past rejection or truncation taught us, then — once per
+        endpoint — asking it outright.
+
+        The probe is asked lazily and cached (including its silence): most
+        endpoints are not vLLM and answer nothing, and re-asking every turn
+        would put an HTTP round-trip in front of every message for a value that
+        does not change."""
+        known = self._limits.get(model, base_url)
+        if known is not None:
+            return known
+        key = (model or "", base_url or "")
+        if key not in self._probed:
+            probed = self._probe(base_url or self._base_url, model)
+            self._probed[key] = probed
+            if probed is not None:
+                self._limits.learn_exact(model, base_url, limit=probed)
+        return self._probed.get(key)
 
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
@@ -1110,9 +1182,16 @@ class LitellmAgentRunner:
                         content_text="".join(content_buf),
                     )
 
-                prompt_final, completion_final = _final_tokens(
-                    _exact_usage(streamed), prompt_tok, completion_chars
+                usage = _exact_usage(streamed)
+                # #624: the provider just told us how much it ACTUALLY read. If
+                # that is far below what we sent, it truncated silently — the
+                # one failure mode with no error and no other symptom.
+                self._note_prompt_usage(
+                    ctx,
+                    sent_estimate=_sent_estimate(ctx, prompt),
+                    reported=usage[0] if usage else None,
                 )
+                prompt_final, completion_final = _final_tokens(usage, prompt_tok, completion_chars)
                 queue.put_nowait(
                     AgentMetrics(
                         phase="final",
@@ -1220,9 +1299,11 @@ class LitellmAgentRunner:
                 tool_calls=tool_calls_seen,
                 content_text="".join(content_buf),
             )
-        prompt_final, completion_final = _final_tokens(
-            _exact_usage(result), prompt_tok, len("".join(content_buf))
+        usage = _exact_usage(result)
+        self._note_prompt_usage(
+            ctx, sent_estimate=_sent_estimate(ctx, prompt), reported=usage[0] if usage else None
         )
+        prompt_final, completion_final = _final_tokens(usage, prompt_tok, len("".join(content_buf)))
         yield AgentMetrics(
             phase="final",
             prompt_tokens=prompt_final,

@@ -291,6 +291,11 @@ class AgentToolContext:
     # into a visible notice in the thread: a silent cut is indistinguishable
     # from the model simply forgetting, which is the whole of #624.
     history_trimmed: int = 0
+    # #624: tokens this turn spends before any history — the system prompt plus
+    # the tool schemas, as measured by the turn-context builder. Carried so the
+    # runner can size the whole request without recomputing it, and compare that
+    # against the provider's reported usage to catch a silent truncation.
+    context_overhead_tokens: int = 0
     # #613: the owning chat thread's Conversation resource id, for conversation-
     # scoped tool state (the `update_todos` checklist). Set by the chat turn
     # builder only — workflow / KB / test contexts leave it None, and the todo
