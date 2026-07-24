@@ -76,6 +76,20 @@ describe("SuppressedAuditList", () => {
     expect(screen.getByTestId("suppressed-kind-term_question")).toHaveTextContent(/問題|question/i);
   });
 
+  // #506/#577 follow-up: a near-card suppression names WHICH existing card it
+  // duplicated, so a reviewer can verify the dedup instead of trusting a bare
+  // "已有相近卡片".
+  it("names the existing card a near-card row duplicated", () => {
+    render(
+      <SuppressedAuditList
+        items={[
+          item({ kind: "proposal", label: "Reflow Zone 3", reason: "near-card", target_label: "RZ3" }),
+        ]}
+      />,
+    );
+    expect(screen.getByText(/RZ3/)).toBeInTheDocument();
+  });
+
   it("summarises the counts by kind at the top", () => {
     render(
       <SuppressedAuditList

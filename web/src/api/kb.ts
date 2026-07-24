@@ -617,6 +617,8 @@ export type KbSuppressedItem = {
   label: string;
   cluster_key: string;
   reason: string;
+  /** #506/#577 follow-up: for a near-card suppression, the existing card's title. */
+  target_label?: string;
 };
 
 /** #481/#506: the global 審核 inbox — card proposals + questions, permission-filtered,

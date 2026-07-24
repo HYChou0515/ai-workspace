@@ -81,6 +81,8 @@ class SuppressedItemOut(BaseModel):
     label: str
     cluster_key: str
     reason: str
+    # #506/#577 follow-up: for a near-card suppression, the existing card's title.
+    target_label: str = ""
 
 
 class ReviewInboxOut(BaseModel):
@@ -123,6 +125,7 @@ def _suppressed_out(item: SuppressedItem) -> SuppressedItemOut:
         label=item.label,
         cluster_key=item.cluster_key,
         reason=item.reason,
+        target_label=item.target_label,
     )
 
 

@@ -59,7 +59,9 @@ export function SuppressedAuditList({ items }: { items: KbSuppressedItem[] }) {
             </span>
             <span className="rvw-suppressed__label">{it.label || it.cluster_key}</span>
             <span className="rvw-suppressed__reason">
-              {t(REASON_KEY[it.reason] ?? "review.suppressed.reason.other")}
+              {it.reason === "near-card" && it.target_label
+                ? t("review.suppressed.reason.near-card.named", { card: it.target_label })
+                : t(REASON_KEY[it.reason] ?? "review.suppressed.reason.other")}
             </span>
             <span className="rvw-cluster__coll">{it.collection_name}</span>
           </li>

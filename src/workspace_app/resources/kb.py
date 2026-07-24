@@ -702,6 +702,10 @@ class ClusterMember(Struct):  # → resource "cluster-member"
     # a short human label for the suppressed-audit view (the surface term/title), so
     # the audit reads without re-fetching a dropped candidate that was never persisted
     label: str = ""
+    # #506/#577 follow-up: for a ``near-card`` suppression, the TITLE of the existing
+    # card the candidate duplicated — so the audit reads "撞到「<card>」" instead of a
+    # bare "near-card". Empty for wiki suppressions and active members.
+    target_label: str = ""
     embedding: Annotated[list[float] | None, Vector(dim=EMBED_DIM, distance="cosine")] = None
 
 

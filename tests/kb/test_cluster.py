@@ -311,6 +311,10 @@ def test_reconciler_suppresses_a_proposal_that_duplicates_a_card() -> None:
     supp = [m for m in members if m.kind == "proposal" and m.state == "suppressed"]
     assert len(supp) == 1
     assert supp[0].ref_id == dup.id  # ids were assigned so the audit row addresses it
+    # #506/#577 follow-up: a near-card suppression records WHICH existing card it
+    # duplicated, so the audit reads "撞到「TAGX」" instead of a bare "near-card".
+    assert supp[0].reason == "near-card"
+    assert supp[0].target_label == "TAGX"
 
 
 def test_reconciler_keeps_a_new_proposal_and_clusters_it() -> None:

@@ -823,6 +823,10 @@ export const messages = {
     "zh-TW": "已有相近卡片",
     en: "A similar card already exists",
   },
+  "review.suppressed.reason.near-card.named": {
+    "zh-TW": "已有相近卡片「{card}」",
+    en: "Duplicates an existing card «{card}»",
+  },
   "review.suppressed.reason.other": { "zh-TW": "已被涵蓋", en: "Already covered" },
   "review.filter.search": { "zh-TW": "搜尋標題、詞彙、問題…", en: "Search titles, terms, questions…" },
   "review.filter.collection": { "zh-TW": "所有知識庫", en: "All knowledge bases" },
