@@ -40,6 +40,7 @@ from .events import GoalUpdated, UserMessage
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
+from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -289,17 +290,15 @@ class ChatSendService:
     def _notice_history_reduced(self, rid: str, note: str) -> None:
         """Tell the thread that older messages no longer reach the model (#624).
 
-        Written once per conversation: the horizon only moves outward, so a
-        notice per turn would repeat the same fact forever. `role="notice"` is
-        rendered by the FE and never replayed into LLM history (`history_items`
-        only folds user/assistant/tool/error) — so telling the user costs the
-        model nothing."""
+        The wording and the once-per-thread rule live in `turns` because THREE
+        surfaces persist this marker (app chat, KB chat, workflow turns) — a
+        rule kept in three places is a rule that will hold in two of them."""
         conv = self._conv_rm.get(rid).data
         assert isinstance(conv, Conversation)
-        if any(m.role == "notice" for m in conv.messages):
+        if already_noticed(conv.messages):
             return  # already told, at the transition
-        text = f"{note}需要它記得那些內容的話,請開一個新對話。"
-        conv.messages.append(Message(role="notice", content=text, created_at=now_ms()))
+        text = context_notice_text(note)
+        conv.messages.append(Message(role=CONTEXT_NOTICE_ROLE, content=text, created_at=now_ms()))
         self._conv_rm.update(rid, conv)
         logger.info("chat_send: history reduced for chat %s — %s", rid, note)
 

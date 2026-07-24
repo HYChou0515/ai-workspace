@@ -75,6 +75,33 @@ def _est_tokens(m: Any) -> int:
     return max(1, estimate_messages([m]))
 
 
+#: Role of the in-thread marker that says part of a conversation no longer
+#: reaches the model (#624). It is never replayed into LLM history —
+#: `history_items` only folds user/assistant/tool/error — so telling the user
+#: costs the model nothing.
+CONTEXT_NOTICE_ROLE = "notice"
+
+
+def context_notice_text(note: str) -> str:
+    """The user-facing wording for a reduction.
+
+    The algorithm supplies the first half, because only it knows what it gave
+    up ("N messages dropped" is false for the stage that folds and drops
+    nothing). This adds the part that is the same either way: what to do about
+    it."""
+    return f"{note}需要它記得那些內容的話,請開一個新對話。"
+
+
+def already_noticed(messages: Iterable[Any]) -> bool:
+    """Whether this thread has been told already.
+
+    The horizon only moves outward, so a notice per turn would repeat the same
+    fact forever and become wallpaper. Lives here, once, because three surfaces
+    persist this marker — a rule kept in three places is a rule that will hold
+    in two of them."""
+    return any(getattr(m, "role", "") == CONTEXT_NOTICE_ROLE for m in messages)
+
+
 def _fit_token_budget(msgs: list[Any], max_tokens: int) -> list[Any]:
     """Keep the NEWEST contiguous suffix of `msgs` whose estimated tokens
     fit `max_tokens` (issue #45). The newest message is always kept even

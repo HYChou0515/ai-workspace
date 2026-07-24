@@ -185,3 +185,149 @@ def test_kb_chat_is_not_left_without_any_ceiling():
     assert "_kb_history_budget" in src or "history_budget" in src, (
         "KB chat must derive a budget, not rely on a constant that now defaults to 0"
     )
+
+
+def test_what_the_runner_learned_changes_what_the_next_turn_sends():
+    """P3 exists to feed P2, and mutation testing showed nothing proved it: with
+    `learned=` pinned to None the whole suite stayed green.
+
+    A ceiling learned from traffic — stated in a rejection, or inferred from a
+    provider that truncated silently — is worth nothing if the next turn does
+    not spend it. The runner would go on relearning the same number forever
+    while the budget stayed at whatever the catalog guessed, or at no ceiling at
+    all for the self-hosted models that are exactly the case this rung exists
+    for.
+    """
+    from workspace_app.api.turn_context import TurnContextBuilder
+    from workspace_app.resources import AgentConfig
+
+    # A self-hosted name no registry knows — the production shape.
+    cfg = AgentConfig(name="t", model="openai/some-self-hosted-model", system_prompt="s")
+    builder = TurnContextBuilder.__new__(TurnContextBuilder)
+    builder._context_limit = None
+    builder._tool_output_max_chars = 0
+    builder.learned_limit_fn = None
+
+    assert builder._budget_for(cfg) is None, "nothing known yet ⇒ send it all"
+
+    builder.learned_limit_fn = lambda model, base_url: 32_768
+
+    spent = builder._budget_for(cfg)
+    assert spent is not None, "a learned ceiling must produce a budget"
+    assert 0 < spent < 32_768, "and one that leaves room for the prompt and the reply"
+
+
+def _kb_client_with_limit(limit: int | None):
+    """create_app with a declared ceiling and a scripted runner, plus one KB
+    chat — the KB send path under test."""
+    from workspace_app.api import create_app
+    from workspace_app.api.events import MessageDelta, RunDone
+    from workspace_app.api.runner import ScriptedAgentRunner
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.kb.chunker import FixedTokenChunker
+    from workspace_app.kb.embedder import HashEmbedder
+    from workspace_app.resources import make_spec
+    from workspace_app.resources.kb import EMBED_DIM
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ._client import TestClient
+
+    app = create_app(
+        spec=make_spec(),
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([MessageDelta(text="ok"), RunDone()]),
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+        context_limit=limit,
+    )
+    client = TestClient(app)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    chat = client.post("/kb/chats", json={"title": "t", "collection_ids": [cid]}).json()[
+        "resource_id"
+    ]
+    return client, chat
+
+
+def _kb_thread(client, chat):
+    return client.get(f"/kb/chats/{chat}").json()["messages"]
+
+
+def test_kb_chat_says_when_it_stops_reading_the_thread():
+    """Announcing a reduction is unconditional (§3), and KB chat was doing it in
+    total silence.
+
+    It is also the surface most likely to need it: retrieved passages and whole
+    wiki pages land in this thread, so it reaches a ceiling sooner than app chat
+    does — and its users are the ones asking "why did it forget what I told it".
+    """
+    client, chat = _kb_client_with_limit(1_000)  # tiny ceiling ⇒ everything reduces
+    for i in range(6):
+        client.post(f"/kb/chats/{chat}/messages", json={"content": "量測資料異常" * 200 + str(i)})
+
+    notices = [m for m in _kb_thread(client, chat) if m["role"] == "notice"]
+    assert notices, "a reduced KB turn must leave a visible notice"
+    assert "新對話" in notices[0]["content"]
+
+
+def test_the_kb_notice_is_not_repeated_every_turn():
+    """Same rule as the app chat, from the same place — two copies of it would
+    be two rules, and one of them would drift."""
+    client, chat = _kb_client_with_limit(1_000)
+    for i in range(6):
+        client.post(f"/kb/chats/{chat}/messages", json={"content": "量測資料異常" * 200 + str(i)})
+
+    assert len([m for m in _kb_thread(client, chat) if m["role"] == "notice"]) == 1
+
+
+async def test_a_workflow_turn_also_says_when_it_stops_reading_the_thread(monkeypatch):
+    """The third surface. A workflow agent node runs on a REAL conversation the
+    user can open, and `_common` already computes the note for it — it was just
+    dropped on the floor, so a run that quietly forgot its earlier steps looked
+    like a model that had gone vague.
+
+    Announcing is unconditional (§3): "nobody is watching right now" is an
+    argument for persisting it, not for skipping it.
+    """
+    import workspace_app.api.app as app_mod
+    from workspace_app.api import create_app
+    from workspace_app.api.events import MessageDelta, RunDone
+    from workspace_app.api.runner import ScriptedAgentRunner
+    from workspace_app.api.workflow_exec import WorkflowExecutor
+    from workspace_app.apps.playground.model import PlaygroundItem
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.resources import Conversation, Message, make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    spec = make_spec()
+    captured: dict[str, WorkflowExecutor] = {}
+    real = app_mod.WorkflowExecutor
+    monkeypatch.setattr(
+        app_mod, "WorkflowExecutor", lambda **kw: captured.setdefault("ex", real(**kw))
+    )
+    create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([MessageDelta(text="ok"), RunDone()]),
+        context_limit=1_000,  # tiny ceiling ⇒ the thread cannot fit
+    )
+    item_id = (
+        spec.get_resource_manager(PlaygroundItem)
+        .create(PlaygroundItem(title="t", owner="u", profile="echo"))
+        .resource_id
+    )
+    conv_rm = spec.get_resource_manager(Conversation)
+    rid = conv_rm.create(
+        Conversation(
+            item_id=item_id,
+            messages=[
+                Message(role="user", content="量測資料異常" * 200 + str(i)) for i in range(6)
+            ],
+        )
+    ).resource_id
+
+    await captured["ex"].drive_turn(item_id, rid, "u", "接著做", None)
+
+    after = conv_rm.get(rid).data.messages
+    assert [m for m in after if m.role == "notice"], "a reduced workflow turn must say so"

@@ -396,14 +396,21 @@
 # answer we send the whole history rather than trim on a guess.
 #
 # When a request IS rejected for length, the ceiling stated in the rejection
-# is remembered, the history is halved, and the turn is retried — and if a
-# single message alone will not fit, the chat says so in words you can act
-# on instead of failing with a raw provider string.
+# is remembered and the turn is retried with the same reduction algorithm the
+# pre-send path uses, aimed at that ceiling minus the prompt and tool schemas.
+# (Only when a rejection names no ceiling is there nothing to aim at, and the
+# history is halved blindly.) If a single message alone will not fit, the chat
+# says so in words you can act on instead of a raw provider string.
 #
-# NOT yet wired (do not rely on it): asking the endpoint up front via vLLM's
-# /tokenize, and inferring a silent truncation from the reported
-# prompt_tokens. Both are implemented and tested but have no caller — set
-# `context_limit` explicitly if your endpoint truncates silently (Ollama).
+# Two more sources feed the ceiling, both automatic — you should not have to
+# set anything for them:
+#   - a silent truncation is INFERRED from the reported prompt_tokens (the
+#     provider read far less than we sent), which is the only signal Ollama
+#     gives, and the inferred window is used from then on;
+#   - vLLM's /tokenize is asked once per endpoint, and any answer other than a
+#     usable `max_model_len` (404, timeout, a non-vLLM server) is simply
+#     ignored — the feature does not depend on it.
+# Setting `context_limit` still overrides both.
 #
 # When it still does not fit, ONE algorithm decides what to give up, in
 # increasing order of what it costs you (there is no knob — see #624):

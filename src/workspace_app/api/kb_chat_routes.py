@@ -69,7 +69,14 @@ from .notifications import notify
 from .permission_body import PermissionBody, PermissionOut, build_permission, granted_user_ids
 from .runner import AgentRunner
 from .timeutil import dt_ms
-from .turns import ChatTurnEngine, TurnMessage, history_items
+from .turns import (
+    CONTEXT_NOTICE_ROLE,
+    ChatTurnEngine,
+    TurnMessage,
+    already_noticed,
+    context_notice_text,
+    history_items,
+)
 
 
 def kb_progress(ev: AgentEvent) -> str | None:
@@ -507,6 +514,29 @@ def register_kb_chat_routes(
     def _load(chat_id: str) -> KbChat:
         return _load_rev(chat_id)[0]
 
+    def _note_kb_reduction(chat_id: str, owner: str, note: str) -> None:
+        """Tell a KB thread that older messages no longer reach the model (#624).
+
+        Same wording and same once-per-thread rule as the app chat, taken from
+        `turns` rather than restated here — this marker is persisted by three
+        surfaces, and a rule kept in three places is a rule that will hold in
+        two of them."""
+        fresh = _load(chat_id)
+        if already_noticed(fresh.messages):
+            return  # already told, at the transition
+        fresh.messages.append(
+            KbMessage(
+                role=CONTEXT_NOTICE_ROLE,
+                content=context_notice_text(note),
+                created_at=_now_ms(),
+            )
+        )
+        # Written AS THE OWNER for the same reason the user message is (above):
+        # mechanically an `update`, which a converse-only collaborator need not
+        # hold write_meta for.
+        with chat_rm.using(user=owner) as op:
+            op.update(chat_id, fresh)
+
     def _authorize_chat(chat_id: str, verb: Verb) -> tuple[KbChat, str]:
         """#304 — gate a hand-written chat route. Loads the chat (`_load_rev` 404s
         if missing), then sequences the two checks the auto-CRUD layer composes:
@@ -833,6 +863,26 @@ def register_kb_chat_routes(
             if _turn_disclosure
             else []
         )
+        # Cross-turn memory: prior dialogue (excludes the user msg just added),
+        # each message attributed to its author (#242).
+        _reduced: list[str] = []
+        _history = history_items(
+            chat.messages[:-1],
+            max_messages=history_max_messages,
+            # #624: derived from the endpoint's real ceiling minus this turn's
+            # prompt, exactly like the app chat. Unknown ⇒ 0 ⇒ no trim (send it
+            # all and learn), never a fabricated constant.
+            max_tokens=(
+                _kb_history_budget(agent_config, context_limit) or history_max_context_tokens
+            ),
+            users=users,
+            on_reduce=_reduced.append,
+        )
+        # #624: announcing a reduction is unconditional. This is the surface most
+        # likely to need it — retrieved passages and whole wiki pages land in
+        # this thread — and it was the one cutting in silence.
+        if _reduced:
+            _note_kb_reduction(chat_id, owner, _reduced[0])
         ctx = AgentToolContext(
             tool_output_max_chars=tool_output_max_chars,
             exec_output_max_chars=exec_output_max_chars,
@@ -862,17 +912,7 @@ def register_kb_chat_routes(
             spec=spec,
             # Cross-turn memory: prior dialogue (excludes the user msg just added),
             # each message attributed to its author (#242).
-            history=history_items(
-                chat.messages[:-1],
-                max_messages=history_max_messages,
-                # #624: derived from the endpoint's real ceiling minus this
-                # turn's prompt, exactly like the app chat. Unknown ⇒ 0 ⇒ no
-                # trim (send it all and learn), never a fabricated constant.
-                max_tokens=(
-                    _kb_history_budget(agent_config, context_limit) or history_max_context_tokens
-                ),
-                users=users,
-            ),
+            history=_history,
             # #242: who the agent is replying to (here, always the owner — shares
             # are read-only). Feeds the per-turn "you are replying to …" note.
             speaker=users.get(get_user_id()),

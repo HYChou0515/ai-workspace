@@ -155,3 +155,23 @@ def test_it_works_on_sdk_history_items_too():
     assert result.changed
     assert _tokens(result.messages) <= 200
     assert any(TASK in m["content"] for m in result.messages)
+
+
+def test_the_leading_messages_do_not_churn_as_the_thread_grows():
+    """P2 originally asked for trimming in BLOCKS, so a provider's prefix cache
+    could survive several turns — a window that slides by one message per turn
+    invalidates it every turn.
+
+    Folding delivers that, and more directly: it is a per-message, context-free
+    transform, so a bulky tool output folds to the same text no matter what else
+    is in the thread. The leading items stay byte-identical as the conversation
+    grows; only the tail extends. A sliding window cannot do this by
+    construction.
+    """
+    msgs = _thread()
+    grown = [*msgs, _Msg("assistant", "再跑一批"), _Msg("tool", "y" * 8_000, tool_name="exec")]
+
+    before = default_reducer().reduce(msgs, budget=6_000, estimate=_tokens)
+    after = default_reducer().reduce(grown, budget=6_000, estimate=_tokens)
+
+    assert [m.content for m in after.messages[: len(msgs)]] == [m.content for m in before.messages]
