@@ -391,8 +391,9 @@
 #
 # `context_limit` — the endpoint's window in tokens, when you know it (e.g.
 # vLLM's --max-model-len). Unset = resolve per turn from, in order: what a
-# past rejection told us, then the model registry (knows hosted models and
-# ollama/*, NOT a self-hosted model under a custom name). If neither can
+# past rejection told us, then the model registry (which knows HOSTED models;
+# it does not know a self-hosted model under a custom name, and it resolves an
+# `ollama/*` name only by asking a running Ollama daemon). If none of them can
 # answer we send the whole history rather than trim on a guess.
 #
 # When a request IS rejected for length, the ceiling stated in the rejection

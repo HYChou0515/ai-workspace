@@ -64,9 +64,17 @@ def test_nonpositive_values_are_treated_as_absent():
 # ── the catalog lookup ──────────────────────────────────────────────
 
 
-def test_catalog_knows_a_bundled_local_model():
-    """litellm's table covers `ollama/*` — the dev default resolves."""
-    assert catalog_limit("ollama/qwen3:14b") == 40960
+def test_catalog_knows_a_hosted_model():
+    """The rung that answers without asking anyone: litellm's bundled table.
+
+    It was `ollama/qwen3:14b` here, asserting 40,960 — which passed on a laptop
+    with Ollama running and failed in CI, because that name is NOT in the table.
+    litellm resolves it by asking the local Ollama DAEMON. So the "catalog"
+    rung answers for a bundled local model only where one is already serving it,
+    which is a different claim from the one this test was making, and not one a
+    unit test can hold. `learned` and `probe` are the rungs that cover it.
+    """
+    assert catalog_limit("gpt-4o") == 128_000
 
 
 def test_catalog_returns_none_for_a_self_hosted_name():

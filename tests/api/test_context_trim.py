@@ -331,3 +331,25 @@ async def test_a_workflow_turn_also_says_when_it_stops_reading_the_thread(monkey
 
     after = conv_rm.get(rid).data.messages
     assert [m for m in after if m.role == "notice"], "a reduced workflow turn must say so"
+
+
+def test_the_notice_never_reaches_the_model():
+    """The marker is persisted in the thread, so it must be provably invisible
+    to the LLM. Otherwise telling the user "I can no longer read the earlier
+    messages" would itself consume the little room that is left — and it would
+    grow every turn a surface adds one.
+
+    (The FE half is locked by `agentLog.contextNotice.test.ts`.)
+    """
+    from workspace_app.api.turns import CONTEXT_NOTICE_ROLE
+
+    msgs = [
+        Message(role="user", content="量測資料異常"),
+        Message(role=CONTEXT_NOTICE_ROLE, content="較早的訊息不會被讀到"),
+        Message(role="assistant", content="收到"),
+    ]
+
+    items = history_items(msgs, max_messages=0, max_tokens=0)
+
+    assert [i["role"] for i in items] == ["user", "assistant"]
+    assert not any("不會被讀到" in str(i) for i in items)
