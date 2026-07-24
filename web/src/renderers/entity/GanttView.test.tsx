@@ -95,11 +95,42 @@ describe("GanttView", () => {
     expect(screen.getByText("v1.0")).toBeInTheDocument();
   });
 
-  it("switches the time-axis zoom, changing the bar width", () => {
+  it("snaps to a preset density when its anchor is clicked, changing the bar width", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-11" })] })} />);
     const weekWidth = screen.getByTestId("bar-1").style.width;
     fireEvent.click(screen.getByRole("button", { name: "zoom month" }));
     expect(screen.getByTestId("bar-1").style.width).not.toBe(weekWidth);
+  });
+
+  it("zooms continuously by dragging the density slider", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-31" })] })} />);
+    const slider = screen.getByRole("slider", { name: /zoom/i });
+    const before = screen.getByTestId("bar-1").style.width;
+    fireEvent.change(slider, { target: { value: "1" } }); // slide fully toward the day anchor
+    expect(screen.getByTestId("bar-1").style.width).not.toBe(before);
+  });
+
+  it("renders a month context band above the fine ticks (two-tier axis)", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-20" })] })} />);
+    expect(screen.getByText("Jan 2026")).toBeInTheDocument();
+  });
+
+  it("fits a short project to the measured pane so it fills the width by default", () => {
+    class FakeRO {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe() {
+        this.cb([{ contentRect: { width: 900 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeRO);
+    // an 11-day project (daysBetween 10) in a 900px pane (750 after the gutter)
+    // auto-fits to the day-anchor density (28px/day) instead of staying tiny at
+    // the week density (10px/day → 100px) — so the bar stretches to fill.
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-15" })] })} />);
+    expect(screen.getByTestId("bar-1").style.width).toBe("280px");
+    vi.unstubAllGlobals();
   });
 
   it("marks today when it falls within the chart range", () => {

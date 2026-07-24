@@ -542,11 +542,52 @@
   gap: var(--space-4);
   align-items: center;
 }
+/* continuous zoom: a range slider whose track carries day / week / month snap
+ * anchors — drag anywhere, or click an anchor for that preset's best form. */
+.ev-gantt__zoom {
+  position: relative;
+  width: 220px;
+  padding: 0 var(--space-8) 16px;
+}
+.ev-gantt__zoom-range {
+  display: block;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.ev-gantt__zoom-anchors {
+  position: absolute;
+  left: var(--space-8);
+  right: var(--space-8);
+  bottom: 0;
+  height: 14px;
+}
+.ev-gantt__zoom-anchor {
+  position: absolute;
+  transform: translateX(-50%);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1;
+  color: var(--text-paper-d);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ev-gantt__zoom-anchor:hover {
+  color: var(--text-paper);
+}
+.ev-gantt__zoom-anchor[data-active] {
+  color: var(--accent);
+  font-weight: 600;
+}
 .ev-gantt__scroll {
   overflow-x: auto;
-  /* hug the chart instead of stretching a half-empty card across the pane */
-  width: fit-content;
-  max-width: 100%;
+  /* fill the pane — the canvas stretches its dated grid to match (max(pane,
+   * content)), so a short project fills the width and a long one scrolls. */
+  width: 100%;
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   background: var(--white);
@@ -609,6 +650,30 @@
   border-bottom: 1px solid var(--paper-3);
   background: var(--paper-2);
 }
+/* two-tier axis: a coarse context band (month / year) over the fine tick row */
+.ev-gantt__axis-coarse {
+  position: relative;
+  border-bottom: 1px solid color-mix(in srgb, var(--paper-3) 60%, transparent);
+}
+.ev-gantt__axis-fine {
+  position: relative;
+}
+.ev-gantt__coarse-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--paper-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-paper);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
 .ev-gantt__tick {
   position: absolute;
   top: 0;
@@ -645,8 +710,9 @@
   bottom: 5px;
   display: flex;
   align-items: center;
-  /* a soft vertical gradient reads calmer than a flat slab of pure accent */
-  background: linear-gradient(180deg, var(--accent), var(--accent-h));
+  /* task bars carry their own (blue) hue so they never blend into the red
+   * accent "today" line; a soft vertical gradient reads calmer than a slab */
+  background: linear-gradient(180deg, var(--info), color-mix(in srgb, var(--info), var(--ink) 22%));
   border-radius: var(--radius-chip);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
   cursor: grab;

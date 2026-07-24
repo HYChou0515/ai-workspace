@@ -15,19 +15,24 @@
  * backend role vocabulary doesn't have yet (tracked as a #450 sub-item).
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { EntityInstance } from "../../api/entities";
 import {
   applyDrag,
+  axisFor,
+  canvasWidthFor,
+  clampPpd,
   daysBetween,
   deltaDays,
   type DragMode,
-  pxPerDay,
-  shiftDate,
+  PPD_ANCHORS,
+  ppdToSlider,
   type Span,
+  sliderToPpd,
   spanToDates,
   spanValue,
+  visibleDaysFor,
   type Zoom,
 } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
@@ -35,11 +40,12 @@ import { fieldText, roleOf } from "./shared";
 import type { EntityViewProps } from "./types";
 
 const GUTTER = 150;
-const AXIS_H = 22;
+const COARSE_H = 18; // top context band (month / year)
+const FINE_H = 20; // fine tick row (day numbers / week starts / months)
+const AXIS_H = COARSE_H + FINE_H;
 const LANE_H = 24;
 const ROW_H = 26;
 const ZOOMS: Zoom[] = ["day", "week", "month"];
-const TICK_DAYS: Record<Zoom, number> = { day: 1, week: 7, month: 30 };
 
 type Row = { e: EntityInstance; span: Span };
 type Lane = { key: string; label: string | null; rows: Row[] };
@@ -80,8 +86,23 @@ function groupLanes(rows: Row[], groupField: string | undefined, type: EntityVie
 export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: EntityViewProps) {
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
-  const [zoom, setZoom] = useState<Zoom>("week");
+  // null ⇒ auto-fit the whole project to the measured pane (fills the width on
+  // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
+  const [manualPpd, setManualPpd] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  // Measure the scroll pane so a short project can FILL its width (max(pane,
+  // content)) instead of hugging a half-empty card; a long one still scrolls.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [paneWidth, setPaneWidth] = useState(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setPaneWidth(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const rows: Row[] = entities
     .map((e) => ({ e, span: spanToDates(e.fields[spanField]) }))
@@ -91,30 +112,38 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
     return <div style={{ color: "var(--text-paper-d)" }}>No records with a date range to chart yet.</div>;
   }
 
-  const ppd = pxPerDay(zoom);
   const minDate = rows.map((r) => r.span.start).reduce((m, s) => (s < m ? s : m));
   const maxDate = rows.map((r) => r.span.end).reduce((m, e) => (e > m ? e : m));
   const totalDays = daysBetween(minDate, maxDate) + 1;
-  const chartWidth = totalDays * ppd;
+  // Default density fits the whole project into the pane (fills the width with
+  // no empty gap); once measured, the user's slider choice takes over. Fall back
+  // to the week anchor before the pane is measured (first paint / SSR).
+  const paneAvail = paneWidth - GUTTER;
+  const fitPpd = paneAvail > 0 ? clampPpd(paneAvail / totalDays) : PPD_ANCHORS.week;
+  const ppd = manualPpd ?? fitPpd;
+  // Fill the pane when the project is short, scroll when it's long; the dated
+  // grid then spans the whole canvas so there is no empty gap.
+  const canvasWidth = canvasWidthFor(totalDays, ppd, paneAvail);
+  const visibleDays = visibleDaysFor(canvasWidth, ppd);
   const xOf = (date: string) => daysBetween(minDate, date) * ppd;
 
   const lanes = groupLanes(rows, spec.group_by, type, refIndex);
   const grouped = Boolean(spec.group_by);
 
-  // Drag: capture the down point + zoom, track on window, commit one patch on up.
+  // Drag: capture the down point + density, track on window, commit one patch on up.
   const startDrag = (number: number, mode: DragMode, e: React.PointerEvent) => {
     if (busy) return;
     e.preventDefault();
     const row = rows.find((r) => r.e.number === number);
     if (!row) return;
     const downX = e.clientX;
-    const z = zoom;
-    const onMove = (ev: PointerEvent) => setDrag({ number, mode, days: deltaDays(ev.clientX - downX, z) });
+    const dragPpd = ppd;
+    const onMove = (ev: PointerEvent) => setDrag({ number, mode, days: deltaDays(ev.clientX - downX, dragPpd) });
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       setDrag(null);
-      const days = deltaDays(ev.clientX - downX, z);
+      const days = deltaDays(ev.clientX - downX, dragPpd);
       if (days !== 0) onPatch(number, { [spanField]: spanValue(applyDrag(row.span, mode, days)) });
     };
     window.addEventListener("pointermove", onMove);
@@ -125,33 +154,46 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   const previewSpan = (row: Row): Span =>
     drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days) : row.span;
 
-  const ticks: string[] = [];
-  for (let d = 0; d < totalDays; d += TICK_DAYS[zoom]) ticks.push(shiftDate(minDate, d));
+  const axis = axisFor(minDate, visibleDays, ppd);
 
   const today = new Date().toISOString().slice(0, 10);
-  const todayInRange = today >= minDate && today <= maxDate;
+  const todayOffset = daysBetween(minDate, today);
+  const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
 
   return (
     <div>
       <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
-        {ZOOMS.map((z) => (
-          <button
-            key={z}
-            type="button"
-            className="btn"
-            data-variant={zoom === z ? "primary" : "secondary"}
-            data-size="sm"
-            data-active={zoom === z || undefined}
-            aria-label={`zoom ${z}`}
-            onClick={() => setZoom(z)}
-          >
-            {z}
-          </button>
-        ))}
+        <div className="ev-gantt__zoom">
+          <input
+            type="range"
+            className="ev-gantt__zoom-range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={ppdToSlider(ppd)}
+            aria-label="zoom"
+            onChange={(e) => setManualPpd(sliderToPpd(Number(e.target.value)))}
+          />
+          <div className="ev-gantt__zoom-anchors">
+            {ZOOMS.map((z) => (
+              <button
+                key={z}
+                type="button"
+                className="ev-gantt__zoom-anchor"
+                data-active={Math.abs(ppd - PPD_ANCHORS[z]) < 0.5 || undefined}
+                style={{ left: `${ppdToSlider(PPD_ANCHORS[z]) * 100}%` }}
+                aria-label={`zoom ${z}`}
+                onClick={() => setManualPpd(PPD_ANCHORS[z])}
+              >
+                {z}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      <div className="ev-gantt__scroll scrollable">
-        <div className="ev-gantt__grid" style={{ minWidth: GUTTER + chartWidth }}>
+      <div className="ev-gantt__scroll scrollable" ref={scrollRef}>
+        <div className="ev-gantt__grid" style={{ minWidth: GUTTER + canvasWidth }}>
           {/* left gutter: axis spacer + lane headers + row labels */}
           <div className="ev-gantt__gutter" style={{ width: GUTTER }}>
             <div style={{ height: AXIS_H }} />
@@ -172,16 +214,29 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
           </div>
 
           {/* right timeline: gridlines + axis ticks + today line + bars */}
-          <div className="ev-gantt__canvas" style={{ width: chartWidth }}>
-            {ticks.map((t) => (
-              <div key={`grid-${t}`} className="ev-gantt__gridline" style={{ left: xOf(t) }} />
+          <div className="ev-gantt__canvas" style={{ width: canvasWidth }}>
+            {axis.fine.map((t) => (
+              <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * ppd }} />
             ))}
             <div className="ev-gantt__axis" style={{ height: AXIS_H }}>
-              {ticks.map((t) => (
-                <span key={t} className="ev-gantt__tick" style={{ left: xOf(t) }}>
-                  {t.slice(5)}
-                </span>
-              ))}
+              <div className="ev-gantt__axis-coarse" style={{ height: COARSE_H }}>
+                {axis.coarse.map((b) => (
+                  <span
+                    key={`coarse-${b.day}`}
+                    className="ev-gantt__coarse-band"
+                    style={{ left: b.day * ppd, width: b.days * ppd }}
+                  >
+                    {b.label}
+                  </span>
+                ))}
+              </div>
+              <div className="ev-gantt__axis-fine" style={{ height: FINE_H }}>
+                {axis.fine.map((t) => (
+                  <span key={`fine-${t.day}`} className="ev-gantt__tick" style={{ left: t.day * ppd }}>
+                    {t.label}
+                  </span>
+                ))}
+              </div>
             </div>
 
             {todayInRange && (
