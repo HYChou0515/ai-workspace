@@ -1,10 +1,13 @@
 """AgentCardDrafter (#506 P5) — the agentic CardDrafter. Where LlmCardDrafter
 does one ILlm pass, this drives an agent LOOP so the drafter can consult the KB
-(ask_knowledge_base: RAG + glossary + wiki, scoped to the doc's collection and
-budgeted) BEFORE drafting — it drafts only genuinely-new cards and asks only
-genuinely-open questions instead of re-asking what the KB already explains. The
-final assistant message is the same digest JSON the one-shot drafter emitted,
-parsed by the same tolerant parser."""
+(ask_knowledge_base) BEFORE drafting. #506/#577 follow-up: its DEFAULT consultation
+is the GLOSSARY of existing cards only — not RAG or the wiki — because grading a
+card against the same corpus it was extracted from suppresses nearly everything
+(the self-suppression #577 fixed at reconcile; the drafter is a separate path). So
+it drafts a card whenever the document defines a term, skipping only an exact
+existing-card duplicate; card-vs-card dedup stays with reconcile. The final
+assistant message is the same digest JSON the one-shot drafter emitted, parsed by
+the same tolerant parser."""
 
 from __future__ import annotations
 
@@ -116,15 +119,24 @@ def test_default_card_drafter_config_grants_only_ask_knowledge_base():
     assert cfg.system_prompt  # a non-empty role instruction
 
 
-def test_default_drafter_spec_caps_rag_wiki_and_glossary():
-    # #506 ③ defaults: the drafter's sub-agent consults RAG + wiki + glossary over
-    # the doc's own collection, each search budgeted.
+def test_drafter_spec_grants_no_wiki_or_corpus_search_so_it_cannot_self_suppress_cards():
+    # #506/#577 follow-up — the root cause of "1000 docs → 5 proposals, all
+    # suppressed": the agentic drafter used to consult RAG + wiki over the SAME
+    # collection it extracts cards from, so nearly every term it drafted was
+    # "already explained" in the corpus/wiki and it declined to draft the card.
+    # That is the self-suppression #577 fixed only at the RECONCILE stage — the
+    # drafter is a separate code path with its own (hardcoded) wiki budget. The
+    # drafter's KB consultation must NOT reach the wiki or the document corpus:
+    # "already known" = "already has a card" (the glossary = existing context
+    # cards), never "the wiki / another doc mentions it". Card-vs-card dedup is
+    # reconcile's job (#577), not the drafter's.
     spec = default_drafter_ask_kb_spec()
-    assert spec.kb_search_max == 3
-    assert spec.wiki_search_max == 3
-    assert spec.glossary is True
-    # #537: the wiki is reached through the delegating `ask_wiki`, not the raw grep.
-    assert spec.allowed_tools() == ["kb_search", "ask_wiki", "lookup_glossary"]
+    assert spec.kb_search_max == 0  # no corpus suppression of cards
+    assert spec.wiki_search_max == 0  # no wiki suppression of cards
+    assert spec.glossary is True  # only the existing-cards glossary remains
+    # With both searches off, the sub-agent gets ONLY the glossary — no `ask_wiki`,
+    # no `kb_search` — so a card can never be dropped for being in the corpus/wiki.
+    assert spec.allowed_tools() == ["lookup_glossary"]
 
 
 class _PromptCapturingRunner:
@@ -139,14 +151,30 @@ class _PromptCapturingRunner:
 
 def test_agentic_drafter_prompts_the_model_to_consult_the_knowledge_base_first():
     # By default the agentic drafter drives the KB-consulting prompt (not the
-    # one-shot template) — it carries the document and tells the model to check
-    # existing knowledge before drafting, so it doesn't re-ask what's known (③).
+    # one-shot template) — it carries the document and grants the ask_knowledge_base
+    # tool (now an existing-card check, not a corpus/wiki grade).
     runner = _PromptCapturingRunner()
     d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
     d.digest(doc_path="reflow.md", doc_text="Zone 3 setpoint 245C.")
     assert "ask_knowledge_base" in runner.prompt
     assert "Zone 3 setpoint 245C." in runner.prompt  # the document rode along
     assert "reflow.md" in runner.prompt
+
+
+def test_agentic_drafter_prompt_does_not_suppress_a_card_for_being_covered_elsewhere():
+    # #506/#577 follow-up: the prompt must NOT tell the model to skip a card because
+    # the concept is explained in the wiki or another document (the old step 3 said
+    # "already known; leave it out" — that was the self-suppression). It must instead
+    # say coverage elsewhere is not a reason to skip. This is the soft half of the
+    # fix; the hard guarantee is the glossary-only spec above.
+    runner = _PromptCapturingRunner()
+    d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
+    d.digest(doc_path="reflow.md", doc_text="Zone 3 setpoint 245C.")
+    # Collapse the markdown's hard line-wraps so a phrase match doesn't hinge on
+    # where the prose happened to wrap.
+    prompt = " ".join(runner.prompt.lower().split())
+    assert "not a reason to skip" in prompt  # coverage elsewhere ≠ skip the card
+    assert "leave it out" not in prompt  # the old suppression instruction is gone
 
 
 def test_wire_agentic_card_drafter_swaps_the_coordinator_onto_the_closed_loop():
@@ -188,3 +216,51 @@ def test_wire_agentic_card_drafter_swaps_the_coordinator_onto_the_closed_loop():
     )
 
     assert isinstance(coord.swapped, AgentCardDrafter)  # closed-loop drafter, not one-shot
+
+
+def test_wire_passes_the_glossary_only_spec_and_never_re_enables_corpus_or_wiki(monkeypatch):
+    # #506/#577 follow-up regression guard. A past version re-enabled the drafter's
+    # chunk search here (`replace(default_drafter_ask_kb_spec(), kb_search_max=
+    # max_searches or 3)`), which reintroduced the self-suppression: the drafter
+    # graded its own cards against the corpus and dropped nearly all of them. The
+    # composition root must pass the glossary-only default UNCHANGED, even when a
+    # non-zero `max_searches` is configured. Spy on the builder to prove the spec it
+    # receives grants ONLY the glossary — no kb_search, no ask_wiki.
+    import workspace_app.api.card_drafter_agent as mod
+    from workspace_app.agent.config_catalog import AgentConfigCatalog
+    from workspace_app.kb.card_drafter import NullCardDrafter
+    from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
+    from workspace_app.kb.embedder import HashEmbedder
+    from workspace_app.kb.retriever import Retriever
+    from workspace_app.resources import make_spec
+    from workspace_app.resources.kb import EMBED_DIM
+
+    spec = make_spec(default_user="u")
+    captured: dict = {}
+
+    def spy(*, bridge_run, agent_config, base_spec):
+        captured["spec"] = base_spec
+        return lambda cid: AgentToolContext()
+
+    monkeypatch.setattr(mod, "drafter_context_builder", spy)
+
+    class _Coord(CardGenCoordinator):
+        def __init__(self) -> None:
+            super().__init__(spec, NullCardDrafter())
+
+        def set_drafter(self, drafter) -> None:  # noqa: D401 — record only
+            pass
+
+    mod.wire_agentic_card_drafter(
+        _Coord(),
+        spec=spec,
+        runner=ScriptedAgentRunner([]),
+        retriever=Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM)),
+        catalog=AgentConfigCatalog(),
+        kb_agent_config=AgentConfig(name="KB"),
+        max_searches=3,  # a non-zero budget must NOT leak into the drafter's spec
+    )
+
+    got = captured["spec"]
+    assert got.kb_search_max == 0 and got.wiki_search_max == 0
+    assert got.allowed_tools() == ["lookup_glossary"]
