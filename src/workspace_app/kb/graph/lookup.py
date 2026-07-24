@@ -36,20 +36,22 @@ def entity_card(spec: SpecStar, name: str, *, as_user: str) -> str:
     misses the caller may actually open."""
     key = norm_surface(name)
     erm = spec.get_resource_manager(GraphEntity)
+    pages: list[EntityPage] = []
     for r in erm.list_resources(QB["norm_keys"].contains(key).build()):
         entity = r.data
         assert isinstance(entity, GraphEntity)
         if entity.merged_into:
             continue  # a tombstone; its evidence lives at the host now
         try:
-            page = entity_page(spec, r.info.resource_id, as_user=as_user)  # ty: ignore[unresolved-attribute]
+            pages.append(entity_page(spec, r.info.resource_id, as_user=as_user))  # ty: ignore[unresolved-attribute]
         except ResourceIDNotFoundError:
-            break  # unreadable — same face as unknown
-        return _render(spec, page, as_user=as_user)
-    return _not_found(spec, name, key, as_user=as_user)
+            continue  # unreadable — same face as unknown, and not hinted either
+    if not pages:
+        return _not_found(spec, name, key, as_user=as_user)
+    return _render(spec, pages[0], as_user=as_user, sharing=len(pages))
 
 
-def _render(spec: SpecStar, page: EntityPage, *, as_user: str) -> str:
+def _render(spec: SpecStar, page: EntityPage, *, as_user: str, sharing: int = 1) -> str:
     entity = page.entity
     kind = ""
     if entity.kind_id:
@@ -59,6 +61,14 @@ def _render(spec: SpecStar, page: EntityPage, *, as_user: str) -> str:
             kind = ""  # the kind rests on evidence this caller cannot read
     head = entity.canonical_name if not kind else f"{entity.canonical_name} ({kind})"
     lines = [f"# {head}"]
+    if sharing > 1:
+        # #633 P5: returning the first match answers about the wrong thing and
+        # nobody finds out. Say the name is ambiguous and let the caller
+        # disambiguate — the fact that it IS ambiguous is itself worth knowing.
+        lines.append(
+            f"⚠ {sharing} different things go by this name; this is one of them. "
+            "Ask about a more specific name, or say the name is ambiguous."
+        )
     # The spellings documents actually used — never the normalised keys.
     others = sorted({m.surface for m in page.mentions} - {entity.canonical_name})
     if others:

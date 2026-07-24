@@ -53,6 +53,8 @@ from ..kb.context_cards import (
     shown_card_count,
 )
 from ..kb.doc_permission import denied_doc_ids
+from ..kb.graph.inject import entity_block
+from ..kb.graph.name_cache import NameIndexCache
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import VlmDescriber
 from ..kb.wiki.consult import WikiConsultant
@@ -420,6 +422,41 @@ class _ShareBody(BaseModel):
 
 def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
+
+
+# #633: one name index per process, rebuilt on a TTL. Built lazily so a pod that
+# never serves a KB turn never pays for it, and keyed on the spec so tests get
+# their own. A stale index only costs a name not being offered this turn — the
+# dossier tool still reaches it — which is what makes a plain TTL sufficient
+# instead of cross-pod invalidation.
+_NAME_INDEXES: dict[int, NameIndexCache] = {}
+
+
+def _load_graph_names(spec: SpecStar) -> dict[str, tuple[str, ...]]:
+    """Every identity's names → the ids they resolve to. Reads WITHOUT an access
+    scope on purpose: this is a name→id map, and every use of it re-reads the
+    identity as the caller before showing anything. Filtering here instead would
+    mean one index per user."""
+    from ..resources.graph import GraphEntity
+
+    names: dict[str, tuple[str, ...]] = {}
+    rm = spec.get_resource_manager(GraphEntity)
+    for r in rm.list_resources():
+        entity = r.data
+        if not isinstance(entity, GraphEntity) or entity.merged_into or not entity.collection_ids:
+            continue  # a tombstone or an identity nothing vouches for
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for key in entity.norm_keys:
+            names[key] = names.get(key, ()) + (rid,)
+    return names
+
+
+def _name_index(spec: SpecStar) -> NameIndexCache:
+    cache = _NAME_INDEXES.get(id(spec))
+    if cache is None:
+        cache = NameIndexCache(lambda: _load_graph_names(spec))
+        _NAME_INDEXES[id(spec)] = cache
+    return cache
 
 
 def register_kb_chat_routes(
@@ -920,6 +957,19 @@ def register_kb_chat_routes(
             # was never defined for the model, and marking it would keep a later
             # kb_search this turn from defining it either.
             ctx.injected_card_ids.update(rid for rid, _ in hits[: shown_card_count(cards)])
+
+        # #633: the same idea for the knowledge graph. A 14B model decides
+        # whether to look something up by whether IT knows the word, so a
+        # question about a term it recognises ("回焊爐是什麼?") never reached the
+        # graph even with the dossier tool one call away (#630 P7, four prompt
+        # attempts). Names the question mentions are resolved here and their
+        # facts ride along. Reads AS the caller; a stale index only means a name
+        # is not offered yet — `lookup_entity` still finds it.
+        graph_block = entity_block(
+            spec, _name_index(spec).get(), body.content, as_user=get_user_id()
+        )
+        if graph_block:
+            agent_content = f"{graph_block}\n\n{agent_content}"
 
         # #513 P10: a transient image attached to this message is VLM-described and
         # its caption folded into the query the agent searches with — the same

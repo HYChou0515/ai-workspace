@@ -19,6 +19,7 @@ from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import (
     GraphClaim,
+    GraphEntity,
     GraphMention,
     GraphRelationship,
     mention_id,
@@ -247,3 +248,26 @@ def test_a_unit_already_inside_the_value_is_not_printed_twice():
     assert "98.7%%" not in card
     assert "98.7%" in card
     assert "92%" in card  # the unit IS appended when the value lacks it
+
+
+def test_an_ambiguous_name_is_disclosed_not_silently_resolved():
+    """#633 P5 — two things can share a name (concurrent pods, a merge
+    tombstone, two collections naming different things alike). Returning the
+    first match answers about the wrong thing and nobody ever finds out; the
+    card says how many share the name and shows what distinguishes them."""
+    spec = make_spec()
+    cid = _seed(spec)
+    erm = spec.get_resource_manager(GraphEntity)
+    with erm.using("bob"):
+        erm.create(
+            GraphEntity(
+                canonical_name="回焊爐",
+                norm_keys=[norm_surface("回焊爐")],
+                collection_ids=[cid],
+            )
+        )
+
+    card = entity_card(spec, "回焊爐", as_user="alice")
+
+    assert "go by this name" in card  # the ambiguity is stated, not resolved away
+    assert "2 " in card
