@@ -318,6 +318,8 @@ def main() -> None:
             infer_modules_collection=infer_cfg.collection,
             history_max_messages=settings.history.max_messages,
             history_max_context_tokens=settings.history.max_context_tokens,
+            # #624: the operator's declared endpoint ceiling (None ⇒ resolve per turn).
+            context_limit=settings.history.context_limit,
             packages=packages,
             # `prebuilt_dir=None` even with packages: the sandbox's `tools_dir`
             # above already bind-mounts PREBUILT_DIR read-only at /.tools/ inside

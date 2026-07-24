@@ -267,15 +267,34 @@ class ExecSettings:
 # ─── cross-turn memory ──────────────────────────────────────────────────
 @dataclass(frozen=True)
 class HistorySettings:
-    max_messages: int = 40
-    # Token budget for the replayed history (issue #45). After the
-    # message-count window, oldest items are dropped until the estimated
-    # token total (≈chars/4) fits — so a handful of huge tool outputs
-    # can't overflow the model's context even within `max_messages`.
-    # `0` disables the token budget (count window only). Default sized
-    # for the bundled local qwen3 (~32K ctx) leaving room for the system
-    # prompt + the current turn + the reply.
-    max_context_tokens: int = 24_000
+    max_messages: int = 0
+    """Hard cap on how many messages may be replayed. `0` (default) = off.
+
+    #624: this used to default to 40 and was the *actual* governor of chat
+    memory — measured, a work session with tool output kept only the last ~3
+    turns, regardless of how large the served context was. Memory is bounded by
+    tokens, not by "the 41st message", so the count cap is now an explicit
+    operator tool rather than the silent ceiling."""
+
+    max_context_tokens: int = 0
+    """Manual token cap on replayed history. `0` (default) = off — the budget is
+    DERIVED per turn from the endpoint's real ceiling minus what the system
+    prompt and tool schemas already spend (see `context_limit`).
+
+    #624: this used to default to 24,000, a number written for an assumed
+    "~32K ctx" that no deployment was ever checked against, and measured with a
+    `chars // 4` estimator that undercounts Traditional Chinese 3.6x. Left here
+    as an override for deploys that want a hard ceiling of their own."""
+
+    context_limit: int | None = None
+    """The endpoint's context window in tokens, when the operator knows it.
+
+    #624: `None` (default) means resolve it per turn — the model registry knows
+    hosted models and `ollama/*`, but a self-hosted model behind an
+    OpenAI-compatible endpoint is in no registry. When nothing can answer, we
+    send the whole history and learn the real limit from the response rather
+    than trimming on a guess. Set this when you know it (e.g. vLLM's
+    `--max-model-len`) and want the budget derived without waiting to learn."""
 
 
 # ─── kb subsystem ───────────────────────────────────────────────────────

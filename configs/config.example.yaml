@@ -378,14 +378,68 @@
 #   tool_output_max_chars: 200000
 
 # ─── cross-turn memory (chat history replay) ──── [OPT] ─────────────
-# `max_context_tokens` (issue #45): after the message-count window,
-# oldest items are dropped until the estimated tokens (~chars/4) fit, so
-# huge tool outputs can't overflow the context within max_messages. 0
-# disables the token budget. Default sized for the bundled local qwen3
-# (~32K ctx); raise it for big-context hosted models.
+#
+# #624: how much of a conversation the model still sees. BOTH manual caps
+# now default to OFF; the budget is derived per turn from the endpoint's
+# real ceiling minus what the system prompt + tool schemas already spend.
+#
+# They used to default to 40 messages / 24,000 tokens — numbers written for
+# an assumed "~32K ctx" that no deployment was ever checked against, and
+# measured with a chars/4 estimator that undercounts Traditional Chinese
+# 3.6x. Measured effect: a work session with tool output kept only the last
+# ~3 turns, no matter how large the served window was, and said nothing.
+#
+# `context_limit` — the endpoint's window in tokens, when you know it (e.g.
+# vLLM's --max-model-len). Unset = resolve per turn from, in order: what a
+# past rejection told us, then the model registry (which knows HOSTED models;
+# it does not know a self-hosted model under a custom name, and it resolves an
+# `ollama/*` name only by asking a running Ollama daemon). If none of them can
+# answer we send the whole history rather than trim on a guess.
+#
+# When a request IS rejected for length, the ceiling stated in the rejection
+# is remembered and the turn is retried with the same reduction algorithm the
+# pre-send path uses, aimed at that ceiling minus the prompt and tool schemas.
+# (Only when a rejection names no ceiling is there nothing to aim at, and the
+# history is halved blindly.) If a single message alone will not fit, the chat
+# says so in words you can act on instead of a raw provider string.
+#
+# Two more sources feed the ceiling, both automatic — you should not have to
+# set anything for them:
+#   - a silent truncation is INFERRED from the reported prompt_tokens (the
+#     provider read far less than we sent), which is the only signal Ollama
+#     gives, and the inferred window is used from then on;
+#   - vLLM's /tokenize is asked once per endpoint, and any answer other than a
+#     usable `max_model_len` (404, timeout, a non-vLLM server) is simply
+#     ignored — the feature does not depend on it.
+# Setting `context_limit` still overrides both.
+#
+# When it still does not fit, ONE algorithm decides what to give up, in
+# increasing order of what it costs you (there is no knob — see #624):
+#   1. fold bulky OLD tool output   — the cheapest by far. One 30 KB `exec` is
+#      about twenty turns of dialogue and nobody re-reads row 8,000. Measured:
+#      a six-turn session folds 12,153 tokens to 279 with every message intact,
+#      which is why this runs first and usually suffices alone.
+#   2. drop from the middle         — gives up conversation, never your opening
+#      request: every later turn refers back to it.
+#   3. drop the request too         — only when it plus the current turn will
+#      not fit together. The newest message always survives.
+#
 # history:
-#   max_messages: 40
-#   max_context_tokens: 24000
+#   context_limit: 32768                  # ← the ceiling, if you know it
+#   max_messages: 0                       # ← optional hard cap (0 = off)
+#   max_context_tokens: 0                 # ← optional hard cap (0 = off)
+#
+# ── Serving-layer note: the window is NOT the model's capability ──
+#
+# Ollama applies its OWN runtime ceiling (`num_ctx`, default 4096) no matter
+# what the model supports — qwen3:14b handles 40,960 but gets 4,096 unless
+# told otherwise, and it TRUNCATES SILENTLY rather than erroring: the model
+# then answers confidently from a prompt whose front was cut off. Raise it
+# with `OLLAMA_CONTEXT_LENGTH=40960` on the Ollama daemon (costs KV-cache
+# VRAM), or bake `PARAMETER num_ctx` into a derived model.
+#
+# vLLM and hosted APIs reject an over-long request instead — loud, and the
+# rejection states the ceiling, which we parse and remember.
 
 # ─── KB subsystem ─────────────────────────────── [OPT] ─────────────
 # kb:

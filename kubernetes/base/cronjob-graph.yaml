@@ -10,7 +10,8 @@
 # the graph worker (or an all-in-one API with RUN_CONSUMERS=true) consuming the
 # `graph` JobType.
 #
-# Tune: `schedule` (cron, UTC — e.g. "0 3 * * *" for nightly). Auth: this POSTs
+# Tune: `schedule` (cron, in `timeZone` Asia/Taipei — e.g. "0 3 * * *" for
+# nightly; needs Kubernetes ≥1.27 for the GA timeZone field). Auth: this POSTs
 # unauthenticated to the in-cluster ClusterIP service; add an auth header to the
 # curl if the deploy gates the create route.
 apiVersion: batch/v1
@@ -18,7 +19,10 @@ kind: CronJob
 metadata:
   name: rca-graph-weekly
 spec:
-  schedule: "0 3 * * 6" # 03:00 UTC Saturday
+  schedule: "0 3 * * 6" # 03:00 Asia/Taipei Saturday — the actually-idle weekend
+  # small hours. (Hand-shifting to UTC would also move the DAY: Sat 03:00 Taipei
+  # is Fri 19:00 UTC — the timeZone field spares every future editor that math.)
+  timeZone: "Asia/Taipei"
   concurrencyPolicy: Forbid # never overlap two extraction passes
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3

@@ -55,7 +55,7 @@ export type ItemAccess = {
 
 export function useItemAccess(item: AppItem | undefined): ItemAccess {
   const { id: me, ready: meReady } = useCurrentUserState();
-  const { isSuperuser, ready: superuserReady } = useIsSuperuserState();
+  const { isSuperuser, groups, ready: superuserReady } = useIsSuperuserState();
   if (!(meReady && superuserReady)) {
     // LOADING CONTRACT, identity half — see the module docstring.
     return {
@@ -71,10 +71,10 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
   const owner = item?.created_by ?? "";
   const perm = parseItemPermission(item?.permission);
   return {
-    canReadChat: canReadChat(perm, me, owner, isSuperuser),
-    canSeeFiles: canReadItemContent(perm, me, owner, isSuperuser),
-    canConverse: canConverse(perm, me, owner, isSuperuser),
-    canWrite: canWriteItem(perm, me, owner, isSuperuser),
-    isDiscoverableOnly: isDiscoverableOnly(perm, me, owner, isSuperuser),
+    canReadChat: canReadChat(perm, me, owner, isSuperuser, groups),
+    canSeeFiles: canReadItemContent(perm, me, owner, isSuperuser, groups),
+    canConverse: canConverse(perm, me, owner, isSuperuser, groups),
+    canWrite: canWriteItem(perm, me, owner, isSuperuser, groups),
+    isDiscoverableOnly: isDiscoverableOnly(perm, me, owner, isSuperuser, groups),
   };
 }

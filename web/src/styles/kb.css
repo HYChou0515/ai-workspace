@@ -2704,6 +2704,12 @@
 .kb-review__head { display: flex; flex-direction: column; gap: 2px; }
 .kb-review__title { margin: 0; font-size: 1.05rem; color: var(--text-paper); }
 .kb-review__sub { margin: 0; color: var(--text-paper-d2); font-size: 0.8125rem; }
+.kb-review__funnel {
+  margin: 4px 0 0;
+  color: var(--text-paper-d2);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
 .kb-review__empty { color: var(--text-paper-d2); padding: 24px 12px; text-align: center; border: 1px dashed var(--paper-3); border-radius: var(--radius-btn); }
 .kb-review__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .kb-review__item { border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--white); }
@@ -3018,6 +3024,20 @@
   border: 1px solid var(--paper-3);
   color: var(--ink-3);
   font-size: 12px;
+}
+.rvw-suppressed__summary {
+  margin: 0 0 8px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.rvw-suppressed__kind {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 4px;
+  background: var(--paper-3);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 500;
 }
 
 .rvw {

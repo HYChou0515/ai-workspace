@@ -175,6 +175,7 @@ def test_review_inbox_suppressed_lists_dropped_candidates():
             state="suppressed",
             reason="near-card",
             label="RZ3",
+            target_label="Reflow Zone 3",
         )
     )
     body = _client(spec).get("/kb/review-inbox", params={"suppressed": "true"}).json()
@@ -184,3 +185,5 @@ def test_review_inbox_suppressed_lists_dropped_candidates():
     assert s["label"] == "RZ3"
     assert s["reason"] == "near-card"
     assert s["kind"] == "proposal"
+    # #506/#577 follow-up: the near-card row names the existing card it duplicated.
+    assert s["target_label"] == "Reflow Zone 3"

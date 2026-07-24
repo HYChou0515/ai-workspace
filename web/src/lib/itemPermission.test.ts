@@ -49,6 +49,7 @@ import {
   hasItemVerb,
   isDiscoverableOnly,
   itemGrantsFromPermission,
+  itemGroupGrantsFromPermission,
   itemPermissionFromGrants,
   itemRoleForVerbs,
 } from "./itemPermission";
@@ -133,14 +134,25 @@ describe("item role ↔ grant mapping (grill D2)", () => {
     const back = itemGrantsFromPermission(perm, OWNER);
     expect(back).toEqual([{ userId: "alice", role: "participant", verbs: expect.any(Set) }]);
   });
-  it("preserves group + all subjects and unmanaged verbs on save", () => {
+  it("round-trips group grants, keeps `all`, and leaves unmanaged verbs untouched (#608)", () => {
     const perm = itemPermissionFromGrants(
       "restricted",
       [{ userId: "alice", role: "in_workspace", verbs: new Set() }],
       { visibility: "restricted", read_chat: ["group:team", "all"], change_permission: ["user:x"] },
+      [{ groupId: "team", role: "in_workspace" }], // group grants now managed explicitly
     );
+    // the group round-trips (in_workspace grants read_chat), `all` survives, alice added
     expect(perm.read_chat).toEqual(expect.arrayContaining(["group:team", "all", "user:alice"]));
     expect(perm.change_permission).toEqual(["user:x"]); // unmanaged verb untouched
+  });
+
+  it("DROPS a group grant that isn't passed back (dialog must round-trip them, #608)", () => {
+    const perm = itemPermissionFromGrants(
+      "restricted",
+      [],
+      { visibility: "restricted", read_chat: ["group:team", "all"] },
+    );
+    expect(perm.read_chat).toEqual(["all"]); // group dropped, `all` kept
   });
   it("a Custom (non-nested) grant writes exactly its verbs", () => {
     const perm = itemPermissionFromGrants(
@@ -203,5 +215,41 @@ describe("#578 itemVisibility — display fold", () => {
     expect(itemVisibility({ visibility: "public" })).toBe("public");
     expect(itemVisibility({ visibility: "restricted" })).toBe("restricted");
     expect(itemVisibility({ visibility: "private" })).toBe("private");
+  });
+});
+
+describe("itemGroupGrantsFromPermission (#608)", () => {
+  it("decodes group: subjects into (group, role) at their deepest ladder tier", () => {
+    const perm: import("./itemPermission").ItemPermission = {
+      visibility: "restricted",
+      read_meta: ["group:eng", "group:hr", "user:alice"],
+      read_chat: ["group:eng", "group:hr"],
+      read_content: ["group:eng"],
+    };
+    expect(itemGroupGrantsFromPermission(perm)).toEqual([
+      { groupId: "eng", role: "reader" },
+      { groupId: "hr", role: "in_workspace" },
+    ]);
+  });
+});
+
+describe("group grants resolve for the caller's groups (#608 gating)", () => {
+  const ME = "erin";
+  const OWN = "owner9";
+  it("hasItemVerb grants a verb held via a group the caller belongs to", () => {
+    const p = { visibility: "restricted" as const, read_content: ["group:eng"] };
+    expect(hasItemVerb(p, ME, OWN, "read_content", false, ["eng"])).toBe(true);
+    expect(hasItemVerb(p, ME, OWN, "read_content", false, ["hr"])).toBe(false); // not in eng
+    expect(hasItemVerb(p, ME, OWN, "read_content", false, [])).toBe(false); // no groups known
+  });
+  it("canWriteItem honours a group write grant", () => {
+    const p = { visibility: "restricted" as const, edit_content: ["group:eng"] };
+    expect(canWriteItem(p, ME, OWN, false, ["eng"])).toBe(true);
+    expect(canWriteItem(p, ME, OWN, false, [])).toBe(false);
+  });
+  it("canChangeItemPermission honours a group change_permission grant", () => {
+    const p = { visibility: "restricted" as const, change_permission: ["group:eng"] };
+    expect(canChangeItemPermission(p, ME, OWN, false, ["eng"])).toBe(true);
+    expect(canChangeItemPermission(p, ME, OWN, false, [])).toBe(false);
   });
 });

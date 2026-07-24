@@ -65,3 +65,55 @@ def test_absent_pick_falls_back_to_operator_default():
     # create_app's default operator cap is None (unlimited) when not configured.
     seen = _budgets_seen_for(None)
     assert seen[0].max_calls is None
+
+
+# #537 follow-up: the composer's wiki pick rides the app turn the same way —
+# ONE WikiSearchBudget shared across the turn's ask_knowledge_base calls. The
+# app turn used to leave the sub-agent's wiki allowance unlimited (AI-judged);
+# now the user caps it like document search.
+
+
+def _wiki_budgets_seen_for(max_wiki_searches: int | None) -> list:
+    spec = make_spec(default_user="u")
+    iid = register_rca_item(spec)
+    seen: list = []
+
+    class _Runner:
+        async def run(self, prompt, ctx):  # noqa: ANN001 — test double
+            if ctx.sandbox is None:  # the KB sub-agent turn (KB flavour, no sandbox)
+                seen.append(ctx.wiki_search_budget)
+                yield MessageDelta(text="kb answer")
+                return
+            # Two ask_knowledge_base calls in ONE outer turn.
+            await ctx.run_subagent("kb_chat", "first")  # type: ignore[misc]
+            await ctx.run_subagent("kb_chat", "second")  # type: ignore[misc]
+            yield MessageDelta(text="done")
+
+    app = create_app(
+        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=_Runner()
+    )
+    client = TestClient(app)
+    body: dict = {"content": "q"}
+    if max_wiki_searches is not None:
+        body["max_wiki_searches"] = max_wiki_searches
+    client.post(f"/a/rca/items/{iid}/messages", json=body)
+    return seen
+
+
+def test_wiki_pick_reaches_subagent_and_is_shared_across_calls():
+    seen = _wiki_budgets_seen_for(2)
+    assert len(seen) == 2
+    assert seen[0].max_calls == 2  # the composer's wiki pick reached the sub-agent
+    assert seen[0] is seen[1]  # ONE wiki budget shared across both ask_kb calls
+
+
+def test_wiki_zero_pick_disables_wiki_for_the_whole_turn():
+    seen = _wiki_budgets_seen_for(0)
+    assert seen[0].max_calls == 0  # 0 = no wiki this reply
+    assert seen[0] is seen[1]
+
+
+def test_wiki_absent_pick_falls_back_to_operator_default():
+    # create_app's default operator cap is None (unlimited) when not configured.
+    seen = _wiki_budgets_seen_for(None)
+    assert seen[0].max_calls is None

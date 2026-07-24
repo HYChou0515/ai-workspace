@@ -13,6 +13,10 @@ export const qk = {
   me: ["me"] as const,
   users: ["users"] as const,
   notifications: ["notifications"] as const,
+  // #608 — logical groups. `groups` = the management list (what I own/maintain/
+  // belong to); `pickableGroups` = every group, name+count, for the share picker.
+  groups: ["groups"] as const,
+  pickableGroups: ["groups", "pickable"] as const,
 
   investigations: ["investigations"] as const,
   investigation: (id: string) => ["investigation", id] as const,
@@ -153,6 +157,8 @@ export const qk = {
     // #175: a 自動 context card generation run (status + proposals, polled).
     cardGen: (jobId: string) => ["kb", "card-gen", jobId] as const,
     cardGenRuns: (collectionId: string) => ["kb", "card-gen-runs", collectionId] as const,
+    // #506/#577 follow-up: the collection's last run funnel (drafted → kept summary).
+    cardGenLatest: (collectionId: string) => ["kb", "card-gen-latest", collectionId] as const,
     // #377: the global "待釐清" clarification-question inbox.
     docQuestions: ["kb", "doc-questions"] as const,
     docQuestionsFor: (collectionId: string) => ["kb", "doc-questions", collectionId] as const,

@@ -735,6 +735,14 @@ export const messages = {
     "zh-TW": "其中 {n} 份仍在索引，索引完成後請再生成一次。",
     en: "{n} still indexing — generate again once they finish indexing.",
   },
+  "kb.cards.funnel.summary": {
+    "zh-TW": "最近一次生成：讀 {units} 份來源 → 抽 {drafts} 張草稿 → 留 {kept} 張提案",
+    en: "Last run: read {units} sources → drafted {drafts} → kept {kept} proposals",
+  },
+  "kb.cards.funnel.skipped": {
+    "zh-TW": "（另有 {n} 份仍在索引，完成後再生成）",
+    en: "({n} still indexing — generate again once ready)",
+  },
   "kb.autoDigest.label": { "zh-TW": "自動生成卡片", en: "Auto-generate cards" },
   "kb.autoDigest.help": {
     "zh-TW": "文件索引完成後，自動草擬卡片並提出待釐清的問題。",
@@ -823,10 +831,18 @@ export const messages = {
     "zh-TW": "沒有被自動略過的候選——所有提案都進了待審核。",
     en: "Nothing was auto-skipped — every candidate reached the review queue.",
   },
+  "review.suppressed.summary": {
+    "zh-TW": "共 {cards} 張卡片、{questions} 個問題被自動略過",
+    en: "{cards} cards, {questions} questions auto-skipped",
+  },
   "review.suppressed.reason.wiki": { "zh-TW": "已在 wiki 說明", en: "Explained in the wiki" },
   "review.suppressed.reason.near-card": {
     "zh-TW": "已有相近卡片",
     en: "A similar card already exists",
+  },
+  "review.suppressed.reason.near-card.named": {
+    "zh-TW": "已有相近卡片「{card}」",
+    en: "Duplicates an existing card «{card}»",
   },
   "review.suppressed.reason.other": { "zh-TW": "已被涵蓋", en: "Already covered" },
   "review.filter.search": { "zh-TW": "搜尋標題、詞彙、問題…", en: "Search titles, terms, questions…" },

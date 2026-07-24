@@ -60,6 +60,19 @@ describe("sendMessage request body", () => {
     expect(body.max_kb_searches).toBe(2);
   });
 
+  it("carries the per-message max_wiki_searches pick (#537 follow-up)", async () => {
+    // The app turn's wiki allowance — without it the BE falls back to the
+    // operator default, so the composer's wiki stepper would be a no-op here.
+    await realApi.sendMessage({
+      slug: "rca",
+      investigationId: "inv-1",
+      content: "q",
+      maxWikiSearches: 1,
+    });
+    const body = JSON.parse(captured.bodies[0]!);
+    expect(body.max_wiki_searches).toBe(1);
+  });
+
   it("carries the composer's attached image paths (so a VLM main model sees them)", async () => {
     // A vision main model reads attached images inline; the BE reads these
     // workspace paths and inlines the images into the turn. The paths must

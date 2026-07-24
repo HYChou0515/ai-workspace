@@ -49,6 +49,7 @@ from .card_gen import (
     CardDraft,
     CardDrafter,
     CardGenArtifact,
+    CardGenFunnel,
     CardGenJob,
     CardGenPayload,
     CardGenRunSummary,
@@ -203,6 +204,34 @@ class CardGenCoordinator:
         its stable ``pid`` so the review table can address one card. Read from the
         first-class :class:`CardProposal` rows (#511 P2), not the nested list."""
         return CardGenArtifact(proposals=self._proposals.list_by_run(run_id))
+
+    def funnel(self, run_id: str) -> CardGenFunnel:
+        """The run's finalize funnel (#506/#577 follow-up) — units digested, raw
+        drafts extracted, proposals kept — so the FE can show 'drafted X → kept Y'.
+        All zero until the run finalizes (or if the run has vanished)."""
+        run = self._runs.get(run_id)
+        if run is None:
+            return CardGenFunnel()
+        return CardGenFunnel(
+            n_units=run.n_units,
+            n_raw_drafts=run.n_raw_drafts,
+            n_proposals=run.n_proposals,
+            n_skipped_indexing=len(run.skipped_indexing),
+        )
+
+    def latest_funnel(self, collection_id: str) -> CardGenFunnel | None:
+        """The collection's most-recent finalized run's funnel — the 待審核 tab's
+        'last run: drafted X → kept Y' summary. Includes a run that kept 0 (the
+        empty-queue case). ``None`` if the collection has never finalized a run."""
+        run = self._runs.latest_finalized(collection_id)
+        if run is None:
+            return None
+        return CardGenFunnel(
+            n_units=run.n_units,
+            n_raw_drafts=run.n_raw_drafts,
+            n_proposals=run.n_proposals,
+            n_skipped_indexing=len(run.skipped_indexing),
+        )
 
     def _active_count(self) -> int:
         return self._job_rm.count_resources(QB["status"].in_(_ACTIVE).build())
@@ -436,7 +465,9 @@ class CardGenCoordinator:
                 run_id,
                 doc_index,
             )
-            self._runs.mark_done(run_id, doc_index)  # close the slot; defer to the hook
+            # Close the slot (defer to the auto-digest hook) AND record it as a
+            # still-indexing skip so the funnel attributes the coverage gap (P3).
+            self._runs.mark_skipped_indexing(run_id, doc_index)
             return
         try:
             # #506: the agentic drafter scopes its ask_knowledge_base to the doc's
@@ -549,7 +580,13 @@ class CardGenCoordinator:
             len(run.failed),
             status,
         )
-        self._runs.finish(run_id, status=status)
+        self._runs.finish(
+            run_id,
+            status=status,
+            n_units=len(units),
+            n_raw_drafts=len(raw),
+            n_proposals=len(kept),
+        )
 
     # ── fan-out staging (per-doc digests, #414) ──────────────────────
     def _stage_unit(

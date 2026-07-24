@@ -314,10 +314,13 @@ def conversation_access_scope(
 
 def work_item_access_scope(
     superusers: frozenset[str] = frozenset(),
+    groups_provider: GroupsProvider | None = None,
 ) -> AccessScope:
     """#306 — an App WorkItem carries the SAME embedded ``Permission`` as a
     collection (``permission.visibility`` / ``permission.read_meta`` + the real
     ``created_by`` owner), so its read/list visibility is the identical predicate.
     A thin delegate keeps that logic written once (plan-permissions.md: "written
-    once, generically")."""
-    return collection_access_scope(superusers)
+    once, generically"). #608: the ``groups_provider`` is threaded through so a
+    `group:<id>` read_meta grant on an item resolves at the storage-list layer too
+    (without it, item group grants were only honoured per-route, not in the list)."""
+    return collection_access_scope(superusers, groups_provider)

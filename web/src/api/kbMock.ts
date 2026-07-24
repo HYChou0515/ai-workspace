@@ -735,6 +735,18 @@ export const mockKbApi: KbApi = {
         proposal_count: j.proposals.length,
       }));
   },
+  async getLatestCardGenFunnel(collectionId) {
+    const last = [...cardGenJobs.values()]
+      .filter((j) => j.collectionId === collectionId && j.status === "completed")
+      .pop();
+    if (!last) return null;
+    return {
+      n_units: 1,
+      n_raw_drafts: last.proposals.length,
+      n_proposals: last.proposals.length,
+      n_skipped_indexing: 0,
+    };
+  },
   async dismissCardGen(jobId) {
     const j = cardGenJobs.get(jobId);
     if (j) j.resolved = true;

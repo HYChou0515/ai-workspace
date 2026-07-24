@@ -61,6 +61,8 @@ export type AgentEntry =
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
   // #613 P3: a persisted goal marker (met / exhausted) — FE-only, never LLM history.
   | { kind: "goal_note"; text: string; at?: number }
+  // #624: a persisted system notice (history no longer reaches the model).
+  | { kind: "notice"; text: string; at?: number }
   | { kind: "step"; step: StepView; at?: number }
   | { kind: "phase"; phase: string; at?: number }
   | { kind: "banner"; text: string; at?: number };
@@ -144,6 +146,10 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
         note: m.content,
         at: m.created_at ?? undefined,
       });
+    } else if (m.role === "notice") {
+      // #624: the context horizon moved — the user needs to know the model can
+      // no longer see the start of the thread.
+      entries.push({ kind: "notice", text: m.content, at: m.created_at ?? undefined });
     } else if (m.role === "goal") {
       // #613 P3: the goal driver's outcome marker (達成 / 額度用盡).
       entries.push({ kind: "goal_note", text: m.content, at: m.created_at ?? undefined });
@@ -188,7 +194,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
 /** Entries that carry the conversation itself — the ones the backend persists.
  * `step` / `phase` / live banners are stream-only chrome and are deliberately
  * NOT counted, so their presence can't disguise a store that is behind. */
-const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note"]);
+const CONTENT_KINDS = new Set(["message", "tool_call", "mention", "goal_note", "notice"]);
 
 const contentCount = (entries: readonly AgentEntry[]) =>
   entries.filter((e) => CONTENT_KINDS.has(e.kind)).length;

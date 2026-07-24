@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 
 import magic
 
-from ..agent.context import KbSearchBudget
+from ..agent.context import KbSearchBudget, WikiSearchBudget
 from ..filestore.protocol import FileNotFound
 from ..kb.collections import (
     collection_ids_from_json,
@@ -40,6 +40,7 @@ from .events import GoalUpdated, UserMessage
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
+from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -286,6 +287,21 @@ class ChatSendService:
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return  # the chat was deleted mid-flight
 
+    def _notice_history_reduced(self, rid: str, note: str) -> None:
+        """Tell the thread that older messages no longer reach the model (#624).
+
+        The wording and the once-per-thread rule live in `turns` because THREE
+        surfaces persist this marker (app chat, KB chat, workflow turns) — a
+        rule kept in three places is a rule that will hold in two of them."""
+        conv = self._conv_rm.get(rid).data
+        assert isinstance(conv, Conversation)
+        if already_noticed(conv.messages):
+            return  # already told, at the transition
+        text = context_notice_text(note)
+        conv.messages.append(Message(role=CONTEXT_NOTICE_ROLE, content=text, created_at=now_ms()))
+        self._conv_rm.update(rid, conv)
+        logger.info("chat_send: history reduced for chat %s — %s", rid, note)
+
     def _append_goal_marker(self, rid: str, text: str) -> None:
         """A `role="goal"` marker in the thread — rendered by the FE, and by
         design never replayed into LLM history (`history_items` only folds
@@ -374,6 +390,16 @@ class ChatSendService:
                 ceiling=self._kb_max_searches_ceiling,
             )
         )
+        # #537 follow-up: the wiki twin — one turn-wide allowance shared the same
+        # way. Always passed, so the sub-agent's wiki cap is the user's pick (or
+        # the operator default) instead of the old unstated-→-unlimited.
+        wiki_budget = WikiSearchBudget(
+            max_calls=resolve_max_searches(
+                body.max_wiki_searches,
+                default=self._kb_max_searches_per_turn,
+                ceiling=self._kb_max_searches_ceiling,
+            )
+        )
 
         async def _run_subagent_with_depth(
             purpose: str,
@@ -398,6 +424,7 @@ class ChatSendService:
                 reff = body.reasoning_effort
                 colls = collection_ids
                 bud = kb_budget
+                wiki_bud = wiki_budget
             elif purpose == "infer_modules":
                 enh, reff = (
                     self._infer_modules_enhancements,
@@ -405,8 +432,9 @@ class ChatSendService:
                 )
                 colls = infer_coll_ids
                 bud = None
+                wiki_bud = None
             else:  # pragma: no cover
-                enh, reff, colls, bud = None, None, None, None
+                enh, reff, colls, bud, wiki_bud = None, None, None, None, None
             return await self._subagent_bridge.run(
                 purpose,
                 payload,
@@ -416,6 +444,7 @@ class ChatSendService:
                 reasoning_effort=reff,
                 collection_ids=colls,
                 budget=bud,
+                wiki_budget=wiki_bud,
                 # Permission-disclosure: forward the parent turn's withheld
                 # accumulator so the KB sub-agent's disclosed sources bubble up.
                 withheld_sink=withheld_sink,
@@ -449,6 +478,13 @@ class ChatSendService:
             # #613: this thread's Conversation id — the update_todos tool's row key.
             conversation_id=rid,
         )
+
+        # #624: the turn had to leave part of the thread out. Say so — once, at
+        # the transition. A silent cut is indistinguishable from the model being
+        # forgetful, which is how this stayed invisible for so long; a notice on
+        # EVERY subsequent turn would become wallpaper just as fast.
+        if ctx.history_reduced_note:
+            self._notice_history_reduced(rid, ctx.history_reduced_note)
 
         # Source A (#…): a vision-capable main model reads attached images
         # directly — inline them into this turn's user message so the model sees

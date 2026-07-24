@@ -43,6 +43,19 @@ from ..agent.args_recovery import (
 from ..agent.context import AgentToolContext
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
+from ..context_budget import (
+    ContextLimit,
+    LimitLearner,
+    deferred_lookup,
+    detect_truncation,
+    estimate_messages,
+    estimate_tokens,
+    halve_history,
+    history_budget,
+    is_context_overflow,
+    parse_limit_from_error,
+)
+from ..context_probe import probe_context_limit
 from ..resources import AgentConfig
 from ..tokens import ITokenService
 from ..tooling.registry import PackageInfo, build_function_tools
@@ -50,6 +63,7 @@ from ..users.labels import speaker_note
 from .events import (
     AgentEvent,
     AgentMetrics,
+    ContextTrimmed,
     FailoverSwitch,
     MaxTurnsExceeded,
     MessageDelta,
@@ -551,6 +565,17 @@ def diagnose_error(exc: BaseException) -> str:
         return _MALFORMED_HINT
     if "timeout" in low or "timed out" in low:
         return "The previous step timed out. Take a smaller step and try again."
+    # #624: a length rejection must NOT get the catch-all "try again" — that
+    # hint is appended to the very prompt that was too long, so it makes the
+    # next attempt bigger. Say what would actually help instead.
+    from ..context_budget import is_context_overflow
+
+    if is_context_overflow(low):
+        return (
+            "The previous attempt was rejected because the request was too long "
+            "for this model's context window. Work with less material at a time "
+            "and keep your answer shorter."
+        )
     return f"The previous attempt failed: {msg[:200]}. Try again."
 
 
@@ -679,7 +704,67 @@ def _emit_llm_trace(
         _LOGGER.debug("llm trace emission failed", exc_info=True)
 
 
-def _should_retry(*, progress_made: bool, attempt: int, max_retries: int) -> bool:
+def _shrink_history(
+    history: list[Any], stated_limit: int | None, *, overhead_tokens: int = 0
+) -> list[Any]:
+    """Make the next attempt smaller (#624).
+
+    When the rejection stated a ceiling we know the budget, so the reduction
+    algorithm decides what to give up — the same decision, derived the same way,
+    as the pre-send path. "The same way" has to include the arithmetic, not just
+    the algorithm: a rejection states the model's TOTAL ceiling, while the
+    request also carries the system prompt and every tool schema (74,222
+    characters on a measured item). Aiming history at the raw stated figure
+    judges an over-long thread to "fit", so the algorithm returns it untouched
+    and we fall through to blind halving — several more rejected round-trips,
+    ending in an error that blames the user's message for what the prompt spent.
+
+    Without a stated ceiling there is no budget to aim at, so a blind halving is
+    all that is available; it converges in a few rounds and floors at one
+    message."""
+    from ..context_reducers import default_reducer
+
+    if stated_limit is None:
+        return halve_history(history)
+    # `stated_limit` is a number, so a budget always comes back. 0 is its honest
+    # floor — the overhead alone already fills the window — and drives the last
+    # stage rather than needing a special case.
+    budget = (
+        history_budget(
+            ContextLimit(tokens=stated_limit, source="learned"),
+            overhead_tokens=overhead_tokens,
+        )
+        or 0
+    )
+    result = default_reducer().reduce(history, budget=budget, estimate=estimate_messages)
+    # Progress must be measured in TOKENS, not messages: the cheapest stage
+    # folds bulky tool output and keeps every message, so a "are there fewer
+    # messages?" guard would discard a fold that already freed most of the
+    # budget and blindly halve instead — throwing away the task to keep a data
+    # dump, which is the behaviour this issue exists to remove. Something must
+    # still shrink, or the retry would resend an identical request.
+    if estimate_messages(result.messages) < estimate_messages(history):
+        return result.messages
+    return halve_history(history)
+
+
+def _sent_estimate(ctx: AgentToolContext, prompt: str) -> int:
+    """Roughly how many tokens this request carried: the per-turn overhead the
+    context builder already measured (system prompt + tool schemas), plus the
+    replayed history and this turn's message (#624).
+
+    Only ever compared against the provider's own figure with a wide ratio, so
+    it needs to be the right order of magnitude, not exact — and the overhead
+    term is reused rather than recomputed so the comparison costs nothing."""
+    total = max(0, ctx.context_overhead_tokens)
+    if ctx.history:
+        total += estimate_tokens(str(ctx.history))
+    return total + estimate_tokens(prompt or "")
+
+
+def _should_retry(
+    *, progress_made: bool, attempt: int, max_retries: int, error_text: str = ""
+) -> bool:
     """Decide whether to restart the turn after `_run_once` raised.
 
     Issue #26: the agents-SDK can't resume a stream mid-turn — a restart
@@ -688,10 +773,32 @@ def _should_retry(*, progress_made: bool, attempt: int, max_retries: int) -> boo
     nothing user-visible has streamed yet (the early small-model JSON-parse
     failures we hand a hint back for). Once there's progress, showing the
     error wins over clobbering the chat.
+
+    #624: it must also look at WHAT failed. This used to consider only
+    "did anything stream" and "how many attempts", so a deterministic
+    rejection — the prompt did not fit, a parameter was malformed — was
+    re-sent unchanged up to three times. Each attempt failed identically, and
+    the hint appended between them ("the previous attempt failed… try again")
+    was added to a prompt that was already too long. A `400` is the provider
+    telling us the request is wrong; repeating it is not a strategy.
     """
     if progress_made:
         return False
+    if error_text and _is_deterministic_rejection(error_text):
+        return False
     return attempt <= max_retries
+
+
+def _is_deterministic_rejection(message: str) -> bool:
+    """Whether this error will fail identically no matter how often we resend.
+
+    Length rejections and malformed-request errors are decided by the request
+    itself, so a retry is pure latency. Everything else (timeouts, blips,
+    small-model JSON garble) keeps the #76 retry-with-a-hint behaviour."""
+    from ..context_budget import is_context_overflow
+
+    low = (message or "").lower()
+    return is_context_overflow(low) or "invalid_request_error" in low
 
 
 # ── non-streaming escape hatch (WORKSPACE_AGENT_STREAM=0) ─────────────────────
@@ -751,6 +858,19 @@ class LitellmAgentRunner:
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
         # catalogs); run() fails loud if it's missing.
         self._max_retries = max_retries
+        # #624: what we have learned about each endpoint's real ceiling, from
+        # the rejections it hands back. Per-pod and in-memory on purpose — a
+        # cache that re-learns in one turn, never a durable claim that can go
+        # stale and quietly mis-govern a deploy.
+        self._limits = LimitLearner()
+        # Endpoints already asked (value or None), so a silent one is asked once.
+        self._probed: dict[tuple[str, str], int | None] = {}
+        # The endpoint-asking seam. A plain attribute (not a method) so it is an
+        # injectable dependency like the other sinks here — every failure inside
+        # `probe_context_limit` already degrades to None.
+        self._probe: Callable[[str | None, str], int | None] = lambda base_url, model: (
+            probe_context_limit(base_url=base_url, model=model)
+        )
         self._max_turns = max_turns
         # Chat LLM endpoint (global; see factories.Settings). None → LiteLLM's
         # own provider env / Ollama defaults.
@@ -851,8 +971,70 @@ class LitellmAgentRunner:
                 return
             except Exception as exc:  # noqa: BLE001 — every other failure becomes a hint or final error
                 attempt += 1
+                # #624: an over-long request is the one failure with a productive
+                # answer — send less. Repeating it unchanged cannot work, and
+                # simply giving up strands the conversation for good: the failure
+                # is persisted, so the next turn replays a LONGER thread and is
+                # rejected again, forever. Shrink, remember what it told us, and
+                # try once more.
+                text = f"{type(exc).__name__}: {exc}"
+                if is_context_overflow(text):
+                    if (stated := parse_limit_from_error(text)) is not None:
+                        self._limits.learn_exact(
+                            ctx.agent_config.model, self._base_url, limit=stated
+                        )
+                    # This branch deliberately bypasses the attempt counter — an
+                    # over-long request is the one failure with a productive
+                    # answer, and a budget of three would strand a long thread.
+                    # Its termination therefore rests ENTIRELY on every round
+                    # being smaller than the last, so that is checked HERE
+                    # rather than trusted to the callee: when the guarantee
+                    # lapsed, no test went red, the suite simply never finished
+                    # — and in production it is an unbounded run of rejected
+                    # LLM calls.
+                    #
+                    # Smaller is measured in TOKENS, not messages: the cheapest
+                    # stage folds bulky tool output and keeps every message.
+                    before = estimate_messages(ctx.history)
+                    shrunk = (
+                        _shrink_history(
+                            ctx.history,
+                            stated,
+                            # The ceiling in the rejection covers the WHOLE
+                            # request; history only gets what the prompt and
+                            # tool schemas leave behind.
+                            overhead_tokens=ctx.context_overhead_tokens,
+                        )
+                        if len(ctx.history) > 1
+                        else ctx.history
+                    )
+                    if estimate_messages(shrunk) < before:
+                        dropped = len(ctx.history) - len(shrunk)
+                        ctx.history = shrunk
+                        _LOGGER.warning(
+                            "litellm_runner: request too long — retrying with %d history "
+                            "items (investigation=%s)",
+                            len(ctx.history),
+                            ctx.investigation_id,
+                        )
+                        yield ContextTrimmed(dropped=dropped, kept=len(ctx.history))
+                        continue
+                    # Nothing got smaller — usually one message that alone
+                    # exceeds the window. Say it in words the user can act on;
+                    # a raw provider string tells them nothing about what to do.
+                    yield RunError(
+                        message=(
+                            "這一輪送不出去:內容超過模型一次能讀的範圍,而且已經沒有東西可以再省。"
+                            "請把訊息拆小,或開一個新對話重試。"
+                        )
+                    )
+                    yield RunDone()
+                    return
                 if not _should_retry(
-                    progress_made=progress_made, attempt=attempt, max_retries=self._max_retries
+                    progress_made=progress_made,
+                    attempt=attempt,
+                    max_retries=self._max_retries,
+                    error_text=f"{type(exc).__name__}: {exc}",
                 ):
                     _LOGGER.warning(
                         "litellm_runner: turn stopped after %d attempt(s), not retrying "
@@ -882,6 +1064,72 @@ class LitellmAgentRunner:
                 )
                 feedback = diagnose_error(exc)
                 yield classify_retry_event(exc, feedback)
+
+    def _note_prompt_usage(
+        self, ctx: AgentToolContext, *, sent_estimate: int, reported: int | None
+    ) -> None:
+        """Compare what we believe we sent against what the provider says it
+        read, and learn the endpoint's real window from the gap (#624).
+
+        This is the ONLY signal a silently-truncating provider gives. Ollama
+        drops the front of an over-long request with no error and no warning —
+        the model then answers, fluently, from a prompt it never fully saw
+        (measured: 3,983 of 8,755 tokens read, and it invented a project code
+        rather than saying it did not know). The usage figure was already being
+        collected for the UI's ↑ counter and thrown away for this purpose.
+
+        Inferences need confirming before they govern anything; see
+        ``LimitLearner``."""
+        if ctx.agent_config is None:
+            return
+        cut = detect_truncation(sent_estimate=sent_estimate, reported_prompt_tokens=reported)
+        if cut is None:
+            return
+        _LOGGER.warning(
+            "litellm_runner: provider read %d of ~%d estimated tokens — it truncated "
+            "silently; treating %d as its window (model=%s)",
+            reported or 0,
+            sent_estimate,
+            cut,
+            ctx.agent_config.model,
+        )
+        self._limits.observe(ctx.agent_config.model, self._base_url, limit=cut)
+
+    def learned_limit(self, model: str, base_url: str | None) -> int | None:
+        """What we know about this endpoint's real ceiling (#624).
+
+        Read by the turn-context builder so a turn's budget comes from what the
+        endpoint actually told us rather than from a guess. Two sources, in
+        order: what a past rejection or truncation taught us, then — once per
+        endpoint — asking it outright.
+
+        The probe is asked lazily and cached (including its silence): most
+        endpoints are not vLLM and answer nothing, and re-asking every turn
+        would put an HTTP round-trip in front of every message for a value that
+        does not change.
+
+        It is also asked OFF the request path. The probe is a synchronous POST
+        with a multi-second timeout, and this method is reached from inside
+        `async def build_chat_turn` — so an endpoint that hangs would stall the
+        whole pod's event loop, not just the turn that asked. Nothing has to be
+        invented to avoid that: an endpoint we have not heard from yet is
+        `unknown`, and `unknown` already means "send it all" (§3), so the first
+        turn behaves exactly as designed while the answer arrives for the next
+        one."""
+        known = self._limits.get(model, base_url)
+        if known is not None:
+            return known
+        probed = deferred_lookup(
+            self._probed,
+            (model or "", base_url or ""),
+            lambda: self._probe(base_url or self._base_url, model),
+        )
+        if probed is not None:
+            # The learner is the ONE place that answers "what do we know about
+            # this endpoint" — a rejection, a silent truncation and a probe all
+            # land there, so nothing downstream has to know which of them spoke.
+            self._limits.learn_exact(model, base_url, limit=probed)
+        return self._limits.get(model, base_url)
 
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
@@ -1021,9 +1269,16 @@ class LitellmAgentRunner:
                         content_text="".join(content_buf),
                     )
 
-                prompt_final, completion_final = _final_tokens(
-                    _exact_usage(streamed), prompt_tok, completion_chars
+                usage = _exact_usage(streamed)
+                # #624: the provider just told us how much it ACTUALLY read. If
+                # that is far below what we sent, it truncated silently — the
+                # one failure mode with no error and no other symptom.
+                self._note_prompt_usage(
+                    ctx,
+                    sent_estimate=_sent_estimate(ctx, prompt),
+                    reported=usage[0] if usage else None,
                 )
+                prompt_final, completion_final = _final_tokens(usage, prompt_tok, completion_chars)
                 queue.put_nowait(
                     AgentMetrics(
                         phase="final",
@@ -1131,9 +1386,11 @@ class LitellmAgentRunner:
                 tool_calls=tool_calls_seen,
                 content_text="".join(content_buf),
             )
-        prompt_final, completion_final = _final_tokens(
-            _exact_usage(result), prompt_tok, len("".join(content_buf))
+        usage = _exact_usage(result)
+        self._note_prompt_usage(
+            ctx, sent_estimate=_sent_estimate(ctx, prompt), reported=usage[0] if usage else None
         )
+        prompt_final, completion_final = _final_tokens(usage, prompt_tok, len("".join(content_buf)))
         yield AgentMetrics(
             phase="final",
             prompt_tokens=prompt_final,

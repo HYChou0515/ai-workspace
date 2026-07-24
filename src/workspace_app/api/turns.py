@@ -34,6 +34,7 @@ from typing import Any, cast
 from fastapi.responses import StreamingResponse
 
 from ..agent.context import AgentToolContext
+from ..context_budget import estimate_messages
 from ..failover.core import AllProvidersFailed
 from ..resources.conversation import MessageMetrics
 from ..turn_control import InMemoryTurnControl, ITurnControl
@@ -64,13 +65,41 @@ def _now_ms() -> int:
 
 
 def _est_tokens(m: Any) -> int:
-    """Rough token estimate for one persisted message (~4 chars/token).
-    Used only for the history token budget — approximate is fine."""
-    chars = len(getattr(m, "content", "") or "")
-    args = getattr(m, "tool_args", None)
-    if args:
-        chars += len(str(args))
-    return max(1, chars // 4)
+    """Estimated tokens for one persisted message, tool arguments included.
+
+    #624: this used to be `chars // 4` — an English rule of thumb that
+    undercounts Traditional Chinese ~3.6x (measured: 9,742 chars estimated at
+    2,435 against a real 8,755). On a Chinese-heavy deployment that meant the
+    budget was met far later than it claimed, so we shipped far more than we
+    believed. `context_budget` counts CJK at ~1 token/char."""
+    return max(1, estimate_messages([m]))
+
+
+#: Role of the in-thread marker that says part of a conversation no longer
+#: reaches the model (#624). It is never replayed into LLM history —
+#: `history_items` only folds user/assistant/tool/error — so telling the user
+#: costs the model nothing.
+CONTEXT_NOTICE_ROLE = "notice"
+
+
+def context_notice_text(note: str) -> str:
+    """The user-facing wording for a reduction.
+
+    The algorithm supplies the first half, because only it knows what it gave
+    up ("N messages dropped" is false for the stage that folds and drops
+    nothing). This adds the part that is the same either way: what to do about
+    it."""
+    return f"{note}需要它記得那些內容的話,請開一個新對話。"
+
+
+def already_noticed(messages: Iterable[Any]) -> bool:
+    """Whether this thread has been told already.
+
+    The horizon only moves outward, so a notice per turn would repeat the same
+    fact forever and become wallpaper. Lives here, once, because three surfaces
+    persist this marker — a rule kept in three places is a rule that will hold
+    in two of them."""
+    return any(getattr(m, "role", "") == CONTEXT_NOTICE_ROLE for m in messages)
 
 
 def _fit_token_budget(msgs: list[Any], max_tokens: int) -> list[Any]:
@@ -127,9 +156,11 @@ def _attribute(content: str, author: str | None, users: UserDirectory | None) ->
 def history_items(
     messages: Iterable[Any],
     *,
-    max_messages: int,
+    max_messages: int = 0,
     max_tokens: int = 0,
     users: UserDirectory | None = None,
+    on_trim: Callable[[int], None] | None = None,
+    on_reduce: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Map persisted messages → SDK input items for cross-turn memory.
 
@@ -161,10 +192,28 @@ def history_items(
     Duck-typed on `.role`/`.content`/`.tool_call_id`/`.tool_name`/
     `.tool_args` so RCA `Message` and KB `KbMessage` both fit."""
     msgs = list(messages)
+    before = len(msgs)
     if max_messages:
         msgs = msgs[-max_messages:]
     if max_tokens:
-        msgs = _fit_token_budget(msgs, max_tokens)
+        # #624: HOW to fit is a product policy, not something this function gets
+        # to decide. It used to drop the oldest messages inline — the one option
+        # that sacrifices the user's opening request before it touches a single
+        # tool dump — so it now lives behind `IContextReducer` instead.
+        from ..context_budget import estimate_messages
+        from ..context_reducers import default_reducer
+
+        result = default_reducer().reduce(msgs, budget=max_tokens, estimate=estimate_messages)
+        msgs = result.messages
+        if result.changed and on_reduce is not None:
+            # The notice describes what the policy actually gave up; "N messages
+            # dropped" is only true for one of them.
+            on_reduce(result.summary)
+    # `0` caps mean "no ceiling known / declared" and nothing is given up — we
+    # send it all and learn the real limit from the response (P3) or the
+    # rejection (P4), rather than amputating on a guess.
+    if on_trim is not None and before > len(msgs):
+        on_trim(before - len(msgs))
     items: list[dict[str, Any]] = []
     for m in msgs:
         if m.role == "error":

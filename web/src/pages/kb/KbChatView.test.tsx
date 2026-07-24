@@ -118,7 +118,7 @@ describe("KbChatView share gate", () => {
   });
 
   it("offers Share to a superuser who is not the owner", async () => {
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: true, groups: [] });
     const chat = { ...baseChat, owner: "someone-else" };
     render(<KbChatView chatId="chat:1" client={chatClient(chat)} />);
     await screen.findByText("Void thresholds");
@@ -126,7 +126,7 @@ describe("KbChatView share gate", () => {
   });
 
   it("hides Share from a plain non-owner reading a shared chat", async () => {
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false, groups: [] });
     const chat = { ...baseChat, owner: "someone-else", shared_with: ["default-user"] };
     render(<KbChatView chatId="chat:1" client={chatClient(chat)} />);
     await screen.findByText("Void thresholds");
@@ -134,7 +134,7 @@ describe("KbChatView share gate", () => {
   });
 
   it("does NOT treat an owner-less chat as mine (unknown ≠ mine)", async () => {
-    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false });
+    vi.spyOn(api, "getMe").mockResolvedValue({ id: "default-user", is_superuser: false, groups: [] });
     const chat = { ...baseChat, owner: undefined as unknown as string };
     render(<KbChatView chatId="chat:1" client={chatClient(chat)} />);
     await screen.findByText("Void thresholds");

@@ -87,11 +87,21 @@ def default_card_drafter_config(
 
 
 def default_drafter_ask_kb_spec() -> AskKbSpec:
-    """The drafter's base ``AskKbSpec`` — the sub-agent it delegates to gets a
-    capped chunk search + a capped wiki consultation + the glossary over the document's OWN
-    collection (scope is stamped per-document by :func:`drafter_context_builder`), so
-    it consults ALL of RAG + wiki + glossary before drafting (#506 ③)."""
-    return AskKbSpec(kb_search_max=3, wiki_search_max=3, glossary=True)
+    """The drafter's base ``AskKbSpec`` — the sub-agent it delegates to gets ONLY
+    the glossary (existing context cards), NOT chunk search or the wiki.
+
+    #506/#577 follow-up (root cause of "1000 docs → ~5 proposals, all suppressed"):
+    the drafter extracts card candidates FROM a document, then — if it also searches
+    the same collection's RAG + wiki — nearly every candidate is "already explained"
+    in the corpus/wiki, so it declines to draft the card. That is the structural
+    self-suppression #577 fixed at the RECONCILE stage; the drafter is a separate
+    code path that was never fixed. A concept appearing in the wiki is exactly the
+    reason it DESERVES a card, not a reason to omit it. So the drafter must not grade
+    its own cards against the source corpus: ``kb_search_max=0`` + ``wiki_search_max=0``
+    leave only ``lookup_glossary`` (``allowed_tools`` → ``["lookup_glossary"]``), so
+    "already known" means "already has a card", never "the wiki/another doc mentions
+    it". Card-vs-card dedup stays with reconcile (#577)."""
+    return AskKbSpec(kb_search_max=0, wiki_search_max=0, glossary=True)
 
 
 class AgentCardDrafter:
@@ -184,25 +194,25 @@ def wire_agentic_card_drafter(
     max_searches: int | None,
 ) -> None:
     """Swap ``coordinator``'s open-loop one-shot drafter for the agentic
-    :class:`AgentCardDrafter` that consults ``ask_knowledge_base`` (RAG + wiki +
-    glossary, scoped to each document's collection) BEFORE drafting (#506 P5).
+    :class:`AgentCardDrafter` (#506 P5). #506/#577 follow-up: the drafter's
+    ``ask_knowledge_base`` consults ONLY the glossary of existing cards — not RAG,
+    not the wiki — because grading a card against the same corpus it was extracted
+    from suppresses nearly everything (the self-suppression #577 fixed at reconcile;
+    the drafter is a separate code path). So the drafter drafts a card whenever the
+    document defines a term, skipping only an exact existing-card duplicate.
 
     This is the SINGLE seam both composition roots call — ``create_app`` and the
     split-deployment worker's ``build_bundle`` — so a card-gen job runs the closed
     loop no matter which pod drains it (#506 worker parity). Without it the worker
-    (``run_consumers=false``) would keep the open-loop drafter and silently re-ask /
-    re-propose what the collection already documents.
+    (``run_consumers=false``) would keep the open-loop drafter.
 
     The drafter's own subagent bridge runs headless under the system-superuser
     identity so the #305 collection-read gate passes ``[collection_id]`` through (a
     background job carries no request speaker); safe because the drafter's spec
     FORCES scope to the document's collection, so superuser status can't widen the
-    search. #537: the sub-agent's spec grants `ask_wiki`, so the drafter must wire
-    a consultant for it to delegate to — a granted tool with nothing behind it just
-    burns a call to report there is no wiki. It's built per call over the scope the
-    spec forced, and returns `None` when that collection keeps no wiki."""
+    search. No wiki consultant is wired: the glossary-only spec never grants
+    ``ask_wiki``, so there is nothing to delegate to."""
     from ..kb.help_collection import HELP_SYSTEM_USER
-    from ..kb.wiki.consult import make_wiki_consultant
     from .subagent_bridge import SubagentBridge
 
     bridge = SubagentBridge(
@@ -214,7 +224,6 @@ def wire_agentic_card_drafter(
         get_user_id=lambda: HELP_SYSTEM_USER,
         max_searches=max_searches,
         superusers=frozenset({HELP_SYSTEM_USER}),
-        wiki_consultant_factory=lambda cids: make_wiki_consultant(runner, spec, cids),
     )
     coordinator.set_drafter(
         AgentCardDrafter(
@@ -229,10 +238,11 @@ def wire_agentic_card_drafter(
                     llm_base_url=kb_agent_config.llm_base_url,
                     llm_api_key=kb_agent_config.llm_api_key,
                 ),
-                base_spec=replace(
-                    default_drafter_ask_kb_spec(),
-                    kb_search_max=max_searches or 3,
-                ),
+                # Pass the glossary-only spec UNCHANGED. `max_searches` is
+                # deliberately NOT applied here (it stays a bridge-level cap for
+                # OTHER sub-agents): re-enabling the drafter's chunk/wiki search is
+                # exactly the self-suppression this fix removes (#506/#577).
+                base_spec=default_drafter_ask_kb_spec(),
             ),
         )
     )

@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { KbApi } from "../../api/kb";
 import { _resetKbMock, _seedDocQuestionMock, mockKbApi } from "../../api/kbMock";
 import { qk } from "../../api/queryKeys";
 import { LocaleProvider } from "../../lib/i18n";
@@ -49,6 +50,42 @@ describe("<CollectionReviewTab /> (#415 → #481 table)", () => {
     await seedRun();
     renderTab();
     expect(await screen.findByText("reflow", { selector: ".rvw__title" })).toBeInTheDocument();
+  });
+
+  // #506/#577 follow-up: after a run, the tab shows 'drafted X → kept Y' so a user
+  // can see the drafter's yield — the signal that P2 (no wiki self-suppression) took
+  // effect (drafts jump from ~0 to many), and the audit for why the queue looks thin.
+  it("shows the last run's drafted→kept funnel summary", async () => {
+    await seedRun();
+    renderTab();
+    const summary = await screen.findByTestId("cardgen-funnel-summary");
+    expect(summary).toHaveTextContent(/草稿|drafted/i);
+    expect(summary).toHaveTextContent(/1/);
+  });
+
+  it("shows no funnel summary before the collection has ever generated", async () => {
+    renderTab();
+    await screen.findByText("目前沒有待審核項目。");
+    expect(screen.queryByTestId("cardgen-funnel-summary")).not.toBeInTheDocument();
+  });
+
+  // P3 coverage: a low draft count that's actually "sources still indexing" must
+  // read as such, not as a drafter failure.
+  it("attributes a coverage gap to still-indexing sources", async () => {
+    const client: KbApi = {
+      ...mockKbApi,
+      getReviewInbox: async () => ({ cards: [], questions: [] }),
+      getLatestCardGenFunnel: async () => ({
+        n_units: 1,
+        n_raw_drafts: 2,
+        n_proposals: 2,
+        n_skipped_indexing: 3,
+      }),
+    };
+    render(<CollectionReviewTab collectionId="col-1" client={client} />, { wrapper: QueryWrap });
+    const summary = await screen.findByTestId("cardgen-funnel-summary");
+    expect(summary).toHaveTextContent(/仍在索引|still indexing/i);
+    expect(summary).toHaveTextContent(/3/);
   });
 
   it("accepts a card, applies it — writes a card, drops from the queue, refreshes Cards", async () => {

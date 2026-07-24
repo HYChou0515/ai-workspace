@@ -527,6 +527,16 @@ export type KbCardGenCommit = { created: number; updated: number; skipped: numbe
 /** #415: one row of a collection's 待審核 queue — a finalized run awaiting review. */
 export type KbCardGenRun = { run_id: string; collection_id: string; proposal_count: number };
 
+/** #506/#577 follow-up: the last run's finalize funnel — n_units docs digested,
+ * n_raw_drafts drafts extracted, n_proposals kept, n_skipped_indexing sources
+ * skipped because still indexing (P3 coverage) — for the 待審核 tab summary. */
+export type KbCardGenFunnel = {
+  n_units: number;
+  n_raw_drafts: number;
+  n_proposals: number;
+  n_skipped_indexing: number;
+};
+
 /** #377 — one open clarification question in the global inbox. A `term` question
  * carries `term` + `source_doc_ids` (deduped across docs) and becomes a context
  * card when answered; a `description` question carries `source_doc_id` + `quote`
@@ -607,6 +617,8 @@ export type KbSuppressedItem = {
   label: string;
   cluster_key: string;
   reason: string;
+  /** #506/#577 follow-up: for a near-card suppression, the existing card's title. */
+  target_label?: string;
 };
 
 /** #481/#506: the global 審核 inbox — card proposals + questions, permission-filtered,
@@ -847,6 +859,9 @@ export interface KbApi {
   commitCardGen(jobId: string): Promise<KbCardGenCommit>;
   /** #415: the collection's 待審核 queue — finalized runs awaiting review. */
   listCardGenRuns(collectionId: string): Promise<KbCardGenRun[]>;
+  /** #506/#577 follow-up: the collection's LAST finalized run's funnel (drafted →
+   * kept), or null if it never ran. Includes the kept=0 case the queue can't show. */
+  getLatestCardGenFunnel(collectionId: string): Promise<KbCardGenFunnel | null>;
   /** #415: discard a run's proposals — it leaves the queue, writing no cards. */
   dismissCardGen(jobId: string): Promise<void>;
 
@@ -1286,6 +1301,10 @@ export const realKbApi: KbApi = {
   async listCardGenRuns(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/context-card-gen`;
     return (await ok(await apiFetch(url), "list card gen runs")).json();
+  },
+  async getLatestCardGenFunnel(collectionId) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/context-card-gen/latest`;
+    return (await ok(await apiFetch(url), "latest card gen funnel")).json();
   },
   async dismissCardGen(jobId) {
     const url = `/kb/context-card-gen/${encodeURIComponent(jobId)}/dismiss`;

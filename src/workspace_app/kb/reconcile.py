@@ -198,6 +198,7 @@ def _put_member(
     embedding: list[float] | None,
     reason: str = "",
     label: str = "",
+    target_label: str = "",
 ) -> None:
     """Idempotently upsert one :class:`ClusterMember` by its deterministic id — the
     single write path shared by the finalize-time :class:`Reconciler` and the
@@ -214,6 +215,7 @@ def _put_member(
             state=state,
             reason=reason,
             label=label,
+            target_label=target_label,
             embedding=embedding,
         ),
     )
@@ -267,12 +269,15 @@ class Reconciler:
         deterministic member id, so an accidental re-finalize can't double-count."""
         ensure_proposal_ids(proposals)
         self._project_cards(collection_id, existing)
+        # id → title, so a near-card suppression can name the card it duplicated.
+        card_titles = {card_id: card.title for card_id, card in existing}
         kept: list[ProposedCard] = []
         for p in proposals:
             norm_key = (derive_norm_keys(p.keys) or [""])[0]
             vec = self._embed(_card_text(norm_key, p.title))
             state = "active"
             reason = ""
+            target_label = ""
             if p.mode == "new":
                 # NOT graded against the wiki — only against existing CARDS. A card
                 # and a wiki page are different sources, not substitutes (#537): the
@@ -293,6 +298,7 @@ class Reconciler:
                 )
                 if grade.action == "suppress":
                     state, reason = "suppressed", grade.reason
+                    target_label = card_titles.get(grade.target_card_id or "", "")
                 elif grade.action == "update":
                     p.mode = "update"
                     p.target_card_id = grade.target_card_id
@@ -315,6 +321,7 @@ class Reconciler:
                 embedding=vec,
                 reason=reason,
                 label=p.title or (p.keys[0] if p.keys else norm_key),
+                target_label=target_label,
             )
             if state != "suppressed":
                 kept.append(p)
@@ -436,6 +443,7 @@ class Reconciler:
         embedding: list[float],
         reason: str = "",
         label: str = "",
+        target_label: str = "",
     ) -> None:
         _put_member(
             self._spec.get_resource_manager(ClusterMember),
@@ -450,6 +458,7 @@ class Reconciler:
             embedding=embedding,
             reason=reason,
             label=label,
+            target_label=target_label,
         )
 
 

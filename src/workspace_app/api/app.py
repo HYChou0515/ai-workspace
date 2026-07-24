@@ -33,6 +33,7 @@ from ..resources import (
     AgentConfig,
     CheckRun,
 )
+from ..resources.groups import groups_of
 from ..resources.kb import EMBED_DIM, Collection
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxNotFound, SandboxSpec
 from ..sync import SandboxSync
@@ -301,9 +302,12 @@ def create_app(
     # "" ⇒ search ALL collections (backward-compatible). Resolved to ids once
     # per turn (not per step).
     infer_modules_collection: str = "",
-    history_max_messages: int = 40,
+    history_max_messages: int = 0,
     # Token budget for the replayed history (#45); 0 disables it.
-    history_max_context_tokens: int = 24_000,
+    history_max_context_tokens: int = 0,
+    # #624: the operator's declared context ceiling for this deploy's endpoint.
+    # None ⇒ resolve per turn from the model registry; unknown ⇒ do not trim.
+    context_limit: int | None = None,
     # Operator-level KB retrieval enhancement defaults + LLM ceilings.
     # `None` ⇒ bundled `EnhancementSettings()` (light: expand=1, hyde=0,
     # rerank=on). __main__ threads `settings.kb.retrieval.enhancements`.
@@ -646,6 +650,9 @@ def create_app(
         activity=activity,
         monitor=monitor,
         superusers=superusers,
+        # #608: /me carries the caller's group ids so the FE can resolve a
+        # `group:<id>` grant to the current viewer (same resolver the access_scopes use).
+        groups_provider=lambda u: groups_of(spec, u),
     )
 
     # #106: context-card create/update custom actions must register on the spec
@@ -889,6 +896,7 @@ def create_app(
         kb_agent_configs=kb_agent_configs,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        context_limit=context_limit,
         max_searches_per_turn=kb_max_searches_per_turn,
         max_searches_ceiling=kb_max_searches_ceiling,
         disclosure_enabled=kb_disclosure_enabled,
@@ -947,13 +955,15 @@ def create_app(
     _run_subagent = subagent_bridge.run
 
     # #506: close the card-gen loop — swap the coordinator's fallback (open-loop)
-    # drafter for the AGENTIC one when card drafting is enabled, so it consults the KB
-    # (ask_knowledge_base: RAG + glossary + wiki, scoped to the doc's own collection,
-    # budgeted) before drafting and thus drafts only genuinely-new cards / asks only
-    # genuinely-open questions. Done HERE, after the KB retriever exists (the
-    # coordinators are built earlier). `wire_agentic_card_drafter` is the SAME seam the
-    # split-deployment worker calls (`build_bundle`), so a card-gen job runs the closed
-    # loop no matter which pod drains it (#506 worker parity).
+    # drafter for the AGENTIC one when card drafting is enabled. #506/#577 follow-up:
+    # the agentic drafter consults ONLY the glossary of existing cards before drafting
+    # (not RAG, not the wiki) — grading a card against the same corpus it was extracted
+    # from suppressed nearly everything, so it drafts a card whenever the document
+    # defines a term and skips only an exact existing-card duplicate. Done HERE, after
+    # the KB retriever exists (the coordinators are built earlier).
+    # `wire_agentic_card_drafter` is the SAME seam the split-deployment worker calls
+    # (`build_bundle`), so a card-gen job runs the closed loop no matter which pod
+    # drains it (#506 worker parity).
     if card_drafter_llm is not None:
         from .card_drafter_agent import wire_agentic_card_drafter
 
@@ -999,9 +1009,18 @@ def create_app(
         infer_modules_parallelism=infer_modules_parallelism,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        # #624: the operator's declared ceiling for this endpoint (the escape
+        # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
+        context_limit=context_limit,
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
     )
+
+    # #624: let the budget consult what the RUNNER has learned about each
+    # endpoint's real ceiling (from the limits its rejections stated). Attached
+    # after construction because the runner is injected, and duck-typed because
+    # ScriptedAgentRunner (tests, replay) has nothing to learn from.
+    turn_ctx.learned_limit_fn = getattr(runner, "learned_limit", None)
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so

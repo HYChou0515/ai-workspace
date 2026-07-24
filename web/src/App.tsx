@@ -7,6 +7,7 @@ import { AppDashboard } from "./pages/AppDashboard";
 import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { GroupsPage } from "./pages/GroupsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
@@ -45,6 +46,10 @@ export function AppRoutes() {
         {kbRoutes()}
         <Route path="/kb/doc/*" element={<KbDocPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
+        {/* #608: manage logical groups (superuser creates + designates an owner;
+            owners/maintainers manage membership). Discoverable via the nav for
+            superusers + anyone who belongs to a group. */}
+        <Route path="/groups" element={<GroupsPage />} />
         {/* #481: the global 審核 inbox — every pending-review item (card proposals +
             clarification questions) across every readable collection, in one
             filterable table. Absorbs the old (invisible) /clarifications page. */}

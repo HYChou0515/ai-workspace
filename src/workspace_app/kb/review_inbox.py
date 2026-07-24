@@ -107,6 +107,9 @@ class SuppressedItem(msgspec.Struct):
     label: str
     cluster_key: str
     reason: str  # "wiki" | "near-card"
+    # #506/#577 follow-up: for a ``near-card`` suppression, the title of the existing
+    # card it duplicated (so the audit names it); "" for a ``wiki`` suppression.
+    target_label: str = ""
 
 
 class ReviewInbox(msgspec.Struct):
@@ -157,6 +160,7 @@ def _suppressed_item(readable: dict[str, _CollCtx], member: ClusterMember) -> Su
         label=member.label or member.norm_key,
         cluster_key=member.cluster_key,
         reason=member.reason,
+        target_label=member.target_label,
     )
 
 

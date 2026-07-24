@@ -297,17 +297,21 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # one-directional (apps → resources, not back).
     from ..apps.registry import register_apps
 
-    register_apps(spec, superusers)
-    # #307: a flat, owner-managed logical Group. `members` indexed so resolving a
-    # user → the groups they're in (`groups_of`) is a `members.contains(user)`
-    # query, not a scan. No access_scope / permission (owner-managed via routes),
-    # so resolving groups can't recurse into a permission check.
-    spec.add_model(Group, indexed_fields=["members"])
-    # #307: the user → groups resolver every #262 access_scope + write checker
-    # folds in (so a `group:<id>` grant covers its members). Injected here — it
-    # needs `spec` to query the Group model, which keeps `perm/` free of a resource
-    # import. Closed over THIS spec so tests with isolated specs stay isolated.
+    # #307: the user → groups resolver every #262 access_scope + write checker folds
+    # in (so a `group:<id>` grant covers its members). It's LAZY (a closure over
+    # spec, queried at request time), so building it before the Group `add_model`
+    # below is fine. Closed over THIS spec so tests with isolated specs stay isolated.
     groups = _groups_provider(spec)
+    # #608: thread it into the WorkItem access_scope so a `group:<id>` grant on an
+    # item resolves in the storage-list scope too (not only per-route).
+    register_apps(spec, superusers, groups_provider=groups)
+    # #307/#608: a flat, delegable logical Group. `members`/`maintainers`/`owner`
+    # indexed so `groups_of` and the management page's "groups I own/maintain/belong
+    # to" are queries, not scans. No access_scope / permission (owner-managed via
+    # routes), so resolving groups can't recurse into a permission check. Pre-608
+    # rows have `owner=None` (creator is owner) — covered by the indexed `created_by`
+    # meta, so no `rm.migrate` backfill is needed for the new fields.
+    spec.add_model(Group, indexed_fields=["members", "maintainers", "owner"])
     # item_id indexed so the per-item conversation lookup is a query, not a full
     # scan. (#89: was investigation_id + a typed Ref; now an opaque key so one
     # Conversation table serves every App's items.) #306 PR3: the denormalized

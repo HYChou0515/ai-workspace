@@ -58,4 +58,52 @@ describe("SuppressedAuditList", () => {
     render(<SuppressedAuditList items={[]} />);
     expect(screen.getByTestId("suppressed-empty")).toBeInTheDocument();
   });
+
+  // #506/#577 follow-up: the reader must be able to tell a suppressed CARD from a
+  // suppressed QUESTION — otherwise "5 items, reason wiki" reads as "wiki is
+  // killing my cards" when in fact those are questions (a card is never
+  // wiki-suppressed) and the cards were never drafted.
+  it("labels each row's KIND (card proposal vs question) so cards ≠ questions", () => {
+    render(
+      <SuppressedAuditList
+        items={[
+          item({ kind: "proposal", label: "Reflow Zone 3", reason: "near-card" }),
+          item({ kind: "term_question", label: "Metal 4", reason: "wiki" }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("suppressed-kind-proposal")).toHaveTextContent(/卡片|card/i);
+    expect(screen.getByTestId("suppressed-kind-term_question")).toHaveTextContent(/問題|question/i);
+  });
+
+  // #506/#577 follow-up: a near-card suppression names WHICH existing card it
+  // duplicated, so a reviewer can verify the dedup instead of trusting a bare
+  // "已有相近卡片".
+  it("names the existing card a near-card row duplicated", () => {
+    render(
+      <SuppressedAuditList
+        items={[
+          item({ kind: "proposal", label: "Reflow Zone 3", reason: "near-card", target_label: "RZ3" }),
+        ]}
+      />,
+    );
+    expect(screen.getByText(/RZ3/)).toBeInTheDocument();
+  });
+
+  it("summarises the counts by kind at the top", () => {
+    render(
+      <SuppressedAuditList
+        items={[
+          item({ kind: "term_question", reason: "wiki" }),
+          item({ kind: "term_question", reason: "wiki" }),
+          item({ kind: "proposal", reason: "near-card" }),
+        ]}
+      />,
+    );
+    const summary = screen.getByTestId("suppressed-summary");
+    // two questions + one card — the reader sees at a glance that the wiki-suppressed
+    // ones are QUESTIONS, not cards.
+    expect(summary).toHaveTextContent(/2/);
+    expect(summary).toHaveTextContent(/1/);
+  });
 });

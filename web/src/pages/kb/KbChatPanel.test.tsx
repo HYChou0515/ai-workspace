@@ -305,6 +305,20 @@ describe("KbChatPanel wiki correction (#397)", () => {
   });
 });
 
+// #537 follow-up: the wiki allowance stepper is ALWAYS offered in KB chat.
+// Hiding it when no in-scope collection kept a wiki made the popover
+// inconsistent next to the ever-present document-search stepper ("nowhere to
+// pick the wiki count"). With no wiki in scope the allowance simply has
+// nothing to spend on — the backend still withholds the tool.
+describe("KbChatPanel wiki allowance stepper", () => {
+  it("offers the wiki stepper even when no collection in scope has a wiki", async () => {
+    render(<KbChatPanel chatId={null} client={panelClient([coll({ use_wiki: false })])} />);
+    await screen.findByText("C1");
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+    expect(screen.getByLabelText("最多查百科次數")).toBeInTheDocument();
+  });
+});
+
 describe("KbChatPanel image attach (#513 P10)", () => {
   // A typed streamMessage spy so `.mock.calls[0][0]` carries SendKbMessageArgs.
   const streamSpy = () => vi.fn((_args: SendKbMessageArgs) => (async function* () {})());

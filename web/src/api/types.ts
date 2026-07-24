@@ -30,6 +30,8 @@ export type MessageRole =
   | "system"
   | "mention"
   | "goal"
+  // #624: `notice` = 系統告知(例如較早訊息已超出模型可讀範圍)— FE-only。
+  | "notice"
   | "error";
 
 export type Message = {
@@ -355,6 +357,9 @@ export type SendMessageArgs = {
   /** #334: per-message cap on kb_search calls this turn (shared across the
    * turn's ask_knowledge_base calls). 0 = don't search; omitted = operator default. */
   maxKbSearches?: number;
+  /** #537 follow-up: the wiki twin — caps the turn's ask_knowledge_base wiki
+   * consults. 0 = no wiki; omitted = operator default. */
+  maxWikiSearches?: number;
   /** #605: per-chat disclosure toggle (see kb.ts SendMessageArgs). */
   disclosure?: boolean;
   /** #380: skills the user chose to APPLY this turn (skills picker "apply"
@@ -421,9 +426,10 @@ export interface ApiClient {
   /** Id of the signed-in user (`GET /me`). The whole FE reads identity through
    * this; real auth swaps only the backend resolution. */
   getCurrentUser(): Promise<string>;
-  /** The signed-in user's id + superuser flag (`GET /me`). Superuser gates
-   * system-wide controls (e.g. the collection "Global" toggle). */
-  getMe(): Promise<{ id: string; is_superuser: boolean }>;
+  /** The signed-in user's id + superuser flag + group ids (`GET /me`). Superuser
+   * gates system-wide controls (e.g. the collection "Global" toggle); `groups`
+   * lets the FE resolve a `group:<id>` grant to the current viewer (#608). */
+  getMe(): Promise<{ id: string; is_superuser: boolean; groups: string[] }>;
   /** GET /users — the company directory (small; fetch once, filter on the FE). */
   getUsers(): Promise<User[]>;
   /** GET /notifications — the current user's notifications, newest first. */

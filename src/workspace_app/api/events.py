@@ -207,6 +207,20 @@ class GoalUpdated:
 
 
 @dataclass(frozen=True)
+class ContextTrimmed:
+    """#624: the request did not fit, so older history was dropped and the turn
+    retried with less. `kept` is how many history items survived; `dropped` is
+    the count when known (0 from the retry path, which halves rather than
+    counting). Live-only — the durable record is the `notice` message in the
+    thread; this is what makes the shrink visible WHILE it happens instead of
+    looking like a stall."""
+
+    kept: int
+    dropped: int = 0
+    type: Literal["context_trimmed"] = "context_trimmed"
+
+
+@dataclass(frozen=True)
 class Presence:
     """#455: the live roster of an item's stream — the distinct users currently
     subscribed to its `/stream`. Broadcast whenever a viewer joins or leaves, so
@@ -232,6 +246,7 @@ AgentEvent = (
     | FailoverSwitch  # #249/#131: chat model switched mid-turn (ephemeral notice)
     | RestoreProgress  # #492 P11: cold-wake snapshot restore progress (ephemeral)
     | TodosUpdated  # #613: the agent rewrote the conversation's todo checklist
+    | ContextTrimmed  # #624: the request was too long; older history was dropped
     | GoalUpdated  # #613 P3: the chat's goal was set / cleared / advanced
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)

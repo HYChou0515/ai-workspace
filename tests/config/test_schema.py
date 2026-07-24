@@ -91,8 +91,19 @@ def test_read_file_section_defaults():
 
 
 def test_history_section_defaults():
+    """#624: both manual caps default OFF, and the endpoint ceiling defaults to
+    "unknown".
+
+    They used to be 40 messages / 24,000 tokens, which is what actually decided
+    how much a chat could remember — measured, a work session with tool output
+    kept only the last ~3 turns no matter how large the served window was. The
+    budget is now derived per turn from the real ceiling, so these two are
+    operator overrides rather than the silent governor, and an unknown ceiling
+    means "send it all and learn", never "fall back to a number nobody checked"."""
     s = Settings().history
-    assert s.max_messages == 40
+    assert s.max_messages == 0
+    assert s.max_context_tokens == 0
+    assert s.context_limit is None
 
 
 def test_kb_section_is_nested_dataclasses():
