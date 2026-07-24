@@ -286,6 +286,21 @@ class HistorySettings:
     `chars // 4` estimator that undercounts Traditional Chinese 3.6x. Left here
     as an override for deploys that want a hard ceiling of their own."""
 
+    reducer: str = "drop-oldest"
+    """WHAT to give up when the thread does not fit (#624).
+
+    `drop-oldest` (default) — the incumbent: drop from the front. Note what that
+      costs: the user's opening request, which every later turn refers back to,
+      is sacrificed before a single byte of any tool dump.
+    `elide-tool-output` — fold away the body of bulky OLD tool output first and
+      keep the conversation. A 30 KB `exec` dump costs roughly twenty turns of
+      dialogue, so this buys back far more of the session.
+    `keep-task` — never drop the first user message; drop from the middle.
+
+    The default is the incumbent so that introducing the choice changed no
+    behaviour on its own. It is NOT a recommendation — which policy fits your
+    work is a product decision this code deliberately does not make for you."""
+
     context_limit: int | None = None
     """The endpoint's context window in tokens, when the operator knows it.
 

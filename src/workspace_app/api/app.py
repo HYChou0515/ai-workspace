@@ -308,6 +308,8 @@ def create_app(
     # #624: the operator's declared context ceiling for this deploy's endpoint.
     # None ⇒ resolve per turn from the model registry; unknown ⇒ do not trim.
     context_limit: int | None = None,
+    # #624: the reduction policy (see config `history.reducer`). None ⇒ incumbent.
+    history_reducer: str | None = None,
     # Operator-level KB retrieval enhancement defaults + LLM ceilings.
     # `None` ⇒ bundled `EnhancementSettings()` (light: expand=1, hyde=0,
     # rerank=on). __main__ threads `settings.kb.retrieval.enhancements`.
@@ -1010,6 +1012,7 @@ def create_app(
         # #624: the operator's declared ceiling for this endpoint (the escape
         # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
         context_limit=context_limit,
+        reducer=history_reducer,
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
     )

@@ -296,6 +296,10 @@ class AgentToolContext:
     # runner can size the whole request without recomputing it, and compare that
     # against the provider's reported usage to catch a silent truncation.
     context_overhead_tokens: int = 0
+    # #624: what the reduction policy gave up, in its own words — "N messages
+    # will not be read", "N tool outputs folded away", … The send path shows
+    # this verbatim, because only the policy knows what it actually did.
+    history_reduced_note: str = ""
     # #613: the owning chat thread's Conversation resource id, for conversation-
     # scoped tool state (the `update_todos` checklist). Set by the chat turn
     # builder only — workflow / KB / test contexts leave it None, and the todo

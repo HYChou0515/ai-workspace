@@ -133,6 +133,8 @@ def history_items(
     max_tokens: int = 0,
     users: UserDirectory | None = None,
     on_trim: Callable[[int], None] | None = None,
+    reducer: str | None = None,
+    on_reduce: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Map persisted messages → SDK input items for cross-turn memory.
 
@@ -168,10 +170,24 @@ def history_items(
     if max_messages:
         msgs = msgs[-max_messages:]
     if max_tokens:
-        msgs = _fit_token_budget(msgs, max_tokens)
-    # #624: hand the cut back. `0` caps mean "no ceiling known / declared" and
-    # nothing is dropped — we send it all and learn the real limit from the
-    # response (P3) or the rejection (P4), rather than amputating on a guess.
+        # #624: HOW to fit is a configured policy, not something this function
+        # gets to decide. Dropping the oldest messages is one option — and the
+        # one that sacrifices the user's opening request before it touches a
+        # single tool dump — so it is selected by name like any other.
+        from ..context_budget import estimate_messages
+        from ..context_reducers import DEFAULT_REDUCER, get_reducer
+
+        result = get_reducer(reducer or DEFAULT_REDUCER).reduce(
+            msgs, budget=max_tokens, estimate=estimate_messages
+        )
+        msgs = result.messages
+        if result.changed and on_reduce is not None:
+            # The notice describes what the policy actually gave up; "N messages
+            # dropped" is only true for one of them.
+            on_reduce(result.summary)
+    # `0` caps mean "no ceiling known / declared" and nothing is given up — we
+    # send it all and learn the real limit from the response (P3) or the
+    # rejection (P4), rather than amputating on a guess.
     if on_trim is not None and before > len(msgs):
         on_trim(before - len(msgs))
     items: list[dict[str, Any]] = []

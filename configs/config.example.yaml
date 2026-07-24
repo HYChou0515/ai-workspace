@@ -405,7 +405,24 @@
 # prompt_tokens. Both are implemented and tested but have no caller — set
 # `context_limit` explicitly if your endpoint truncates silently (Ollama).
 #
+# `reducer` — WHAT to give up when the thread still does not fit. This is a
+# product decision, so it is a choice here rather than an assumption in the
+# code:
+#   drop-oldest        (default, the incumbent) drop from the front. Note the
+#                      cost: your OPENING request — the task every later turn
+#                      refers back to — is sacrificed before a single byte of
+#                      any tool dump.
+#   elide-tool-output  fold away the body of bulky OLD tool output first and
+#                      keep the conversation. One 30 KB `exec` dump costs about
+#                      twenty turns of dialogue, so this buys back far more of
+#                      the session.
+#   keep-task          never drop the first user message; drop from the middle.
+#
+# The default is the incumbent so that offering the choice changed nothing on
+# its own. It is not a recommendation.
+#
 # history:
+#   reducer: drop-oldest                  # ← drop-oldest | elide-tool-output | keep-task
 #   context_limit: 32768                  # ← the ceiling, if you know it
 #   max_messages: 0                       # ← optional hard cap (0 = off)
 #   max_context_tokens: 0                 # ← optional hard cap (0 = off)

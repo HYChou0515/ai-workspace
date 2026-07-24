@@ -286,7 +286,7 @@ class ChatSendService:
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return  # the chat was deleted mid-flight
 
-    def _notice_history_trimmed(self, rid: str, dropped: int) -> None:
+    def _notice_history_reduced(self, rid: str, note: str) -> None:
         """Tell the thread that older messages no longer reach the model (#624).
 
         Written once per conversation: the horizon only moves outward, so a
@@ -298,13 +298,10 @@ class ChatSendService:
         assert isinstance(conv, Conversation)
         if any(m.role == "notice" for m in conv.messages):
             return  # already told, at the transition
-        text = (
-            f"較早的 {dropped} 則訊息已超出 AI 一次能讀的範圍,從這輪起不會被讀到。"
-            "需要它記得那些內容的話,請開一個新對話。"
-        )
+        text = f"{note}需要它記得那些內容的話,請開一個新對話。"
         conv.messages.append(Message(role="notice", content=text, created_at=now_ms()))
         self._conv_rm.update(rid, conv)
-        logger.info("chat_send: history trimmed (%d messages) for chat %s", dropped, rid)
+        logger.info("chat_send: history reduced for chat %s — %s", rid, note)
 
     def _append_goal_marker(self, rid: str, text: str) -> None:
         """A `role="goal"` marker in the thread — rendered by the FE, and by
@@ -487,8 +484,8 @@ class ChatSendService:
         # the transition. A silent cut is indistinguishable from the model being
         # forgetful, which is how this stayed invisible for so long; a notice on
         # EVERY subsequent turn would become wallpaper just as fast.
-        if ctx.history_trimmed:
-            self._notice_history_trimmed(rid, ctx.history_trimmed)
+        if ctx.history_reduced_note:
+            self._notice_history_reduced(rid, ctx.history_reduced_note)
 
         # Source A (#…): a vision-capable main model reads attached images
         # directly — inline them into this turn's user message so the model sees

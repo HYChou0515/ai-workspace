@@ -86,6 +86,7 @@ class TurnContextBuilder:
         history_max_messages: int,
         history_max_context_tokens: int,
         context_limit: int | None = None,
+        reducer: str | None = None,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     ) -> None:
         self._sandbox = sandbox
@@ -111,6 +112,8 @@ class TurnContextBuilder:
         # #624: the operator's declared ceiling for this deploy's endpoint. None ⇒
         # resolve per turn (catalog lookup), and `unknown` ⇒ do not trim at all.
         self._context_limit = context_limit
+        # #624: WHICH reduction policy this deploy runs. None ⇒ the incumbent.
+        self._reducer = reducer
         self._wiki_coordinator = wiki_coordinator
         # #429 P10: the event-dispatch sink stamped onto every agent turn's ctx so an
         # agent's entity write fires on_event workflows. Set after construction by the
@@ -252,6 +255,7 @@ class TurnContextBuilder:
         # #624: capture whether history had to be cut, so the send path can say so
         # in the thread. The cut used to be unspeakable — nothing recorded it.
         cut: list[int] = []
+        said: list[str] = []
         history = history_items(
             history_messages,
             max_messages=self._history_max_messages,
@@ -274,6 +278,8 @@ class TurnContextBuilder:
             ),
             users=self._users,
             on_trim=cut.append,
+            reducer=self._reducer,
+            on_reduce=said.append,
         )
         return dict(
             investigation_id=item_id,
@@ -301,6 +307,7 @@ class TurnContextBuilder:
             exec_output_max_chars=self._exec_output_max_chars,
             history=history,
             history_trimmed=cut[0] if cut else 0,
+            history_reduced_note=said[0] if said else "",
             context_overhead_tokens=self._overhead_for(agent_config, item_id),
             packages=self._packages or [],
             prebuilt_dir=self._prebuilt_dir,
