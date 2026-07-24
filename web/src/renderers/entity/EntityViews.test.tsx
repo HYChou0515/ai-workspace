@@ -212,6 +212,23 @@ describe("role widgets in the table (§B3)", () => {
     fireEvent.click(screen.getByRole("button", { name: "+ New" }));
     expect(screen.getByLabelText("assignee").tagName).toBe("SELECT");
   });
+
+  it("renders a ref field in quick-create as a #N-title picker, not a raw number", () => {
+    const withRef: EntityType = {
+      name: "issue",
+      records_path: "issues",
+      fields: [{ name: "milestone", role: "ref", to: "milestone" }],
+      form: [{ name: "milestone", widget: "ref", required: false }],
+    };
+    const index = buildRefIndex({
+      milestone: [{ number: 5, type_name: "milestone", fields: { title: "v1.0" }, body: "", diagnostics: [] }],
+    });
+    render(<EntityViewBody spec={tableSpec} type={withRef} entities={[]} refIndex={index} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    const sel = screen.getByLabelText("milestone");
+    expect(sel.tagName).toBe("SELECT");
+    expect(within(sel).getByRole("option", { name: "#5 v1.0" })).toBeInTheDocument();
+  });
 });
 
 describe("table sort / filter / column visibility (§A1)", () => {

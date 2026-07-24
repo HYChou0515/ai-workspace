@@ -18,6 +18,7 @@ import { dump, load } from "js-yaml";
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
 import { MonacoEditor } from "../../components/MonacoEditor";
+import type { RefOption } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 
 export type EntityFileEditorProps = {
@@ -26,6 +27,9 @@ export type EntityFileEditorProps = {
   users?: User[];
   canWrite?: boolean;
   busy?: boolean;
+  /** Per-field ref picker options — a `ref` field edits as a #N-title dropdown
+   * instead of a raw number box when its target records are loaded. */
+  refOptionsFor?: (name: string) => RefOption[] | undefined;
   onSave: (patch: Record<string, unknown>, body: string) => void;
 };
 
@@ -39,7 +43,7 @@ function pickSettable(fields: Record<string, unknown>, type: EntityType): Record
   return out;
 }
 
-export function EntityFileEditor({ type, record, users, canWrite = true, busy, onSave }: EntityFileEditorProps) {
+export function EntityFileEditor({ type, record, users, canWrite = true, busy, refOptionsFor, onSave }: EntityFileEditorProps) {
   const settable = settableFields(type);
   const [fields, setFields] = useState<Record<string, unknown>>(() => pickSettable(record.fields, type));
   const [body, setBody] = useState<string>(record.body ?? "");
@@ -116,6 +120,7 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, o
                 value={fields[f.name]}
                 values={f.values}
                 users={users}
+                refOptions={refOptionsFor?.(f.name)}
                 disabled={!canWrite}
                 onCommit={(v) => setFields((s) => ({ ...s, [f.name]: v }))}
               />

@@ -90,4 +90,25 @@ describe("EntityFileEditor (§C2)", () => {
     render(<EntityFileEditor type={issueType} record={record} canWrite={false} onSave={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
+
+  it("renders a ref field as a #N-title picker when ref options are supplied", () => {
+    const withRef: EntityType = {
+      name: "issue",
+      records_path: "issues",
+      fields: [{ name: "milestone", role: "ref", to: "milestone" }],
+      form: [],
+    };
+    const rec: EntityInstance = { number: 1, type_name: "issue", fields: { milestone: 5 }, body: "", diagnostics: [], version: "v1" };
+    render(
+      <EntityFileEditor
+        type={withRef}
+        record={rec}
+        onSave={vi.fn()}
+        refOptionsFor={(n) => (n === "milestone" ? [{ number: 5, label: "v1.0" }] : undefined)}
+      />,
+    );
+    const sel = screen.getByLabelText("milestone");
+    expect(sel.tagName).toBe("SELECT");
+    expect((sel as HTMLSelectElement).value).toBe("5");
+  });
 });

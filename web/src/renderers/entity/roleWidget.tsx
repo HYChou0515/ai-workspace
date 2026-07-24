@@ -310,11 +310,14 @@ export type RoleCreateInputProps = {
   value: string;
   values?: string[] | null;
   users?: User[];
+  /** Target records for a `ref` widget — turns it into a #N-title picker instead
+   * of a raw number box. Absent (target records not loaded) ⇒ number fallback. */
+  refOptions?: RefOption[];
   required?: boolean;
   onChange: (next: string) => void;
 };
 
-export function RoleCreateInput({ widget, name, value, values, users, required, onChange }: RoleCreateInputProps) {
+export function RoleCreateInput({ widget, name, value, values, users, refOptions, required, onChange }: RoleCreateInputProps) {
   if (widget === "select")
     return (
       <StatusSelect name={name} value={value} values={values} blank required={required} className="ev-field" onCommit={onChange} />
@@ -323,6 +326,17 @@ export function RoleCreateInput({ widget, name, value, values, users, required, 
     return <ActorSelect name={name} value={value} users={users} required={required} className="ev-field" onCommit={onChange} />;
   if (widget === "daterange")
     return <DateRangeInput name={name} value={value} className="ev-field" onCommit={(next) => onChange(next == null ? "" : String(next))} />;
+  if (widget === "ref" && refOptions)
+    return (
+      <RefSelect
+        name={name}
+        value={value}
+        options={refOptions}
+        required={required}
+        className="ev-field"
+        onCommit={(next) => onChange(next == null ? "" : String(next))}
+      />
+    );
 
   const type = widget === "date" ? "date" : widget === "progress" || widget === "rank" || widget === "ref" ? "number" : "text";
   const placeholder = widget === "ref" ? "#" : "";

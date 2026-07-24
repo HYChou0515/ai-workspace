@@ -25,11 +25,12 @@ import { ModalShell } from "../../components/ModalShell";
 import { Popover } from "../../components/Popover";
 import { handleDragEnd, partitionColumns, UNSET_COL } from "./boardOps";
 import { EntityFileEditor } from "./EntityFileEditor";
+import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
 import type { EntityViewProps } from "./types";
 
-export function BoardView({ spec, type, entities, users, canWrite, onPatch, onSave, onOpenRecord, busy }: EntityViewProps) {
+export function BoardView({ spec, type, entities, users, canWrite, refIndex, onPatch, onSave, onOpenRecord, busy }: EntityViewProps) {
   const readOnly = canWrite === false; // §E — a non-writer can't drag or change status
   const groupField = spec.group_by ?? "status";
   const statusSpec = roleOf(type, groupField);
@@ -50,6 +51,8 @@ export function BoardView({ spec, type, entities, users, canWrite, onPatch, onSa
       return value === null ? v === "" : v === value;
     });
 
+  const refOptionsFor = (name: string) => refOptionsForField(type, refIndex, name);
+
   const renderCard = (e: EntityInstance) => (
     <Card
       key={e.number}
@@ -65,6 +68,7 @@ export function BoardView({ spec, type, entities, users, canWrite, onPatch, onSa
       onPatch={onPatch}
       onSave={onSave}
       onOpenRecord={onOpenRecord}
+      refOptionsFor={refOptionsFor}
     />
   );
 
@@ -151,6 +155,7 @@ function Card({
   onPatch,
   onSave,
   onOpenRecord,
+  refOptionsFor,
 }: {
   entity: EntityInstance;
   titleField: string;
@@ -164,6 +169,7 @@ function Card({
   onPatch: (number: number, patch: Record<string, unknown>) => void;
   onSave?: (number: number, patch: Record<string, unknown>, body: string) => void;
   onOpenRecord?: (number: number) => void;
+  refOptionsFor?: (name: string) => RefOption[] | undefined;
 }) {
   const [editing, setEditing] = useState(false);
   // §E — a read-only member can neither drag the card nor change its status.
@@ -267,6 +273,7 @@ function Card({
               users={users}
               canWrite={!readOnly}
               busy={busy}
+              refOptionsFor={refOptionsFor}
               onSave={(patch, body) => {
                 onSave?.(entity.number, patch, body);
                 setEditing(false);

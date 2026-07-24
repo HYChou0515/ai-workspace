@@ -7,7 +7,7 @@
  */
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
-import { fieldText } from "./shared";
+import { fieldText, roleOf } from "./shared";
 
 /** type name → (record number → record), for O(1) ref resolution. */
 export type RefIndex = Map<string, Map<number, EntityInstance>>;
@@ -72,4 +72,19 @@ export function refOptions(refSpec: EntityFieldSpec, index: RefIndex): RefOption
     number: r.number,
     label: fieldText(r.fields.title) || `#${r.number}`,
   }));
+}
+
+/** Picker options for a named field IF it's a `ref` (resolved from the type's
+ * schema) — else `undefined`. Lets create + edit forms render a `#N <title>`
+ * dropdown for a ref instead of a raw number box (the target lives in another
+ * collection, so a bare number is meaningless to a human). `undefined` index ⇒
+ * `undefined` (caller hasn't loaded referenced records → keep the number box). */
+export function refOptionsForField(
+  type: EntityType | null,
+  index: RefIndex | undefined,
+  name: string,
+): RefOption[] | undefined {
+  if (!index) return undefined;
+  const spec = roleOf(type, name);
+  return spec?.role === "ref" ? refOptions(spec, index) : undefined;
 }

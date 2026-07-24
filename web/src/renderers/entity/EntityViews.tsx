@@ -16,6 +16,7 @@ import { useState } from "react";
 import type { EntityDiagnostic, EntityFormField } from "../../api/entities";
 import type { User } from "../../api/types";
 import { ModalShell } from "../../components/ModalShell";
+import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
 import { fieldText, parseSpan, parseViewSpec } from "./shared";
 import type { EntityViewProps, ViewKind, ViewSpec } from "./types";
@@ -35,6 +36,7 @@ export function QuickCreate({
   onCreate,
   busy,
   entityLabel,
+  refOptionsFor,
 }: {
   form: EntityFormField[];
   users?: User[];
@@ -42,6 +44,9 @@ export function QuickCreate({
   busy?: boolean;
   /** Entity name for the modal title ("New issue"). */
   entityLabel?: string;
+  /** Per-field ref picker options — a `ref` field renders a #N-title dropdown
+   * instead of a raw number box when its target records are loaded. */
+  refOptionsFor?: (name: string) => RefOption[] | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -90,6 +95,7 @@ export function QuickCreate({
                 value={draft[f.name] ?? ""}
                 values={f.values}
                 users={users}
+                refOptions={refOptionsFor?.(f.name)}
                 required={f.required}
                 onChange={(v) => setDraft((d) => ({ ...d, [f.name]: v }))}
               />
@@ -191,7 +197,14 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
         {type && !renderer.suppressQuickCreate && canWrite && (
-          <QuickCreate form={type.form} users={users} onCreate={onCreate} busy={busy} entityLabel={type.name} />
+          <QuickCreate
+            form={type.form}
+            users={users}
+            onCreate={onCreate}
+            busy={busy}
+            entityLabel={type.name}
+            refOptionsFor={(name) => refOptionsForField(type, props.refIndex, name)}
+          />
         )}
       </div>
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
