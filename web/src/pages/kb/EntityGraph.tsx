@@ -64,8 +64,18 @@ export function EntityGraph({
   );
   const mid = (p: Node): Node => ({ x: (p.x + 50) / 2, y: (p.y + 50) / 2 });
 
+  // Height follows the busier side: a thing with one document and no relations
+  // was drawing a single node inside a 430px box, which reads as "something
+  // failed to load" rather than "there is little to show".
+  const height = Math.max(180, Math.min(430, 110 + Math.max(docs.length, rels.length) * 80));
+
   return (
-    <div className="ent-graph" data-testid="entity-graph" aria-label={t("entity.graphAria")}>
+    <div
+      className="ent-graph"
+      data-testid="entity-graph"
+      aria-label={t("entity.graphAria")}
+      style={{ height }}
+    >
       <svg
         className="ent-graph__edges"
         viewBox="0 0 100 100"
