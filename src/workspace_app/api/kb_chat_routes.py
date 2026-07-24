@@ -437,6 +437,12 @@ def _graph_block_for(spec: SpecStar, text: str, as_user: str) -> str:
     return entity_block(spec, graph_name_index(spec).get(), text, as_user=as_user)
 
 
+#: Per-process cache for the KB-chat catalog rung, keyed by model — the litellm
+#: registry value never changes within a run, and `deferred_lookup` fills it off
+#: the event loop. Module-level (not per-request) so it survives across turns.
+_KB_CATALOG_CACHE: dict[str, int | None] = {}
+
+
 def _kb_history_budget(cfg: AgentConfig | None, context_limit: int | None) -> int:
     """Tokens available for replayed KB-chat history, or 0 for "no ceiling known
     — do not trim" (#624).
@@ -446,6 +452,7 @@ def _kb_history_budget(cfg: AgentConfig | None, context_limit: int | None) -> in
     operator config, then the model registry, then unknown."""
     from ..context_budget import (
         catalog_limit,
+        deferred_lookup,
         estimate_tokens,
         history_budget,
         resolve_context_limit,
@@ -453,7 +460,12 @@ def _kb_history_budget(cfg: AgentConfig | None, context_limit: int | None) -> in
 
     if cfg is None:
         return 0
-    limit = resolve_context_limit(configured=context_limit, catalog=catalog_limit(cfg.model))
+    # #624 §9.12: catalog_limit does network I/O (litellm resolves an `ollama/*`
+    # name via the daemon, untimed), and this runs on the `send_message` request
+    # path — so it goes through deferred_lookup exactly like the app-chat path
+    # (cached per model, filled off the event loop), never a raw per-turn call.
+    catalog = deferred_lookup(_KB_CATALOG_CACHE, cfg.model, lambda: catalog_limit(cfg.model))
+    limit = resolve_context_limit(configured=context_limit, catalog=catalog)
     budget = history_budget(limit, overhead_tokens=estimate_tokens(cfg.system_prompt or ""))
     return 0 if budget is None else max(1, budget)
 

@@ -58,6 +58,13 @@ data:
   #                migrate_from: ${FILESTORE_MIGRATE_FROM} }
   # and mount the `workspaces` PVC on this Deployment (see deployment.yaml + pvc.yaml).
 
+  # litellm fetches its model-price map from GitHub over HTTPS at import — every
+  # pod hits that handshake at startup and, on a locked-down network, fails it
+  # ("SSL getting model settings"). The bundled backup is what it falls back to
+  # anyway, so force it and skip the fetch. The app also sets this in code
+  # (setdefault), so this line is for visibility / to opt back in with "false".
+  LITELLM_LOCAL_MODEL_COST_MAP: "true"
+
   # KB: point LiteLLM at the Ollama service. The embedder model MUST match the
   # dim the image was built with, and a real embedder requires the model pulled
   # in Ollama (see README). "" KB_LLM_MODEL disables multi-query/HyDE/rerank.
