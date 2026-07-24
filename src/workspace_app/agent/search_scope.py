@@ -1,6 +1,6 @@
 """#537 — which knowledge sources a turn may actually use.
 
-The KB agent has three ways to find something out, and they are not
+The KB agent has several ways to find something out, and they are not
 interchangeable:
 
 - **the glossary** (`lookup_glossary`) — one exact-key lookup against curated

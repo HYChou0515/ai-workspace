@@ -1648,6 +1648,25 @@ def resolve_collection_impl(ctx: RunContextWrapper[AgentToolContext], ref: str) 
     return json.dumps(resolve_collection(spec, ref), ensure_ascii=False)
 
 
+def lookup_entity_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -> str:
+    """Look up one named thing in the knowledge graph and get its dossier.
+
+    Deterministic + instant — no search, no model call. Pass the name the user
+    asked about; returns everything the indexed documents state about that exact
+    thing: its other spellings, the numbers stated beside it, every document
+    that mentions it, and what it connects to — each line tagged with the
+    document it came from, ready to cite. If nothing matches exactly you get
+    the closest known names — re-ask with one of them verbatim. Prefer this
+    FIRST for "what is X" / "tell me about X" questions; use kb_search
+    afterwards for prose and context the graph doesn't carry."""
+    from ..kb.graph.lookup import entity_card
+
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: lookup_entity needs a knowledge-base context (no spec on this turn)"
+    return entity_card(spec, name, as_user=ctx.context.acting_user)
+
+
 def lookup_glossary_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
     """Look up the Hub's glossary (context cards) for a term or phrase.
 
@@ -2116,6 +2135,10 @@ _IMPLS = {
     # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
     "resolve_collection": resolve_collection_impl,
     "lookup_glossary": lookup_glossary_impl,
+    # #628: the knowledge-graph dossier — same family as lookup_glossary
+    # (deterministic, zero LLM, ctx.spec + acting_user). Granted to the KB
+    # chat presets; app agents reach the graph through ask_knowledge_base.
+    "lookup_entity": lookup_entity_impl,
     "update_context_card": update_context_card_impl,
     "create_context_card": create_context_card_impl,
     # #397: submit a wiki correction (tell the maintainer what's wrong instead of

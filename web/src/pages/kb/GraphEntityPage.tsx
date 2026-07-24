@@ -42,6 +42,19 @@ type Related = {
   source_doc_id: string;
 };
 
+// #628: a number stated on a slide that names this entity — co-located, so it
+// arrives with the slide it came from.
+type Claim = {
+  metric: string;
+  norm_metric: string;
+  value: string;
+  unit: string;
+  period: string;
+  norm_period: string;
+  source_doc_id: string;
+  chunk_id: string;
+};
+
 type Entity = {
   id: string;
   name: string;
@@ -50,6 +63,7 @@ type Entity = {
   occurrences: number;
   mentions: Mention[];
   related: Related[];
+  claims: Claim[];
 };
 
 async function fetchEntity(id: string): Promise<Entity | null> {
@@ -148,6 +162,38 @@ export function GraphEntityPage() {
           other_entity_id: r.other_entity_id,
         }))}
       />
+
+      {/* #628 — the numbers stated on slides that name this entity: verbatim
+          value, its period, and the slide it came from. The page REPORTS what
+          each document said and does not adjudicate between them — deciding
+          which figure is right is the reader's call, on evidence we can show
+          but not weigh. */}
+      {e.claims.length > 0 && (
+        <section className="ent-page__section">
+          <h2 className="ent-page__h2">{t("entity.claims")}</h2>
+          <ul className="ent-page__list" data-testid="entity-claims">
+            {e.claims.map((c, i) => (
+              <li className="ent-page__mention" key={`${c.source_doc_id}:${c.chunk_id}:${i}`}>
+                  <a
+                    className="ent-page__docchip"
+                    href={docHref(c.source_doc_id, c.value)}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={c.source_doc_id}
+                  >
+                    {docLabel(c.source_doc_id)}
+                  </a>
+                  <span className="ent-page__claim-metric">{c.metric}</span>
+                  <span className="ent-page__claim-value">
+                    {c.value}
+                    {c.unit ? <span className="ent-page__claim-unit">{c.unit}</span> : null}
+                  </span>
+                {c.period ? <span className="ent-page__claim-period">{c.period}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <section className="ent-page__section">
         <h2 className="ent-page__h2">{t("entity.mentions")}</h2>

@@ -39,6 +39,19 @@ const ENTITY = {
       chunk_id: "deck-A#0",
     },
   ],
+  claims: [],
+};
+
+// #628: one number stated on a slide that names the entity.
+const CLAIM = {
+  metric: "良率",
+  norm_metric: "良率",
+  value: "98.7",
+  unit: "%",
+  period: "Q3",
+  norm_period: "q3",
+  source_doc_id: "deck-A",
+  chunk_id: "deck-A#0",
 };
 
 const renderAt = (id: string) =>
@@ -78,5 +91,52 @@ describe("GraphEntityPage (#534)", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
     renderAt("graph-entity:nope");
     expect(await screen.findByTestId("entity-missing")).toBeInTheDocument();
+  });
+
+  it("shows the numbers stated beside it, each with its slide (#628)", async () => {
+    const withClaim = { ...ENTITY, claims: [CLAIM] };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(withClaim), { status: 200 })),
+    );
+    renderAt("graph-entity:1");
+
+    const section = await screen.findByTestId("entity-claims");
+    expect(section).toHaveTextContent("良率");
+    expect(section).toHaveTextContent("98.7");
+    expect(section).toHaveTextContent("%");
+    expect(section).toHaveTextContent("Q3");
+    expect(section).toHaveTextContent("deck-A"); // the slide it came from
+  });
+
+  it("reports every document's figure without adjudicating between them (#628)", async () => {
+    // Two decks state different Q3 yields. The page shows both, attributed —
+    // deciding which is right is the reader's call, not the system's.
+    const both = {
+      ...ENTITY,
+      claims: [CLAIM, { ...CLAIM, value: "95.0", source_doc_id: "deck-B", chunk_id: "deck-B#0" }],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(both), { status: 200 })),
+    );
+    renderAt("graph-entity:1");
+
+    const section = await screen.findByTestId("entity-claims");
+    expect(section).toHaveTextContent("98.7");
+    expect(section).toHaveTextContent("95.0");
+    expect(section).toHaveTextContent("deck-B");
+    // no verdict of any kind is rendered
+    expect(section.querySelector(".ent-page__conflict")).toBeNull();
+  });
+
+  it("hides the numbers section when there are none (#628)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify(ENTITY), { status: 200 })),
+    );
+    renderAt("graph-entity:1");
+    await screen.findByTestId("entity-page");
+    expect(screen.queryByTestId("entity-claims")).not.toBeInTheDocument();
   });
 });

@@ -809,6 +809,9 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "kb_search",
             "ask_wiki",
             "lookup_glossary",
+            # #628: the knowledge-graph dossier — deterministic and free like
+            # lookup_glossary, so it sits outside the search budgets (#537).
+            "lookup_entity",
             "request_wiki_update",
         ],
     },
@@ -833,6 +836,9 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "kb_search",
             "ask_wiki",
             "lookup_glossary",
+            # #628: the knowledge-graph dossier — deterministic and free like
+            # lookup_glossary, so it sits outside the search budgets (#537).
+            "lookup_entity",
             "request_wiki_update",
         ],
     },
@@ -849,6 +855,9 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "kb_search",
             "ask_wiki",
             "lookup_glossary",
+            # #628: the knowledge-graph dossier — deterministic and free like
+            # lookup_glossary, so it sits outside the search budgets (#537).
+            "lookup_entity",
             "request_wiki_update",
         ],
     },

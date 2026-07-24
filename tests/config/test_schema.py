@@ -279,6 +279,7 @@ def test_bundled_presets_include_qwen3_claude_openai_and_kb_default():
         "kb_search",
         "ask_wiki",
         "lookup_glossary",
+        "lookup_entity",
         "request_wiki_update",
     ]
     assert "search_wiki" not in (presets["kb-default"].allowed_tools or [])
@@ -357,3 +358,16 @@ def test_settings_is_frozen_so_top_level_reassignment_fails():
     except dataclasses.FrozenInstanceError:
         return
     raise AssertionError("Settings should be frozen")
+
+
+def test_bundled_kb_presets_grant_the_graph_dossier_tool():
+    """#628: `lookup_entity` is deterministic and free (the lookup_glossary
+    family), so every bundled KB chat preset carries it. The workspace default
+    toolset does NOT — app agents reach the graph through ask_knowledge_base,
+    and the leaf needs a spec-scoped KB context they don't hold."""
+    from workspace_app.agent import build_tools
+
+    presets = Settings().agents.presets
+    for name in ("kb-default", "kb-claude", "kb-openai"):
+        assert "lookup_entity" in (presets[name].allowed_tools or []), name
+    assert "lookup_entity" not in {t.name for t in build_tools(None)}

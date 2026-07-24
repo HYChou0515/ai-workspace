@@ -15,10 +15,10 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.graph.link import link_identical_mentions
-from workspace_app.kb.graph.normalize import norm_surface
+from workspace_app.kb.graph.normalize import norm_metric, norm_surface
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
-from workspace_app.resources.graph import GraphEntity, GraphMention, mention_id
+from workspace_app.resources.graph import GraphClaim, GraphEntity, GraphMention, mention_id
 from workspace_app.resources.kb import EMBED_DIM, Collection
 from workspace_app.sandbox.mock import MockSandbox
 
@@ -213,3 +213,44 @@ def _entity_id(spec, name: str) -> str:
         if r.data.canonical_name == name:
             return r.info.resource_id
     raise AssertionError(name)
+
+
+def test_the_entity_page_carries_the_numbers_stated_beside_it():
+    """#628 P2 — claims ride the entity response: a metric stated on a slide
+    that names the entity arrives with enough provenance to open and check."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    eid = _seed(spec)
+    crm = spec.get_resource_manager(Collection)
+    rows = list(crm.list_resources(QB.all().build()))
+    cid = rows[0].info.resource_id  # ty: ignore[unresolved-attribute]
+    rm = spec.get_resource_manager(GraphClaim)
+    with rm.using("bob"):
+        rm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-A",
+                chunk_id="deck-A#0",
+                norm_metric=norm_metric("良率"),
+                metric="良率",
+                value="98.7",
+                period="Q3",
+                norm_period="q3",
+                unit="%",
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            )
+        )
+
+    body = client.get(f"/kb/graph/entities/{eid}").json()
+    assert len(body["claims"]) == 1
+    c = body["claims"][0]
+    assert c["metric"] == "良率"
+    assert c["norm_metric"] == norm_metric("良率")
+    assert c["value"] == "98.7"
+    assert c["unit"] == "%"
+    assert c["period"] == "Q3"
+    assert c["norm_period"] == "q3"
+    assert c["source_doc_id"] == "deck-A"
+    assert c["chunk_id"] == "deck-A#0"
