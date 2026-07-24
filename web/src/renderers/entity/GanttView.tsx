@@ -101,20 +101,20 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   const lanes = groupLanes(rows, spec.group_by, type, refIndex);
   const grouped = Boolean(spec.group_by);
 
-  // Drag: capture the down point + zoom, track on window, commit one patch on up.
+  // Drag: capture the down point + density, track on window, commit one patch on up.
   const startDrag = (number: number, mode: DragMode, e: React.PointerEvent) => {
     if (busy) return;
     e.preventDefault();
     const row = rows.find((r) => r.e.number === number);
     if (!row) return;
     const downX = e.clientX;
-    const z = zoom;
-    const onMove = (ev: PointerEvent) => setDrag({ number, mode, days: deltaDays(ev.clientX - downX, z) });
+    const dragPpd = ppd;
+    const onMove = (ev: PointerEvent) => setDrag({ number, mode, days: deltaDays(ev.clientX - downX, dragPpd) });
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
       setDrag(null);
-      const days = deltaDays(ev.clientX - downX, z);
+      const days = deltaDays(ev.clientX - downX, dragPpd);
       if (days !== 0) onPatch(number, { [spanField]: spanValue(applyDrag(row.span, mode, days)) });
     };
     window.addEventListener("pointermove", onMove);

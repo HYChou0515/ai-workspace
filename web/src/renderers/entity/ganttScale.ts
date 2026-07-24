@@ -14,10 +14,53 @@ export type Span = { start: string; end: string };
 
 const DAY_MS = 86_400_000;
 
-const PX_PER_DAY: Record<Zoom, number> = { day: 28, week: 10, month: 3 };
+/** The three named zoom stops, in px-per-day. They are no longer the ONLY
+ * densities — the zoom is continuous (a slider) — but they remain the labelled
+ * anchor points the slider snaps to, and bound its travel: `month` is the most
+ * zoomed-out density we offer, `day` the most zoomed-in. */
+export const PPD_ANCHORS: Record<Zoom, number> = { day: 28, week: 10, month: 3 };
+export const PPD_MIN = PPD_ANCHORS.month;
+export const PPD_MAX = PPD_ANCHORS.day;
 
 export function pxPerDay(zoom: Zoom): number {
-  return PX_PER_DAY[zoom];
+  return PPD_ANCHORS[zoom];
+}
+
+/** Keep a (possibly slider- or drag-derived) px-per-day within the zoom range
+ * the anchors define — never more zoomed-in than `day`, never more out than
+ * `month`. */
+export function clampPpd(ppd: number): number {
+  return Math.min(PPD_MAX, Math.max(PPD_MIN, ppd));
+}
+
+/** Map a slider position in [0, 1] to px-per-day. Log-scaled — equal drags feel
+ * like equal zoom multipliers — with the `month` anchor at 0 and `day` at 1.
+ * Out-of-track positions clamp to the anchor densities. */
+export function sliderToPpd(pos: number): number {
+  const p = Math.min(1, Math.max(0, pos));
+  return PPD_MIN * (PPD_MAX / PPD_MIN) ** p;
+}
+
+/** The inverse of {@link sliderToPpd}: the slider position [0, 1] that shows a
+ * given px-per-day. */
+export function ppdToSlider(ppd: number): number {
+  return Math.log(clampPpd(ppd) / PPD_MIN) / Math.log(PPD_MAX / PPD_MIN);
+}
+
+/** The chart canvas width: at least the pane it sits in (so a short project
+ * fills the width instead of leaving a half-empty card), at least the content
+ * it needs (so a long project scrolls). `max(pane, content)`. A `paneAvail` of
+ * 0 (unmeasured, e.g. first paint / SSR) degrades to the natural content width. */
+export function canvasWidthFor(dataDays: number, ppd: number, paneAvail: number): number {
+  return Math.max(dataDays * ppd, paneAvail);
+}
+
+/** How many whole day-columns span a canvas of `width` at `ppd` px/day —
+ * rounded up so the dated grid always reaches the canvas edge, never below 1.
+ * When the canvas is wider than the data (a filled-to-pane short project) this
+ * is how far past the data the axis keeps drawing dates. */
+export function visibleDaysFor(width: number, ppd: number): number {
+  return Math.max(1, Math.ceil(width / ppd));
 }
 
 function toISODate(ms: number): string {
@@ -34,9 +77,10 @@ export function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(b) - Date.parse(a)) / DAY_MS);
 }
 
-/** A horizontal pixel delta → the nearest whole number of days at this zoom. */
-export function deltaDays(dx: number, zoom: Zoom): number {
-  return Math.round(dx / pxPerDay(zoom));
+/** A horizontal pixel delta → the nearest whole number of days at this
+ * (continuous) px-per-day density. */
+export function deltaDays(dx: number, ppd: number): number {
+  return Math.round(dx / ppd);
 }
 
 /** Parse a `daterange` value (`"start/end"` string, `[start, end]`, or
