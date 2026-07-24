@@ -722,6 +722,10 @@ export const messages = {
     "zh-TW": "最近一次生成：讀 {units} 份來源 → 抽 {drafts} 張草稿 → 留 {kept} 張提案",
     en: "Last run: read {units} sources → drafted {drafts} → kept {kept} proposals",
   },
+  "kb.cards.funnel.skipped": {
+    "zh-TW": "（另有 {n} 份仍在索引，完成後再生成）",
+    en: "({n} still indexing — generate again once ready)",
+  },
   "kb.autoDigest.label": { "zh-TW": "自動生成卡片", en: "Auto-generate cards" },
   "kb.autoDigest.help": {
     "zh-TW": "文件索引完成後，自動草擬卡片並提出待釐清的問題。",

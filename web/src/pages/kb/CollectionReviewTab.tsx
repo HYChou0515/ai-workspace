@@ -45,6 +45,8 @@ export function CollectionReviewTab({
               drafts: funnel.n_raw_drafts,
               kept: funnel.n_proposals,
             })}
+            {funnel.n_skipped_indexing > 0 &&
+              ` ${t("kb.cards.funnel.skipped", { n: funnel.n_skipped_indexing })}`}
           </p>
         )}
       </header>

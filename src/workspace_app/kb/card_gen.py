@@ -259,6 +259,12 @@ class CardGenRun(msgspec.Struct):  # → resource "card-gen-run"
     total: int = 0
     done: list[int] = msgspec.field(default_factory=list)  # doc indices digested OK
     failed: list[int] = msgspec.field(default_factory=list)  # doc indices that gave up
+    # P3 coverage (#506/#577 follow-up): doc indices skipped because the source was
+    # still indexing (no extracted text yet) — a SUBSET of `done` (the slot is
+    # closed so the finalize gate still fits), tracked separately so a low n_units
+    # can be attributed to "not ready yet" (deferred to the auto-digest hook) rather
+    # than read as a drafter failure.
+    skipped_indexing: list[int] = msgspec.field(default_factory=list)
     finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
     status: str = "pending"  # pending | running | done | error
     # #506/#577 follow-up: the finalize funnel, persisted so the FE can show
@@ -307,11 +313,14 @@ class CardGenFunnel(msgspec.Struct):
     digested; ``n_raw_drafts`` = card drafts the drafter extracted (pre-merge);
     ``n_proposals`` = proposals kept after merge + classify + reconcile. A tiny
     n_raw_drafts means the DRAFTER produced little; a big n_raw_drafts with tiny
-    n_proposals means DEDUP/reconcile suppressed the rest."""
+    n_proposals means DEDUP/reconcile suppressed the rest. ``n_skipped_indexing`` =
+    selected docs skipped because still indexing (deferred to the auto-digest hook)
+    — so a low n_units reads as "not ready yet", not a drafter failure (P3)."""
 
     n_units: int = 0
     n_raw_drafts: int = 0
     n_proposals: int = 0
+    n_skipped_indexing: int = 0
 
 
 # ── review lifecycle helpers (#481) ──────────────────────────────────────────

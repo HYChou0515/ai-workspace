@@ -189,6 +189,28 @@ async def test_a_still_indexing_doc_is_skipped_not_digested_to_nothing():
     assert [p.keys for p in coord.proposals(jid).proposals] == [["RZ3"]]  # only the ready doc
 
 
+async def test_the_funnel_attributes_the_coverage_gap_to_still_indexing_docs():
+    """P3 coverage visibility (#506/#577 follow-up): when the drafter yields few
+    proposals, a user must be able to tell "the drafter suppressed them" from "half
+    the sources weren't ready yet". A still-indexing doc is SKIPPED (deferred to the
+    auto-digest hook once it's ready), so the run must record HOW MANY it skipped —
+    otherwise a low n_units reads as a drafter failure when it's just pending
+    indexing. Here: 1 ready doc digested, 1 still-indexing doc skipped."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    ready = _add_source(spec, cid, "ready.md", "RZ3 is the third reflow zone")
+    pending = _add_indexing_binary(spec, cid, "pending.png")
+    drafter = _FakeDrafter({"ready.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [ready, pending])
+    await coord.aclose()
+
+    funnel = coord.funnel(jid)
+    assert funnel.n_units == 1  # only the ready doc produced a digest
+    assert funnel.n_skipped_indexing == 1  # the still-indexing doc, attributed
+    assert funnel.n_proposals == 1
+
+
 def _cards(spec, cid: str):
     rm = spec.get_resource_manager(ContextCard)
     return rm.list_resources((QB["collection_id"] == cid).build())

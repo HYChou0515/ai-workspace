@@ -101,6 +101,14 @@ class CardGenRunStore:
         finalize gate so a failed doc can't wedge the run in ``running`` forever."""
         self._cas(run_id, lambda run: _with_index(run, "failed", doc_index))
 
+    def mark_skipped_indexing(self, run_id: str, doc_index: int) -> None:
+        """Idempotently record that doc ``doc_index`` was skipped because it was
+        still indexing (no extracted text yet). It counts as ``done`` — the slot is
+        closed so the finalize gate fits — AND is tracked in ``skipped_indexing`` so
+        the funnel can attribute a low n_units to "not ready yet" rather than a
+        drafter failure (P3, #506/#577 follow-up)."""
+        self._cas(run_id, lambda run: _with_skipped_indexing(run, doc_index))
+
     def claim_finalize(self, run_id: str) -> bool:
         """Try to win the exactly-once finalize gate. Returns ``True`` for the
         single winner — only when every doc is accounted for
@@ -192,3 +200,16 @@ def _with_index(run: CardGenRun, field_name: str, doc_index: int) -> CardGenRun 
     if doc_index in current:
         return None
     return msgspec.structs.replace(run, **{field_name: [*current, doc_index]})
+
+
+def _with_skipped_indexing(run: CardGenRun, doc_index: int) -> CardGenRun | None:
+    """Record a still-indexing skip: append ``doc_index`` to BOTH ``done`` (so the
+    finalize gate closes) and ``skipped_indexing`` (so the funnel can attribute it).
+    Idempotent — a no-op once already recorded, matching ``mark_done``."""
+    if doc_index in run.skipped_indexing:
+        return None
+    return msgspec.structs.replace(
+        run,
+        done=run.done if doc_index in run.done else [*run.done, doc_index],
+        skipped_indexing=[*run.skipped_indexing, doc_index],
+    )

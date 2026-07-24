@@ -49,9 +49,9 @@ from .card_gen import (
     CardDraft,
     CardDrafter,
     CardGenArtifact,
+    CardGenFunnel,
     CardGenJob,
     CardGenPayload,
-    CardGenFunnel,
     CardGenRunSummary,
     CardGenUnit,
     CommitResult,
@@ -216,6 +216,7 @@ class CardGenCoordinator:
             n_units=run.n_units,
             n_raw_drafts=run.n_raw_drafts,
             n_proposals=run.n_proposals,
+            n_skipped_indexing=len(run.skipped_indexing),
         )
 
     def latest_funnel(self, collection_id: str) -> CardGenFunnel | None:
@@ -229,6 +230,7 @@ class CardGenCoordinator:
             n_units=run.n_units,
             n_raw_drafts=run.n_raw_drafts,
             n_proposals=run.n_proposals,
+            n_skipped_indexing=len(run.skipped_indexing),
         )
 
     def _active_count(self) -> int:
@@ -463,7 +465,9 @@ class CardGenCoordinator:
                 run_id,
                 doc_index,
             )
-            self._runs.mark_done(run_id, doc_index)  # close the slot; defer to the hook
+            # Close the slot (defer to the auto-digest hook) AND record it as a
+            # still-indexing skip so the funnel attributes the coverage gap (P3).
+            self._runs.mark_skipped_indexing(run_id, doc_index)
             return
         try:
             # #506: the agentic drafter scopes its ask_knowledge_base to the doc's

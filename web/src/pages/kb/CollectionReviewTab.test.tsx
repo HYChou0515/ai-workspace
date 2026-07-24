@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import type { KbApi } from "../../api/kb";
 import { _resetKbMock, _seedDocQuestionMock, mockKbApi } from "../../api/kbMock";
 import { qk } from "../../api/queryKeys";
 import { LocaleProvider } from "../../lib/i18n";
@@ -66,6 +67,25 @@ describe("<CollectionReviewTab /> (#415 → #481 table)", () => {
     renderTab();
     await screen.findByText("目前沒有待審核項目。");
     expect(screen.queryByTestId("cardgen-funnel-summary")).not.toBeInTheDocument();
+  });
+
+  // P3 coverage: a low draft count that's actually "sources still indexing" must
+  // read as such, not as a drafter failure.
+  it("attributes a coverage gap to still-indexing sources", async () => {
+    const client: KbApi = {
+      ...mockKbApi,
+      getReviewInbox: async () => ({ cards: [], questions: [] }),
+      getLatestCardGenFunnel: async () => ({
+        n_units: 1,
+        n_raw_drafts: 2,
+        n_proposals: 2,
+        n_skipped_indexing: 3,
+      }),
+    };
+    render(<CollectionReviewTab collectionId="col-1" client={client} />, { wrapper: QueryWrap });
+    const summary = await screen.findByTestId("cardgen-funnel-summary");
+    expect(summary).toHaveTextContent(/仍在索引|still indexing/i);
+    expect(summary).toHaveTextContent(/3/);
   });
 
   it("accepts a card, applies it — writes a card, drops from the queue, refreshes Cards", async () => {

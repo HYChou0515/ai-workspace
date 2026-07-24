@@ -57,21 +57,25 @@ class ProposedCardIO(BaseModel):
 
 class GenFunnelOut(BaseModel):
     """#506/#577 follow-up: one finalized run's funnel — n_units docs digested,
-    n_raw_drafts drafts extracted, n_proposals kept — for the 待審核 tab summary."""
+    n_raw_drafts drafts extracted, n_proposals kept, n_skipped_indexing sources
+    skipped because still indexing — for the 待審核 tab summary."""
 
     n_units: int = 0
     n_raw_drafts: int = 0
     n_proposals: int = 0
+    n_skipped_indexing: int = 0
 
 
 class GenStatusOut(BaseModel):
     status: str
     proposals: list[ProposedCardIO]
     # #506/#577 follow-up: the finalize funnel, so the FE shows "drafted X → kept Y"
-    # (n_units = docs digested, n_raw_drafts = drafts extracted, n_proposals = kept).
+    # (n_units = docs digested, n_raw_drafts = drafts extracted, n_proposals = kept,
+    # n_skipped_indexing = sources skipped because still indexing — P3 coverage).
     n_units: int = 0
     n_raw_drafts: int = 0
     n_proposals: int = 0
+    n_skipped_indexing: int = 0
 
 
 class ReviewBody(BaseModel):
@@ -133,6 +137,7 @@ def register_card_gen_routes(app: FastAPI | APIRouter, coordinator: CardGenCoord
             n_units=funnel.n_units,
             n_raw_drafts=funnel.n_raw_drafts,
             n_proposals=funnel.n_proposals,
+            n_skipped_indexing=funnel.n_skipped_indexing,
         )
 
     @app.post("/kb/collections/{collection_id}/context-cards/generate")
@@ -186,7 +191,10 @@ def register_card_gen_routes(app: FastAPI | APIRouter, coordinator: CardGenCoord
         if f is None:
             return None
         return GenFunnelOut(
-            n_units=f.n_units, n_raw_drafts=f.n_raw_drafts, n_proposals=f.n_proposals
+            n_units=f.n_units,
+            n_raw_drafts=f.n_raw_drafts,
+            n_proposals=f.n_proposals,
+            n_skipped_indexing=f.n_skipped_indexing,
         )
 
     @app.get("/kb/collections/{collection_id}/context-card-gen")

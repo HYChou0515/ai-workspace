@@ -528,8 +528,14 @@ export type KbCardGenCommit = { created: number; updated: number; skipped: numbe
 export type KbCardGenRun = { run_id: string; collection_id: string; proposal_count: number };
 
 /** #506/#577 follow-up: the last run's finalize funnel — n_units docs digested,
- * n_raw_drafts drafts extracted, n_proposals kept — for the 待審核 tab summary. */
-export type KbCardGenFunnel = { n_units: number; n_raw_drafts: number; n_proposals: number };
+ * n_raw_drafts drafts extracted, n_proposals kept, n_skipped_indexing sources
+ * skipped because still indexing (P3 coverage) — for the 待審核 tab summary. */
+export type KbCardGenFunnel = {
+  n_units: number;
+  n_raw_drafts: number;
+  n_proposals: number;
+  n_skipped_indexing: number;
+};
 
 /** #377 — one open clarification question in the global inbox. A `term` question
  * carries `term` + `source_doc_ids` (deduped across docs) and becomes a context
