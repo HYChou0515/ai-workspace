@@ -25,8 +25,10 @@ import {
   daysBetween,
   deltaDays,
   type DragMode,
-  pxPerDay,
+  PPD_ANCHORS,
+  ppdToSlider,
   type Span,
+  sliderToPpd,
   spanToDates,
   spanValue,
   visibleDaysFor,
@@ -83,7 +85,7 @@ function groupLanes(rows: Row[], groupField: string | undefined, type: EntityVie
 export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: EntityViewProps) {
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
-  const [zoom, setZoom] = useState<Zoom>("week");
+  const [ppd, setPpd] = useState<number>(PPD_ANCHORS.week);
   const [drag, setDrag] = useState<Drag | null>(null);
   // Measure the scroll pane so a short project can FILL its width (max(pane,
   // content)) instead of hugging a half-empty card; a long one still scrolls.
@@ -107,7 +109,6 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
     return <div style={{ color: "var(--text-paper-d)" }}>No records with a date range to chart yet.</div>;
   }
 
-  const ppd = pxPerDay(zoom);
   const minDate = rows.map((r) => r.span.start).reduce((m, s) => (s < m ? s : m));
   const maxDate = rows.map((r) => r.span.end).reduce((m, e) => (e > m ? e : m));
   const totalDays = daysBetween(minDate, maxDate) + 1;
@@ -153,20 +154,33 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   return (
     <div>
       <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
-        {ZOOMS.map((z) => (
-          <button
-            key={z}
-            type="button"
-            className="btn"
-            data-variant={zoom === z ? "primary" : "secondary"}
-            data-size="sm"
-            data-active={zoom === z || undefined}
-            aria-label={`zoom ${z}`}
-            onClick={() => setZoom(z)}
-          >
-            {z}
-          </button>
-        ))}
+        <div className="ev-gantt__zoom">
+          <input
+            type="range"
+            className="ev-gantt__zoom-range"
+            min={0}
+            max={1}
+            step={0.001}
+            value={ppdToSlider(ppd)}
+            aria-label="zoom"
+            onChange={(e) => setPpd(sliderToPpd(Number(e.target.value)))}
+          />
+          <div className="ev-gantt__zoom-anchors">
+            {ZOOMS.map((z) => (
+              <button
+                key={z}
+                type="button"
+                className="ev-gantt__zoom-anchor"
+                data-active={Math.abs(ppd - PPD_ANCHORS[z]) < 0.5 || undefined}
+                style={{ left: `${ppdToSlider(PPD_ANCHORS[z]) * 100}%` }}
+                aria-label={`zoom ${z}`}
+                onClick={() => setPpd(PPD_ANCHORS[z])}
+              >
+                {z}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       <div className="ev-gantt__scroll scrollable" ref={scrollRef}>

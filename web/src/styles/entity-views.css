@@ -542,6 +542,47 @@
   gap: var(--space-4);
   align-items: center;
 }
+/* continuous zoom: a range slider whose track carries day / week / month snap
+ * anchors — drag anywhere, or click an anchor for that preset's best form. */
+.ev-gantt__zoom {
+  position: relative;
+  width: 220px;
+  padding: 0 var(--space-8) 16px;
+}
+.ev-gantt__zoom-range {
+  display: block;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.ev-gantt__zoom-anchors {
+  position: absolute;
+  left: var(--space-8);
+  right: var(--space-8);
+  bottom: 0;
+  height: 14px;
+}
+.ev-gantt__zoom-anchor {
+  position: absolute;
+  transform: translateX(-50%);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1;
+  color: var(--text-paper-d);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ev-gantt__zoom-anchor:hover {
+  color: var(--text-paper);
+}
+.ev-gantt__zoom-anchor[data-active] {
+  color: var(--accent);
+  font-weight: 600;
+}
 .ev-gantt__scroll {
   overflow-x: auto;
   /* fill the pane — the canvas stretches its dated grid to match (max(pane,

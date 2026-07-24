@@ -95,11 +95,19 @@ describe("GanttView", () => {
     expect(screen.getByText("v1.0")).toBeInTheDocument();
   });
 
-  it("switches the time-axis zoom, changing the bar width", () => {
+  it("snaps to a preset density when its anchor is clicked, changing the bar width", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-11" })] })} />);
     const weekWidth = screen.getByTestId("bar-1").style.width;
     fireEvent.click(screen.getByRole("button", { name: "zoom month" }));
     expect(screen.getByTestId("bar-1").style.width).not.toBe(weekWidth);
+  });
+
+  it("zooms continuously by dragging the density slider", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-31" })] })} />);
+    const slider = screen.getByRole("slider", { name: /zoom/i });
+    const before = screen.getByTestId("bar-1").style.width;
+    fireEvent.change(slider, { target: { value: "1" } }); // slide fully toward the day anchor
+    expect(screen.getByTestId("bar-1").style.width).not.toBe(before);
   });
 
   it("renders a month context band above the fine ticks (two-tier axis)", () => {
