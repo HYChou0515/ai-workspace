@@ -17,6 +17,16 @@ const REASON_KEY: Record<string, MsgKey> = {
   "near-card": "review.suppressed.reason.near-card",
 };
 
+/** #506/#577 follow-up — the KIND of a suppressed candidate, so a reader can tell a
+ * suppressed CARD from a suppressed QUESTION. Crucial because a card is NEVER
+ * wiki-suppressed (#577): a "reason: wiki" row is always a question, and reading it
+ * as "wiki is killing my cards" is exactly the confusion this label prevents. */
+const KIND_KEY: Record<string, MsgKey> = {
+  proposal: "review.type.card",
+  term_question: "review.type.question",
+  card: "review.type.card",
+};
+
 export function SuppressedAuditList({ items }: { items: KbSuppressedItem[] }) {
   const t = useT();
   if (items.length === 0) {
@@ -26,20 +36,35 @@ export function SuppressedAuditList({ items }: { items: KbSuppressedItem[] }) {
       </p>
     );
   }
+  const cards = items.filter((it) => it.kind === "proposal" || it.kind === "card").length;
+  const questions = items.length - cards;
   return (
-    <ul className="rvw-suppressed-list">
-      {items.map((it, i) => (
-        <li
-          key={`${it.collection_id}:${it.cluster_key}:${it.kind}:${i}`}
-          className="rvw-suppressed"
-        >
-          <span className="rvw-suppressed__label">{it.label || it.cluster_key}</span>
-          <span className="rvw-suppressed__reason">
-            {t(REASON_KEY[it.reason] ?? "review.suppressed.reason.other")}
-          </span>
-          <span className="rvw-cluster__coll">{it.collection_name}</span>
-        </li>
-      ))}
-    </ul>
+    <div>
+      <p data-testid="suppressed-summary" className="rvw-suppressed__summary">
+        {t("review.suppressed.summary")
+          .replace("{cards}", String(cards))
+          .replace("{questions}", String(questions))}
+      </p>
+      <ul className="rvw-suppressed-list">
+        {items.map((it, i) => (
+          <li
+            key={`${it.collection_id}:${it.cluster_key}:${it.kind}:${i}`}
+            className="rvw-suppressed"
+          >
+            <span
+              data-testid={`suppressed-kind-${it.kind}`}
+              className="rvw-suppressed__kind"
+            >
+              {t(KIND_KEY[it.kind] ?? "review.type.card")}
+            </span>
+            <span className="rvw-suppressed__label">{it.label || it.cluster_key}</span>
+            <span className="rvw-suppressed__reason">
+              {t(REASON_KEY[it.reason] ?? "review.suppressed.reason.other")}
+            </span>
+            <span className="rvw-cluster__coll">{it.collection_name}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

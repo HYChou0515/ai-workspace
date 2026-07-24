@@ -806,6 +806,10 @@ export const messages = {
     "zh-TW": "沒有被自動略過的候選——所有提案都進了待審核。",
     en: "Nothing was auto-skipped — every candidate reached the review queue.",
   },
+  "review.suppressed.summary": {
+    "zh-TW": "共 {cards} 張卡片、{questions} 個問題被自動略過",
+    en: "{cards} cards, {questions} questions auto-skipped",
+  },
   "review.suppressed.reason.wiki": { "zh-TW": "已在 wiki 說明", en: "Explained in the wiki" },
   "review.suppressed.reason.near-card": {
     "zh-TW": "已有相近卡片",
