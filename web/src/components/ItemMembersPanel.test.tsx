@@ -15,6 +15,8 @@ import { api } from "../api";
 vi.mock("./UserChip", () => ({
   UserChip: ({ userId }: { userId: string }) => <span>{userId}</span>,
 }));
+const pickable = vi.hoisted(() => ({ groups: [] as Array<Record<string, unknown>> }));
+vi.mock("../hooks/usePickableGroups", () => ({ usePickableGroups: () => pickable.groups }));
 vi.mock("./ItemShareDialog", () => ({
   ItemShareDialog: ({ value, onSubmit }: { value: { visibility: string }; onSubmit: (p: unknown) => void }) => (
     <div data-testid="share-dialog" data-visibility={value.visibility}>
@@ -54,7 +56,10 @@ function signInAs(id: string, isSuperuser = false) {
   vi.mocked(api.getMe).mockResolvedValue({ id, is_superuser: isSuperuser, groups: [] });
 }
 
-beforeEach(() => signInAs("alice"));
+beforeEach(() => {
+  signInAs("alice");
+  pickable.groups = [];
+});
 afterEach(cleanup);
 
 describe("ItemMembersPanel", () => {
@@ -97,6 +102,37 @@ describe("ItemMembersPanel", () => {
   it("includes a grantee who is not on the roster", async () => {
     render({ members: [], permission: { visibility: "restricted", read_chat: ["user:erin"] } });
     expect(await screen.findByTestId("member-row-erin")).toBeInTheDocument();
+  });
+
+  // A public item is reachable by everyone, so listing "you and him" as if only
+  // those two have access is misleading — say "Everyone" instead, with the chip.
+  it("shows a public item as Everyone, not a member list", async () => {
+    render({ permission: { visibility: "public" }, members: ["bob"] });
+    expect(await screen.findByText(/Everyone can access this/i)).toBeInTheDocument();
+    expect(screen.getByText("Public")).toBeInTheDocument(); // AccessChip
+    expect(screen.queryByTestId("member-row-bob")).not.toBeInTheDocument();
+  });
+
+  // A private item is owner-only; other roster names have no access, so showing
+  // them is confusing. The owner sees "Only you." + the Private chip.
+  it("shows a private item as Only you (owner), not other members", async () => {
+    render({ permission: { visibility: "private" }, members: ["bob"] });
+    expect(await screen.findByText(/Only you/i)).toBeInTheDocument();
+    expect(screen.getByText("Private")).toBeInTheDocument();
+    expect(screen.queryByTestId("member-row-bob")).not.toBeInTheDocument();
+  });
+
+  // #608 — a group granted access must appear in the roster (the panel used to
+  // read only user grants), resolving the group's name like the share dialog.
+  it("lists a granted group with its resolved name and role", async () => {
+    pickable.groups = [{ resource_id: "group:g1", name: "Eng Team", description: "", member_count: 5 }];
+    render({
+      members: [],
+      permission: { visibility: "restricted", read_meta: ["group:group:g1"], read_chat: ["group:group:g1"] },
+    });
+    const row = await screen.findByTestId("group-row-group:g1");
+    expect(row).toHaveTextContent("Eng Team");
+    expect(row).toHaveTextContent("In workspace");
   });
 
   it("offers access management to someone who may change permission", async () => {

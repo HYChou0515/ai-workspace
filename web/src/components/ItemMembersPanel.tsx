@@ -9,11 +9,14 @@ import {
   type ItemPermission,
   canChangeItemPermission,
   itemGrantsFromPermission,
+  itemGroupGrantsFromPermission,
   itemRoleDef,
   itemVisibility,
   parseItemPermission,
 } from "../lib/itemPermission";
 import { pxToRem } from "../lib/pxToRem";
+import { AccessChip } from "./AccessChip";
+import { Icon } from "./Icon";
 import { ItemShareDialog } from "./ItemShareDialog";
 import { UserChip } from "./UserChip";
 
@@ -53,8 +56,11 @@ export function ItemMembersPanel({
   const { isSuperuser, groups } = useIsSuperuserState();
   const [sharing, setSharing] = useState(false);
   const owner = (item.created_by as string) || (item.owner as string) || "";
-  const perm = parseItemPermission((item as Record<string, unknown>).permission);
+  const raw = (item as Record<string, unknown>).permission;
+  const perm = parseItemPermission(raw);
+  const vis = itemVisibility(raw);
   const canManage = canChangeItemPermission(perm, me, owner, isSuperuser, groups);
+  const pickableGroups = usePickableGroups();
   const label = manifest.labels?.members ?? "Members";
 
   return (
@@ -63,28 +69,59 @@ export function ItemMembersPanel({
         <span data-testid="members-title" className="caps">
           {label}
         </span>
-        {canManage && (
-          <button
-            type="button"
-            data-testid="members-manage"
-            className="btn"
-            data-variant="secondary"
-            data-size="sm"
-            onClick={() => (onManage ? onManage() : setSharing(true))}
-          >
-            Manage access…
-          </button>
-        )}
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {/* The item's access setting up front — a public/private item lists no
+              members, so the chip is what tells you the state (#578). */}
+          <AccessChip visibility={vis} />
+          {canManage && (
+            <button
+              type="button"
+              data-testid="members-manage"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              onClick={() => (onManage ? onManage() : setSharing(true))}
+            >
+              Manage access…
+            </button>
+          )}
+        </span>
       </div>
 
-      <ul style={list}>
-        {rosterOf(item, perm, owner).map((row) => (
-          <li key={row.userId} data-testid={`member-row-${row.userId}`} style={rowStyle}>
-            <UserChip userId={row.userId} />
-            <span style={roleText}>{row.role}</span>
-          </li>
-        ))}
-      </ul>
+      {/* The roster only means something when access is RESTRICTED. Public reaches
+          everyone (listing two names implies only those two) and private reaches
+          only the owner, so both get a one-line summary, not a misleading list. */}
+      {vis === "public" && <div style={accessNote}>Everyone can access this.</div>}
+      {vis === "private" && <div style={accessNote}>{me === owner ? "Only you." : "Only the owner."}</div>}
+      {vis === "unknown" && (
+        <div style={accessNote}>This {manifest.item.noun.toLowerCase()}’s access settings can’t be read.</div>
+      )}
+      {vis === "restricted" && (
+        <ul style={list}>
+          {rosterOf(item, perm, owner).map((row) => (
+            <li key={row.userId} data-testid={`member-row-${row.userId}`} style={rowStyle}>
+              <UserChip userId={row.userId} />
+              <span style={roleText}>{row.role}</span>
+            </li>
+          ))}
+          {/* #608 — a group granted access is a member too; resolve its name the
+              same way the share dialog does ("Unknown group" if we can't). */}
+          {perm &&
+            itemGroupGrantsFromPermission(perm).map((g) => {
+              const pg = pickableGroups.find((x) => x.resource_id === g.groupId);
+              return (
+                <li key={g.groupId} data-testid={`group-row-${g.groupId}`} style={rowStyle}>
+                  <span style={groupPill}>
+                    <Icon name="users" size={13} color="var(--text-paper-d)" />
+                    {pg?.name ?? "Unknown group"}
+                    {pg ? ` · ${pg.member_count}` : ""}
+                  </span>
+                  <span style={roleText}>{itemRoleDef(g.role).label}</span>
+                </li>
+              );
+            })}
+        </ul>
+      )}
 
       {sharing && (
         <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />
@@ -218,3 +255,5 @@ const rowStyle: React.CSSProperties = {
   fontSize: pxToRem(12),
 };
 const roleText: React.CSSProperties = { color: "var(--text-paper-d)", fontSize: pxToRem(11) };
+const accessNote: React.CSSProperties = { color: "var(--text-paper-d)", fontSize: pxToRem(12) };
+const groupPill: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4 };
