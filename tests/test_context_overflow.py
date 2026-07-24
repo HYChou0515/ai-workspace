@@ -215,3 +215,35 @@ async def test_the_ceiling_stated_in_the_rejection_is_remembered():
     await _drive(runner, _ctx_with_history(2))
 
     assert runner.learned_limit("m", None) == 32768
+
+
+async def test_the_retry_uses_the_configured_policy_when_the_limit_is_stated():
+    """#624: the 400-retry path had its own hardcoded "drop the older half" —
+    the same product decision the reduction algorithm owns, answered twice and
+    differently. When the rejection states a ceiling we know the budget, so the
+    SAME algorithm decides what to give up; a blind halving is only for the case
+    where no ceiling was stated and there is nothing to aim at."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    seen: list[list[dict]] = []
+
+    class _Runner(LitellmAgentRunner):
+        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+            seen.append(list(ctx.history))
+            if len(ctx.history) > 3:
+                raise _Boom("This model's maximum context length is 40 tokens.")
+            yield MessageDelta(text="ok")
+
+    ctx = _ctx_with_history(0)
+    ctx.history = [
+        {"role": "user", "content": "分析這批資料並寫成報告"},
+        *[{"role": "tool", "content": "x" * 6_000} for _ in range(4)],
+        {"role": "user", "content": "現在呢?"},
+    ]
+
+    await _drive(_Runner(), ctx)
+
+    assert len(seen) > 1, "a stated ceiling must drive a retry"
+    # The policy folded the dumps rather than blindly dropping the front, so the
+    # opening request survived into the retry.
+    assert any("分析這批資料" in m["content"] for m in seen[-1])

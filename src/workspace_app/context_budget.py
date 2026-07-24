@@ -126,13 +126,24 @@ def estimate_tokens(text: str) -> int:
 
 
 def estimate_messages(messages: Any) -> int:
-    """Estimated tokens for a list of persisted messages, tool arguments
-    included — a large ``patch`` / ``args`` payload occupies the window exactly
-    like prose does, and the old estimator counted it too."""
+    """Estimated tokens for a list of messages, tool arguments included — a large
+    ``patch`` / ``args`` payload occupies the window exactly like prose does.
+
+    Handles BOTH shapes the system carries a message in: a persisted ``Message``
+    object and an SDK input item (a plain dict). Counting only one of them does
+    not fail loudly — it silently returns 0 for the other, so everything "fits",
+    every policy becomes a no-op, and the caller falls back to whatever blunt
+    rule it kept for emergencies. That is precisely how the retry path came to
+    drop the user's opening request while a policy that would have preserved it
+    ran and reported success."""
     total = 0
     for m in messages:
-        total += estimate_tokens(getattr(m, "content", "") or "")
-        args = getattr(m, "tool_args", None)
+        if isinstance(m, dict):
+            total += estimate_tokens(str(m.get("content", "") or ""))
+            args = m.get("arguments") or m.get("tool_args")
+        else:
+            total += estimate_tokens(getattr(m, "content", "") or "")
+            args = getattr(m, "tool_args", None)
         if args:
             total += estimate_tokens(str(args))
     return total

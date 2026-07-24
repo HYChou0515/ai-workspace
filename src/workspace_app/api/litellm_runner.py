@@ -46,6 +46,7 @@ from ..agent.tools import build_tools
 from ..context_budget import (
     LimitLearner,
     detect_truncation,
+    estimate_messages,
     estimate_tokens,
     halve_history,
     is_context_overflow,
@@ -700,6 +701,24 @@ def _emit_llm_trace(
         _LOGGER.debug("llm trace emission failed", exc_info=True)
 
 
+def _shrink_history(history: list[Any], stated_limit: int | None) -> list[Any]:
+    """Make the next attempt smaller (#624).
+
+    When the rejection stated a ceiling we know the budget, so the CONFIGURED
+    policy decides what to give up — the same decision, answered the same way,
+    as the pre-send path. Without a stated ceiling there is no budget to aim at,
+    so a blind halving is all that is available; it converges in a few rounds
+    and floors at one message."""
+    from ..context_reducers import default_reducer
+
+    if stated_limit is None:
+        return halve_history(history)
+    result = default_reducer().reduce(history, budget=stated_limit, estimate=estimate_messages)
+    # A policy that could not shrink anything must still make progress, or the
+    # retry would resend an identical request.
+    return result.messages if len(result.messages) < len(history) else halve_history(history)
+
+
 def _sent_estimate(ctx: AgentToolContext, prompt: str) -> int:
     """Roughly how many tokens this request carried: the per-turn overhead the
     context builder already measured (system prompt + tool schemas), plus the
@@ -936,7 +955,7 @@ class LitellmAgentRunner:
                             ctx.agent_config.model, self._base_url, limit=stated
                         )
                     if len(ctx.history) > 1:
-                        ctx.history = halve_history(ctx.history)
+                        ctx.history = _shrink_history(ctx.history, stated)
                         _LOGGER.warning(
                             "litellm_runner: request too long — retrying with %d history "
                             "items (investigation=%s)",

@@ -133,7 +133,6 @@ def history_items(
     max_tokens: int = 0,
     users: UserDirectory | None = None,
     on_trim: Callable[[int], None] | None = None,
-    reducer: str | None = None,
     on_reduce: Callable[[str], None] | None = None,
 ) -> list[dict[str, Any]]:
     """Map persisted messages → SDK input items for cross-turn memory.
@@ -175,11 +174,9 @@ def history_items(
         # one that sacrifices the user's opening request before it touches a
         # single tool dump — so it is selected by name like any other.
         from ..context_budget import estimate_messages
-        from ..context_reducers import DEFAULT_REDUCER, get_reducer
+        from ..context_reducers import default_reducer
 
-        result = get_reducer(reducer or DEFAULT_REDUCER).reduce(
-            msgs, budget=max_tokens, estimate=estimate_messages
-        )
+        result = default_reducer().reduce(msgs, budget=max_tokens, estimate=estimate_messages)
         msgs = result.messages
         if result.changed and on_reduce is not None:
             # The notice describes what the policy actually gave up; "N messages

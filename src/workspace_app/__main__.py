@@ -320,8 +320,6 @@ def main() -> None:
             history_max_context_tokens=settings.history.max_context_tokens,
             # #624: the operator's declared endpoint ceiling (None ⇒ resolve per turn).
             context_limit=settings.history.context_limit,
-            # #624: WHICH policy decides what to give up when it does not fit.
-            history_reducer=settings.history.reducer,
             packages=packages,
             # `prebuilt_dir=None` even with packages: the sandbox's `tools_dir`
             # above already bind-mounts PREBUILT_DIR read-only at /.tools/ inside
