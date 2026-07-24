@@ -88,6 +88,20 @@ def test_mark_failed_is_idempotent():
     assert _get(store, run_id).failed == [2]  # recorded once, not twice
 
 
+def test_mark_skipped_indexing_records_done_and_skip_and_is_idempotent():
+    """A still-indexing skip counts as ``done`` (so the finalize gate closes) AND is
+    tracked in ``skipped_indexing`` (so the funnel attributes it). A redelivered
+    process job records it once, not twice (P3, #506/#577 follow-up)."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = store.start(cid, ["d1", "d2", "d3"])
+    store.mark_skipped_indexing(run_id, 1)
+    store.mark_skipped_indexing(run_id, 1)  # redelivery of the same skipped doc
+    run = _get(store, run_id)
+    assert run.skipped_indexing == [1]  # recorded once
+    assert run.done == [1]  # counted toward the finalize gate, once
+
+
 def test_finalize_gate_opens_only_when_all_docs_accounted_for():
     spec, cid = _spec_with_collection()
     store = CardGenRunStore(spec)

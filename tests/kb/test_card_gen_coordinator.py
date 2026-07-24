@@ -738,6 +738,14 @@ async def test_finalize_persists_the_funnel_counts_on_the_run():
     assert funnel.n_proposals == 2  # both kept (distinct keys, no existing card)
 
 
+async def test_funnel_of_a_vanished_run_is_all_zero():
+    """``funnel`` on a run that never existed (or cascaded away) returns an empty
+    funnel, not an error — the status route calls it for any job id."""
+    spec = make_spec(default_user="u")
+    f = CardGenCoordinator(spec, _FakeDrafter({})).funnel("card-gen-run:gone")
+    assert (f.n_units, f.n_raw_drafts, f.n_proposals, f.n_skipped_indexing) == (0, 0, 0, 0)
+
+
 async def test_latest_funnel_reports_the_most_recent_finalized_run():
     """The 待審核 tab shows 'last run: drafted X → kept Y'. That summary must come
     from the collection's MOST RECENT finalized run — including one that kept 0
