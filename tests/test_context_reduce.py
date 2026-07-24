@@ -134,3 +134,35 @@ def test_every_strategy_respects_the_budget_and_keeps_the_newest(name):
     assert result.messages, name
     assert result.messages[-1] is msgs[-1], name
     assert _tokens(result.messages) <= 1_500 or len(result.messages) == 1, name
+
+
+# ── the default: decided on the evidence, not left open ─────────────
+
+
+def test_the_default_protects_both_the_task_and_the_dialogue():
+    """#624's measurements point at one answer, so the default is that answer.
+
+    A 30 KB `exec` dump costs ~20 turns of dialogue, and the opening request is
+    what every later turn refers back to. So: fold the bulky OLD dumps first
+    (they are the bulk and the least worth re-reading verbatim), and if that is
+    still not enough, drop from the middle rather than sacrifice the task.
+    Shipping `drop-oldest` as the default would mean shipping the behaviour this
+    issue exists to fix."""
+    from workspace_app.context_reducers import DEFAULT_REDUCER
+
+    msgs = _thread()
+    result = get_reducer(DEFAULT_REDUCER).reduce(msgs, budget=2_500, estimate=_tokens)
+
+    assert result.messages[0].content == "分析這批晶圓資料,做 SPC,寫成報告"
+    assert _tokens(result.messages) <= 2_500
+    human = len([m for m in result.messages if m.role in ("user", "assistant")])
+    incumbent = get_reducer("drop-oldest").reduce(msgs, budget=2_500, estimate=_tokens)
+    assert human > len([m for m in incumbent.messages if m.role in ("user", "assistant")])
+
+
+def test_the_incumbent_is_still_one_config_line_away():
+    """Choosing a default must not remove the choice — that was the original
+    defect."""
+    from workspace_app.context_reducers import REDUCERS
+
+    assert "drop-oldest" in REDUCERS

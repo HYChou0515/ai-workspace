@@ -286,7 +286,7 @@ class HistorySettings:
     `chars // 4` estimator that undercounts Traditional Chinese 3.6x. Left here
     as an override for deploys that want a hard ceiling of their own."""
 
-    reducer: str = "drop-oldest"
+    reducer: str = "elide-then-keep-task"
     """WHAT to give up when the thread does not fit (#624).
 
     `drop-oldest` (default) — the incumbent: drop from the front. Note what that
@@ -297,9 +297,10 @@ class HistorySettings:
       dialogue, so this buys back far more of the session.
     `keep-task` — never drop the first user message; drop from the middle.
 
-    The default is the incumbent so that introducing the choice changed no
-    behaviour on its own. It is NOT a recommendation — which policy fits your
-    work is a product decision this code deliberately does not make for you."""
+    `elide-then-keep-task` (default) — fold the bulky old dumps, and if that is
+      still not enough drop from the middle rather than lose the task. Chosen on
+      this issue's measurements: defaulting to the incumbent would ship the very
+      behaviour #624 exists to fix. Every other policy is one line away."""
 
     context_limit: int | None = None
     """The endpoint's context window in tokens, when the operator knows it.

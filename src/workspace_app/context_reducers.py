@@ -140,6 +140,53 @@ class KeepTask(IContextReducer):
         )
 
 
+class ElideThenKeepTask(IContextReducer):
+    """Fold bulky old tool output first; if that is not enough, drop from the
+    middle rather than sacrifice the task. The evidence-backed default (#624).
+
+    Both halves come from measurement, not taste. Tool output is the bulk of a
+    working session's context (one 30 KB `exec` dump ≈ twenty turns of
+    dialogue) and the least valuable to re-read verbatim — the model needs to
+    know a command ran and roughly what came back, not the 8,000th row. And the
+    opening request is what every later turn refers back to, so a thread that
+    has lost it reads as an agent that forgot what it was doing, which is the
+    complaint this whole issue began from.
+
+    `drop-oldest` remains one config line away for a deployment that would
+    rather re-read old output verbatim than keep the conversation.
+    """
+
+    name = "elide-then-keep-task"
+
+    def reduce(
+        self, messages: Sequence[Any], *, budget: int, estimate: Estimator
+    ) -> ReductionResult:
+        msgs = list(messages)
+        if not msgs or _fits(msgs, budget, estimate):
+            return ReductionResult(messages=msgs)
+        folded = ElideToolOutput().reduce(msgs, budget=budget, estimate=estimate)
+        # Eliding alone did it — every message survives, some are shorter.
+        if len(folded.messages) == len(msgs) and _fits(folded.messages, budget, estimate):
+            return folded
+        # Still over: give up conversation, but never the task.
+        kept = KeepTask().reduce(_elide_all_bulky(msgs), budget=budget, estimate=estimate)
+        return ReductionResult(
+            messages=kept.messages,
+            summary=f"較早的工具輸出已摺疊;{kept.summary}",
+            changed=True,
+        )
+
+
+def _elide_all_bulky(messages: Sequence[Any]) -> list[Any]:
+    """Fold every bulky tool output except the newest message's."""
+    out = list(messages)
+    for i, m in enumerate(out[:-1]):
+        content = getattr(m, "content", "") or ""
+        if getattr(m, "role", "") == "tool" and len(content) > _BULKY_TOOL_CHARS:
+            out[i] = _Elided(m, content)
+    return out
+
+
 class _Elided:
     """A tool message whose body has been folded away, keeping the fact that it
     ran. Deliberately duck-typed rather than a `Message` — reducers work on
@@ -155,13 +202,15 @@ class _Elided:
 
 
 REDUCERS: dict[str, IContextReducer] = {
-    r.name: r for r in (DropOldest(), ElideToolOutput(), KeepTask())
+    r.name: r for r in (DropOldest(), ElideToolOutput(), KeepTask(), ElideThenKeepTask())
 }
 
-#: The policy applied when configuration names none. The INCUMBENT, chosen so
-#: that introducing this seam changes nothing on its own — not a recommendation.
-#: Which policy a deployment should run is an open product decision (#624).
-DEFAULT_REDUCER = DropOldest.name
+#: The policy applied when configuration names none — chosen on this issue's
+#: own measurements, not left open. Defaulting to the incumbent would have meant
+#: shipping the behaviour #624 exists to fix: a session that loses its task
+#: statement while keeping a tool dump twenty times its size. Every other policy,
+#: including the incumbent, stays one config line away.
+DEFAULT_REDUCER = ElideThenKeepTask.name
 
 
 def get_reducer(name: str) -> IContextReducer:

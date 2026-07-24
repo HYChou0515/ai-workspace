@@ -408,7 +408,9 @@
 # `reducer` — WHAT to give up when the thread still does not fit. This is a
 # product decision, so it is a choice here rather than an assumption in the
 # code:
-#   drop-oldest        (default, the incumbent) drop from the front. Note the
+#   elide-then-keep-task  (DEFAULT) fold bulky old tool output, and if that
+#                      is still not enough drop from the middle — never the task.
+#   drop-oldest        (the incumbent) drop from the front. Note the
 #                      cost: your OPENING request — the task every later turn
 #                      refers back to — is sacrificed before a single byte of
 #                      any tool dump.
@@ -418,11 +420,11 @@
 #                      the session.
 #   keep-task          never drop the first user message; drop from the middle.
 #
-# The default is the incumbent so that offering the choice changed nothing on
-# its own. It is not a recommendation.
+# The default was chosen on this issue's own measurements — defaulting to the
+# incumbent would have shipped the behaviour #624 exists to fix. Switch freely.
 #
 # history:
-#   reducer: drop-oldest                  # ← drop-oldest | elide-tool-output | keep-task
+#   reducer: elide-then-keep-task         # ← or drop-oldest | elide-tool-output | keep-task
 #   context_limit: 32768                  # ← the ceiling, if you know it
 #   max_messages: 0                       # ← optional hard cap (0 = off)
 #   max_context_tokens: 0                 # ← optional hard cap (0 = off)
