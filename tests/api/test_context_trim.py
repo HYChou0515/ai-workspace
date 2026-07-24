@@ -383,3 +383,27 @@ async def test_the_catalog_rung_does_not_block_the_event_loop():
 
     assert elapsed < 0.2, f"the catalog rung blocked the event loop for {elapsed:.2f}s"
     assert got is None, "not back yet ⇒ unknown, which already means 'send it all'"
+
+
+def test_the_turn_overhead_is_measured_once(monkeypatch):
+    """Building the tool schemas to size them costs ~28 ms, on the event loop,
+    and the turn was doing it TWICE: once inside `_budget_for` to derive the
+    history budget, once again to stamp `context_overhead_tokens`. It is the
+    same number both times.
+    """
+    from workspace_app.api.turn_context import TurnContextBuilder
+
+    real = TurnContextBuilder._tools_tokens
+    calls = 0
+
+    def _counting(self, agent_config, *, app_slug, profile):
+        nonlocal calls
+        calls += 1
+        return real(self, agent_config, app_slug=app_slug, profile=profile)
+
+    monkeypatch.setattr(TurnContextBuilder, "_tools_tokens", _counting)
+
+    client, _spec, iid = _app_with_limit(40_000)
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "量測資料異常"})
+
+    assert calls == 1, f"the tool schemas were built {calls} times for one turn"

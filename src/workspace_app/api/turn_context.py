@@ -159,6 +159,7 @@ class TurnContextBuilder:
         *,
         app_slug: str | None = None,
         profile: str | None = None,
+        overhead_tokens: int | None = None,
     ) -> int | None:
         """Tokens left for replayed history on this turn, or ``None`` for "no
         ceiling known — do not trim" (#624).
@@ -181,6 +182,11 @@ class TurnContextBuilder:
         since #480 carries every tool's documentation) plus the tool schemas that
         ride alongside it. The old budget could see neither, so an 18.5k-token
         prompt and a 24k history budget were aimed at a 40,960-token model.
+
+        ``overhead_tokens`` lets a caller that already measured it pass it in.
+        Building the tool schemas to size them costs ~28 ms on the event loop, and
+        a turn needs the same figure twice — for this budget and for the ctx field
+        the truncation check reads.
         """
         from ..context_budget import (
             deferred_lookup,
@@ -208,8 +214,10 @@ class TurnContextBuilder:
                 lambda: self._catalog_fn(agent_config.model),
             ),
         )
-        overhead = estimate_tokens(agent_config.system_prompt or "")
-        overhead += self._tools_tokens(agent_config, app_slug=app_slug, profile=profile)
+        overhead = overhead_tokens
+        if overhead is None:
+            overhead = estimate_tokens(agent_config.system_prompt or "")
+            overhead += self._tools_tokens(agent_config, app_slug=app_slug, profile=profile)
         budget = history_budget(limit, overhead_tokens=overhead)
         if budget is None:
             return None
@@ -268,6 +276,11 @@ class TurnContextBuilder:
         # in the thread. The cut used to be unspeakable — nothing recorded it.
         cut: list[int] = []
         said: list[str] = []
+        # #624: measured ONCE — sizing the tool schemas builds them (~28 ms, on
+        # the event loop) and this turn needs the same figure twice: to derive
+        # the history budget, and as the ctx field the silent-truncation check
+        # compares against.
+        overhead = self._overhead_for(agent_config, item_id)
         history = history_items(
             history_messages,
             max_messages=self._history_max_messages,
@@ -279,14 +292,7 @@ class TurnContextBuilder:
             # ceiling with no room left, which must trim to nothing, not to all.
             max_tokens=(
                 derived
-                if (
-                    derived := self._budget_for(
-                        agent_config,
-                        app_slug=self._locator.slug_of(item_id),
-                        profile=self._locator.profile_of(item_id),
-                    )
-                )
-                is not None
+                if (derived := self._budget_for(agent_config, overhead_tokens=overhead)) is not None
                 else self._history_max_context_tokens
             ),
             users=self._users,
@@ -320,7 +326,7 @@ class TurnContextBuilder:
             history=history,
             history_trimmed=cut[0] if cut else 0,
             history_reduced_note=said[0] if said else "",
-            context_overhead_tokens=self._overhead_for(agent_config, item_id),
+            context_overhead_tokens=overhead,
             packages=self._packages or [],
             prebuilt_dir=self._prebuilt_dir,
             app_slug=self._locator.slug_of(item_id),
