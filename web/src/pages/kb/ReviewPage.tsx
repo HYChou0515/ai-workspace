@@ -9,6 +9,7 @@
  */
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 
 import { kbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
@@ -209,6 +210,12 @@ export function ReviewPage() {
 
       {isMerges ? (
         <div className="rvw-page__body">
+          {/* #636: this tab only shows identities with a PENDING proposal, which
+              is a sliver of the graph. The browser is the way to everything
+              else — and the only entry that does not need an id in hand. */}
+          <Link className="rvw-page__browse-link" to="/kb/graph">
+            {t("graph.browse.link")} →
+          </Link>
           {merges.isPending ? (
             <Skeleton style={{ height: 220 }} />
           ) : (

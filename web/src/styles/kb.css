@@ -3822,3 +3822,27 @@
 .eval-card__bar-fill { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
 .eval-card__bar-v { width: 42px; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-paper); flex-shrink: 0; }
 
+
+/* #636 — the graph browser: a list you can search, narrow and page through.
+   No total is shown anywhere because the API cannot produce one cheaply. */
+.gbr { max-width: 900px; margin: 0 auto; padding: var(--space-32) var(--space-24) var(--space-48); }
+.gbr__head { margin-bottom: var(--space-24); }
+.gbr__eyebrow { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-paper-d2); margin: 0 0 var(--space-8); }
+.gbr__title { font-family: var(--font-display); font-size: var(--text-display-md); font-weight: 680; color: var(--text-paper); margin: 0 0 var(--space-8); }
+.gbr__blurb { color: var(--text-paper-d); font-size: var(--text-body-sm); margin: 0; max-width: 62ch; }
+.gbr__filters { display: flex; gap: var(--space-8); flex-wrap: wrap; margin-bottom: var(--space-16); }
+.gbr__search, .gbr__kind, .gbr__collection { font: inherit; font-size: var(--text-body-sm); padding: 6px 10px; border: 1px solid var(--paper-3); border-radius: var(--radius-chip); background: var(--white); color: var(--text-paper); }
+.gbr__search { flex: 2 1 240px; }
+.gbr__kind { flex: 1 1 160px; }
+.gbr__collection { flex: 1 1 160px; }
+.gbr__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.gbr__row { display: flex; align-items: baseline; gap: var(--space-12); padding: 10px 14px; background: var(--white); border: 1px solid var(--paper-3); border-radius: var(--radius-card); }
+.gbr__name { font-family: var(--font-display); font-size: var(--text-body-lg); font-weight: 640; color: var(--text-paper); text-decoration: none; }
+.gbr__name:hover { color: var(--accent); }
+.gbr__kind-chip { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--accent-h); background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: var(--radius-chip); padding: 1px 8px; }
+.gbr__aliases { margin-left: auto; font-size: var(--text-small); color: var(--text-paper-d2); }
+.gbr__pager { display: flex; gap: var(--space-8); justify-content: center; margin-top: var(--space-24); }
+.gbr__page-btn { font: inherit; font-size: var(--text-body-sm); padding: 6px 16px; border: 1px solid var(--paper-3); border-radius: var(--radius-chip); background: var(--white); color: var(--text-paper); cursor: pointer; }
+.gbr__page-btn:hover { border-color: var(--accent); color: var(--accent); }
+.rvw-page__browse-link { display: inline-block; margin-bottom: var(--space-12); font-size: var(--text-body-sm); color: var(--accent-h); text-decoration: none; }
+.rvw-page__browse-link:hover { text-decoration: underline; }

@@ -137,6 +137,8 @@ export const qk = {
     // The doc IDE's cheap open-a-doc metadata (rationale + parser guidance) —
     // separate from `doc` (the heavy render, used by the citation drawer).
     docMeta: (id: string) => ["kb", "doc-meta", id] as const,
+    graphEntities: (p: { q: string; kind: string; collection: string; offset: number }) =>
+      ["kb", "graph", "entities", p] as const,
     graphEntity: (id: string) => ["kb", "graph-entity", id] as const,
     evalRuns: () => ["kb", "eval-runs"] as const,
     evalResults: () => ["kb", "eval-results"] as const,
