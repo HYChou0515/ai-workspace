@@ -102,6 +102,11 @@ describe("GanttView", () => {
     expect(screen.getByTestId("bar-1").style.width).not.toBe(weekWidth);
   });
 
+  it("renders a month context band above the fine ticks (two-tier axis)", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-20" })] })} />);
+    expect(screen.getByText("Jan 2026")).toBeInTheDocument();
+  });
+
   it("marks today when it falls within the chart range", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2020-01-01/2035-01-01" })] })} />);
     expect(screen.getByTestId("gantt-today")).toBeInTheDocument();

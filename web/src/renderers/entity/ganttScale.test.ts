@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyDrag,
+  AXIS_MIN_LABEL_PX,
+  axisFor,
   canvasWidthFor,
   clampPpd,
   daysBetween,
@@ -60,6 +62,52 @@ describe("spanToDates", () => {
   it("returns null for junk or a reversed range", () => {
     expect(spanToDates("nope")).toBeNull();
     expect(spanToDates("2026-02-01/2026-01-01")).toBeNull();
+  });
+});
+
+describe("axisFor", () => {
+  it("never spaces two fine labels closer than the min label width (fixes day-zoom overlap)", () => {
+    // day anchor over a full month — the exact case that used to overlap MM-DD every 28px
+    const axis = axisFor("2026-07-01", 31, PPD_ANCHORS.day);
+    expect(axis.fine.length).toBeGreaterThan(1); // still shows ticks, doesn't go blank
+    for (let i = 1; i < axis.fine.length; i++) {
+      const gapPx = (axis.fine[i].day - axis.fine[i - 1].day) * PPD_ANCHORS.day;
+      expect(gapPx).toBeGreaterThanOrEqual(AXIS_MIN_LABEL_PX);
+    }
+  });
+
+  it("keeps labels non-overlapping across the whole zoom range", () => {
+    for (const ppd of [3, 4.9, 5, 10, 18, 28]) {
+      const axis = axisFor("2026-03-15", 500, ppd);
+      for (let i = 1; i < axis.fine.length; i++) {
+        const gapPx = (axis.fine[i].day - axis.fine[i - 1].day) * ppd;
+        expect(gapPx).toBeGreaterThanOrEqual(AXIS_MIN_LABEL_PX);
+      }
+    }
+  });
+
+  it("zoomed in: day-number fine ticks under month bands (best form 天=月帶+日號)", () => {
+    const axis = axisFor("2026-07-01", 40, PPD_ANCHORS.day);
+    expect(axis.coarse.map((b) => b.label)).toContain("Jul 2026");
+    expect(axis.coarse.map((b) => b.label)).toContain("Aug 2026");
+    expect(axis.fine.every((t) => /^\d{1,2}$/.test(t.label))).toBe(true);
+  });
+
+  it("zoomed out: month-name fine ticks under year bands (best form 月=年帶+月份)", () => {
+    const axis = axisFor("2026-01-01", 400, PPD_ANCHORS.month);
+    expect(axis.unit).toBe("month");
+    expect(axis.coarse.map((b) => b.label)).toEqual(expect.arrayContaining(["2026", "2027"]));
+    expect(axis.fine.some((t) => t.label === "Feb")).toBe(true);
+  });
+
+  it("coarse bands tile the whole visible window with no gaps", () => {
+    const axis = axisFor("2026-07-10", 120, PPD_ANCHORS.week);
+    expect(axis.coarse[0].day).toBe(0);
+    for (let i = 1; i < axis.coarse.length; i++) {
+      expect(axis.coarse[i].day).toBe(axis.coarse[i - 1].day + axis.coarse[i - 1].days);
+    }
+    const last = axis.coarse[axis.coarse.length - 1];
+    expect(last.day + last.days).toBe(120);
   });
 });
 

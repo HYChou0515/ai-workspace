@@ -609,6 +609,30 @@
   border-bottom: 1px solid var(--paper-3);
   background: var(--paper-2);
 }
+/* two-tier axis: a coarse context band (month / year) over the fine tick row */
+.ev-gantt__axis-coarse {
+  position: relative;
+  border-bottom: 1px solid color-mix(in srgb, var(--paper-3) 60%, transparent);
+}
+.ev-gantt__axis-fine {
+  position: relative;
+}
+.ev-gantt__coarse-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--paper-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-paper);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
 .ev-gantt__tick {
   position: absolute;
   top: 0;

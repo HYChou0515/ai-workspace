@@ -124,3 +124,103 @@ export function applyDrag(span: Span, mode: DragMode, days: number): Span {
 export function spanValue(span: Span): string {
   return `${span.start}/${span.end}`;
 }
+
+// ── two-tier axis (#448 responsive redesign) ───────────────────────────────
+// A coarse context band (months, or years when zoomed way out) over a fine
+// tick row (day numbers → week starts → month names), the fine row THINNED so
+// two labels can never collide at any density — the cure for the day-zoom
+// "MM-DD every 28px" overlap. All positions are day-offsets from minDate; the
+// view multiplies by px-per-day.
+
+export type FineTick = { day: number; label: string };
+export type CoarseBand = { day: number; days: number; label: string };
+export type Axis = { unit: Zoom; fine: FineTick[]; coarse: CoarseBand[] };
+
+/** Horizontal room (px) reserved per fine-tier label. A fine step is only
+ * chosen if `stepDays * ppd` clears this, so labels never touch. */
+export const AXIS_MIN_LABEL_PX = 36;
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** ppd at/above which the axis shows within-month detail (days/weeks) rather
+ * than a month overview. */
+const DETAIL_PPD = 5;
+
+function ymd(date: string): { y: number; m: number; d: number } {
+  const t = new Date(`${date}T00:00:00Z`);
+  return { y: t.getUTCFullYear(), m: t.getUTCMonth(), d: t.getUTCDate() };
+}
+
+function firstOfMonth(y: number, m: number): string {
+  return `${y}-${String(m + 1).padStart(2, "0")}-01`;
+}
+
+/** Calendar-month bands clipped to [0, visibleDays), in day-offsets from
+ * minDate. A band opening before minDate is clamped to day 0. */
+function monthBands(minDate: string, visibleDays: number): CoarseBand[] {
+  const bands: CoarseBand[] = [];
+  let cursor = 0;
+  while (cursor < visibleDays) {
+    const { y, m } = ymd(shiftDate(minDate, cursor));
+    const nextStart = firstOfMonth(m === 11 ? y + 1 : y, m === 11 ? 0 : m + 1);
+    const bandEnd = Math.min(daysBetween(minDate, nextStart), visibleDays);
+    bands.push({ day: cursor, days: bandEnd - cursor, label: `${MONTHS[m]} ${y}` });
+    cursor = bandEnd;
+  }
+  return bands;
+}
+
+/** Calendar-year bands clipped to [0, visibleDays), in day-offsets from minDate. */
+function yearBands(minDate: string, visibleDays: number): CoarseBand[] {
+  const bands: CoarseBand[] = [];
+  let cursor = 0;
+  while (cursor < visibleDays) {
+    const { y } = ymd(shiftDate(minDate, cursor));
+    const bandEnd = Math.min(daysBetween(minDate, `${y + 1}-01-01`), visibleDays);
+    bands.push({ day: cursor, days: bandEnd - cursor, label: String(y) });
+    cursor = bandEnd;
+  }
+  return bands;
+}
+
+/** Fine ticks at calendar-month starts, thinned so labels fit at this density. */
+function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick[] {
+  const step = [1, 2, 3, 6, 12].find((s) => s * 30 * ppd >= AXIS_MIN_LABEL_PX) ?? 12;
+  const ticks: FineTick[] = [];
+  let { y, m } = ymd(minDate);
+  if (ymd(minDate).d !== 1) {
+    // the first WHOLE month starts next month
+    if (m === 11) {
+      y += 1;
+      m = 0;
+    } else {
+      m += 1;
+    }
+  }
+  for (let count = 0; ; count += 1) {
+    const day = daysBetween(minDate, firstOfMonth(y, m));
+    if (day >= visibleDays) break;
+    if (day >= 0 && count % step === 0) ticks.push({ day, label: MONTHS[m] });
+    if (m === 11) {
+      y += 1;
+      m = 0;
+    } else {
+      m += 1;
+    }
+  }
+  return ticks;
+}
+
+/** Build the two-tier axis for a visible window of `visibleDays` from `minDate`
+ * at `ppd` px/day. Zoomed in → day/week detail over month bands; zoomed out →
+ * month labels over year bands. The fine row is always thinned to fit. */
+export function axisFor(minDate: string, visibleDays: number, ppd: number): Axis {
+  if (ppd >= DETAIL_PPD) {
+    const step = [1, 2, 5, 7, 14].find((s) => s * ppd >= AXIS_MIN_LABEL_PX) ?? 14;
+    const fine: FineTick[] = [];
+    for (let day = 0; day < visibleDays; day += step) {
+      fine.push({ day, label: String(ymd(shiftDate(minDate, day)).d) });
+    }
+    return { unit: step >= 7 ? "week" : "day", fine, coarse: monthBands(minDate, visibleDays) };
+  }
+  return { unit: "month", fine: monthTicks(minDate, visibleDays, ppd), coarse: yearBands(minDate, visibleDays) };
+}

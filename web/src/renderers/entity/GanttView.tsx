@@ -20,11 +20,11 @@ import { useState } from "react";
 import type { EntityInstance } from "../../api/entities";
 import {
   applyDrag,
+  axisFor,
   daysBetween,
   deltaDays,
   type DragMode,
   pxPerDay,
-  shiftDate,
   type Span,
   spanToDates,
   spanValue,
@@ -35,11 +35,12 @@ import { fieldText, roleOf } from "./shared";
 import type { EntityViewProps } from "./types";
 
 const GUTTER = 150;
-const AXIS_H = 22;
+const COARSE_H = 18; // top context band (month / year)
+const FINE_H = 20; // fine tick row (day numbers / week starts / months)
+const AXIS_H = COARSE_H + FINE_H;
 const LANE_H = 24;
 const ROW_H = 26;
 const ZOOMS: Zoom[] = ["day", "week", "month"];
-const TICK_DAYS: Record<Zoom, number> = { day: 1, week: 7, month: 30 };
 
 type Row = { e: EntityInstance; span: Span };
 type Lane = { key: string; label: string | null; rows: Row[] };
@@ -125,8 +126,7 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   const previewSpan = (row: Row): Span =>
     drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days) : row.span;
 
-  const ticks: string[] = [];
-  for (let d = 0; d < totalDays; d += TICK_DAYS[zoom]) ticks.push(shiftDate(minDate, d));
+  const axis = axisFor(minDate, totalDays, ppd);
 
   const today = new Date().toISOString().slice(0, 10);
   const todayInRange = today >= minDate && today <= maxDate;
@@ -173,15 +173,28 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
 
           {/* right timeline: gridlines + axis ticks + today line + bars */}
           <div className="ev-gantt__canvas" style={{ width: chartWidth }}>
-            {ticks.map((t) => (
-              <div key={`grid-${t}`} className="ev-gantt__gridline" style={{ left: xOf(t) }} />
+            {axis.fine.map((t) => (
+              <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * ppd }} />
             ))}
             <div className="ev-gantt__axis" style={{ height: AXIS_H }}>
-              {ticks.map((t) => (
-                <span key={t} className="ev-gantt__tick" style={{ left: xOf(t) }}>
-                  {t.slice(5)}
-                </span>
-              ))}
+              <div className="ev-gantt__axis-coarse" style={{ height: COARSE_H }}>
+                {axis.coarse.map((b) => (
+                  <span
+                    key={`coarse-${b.day}`}
+                    className="ev-gantt__coarse-band"
+                    style={{ left: b.day * ppd, width: b.days * ppd }}
+                  >
+                    {b.label}
+                  </span>
+                ))}
+              </div>
+              <div className="ev-gantt__axis-fine" style={{ height: FINE_H }}>
+                {axis.fine.map((t) => (
+                  <span key={`fine-${t.day}`} className="ev-gantt__tick" style={{ left: t.day * ppd }}>
+                    {t.label}
+                  </span>
+                ))}
+              </div>
             </div>
 
             {todayInRange && (
