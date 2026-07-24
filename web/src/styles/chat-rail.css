@@ -1,0 +1,56 @@
+/* ── chat-first workspace (#chat-private) ──────────────────────────────────
+ * A left rail of the user's own chats beside the chat surface itself, so a
+ * chat-first App reads like a private chat app (opencode-style session list)
+ * rather than a dashboard-then-workspace. Manifest-gated in AppWorkspace. */
+.chat-workspace {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+.chat-workspace__main {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+}
+.chat-rail {
+  flex: 0 0 auto;
+  width: 240px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--paper-3);
+  background: var(--paper-2);
+  overflow: hidden;
+}
+.chat-rail__list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-rail__item {
+  display: block;
+  padding: var(--space-8);
+  border-radius: var(--radius-card);
+  color: var(--text-paper);
+  text-decoration: none;
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chat-rail__item:hover {
+  background: var(--paper-3);
+}
+.chat-rail__item[data-active="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-h);
+  font-weight: 600;
+}
+.chat-rail__empty {
+  padding: var(--space-8);
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
+}

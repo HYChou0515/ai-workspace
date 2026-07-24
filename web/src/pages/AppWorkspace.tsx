@@ -16,6 +16,7 @@ import { useParams } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import type { AppItem, AppManifest } from "../api/types";
+import { ChatListRail } from "../components/ChatListRail";
 import { useFiles } from "../hooks/useInvestigation";
 import { usePersistentBoolean } from "../hooks/usePersistentBoolean";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
@@ -89,7 +90,7 @@ function WorkspaceLoaded({
 
   const items = files.kind === "ready" ? files.items : [];
   const dirs = files.kind === "ready" ? files.dirs : [];
-  return (
+  const shell = (
     <WorkspaceShell
       item={item}
       manifest={manifest}
@@ -100,6 +101,18 @@ function WorkspaceLoaded({
       onFilesChanged={onFilesChanged}
       onInvestigationChanged={() => {}}
     />
+  );
+  // Chat-first Apps get the private-chat framing: a left rail of the user's own
+  // chats beside the chat itself (manifest-gated, so it stays App-agnostic).
+  // Other surfaces (IDE-first / views-first) keep the plain workspace.
+  if (manifest.layout.primary_surface !== "chat") {
+    return shell;
+  }
+  return (
+    <div className="chat-workspace">
+      <ChatListRail slug={slug} resourceRoute={manifest.resource_route} currentId={id} />
+      <div className="chat-workspace__main">{shell}</div>
+    </div>
   );
 }
 
