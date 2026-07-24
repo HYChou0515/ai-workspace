@@ -265,10 +265,10 @@ def test_bundled_presets_include_qwen3_claude_openai_and_kb_default():
     # index-first navigation the LLM-wiki design (docs/plan-llm-wiki.md §2.4) calls
     # for. The KB agent reaches the wiki through `ask_wiki` instead (P2).
     assert presets["kb-default"].allowed_tools == [
-        "kb_search",
-        "ask_wiki",
         "lookup_glossary",
         "lookup_entity",
+        "ask_wiki",
+        "kb_search",
         "request_wiki_update",
     ]
     assert "search_wiki" not in (presets["kb-default"].allowed_tools or [])

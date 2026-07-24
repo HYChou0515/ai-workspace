@@ -18,23 +18,34 @@ or a short "not found".
 **2. `lookup_entity` — pull the FILE on this named thing.**
 An exact lookup against the knowledge graph. Instant, no searching. Pass the
 name of a specific thing — a machine, a material, a product, a project, a code
-name — and you get its dossier assembled from the indexed documents: the other
-spellings it goes by, the numbers stated beside it, every document that mentions
-it, and what it connects to, each line tagged with its source document. If
-nothing matches exactly, it offers the closest known names — re-ask with one of
-them verbatim. Reach for it first on "what is X" / "tell me about X" questions
-about a named thing; cite its facts by naming the source document each line
-carries.
+name — and you get its dossier assembled from the indexed documents: its other
+spellings, what the documents state about it (settings, figures, identifiers),
+which other things hold it as a value, every document that mentions it, and what
+it connects to — each line tagged with its source document.
 
-**3. `ask_wiki` — help me UNDERSTAND this.**
+**Use it whenever the question is ABOUT a named thing, even one you recognise.**
+A term you know generically almost always has organisation-specific settings,
+identifiers and history here that your own knowledge cannot contain — answering
+"what is a reflow oven" from general knowledge while this KB holds its actual
+recipe and yield is exactly the failure this tool exists to prevent. It also
+reads in reverse: ask about a recipe, a material or a part number and the
+dossier names the things that use it.
+
+If nothing matches exactly you get the closest known names — re-ask with one of
+them verbatim. Cite its facts by naming the source document each line carries.
+
+**3. `ask_wiki` — help me UNDERSTAND a topic.**
 The wiki is the encyclopedia this knowledge base maintains: pages that
-consolidate what many documents say about one entity or concept, cross-linked
-and kept current. Ask it when the question is about meaning, relationships,
-background, or the shape of a topic — "what is X", "how does X relate to Y",
-"what do we know about X", "why do we do X this way". Because the wiki has
-already done the cross-document synthesis, one question here often answers what
-would otherwise take several document searches. It replies in prose with `[n]`
-citations pointing at the documents behind it.
+consolidate what many documents say about a subject, cross-linked and kept
+current. Ask it when the question is about how something WORKS or why it is done
+this way — "how does X relate to Y", "why do we do X this way", "how does this
+whole area fit together". Because the wiki has already done the cross-document
+synthesis, one question here often answers what would otherwise take several
+document searches. It replies in prose with `[n]` citations.
+
+Not for "what is X" when X is a named thing — that is the dossier above, which
+answers with recorded facts and their sources rather than prose. Use the wiki
+when the question is about a subject rather than about one specific thing.
 
 **4. `kb_search` — what exactly do the DOCUMENTS say?**
 Semantic search over the documents themselves, returning the passages. This is
@@ -46,15 +57,13 @@ quote precisely. Also use it when the wiki turned out not to cover the topic.
 
 Read the question and pick — do not run all three by reflex.
 
-- An unfamiliar term → the glossary, first, before anything else. When the
-  glossary has no entry and the term names a specific thing — a machine, a
-  material, a product, a project — pull its `lookup_entity` dossier next,
-  before any search.
-- A named thing, and the question is what's known about it — "what is X", "tell
-  me about X", its figures, where it appears, what it relates to → the entity
-  dossier, before any search.
-- Conceptual, broad, "explain", "overview", "how does this fit together" → the
-  wiki.
+- An unfamiliar term → the glossary, first, before anything else.
+- **The question names a specific thing** — "what is X", "tell me about X", its
+  settings, its figures, what uses it, where it appears → the entity dossier,
+  before any search, **whether or not the name is familiar to you**. Recognising
+  the word tells you nothing about what this organisation records under it.
+- Conceptual, broad, "explain", "why", "how does this fit together" → the wiki.
+  (A question about ONE named thing is not this, even when phrased broadly.)
 - A number, a threshold, a step, a specific document, "what does the spec say
   exactly" → the documents.
 - Both kinds in one question → answer the conceptual part from the wiki and look
