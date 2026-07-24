@@ -248,3 +248,39 @@ N5 TV0 · 使用的 POR recipe = 'PPOOIXUX'      ← 以前整條進不來
 - **屬性名稱帶贅字** — 模型回「使用的 POR recipe」而非「POR recipe」,
   同一屬性在不同句式下會分裂成不同 key。這是 LLM 的自然變異,不做白名單就
   只能接受;若成為實際問題,屬於抽取品質 eval 的範疇。
+
+---
+
+## 9 · 逐條驗收(2026-07-24)
+
+每一條「已完成」都對照程式碼查過,不是勾了就算。驗收方式是把 plan 的聲明變成
+可執行的檢查(**25/25 通過**),而不是肉眼確認:
+
+| 面向 | 檢查的東西 |
+| --- | --- |
+| §3 決策(6) | 矛盾偵測無殘留、prompt 不含 `numeric`、`no fixed list`、qualifier 兩層寫在 `GraphClaim`、`_claims_beside` 已消失、`display_value` 存在 |
+| §4/§5/§6 phases(15) | 每個 phase 對應的模組 / 欄位 / 端點 / 測試實際存在 |
+| §7 明列不做(2+3) | 無 traversal(0 處)、無屬性白名單(0 處)、`name_index` 無 embedding/vector/cosine、glossary 載入方式本輪只改 3 行(`_hits` → `mentions` 改名) |
+| §8 缺口(1) | `xfail(strict=True)` 釘住 #635 |
+
+**驗收過程中抓到的三件事**(都是驗證方法的瑕疵,不是實作缺陷,但值得記):
+
+1. 三條檢查誤報 FAIL — 片語找錯檔案、`embedded`(CJK 嵌入匹配)被當成 `embedding`、
+   plan 說明文字裡引用的 `- [ ]` 被當成未完成項目。**檢查本身也要被檢查。**
+2. `git diff master` 用錯基準 — 這條分支疊了兩層,看起來像我改了 `context_cards.py`
+   80 行,實際只有 3 行。
+3. 驗收腳本一開始 `| tail` 把 exit code 吃掉了,回報永遠是 0。
+
+### 閘門
+
+| | 結果 |
+| --- | --- |
+| 後端全套(`-m "not integration"`) | **4931 passed, 2 xfailed** |
+| 前端(vitest,283 檔) | **2013 passed** |
+| `ruff check` / `ruff format --check` | 通過 |
+| `ty check`(全專案) | 通過 |
+| 前端 typecheck / build | 通過 |
+| `mkdocs build --strict` | 通過 |
+
+> 2 xfailed = #635 的兩個已知洩漏,**strict 模式**:修好時會 XPASS 而失敗,
+> 強迫拿掉標記。
