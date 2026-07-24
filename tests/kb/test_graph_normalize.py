@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from workspace_app.kb.graph.normalize import norm_metric, norm_period, norm_unit
+from workspace_app.kb.graph.normalize import norm_attribute, norm_period, norm_unit
 
 
 class TestNormMetric:
@@ -37,7 +37,7 @@ class TestNormMetric:
         ],
     )
     def test_the_same_metric_written_two_ways_gets_one_key(self, a: str, b: str):
-        assert norm_metric(a) == norm_metric(b)
+        assert norm_attribute(a) == norm_attribute(b)
 
     @pytest.mark.parametrize(
         "a,b",
@@ -49,10 +49,10 @@ class TestNormMetric:
         ],
     )
     def test_two_different_metrics_never_collapse(self, a: str, b: str):
-        assert norm_metric(a) != norm_metric(b)
+        assert norm_attribute(a) != norm_attribute(b)
 
     def test_an_empty_name_stays_empty(self):
-        assert norm_metric("   ") == ""
+        assert norm_attribute("   ") == ""
 
 
 class TestParsePeriod:
@@ -148,7 +148,7 @@ class TestKeysAreStorable:
     @pytest.mark.parametrize(
         "fn,arg",
         [
-            (norm_metric, "Revenue (USD)"),
+            (norm_attribute, "Revenue (USD)"),
             (norm_period, "Q3 2024"),
             (norm_period, "去年同期"),
             (norm_period, ""),

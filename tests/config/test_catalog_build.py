@@ -115,10 +115,10 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
     cat = build_catalog(settings, config_dir=None)
     kb = cat.kb_chat()
     assert kb.allowed_tools == [  # ty: ignore[unresolved-attribute]
-        "kb_search",
-        "ask_wiki",
         "lookup_glossary",
         "lookup_entity",
+        "ask_wiki",
+        "kb_search",
         "request_wiki_update",
     ]
     prompt = kb.system_prompt  # ty: ignore[unresolved-attribute]

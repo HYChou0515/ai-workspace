@@ -35,10 +35,14 @@ class _ScriptedLlm(ILlm):
     parallel batch jobs, and one instance serves BOTH pipelines."""
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
-        if "Extract every metric" in prompt:  # graph: metric-claim extractor
-            yield '[{"metric": "Yield", "period": "Q3", "value": "98.7", "unit": "%"}]', False
-        elif "surface" in prompt:  # graph: mention extractor
-            yield '{"mentions": [{"surface": "回焊爐", "kind": "機台"}], "relations": []}', False
+        if "surface" in prompt:  # graph: the one joint extraction (#630 P4)
+            yield (
+                '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
+                ' "aliases": [], "relationships": [],'
+                ' "attributes": [{"subject": "回焊爐", "attribute": "Yield",'
+                ' "period": "Q3", "value": "98.7", "unit": "%"}]}',
+                False,
+            )
         elif "just 'yes' or 'no'" in prompt:  # eval: answerability filter
             yield "yes", False
         elif "question that this passage directly answers" in prompt:  # eval: generate
@@ -137,7 +141,9 @@ def test_graph_pipeline_runs_end_to_end_over_http():
         if isinstance(r.data, GraphClaim)  # narrow Struct|Unset for ty
     ]
     assert claims, "no GraphClaim rows — the batch stage did nothing"
-    assert {c.metric for c in claims} == {"Yield"}
+    assert {c.attribute for c in claims} == {"Yield"}
+    # #630: and it knows WHOSE figure it is, not just that a slide had one
+    assert {c.subject for c in claims} == {"回焊爐"}
 
 
 def test_eval_pipeline_runs_end_to_end_over_http():

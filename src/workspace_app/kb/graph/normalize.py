@@ -56,8 +56,8 @@ def _fold_width(text: str) -> str:
     return unicodedata.normalize("NFKC", text)
 
 
-def norm_metric(metric: str) -> str:
-    """The grouping key for a metric NAME — surface noise removed, meaning intact.
+def norm_attribute(attribute: str) -> str:
+    """The grouping key for an ATTRIBUTE NAME — surface noise removed, meaning intact.
 
     Removes: width variants, case, whitespace runs, decorative punctuation, a
     trailing unit parenthetical, and word-separating hyphens. Does NOT touch
@@ -66,7 +66,7 @@ def norm_metric(metric: str) -> str:
     a translation ("營收" vs "Revenue"). Those are different keys here on purpose —
     equating them is a judgement about meaning, which belongs to the alias table.
     """
-    text = _fold_width(metric)
+    text = _fold_width(attribute)
     text = _PARENTHETICAL.sub(" ", text)
     text = _WORD_SEP.sub(" ", text)
     text = _SPACE_RUN.sub(" ", text).strip(_TRIM_PUNCT)
@@ -76,10 +76,10 @@ def norm_metric(metric: str) -> str:
 
 def norm_surface(text: str) -> str:
     """The grouping key for an ENTITY surface — deliberately gentler than
-    :func:`norm_metric`.
+    :func:`norm_attribute`.
 
     Removes width variants, case, whitespace runs and CJK word-gaps: pure typing
-    noise. Keeps everything :func:`norm_metric` strips for metric-specific
+    noise. Keeps everything :func:`norm_attribute` strips for attribute-specific
     reasons, because on an entity those characters carry meaning:
 
     * a **parenthetical** on a metric is a unit ("Revenue (USD)"), but on an
@@ -217,3 +217,18 @@ def norm_unit(unit: str) -> str:
     if not text:
         return ""
     return _UNIT_ALIASES.get(text, text)
+
+
+def display_value(value: str, unit: str) -> str:
+    """The value as a reader should see it, with its unit exactly once.
+
+    The value is captured VERBATIM and the unit is captured separately, so a
+    passage writing "98.7%" yields both — a live model fills in each field from
+    the same characters. Concatenating gives "98.7%%". The document's own wording
+    wins; the unit is appended only when the value does not already carry it.
+    """
+    value = value.strip()
+    unit = unit.strip()
+    if not unit or value.endswith(unit):
+        return value
+    return f"{value}{unit}"

@@ -45,8 +45,9 @@ type Related = {
 // #628: a number stated on a slide that names this entity — co-located, so it
 // arrives with the slide it came from.
 type Claim = {
-  metric: string;
-  norm_metric: string;
+  attribute: string;
+  norm_attribute: string;
+  subject: string;
   value: string;
   unit: string;
   period: string;
@@ -64,6 +65,8 @@ type Entity = {
   mentions: Mention[];
   related: Related[];
   claims: Claim[];
+  // #630: the same statements from the far end — what holds THIS as a value.
+  value_of: Claim[];
 };
 
 async function fetchEntity(id: string): Promise<Entity | null> {
@@ -183,11 +186,43 @@ export function GraphEntityPage() {
                   >
                     {docLabel(c.source_doc_id)}
                   </a>
-                  <span className="ent-page__claim-metric">{c.metric}</span>
+                  <span className="ent-page__claim-metric">{c.attribute}</span>
                   <span className="ent-page__claim-value">
                     {c.value}
-                    {c.unit ? <span className="ent-page__claim-unit">{c.unit}</span> : null}
+                    {/* The unit is captured beside the verbatim value, so a
+                        passage writing "98.7%" fills BOTH fields — printing them
+                        back to back gives "98.7%%". The document's wording wins. */}
+                    {c.unit && !c.value.endsWith(c.unit) ? (
+                      <span className="ent-page__claim-unit">{c.unit}</span>
+                    ) : null}
                   </span>
+                {c.period ? <span className="ent-page__claim-period">{c.period}</span> : null}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {/* #630 — the statement table read from the far end: what runs this
+          recipe, what is made of this material. A value is an identity as soon
+          as some document talks about it, so this needs no promotion step. */}
+      {e.value_of.length > 0 && (
+        <section className="ent-page__section">
+          <h2 className="ent-page__h2">{t("entity.valueOf")}</h2>
+          <ul className="ent-page__list" data-testid="entity-value-of">
+            {e.value_of.map((c, i) => (
+              <li className="ent-page__mention" key={`v:${c.source_doc_id}:${c.chunk_id}:${i}`}>
+                <a
+                  className="ent-page__docchip"
+                  href={docHref(c.source_doc_id, c.subject)}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={c.source_doc_id}
+                >
+                  {docLabel(c.source_doc_id)}
+                </a>
+                <span className="ent-page__surface">{c.subject}</span>
+                <span className="ent-page__claim-period">{c.attribute}</span>
                 {c.period ? <span className="ent-page__claim-period">{c.period}</span> : null}
               </li>
             ))}

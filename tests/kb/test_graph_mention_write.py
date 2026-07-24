@@ -15,7 +15,7 @@ from collections.abc import Iterator
 from specstar import QB
 from specstar.types import Binary
 
-from workspace_app.kb.graph.mention_write import write_doc_mentions
+from workspace_app.kb.graph.doc_write import write_doc_graph
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphMention, mention_id
@@ -67,7 +67,7 @@ def test_the_same_thing_on_several_slides_is_one_row_with_a_count():
         '[{"surface": "回焊爐", "kind": "機台"}, {"surface": "錫膏", "kind": "材料"}]',
         '[{"surface": "回焊爐", "kind": "機台"}]',
     )
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         llm,
         collection_id="c1",
@@ -91,7 +91,7 @@ def test_surface_variants_land_on_one_row_and_keep_the_first_spelling():
         '[{"surface": "Reflow Oven", "kind": "tool"},'
         ' {"surface": "  reflow   oven ", "kind": "tool"}]'
     )
-    write_doc_mentions(
+    write_doc_graph(
         spec, llm, collection_id="c1", source_doc_id="deck-A", chunks=[("deck-A#0", "t")]
     )
     (got,) = _mentions(spec, "deck-A")
@@ -102,14 +102,14 @@ def test_surface_variants_land_on_one_row_and_keep_the_first_spelling():
 def test_re_extraction_replaces_rather_than_accumulates():
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         _FakeLlm('[{"surface": "回焊爐", "kind": "機台"}]'),
         collection_id="c1",
         source_doc_id="deck-A",
         chunks=[("deck-A#0", "t")],
     )
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         _FakeLlm('[{"surface": "錫膏", "kind": "材料"}]'),
         collection_id="c1",
@@ -125,7 +125,7 @@ def test_a_row_keeps_its_id_across_a_re_run():
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
     for _ in range(2):
-        write_doc_mentions(
+        write_doc_graph(
             spec,
             _FakeLlm('[{"surface": "回焊爐", "kind": "機台"}]'),
             collection_id="c1",
@@ -139,7 +139,7 @@ def test_a_row_keeps_its_id_across_a_re_run():
 def test_every_row_carries_the_decks_permission_mirror():
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         _FakeLlm('[{"surface": "回焊爐", "kind": "機台"}]'),
         collection_id="c1",
@@ -154,7 +154,7 @@ def test_every_row_carries_the_decks_permission_mirror():
 def test_a_vanished_deck_is_wiped_and_skipped():
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         _FakeLlm('[{"surface": "回焊爐", "kind": "機台"}]'),
         collection_id="c1",
@@ -162,7 +162,7 @@ def test_a_vanished_deck_is_wiped_and_skipped():
         chunks=[("deck-A#0", "t")],
     )
     spec.get_resource_manager(SourceDoc).permanently_delete("deck-A")
-    n = write_doc_mentions(
+    n, _ = write_doc_graph(
         spec,
         _FakeLlm('[{"surface": "回焊爐", "kind": "機台"}]'),
         collection_id="c1",
@@ -184,7 +184,7 @@ def test_a_mention_created_by_a_declaration_still_knows_where_it_came_from():
         ' "aliases": [{"a": "回焊爐", "b": "Reflow Oven",'
         ' "quote": "回焊爐(Reflow Oven)溫度過高"}]}'
     )
-    write_doc_mentions(
+    write_doc_graph(
         spec,
         llm,
         collection_id="c1",

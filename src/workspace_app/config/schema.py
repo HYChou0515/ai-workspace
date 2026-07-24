@@ -805,13 +805,15 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         # rests on. #270's A/B convention keeps that leaf with the wiki maintainer /
         # reader; the KB agent consults the wiki through `ask_wiki`, which delegates
         # the whole navigation to the reader in a throwaway context.
+        # #630: listed CHEAPEST-FIRST, matching the order the system prompt
+        # introduces them. The order is not cosmetic — a 14B model reaches for
+        # what it sees first, and with kb_search leading it searched instead of
+        # opening the dossier it already had (observed, three runs).
         "allowed_tools": [
-            "kb_search",
-            "ask_wiki",
             "lookup_glossary",
-            # #628: the knowledge-graph dossier — deterministic and free like
-            # lookup_glossary, so it sits outside the search budgets (#537).
             "lookup_entity",
+            "ask_wiki",
+            "kb_search",
             "request_wiki_update",
         ],
     },
@@ -832,13 +834,15 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "Summarize what we know on this topic",
             "Find related past findings",
         ],
+        # #630: listed CHEAPEST-FIRST, matching the order the system prompt
+        # introduces them. The order is not cosmetic — a 14B model reaches for
+        # what it sees first, and with kb_search leading it searched instead of
+        # opening the dossier it already had (observed, three runs).
         "allowed_tools": [
-            "kb_search",
-            "ask_wiki",
             "lookup_glossary",
-            # #628: the knowledge-graph dossier — deterministic and free like
-            # lookup_glossary, so it sits outside the search budgets (#537).
             "lookup_entity",
+            "ask_wiki",
+            "kb_search",
             "request_wiki_update",
         ],
     },
@@ -851,13 +855,15 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "Summarize what we know on this topic",
             "Find related past findings",
         ],
+        # #630: listed CHEAPEST-FIRST, matching the order the system prompt
+        # introduces them. The order is not cosmetic — a 14B model reaches for
+        # what it sees first, and with kb_search leading it searched instead of
+        # opening the dossier it already had (observed, three runs).
         "allowed_tools": [
-            "kb_search",
-            "ask_wiki",
             "lookup_glossary",
-            # #628: the knowledge-graph dossier — deterministic and free like
-            # lookup_glossary, so it sits outside the search budgets (#537).
             "lookup_entity",
+            "ask_wiki",
+            "kb_search",
             "request_wiki_update",
         ],
     },

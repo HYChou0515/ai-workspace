@@ -14,7 +14,7 @@ from specstar import SpecStar
 
 from workspace_app.kb.graph.link import link_identical_mentions, reconcile_vocabulary
 from workspace_app.kb.graph.lookup import entity_card
-from workspace_app.kb.graph.normalize import norm_metric, norm_surface
+from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import (
@@ -93,8 +93,10 @@ def _seed(spec: SpecStar, *, private: bool = False) -> str:
                 collection_id=cid,
                 source_doc_id="deck-A",
                 chunk_id="deck-A#0",
-                norm_metric=norm_metric("良率"),
-                metric="良率",
+                norm_subject=norm_surface("回焊爐"),
+                subject="回焊爐",
+                norm_attribute=norm_attribute("良率"),
+                attribute="良率",
                 value="98.7",
                 period="Q3",
                 norm_period="q3",
@@ -156,3 +158,92 @@ def test_close_names_are_offered_when_nothing_matches_exactly():
     card = entity_card(spec, "回焊爐 溫度", as_user="alice")
     assert "not found" in card.lower()
     assert "回焊爐" in card  # the near miss, so the agent can re-ask
+
+
+def test_the_card_answers_who_holds_this_value():
+    """#630 P5 — the dossier reads the statement table from both ends, so asking
+    about a recipe tells you which machines run it (「PPOO 系列被哪些機台使用」)."""
+    from workspace_app.kb.graph.normalize import norm_attribute as _na
+
+    spec = make_spec()
+    cid = _seed(spec)
+    grm = spec.get_resource_manager(GraphClaim)
+    with grm.using("bob"):
+        grm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-A",
+                chunk_id="deck-A#0",
+                norm_subject=norm_surface("回焊爐"),
+                subject="回焊爐",
+                norm_attribute=_na("recipe"),
+                attribute="recipe",
+                value="PPOOIXUX",
+                norm_value=norm_surface("PPOOIXUX"),
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            )
+        )
+    mrm = spec.get_resource_manager(GraphMention)
+    with mrm.using("bob"):
+        mrm.create(
+            GraphMention(
+                collection_id=cid,
+                source_doc_id="deck-D",
+                surface="PPOOIXUX",
+                norm_surface=norm_surface("PPOOIXUX"),
+                kind="recipe",
+                norm_kind=norm_surface("recipe"),
+                occurrences=1,
+                chunk_ids=["deck-D#0"],
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=mention_id("deck-D", "PPOOIXUX"),
+        )
+    link_identical_mentions(spec)
+
+    card = entity_card(spec, "PPOOIXUX", as_user="alice")
+
+    assert "回焊爐" in card
+    assert "recipe" in card
+    assert "deck-A" in card
+
+
+def test_a_unit_already_inside_the_value_is_not_printed_twice():
+    """Live models write the unit in BOTH places — value "98.7%" plus unit "%" —
+    because the value is asked for verbatim and the unit is asked for separately.
+    Rendering them by concatenation gives "98.7%%". The value is what the document
+    wrote, so it wins; the unit is only appended when the value lacks it."""
+    from workspace_app.kb.graph.normalize import norm_attribute as _na
+
+    spec = make_spec()
+    cid = _seed(spec)
+    grm = spec.get_resource_manager(GraphClaim)
+    for attr, value, unit in (("良率", "98.7%", "%"), ("稼動率", "92", "%")):
+        with grm.using("bob"):
+            grm.create(
+                GraphClaim(
+                    collection_id=cid,
+                    source_doc_id="deck-A",
+                    chunk_id="deck-A#0",
+                    norm_subject=norm_surface("回焊爐"),
+                    subject="回焊爐",
+                    norm_attribute=_na(attr),
+                    attribute=attr,
+                    value=value,
+                    norm_value=norm_surface(value),
+                    unit=unit,
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                    doc_visibility="public",
+                )
+            )
+
+    card = entity_card(spec, "回焊爐", as_user="alice")
+
+    assert "98.7%%" not in card
+    assert "98.7%" in card
+    assert "92%" in card  # the unit IS appended when the value lacks it

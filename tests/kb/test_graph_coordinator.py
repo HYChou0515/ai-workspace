@@ -14,15 +14,17 @@ from workspace_app.resources.kb import Collection, DocChunk, SourceDoc
 
 
 class _FakeLlm(ILlm):
-    """Stateless (thread-safe under parallel batch jobs). Answers whichever
-    extractor asked, keyed on a word only that prompt contains — the batch runs
-    both over the same chunks."""
+    """Stateless (thread-safe under parallel batch jobs). #630 P4: there is ONE
+    extraction prompt per chunk now, so one joint answer serves both layers."""
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
-        if "surface" in prompt:
-            yield '[{"surface": "回焊爐", "kind": "機台"}]', False
-        else:
-            yield '[{"metric": "Revenue", "period": "Q3", "value": "1.2M", "unit": "USD"}]', False
+        yield (
+            '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
+            ' "aliases": [], "relationships": [],'
+            ' "attributes": [{"subject": "回焊爐", "attribute": "Revenue",'
+            ' "period": "Q3", "value": "1.2M", "unit": "USD"}]}',
+            False,
+        )
 
 
 def _mk_collection(spec, name: str, *, use_graph: bool, docs: list[tuple[str, str]]) -> str:
@@ -74,9 +76,9 @@ async def test_graph_fan_out_extracts_only_opted_in_collections():
 
     on_claims = _claims(spec, on)
     assert len(on_claims) == 1
-    assert on_claims[0].metric == "Revenue"
+    assert on_claims[0].attribute == "Revenue"
     assert on_claims[0].source_doc_id == "deck-A"
-    assert on_claims[0].norm_metric == "revenue"
+    assert on_claims[0].norm_attribute == "revenue"
     assert _claims(spec, off) == []  # use_graph=False collection is skipped
 
 
@@ -112,8 +114,10 @@ async def test_split_reconciles_the_permission_mirror_before_extracting():
             GraphClaim(
                 collection_id=cid,
                 source_doc_id="deck-A",
-                norm_metric="revenue",
-                metric="Revenue",
+                norm_subject="acme",
+                subject="Acme",
+                norm_attribute="revenue",
+                attribute="Revenue",
                 value="1.2M",
             )
         ).resource_id
@@ -144,8 +148,10 @@ async def test_the_split_job_runs_the_reconcile_before_fanning_out_batches():
             GraphClaim(
                 collection_id=cid,
                 source_doc_id="deck-A",
-                norm_metric="revenue",
-                metric="Revenue",
+                norm_subject="acme",
+                subject="Acme",
+                norm_attribute="revenue",
+                attribute="Revenue",
                 value="1.2M",
             )
         ).resource_id
@@ -189,8 +195,10 @@ async def test_the_reconcile_never_publishes_a_tightened_deck():
             GraphClaim(
                 collection_id=cid,
                 source_doc_id="deck-A",
-                norm_metric="revenue",
-                metric="Revenue",
+                norm_subject="acme",
+                subject="Acme",
+                norm_attribute="revenue",
+                attribute="Revenue",
                 value="1.2M",
                 collection_visibility="public",
                 collection_created_by="bob",

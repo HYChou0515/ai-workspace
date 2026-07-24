@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..llm import ILlm
@@ -48,6 +48,16 @@ _PROMPT = (
     '"a", "b", and "quote" — the words from the passage that say so, copied '
     "exactly. If the passage does not say it, do not list it: a resemblance you "
     "noticed is not a declaration.\n\n"
+    "Then list what the passage STATES ABOUT those things — anything of the shape "
+    '「X 的 A 是 V」 / "X\'s A is V", including a table row pairing a label with a '
+    'value. For each give "subject" (the thing it is about, exactly as written; '
+    'skip the statement if the passage does not say which thing), "attribute" '
+    "(what is being given, in the passage's own words — 良率 / recipe / 供應商 / "
+    'temperature; no fixed list), "value" (VERBATIM, keep the original formatting: '
+    '"1.2M", "98.7", "PPOOIXUX", "Ar/O2" — never convert, round or translate), '
+    '"unit" (what belongs to the value: "%", "USD", "°C" — leave it EMPTY when the '
+    'value already spells it out, e.g. value "98.7%" needs no unit) and "period" '
+    '(when it holds: "FY24 Q3", "2025 上半年", else empty).\n\n'
     "Finally, list what the passage says CONNECTS two of those things — a cause, "
     "a part, a step that follows another, a thing something is measured by. Give "
     '"subject", "predicate", "object", and "quote" if the passage states it in so '
@@ -56,6 +66,8 @@ _PROMPT = (
     "Output ONLY a JSON object:\n"
     '{{"mentions": [{{"surface": ..., "kind": ...}}], '
     '"aliases": [{{"a": ..., "b": ..., "quote": ...}}], '
+    '"attributes": [{{"subject": ..., "attribute": ..., "value": ..., '
+    '"unit": ..., "period": ...}}], '
     '"relationships": [{{"subject": ..., "predicate": ..., "object": ..., '
     '"quote": ...}}]}}\n'
     "No prose.\n\nPassage:\n{text}"
@@ -101,13 +113,38 @@ class StatedRelationship:
 
 
 @dataclass(frozen=True)
+class AttributeClaim:
+    """One statement a passage made about a thing — 「誰 · 什麼屬性 · 值」.
+
+    The value's TYPE is not a gate: "98.7" and "PPOOIXUX" are the same kind of
+    fact, and gating on type made half of them unrepresentable (#630; no builder
+    in the field does it, per the #628 survey). ``value`` is verbatim, whatever
+    it is. The two qualifiers sit in the layers every mature graph model uses:
+    ``unit`` belongs to the VALUE ("98.7" + "%" is one quantity), ``period`` to
+    the STATEMENT (when it held).
+    """
+
+    subject: str
+    attribute: str
+    value: str
+    unit: str = ""
+    period: str = ""
+
+
+@dataclass(frozen=True)
 class Extraction:
     """What one passage yielded: the things it talks about, the equivalences it
-    states about them, and what it says connects them."""
+    states about them, what it states ABOUT them, and what it says connects them.
+
+    One pass, four signals. They were two prompts over the same chunk, which cost
+    double the model time and split the signal — the pass naming the things and
+    the pass stating facts about them never saw each other's answers.
+    """
 
     mentions: list[EntityMention]
     aliases: list[DeclaredAlias]
     relationships: list[StatedRelationship]
+    attributes: list[AttributeClaim] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -141,7 +178,7 @@ def extract_entities(llm: ILlm, text: str) -> Extraction:
     reply = llm.collect(_PROMPT.format(text=text))
     payload = _parse(reply)
     if payload is None:
-        return Extraction(mentions=[], aliases=[], relationships=[])
+        return Extraction(mentions=[], aliases=[], relationships=[], attributes=[])
     raw_mentions = payload.get("mentions")
     raw_aliases = payload.get("aliases")
     mentions: list[EntityMention] = []
@@ -184,7 +221,33 @@ def extract_entities(llm: ILlm, text: str) -> Extraction:
                 quote=quote if quote in text else "",
             )
         )
-    return Extraction(mentions=mentions, aliases=aliases, relationships=relationships)
+    raw_attributes = payload.get("attributes")
+    attributes: list[AttributeClaim] = []
+    for item in raw_attributes if isinstance(raw_attributes, list) else []:
+        if not isinstance(item, dict):
+            continue
+        subj = str(item.get("subject", "")).strip()
+        attr = str(item.get("attribute", "")).strip()
+        value = str(item.get("value", "")).strip()
+        # All three are load-bearing: no subject ⇒ nothing to file it under, no
+        # attribute ⇒ it says nothing, no value ⇒ it states nothing.
+        if not (subj and attr and value):
+            continue
+        attributes.append(
+            AttributeClaim(
+                subject=subj,
+                attribute=attr,
+                value=value,
+                unit=str(item.get("unit", "")).strip(),
+                period=str(item.get("period", "")).strip(),
+            )
+        )
+    return Extraction(
+        mentions=mentions,
+        aliases=aliases,
+        relationships=relationships,
+        attributes=attributes,
+    )
 
 
 def _parse(reply: str) -> dict[str, Any] | None:
@@ -204,12 +267,15 @@ def _parse(reply: str) -> dict[str, Any] | None:
         except (json.JSONDecodeError, ValueError):
             continue
         if isinstance(data, dict) and (
-            "mentions" in data or "aliases" in data or "relationships" in data
+            "mentions" in data
+            or "aliases" in data
+            or "relationships" in data
+            or "attributes" in data
         ):
             return data
         if isinstance(data, dict):
             continue  # a lone object from INSIDE a bare array — try the array shape
         if isinstance(data, list):
-            return {"mentions": data, "aliases": [], "relationships": []}
+            return {"mentions": data, "aliases": [], "relationships": [], "attributes": []}
     _LOGGER.warning("extract_entities: no usable JSON in the reply, dropping the batch")
     return None

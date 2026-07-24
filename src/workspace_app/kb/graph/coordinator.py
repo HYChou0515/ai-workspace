@@ -8,7 +8,8 @@ Consumes one ``GraphJob`` JobType and dispatches on ``payload.kind``:
   ``source_doc_id``), batch them, enqueue a ``batch`` per batch
   (``partition_key=None`` → parallel across the GPU fleet).
 - ``batch`` — for each doc in the batch, load the doc's chunk texts and
-  ``write_doc_claims`` (extract → idempotent wipe+rewrite).
+  ``write_doc_graph`` (one extraction per chunk → idempotent wipe+rewrite of
+  both layers).
 
 No finalize / CAS join: per-doc writes are independent and idempotent. The LLM
 (extraction) is an injected seam — tests pass a fake ``ILlm``. Consumption
@@ -34,10 +35,9 @@ from ..doc_permission import (
 )
 from ..eval.sample import into_batches
 from ..llm import ILlm
+from .doc_write import write_doc_graph
 from .jobs import GraphJob, GraphJobPayload
 from .link import reconcile_vocabulary
-from .mention_write import write_doc_mentions
-from .write import write_doc_claims
 
 _LOGGER = logging.getLogger(__name__)
 _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
@@ -185,17 +185,16 @@ class GraphCoordinator:
     def _batch(self, payload: GraphJobPayload) -> None:
         cid = payload.collection_id
         for doc_id in payload.doc_ids:
-            chunks = self._doc_chunks(doc_id)
-            write_doc_claims(
-                self._spec, self._llm, collection_id=cid, source_doc_id=doc_id, chunks=chunks
-            )
-            # #534 B: the primary layer, over the SAME chunks. Two passes for now —
-            # the issue's plan is one joint prompt for entities, relationships and
-            # claims, which halves the model time and keeps the signals together.
-            # Worth doing when relationships arrive and the joint signal actually
-            # matters; splitting them now keeps each extractor testable on its own.
-            write_doc_mentions(
-                self._spec, self._llm, collection_id=cid, source_doc_id=doc_id, chunks=chunks
+            # #630 P4: ONE model call per chunk feeds both layers — the things
+            # the passage talks about and what it states about them come out of
+            # the same answer, so they can never disagree about which subject
+            # was named.
+            write_doc_graph(
+                self._spec,
+                self._llm,
+                collection_id=cid,
+                source_doc_id=doc_id,
+                chunks=self._doc_chunks(doc_id),
             )
 
     # ── helpers ──────────────────────────────────────────────────────

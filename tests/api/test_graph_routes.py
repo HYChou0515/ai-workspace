@@ -15,7 +15,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.graph.link import link_identical_mentions
-from workspace_app.kb.graph.normalize import norm_metric, norm_surface
+from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim, GraphEntity, GraphMention, mention_id
@@ -231,8 +231,10 @@ def test_the_entity_page_carries_the_numbers_stated_beside_it():
                 collection_id=cid,
                 source_doc_id="deck-A",
                 chunk_id="deck-A#0",
-                norm_metric=norm_metric("良率"),
-                metric="良率",
+                norm_subject=norm_surface("回焊爐"),
+                subject="回焊爐",
+                norm_attribute=norm_attribute("良率"),
+                attribute="良率",
                 value="98.7",
                 period="Q3",
                 norm_period="q3",
@@ -246,11 +248,68 @@ def test_the_entity_page_carries_the_numbers_stated_beside_it():
     body = client.get(f"/kb/graph/entities/{eid}").json()
     assert len(body["claims"]) == 1
     c = body["claims"][0]
-    assert c["metric"] == "良率"
-    assert c["norm_metric"] == norm_metric("良率")
+    assert c["attribute"] == "良率"
+    assert c["norm_attribute"] == norm_attribute("良率")
     assert c["value"] == "98.7"
     assert c["unit"] == "%"
     assert c["period"] == "Q3"
     assert c["norm_period"] == "q3"
     assert c["source_doc_id"] == "deck-A"
     assert c["chunk_id"] == "deck-A#0"
+
+
+def test_the_entity_response_reads_the_statement_table_from_both_ends():
+    """#630 P5 over HTTP: a value some document also discusses is an identity,
+    and its page answers "who has this as a value" (「這個 recipe 被哪些機台使用」)."""
+    from workspace_app.kb.graph.normalize import norm_attribute
+
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _seed(spec)
+    crm = spec.get_resource_manager(Collection)
+    cid = next(iter(crm.list_resources(QB.all().build()))).info.resource_id  # ty: ignore[unresolved-attribute]
+    mrm = spec.get_resource_manager(GraphMention)
+    with mrm.using("bob"):
+        mrm.create(
+            GraphMention(
+                collection_id=cid,
+                source_doc_id="deck-R",
+                surface="PPOOIXUX",
+                norm_surface=norm_surface("PPOOIXUX"),
+                kind="recipe",
+                norm_kind=norm_surface("recipe"),
+                occurrences=1,
+                chunk_ids=["deck-R#0"],
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=mention_id("deck-R", "PPOOIXUX"),
+        )
+    rm = spec.get_resource_manager(GraphClaim)
+    with rm.using("bob"):
+        rm.create(
+            GraphClaim(
+                collection_id=cid,
+                source_doc_id="deck-A",
+                chunk_id="deck-A#0",
+                norm_subject=norm_surface("回焊爐"),
+                subject="回焊爐",
+                norm_attribute=norm_attribute("recipe"),
+                attribute="recipe",
+                value="PPOOIXUX",
+                norm_value=norm_surface("PPOOIXUX"),
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            )
+        )
+    link_identical_mentions(spec)
+
+    rid = _entity_id(spec, "PPOOIXUX")
+    body = client.get(f"/kb/graph/entities/{rid}").json()
+    (held,) = body["value_of"]
+    assert held["subject"] == "回焊爐"
+    assert held["attribute"] == "recipe"
+    assert held["source_doc_id"] == "deck-A"
+    assert body["claims"] == []  # the recipe itself has no attributes stated

@@ -462,15 +462,16 @@ class GraphRelatedOut(BaseModel):
 
 
 class GraphClaimOut(BaseModel):
-    """#628: one number stated on a slide that names this entity — co-location,
-    read-time, so the figure arrives with enough provenance to open and check."""
+    """#628/#630: one statement a document made about this identity — bound by
+    the subject the passage named, carrying enough provenance to open and check."""
 
-    metric: str  # verbatim, as the document wrote it
-    norm_metric: str  # the grouping key (conflict detection groups on this)
-    value: str  # verbatim — never reformatted
-    unit: str
-    period: str
+    attribute: str  # verbatim, as the document wrote it
+    norm_attribute: str  # the grouping key
+    value: str  # verbatim — never reformatted, whatever its type
+    unit: str  # qualifies the VALUE
+    period: str  # qualifies the STATEMENT
     norm_period: str
+    subject: str  # whose attribute this is, as the document wrote it
     source_doc_id: str
     chunk_id: str
 
@@ -487,6 +488,9 @@ class GraphEntityOut(BaseModel):
     mentions: list[GraphMentionOut]
     related: list[GraphRelatedOut]
     claims: list[GraphClaimOut]
+    # #630 P5: the same statements read from the far end — what OTHER things
+    # hold this identity as a value ("which machines run this recipe").
+    value_of: list[GraphClaimOut]
 
 
 class GraphEvidenceOut(BaseModel):
@@ -2030,8 +2034,9 @@ def register_kb_routes(
             ],
             claims=[
                 GraphClaimOut(
-                    metric=c.metric,
-                    norm_metric=c.norm_metric,
+                    attribute=c.attribute,
+                    norm_attribute=c.norm_attribute,
+                    subject=c.subject,
                     value=c.value,
                     unit=c.unit,
                     period=c.period,
@@ -2040,6 +2045,20 @@ def register_kb_routes(
                     chunk_id=c.chunk_id,
                 )
                 for c in page.claims
+            ],
+            value_of=[
+                GraphClaimOut(
+                    attribute=c.attribute,
+                    norm_attribute=c.norm_attribute,
+                    subject=c.subject,
+                    value=c.value,
+                    unit=c.unit,
+                    period=c.period,
+                    norm_period=c.norm_period,
+                    source_doc_id=c.source_doc_id,
+                    chunk_id=c.chunk_id,
+                )
+                for c in page.value_of
             ],
         )
 

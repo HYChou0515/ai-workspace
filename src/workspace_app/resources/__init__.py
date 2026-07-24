@@ -148,12 +148,14 @@ def _renormalize_claim(record: Any) -> Any:
     Reads only the row's own fields, so it is a pure transform a migrate step may
     run (it cannot load another resource).
     """
-    from ..kb.graph.normalize import norm_metric, norm_period, norm_unit
+    from ..kb.graph.normalize import norm_attribute, norm_period, norm_surface, norm_unit
 
     assert isinstance(record, GraphClaim)
     return msgspec.structs.replace(
         record,
-        norm_metric=norm_metric(record.metric),
+        norm_subject=norm_surface(record.subject),
+        norm_attribute=norm_attribute(record.attribute),
+        norm_value=norm_surface(record.value),
         norm_period=norm_period(record.period),
         norm_unit=norm_unit(record.unit),
     )
@@ -691,8 +693,10 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     spec.add_model(EvalResult, indexed_fields=["collection_id", "run_label"])
     spec.add_model(EvalRun, indexed_fields=["status", "collection_id"])
     spec.add_model(EvalBatchStat, indexed_fields=["collection_id", "run_label"])
-    # #534: flat metric-claim table. collection_id (Ref, auto) + norm_metric +
-    # period indexed to filter a metric's values across decks and (later) rollup;
+    # #534/#630: flat attribute-statement table. collection_id (Ref, auto) +
+    # norm_subject / norm_attribute / norm_value / norm_period indexed — find one
+    # thing's statements, group an attribute across decks, and ask who holds a
+    # given value (which is what makes a value that is ALSO an identity findable);
     # source_doc_id indexed so a re-extraction can wipe+rewrite one doc's claims.
     # #534 slice 2: the read-permission mirror is indexed so `graph_claim_access_scope`
     # filters a claim by the DECK it came from at the storage layer — the auto-CRUD
@@ -702,18 +706,26 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # A pre-slice-2 row has NO cell for these (the fields weren't indexed when it
     # was written), so the scope's `isna()` clause reads it as public until the
     # backfill reaches it — strictly better than today's no-scope-at-all, never worse.
-    # #534 甲 v1→v2: the comparison keys are DERIVED state, so a rule change is a
-    # schema change. The step carries the new algorithm and recomputes every key
+    # #534 甲 v1→v2, #630 v2→v3: the comparison keys are DERIVED state, so a rule
+    # change is a schema change. v3 adds the subject and value keys; rows written
+    # before #630 have no subject to derive one FROM, so migrating them yields an
+    # empty key — they are replaced by the next per-doc extraction (wipe+rewrite),
+    # which is the only thing that can supply what was never asked for.
+    # The step carries the new algorithm and recomputes every key
     # from the raw surfaces the row already holds, so `POST /graph-claim/migrate/
     # execute` brings old rows onto the current rules — and until it runs, each
     # row still records which version produced its keys, so the drift is a fact
     # someone can query rather than an invisible one. The `None` step covers rows
     # written before any Schema existed (all of slice 1's).
     spec.add_model(
-        Schema(GraphClaim, "v2").step(None, _renormalize_claim, to="v2", source_type=GraphClaim),
+        Schema(GraphClaim, "v3")
+        .step(None, _renormalize_claim, to="v3", source_type=GraphClaim)
+        .step("v2", _renormalize_claim, to="v3", source_type=GraphClaim),
         indexed_fields=[
             "collection_id",
-            "norm_metric",
+            "norm_subject",
+            "norm_attribute",
+            "norm_value",
             "norm_period",
             "norm_unit",
             "source_doc_id",

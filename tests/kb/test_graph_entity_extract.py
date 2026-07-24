@@ -31,8 +31,10 @@ from workspace_app.kb.llm import ILlm
 class _FakeLlm(ILlm):
     def __init__(self, reply: str) -> None:
         self._reply = reply
+        self.prompts: list[str] = []
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        self.prompts.append(prompt)
         yield self._reply, False
 
 
@@ -200,3 +202,68 @@ class TestRelationships:
         llm = _FakeLlm('{"relationships": [{"subject": "A", "predicate": "造成", "object": "B"}]}')
         (got,) = extract_entities(llm, "…").relationships
         assert got.quote == ""
+
+
+def test_one_pass_also_yields_what_the_passage_states_about_those_things():
+    """#630 P4 — attributes ride in the SAME extraction as the mentions.
+
+    They used to be a second prompt over the same chunk, which doubled the model
+    time and, worse, split the signal: the pass that decided what the passage
+    talks about and the pass that decided what it says about them never saw each
+    other's answers, so a subject could be named in one and unknown in the other.
+    """
+    from workspace_app.kb.graph.entity_extract import AttributeClaim
+
+    llm = _FakeLlm(
+        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
+        ' "aliases": [], "relationships": [],'
+        ' "attributes": [{"subject": "回焊爐", "attribute": "良率",'
+        ' "value": "98.7", "unit": "%", "period": "Q3"},'
+        ' {"subject": "回焊爐", "attribute": "recipe", "value": "PPOOIXUX"}]}'
+    )
+    got = extract_entities(llm, "回焊爐 Q3 良率 98.7%,recipe 是 PPOOIXUX。")
+    assert got.mentions == [EntityMention(surface="回焊爐", kind="機台")]
+    assert got.attributes == [
+        AttributeClaim(subject="回焊爐", attribute="良率", value="98.7", unit="%", period="Q3"),
+        AttributeClaim(subject="回焊爐", attribute="recipe", value="PPOOIXUX"),
+    ]
+
+
+def test_a_reply_without_attributes_is_still_usable():
+    """Small models drift back to the shape they were asked for last time; a
+    missing key must mean 'none', not 'drop the passage'."""
+    llm = _FakeLlm('{"mentions": [{"surface": "爐"}], "aliases": [], "relationships": []}')
+    got = extract_entities(llm, "爐")
+    assert got.mentions == [EntityMention(surface="爐", kind="")]
+    assert got.attributes == []
+
+
+def test_an_attribute_missing_a_part_is_dropped():
+    llm = _FakeLlm(
+        '{"mentions": [], "aliases": [], "relationships": [],'
+        ' "attributes": [{"subject": "", "attribute": "良率", "value": "5"},'
+        ' {"subject": "爐", "attribute": "", "value": "5"},'
+        ' {"subject": "爐", "attribute": "良率", "value": ""},'
+        ' {"subject": "爐", "attribute": "良率", "value": "98"}]}'
+    )
+    from workspace_app.kb.graph.entity_extract import AttributeClaim
+
+    assert extract_entities(llm, "t").attributes == [
+        AttributeClaim(subject="爐", attribute="良率", value="98")
+    ]
+
+
+def test_the_prompt_never_gates_on_the_value_being_a_number():
+    """The guard on the gate itself — the regression #630 exists to prevent.
+
+    The old attribute prompt opened with "every metric that carries a NUMERIC
+    value", which is what made a stated recipe or supplier unrepresentable. This
+    test fails the moment that word comes back."""
+    llm = _FakeLlm("{}")
+    extract_entities(llm, "t")
+    prompt = llm.prompts[0].lower()
+    assert "numeric" not in prompt
+    # …and it says the opposite out loud: any value, kept exactly as written.
+    # ("part numbers" legitimately appears in the mention section — the word to
+    # watch is the one that GATES on the value's type, not the word "number".)
+    assert "verbatim" in prompt

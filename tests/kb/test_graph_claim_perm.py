@@ -53,8 +53,10 @@ def _claim(
             GraphClaim(
                 collection_id=cid,
                 source_doc_id="deck-1",
-                norm_metric="revenue",
-                metric="Revenue",
+                norm_subject="acme",
+                subject="Acme",
+                norm_attribute="revenue",
+                attribute="Revenue",
                 value="1.2M",
                 collection_visibility=collection_visibility,
                 collection_read_meta=collection_read_meta or [],
@@ -138,8 +140,10 @@ def test_a_claim_whose_mirror_was_never_written_is_hidden():
             GraphClaim(
                 collection_id=cid,
                 source_doc_id="deck-1",
-                norm_metric="revenue",
-                metric="Revenue",
+                norm_subject="acme",
+                subject="Acme",
+                norm_attribute="revenue",
+                attribute="Revenue",
                 value="1.2M",
             )
         ).resource_id
@@ -307,8 +311,10 @@ def test_pushing_a_deck_override_reaches_only_that_decks_claims():
             GraphClaim(
                 collection_id=cid,
                 source_doc_id="deck-2",
-                norm_metric="revenue",
-                metric="Revenue",
+                norm_subject="acme",
+                subject="Acme",
+                norm_attribute="revenue",
+                attribute="Revenue",
                 value="9M",
                 collection_visibility="public",
                 collection_created_by="bob",

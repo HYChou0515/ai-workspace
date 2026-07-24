@@ -2,9 +2,10 @@
 
 "What is X" against a slide-heavy corpus is not answered by a definition
 sentence — slides rarely contain one. It is answered by ASSEMBLY: the thing's
-name in every spelling the documents used, the numbers stated beside it, every
-document that mentions it, and what it connects to, each line carrying the
-slide it came from. All of that already hangs off :func:`review.entity_page`;
+name in every spelling the documents used, what documents state about it, what
+OTHER things have it as a value (#630 — asking about a recipe tells you which
+machines run it), every document that mentions it, and what it connects to,
+each line carrying the slide it came from. All of that already hangs off :func:`review.entity_page`;
 this module resolves a free-typed name to an entity and renders that page as a
 plain-text card an agent can quote from.
 
@@ -22,7 +23,7 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ...resources.graph import GraphEntity
-from .normalize import norm_surface
+from .normalize import display_value, norm_surface
 from .review import EntityPage, entity_page
 
 # A did-you-mean longer than this stops helping the agent pick and starts
@@ -66,10 +67,19 @@ def _render(spec: SpecStar, page: EntityPage, *, as_user: str) -> str:
     lines.append(f"Mentioned {page.occurrences} times across {len(docs)} documents.")
 
     if page.claims:
-        lines += ["", "## Numbers stated beside it"]
+        lines += ["", "## What the documents state about it"]
         for c in page.claims:
             period = f" ({c.period})" if c.period else ""
-            lines.append(f"- {c.metric} = {c.value}{c.unit}{period} [{c.source_doc_id}]")
+            shown = display_value(c.value, c.unit)
+            lines.append(f"- {c.attribute} = {shown}{period} [{c.source_doc_id}]")
+
+    if page.value_of:
+        # #630 P5: the statement table read from the far end — what runs this
+        # recipe, what is made of this material, who reports to this manager.
+        lines += ["", "## Things that have it as a value"]
+        for c in page.value_of:
+            period = f" ({c.period})" if c.period else ""
+            lines.append(f"- {c.subject} — {c.attribute}{period} [{c.source_doc_id}]")
 
     lines += ["", "## Documents that mention it"]
     for m in page.mentions:
