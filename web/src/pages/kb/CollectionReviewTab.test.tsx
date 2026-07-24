@@ -51,6 +51,23 @@ describe("<CollectionReviewTab /> (#415 → #481 table)", () => {
     expect(await screen.findByText("reflow", { selector: ".rvw__title" })).toBeInTheDocument();
   });
 
+  // #506/#577 follow-up: after a run, the tab shows 'drafted X → kept Y' so a user
+  // can see the drafter's yield — the signal that P2 (no wiki self-suppression) took
+  // effect (drafts jump from ~0 to many), and the audit for why the queue looks thin.
+  it("shows the last run's drafted→kept funnel summary", async () => {
+    await seedRun();
+    renderTab();
+    const summary = await screen.findByTestId("cardgen-funnel-summary");
+    expect(summary).toHaveTextContent(/草稿|drafted/i);
+    expect(summary).toHaveTextContent(/1/);
+  });
+
+  it("shows no funnel summary before the collection has ever generated", async () => {
+    renderTab();
+    await screen.findByText("目前沒有待審核項目。");
+    expect(screen.queryByTestId("cardgen-funnel-summary")).not.toBeInTheDocument();
+  });
+
   it("accepts a card, applies it — writes a card, drops from the queue, refreshes Cards", async () => {
     await seedRun();
     const client = makeTestQueryClient();

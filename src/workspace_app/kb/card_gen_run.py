@@ -31,7 +31,7 @@ import logging
 from collections.abc import Callable
 
 import msgspec
-from specstar import SpecStar
+from specstar import QB, SpecStar
 from specstar.types import PreconditionFailedError, ResourceIDNotFoundError, RevisionStatus
 
 from .card_gen import CardGenRun
@@ -67,6 +67,22 @@ class CardGenRunStore:
             return None
         assert isinstance(data, CardGenRun)  # narrow Struct | Unset for ty
         return data
+
+    def latest_finalized(self, collection_id: str) -> CardGenRun | None:
+        """The collection's most-recently-finalized run (``done`` / ``error``),
+        newest first — the source of the 待審核 tab's 'last run: drafted X → kept Y'
+        summary. Both predicates are indexed (``collection_id`` + ``status``), so it
+        never scans. Crucially it INCLUDES a run that kept 0 proposals — which the
+        active-proposal queue can't show, yet is exactly the case a user needs
+        explained. ``None`` if the collection has never finalized a run."""
+        query = ((QB["collection_id"] == collection_id) & QB["status"].in_(["done", "error"])).sort(
+            QB.created_time().desc(), QB.resource_id().asc()
+        )
+        for r in self._rm.list_resources(query.limit(1).build()):
+            data = r.data
+            assert isinstance(data, CardGenRun)  # rm is CardGenRun-typed; narrows ty
+            return data
+        return None
 
     # ── CAS mutations ────────────────────────────────────────────────
     def begin(self, run_id: str) -> None:
@@ -106,10 +122,29 @@ class CardGenRunStore:
         self._cas(run_id, mutate)
         return claimed
 
-    def finish(self, run_id: str, *, status: str) -> None:
+    def finish(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        n_units: int = 0,
+        n_raw_drafts: int = 0,
+        n_proposals: int = 0,
+    ) -> None:
         """Stamp the terminal status (``done`` / ``error``) once finalize has run
-        — this is what flips the FE from PROCESSING to COMPLETED / FAILED."""
-        self._cas(run_id, lambda run: msgspec.structs.replace(run, status=status))
+        — this is what flips the FE from PROCESSING to COMPLETED / FAILED — and,
+        in the same write, the finalize funnel counts (#506/#577 follow-up) so the
+        FE can show 'drafted X → kept Y' without reading a log."""
+        self._cas(
+            run_id,
+            lambda run: msgspec.structs.replace(
+                run,
+                status=status,
+                n_units=n_units,
+                n_raw_drafts=n_raw_drafts,
+                n_proposals=n_proposals,
+            ),
+        )
 
     # ── machinery ────────────────────────────────────────────────────
     def _cas(

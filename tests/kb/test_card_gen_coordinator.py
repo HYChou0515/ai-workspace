@@ -689,6 +689,53 @@ async def test_finalize_logs_the_funnel_counts(caplog):
     assert "final_status=done" in rec.message and "n_proposals=1" in rec.message
 
 
+async def test_finalize_persists_the_funnel_counts_on_the_run():
+    """#506/#577 follow-up observability: the finalize funnel (units digested, raw
+    drafts extracted, proposals kept) is not just LOGGED — it is persisted on the
+    run so the FE can show 'drafted X → kept Y' without anyone reading a log. This
+    is what lets a user tell 'the drafter drafted nothing' (n_raw_drafts tiny) from
+    'reconcile suppressed everything' (n_raw_drafts big, n_proposals tiny)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "Reflow zone RZ3 and solder paste SP7.")
+    drafter = _FakeDrafter(
+        {
+            "a.md": [
+                CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s"),
+                CardDraft(keys=["SP7"], title="Solder Paste 7", snippet="s"),
+            ]
+        }
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    funnel = coord.funnel(jid)
+    assert funnel.n_units == 1  # one doc digested
+    assert funnel.n_raw_drafts == 2  # two card drafts extracted
+    assert funnel.n_proposals == 2  # both kept (distinct keys, no existing card)
+
+
+async def test_latest_funnel_reports_the_most_recent_finalized_run():
+    """The 待審核 tab shows 'last run: drafted X → kept Y'. That summary must come
+    from the collection's MOST RECENT finalized run — including one that kept 0
+    proposals (the exact case that left the user staring at an empty queue),
+    which the active-proposal queue structurally cannot surface."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    assert coord.latest_funnel(cid) is None  # no finalized run yet
+
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    funnel = coord.latest_funnel(cid)
+    assert funnel is not None
+    assert funnel.n_units == 1 and funnel.n_raw_drafts == 1 and funnel.n_proposals == 1
+
+
 async def test_a_doc_whose_digest_fails_does_not_sink_the_run():
     """#414 partial tolerance: one document the drafter gives up on is recorded
     failed, but the surviving documents' proposals still land and the run

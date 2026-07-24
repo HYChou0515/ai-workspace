@@ -261,6 +261,13 @@ class CardGenRun(msgspec.Struct):  # → resource "card-gen-run"
     failed: list[int] = msgspec.field(default_factory=list)  # doc indices that gave up
     finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
     status: str = "pending"  # pending | running | done | error
+    # #506/#577 follow-up: the finalize funnel, persisted so the FE can show
+    # "drafted X → kept Y" without reading a log. n_units = docs digested;
+    # n_raw_drafts = card drafts before merge/dedup; n_proposals = proposals kept
+    # after merge + classify + reconcile. All 0 until finalize stamps them.
+    n_units: int = 0
+    n_raw_drafts: int = 0
+    n_proposals: int = 0
 
 
 class CardGenUnit(msgspec.Struct):  # → resource "card-gen-unit"
@@ -292,6 +299,19 @@ class CardGenRunSummary(msgspec.Struct):
     run_id: str
     collection_id: str
     proposal_count: int
+
+
+class CardGenFunnel(msgspec.Struct):
+    """#506/#577 follow-up: the finalize funnel of one run, exposed to the FE so a
+    user can see 'drafted X → kept Y' without reading a log. ``n_units`` = documents
+    digested; ``n_raw_drafts`` = card drafts the drafter extracted (pre-merge);
+    ``n_proposals`` = proposals kept after merge + classify + reconcile. A tiny
+    n_raw_drafts means the DRAFTER produced little; a big n_raw_drafts with tiny
+    n_proposals means DEDUP/reconcile suppressed the rest."""
+
+    n_units: int = 0
+    n_raw_drafts: int = 0
+    n_proposals: int = 0
 
 
 # ── review lifecycle helpers (#481) ──────────────────────────────────────────
