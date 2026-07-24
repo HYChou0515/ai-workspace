@@ -135,3 +135,53 @@ def test_an_unknown_ceiling_never_trims_and_never_notices():
         client.post(f"/a/rca/items/{iid}/messages", json={"content": "量測資料異常" * 200 + str(i)})
 
     assert [m for m in _thread(spec, iid) if m.role == "notice"] == []
+
+
+# ── adversarial-review follow-ups ────────────────────────────────────
+
+
+def test_sizing_measures_the_same_tool_set_the_runner_sends():
+    """M5: `allowed_tools or None` is the alias `_agent_for` warns about in ten
+    lines of comment — `[]` means "no tools", not "use the defaults". Sizing
+    that charges 13 phantom tools to a config which registers none is measuring
+    a different request than the one we send."""
+    from workspace_app.api.turn_context import TurnContextBuilder
+    from workspace_app.resources import AgentConfig
+
+    empty = AgentConfig(name="t", model="m", system_prompt="", allowed_tools=[])
+    builder = TurnContextBuilder.__new__(TurnContextBuilder)
+
+    assert builder._tools_tokens(empty, app_slug=None, profile=None) == 0
+
+
+def test_an_unknown_ceiling_really_takes_the_unknown_branch():
+    """T17: the previous version of this test claimed to exercise the unknown
+    path but the model WAS in the registry (budget 28,356) — it passed only
+    because the messages were short. Assert the branch itself."""
+    from workspace_app.api.turn_context import TurnContextBuilder
+    from workspace_app.resources import AgentConfig
+
+    unknown_model = AgentConfig(
+        name="t", model="openai/some-self-hosted-model-no-registry-knows", system_prompt="s"
+    )
+    builder = TurnContextBuilder.__new__(TurnContextBuilder)
+    builder._context_limit = None
+    builder.learned_limit_fn = None
+
+    assert builder._budget_for(unknown_model) is None
+
+
+def test_kb_chat_is_not_left_without_any_ceiling():
+    """C2 (adversarial review): dropping the two constants to 0 removed KB
+    chat's only cap while giving it none of the new machinery — and KB chat is
+    the surface that stuffs retrieved passages and whole wiki pages into
+    history. It must derive a ceiling like the app chat does, not run uncapped."""
+    import inspect
+
+    from workspace_app.api import kb_chat_routes
+
+    src = inspect.getsource(kb_chat_routes.register_kb_chat_routes)
+    assert "context_limit" in src, "KB chat must receive the endpoint ceiling too"
+    assert "_kb_history_budget" in src or "history_budget" in src, (
+        "KB chat must derive a budget, not rely on a constant that now defaults to 0"
+    )

@@ -9,6 +9,7 @@ persisted the next turn starts from an even longer thread.
 
 from __future__ import annotations
 
+from workspace_app.api.events import MessageDelta, RunDone, RunError
 from workspace_app.context_budget import (
     halve_history,
     is_context_overflow,
@@ -136,3 +137,81 @@ def test_the_length_hint_tells_the_model_something_actionable():
     hint = diagnose_error(RuntimeError("This model's maximum context length is 32768 tokens."))
     assert "try again" not in hint.lower()
     assert "shorter" in hint.lower() or "too long" in hint.lower()
+
+
+# ── C1: the overflow branch must have a way out (adversarial review) ──
+
+
+class _Boom(Exception):
+    pass
+
+
+def _ctx_with_history(n: int):
+    from workspace_app.agent.context import AgentToolContext
+    from workspace_app.resources import AgentConfig
+
+    return AgentToolContext(
+        investigation_id="i",
+        agent_config=AgentConfig(name="t", model="m", system_prompt="s"),
+        history=[{"role": "user", "content": f"m{i}"} for i in range(n)],
+    )
+
+
+async def _drive(runner, ctx):
+    return [ev async for ev in runner.run("go", ctx)]
+
+
+async def test_a_length_rejection_shrinks_the_history_and_retries():
+    """The escape hatch #624 exists for. Rejecting once and giving up leaves the
+    conversation permanently stuck: the failure is persisted, so the next turn's
+    history is LONGER and rejects again — forever. Shrinking is the only exit."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    seen_sizes: list[int] = []
+
+    class _Runner(LitellmAgentRunner):
+        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+            seen_sizes.append(len(ctx.history))
+            if len(ctx.history) > 4:
+                raise _Boom("This model's maximum context length is 32768 tokens.")
+            yield MessageDelta(text="ok")
+
+    events = await _drive(_Runner(), _ctx_with_history(32))
+
+    assert len(seen_sizes) > 1, "a length rejection must be retried with LESS history"
+    assert seen_sizes[1] < seen_sizes[0], "the retry must send a smaller history"
+    assert any(isinstance(e, RunDone) for e in events)
+    assert not [e for e in events if isinstance(e, RunError)], "shrinking should succeed"
+
+
+async def test_an_unshrinkable_overflow_fails_loud_and_actionably():
+    """The floor: when there is nothing left to drop, say so in words the user
+    can act on — not a raw provider string they cannot read."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    class _Runner(LitellmAgentRunner):
+        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+            raise _Boom("This model's maximum context length is 8192 tokens.")
+            yield  # pragma: no cover — unreachable, keeps this an async generator
+
+    events = await _drive(_Runner(), _ctx_with_history(1))
+
+    errs = [e for e in events if isinstance(e, RunError)]
+    assert errs, "an unshrinkable overflow must surface an error"
+    assert "新對話" in errs[0].message or "太長" in errs[0].message
+
+
+async def test_the_ceiling_stated_in_the_rejection_is_remembered():
+    """The provider names its limit; that is the cheapest measurement we will
+    ever get of an endpoint no registry knows."""
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    class _Runner(LitellmAgentRunner):
+        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+            raise _Boom("This model's maximum context length is 32768 tokens.")
+            yield  # pragma: no cover
+
+    runner = _Runner()
+    await _drive(runner, _ctx_with_history(2))
+
+    assert runner.learned_limit("m", None) == 32768

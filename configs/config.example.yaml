@@ -390,13 +390,20 @@
 # ~3 turns, no matter how large the served window was, and said nothing.
 #
 # `context_limit` — the endpoint's window in tokens, when you know it (e.g.
-# vLLM's --max-model-len). Unset = resolve per turn: ask the endpoint
-# (vLLM's /tokenize reports max_model_len), else the model registry (knows
-# hosted models and ollama/*, NOT a self-hosted model under a custom name),
-# else learn it from the traffic. If nothing can answer we send the whole
-# history rather than trim on a guess — and if the endpoint then truncates
-# silently, that is detected from the reported prompt_tokens and SAID, in
-# the thread, once.
+# vLLM's --max-model-len). Unset = resolve per turn from, in order: what a
+# past rejection told us, then the model registry (knows hosted models and
+# ollama/*, NOT a self-hosted model under a custom name). If neither can
+# answer we send the whole history rather than trim on a guess.
+#
+# When a request IS rejected for length, the ceiling stated in the rejection
+# is remembered, the history is halved, and the turn is retried — and if a
+# single message alone will not fit, the chat says so in words you can act
+# on instead of failing with a raw provider string.
+#
+# NOT yet wired (do not rely on it): asking the endpoint up front via vLLM's
+# /tokenize, and inferring a silent truncation from the reported
+# prompt_tokens. Both are implemented and tested but have no caller — set
+# `context_limit` explicitly if your endpoint truncates silently (Ollama).
 #
 # history:
 #   context_limit: 32768                  # ← the ceiling, if you know it

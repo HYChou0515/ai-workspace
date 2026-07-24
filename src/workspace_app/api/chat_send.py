@@ -286,7 +286,7 @@ class ChatSendService:
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return  # the chat was deleted mid-flight
 
-    def _notice_history_trimmed(self, rid: str, engine_key: str, dropped: int) -> None:
+    def _notice_history_trimmed(self, rid: str, dropped: int) -> None:
         """Tell the thread that older messages no longer reach the model (#624).
 
         Written once per conversation: the horizon only moves outward, so a
@@ -488,7 +488,7 @@ class ChatSendService:
         # forgetful, which is how this stayed invisible for so long; a notice on
         # EVERY subsequent turn would become wallpaper just as fast.
         if ctx.history_trimmed:
-            self._notice_history_trimmed(rid, engine_key, ctx.history_trimmed)
+            self._notice_history_trimmed(rid, ctx.history_trimmed)
 
         # Source A (#…): a vision-capable main model reads attached images
         # directly — inline them into this turn's user message so the model sees

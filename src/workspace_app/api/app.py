@@ -896,6 +896,7 @@ def create_app(
         kb_agent_configs=kb_agent_configs,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        context_limit=context_limit,
         max_searches_per_turn=kb_max_searches_per_turn,
         max_searches_ceiling=kb_max_searches_ceiling,
         disclosure_enabled=kb_disclosure_enabled,
@@ -1012,6 +1013,12 @@ def create_app(
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
     )
+
+    # #624: let the budget consult what the RUNNER has learned about each
+    # endpoint's real ceiling (from the limits its rejections stated). Attached
+    # after construction because the runner is injected, and duck-typed because
+    # ScriptedAgentRunner (tests, replay) has nothing to learn from.
+    turn_ctx.learned_limit_fn = getattr(runner, "learned_limit", None)
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so

@@ -43,6 +43,12 @@ from ..agent.args_recovery import (
 from ..agent.context import AgentToolContext
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
+from ..context_budget import (
+    LimitLearner,
+    halve_history,
+    is_context_overflow,
+    parse_limit_from_error,
+)
 from ..resources import AgentConfig
 from ..tokens import ITokenService
 from ..tooling.registry import PackageInfo, build_function_tools
@@ -50,6 +56,7 @@ from ..users.labels import speaker_note
 from .events import (
     AgentEvent,
     AgentMetrics,
+    ContextTrimmed,
     FailoverSwitch,
     MaxTurnsExceeded,
     MessageDelta,
@@ -786,6 +793,11 @@ class LitellmAgentRunner:
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
         # catalogs); run() fails loud if it's missing.
         self._max_retries = max_retries
+        # #624: what we have learned about each endpoint's real ceiling, from
+        # the rejections it hands back. Per-pod and in-memory on purpose — a
+        # cache that re-learns in one turn, never a durable claim that can go
+        # stale and quietly mis-govern a deploy.
+        self._limits = LimitLearner()
         self._max_turns = max_turns
         # Chat LLM endpoint (global; see factories.Settings). None → LiteLLM's
         # own provider env / Ollama defaults.
@@ -886,6 +898,39 @@ class LitellmAgentRunner:
                 return
             except Exception as exc:  # noqa: BLE001 — every other failure becomes a hint or final error
                 attempt += 1
+                # #624: an over-long request is the one failure with a productive
+                # answer — send less. Repeating it unchanged cannot work, and
+                # simply giving up strands the conversation for good: the failure
+                # is persisted, so the next turn replays a LONGER thread and is
+                # rejected again, forever. Shrink, remember what it told us, and
+                # try once more.
+                text = f"{type(exc).__name__}: {exc}"
+                if is_context_overflow(text):
+                    if (stated := parse_limit_from_error(text)) is not None:
+                        self._limits.learn_exact(
+                            ctx.agent_config.model, self._base_url, limit=stated
+                        )
+                    if len(ctx.history) > 1:
+                        ctx.history = halve_history(ctx.history)
+                        _LOGGER.warning(
+                            "litellm_runner: request too long — retrying with %d history "
+                            "items (investigation=%s)",
+                            len(ctx.history),
+                            ctx.investigation_id,
+                        )
+                        yield ContextTrimmed(dropped=0, kept=len(ctx.history))
+                        continue
+                    # Nothing left to drop: one message alone exceeds the window.
+                    # Say it in words the user can act on — a raw provider string
+                    # tells them nothing about what to do next.
+                    yield RunError(
+                        message=(
+                            "這則訊息太長,超過模型一次能讀的範圍,即使不帶任何對話紀錄也送不出去。"
+                            "請把內容拆小,或開一個新對話重試。"
+                        )
+                    )
+                    yield RunDone()
+                    return
                 if not _should_retry(
                     progress_made=progress_made,
                     attempt=attempt,
@@ -920,6 +965,12 @@ class LitellmAgentRunner:
                 )
                 feedback = diagnose_error(exc)
                 yield classify_retry_event(exc, feedback)
+
+    def learned_limit(self, model: str, base_url: str | None) -> int | None:
+        """The ceiling this endpoint stated in a past rejection, if any (#624).
+        Read by the turn-context builder so the next turn's budget is derived
+        from what the endpoint actually said rather than from a guess."""
+        return self._limits.get(model, base_url)
 
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None

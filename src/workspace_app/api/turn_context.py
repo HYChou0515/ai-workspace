@@ -117,8 +117,32 @@ class TurnContextBuilder:
         # so it can't be a constructor arg — mirrors orchestrator.entity_write_sink).
         # None ⇒ no dispatch wired (tests / deployments with no triggers pay nothing).
         self.entity_write_sink: EntityWriteSink | None = None
+        # #624: reads what the RUNNER has learned about each endpoint's real
+        # ceiling (from the limits its rejections stated). Set after construction
+        # by the composition root — the runner is injected, and a scripted runner
+        # (tests, replay) has nothing to learn from. None ⇒ the ladder simply
+        # skips that rung.
+        self.learned_limit_fn: Callable[[str, str | None], int | None] | None = None
 
-    def _budget_for(self, agent_config: AgentConfig | None) -> int | None:
+    def _learned_limit(self, agent_config: AgentConfig) -> int | None:
+        """What the endpoint stated in a past rejection, via the runner's
+        learner. None when nothing has been learned (or no runner is wired —
+        tests, replay), which simply leaves the ladder to its other rungs."""
+        fn = self.learned_limit_fn
+        if fn is None:
+            return None
+        try:
+            return fn(agent_config.model, agent_config.llm_base_url or None)
+        except Exception:  # noqa: BLE001 — a cache read must not break a turn
+            return None
+
+    def _budget_for(
+        self,
+        agent_config: AgentConfig | None,
+        *,
+        app_slug: str | None = None,
+        profile: str | None = None,
+    ) -> int | None:
         """Tokens left for replayed history on this turn, or ``None`` for "no
         ceiling known — do not trim" (#624).
 
@@ -152,12 +176,14 @@ class TurnContextBuilder:
             return None
         limit = resolve_context_limit(
             configured=self._context_limit,
-            learned=None,  # P3 feeds this from observed usage
+            # #624: what the endpoint told us in a past rejection. Wired to the
+            # runner's learner — the adversarial review caught this as a dangling
+            # `learned=None  # P3 feeds this` comment that nothing ever fed.
+            learned=self._learned_limit(agent_config),
             catalog=catalog_limit(agent_config.model),
         )
-        overhead = estimate_tokens(agent_config.system_prompt or "") + self._tools_tokens(
-            agent_config
-        )
+        overhead = estimate_tokens(agent_config.system_prompt or "")
+        overhead += self._tools_tokens(agent_config, app_slug=app_slug, profile=profile)
         budget = history_budget(limit, overhead_tokens=overhead)
         if budget is None:
             return None
@@ -166,7 +192,9 @@ class TurnContextBuilder:
         # "no room for history" without colliding with 0 = "budget disabled".
         return max(1, budget)
 
-    def _tools_tokens(self, agent_config: AgentConfig) -> int:
+    def _tools_tokens(
+        self, agent_config: AgentConfig, *, app_slug: str | None, profile: str | None
+    ) -> int:
         """Estimated cost of the tool schemas sent alongside the prompt. Built
         per turn (~12 ms) rather than guessed — a guess here is the same class of
         defect as the constant it replaces. Any failure degrades to 0 rather than
@@ -177,7 +205,15 @@ class TurnContextBuilder:
         from ..context_budget import estimate_tokens
 
         try:
-            tools = build_tools(agent_config.allowed_tools or None)
+            # NOT `allowed_tools or None` — `[]` is an explicit "no tools", and
+            # that alias turns it into "use the workspace defaults". `_agent_for`
+            # carries a ten-line comment about the misconfig it caused; sizing
+            # must measure the SAME tool set the runner will actually send.
+            tools = build_tools(
+                agent_config.allowed_tools,
+                app_slug=app_slug,
+                profile=profile,
+            )
             payload = json.dumps(
                 [
                     {
@@ -215,7 +251,14 @@ class TurnContextBuilder:
             # the legacy manual cap.
             max_tokens=(
                 derived
-                if (derived := self._budget_for(agent_config)) is not None
+                if (
+                    derived := self._budget_for(
+                        agent_config,
+                        app_slug=self._locator.slug_of(item_id),
+                        profile=self._locator.profile_of(item_id),
+                    )
+                )
+                is not None
                 else self._history_max_context_tokens
             ),
             users=self._users,

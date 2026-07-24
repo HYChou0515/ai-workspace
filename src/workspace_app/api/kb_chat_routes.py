@@ -422,6 +422,27 @@ def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
 
 
+def _kb_history_budget(cfg: AgentConfig | None, context_limit: int | None) -> int:
+    """Tokens available for replayed KB-chat history, or 0 for "no ceiling known
+    — do not trim" (#624).
+
+    The KB turn has no tool schemas worth sizing (the KB agent's toolset is
+    tiny), so the overhead is the system prompt. Same ladder as the app chat:
+    operator config, then the model registry, then unknown."""
+    from ..context_budget import (
+        catalog_limit,
+        estimate_tokens,
+        history_budget,
+        resolve_context_limit,
+    )
+
+    if cfg is None:
+        return 0
+    limit = resolve_context_limit(configured=context_limit, catalog=catalog_limit(cfg.model))
+    budget = history_budget(limit, overhead_tokens=estimate_tokens(cfg.system_prompt or ""))
+    return 0 if budget is None else max(1, budget)
+
+
 def register_kb_chat_routes(
     app: FastAPI | APIRouter,
     spec: SpecStar,
@@ -431,8 +452,12 @@ def register_kb_chat_routes(
     users: UserDirectory,
     *,
     kb_agent_configs: list[AgentConfig],
-    history_max_messages: int = 40,
-    history_max_context_tokens: int = 24_000,
+    history_max_messages: int = 0,
+    history_max_context_tokens: int = 0,
+    # #624: the endpoint's context ceiling. KB chat replays retrieved passages
+    # and whole wiki pages, so it is the LAST surface that should run with no
+    # ceiling — dropping the old constants without wiring this left exactly that.
+    context_limit: int | None = None,
     # #195: per-turn cap on kb_search calls (None ⇒ unlimited). The operator
     # default applied when the composer sends no per-message pick (#334).
     max_searches_per_turn: int | None = None,
@@ -840,7 +865,12 @@ def register_kb_chat_routes(
             history=history_items(
                 chat.messages[:-1],
                 max_messages=history_max_messages,
-                max_tokens=history_max_context_tokens,
+                # #624: derived from the endpoint's real ceiling minus this
+                # turn's prompt, exactly like the app chat. Unknown ⇒ 0 ⇒ no
+                # trim (send it all and learn), never a fabricated constant.
+                max_tokens=(
+                    _kb_history_budget(agent_config, context_limit) or history_max_context_tokens
+                ),
                 users=users,
             ),
             # #242: who the agent is replying to (here, always the owner — shares
