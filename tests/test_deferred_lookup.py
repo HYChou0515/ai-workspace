@@ -93,3 +93,19 @@ async def test_a_failing_lookup_is_remembered_as_silence():
 
     assert calls == 1
     assert cache["k"] is None
+
+
+def test_a_sync_caller_survives_a_failing_lookup():
+    """The async path writes a placeholder before scheduling, so the failure
+    branch only bites a SYNC caller — and there it is the difference between
+    `None` and a KeyError out of a function whose whole contract is "this can
+    never break a turn". Mutation testing found it: removing that line left the
+    suite green because nothing drove a sync lookup that fails.
+    """
+    cache: dict[str, int | None] = {}
+
+    def _boom() -> int:
+        raise RuntimeError("endpoint down")
+
+    assert deferred_lookup(cache, "k", _boom) is None
+    assert cache["k"] is None

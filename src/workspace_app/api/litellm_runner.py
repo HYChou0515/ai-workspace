@@ -1125,8 +1125,11 @@ class LitellmAgentRunner:
             lambda: self._probe(base_url or self._base_url, model),
         )
         if probed is not None:
+            # The learner is the ONE place that answers "what do we know about
+            # this endpoint" — a rejection, a silent truncation and a probe all
+            # land there, so nothing downstream has to know which of them spoke.
             self._limits.learn_exact(model, base_url, limit=probed)
-        return probed
+        return self._limits.get(model, base_url)
 
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
