@@ -560,6 +560,13 @@
 #     # model: openai/gpt-4o                # ← optional inline override (hosted vision model)
 #   # vlm_llm: null                         # ← off switch: image uploads store with zero chunks
 #   #                                       #   until a VLM is configured + the doc is reindexed
+#   card_drafter:                           # #175/#506: the LLM that agentically drafts context cards
+#     preset: card-drafter                  # ← bundled LLM-only preset. DEFAULT-ON: omit this whole
+#     # model: ollama_chat/qwen3:14b        #   block and it STILL runs on this bundled model, so a
+#     #                                     #   deploy without that model reachable fails silently at
+#     #                                     #   card-gen time. Point it at a tool-calling model you HAVE.
+#   # card_drafter: null                    # ← off switch: card drafting stays mounted but proposes
+#   #                                       #   nothing (no cards, no term/description questions)
 #   # vlm_format_llm:                       # issue #115: text LLM that re-emits the VLM's output as
 #   #   preset: kb-retrieval                #   clean Markdown so the chunker splits on structure
 #   #                                       #   instead of truncating tables/sections. Same usage-entry
