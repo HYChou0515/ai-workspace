@@ -256,6 +256,13 @@
 }
 
 /* ── table (§A1) ─────────────────────────────────────────────────────────── */
+/* The view's outer box. `min-width: 0` lets this flex child of `.ev-panel`
+ * shrink below the table's min-content width so the table wrap's own horizontal
+ * scroll engages, rather than the flex item's automatic minimum stretching the
+ * whole panel past the pane (which clipped DUE / PROGRESS — #3 "text cut"). */
+.ev-tableview {
+  min-width: 0;
+}
 .ev-table-wrap {
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -415,6 +422,9 @@
   overflow-x: auto;
   align-items: flex-start;
   padding-bottom: var(--space-8);
+  /* shrink below the columns' combined width so the board scrolls inside itself
+   * instead of stretching the panel past the pane (#3). */
+  min-width: 0;
 }
 .ev-board__col {
   min-width: 264px;

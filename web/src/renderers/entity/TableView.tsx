@@ -92,7 +92,12 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
   };
 
   return (
-    <div>
+    // `min-width: 0` so this flex child of `.ev-panel` can shrink below the
+    // table's min-content width — otherwise the flex item's automatic minimum
+    // stretches the whole panel past the pane and the last columns (DUE /
+    // PROGRESS) get clipped at the pane edge instead of scrolling inside the
+    // bordered table wrap (#3 "text cut").
+    <div className="ev-tableview">
       <div className="ev-toolbar" style={{ position: "relative", marginBottom: 8 }}>
         <button
           type="button"
