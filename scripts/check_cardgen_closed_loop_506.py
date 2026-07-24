@@ -37,14 +37,34 @@ Usage (needs a reachable embedder; config resolves the model + base url):
     uv run python scripts/check_cardgen_closed_loop_506.py
     uv run python scripts/check_cardgen_closed_loop_506.py -c config.yaml
 
-Verifying the OTHER half — that the agentic drafter (P5) really consults
-``ask_knowledge_base`` (kb_search / search_wiki / glossary) BEFORE drafting and
-stops at the budget — is best done live in the app: open a collection with a
-wiki + a few cards, run a card-gen over a document that re-uses an already-carded
-term, and watch the run's SSE stream show the ``kb_search`` / ``search_wiki`` tool
-cards (with the "N/ M searches used" budget footer) and NO duplicate card /
-question for the documented term. That path streams through the real runner, so
-the tool-calling model is exercised end to end.
+Verifying the OTHER half — the agentic drafter (P5) — is best done live in the
+app, because it needs the real tool-calling model in the loop. #506/#577
+follow-up changed what "correct" means here:
+
+    The drafter's ``ask_knowledge_base`` now consults the GLOSSARY of existing
+    cards ONLY — not RAG, not the wiki. Grading a card against the same corpus it
+    was extracted from suppressed nearly everything (a big wiki ⇒ almost every
+    term is "already explained" ⇒ ~0 cards drafted). So the drafter must draft a
+    card whenever the document DEFINES a term, skipping only an EXACT
+    already-carded duplicate.
+
+Live procedure (needs your Ollama / hosted model, a wiki-heavy collection):
+
+  1. Pick a collection with a wiki + ~hundreds of documents (the regime where the
+     bug bit: many terms are written up in the wiki).
+  2. Run card-gen over a batch of its documents.
+  3. On the 待審核 tab, read the new "最近一次生成：讀 N 來源 → 抽 D 草稿 → 留 K 提案"
+     summary (the persisted finalize funnel). BEFORE this fix D was ~0 (the
+     drafter suppressed its own cards); AFTER it, D should be many, and terms that
+     are explained in the wiki but had no card should now appear as proposals.
+  4. Sanity: a term that ALREADY has a card should NOT be re-proposed (the
+     glossary dedup), and card-vs-card near-duplicates are still collapsed by
+     reconcile (the probe above). The "已自動略過" tab shows the KIND of each
+     suppressed item, so a "reason: wiki" row is a QUESTION, never a card.
+
+The funnel (D → K) is the signal: D jumping from ~0 to many is the drafter fix
+taking effect; K is what survives reconcile. That path streams through the real
+runner, so the tool-calling model is exercised end to end.
 """
 
 from __future__ import annotations
