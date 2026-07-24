@@ -322,10 +322,10 @@ entity 上維護一個旗標。
 
 ---
 
-## 9 · 逐條驗收(2026-07-24,範圍:slice 一~三)
+## 9 · 逐條驗收(2026-07-24,範圍:全部四個 slice)
 
 每一條「已完成」都對照程式碼查過,不是勾了就算。驗收方式是把 plan 的聲明變成
-可執行的檢查(**25/25 通過**),而不是肉眼確認:
+可執行的檢查(**32/32 通過**),而不是肉眼確認:
 
 | 面向 | 檢查的東西 |
 | --- | --- |
@@ -333,11 +333,15 @@ entity 上維護一個旗標。
 | §4/§5/§6 phases(15) | 每個 phase 對應的模組 / 欄位 / 端點 / 測試實際存在 |
 | §7 明列不做(2+3) | 無 traversal(0 處)、無屬性白名單(0 處)、`name_index` 無 embedding/vector/cosine、glossary 載入方式本輪只改 3 行(`_hits` → `mentions` 改名) |
 | §8 缺口(1) | `xfail(strict=True)` 釘住 #635 |
+| §6.5 slice 四(7) | 游標式分頁無 `total` 欄位、三個篩選參數、`to_thread` 不阻塞、搜尋走 `NameIndex.search`、總表頁存在且程式碼不含 total、路由與入口連結 |
 
 **驗收過程中抓到的三件事**(都是驗證方法的瑕疵,不是實作缺陷,但值得記):
 
-1. 三條檢查誤報 FAIL — 片語找錯檔案、`embedded`(CJK 嵌入匹配)被當成 `embedding`、
-   plan 說明文字裡引用的 `- [ ]` 被當成未完成項目。**檢查本身也要被檢查。**
+1. **五條檢查誤報 FAIL,全是檢查自己的問題**:片語找錯檔案、`embedded`(CJK 嵌入
+   匹配)被當成 `embedding`、plan 說明文字裡引用的 `- [ ]` 被當成未完成項目;
+   第二輪又兩條 —— `total` 命中的是**別的 model 的欄位**,以及前端**註解裡的
+   「there is no total」**(那句正好是在說它沒有)。
+   **檢查本身也要被檢查**,而且這個教訓犯了兩次。
 2. `git diff master` 用錯基準 — 這條分支疊了兩層,看起來像我改了 `context_cards.py`
    80 行,實際只有 3 行。
 3. 驗收腳本一開始 `| tail` 把 exit code 吃掉了,回報永遠是 0。
@@ -358,8 +362,8 @@ entity 上維護一個旗標。
 
 | | 結果 |
 | --- | --- |
-| 後端全套(`-m "not integration"`) | **4931 passed, 2 xfailed** |
-| 前端(vitest,283 檔) | **2013 passed** |
+| 後端全套(`-m "not integration"`) | **4937 passed, 2 xfailed** |
+| 前端(vitest) | **2018 passed** |
 | `ruff check` / `ruff format --check` | 通過 |
 | `ty check`(全專案) | 通過 |
 | 前端 typecheck / build | 通過 |
