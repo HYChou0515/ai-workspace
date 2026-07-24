@@ -230,8 +230,11 @@ async def test_the_retry_uses_the_configured_policy_when_the_limit_is_stated():
     class _Runner(LitellmAgentRunner):
         async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
             seen.append(list(ctx.history))
-            if len(ctx.history) > 3:
-                raise _Boom("This model's maximum context length is 40 tokens.")
+            # A context rejection is about SIZE. Rejecting on message count
+            # would be a premise no provider has, and one no folding policy
+            # could ever satisfy — it keeps every message by design.
+            if any(len(m["content"]) > 2_000 for m in ctx.history):
+                raise _Boom("This model's maximum context length is 5600 tokens.")
             yield MessageDelta(text="ok")
 
     ctx = _ctx_with_history(0)
@@ -247,3 +250,111 @@ async def test_the_retry_uses_the_configured_policy_when_the_limit_is_stated():
     # The policy folded the dumps rather than blindly dropping the front, so the
     # opening request survived into the retry.
     assert any("分析這批資料" in m["content"] for m in seen[-1])
+
+
+async def test_the_retry_budget_subtracts_what_is_not_history():
+    """The two paths must derive the budget the same way, not just share the
+    algorithm (§P7).
+
+    A rejection states the model's TOTAL ceiling, but the request also carries
+    the system prompt and every tool schema — measured at 74,222 characters on a
+    real item. Budgeting history against the raw stated figure judges an
+    over-long thread to "fit", so the algorithm returns it untouched and the
+    retry falls back to blind halving: several more rejected round-trips, and an
+    error that blames the user's message for what the system prompt spent.
+    """
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    seen: list[list[dict]] = []
+
+    class _Runner(LitellmAgentRunner):
+        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+            seen.append(list(ctx.history))
+            if any(len(m["content"]) > 2_000 for m in ctx.history):
+                raise _Boom("This model's maximum context length is 20000 tokens.")
+            yield MessageDelta(text="ok")
+
+    ctx = _ctx_with_history(0)
+    # Comfortably inside the stated 20,000 on its own …
+    ctx.history = [
+        {"role": "user", "content": "分析這批晶圓資料,做 SPC,寫成報告"},
+        *[{"role": "tool", "content": "x" * 6_000} for _ in range(4)],
+        {"role": "user", "content": "那爐溫呢?"},
+    ]
+    # … but not once the prompt and tool schemas are counted.
+    ctx.context_overhead_tokens = 15_000
+
+    await _drive(_Runner(), ctx)
+
+    assert len(seen) > 1, "a stated ceiling must drive a retry"
+    assert any("分析這批晶圓資料" in m["content"] for m in seen[-1]), (
+        "the opening task must survive — losing it is the defect this issue is about"
+    )
+
+
+async def test_folding_counts_as_progress_even_though_it_drops_nothing():
+    """Progress has to be measured in tokens, not in messages.
+
+    The cheapest stage folds bulky tool output and keeps every message, so a
+    guard that asks "are there fewer messages?" discards a fold that already
+    freed 97% of the budget — and blindly halves instead, throwing away the
+    task to keep a data dump. That is precisely the behaviour this issue exists
+    to remove, reappearing on the retry path.
+    """
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    seen: list[list[dict]] = []
+
+    class _Runner(LitellmAgentRunner):
+        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+            seen.append(list(ctx.history))
+            if any(len(m["content"]) > 2_000 for m in ctx.history):
+                # 5,600 leaves ~3,040 for history once the reply reserve and
+                # margin come off — under this thread's ~6,000, so folding is
+                # required and is also enough.
+                raise _Boom("This model's maximum context length is 5600 tokens.")
+            yield MessageDelta(text="ok")
+
+    ctx = _ctx_with_history(0)
+    ctx.history = [
+        {"role": "user", "content": "分析這批晶圓資料,做 SPC,寫成報告"},
+        *[{"role": "tool", "content": "x" * 6_000} for _ in range(4)],
+        {"role": "user", "content": "那爐溫呢?"},
+    ]
+
+    await _drive(_Runner(), ctx)
+
+    assert len(seen) > 1, "a stated ceiling must drive a retry"
+    assert len(seen[-1]) == len(seen[0]), "folding keeps every message — nothing to drop"
+    assert any("分析這批晶圓資料" in m["content"] for m in seen[-1])
+
+
+async def test_a_retry_that_cannot_get_smaller_stops_instead_of_spinning(monkeypatch):
+    """The overflow branch deliberately bypasses the attempt counter — an
+    over-long request has a productive answer, and a fixed budget of three would
+    strand a long thread. That makes its termination depend ENTIRELY on every
+    round being smaller than the last, which is a guarantee living inside a
+    function the loop calls. Mutation testing showed what happens when that
+    guarantee lapses: no test turns red, the suite simply never finishes (577s
+    and still spinning), and in production it is an unbounded run of rejected
+    LLM calls. So the loop checks for itself.
+    """
+    from workspace_app.api import litellm_runner as mod
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    monkeypatch.setattr(mod, "_shrink_history", lambda history, stated, **kw: list(history))
+
+    attempts = 0
+
+    class _Runner(LitellmAgentRunner):
+        async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+            nonlocal attempts
+            attempts += 1
+            raise _Boom("This model's maximum context length is 8192 tokens.")
+            yield  # pragma: no cover — unreachable, keeps this an async generator
+
+    events = await _drive(_Runner(), _ctx_with_history(20))
+
+    assert attempts < 5, "a retry that cannot shrink must stop, not spin"
+    errs = [e for e in events if isinstance(e, RunError)]
+    assert errs and ("太長" in errs[0].message or "新對話" in errs[0].message)

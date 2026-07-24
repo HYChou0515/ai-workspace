@@ -44,11 +44,13 @@ from ..agent.context import AgentToolContext
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
 from ..context_budget import (
+    ContextLimit,
     LimitLearner,
     detect_truncation,
     estimate_messages,
     estimate_tokens,
     halve_history,
+    history_budget,
     is_context_overflow,
     parse_limit_from_error,
 )
@@ -701,22 +703,48 @@ def _emit_llm_trace(
         _LOGGER.debug("llm trace emission failed", exc_info=True)
 
 
-def _shrink_history(history: list[Any], stated_limit: int | None) -> list[Any]:
+def _shrink_history(
+    history: list[Any], stated_limit: int | None, *, overhead_tokens: int = 0
+) -> list[Any]:
     """Make the next attempt smaller (#624).
 
-    When the rejection stated a ceiling we know the budget, so the CONFIGURED
-    policy decides what to give up — the same decision, answered the same way,
-    as the pre-send path. Without a stated ceiling there is no budget to aim at,
-    so a blind halving is all that is available; it converges in a few rounds
-    and floors at one message."""
+    When the rejection stated a ceiling we know the budget, so the reduction
+    algorithm decides what to give up — the same decision, derived the same way,
+    as the pre-send path. "The same way" has to include the arithmetic, not just
+    the algorithm: a rejection states the model's TOTAL ceiling, while the
+    request also carries the system prompt and every tool schema (74,222
+    characters on a measured item). Aiming history at the raw stated figure
+    judges an over-long thread to "fit", so the algorithm returns it untouched
+    and we fall through to blind halving — several more rejected round-trips,
+    ending in an error that blames the user's message for what the prompt spent.
+
+    Without a stated ceiling there is no budget to aim at, so a blind halving is
+    all that is available; it converges in a few rounds and floors at one
+    message."""
     from ..context_reducers import default_reducer
 
     if stated_limit is None:
         return halve_history(history)
-    result = default_reducer().reduce(history, budget=stated_limit, estimate=estimate_messages)
-    # A policy that could not shrink anything must still make progress, or the
-    # retry would resend an identical request.
-    return result.messages if len(result.messages) < len(history) else halve_history(history)
+    # `stated_limit` is a number, so a budget always comes back. 0 is its honest
+    # floor — the overhead alone already fills the window — and drives the last
+    # stage rather than needing a special case.
+    budget = (
+        history_budget(
+            ContextLimit(tokens=stated_limit, source="learned"),
+            overhead_tokens=overhead_tokens,
+        )
+        or 0
+    )
+    result = default_reducer().reduce(history, budget=budget, estimate=estimate_messages)
+    # Progress must be measured in TOKENS, not messages: the cheapest stage
+    # folds bulky tool output and keeps every message, so a "are there fewer
+    # messages?" guard would discard a fold that already freed most of the
+    # budget and blindly halve instead — throwing away the task to keep a data
+    # dump, which is the behaviour this issue exists to remove. Something must
+    # still shrink, or the retry would resend an identical request.
+    if estimate_messages(result.messages) < estimate_messages(history):
+        return result.messages
+    return halve_history(history)
 
 
 def _sent_estimate(ctx: AgentToolContext, prompt: str) -> int:
@@ -954,23 +982,49 @@ class LitellmAgentRunner:
                         self._limits.learn_exact(
                             ctx.agent_config.model, self._base_url, limit=stated
                         )
-                    if len(ctx.history) > 1:
-                        ctx.history = _shrink_history(ctx.history, stated)
+                    # This branch deliberately bypasses the attempt counter — an
+                    # over-long request is the one failure with a productive
+                    # answer, and a budget of three would strand a long thread.
+                    # Its termination therefore rests ENTIRELY on every round
+                    # being smaller than the last, so that is checked HERE
+                    # rather than trusted to the callee: when the guarantee
+                    # lapsed, no test went red, the suite simply never finished
+                    # — and in production it is an unbounded run of rejected
+                    # LLM calls.
+                    #
+                    # Smaller is measured in TOKENS, not messages: the cheapest
+                    # stage folds bulky tool output and keeps every message.
+                    before = estimate_messages(ctx.history)
+                    shrunk = (
+                        _shrink_history(
+                            ctx.history,
+                            stated,
+                            # The ceiling in the rejection covers the WHOLE
+                            # request; history only gets what the prompt and
+                            # tool schemas leave behind.
+                            overhead_tokens=ctx.context_overhead_tokens,
+                        )
+                        if len(ctx.history) > 1
+                        else ctx.history
+                    )
+                    if estimate_messages(shrunk) < before:
+                        dropped = len(ctx.history) - len(shrunk)
+                        ctx.history = shrunk
                         _LOGGER.warning(
                             "litellm_runner: request too long — retrying with %d history "
                             "items (investigation=%s)",
                             len(ctx.history),
                             ctx.investigation_id,
                         )
-                        yield ContextTrimmed(dropped=0, kept=len(ctx.history))
+                        yield ContextTrimmed(dropped=dropped, kept=len(ctx.history))
                         continue
-                    # Nothing left to drop: one message alone exceeds the window.
-                    # Say it in words the user can act on — a raw provider string
-                    # tells them nothing about what to do next.
+                    # Nothing got smaller — usually one message that alone
+                    # exceeds the window. Say it in words the user can act on;
+                    # a raw provider string tells them nothing about what to do.
                     yield RunError(
                         message=(
-                            "這則訊息太長,超過模型一次能讀的範圍,即使不帶任何對話紀錄也送不出去。"
-                            "請把內容拆小,或開一個新對話重試。"
+                            "這一輪送不出去:內容超過模型一次能讀的範圍,而且已經沒有東西可以再省。"
+                            "請把訊息拆小,或開一個新對話重試。"
                         )
                     )
                     yield RunDone()

@@ -169,10 +169,10 @@ def history_items(
     if max_messages:
         msgs = msgs[-max_messages:]
     if max_tokens:
-        # #624: HOW to fit is a configured policy, not something this function
-        # gets to decide. Dropping the oldest messages is one option — and the
-        # one that sacrifices the user's opening request before it touches a
-        # single tool dump — so it is selected by name like any other.
+        # #624: HOW to fit is a product policy, not something this function gets
+        # to decide. It used to drop the oldest messages inline — the one option
+        # that sacrifices the user's opening request before it touches a single
+        # tool dump — so it now lives behind `IContextReducer` instead.
         from ..context_budget import estimate_messages
         from ..context_reducers import default_reducer
 

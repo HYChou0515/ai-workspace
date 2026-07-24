@@ -258,9 +258,10 @@ class TurnContextBuilder:
             max_messages=self._history_max_messages,
             # The token ceiling is DERIVED from what this endpoint can actually
             # take, minus what the prompt + tool schemas already spend — not a
-            # constant. An unknown ceiling yields 0 ⇒ no trim (we send it all and
-            # learn the real limit from the response), unless an operator has set
-            # the legacy manual cap.
+            # constant. An unknown ceiling yields None ⇒ no trim (we send it all
+            # and learn the real limit from the response), unless an operator has
+            # set the legacy manual cap. None is deliberately not 0: 0 is a known
+            # ceiling with no room left, which must trim to nothing, not to all.
             max_tokens=(
                 derived
                 if (
