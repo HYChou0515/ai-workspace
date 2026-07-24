@@ -221,8 +221,14 @@ export function GraphEntityPage() {
                 >
                   {docLabel(c.source_doc_id)}
                 </a>
-                <span className="ent-page__surface">{c.subject}</span>
-                <span className="ent-page__claim-period">{c.attribute}</span>
+                {/* Reads as a sentence — 「回焊爐 的 POR recipe」 — because three
+                    loose chips (doc · subject · attribute) leave the reader to
+                    guess which one is the thing and which is the property. */}
+                <span className="ent-page__surface">
+                  {c.subject}
+                  <span className="ent-page__value-of-rel"> 的 </span>
+                  <span className="ent-page__value-of-attr">{c.attribute}</span>
+                </span>
                 {c.period ? <span className="ent-page__claim-period">{c.period}</span> : null}
               </li>
             ))}

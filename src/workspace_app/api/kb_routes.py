@@ -476,6 +476,26 @@ class GraphClaimOut(BaseModel):
     chunk_id: str
 
 
+class GraphEntityRowOut(BaseModel):
+    """One row of the graph browser — what a reader needs to decide whether to
+    open it, and nothing that would cost a join to produce."""
+
+    id: str
+    name: str
+    kind: str
+    aliases: list[str]  # the other spellings, so a search hit explains itself
+
+
+class GraphEntityPageOut(BaseModel):
+    """A page of the browser. Deliberately has NO total: counting means
+    permission-checking every row (measured at 4.3 s over 20k), and a pager that
+    says "page 3 of 200" cannot be produced cheaply. "More follow" can."""
+
+    items: list[GraphEntityRowOut]
+    has_more: bool
+    next_offset: int
+
+
 class GraphEntityOut(BaseModel):
     """One identity and everything the corpus said about it that the caller may
     read. Assembled from the links, so nothing is stored twice."""
@@ -679,6 +699,100 @@ def _running_unit_progress(spec: SpecStar, collection_id: str) -> dict[str, DocU
 # `_PermissionBody` / `PermissionOut` / `_granted_user_ids` moved to
 # `api.permission_body` (#306) so the collection / WorkItem / KbChat setters share
 # one HTTP shape. Aliased here to keep the collection setter's call sites unchanged.
+
+
+def _browse_entities(
+    spec: SpecStar,
+    as_user: str,
+    *,
+    q: str,
+    kind: str,
+    collection: str,
+    include_merged: bool,
+    limit: int,
+    offset: int,
+) -> GraphEntityPageOut:
+    """#636 — one page of the browser. Blocking; the route hands it to a thread.
+
+    Two reads for two different problems. Filtering and paging go to the
+    database (indexed fields, and paging is what it is for). Name search does
+    not: a text match against the indexed list column is a full scan (2849 ms
+    at 40k rows), so it runs against the in-memory name index and the hits are
+    fetched by primary key. Everything reads AS the caller.
+
+    Over-fetches by one to answer "does another page follow" without counting
+    the rest — counting means permission-checking every row (4.3 s over 20k),
+    which is why this returns no total.
+    """
+    from ..kb.graph.name_cache import graph_name_index
+    from ..kb.graph.normalize import norm_surface
+    from ..resources.graph import GraphEntity
+
+    erm = spec.get_resource_manager(GraphEntity)
+    rows: list[tuple[str, GraphEntity]] = []
+    want = limit + offset + 1
+    with erm.using(as_user, apply_access_scope=True):  # ty: ignore[unknown-argument]
+        if q:
+            seen: set[str] = set()
+            for _name, hit_ids in graph_name_index(spec).get().search(q, limit=want):
+                for rid in hit_ids:
+                    if rid in seen:
+                        continue
+                    seen.add(rid)
+                    try:
+                        data = erm.get(rid).data
+                    except ResourceIDNotFoundError:
+                        continue  # unreadable or gone — the same face, by design
+                    if not isinstance(data, GraphEntity) or not data.collection_ids:
+                        continue
+                    if data.merged_into and not include_merged:
+                        continue
+                    if collection and collection not in data.collection_ids:
+                        continue
+                    rows.append((rid, data))
+        else:
+            cond = QB.all() if include_merged else (QB["merged_into"] == "")
+            if collection:
+                cond = cond & QB["collection_ids"].contains(collection)
+            for r in erm.list_resources(cond.limit(want).build()):
+                data = r.data
+                if isinstance(data, GraphEntity) and data.collection_ids:
+                    rows.append((r.info.resource_id, data))  # ty: ignore[unresolved-attribute]
+
+        # A kind is an entity too, so its id has to be resolved to the word the
+        # reader typed. Done after the query because the column holds an id.
+        kinds: dict[str, str] = {}
+        if kind or rows:
+            for _rid, data in rows:
+                if data.kind_id and data.kind_id not in kinds:
+                    try:
+                        krow = erm.get(data.kind_id).data
+                    except ResourceIDNotFoundError:
+                        continue
+                    if isinstance(krow, GraphEntity):
+                        kinds[data.kind_id] = krow.canonical_name
+    if kind:
+        wanted = norm_surface(kind)
+        rows = [
+            (rid, d)
+            for rid, d in rows
+            if d.kind_id and norm_surface(kinds.get(d.kind_id, "")) == wanted
+        ]
+
+    window = rows[offset : offset + limit + 1]
+    return GraphEntityPageOut(
+        items=[
+            GraphEntityRowOut(
+                id=rid,
+                name=data.canonical_name,
+                kind=kinds.get(data.kind_id, ""),
+                aliases=sorted(k for k in data.norm_keys if k != norm_surface(data.canonical_name)),
+            )
+            for rid, data in window[:limit]
+        ],
+        has_more=len(window) > limit,
+        next_offset=offset + limit,
+    )
 
 
 def register_kb_routes(
@@ -1974,6 +2088,43 @@ def register_kb_routes(
             counts=counts,
             runs=_running_unit_progress(spec, collection_id),
             latest_ms=latest,
+        )
+
+    @app.get("/kb/graph/entities")
+    async def graph_entities(
+        q: str = Query("", description="search by name (any part of it)"),
+        kind: str = Query("", description="narrow to one kind"),
+        collection: str = Query("", description="narrow to one knowledge base"),
+        include_merged: bool = Query(False, description="include absorbed identities"),
+        limit: int = Query(50, ge=1, le=200),
+        offset: int = Query(0, ge=0),
+    ) -> GraphEntityPageOut:
+        """#636 — browse what the graph built.
+
+        Two different reads, because two different problems. **Filtering and
+        paging** go to the database: those are indexed fields and the pager is
+        exactly what a database is for. **Name search** does not — a text match
+        against the indexed list column is a full scan (2849 ms at 40k rows), so
+        it runs against the in-memory name index (#633) and the hits are then
+        fetched by primary key.
+
+        Reads as the caller throughout, so a knowledge base you cannot open
+        contributes nothing to either path. One page is fetched at a time and
+        the total is never counted: the count costs seconds because every row
+        must be permission-checked, so the contract is "here is a page, and
+        whether more follow".
+        """
+        user = get_user_id()
+        return await asyncio.to_thread(
+            _browse_entities,
+            spec,
+            user,
+            q=q,
+            kind=kind,
+            collection=collection,
+            include_merged=include_merged,
+            limit=limit,
+            offset=offset,
         )
 
     @app.get("/kb/graph/entities/{entity_id}")

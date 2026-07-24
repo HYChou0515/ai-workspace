@@ -53,6 +53,8 @@ from ..kb.context_cards import (
     shown_card_count,
 )
 from ..kb.doc_permission import denied_doc_ids
+from ..kb.graph.inject import entity_block
+from ..kb.graph.name_cache import graph_name_index
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import VlmDescriber
 from ..kb.wiki.consult import WikiConsultant
@@ -427,6 +429,12 @@ class _ShareBody(BaseModel):
 
 def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
+
+
+def _graph_block_for(spec: SpecStar, text: str, as_user: str) -> str:
+    """Build the injection block. Blocking on purpose — the caller hands it to a
+    thread so specstar's synchronous reads never sit on the event loop."""
+    return entity_block(spec, graph_name_index(spec).get(), text, as_user=as_user)
 
 
 def _kb_history_budget(cfg: AgentConfig | None, context_limit: int | None) -> int:
@@ -990,6 +998,22 @@ def register_kb_chat_routes(
             # was never defined for the model, and marking it would keep a later
             # kb_search this turn from defining it either.
             ctx.injected_card_ids.update(rid for rid, _ in hits[: shown_card_count(cards)])
+
+        # #633: the same idea for the knowledge graph. A 14B model decides
+        # whether to look something up by whether IT knows the word, so a
+        # question about a term it recognises ("回焊爐是什麼?") never reached the
+        # graph even with the dossier tool one call away (#630 P7, four prompt
+        # attempts). Names the question mentions are resolved here and their
+        # facts ride along. Reads AS the caller; a stale index only means a name
+        # is not offered yet — `lookup_entity` still finds it.
+        # Off the loop (measured 297 ms on a hit, 0.01 ms on a miss, plus a
+        # ~260 ms index build once per TTL): specstar reads are blocking, and a
+        # blocking call inside an async handler stalls every other request on
+        # this pod — the #569 shape. The miss path is cheap but the hit path is
+        # not, and the hit path is the one users notice.
+        graph_block = await asyncio.to_thread(_graph_block_for, spec, body.content, get_user_id())
+        if graph_block:
+            agent_content = f"{graph_block}\n\n{agent_content}"
 
         # #513 P10: a transient image attached to this message is VLM-described and
         # its caption folded into the query the agent searches with — the same

@@ -11,6 +11,7 @@ import { GroupsPage } from "./pages/GroupsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
+import { GraphBrowsePage } from "./pages/kb/GraphBrowsePage";
 import { GraphEntityPage } from "./pages/kb/GraphEntityPage";
 import { ReviewPage } from "./pages/kb/ReviewPage";
 import { Launcher } from "./pages/Launcher";
@@ -53,6 +54,9 @@ export function AppRoutes() {
             clarification questions) across every readable collection, in one
             filterable table. Absorbs the old (invisible) /clarifications page. */}
         <Route path="/review" element={<ReviewPage />} />
+        {/* #636: the graph browser — the only entry that does not require
+            already knowing an entity's id. */}
+        <Route path="/kb/graph" element={<GraphBrowsePage />} />
         <Route path="/kb/graph/entities/:entityId" element={<GraphEntityPage />} />
         <Route path="/clarifications" element={<Navigate to="/review" replace />} />
         {/* #230: the platform help / intro page (usage guides + release notes +
