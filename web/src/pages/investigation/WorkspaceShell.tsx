@@ -115,6 +115,8 @@ export function WorkspaceShell({
   manifest,
   files,
   dirs = [],
+  ideCollapsed,
+  onIdeCollapsedChange,
   onFilesChanged,
   onInvestigationChanged,
 }: {
@@ -122,6 +124,10 @@ export function WorkspaceShell({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
+  // Optionally controlled: AppWorkspace lifts the IDE-collapse state so file
+  // loading can follow it. Omitted ⇒ the shell owns its own persisted state.
+  ideCollapsed?: boolean;
+  onIdeCollapsedChange?: (b: boolean | ((prev: boolean) => boolean)) => void;
   onFilesChanged?: () => void;
   onInvestigationChanged?: () => void;
 }) {
@@ -149,6 +155,8 @@ export function WorkspaceShell({
                 manifest={manifest}
                 files={files}
                 dirs={dirs}
+                ideCollapsed={ideCollapsed}
+                onIdeCollapsedChange={onIdeCollapsedChange}
                 onFilesChanged={onFilesChanged}
                 onInvestigationChanged={onInvestigationChanged}
                 bufferStore={bufferStore}
@@ -167,6 +175,8 @@ function ShellBody({
   manifest,
   files,
   dirs = [],
+  ideCollapsed: propIdeCollapsed,
+  onIdeCollapsedChange: propOnIdeCollapsedChange,
   onFilesChanged,
   onInvestigationChanged,
   bufferStore,
@@ -175,6 +185,8 @@ function ShellBody({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
+  ideCollapsed?: boolean;
+  onIdeCollapsedChange?: (b: boolean | ((prev: boolean) => boolean)) => void;
   onFilesChanged?: () => void;
   onInvestigationChanged?: () => void;
   bufferStore: FileBufferStore;
@@ -246,10 +258,15 @@ function ShellBody({
   // The first-time default comes from the App's `layout.primary_surface`
   // (chat-first Apps open collapsed; RCA's ide-first opens the workspace), then
   // the user's choice persists per-App so it survives reloads.
-  const [ideCollapsed, setIdeCollapsed] = usePersistentBoolean(
+  const [ideCollapsedInternal, setIdeCollapsedInternal] = usePersistentBoolean(
     `layout:ide-collapsed:${manifest.slug}`,
     initialIdeCollapsed(manifest),
   );
+  // Controlled by AppWorkspace (which lifts this so file loading follows the IDE
+  // being open); falls back to the internal persisted state when standalone.
+  // Nullish (not `||`) so an explicit `false` from the parent is honoured.
+  const ideCollapsed = propIdeCollapsed ?? ideCollapsedInternal;
+  const setIdeCollapsed = propOnIdeCollapsedChange ?? setIdeCollapsedInternal;
   // Cap the chat width so the editor always keeps a usable minimum. The chat is
   // fixed-width (flexShrink:0), so an over-wide agentW would otherwise squeeze
   // the editor into a broken sliver (the #108 regression). Dragging stops at

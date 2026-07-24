@@ -17,9 +17,15 @@ vi.mock("./investigation/WorkspaceShell", () => ({
       {item.title} · {item.resource_id}
     </div>
   ),
+  initialIdeCollapsed: () => false,
 }));
 vi.mock("../hooks/useResources", () => ({
-  useAppManifest: () => ({ resource_route: "/rca-investigation" }),
+  useAppManifest: () => ({
+    resource_route: "/rca-investigation",
+    slug: "rca",
+    function: { workspace: true },
+    layout: { primary_surface: "ide", default_tabs: [] },
+  }),
   useAppItem: () => ({
     resource_id: "rca-investigation/1",
     title: "Oven drift",

@@ -1,34 +1,31 @@
 /**
  * App item workspace (`/a/:slug/:itemId`) — #89 P7 (first cut).
  *
- * Loads the item via the App's `resource_route` + its files, then feeds the
- * existing `InvestigationShell`. The id in the URL is a slash-bearing specstar
- * resource id → decoded here. The turn / file / sandbox machinery is already
- * item-id-keyed (backend P2/P4d), so the shell's chat + file ops work for a new
- * per-App item unchanged.
- *
- * Thin-wrapper limits (P7 remainder / P8): the shell still renders RCA's
- * severity/status/product hardcoded (not `layout`-driven), and its model picker
- * reads `attached_agent_config_id` — we map it from `attached_preset` here so
- * turns resolve right (the backend already routes new items through AppCatalog).
+ * Loads the item via the App's `resource_route`, then feeds the existing
+ * `WorkspaceShell`. Opening the item no longer waits on (or fetches) the file
+ * tree: the chat renders immediately and files are loaded lazily, only when the
+ * file IDE is open. This keeps a chat-first item instant to open AND avoids the
+ * file-tree fetch that warms the sandbox on the backend (so merely clicking into
+ * a chat never spins one up). The id in the URL is a slash-bearing specstar
+ * resource id → decoded here.
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import type { ReactNode } from "react";
+import { type ReactNode, useRef } from "react";
 import { useParams } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
+import type { AppItem, AppManifest } from "../api/types";
 import { useFiles } from "../hooks/useInvestigation";
+import { usePersistentBoolean } from "../hooks/usePersistentBoolean";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
-import { WorkspaceShell } from "./investigation/WorkspaceShell";
+import { initialIdeCollapsed, WorkspaceShell } from "./investigation/WorkspaceShell";
 
 export function AppWorkspace() {
   // #95: the workspace routes nest under /a/{slug}/... — provide the slug
   // (from the URL, available immediately) so `useFiles` here AND the shell's
-  // hooks all build the right paths. (Without this, useFiles ran with an empty
-  // slug → GET /a//items/{id}/files → 404 → the SPA's index.html → a JSON
-  // parse error "Unexpected token '<'".)
+  // hooks all build the right paths.
   const { slug = "", itemId = "" } = useParams();
   return (
     <WorkspaceSlugProvider value={slug}>
@@ -41,30 +38,65 @@ function AppWorkspaceInner({ slug, itemId }: { slug: string; itemId: string }) {
   const id = decodeURIComponent(itemId);
   const manifest = useAppManifest(slug);
   const item = useAppItem(slug, manifest?.resource_route, id);
-  const files = useFiles(id);
+  // Wait only for the item + its manifest (cheap specstar reads) — NOT the files.
+  // Once they're here, `WorkspaceLoaded` can derive the IDE-collapse default from
+  // the manifest before deciding whether to fetch files at all.
+  if (!manifest || !item) {
+    return <Msg>Loading…</Msg>;
+  }
+  return <WorkspaceLoaded slug={slug} id={id} manifest={manifest} item={item} />;
+}
+
+function WorkspaceLoaded({
+  slug,
+  id,
+  manifest,
+  item,
+}: {
+  slug: string;
+  id: string;
+  manifest: AppManifest;
+  item: AppItem;
+}) {
   const queryClient = useQueryClient();
+  // The file IDE's collapse state is lifted here so file loading can follow it:
+  // a chat-first item opens collapsed and never fetches files (no sandbox warm on
+  // open); expanding the IDE enables the fetch. Persisted per-App.
+  const [ideCollapsed, setIdeCollapsed] = usePersistentBoolean(
+    `layout:ide-collapsed:${slug}`,
+    initialIdeCollapsed(manifest),
+  );
+  const files = useFiles(id, { enabled: !ideCollapsed });
+  // Only the FIRST paint waits on files, so an IDE-first item's editor still
+  // opens its default tabs on entry. Once mounted, a later fetch (e.g. expanding
+  // the IDE on a chat-first item) must not unmount the shell and flash "Loading…".
+  const mounted = useRef(false);
+
   // #538: anything that changes the file list changes how full the workspace is,
-  // so the usage bar is refreshed on the same signal. Without this the bar only
-  // tracked uploads made from the chat composer — a file tree upload or delete
-  // left it showing a number the user could see was wrong.
+  // so the usage bar refreshes on the same signal.
   const onFilesChanged = () => {
-    if (files.kind !== "loading") files.refresh();
+    if (files.kind === "ready" || files.kind === "error") files.refresh();
     queryClient.invalidateQueries({ queryKey: qk.workspaceUsage(slug, id) });
   };
 
-  if (!manifest || !item || files.kind === "loading") {
+  if (files.kind === "loading" && !mounted.current) {
     return <Msg>Loading…</Msg>;
   }
-  if (files.kind === "error") {
+  if (files.kind === "error" && !mounted.current) {
     return <Msg tone="err">{files.error.message}</Msg>;
   }
+  mounted.current = true;
 
+  const items = files.kind === "ready" ? files.items : [];
+  const dirs = files.kind === "ready" ? files.dirs : [];
   return (
     <WorkspaceShell
       item={item}
       manifest={manifest}
-      files={files.items}
-      dirs={files.dirs}
+      files={items}
+      dirs={dirs}
+      ideCollapsed={ideCollapsed}
+      onIdeCollapsedChange={setIdeCollapsed}
       onFilesChanged={onFilesChanged}
       onInvestigationChanged={() => {}}
     />
