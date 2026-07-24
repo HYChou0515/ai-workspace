@@ -407,3 +407,30 @@ def test_the_turn_overhead_is_measured_once(monkeypatch):
     client.post(f"/a/rca/items/{iid}/messages", json={"content": "量測資料異常"})
 
     assert calls == 1, f"the tool schemas were built {calls} times for one turn"
+
+
+def test_kb_history_budget_does_not_call_the_catalog_every_turn(monkeypatch):
+    """The KB-chat budget path must reach `catalog_limit` through the same cached,
+    off-loop `deferred_lookup` the app-chat path uses — not a direct synchronous
+    call on every turn.
+
+    `catalog_limit` does network I/O (litellm resolves an `ollama/*` name via the
+    daemon, untimed), and this runs on the `send_message` request path. Calling it
+    raw per turn re-pays that cost every message and, for an `ollama/*` KB model,
+    would freeze the event loop — the exact hazard `deferred_lookup` exists to
+    prevent (`catalog_limit`'s own docstring says never call it directly on a
+    request path).
+    """
+    from workspace_app import context_budget
+    from workspace_app.api import kb_chat_routes
+    from workspace_app.resources import AgentConfig
+
+    kb_chat_routes._KB_CATALOG_CACHE.clear()
+    calls: list[str] = []
+    monkeypatch.setattr(context_budget, "catalog_limit", lambda m: calls.append(m) or None)
+
+    cfg = AgentConfig(name="t", model="openai/self-hosted", system_prompt="s")
+    kb_chat_routes._kb_history_budget(cfg, None)
+    kb_chat_routes._kb_history_budget(cfg, None)
+
+    assert len(calls) == 1, "the catalog lookup must be cached, not repeated each turn"
