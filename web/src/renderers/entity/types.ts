@@ -39,5 +39,11 @@ export type EntityViewProps = {
   canWrite?: boolean;
   onCreate: (args: Record<string, unknown>) => void;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
+  /** #4 — save a record's frontmatter patch + markdown body (the file-editor
+   * path). Powers the board card's ⋯ → Edit modal. Omitted ≡ no edit modal. */
+  onSave?: (number: number, patch: Record<string, unknown>, body: string) => void;
+  /** #4 — open a record's `{records_path}/N.md` file in a new tab (board card
+   * ⋯ → Open file). Undefined when no shell opener is wired ≡ action hidden. */
+  onOpenRecord?: (number: number) => void;
   busy?: boolean;
 };

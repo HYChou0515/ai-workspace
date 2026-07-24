@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityHealthFinding, EntityInstance, EntityType } from "../../api/entities";
@@ -108,13 +108,24 @@ describe("TableView", () => {
     );
     expect(screen.getByRole("columnheader", { name: "title" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "status" })).toBeInTheDocument();
-    // scalar cells are inline-editable inputs — the value lives on the input.
-    expect(screen.getByLabelText("title")).toHaveValue("Login broken");
+    // scalar cells show the value as text at rest (#3) — click to edit.
+    expect(screen.getByLabelText("edit title")).toHaveTextContent("Login broken");
+  });
+
+  it("shows a value cell as text at rest and reveals the editor only on click (#3)", () => {
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "A", status: "open" })]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    // no always-on native select at rest — just the value as text.
+    expect(screen.queryByRole("combobox", { name: "status" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("edit status")).toHaveTextContent("open");
+    // clicking the cell swaps in the shared editor.
+    fireEvent.click(screen.getByLabelText("edit status"));
+    expect(screen.getByLabelText("status").tagName).toBe("SELECT");
   });
 
   it("commits a status change through onPatch (the update write path)", () => {
     const onPatch = vi.fn();
     render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { status: "open" })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.click(screen.getByLabelText("edit status"));
     fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
     expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
   });
@@ -122,6 +133,7 @@ describe("TableView", () => {
   it("commits an edited numeric cell as a number on blur", () => {
     const onPatch = vi.fn();
     render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { progress: 0 })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.click(screen.getByLabelText("edit progress"));
     const cell = screen.getByLabelText("progress");
     fireEvent.change(cell, { target: { value: "40" } });
     fireEvent.blur(cell);
@@ -144,6 +156,18 @@ describe("QuickCreate", () => {
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(onCreate).toHaveBeenCalledWith({ title: "Bug" });
   });
+
+  it("opens the create form in a modal dialog, not crammed into the header (#2)", () => {
+    // #2: the expanded form used to live inside the header flex row, so on the
+    // board it floated as a lopsided card beside a vertically-centred title. It
+    // now opens in a ModalShell — the fields + Create action live in a dialog.
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("title")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeInTheDocument();
+  });
 });
 
 describe("role widgets in the table (§B3)", () => {
@@ -159,6 +183,7 @@ describe("role widgets in the table (§B3)", () => {
     render(
       <EntityViewBody spec={spec} type={withActor} entities={[issue(1, { assignee: "" })]} users={users} onCreate={vi.fn()} onPatch={onPatch} />,
     );
+    fireEvent.click(screen.getByLabelText("edit assignee"));
     fireEvent.change(screen.getByLabelText("assignee"), { target: { value: "bob" } });
     expect(onPatch).toHaveBeenCalledWith(1, { assignee: "bob" });
   });
@@ -167,6 +192,7 @@ describe("role widgets in the table (§B3)", () => {
     const onPatch = vi.fn();
     const spec: ViewSpec = { view: "table", entity: "issue", columns: ["span"] };
     render(<EntityViewBody spec={spec} type={issueType} entities={[issue(1, { span: "" })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.click(screen.getByLabelText("edit span"));
     fireEvent.change(screen.getByLabelText("span start"), { target: { value: "2026-01-01" } });
     fireEvent.change(screen.getByLabelText("span end"), { target: { value: "2026-02-01" } });
     expect(onPatch).toHaveBeenLastCalledWith(1, { span: "2026-01-01/2026-02-01" });
@@ -201,7 +227,7 @@ describe("table sort / filter / column visibility (§A1)", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^title/ }));
-    const values = screen.getAllByLabelText("title").map((i) => (i as HTMLInputElement).value);
+    const values = screen.getAllByLabelText("edit title").map((el) => el.textContent);
     expect(values).toEqual(["alpha", "Beta"]);
   });
 
@@ -217,8 +243,9 @@ describe("table sort / filter / column visibility (§A1)", () => {
       />,
     );
     fireEvent.change(screen.getByLabelText("filter status"), { target: { value: "done" } });
-    expect(screen.queryByDisplayValue("A")).not.toBeInTheDocument();
-    expect(screen.getByDisplayValue("B")).toBeInTheDocument();
+    // titles show as text cells now (#3) — filter hides row A, keeps row B.
+    expect(screen.queryByLabelText("edit title")).toHaveTextContent("B");
+    expect(screen.getAllByLabelText("edit title")).toHaveLength(1);
   });
 
   it("hides a column through the columns menu", () => {
@@ -325,6 +352,7 @@ describe("ref-traversal in the table (§A4)", () => {
         onPatch={onPatch}
       />,
     );
+    fireEvent.click(screen.getByLabelText("edit milestone"));
     fireEvent.change(screen.getByLabelText("milestone"), { target: { value: "5" } });
     expect(onPatch).toHaveBeenCalledWith(1, { milestone: 5 });
   });
@@ -424,8 +452,10 @@ describe("read-only gate (§E canWrite)", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "+ New" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("status")).toBeDisabled();
-    expect(screen.getByLabelText("title")).toBeDisabled();
+    // §E — a read-only member sees plain text, not even a click-to-edit cell.
+    expect(screen.queryByLabelText("edit status")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("edit title")).not.toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
   });
 
   it("hides multi-select + batch (§A1) when canWrite is false", () => {
@@ -449,7 +479,7 @@ describe("read-only gate (§E canWrite)", () => {
       <EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "A" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
     );
     expect(screen.getByRole("button", { name: "+ New" })).toBeInTheDocument();
-    expect(screen.getByLabelText("title")).not.toBeDisabled();
+    expect(screen.getByLabelText("edit title")).toBeInTheDocument();
     expect(screen.getByLabelText("select all")).toBeInTheDocument();
   });
 });

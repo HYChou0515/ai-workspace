@@ -171,15 +171,30 @@
 /* ── quick-create (§C1) ──────────────────────────────────────────────────── */
 /* Opens into a raised card of labelled role widgets rather than a bare inline
  * row of native inputs. */
+/* The create form now lives inside a ModalShell (which supplies the card chrome
+ * + padding), so this is just the inner column: title, a responsive field grid,
+ * then the actions. */
 .ev-quickcreate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding: var(--space-24);
+  min-width: 0;
+}
+.ev-quickcreate__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-display-sm);
+  line-height: var(--leading-display-sm);
+  letter-spacing: -0.02em;
+  color: var(--text-paper);
+}
+.ev-quickcreate__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: var(--space-12);
   align-items: end;
-  padding: var(--space-16);
-  background: var(--white);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-card);
 }
 .ev-quickcreate__field {
   display: flex;
@@ -198,7 +213,6 @@
   color: var(--accent);
 }
 .ev-quickcreate__actions {
-  grid-column: 1 / -1;
   display: flex;
   gap: var(--space-8);
   justify-content: flex-end;
@@ -242,6 +256,13 @@
 }
 
 /* ── table (§A1) ─────────────────────────────────────────────────────────── */
+/* The view's outer box. `min-width: 0` lets this flex child of `.ev-panel`
+ * shrink below the table's min-content width so the table wrap's own horizontal
+ * scroll engages, rather than the flex item's automatic minimum stretching the
+ * whole panel past the pane (which clipped DUE / PROGRESS — #3 "text cut"). */
+.ev-tableview {
+  min-width: 0;
+}
 .ev-table-wrap {
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -252,6 +273,11 @@
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
+  /* Fixed layout so the table fills the pane and long values (a wordy title)
+   * truncate in-cell instead of stretching the column and pushing later columns
+   * (DUE / PROGRESS) off-screen (#3). Columns share the width evenly; the # and
+   * select boxes get fixed minimal widths below. */
+  table-layout: fixed;
   font-size: var(--text-body-sm);
 }
 .ev-table thead th {
@@ -264,6 +290,8 @@
   text-align: left;
   vertical-align: middle;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* second header row (filters) shouldn't cast the caps styling. */
 .ev-table thead tr.ev-table__filters th {
@@ -317,13 +345,41 @@
   font-size: var(--text-xs);
   color: var(--text-paper-d);
   text-align: right;
-  width: 1%;
+  width: 44px;
   white-space: nowrap;
 }
 .ev-table__check {
-  width: 1%;
+  width: 36px;
   white-space: nowrap;
   text-align: center;
+}
+/* At-rest value cell: plain text (no native select / date-picker chrome) so the
+ * grid reads as data AND stays narrow — a row of always-on controls pushed the
+ * DUE / PROGRESS columns off-screen (#3). Click / focus swaps in the editor. */
+.ev-table tbody .ev-cell {
+  display: block;
+  width: 100%;
+  height: 26px;
+  line-height: 24px;
+  padding: 0 var(--space-8);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-btn);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+.ev-table tbody .ev-cell:hover,
+.ev-table tbody .ev-cell:focus-visible {
+  border-color: var(--paper-3);
+  background: var(--white);
+}
+.ev-cell__empty {
+  color: var(--text-paper-d2);
 }
 /* inline cells: chrome only on interaction, so data-heavy tables stay calm. */
 .ev-table tbody .ev-field {
@@ -401,6 +457,9 @@
   overflow-x: auto;
   align-items: flex-start;
   padding-bottom: var(--space-8);
+  /* shrink below the columns' combined width so the board scrolls inside itself
+   * instead of stretching the panel past the pane (#3). */
+  min-width: 0;
 }
 .ev-board__col {
   min-width: 264px;
@@ -484,11 +543,72 @@
 .ev-card--readonly:hover {
   transform: none;
 }
+.ev-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
 .ev-card__title {
   font-weight: 600;
   font-size: var(--text-body-sm);
   color: var(--text-paper);
   line-height: var(--leading-body-sm);
+  min-width: 0;
+}
+/* ⋯ card menu trigger — quiet until the card is hovered / the menu is open. */
+.ev-card__menu {
+  flex: none;
+  margin: calc(var(--space-4) * -1) calc(var(--space-4) * -1) 0 0;
+}
+.ev-card__menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-paper-d);
+  font-size: var(--text-body);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s;
+}
+.ev-card:hover .ev-card__menu-btn,
+.ev-card__menu-btn:focus-visible,
+.ev-card__menu-btn[aria-expanded="true"] {
+  opacity: 1;
+}
+.ev-card__menu-btn:hover,
+.ev-card__menu-btn[aria-expanded="true"] {
+  background: var(--paper-2);
+  border-color: var(--paper-3);
+  color: var(--text-paper);
+}
+/* card ⋯ action list — lives inside a Popover (which supplies the chrome). */
+.ev-cardmenu {
+  display: flex;
+  flex-direction: column;
+}
+.ev-cardmenu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: var(--space-8) var(--space-12);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-btn);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+.ev-cardmenu__item:hover,
+.ev-cardmenu__item:focus-visible {
+  background: var(--paper-2);
 }
 .ev-card__badges {
   display: flex;

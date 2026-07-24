@@ -109,6 +109,13 @@ export function RecordFileRenderer({ path }: { path: string }) {
         </div>
       )}
       <EntityFileEditor
+        // The whole IDE mounts ONE <FileView>, so switching tabs only swaps the
+        // `path` prop and this editor is reused in place. Its form seeds from
+        // `record` via useState (run once on mount), so without a per-record key
+        // the reused instance keeps the previous record's field values — opening
+        // issues/2.md after editing issues/1.md showed #1's title/date. Key it to
+        // the path so a different record file remounts + re-seeds the form.
+        key={path}
         type={type}
         record={record}
         users={users}
