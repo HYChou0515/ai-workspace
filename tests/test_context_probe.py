@@ -126,3 +126,56 @@ def test_the_probe_is_asked_once_per_endpoint():
     for _ in range(3):
         runner.learned_limit("m", "http://vllm")
     assert calls == ["m"], "the answer must be cached, not re-asked"
+
+
+async def test_the_probe_never_runs_on_the_event_loop():
+    """The probe is a SYNCHRONOUS http.post with a 3s timeout, and the turn
+    context that reads it is built inside `async def build_chat_turn`. So an
+    endpoint that hangs would stall the whole pod's event loop for three
+    seconds on its first turn — every unrelated request stalling with it. That
+    is the same defect class as the 254 ms estimator stall the adversarial
+    review already removed, only twelve times worse.
+
+    Nothing has to be invented to fix it: `unknown ⇒ do not trim` is the locked
+    default (§3), so the first turn behaves exactly as designed while the probe
+    runs elsewhere.
+    """
+    import asyncio
+    import time
+
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    runner = LitellmAgentRunner()
+    started = asyncio.Event()
+
+    def _slow_probe(base_url, model):
+        started.set()
+        time.sleep(0.5)  # a hanging endpoint, scaled down
+        return 32_768
+
+    runner._probe = _slow_probe
+
+    loop_free = time.perf_counter()
+    got = await asyncio.to_thread(lambda: None) or runner.learned_limit("m", "http://vllm")
+    elapsed = time.perf_counter() - loop_free
+
+    assert elapsed < 0.2, f"the probe blocked the event loop for {elapsed:.2f}s"
+    assert got is None, "an endpoint we have not heard from yet is `unknown`, not a guess"
+
+
+async def test_a_backgrounded_probe_still_teaches_the_next_turn():
+    """Off the request path, but not thrown away — the whole point of asking."""
+    import asyncio
+
+    from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+    runner = LitellmAgentRunner()
+    runner._probe = lambda base_url, model: 32_768
+
+    assert runner.learned_limit("m", "http://vllm") is None  # first turn: not back yet
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if runner.learned_limit("m", "http://vllm") is not None:
+            break
+
+    assert runner.learned_limit("m", "http://vllm") == 32_768
