@@ -155,6 +155,8 @@ export const qk = {
     // #175: a 自動 context card generation run (status + proposals, polled).
     cardGen: (jobId: string) => ["kb", "card-gen", jobId] as const,
     cardGenRuns: (collectionId: string) => ["kb", "card-gen-runs", collectionId] as const,
+    // #506/#577 follow-up: the collection's last run funnel (drafted → kept summary).
+    cardGenLatest: (collectionId: string) => ["kb", "card-gen-latest", collectionId] as const,
     // #377: the global "待釐清" clarification-question inbox.
     docQuestions: ["kb", "doc-questions"] as const,
     docQuestionsFor: (collectionId: string) => ["kb", "doc-questions", collectionId] as const,

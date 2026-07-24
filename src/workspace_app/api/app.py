@@ -951,13 +951,15 @@ def create_app(
     _run_subagent = subagent_bridge.run
 
     # #506: close the card-gen loop — swap the coordinator's fallback (open-loop)
-    # drafter for the AGENTIC one when card drafting is enabled, so it consults the KB
-    # (ask_knowledge_base: RAG + glossary + wiki, scoped to the doc's own collection,
-    # budgeted) before drafting and thus drafts only genuinely-new cards / asks only
-    # genuinely-open questions. Done HERE, after the KB retriever exists (the
-    # coordinators are built earlier). `wire_agentic_card_drafter` is the SAME seam the
-    # split-deployment worker calls (`build_bundle`), so a card-gen job runs the closed
-    # loop no matter which pod drains it (#506 worker parity).
+    # drafter for the AGENTIC one when card drafting is enabled. #506/#577 follow-up:
+    # the agentic drafter consults ONLY the glossary of existing cards before drafting
+    # (not RAG, not the wiki) — grading a card against the same corpus it was extracted
+    # from suppressed nearly everything, so it drafts a card whenever the document
+    # defines a term and skips only an exact existing-card duplicate. Done HERE, after
+    # the KB retriever exists (the coordinators are built earlier).
+    # `wire_agentic_card_drafter` is the SAME seam the split-deployment worker calls
+    # (`build_bundle`), so a card-gen job runs the closed loop no matter which pod
+    # drains it (#506 worker parity).
     if card_drafter_llm is not None:
         from .card_drafter_agent import wire_agentic_card_drafter
 

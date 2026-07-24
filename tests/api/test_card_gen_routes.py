@@ -124,6 +124,47 @@ def test_generate_review_commit_roundtrip():
     assert card.body == "The third reflow zone."
 
 
+def test_status_exposes_the_finalize_funnel_counts():
+    """#506/#577 follow-up: the status route carries the finalize funnel (units
+    digested, raw drafts extracted, proposals kept) so the FE can show
+    'drafted X → kept Y' — the signal that lets a user see the drafter is the
+    bottleneck (few drafts) vs reconcile (many drafts, few proposals)."""
+    spec, app = _make_app(_ONE_CARD)
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    client = ApiTestClient(app)
+
+    job_id = client.post(
+        f"/kb/collections/{cid}/context-cards/generate", json={"doc_ids": [doc]}
+    ).json()["job_id"]
+    asyncio.run(app.state.card_gen_coordinator.aclose())
+
+    body = client.get(f"/kb/context-card-gen/{job_id}").json()
+    assert body["n_units"] == 1
+    assert body["n_raw_drafts"] == 1
+    assert body["n_proposals"] == 1
+
+
+def test_latest_run_funnel_route_reports_the_collections_last_run():
+    """The 待審核 tab reads the collection's last finalized run's funnel to show
+    'drafted X → kept Y'. Before any run it's null; after a run it carries the
+    counts — including the kept=0 case the active-proposal queue can't show."""
+    spec, app = _make_app(_ONE_CARD)
+    cid = _collection(spec)
+    client = ApiTestClient(app)
+
+    assert client.get(f"/kb/collections/{cid}/context-card-gen/latest").json() is None
+
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    client.post(f"/kb/collections/{cid}/context-cards/generate", json={"doc_ids": [doc]})
+    asyncio.run(app.state.card_gen_coordinator.aclose())
+
+    body = client.get(f"/kb/collections/{cid}/context-card-gen/latest").json()
+    assert body["n_units"] == 1
+    assert body["n_raw_drafts"] == 1
+    assert body["n_proposals"] == 1
+
+
 def test_generate_does_not_change_auto_digest():
     """Generate is a one-shot action over the picked docs — it must NOT silently
     flip the collection's ``auto_digest``. That flag is a user-owned setting

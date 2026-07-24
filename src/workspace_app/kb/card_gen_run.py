@@ -31,7 +31,7 @@ import logging
 from collections.abc import Callable
 
 import msgspec
-from specstar import SpecStar
+from specstar import QB, SpecStar
 from specstar.types import PreconditionFailedError, ResourceIDNotFoundError, RevisionStatus
 
 from .card_gen import CardGenRun
@@ -68,6 +68,22 @@ class CardGenRunStore:
         assert isinstance(data, CardGenRun)  # narrow Struct | Unset for ty
         return data
 
+    def latest_finalized(self, collection_id: str) -> CardGenRun | None:
+        """The collection's most-recently-finalized run (``done`` / ``error``),
+        newest first — the source of the 待審核 tab's 'last run: drafted X → kept Y'
+        summary. Both predicates are indexed (``collection_id`` + ``status``), so it
+        never scans. Crucially it INCLUDES a run that kept 0 proposals — which the
+        active-proposal queue can't show, yet is exactly the case a user needs
+        explained. ``None`` if the collection has never finalized a run."""
+        query = ((QB["collection_id"] == collection_id) & QB["status"].in_(["done", "error"])).sort(
+            QB.created_time().desc(), QB.resource_id().asc()
+        )
+        for r in self._rm.list_resources(query.limit(1).build()):
+            data = r.data
+            assert isinstance(data, CardGenRun)  # rm is CardGenRun-typed; narrows ty
+            return data
+        return None
+
     # ── CAS mutations ────────────────────────────────────────────────
     def begin(self, run_id: str) -> None:
         """Flip ``pending`` → ``running`` when the split job picks the run up
@@ -84,6 +100,14 @@ class CardGenRunStore:
         """Idempotently record that doc ``doc_index`` gave up. Counts toward the
         finalize gate so a failed doc can't wedge the run in ``running`` forever."""
         self._cas(run_id, lambda run: _with_index(run, "failed", doc_index))
+
+    def mark_skipped_indexing(self, run_id: str, doc_index: int) -> None:
+        """Idempotently record that doc ``doc_index`` was skipped because it was
+        still indexing (no extracted text yet). It counts as ``done`` — the slot is
+        closed so the finalize gate fits — AND is tracked in ``skipped_indexing`` so
+        the funnel can attribute a low n_units to "not ready yet" rather than a
+        drafter failure (P3, #506/#577 follow-up)."""
+        self._cas(run_id, lambda run: _with_skipped_indexing(run, doc_index))
 
     def claim_finalize(self, run_id: str) -> bool:
         """Try to win the exactly-once finalize gate. Returns ``True`` for the
@@ -106,10 +130,29 @@ class CardGenRunStore:
         self._cas(run_id, mutate)
         return claimed
 
-    def finish(self, run_id: str, *, status: str) -> None:
+    def finish(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        n_units: int = 0,
+        n_raw_drafts: int = 0,
+        n_proposals: int = 0,
+    ) -> None:
         """Stamp the terminal status (``done`` / ``error``) once finalize has run
-        — this is what flips the FE from PROCESSING to COMPLETED / FAILED."""
-        self._cas(run_id, lambda run: msgspec.structs.replace(run, status=status))
+        — this is what flips the FE from PROCESSING to COMPLETED / FAILED — and,
+        in the same write, the finalize funnel counts (#506/#577 follow-up) so the
+        FE can show 'drafted X → kept Y' without reading a log."""
+        self._cas(
+            run_id,
+            lambda run: msgspec.structs.replace(
+                run,
+                status=status,
+                n_units=n_units,
+                n_raw_drafts=n_raw_drafts,
+                n_proposals=n_proposals,
+            ),
+        )
 
     # ── machinery ────────────────────────────────────────────────────
     def _cas(
@@ -157,3 +200,16 @@ def _with_index(run: CardGenRun, field_name: str, doc_index: int) -> CardGenRun 
     if doc_index in current:
         return None
     return msgspec.structs.replace(run, **{field_name: [*current, doc_index]})
+
+
+def _with_skipped_indexing(run: CardGenRun, doc_index: int) -> CardGenRun | None:
+    """Record a still-indexing skip: append ``doc_index`` to BOTH ``done`` (so the
+    finalize gate closes) and ``skipped_indexing`` (so the funnel can attribute it).
+    Idempotent — a no-op once already recorded, matching ``mark_done``."""
+    if doc_index in run.skipped_indexing:
+        return None
+    return msgspec.structs.replace(
+        run,
+        done=run.done if doc_index in run.done else [*run.done, doc_index],
+        skipped_indexing=[*run.skipped_indexing, doc_index],
+    )

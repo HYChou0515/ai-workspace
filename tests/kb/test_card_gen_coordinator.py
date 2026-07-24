@@ -189,6 +189,28 @@ async def test_a_still_indexing_doc_is_skipped_not_digested_to_nothing():
     assert [p.keys for p in coord.proposals(jid).proposals] == [["RZ3"]]  # only the ready doc
 
 
+async def test_the_funnel_attributes_the_coverage_gap_to_still_indexing_docs():
+    """P3 coverage visibility (#506/#577 follow-up): when the drafter yields few
+    proposals, a user must be able to tell "the drafter suppressed them" from "half
+    the sources weren't ready yet". A still-indexing doc is SKIPPED (deferred to the
+    auto-digest hook once it's ready), so the run must record HOW MANY it skipped —
+    otherwise a low n_units reads as a drafter failure when it's just pending
+    indexing. Here: 1 ready doc digested, 1 still-indexing doc skipped."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    ready = _add_source(spec, cid, "ready.md", "RZ3 is the third reflow zone")
+    pending = _add_indexing_binary(spec, cid, "pending.png")
+    drafter = _FakeDrafter({"ready.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [ready, pending])
+    await coord.aclose()
+
+    funnel = coord.funnel(jid)
+    assert funnel.n_units == 1  # only the ready doc produced a digest
+    assert funnel.n_skipped_indexing == 1  # the still-indexing doc, attributed
+    assert funnel.n_proposals == 1
+
+
 def _cards(spec, cid: str):
     rm = spec.get_resource_manager(ContextCard)
     return rm.list_resources((QB["collection_id"] == cid).build())
@@ -687,6 +709,61 @@ async def test_finalize_logs_the_funnel_counts(caplog):
     rec = next((r for r in caplog.records if "finalize" in r.message.lower()), None)
     assert rec is not None
     assert "final_status=done" in rec.message and "n_proposals=1" in rec.message
+
+
+async def test_finalize_persists_the_funnel_counts_on_the_run():
+    """#506/#577 follow-up observability: the finalize funnel (units digested, raw
+    drafts extracted, proposals kept) is not just LOGGED — it is persisted on the
+    run so the FE can show 'drafted X → kept Y' without anyone reading a log. This
+    is what lets a user tell 'the drafter drafted nothing' (n_raw_drafts tiny) from
+    'reconcile suppressed everything' (n_raw_drafts big, n_proposals tiny)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "Reflow zone RZ3 and solder paste SP7.")
+    drafter = _FakeDrafter(
+        {
+            "a.md": [
+                CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s"),
+                CardDraft(keys=["SP7"], title="Solder Paste 7", snippet="s"),
+            ]
+        }
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    funnel = coord.funnel(jid)
+    assert funnel.n_units == 1  # one doc digested
+    assert funnel.n_raw_drafts == 2  # two card drafts extracted
+    assert funnel.n_proposals == 2  # both kept (distinct keys, no existing card)
+
+
+async def test_funnel_of_a_vanished_run_is_all_zero():
+    """``funnel`` on a run that never existed (or cascaded away) returns an empty
+    funnel, not an error — the status route calls it for any job id."""
+    spec = make_spec(default_user="u")
+    f = CardGenCoordinator(spec, _FakeDrafter({})).funnel("card-gen-run:gone")
+    assert (f.n_units, f.n_raw_drafts, f.n_proposals, f.n_skipped_indexing) == (0, 0, 0, 0)
+
+
+async def test_latest_funnel_reports_the_most_recent_finalized_run():
+    """The 待審核 tab shows 'last run: drafted X → kept Y'. That summary must come
+    from the collection's MOST RECENT finalized run — including one that kept 0
+    proposals (the exact case that left the user staring at an empty queue),
+    which the active-proposal queue structurally cannot surface."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    assert coord.latest_funnel(cid) is None  # no finalized run yet
+
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    funnel = coord.latest_funnel(cid)
+    assert funnel is not None
+    assert funnel.n_units == 1 and funnel.n_raw_drafts == 1 and funnel.n_proposals == 1
 
 
 async def test_a_doc_whose_digest_fails_does_not_sink_the_run():

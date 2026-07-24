@@ -71,6 +71,7 @@ MEMBER_FIELDS = [
     "/state",
     "/reason",
     "/label",
+    "/target_label",
 ]
 
 
