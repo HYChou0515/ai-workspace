@@ -498,11 +498,72 @@
 .ev-card--readonly:hover {
   transform: none;
 }
+.ev-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
 .ev-card__title {
   font-weight: 600;
   font-size: var(--text-body-sm);
   color: var(--text-paper);
   line-height: var(--leading-body-sm);
+  min-width: 0;
+}
+/* ⋯ card menu trigger — quiet until the card is hovered / the menu is open. */
+.ev-card__menu {
+  flex: none;
+  margin: calc(var(--space-4) * -1) calc(var(--space-4) * -1) 0 0;
+}
+.ev-card__menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-paper-d);
+  font-size: var(--text-body);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s;
+}
+.ev-card:hover .ev-card__menu-btn,
+.ev-card__menu-btn:focus-visible,
+.ev-card__menu-btn[aria-expanded="true"] {
+  opacity: 1;
+}
+.ev-card__menu-btn:hover,
+.ev-card__menu-btn[aria-expanded="true"] {
+  background: var(--paper-2);
+  border-color: var(--paper-3);
+  color: var(--text-paper);
+}
+/* card ⋯ action list — lives inside a Popover (which supplies the chrome). */
+.ev-cardmenu {
+  display: flex;
+  flex-direction: column;
+}
+.ev-cardmenu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: var(--space-8) var(--space-12);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-btn);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+.ev-cardmenu__item:hover,
+.ev-cardmenu__item:focus-visible {
+  background: var(--paper-2);
 }
 .ev-card__badges {
   display: flex;

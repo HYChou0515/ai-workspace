@@ -90,6 +90,12 @@ export function AiYamlRenderer({ path }: { path: string }) {
 
   const list = listQ.data;
 
+  // #4 — a board card's ⋯ menu opens the record's `{records_path}/N.md` file in a
+  // new tab; only offered when a shell publishes an opener (§F, #454) and the type
+  // (hence its records_path) is known.
+  const onOpenRecord =
+    openFile && type ? (number: number) => openFile(`/${type.records_path}/${number}.md`) : undefined;
+
   return (
     <EntityViewBody
       spec={spec}
@@ -104,6 +110,8 @@ export function AiYamlRenderer({ path }: { path: string }) {
       schemaMissing={catalogQ.isSuccess && !type}
       onCreate={write.create}
       onPatch={write.patch}
+      onSave={write.save}
+      onOpenRecord={onOpenRecord}
       busy={write.isBusy}
       conflicts={write.conflicts}
       onDismissConflict={write.dismissConflict}
