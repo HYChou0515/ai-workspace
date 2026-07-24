@@ -91,7 +91,7 @@ def _word_ascii(ch: str) -> bool:
     return ch.isascii() and (ch.isalnum() or ch == "_")
 
 
-def _hits(nt: str, key: str) -> bool:
+def mentions(nt: str, key: str) -> bool:
     """Whether `key` occurs in the normalised text `nt` at least once WITHOUT
     being glued into a longer ASCII word — rejecting `m4` inside `m40` or `etch`
     inside `foobar_etch`, while letting CJK keys match embedded. `str.find`
@@ -110,12 +110,12 @@ def _hits(nt: str, key: str) -> bool:
 def match(text: str, vocab: dict[str, list[ContextCard]], *, cap: int = 10) -> list[ContextCard]:
     """Deterministically scan free `text` for any card key in `vocab` and return
     the matched cards (deduped, stable order, capped). Single pass: keys are
-    sorted for a stable order, each tested with `_hits`; cards are deduped by
+    sorted for a stable order, each tested with `mentions`; cards are deduped by
     identity (a card hit by several keys appears once)."""
     nt = norm(text)
     seen: set[int] = set()
     out: list[ContextCard] = []
-    for k in sorted(k for k in vocab if _hits(nt, k)):
+    for k in sorted(k for k in vocab if mentions(nt, k)):
         for card in vocab[k]:
             if id(card) not in seen:
                 seen.add(id(card))
