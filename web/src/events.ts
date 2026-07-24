@@ -129,6 +129,15 @@ export type TodosUpdated = {
   items: { text: string; status: "pending" | "in_progress" | "completed" }[];
 };
 
+/** #624: the request did not fit, so older history was dropped and the turn
+ * retried with less. Live-only — the durable record is the `notice` message.
+ * Mirrors api/events.py ContextTrimmed. */
+export type ContextTrimmed = {
+  type: "context_trimmed";
+  kept: number;
+  dropped: number;
+};
+
 /** #613 P3: the chat's goal changed — set / cleared / state or round moved.
  * `goal` is the panel's whole new state, or null when cleared. Mirrors
  * api/events.py GoalUpdated. */
@@ -229,6 +238,7 @@ export type AgentEvent =
   | RestoreProgress
   | TodosUpdated
   | GoalUpdated
+  | ContextTrimmed
   | UserMessage
   | FileChanged
   | Presence

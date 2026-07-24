@@ -242,6 +242,25 @@ export function EntryView({
   if (entry.kind === "mention") {
     return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
   }
+  if (entry.kind === "notice") {
+    // #624: a quiet but unmissable line — the model's memory horizon moved.
+    return (
+      <div
+        data-testid="context-notice"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          padding: "4px 8px",
+          fontSize: pxToRem(12),
+          color: "var(--text-paper-d)",
+          borderLeft: "2px solid var(--err)",
+        }}
+      >
+        <span>{entry.text}</span>
+      </div>
+    );
+  }
   if (entry.kind === "goal_note") {
     // #613 P3: the goal driver's outcome marker — a quiet status line, like a
     // mention (informational, not part of the dialogue).

@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agent.context import AgentToolContext
+from ..context_budget import catalog_limit, estimate_tokens
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .turns import history_items
@@ -84,6 +85,7 @@ class TurnContextBuilder:
         infer_modules_parallelism: int,
         history_max_messages: int,
         history_max_context_tokens: int,
+        context_limit: int | None = None,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     ) -> None:
         self._sandbox = sandbox
@@ -106,6 +108,9 @@ class TurnContextBuilder:
         self._infer_modules_parallelism = infer_modules_parallelism
         self._history_max_messages = history_max_messages
         self._history_max_context_tokens = history_max_context_tokens
+        # #624: the operator's declared ceiling for this deploy's endpoint. None ⇒
+        # resolve per turn (catalog lookup), and `unknown` ⇒ do not trim at all.
+        self._context_limit = context_limit
         self._wiki_coordinator = wiki_coordinator
         # #429 P10: the event-dispatch sink stamped onto every agent turn's ctx so an
         # agent's entity write fires on_event workflows. Set after construction by the
@@ -113,6 +118,149 @@ class TurnContextBuilder:
         # so it can't be a constructor arg — mirrors orchestrator.entity_write_sink).
         # None ⇒ no dispatch wired (tests / deployments with no triggers pay nothing).
         self.entity_write_sink: EntityWriteSink | None = None
+        # #624: reads what the RUNNER has learned about each endpoint's real
+        # ceiling (from the limits its rejections stated). Set after construction
+        # by the composition root — the runner is injected, and a scripted runner
+        # (tests, replay) has nothing to learn from. None ⇒ the ladder simply
+        # skips that rung.
+        self.learned_limit_fn: Callable[[str, str | None], int | None] | None = None
+        # #624 §9.12: the catalog rung, memoised per model and filled OFF the
+        # event loop (see `deferred_lookup`). `_catalog_fn` is a plain attribute
+        # rather than a direct call so a test can stand in for the slow, untimed
+        # registry lookup — the hazard itself is what needs driving.
+        self._catalog_cache: dict[str, int | None] = {}
+        self._catalog_fn: Callable[[str], int | None] = catalog_limit
+
+    def _overhead_for(self, agent_config: AgentConfig | None, item_id: str) -> int:
+        """Tokens spent before any history: the system prompt + tool schemas."""
+        if agent_config is None:
+            return 0
+        return estimate_tokens(agent_config.system_prompt or "") + self._tools_tokens(
+            agent_config,
+            app_slug=self._locator.slug_of(item_id),
+            profile=self._locator.profile_of(item_id),
+        )
+
+    def _learned_limit(self, agent_config: AgentConfig) -> int | None:
+        """What the endpoint stated in a past rejection, via the runner's
+        learner. None when nothing has been learned (or no runner is wired —
+        tests, replay), which simply leaves the ladder to its other rungs."""
+        fn = self.learned_limit_fn
+        if fn is None:
+            return None
+        try:
+            return fn(agent_config.model, agent_config.llm_base_url or None)
+        except Exception:  # noqa: BLE001 — a cache read must not break a turn
+            return None
+
+    def _budget_for(
+        self,
+        agent_config: AgentConfig | None,
+        *,
+        app_slug: str | None = None,
+        profile: str | None = None,
+        overhead_tokens: int | None = None,
+    ) -> int | None:
+        """Tokens left for replayed history on this turn, or ``None`` for "no
+        ceiling known — do not trim" (#624).
+
+        ``None`` and ``0`` are deliberately different answers: ``None`` means we
+        do not know the ceiling and must not amputate on a guess, while ``0``
+        means we DO know it and the prompt alone already fills it — there is
+        genuinely no room for history. Collapsing them (both "falsy") makes the
+        second case silently behave like the first, which is the opposite of
+        what it needs.
+
+        The ceiling is resolved per turn because it belongs to the *endpoint*
+        this config points at: an operator override first, else the model
+        registry. A self-hosted model behind an OpenAI-compatible endpoint is in
+        no registry, so `unknown` is the expected answer there — and `unknown`
+        must mean "send it all", never "fall back to some number", which is how
+        24,000 came to govern a window nobody had measured.
+
+        The overhead subtracted is real, not assumed: the system prompt (which
+        since #480 carries every tool's documentation) plus the tool schemas that
+        ride alongside it. The old budget could see neither, so an 18.5k-token
+        prompt and a 24k history budget were aimed at a 40,960-token model.
+
+        ``overhead_tokens`` lets a caller that already measured it pass it in.
+        Building the tool schemas to size them costs ~28 ms on the event loop, and
+        a turn needs the same figure twice — for this budget and for the ctx field
+        the truncation check reads.
+        """
+        from ..context_budget import (
+            deferred_lookup,
+            estimate_tokens,
+            history_budget,
+            resolve_context_limit,
+        )
+
+        if agent_config is None:
+            return None
+        limit = resolve_context_limit(
+            configured=self._context_limit,
+            # #624: what the endpoint told us in a past rejection. Wired to the
+            # runner's learner — the adversarial review caught this as a dangling
+            # `learned=None  # P3 feeds this` comment that nothing ever fed.
+            learned=self._learned_limit(agent_config),
+            # #624 §9.12: NOT a table lookup, whatever its name says — litellm
+            # resolves an `ollama/*` name by asking the daemon, untimed (measured
+            # 129,781 ms against an address that does not answer). This runs on
+            # every turn, inside `async def build_chat_turn`, so it is deferred
+            # off the loop like the probe.
+            catalog=deferred_lookup(
+                self._catalog_cache,
+                agent_config.model,
+                lambda: self._catalog_fn(agent_config.model),
+            ),
+        )
+        overhead = overhead_tokens
+        if overhead is None:
+            overhead = estimate_tokens(agent_config.system_prompt or "")
+            overhead += self._tools_tokens(agent_config, app_slug=app_slug, profile=profile)
+        budget = history_budget(limit, overhead_tokens=overhead)
+        if budget is None:
+            return None
+        # `_fit_token_budget` always keeps the newest message (dropping the turn's
+        # own context is worse than a slight overflow), so a floor of 1 expresses
+        # "no room for history" without colliding with 0 = "budget disabled".
+        return max(1, budget)
+
+    def _tools_tokens(
+        self, agent_config: AgentConfig, *, app_slug: str | None, profile: str | None
+    ) -> int:
+        """Estimated cost of the tool schemas sent alongside the prompt. Built
+        per turn (~12 ms) rather than guessed — a guess here is the same class of
+        defect as the constant it replaces. Any failure degrades to 0 rather than
+        breaking the turn."""
+        import json
+
+        from ..agent import build_tools
+        from ..context_budget import estimate_tokens
+
+        try:
+            # NOT `allowed_tools or None` — `[]` is an explicit "no tools", and
+            # that alias turns it into "use the workspace defaults". `_agent_for`
+            # carries a ten-line comment about the misconfig it caused; sizing
+            # must measure the SAME tool set the runner will actually send.
+            tools = build_tools(
+                agent_config.allowed_tools,
+                app_slug=app_slug,
+                profile=profile,
+            )
+            payload = json.dumps(
+                [
+                    {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.params_json_schema,
+                    }
+                    for t in tools
+                ]
+            )
+        except Exception:  # noqa: BLE001 — sizing must never break a turn
+            return 0
+        return estimate_tokens(payload)
 
     def _common(
         self,
@@ -124,6 +272,33 @@ class TurnContextBuilder:
         history_messages: list[Message],
     ) -> dict[str, Any]:
         """The fields identical across every RCA turn shape (interactive + workflow)."""
+        # #624: capture whether history had to be cut, so the send path can say so
+        # in the thread. The cut used to be unspeakable — nothing recorded it.
+        cut: list[int] = []
+        said: list[str] = []
+        # #624: measured ONCE — sizing the tool schemas builds them (~28 ms, on
+        # the event loop) and this turn needs the same figure twice: to derive
+        # the history budget, and as the ctx field the silent-truncation check
+        # compares against.
+        overhead = self._overhead_for(agent_config, item_id)
+        history = history_items(
+            history_messages,
+            max_messages=self._history_max_messages,
+            # The token ceiling is DERIVED from what this endpoint can actually
+            # take, minus what the prompt + tool schemas already spend — not a
+            # constant. An unknown ceiling yields None ⇒ no trim (we send it all
+            # and learn the real limit from the response), unless an operator has
+            # set the legacy manual cap. None is deliberately not 0: 0 is a known
+            # ceiling with no room left, which must trim to nothing, not to all.
+            max_tokens=(
+                derived
+                if (derived := self._budget_for(agent_config, overhead_tokens=overhead)) is not None
+                else self._history_max_context_tokens
+            ),
+            users=self._users,
+            on_trim=cut.append,
+            on_reduce=said.append,
+        )
         return dict(
             investigation_id=item_id,
             sandbox=self._sandbox,
@@ -148,12 +323,10 @@ class TurnContextBuilder:
             read_file_max_chars=self._read_file_max_chars,
             tool_output_max_chars=self._tool_output_max_chars,
             exec_output_max_chars=self._exec_output_max_chars,
-            history=history_items(
-                history_messages,
-                max_messages=self._history_max_messages,
-                max_tokens=self._history_max_context_tokens,
-                users=self._users,
-            ),
+            history=history,
+            history_trimmed=cut[0] if cut else 0,
+            history_reduced_note=said[0] if said else "",
+            context_overhead_tokens=overhead,
             packages=self._packages or [],
             prebuilt_dir=self._prebuilt_dir,
             app_slug=self._locator.slug_of(item_id),

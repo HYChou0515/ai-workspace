@@ -302,9 +302,12 @@ def create_app(
     # "" ⇒ search ALL collections (backward-compatible). Resolved to ids once
     # per turn (not per step).
     infer_modules_collection: str = "",
-    history_max_messages: int = 40,
+    history_max_messages: int = 0,
     # Token budget for the replayed history (#45); 0 disables it.
-    history_max_context_tokens: int = 24_000,
+    history_max_context_tokens: int = 0,
+    # #624: the operator's declared context ceiling for this deploy's endpoint.
+    # None ⇒ resolve per turn from the model registry; unknown ⇒ do not trim.
+    context_limit: int | None = None,
     # Operator-level KB retrieval enhancement defaults + LLM ceilings.
     # `None` ⇒ bundled `EnhancementSettings()` (light: expand=1, hyde=0,
     # rerank=on). __main__ threads `settings.kb.retrieval.enhancements`.
@@ -893,6 +896,7 @@ def create_app(
         kb_agent_configs=kb_agent_configs,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        context_limit=context_limit,
         max_searches_per_turn=kb_max_searches_per_turn,
         max_searches_ceiling=kb_max_searches_ceiling,
         disclosure_enabled=kb_disclosure_enabled,
@@ -1005,9 +1009,18 @@ def create_app(
         infer_modules_parallelism=infer_modules_parallelism,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        # #624: the operator's declared ceiling for this endpoint (the escape
+        # hatch); unset ⇒ resolved per turn, and unknown ⇒ no trimming.
+        context_limit=context_limit,
         # #397: lets the request_wiki_update tool submit a user's wiki correction.
         wiki_coordinator=wiki_coordinator,
     )
+
+    # #624: let the budget consult what the RUNNER has learned about each
+    # endpoint's real ceiling (from the limits its rejections stated). Attached
+    # after construction because the runner is injected, and duck-typed because
+    # ScriptedAgentRunner (tests, replay) has nothing to learn from.
+    turn_ctx.learned_limit_fn = getattr(runner, "learned_limit", None)
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so

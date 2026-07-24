@@ -26,13 +26,15 @@ import msgspec
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from ..resources import Conversation
+from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from .notifications import notification_sent, notify
 from .rca_messages import to_rca_message
+from .timeutil import now_ms
+from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
 
 if TYPE_CHECKING:
     from ..entity.events import EntityOrigin
@@ -167,6 +169,13 @@ class WorkflowExecutor:
             # they fire on_event workflows AND stay inside the recursion depth cap.
             entity_write_origin=entity_write_origin,
         )
+        # #624: this node had to leave part of the thread out. Say so in the
+        # workflow chat — it is a real conversation the user can open, and a run
+        # that quietly forgot its earlier steps reads as a model gone vague.
+        # Nobody watching right now is a reason to PERSIST the notice, not to
+        # skip it.
+        if ctx.history_reduced_note:
+            self._notice_history_reduced(rid, captured_user, ctx.history_reduced_note)
         answer: list[str] = []
 
         def persist(produced: list[TurnMessage]) -> None:
@@ -196,6 +205,28 @@ class WorkflowExecutor:
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError
         return "\n".join(answer)
+
+    def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
+        """Leave the #624 marker in the workflow chat.
+
+        Same wording and same once-per-thread rule as the two interactive chats,
+        taken from `turns` rather than restated — three surfaces persist this
+        marker, and a rule kept in three places is a rule that will hold in two
+        of them. Written as the captured user, like every other background write
+        on this path (§15, the job-pod acting-user pattern)."""
+        conv = self._conv_rm.get(rid).data
+        assert isinstance(conv, Conversation)
+        if already_noticed(conv.messages):
+            return  # already told, at the transition
+        conv.messages.append(
+            Message(
+                role=CONTEXT_NOTICE_ROLE,
+                content=context_notice_text(note),
+                created_at=now_ms(),
+            )
+        )
+        with self._conv_rm.using(user=acting_user):
+            self._conv_rm.update(rid, conv)
 
     async def run_sandbox(
         self,

@@ -30,6 +30,8 @@ export type MessageRole =
   | "system"
   | "mention"
   | "goal"
+  // #624: `notice` = 系統告知(例如較早訊息已超出模型可讀範圍)— FE-only。
+  | "notice"
   | "error";
 
 export type Message = {
