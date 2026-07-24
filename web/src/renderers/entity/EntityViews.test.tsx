@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityHealthFinding, EntityInstance, EntityType } from "../../api/entities";
@@ -143,6 +143,18 @@ describe("QuickCreate", () => {
     fireEvent.change(screen.getByLabelText("title"), { target: { value: "Bug" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(onCreate).toHaveBeenCalledWith({ title: "Bug" });
+  });
+
+  it("opens the create form in a modal dialog, not crammed into the header (#2)", () => {
+    // #2: the expanded form used to live inside the header flex row, so on the
+    // board it floated as a lopsided card beside a vertically-centred title. It
+    // now opens in a ModalShell — the fields + Create action live in a dialog.
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("title")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeInTheDocument();
   });
 });
 

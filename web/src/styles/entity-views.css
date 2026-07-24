@@ -171,15 +171,30 @@
 /* ── quick-create (§C1) ──────────────────────────────────────────────────── */
 /* Opens into a raised card of labelled role widgets rather than a bare inline
  * row of native inputs. */
+/* The create form now lives inside a ModalShell (which supplies the card chrome
+ * + padding), so this is just the inner column: title, a responsive field grid,
+ * then the actions. */
 .ev-quickcreate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding: var(--space-24);
+  min-width: 0;
+}
+.ev-quickcreate__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-display-sm);
+  line-height: var(--leading-display-sm);
+  letter-spacing: -0.02em;
+  color: var(--text-paper);
+}
+.ev-quickcreate__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: var(--space-12);
   align-items: end;
-  padding: var(--space-16);
-  background: var(--white);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-card);
 }
 .ev-quickcreate__field {
   display: flex;
@@ -198,7 +213,6 @@
   color: var(--accent);
 }
 .ev-quickcreate__actions {
-  grid-column: 1 / -1;
   display: flex;
   gap: var(--space-8);
   justify-content: flex-end;
