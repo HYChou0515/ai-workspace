@@ -54,7 +54,7 @@ from ..kb.context_cards import (
 )
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.graph.inject import entity_block
-from ..kb.graph.name_cache import NameIndexCache
+from ..kb.graph.name_cache import graph_name_index
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import VlmDescriber
 from ..kb.wiki.consult import WikiConsultant
@@ -424,45 +424,10 @@ def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
 
 
-# #633: one name index per process, rebuilt on a TTL. Built lazily so a pod that
-# never serves a KB turn never pays for it, and keyed on the spec so tests get
-# their own. A stale index only costs a name not being offered this turn — the
-# dossier tool still reaches it — which is what makes a plain TTL sufficient
-# instead of cross-pod invalidation.
-_NAME_INDEXES: dict[int, NameIndexCache] = {}
-
-
-def _load_graph_names(spec: SpecStar) -> dict[str, tuple[str, ...]]:
-    """Every identity's names → the ids they resolve to. Reads WITHOUT an access
-    scope on purpose: this is a name→id map, and every use of it re-reads the
-    identity as the caller before showing anything. Filtering here instead would
-    mean one index per user."""
-    from ..resources.graph import GraphEntity
-
-    names: dict[str, tuple[str, ...]] = {}
-    rm = spec.get_resource_manager(GraphEntity)
-    for r in rm.list_resources():
-        entity = r.data
-        if not isinstance(entity, GraphEntity) or entity.merged_into or not entity.collection_ids:
-            continue  # a tombstone or an identity nothing vouches for
-        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-        for key in entity.norm_keys:
-            names[key] = names.get(key, ()) + (rid,)
-    return names
-
-
 def _graph_block_for(spec: SpecStar, text: str, as_user: str) -> str:
     """Build the injection block. Blocking on purpose — the caller hands it to a
     thread so specstar's synchronous reads never sit on the event loop."""
-    return entity_block(spec, _name_index(spec).get(), text, as_user=as_user)
-
-
-def _name_index(spec: SpecStar) -> NameIndexCache:
-    cache = _NAME_INDEXES.get(id(spec))
-    if cache is None:
-        cache = NameIndexCache(lambda: _load_graph_names(spec))
-        _NAME_INDEXES[id(spec)] = cache
-    return cache
+    return entity_block(spec, graph_name_index(spec).get(), text, as_user=as_user)
 
 
 def register_kb_chat_routes(

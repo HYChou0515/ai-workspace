@@ -72,6 +72,31 @@ class NameIndex:
     def __len__(self) -> int:
         return len(self._by_name)
 
+    def search(self, query: str, *, limit: int = 50) -> list[tuple[str, tuple[str, ...]]]:
+        """Names containing ``query``, prefix matches first.
+
+        The browser's search (#636). The database cannot answer this cheaply —
+        a text match against the indexed list column is a full scan — but the
+        index is already in memory for injection, so it costs a pass over the
+        keys. Prefix hits rank first because someone typing "ppo" means the
+        start of a name far more often than the middle of one.
+        """
+        key = norm(query)
+        if not key:
+            return []
+        prefix: list[tuple[str, tuple[str, ...]]] = []
+        inner: list[tuple[str, tuple[str, ...]]] = []
+        for name, ids in self._by_name.items():
+            if name.startswith(key):
+                prefix.append((name, ids))
+            elif key in name:
+                inner.append((name, ids))
+            if len(prefix) >= limit:
+                break
+        prefix.sort()
+        inner.sort()
+        return (prefix + inner)[:limit]
+
     def hits(self, text: str) -> dict[str, tuple[str, ...]]:
         """Every indexed name the text mentions, with the identities it resolves
         to. Ambiguity is carried, never collapsed to a first match.

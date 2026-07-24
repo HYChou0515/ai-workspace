@@ -69,3 +69,39 @@ class NameIndexCache:
                 _LOGGER.warning("graph: name index rebuild failed; serving the previous one")
                 self._built_at = now
         return self._index
+
+
+# One index per spec per process. Two routers need it — the chat turn that
+# injects (#633) and the browser that searches (#636) — and neither owns it, so
+# it lives here rather than as a private helper in whichever imported it first.
+_INDEXES: dict[int, NameIndexCache] = {}
+
+
+def load_graph_names(spec: object) -> dict[str, tuple[str, ...]]:
+    """Every identity's names → the ids they resolve to.
+
+    Read WITHOUT an access scope on purpose: this is a name→id map, and every
+    use re-reads the identity AS the caller before showing anything. Filtering
+    here instead would mean one index per user.
+    """
+    from ...resources.graph import GraphEntity
+
+    names: dict[str, tuple[str, ...]] = {}
+    rm = spec.get_resource_manager(GraphEntity)  # ty: ignore[unresolved-attribute]
+    for r in rm.list_resources():
+        entity = r.data
+        if not isinstance(entity, GraphEntity) or entity.merged_into or not entity.collection_ids:
+            continue  # a tombstone, or an identity nothing vouches for
+        rid = r.info.resource_id
+        for key in entity.norm_keys:
+            names[key] = names.get(key, ()) + (rid,)
+    return names
+
+
+def graph_name_index(spec: object) -> NameIndexCache:
+    """The process-local index for ``spec``, built on first use."""
+    cache = _INDEXES.get(id(spec))
+    if cache is None:
+        cache = NameIndexCache(lambda: load_graph_names(spec))
+        _INDEXES[id(spec)] = cache
+    return cache
