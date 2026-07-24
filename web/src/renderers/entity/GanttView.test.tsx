@@ -107,6 +107,22 @@ describe("GanttView", () => {
     expect(screen.getByText("Jan 2026")).toBeInTheDocument();
   });
 
+  it("fills a wide pane by extending the dated grid past the data (no empty gap)", () => {
+    class FakeRO {
+      constructor(private cb: ResizeObserverCallback) {}
+      observe() {
+        this.cb([{ contentRect: { width: 900 } } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeRO);
+    // data lives entirely in January; a 900px pane must extend the grid onward
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-15" })] })} />);
+    expect(screen.getByText("Feb 2026")).toBeInTheDocument();
+    vi.unstubAllGlobals();
+  });
+
   it("marks today when it falls within the chart range", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2020-01-01/2035-01-01" })] })} />);
     expect(screen.getByTestId("gantt-today")).toBeInTheDocument();

@@ -544,9 +544,9 @@
 }
 .ev-gantt__scroll {
   overflow-x: auto;
-  /* hug the chart instead of stretching a half-empty card across the pane */
-  width: fit-content;
-  max-width: 100%;
+  /* fill the pane — the canvas stretches its dated grid to match (max(pane,
+   * content)), so a short project fills the width and a long one scrolls. */
+  width: 100%;
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   background: var(--white);

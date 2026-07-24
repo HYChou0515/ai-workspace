@@ -15,12 +15,13 @@
  * backend role vocabulary doesn't have yet (tracked as a #450 sub-item).
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { EntityInstance } from "../../api/entities";
 import {
   applyDrag,
   axisFor,
+  canvasWidthFor,
   daysBetween,
   deltaDays,
   type DragMode,
@@ -28,6 +29,7 @@ import {
   type Span,
   spanToDates,
   spanValue,
+  visibleDaysFor,
   type Zoom,
 } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
@@ -83,6 +85,19 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   const labelField = spec.label ?? "title";
   const [zoom, setZoom] = useState<Zoom>("week");
   const [drag, setDrag] = useState<Drag | null>(null);
+  // Measure the scroll pane so a short project can FILL its width (max(pane,
+  // content)) instead of hugging a half-empty card; a long one still scrolls.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [paneWidth, setPaneWidth] = useState(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      for (const e of entries) setPaneWidth(e.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const rows: Row[] = entities
     .map((e) => ({ e, span: spanToDates(e.fields[spanField]) }))
@@ -96,7 +111,10 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   const minDate = rows.map((r) => r.span.start).reduce((m, s) => (s < m ? s : m));
   const maxDate = rows.map((r) => r.span.end).reduce((m, e) => (e > m ? e : m));
   const totalDays = daysBetween(minDate, maxDate) + 1;
-  const chartWidth = totalDays * ppd;
+  // Fill the pane when the data is short, scroll when it's long; the dated grid
+  // then extends across the whole canvas so there is no empty gap.
+  const canvasWidth = canvasWidthFor(totalDays, ppd, paneWidth - GUTTER);
+  const visibleDays = visibleDaysFor(canvasWidth, ppd);
   const xOf = (date: string) => daysBetween(minDate, date) * ppd;
 
   const lanes = groupLanes(rows, spec.group_by, type, refIndex);
@@ -126,10 +144,11 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   const previewSpan = (row: Row): Span =>
     drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days) : row.span;
 
-  const axis = axisFor(minDate, totalDays, ppd);
+  const axis = axisFor(minDate, visibleDays, ppd);
 
   const today = new Date().toISOString().slice(0, 10);
-  const todayInRange = today >= minDate && today <= maxDate;
+  const todayOffset = daysBetween(minDate, today);
+  const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
 
   return (
     <div>
@@ -150,8 +169,8 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
         ))}
       </div>
 
-      <div className="ev-gantt__scroll scrollable">
-        <div className="ev-gantt__grid" style={{ minWidth: GUTTER + chartWidth }}>
+      <div className="ev-gantt__scroll scrollable" ref={scrollRef}>
+        <div className="ev-gantt__grid" style={{ minWidth: GUTTER + canvasWidth }}>
           {/* left gutter: axis spacer + lane headers + row labels */}
           <div className="ev-gantt__gutter" style={{ width: GUTTER }}>
             <div style={{ height: AXIS_H }} />
@@ -172,7 +191,7 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
           </div>
 
           {/* right timeline: gridlines + axis ticks + today line + bars */}
-          <div className="ev-gantt__canvas" style={{ width: chartWidth }}>
+          <div className="ev-gantt__canvas" style={{ width: canvasWidth }}>
             {axis.fine.map((t) => (
               <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * ppd }} />
             ))}
