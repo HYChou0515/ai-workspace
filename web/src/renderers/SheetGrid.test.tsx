@@ -89,3 +89,32 @@ describe("SheetGrid — sorting is a view, not a rewrite", () => {
     expect(screen.getAllByRole("textbox").length).toBeLessThan(100);
   });
 });
+
+describe("SheetGrid — degradation", () => {
+  afterEach(cleanup);
+
+  it("an empty file gets one editable cell, not a blank pane", () => {
+    render(<SheetGrid rows={[]} onRowsChange={vi.fn()} />);
+
+    expect(screen.getByLabelText("R1C1")).toBeInTheDocument();
+  });
+
+  it("marks a ragged row and names it, instead of hiding or dropping it", () => {
+    render(
+      <SheetGrid
+        rows={[
+          ["wafer", "qty", "note"],
+          ["W01", "120", "ok"],
+          ["W02"],
+        ]}
+        onRowsChange={vi.fn()}
+      />,
+    );
+
+    // The row is still there and still editable...
+    expect(screen.getByLabelText("R3C1")).toHaveValue("W02");
+    // ...and the mismatch is stated with the row number and both counts.
+    const marked = screen.getByRole("row", { name: /row 3/i });
+    expect(marked).toHaveTextContent(/1 .*3/);
+  });
+});

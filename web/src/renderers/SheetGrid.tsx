@@ -64,18 +64,21 @@ export function SheetGrid({
     setViewportHeight(scrollRef.current?.clientHeight ?? 0);
   }, []);
 
-  const header = rows[0] ?? [];
+  // An empty file still gets one cell: a blank pane offers nothing to click, so
+  // there would be no way to start typing in a file you just created.
+  const grid = rows.length > 0 ? rows : [[""]];
+  const header = grid[0] ?? [];
   // File indices of the data rows, in display order.
-  const order = sort ? sortedIndices(rows, sort.column, sort.dir) : rows.map((_, i) => i).slice(1);
+  const order = sort ? sortedIndices(grid, sort.column, sort.dir) : grid.map((_, i) => i).slice(1);
   const { start, end } = visibleRange({ scrollTop, viewportHeight, rowHeight: ROW_HEIGHT, total: order.length });
 
   const commit = (pending: Edit | null) => {
     setEdit(null);
     if (!pending || readOnly) return;
-    const current = rows[pending.fileRow]?.[pending.col] ?? "";
+    const current = grid[pending.fileRow]?.[pending.col] ?? "";
     if (pending.draft === current) return; // nothing typed — don't dirty the file
     onRowsChange(
-      rows.map((row, r) => (r === pending.fileRow ? row.map((v, c) => (c === pending.col ? pending.draft : v)) : row)),
+      grid.map((row, r) => (r === pending.fileRow ? row.map((v, c) => (c === pending.col ? pending.draft : v)) : row)),
     );
   };
 
@@ -94,12 +97,12 @@ export function SheetGrid({
     );
 
   const actions: { label: string; run: () => string[][] }[] = [
-    { label: "Insert row above", run: () => insertRow(rows, active.fileRow) },
-    { label: "Insert row below", run: () => insertRow(rows, active.fileRow + 1) },
-    { label: "Delete row", run: () => removeRow(rows, active.fileRow) },
-    { label: "Insert column left", run: () => insertColumn(rows, active.col) },
-    { label: "Insert column right", run: () => insertColumn(rows, active.col + 1) },
-    { label: "Delete column", run: () => removeColumn(rows, active.col) },
+    { label: "Insert row above", run: () => insertRow(grid, active.fileRow) },
+    { label: "Insert row below", run: () => insertRow(grid, active.fileRow + 1) },
+    { label: "Delete row", run: () => removeRow(grid, active.fileRow) },
+    { label: "Insert column left", run: () => insertColumn(grid, active.col) },
+    { label: "Insert column right", run: () => insertColumn(grid, active.col + 1) },
+    { label: "Delete column", run: () => removeColumn(grid, active.col) },
   ];
 
   const cellInput = (fileRow: number, displayRow: number, col: number, value: string) => {
@@ -163,7 +166,7 @@ export function SheetGrid({
               className="btn"
               data-variant="secondary"
               data-size="sm"
-              onClick={() => onRowsChange([header, ...order.map((i) => rows[i] as string[])])}
+              onClick={() => onRowsChange([header, ...order.map((i) => grid[i] as string[])])}
             >
               Apply this order to the file
             </button>
@@ -218,13 +221,32 @@ export function SheetGrid({
             )}
             {order.slice(start, end).map((fileRow, k) => {
               const displayRow = start + k + 1; // +1: the header occupies display row 0
+              const cells = grid[fileRow] ?? [];
+              // A row whose field count disagrees with the header is SHOWN and
+              // still editable, with the mismatch stated — dropping it or
+              // blanking the pane would hide data the file really contains
+              // (the same lesson as #646 on the ingest side).
+              const ragged = cells.length !== header.length;
+              // `displayRow` is 0-based; the row NUMBER a user reads is 1-based,
+              // and the header is row 1.
+              const note = ragged ? `Row ${displayRow + 1} — ${cells.length} of ${header.length} fields` : undefined;
               return (
-                <tr key={fileRow} style={{ height: ROW_HEIGHT }}>
-                  {(rows[fileRow] ?? []).map((value, c) => (
+                <tr
+                  key={fileRow}
+                  aria-label={note}
+                  className={ragged ? "sheet-row--ragged" : undefined}
+                  style={{ height: ROW_HEIGHT }}
+                >
+                  {cells.map((value, c) => (
                     <td key={c} style={{ border: "1px solid var(--paper-3)", padding: 0 }}>
                       {cellInput(fileRow, displayRow, c, value)}
                     </td>
                   ))}
+                  {note && (
+                    <td style={{ color: "var(--warn)", padding: "3px 8px", whiteSpace: "nowrap" }} title={note}>
+                      ⚠ {cells.length} of {header.length} fields
+                    </td>
+                  )}
                 </tr>
               );
             })}

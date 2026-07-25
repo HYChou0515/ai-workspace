@@ -98,6 +98,40 @@ describe("SheetRenderer", () => {
     expect(store.snapshot(path).text).toBe("wafer,qty\r\nW01,120\r\n,\r\n");
   });
 
+  it("falls back to the byte editor when the file is not decodable text", async () => {
+    // A grid over mojibake is worse than useless: it invites edits that would
+    // re-encode the bytes. The byte editor is the honest escape hatch.
+    const path = "/data/blob.ai.csv";
+    const store = new FileBufferStore({
+      readFile: vi.fn(async () => ({
+        kind: "binary" as const,
+        path,
+        size: 4,
+        text: "\u0000\u0001",
+        encoding: "binary" as const,
+      })),
+      writeFile: vi.fn(async () => {}),
+    });
+    store.ensureLoaded(path);
+    await new Promise((r) => setTimeout(r, 0));
+    render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={investigationFileService("pm", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <SheetRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+
+    expect(screen.queryByLabelText("R1C1")).not.toBeInTheDocument();
+    expect(await screen.findByText(/not text/i)).toBeInTheDocument();
+  });
+
   it("discards an edit on Esc, leaving the file clean", async () => {
     const { store, path } = await renderSheet("wafer,qty\nW01,120\n");
 

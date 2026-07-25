@@ -14,12 +14,16 @@
  * behave exactly as they do in Monaco; there is no bespoke save path here.
  */
 
+import { useState } from "react";
+
 import { useOptionalFileService } from "../api/fileService";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { useItemCanWrite } from "../hooks/useItemCanWrite";
+import { useOutsideFileChange } from "../hooks/useOutsideFileChange";
 import { useWorkspaceSlug } from "../hooks/useWorkspaceSlug";
 import { parseCsv, serializeCsv } from "./csv";
 import { SheetGrid } from "./SheetGrid";
+import { TextRenderer } from "./TextRenderer";
 
 /** `.tsv` is tab-separated; everything else routed here (`.csv`) is comma-separated.
  * Same rule as `CsvRenderer` and the backend parser (`kb/parsers/tabular.py`). */
@@ -28,13 +32,24 @@ export function delimiterFor(path: string): string {
 }
 
 export function SheetRenderer({ path }: { path: string }) {
-  const { entry, setText, readOnly } = useFileBuffer(path);
+  const { entry, setText, readOnly, reload } = useFileBuffer(path);
+  const [changedOutside, setChangedOutside] = useState(false);
   const slug = useWorkspaceSlug();
   // Optional: a grid can be mounted where no writable service exists (the
   // read-only FileTree select mode does the same), and then there is no item to
   // resolve a permission against.
   const itemId = useOptionalFileService()?.scopeId ?? "";
   const canWrite = useItemCanWrite(slug, itemId);
+
+  // A peer or an agent wrote to this item. With nothing unsaved there is nothing
+  // to lose, so pick up their change silently; with unsaved cells in flight,
+  // say so and let the user decide — merging or discarding on their behalf would
+  // both throw away work without asking.
+  const dirty = entry.save === "dirty" || entry.save === "error";
+  useOutsideFileChange(slug, itemId, () => {
+    if (dirty) setChangedOutside(true);
+    else reload();
+  });
 
   if (entry.status === "loading") {
     return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
@@ -43,18 +58,55 @@ export function SheetRenderer({ path }: { path: string }) {
     return <div style={{ color: "var(--err)" }}>{entry.error ?? "load failed"}</div>;
   }
 
+  // A grid over mojibake is worse than useless: it invites edits that would
+  // re-encode the bytes on save. Degrade to the byte editor, and say why.
+  if (entry.kind === "binary") {
+    return (
+      <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+        <div role="status" style={{ color: "var(--warn)", padding: "6px 2px" }}>
+          This file is not text, so it can't be shown as a sheet — editing the bytes instead.
+        </div>
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <TextRenderer path={path} />
+        </div>
+      </div>
+    );
+  }
+
   const delimiter = delimiterFor(path);
   const rows = parseCsv(entry.text, delimiter);
 
   return (
-    <SheetGrid
-      rows={rows}
-      // Two independent reasons a cell can't be typed in: the path itself is
-      // read-only (#205) or this member may not write the item (#455 §E).
-      readOnly={readOnly || !canWrite}
-      // `entry.text` is passed so the file's line-ending and trailing-newline
-      // style survive the round-trip (see `serializeCsv`).
-      onRowsChange={(next) => setText(serializeCsv(next, delimiter, entry.text))}
-    />
+    <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+      {changedOutside && (
+        <div role="status" className="sheet-banner" style={{ display: "flex", gap: 8, alignItems: "center", padding: "6px 2px", color: "var(--warn)" }}>
+          <span>This file changed outside the editor, and you have unsaved cells.</span>
+          <button
+            type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            onClick={() => {
+              setChangedOutside(false);
+              reload();
+            }}
+          >
+            Reload and lose my changes
+          </button>
+          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => setChangedOutside(false)}>
+            Keep my changes
+          </button>
+        </div>
+      )}
+      <SheetGrid
+        rows={rows}
+        // Two independent reasons a cell can't be typed in: the path itself is
+        // read-only (#205) or this member may not write the item (#455 §E).
+        readOnly={readOnly || !canWrite}
+        // `entry.text` is passed so the file's line-ending and trailing-newline
+        // style survive the round-trip (see `serializeCsv`).
+        onRowsChange={(next) => setText(serializeCsv(next, delimiter, entry.text))}
+      />
+    </div>
   );
 }
