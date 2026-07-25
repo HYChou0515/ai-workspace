@@ -37,6 +37,17 @@ own PR — this is a distinct epic from the #640 review fixes).
   each `--cat-*` token on its own line + don't write `var(--cat-…)` in comments,
   and build slot names from a literal array (not string interpolation).
 
+- **A — group-by: ✅ done.** Decided: **local apply + "Save to view" button** (a
+  dirty "unsaved · Save / Reset" state; Save serialises `group_by` into the
+  `.ai.yaml`). Groupable = discrete fields (status / actor / ref). Table gets
+  collapsible group sections (`groupRows` + a group-header row, per-group
+  collapse); Board/Gantt already render from `group_by`, so the picker just
+  rewires it (via the effective spec). `AiYamlRenderer` owns the draft/saved
+  state and writes through `fileService.writeFile`; a `saved` bridge keeps the
+  view correct while the snapshot file-buffer catches up (it doesn't read the
+  query cache). Browser-verified (regroup by assignee → named collapsible lanes +
+  Save/Reset). Unit + integration tests (table grouping; picker→regroup→YAML).
+
 ## Open decisions (to grill per feature)
 
 - **B — colour source:** auto-palette (deterministic per value, zero-config) vs

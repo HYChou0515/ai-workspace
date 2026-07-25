@@ -84,6 +84,54 @@ describe("AiYamlRenderer", () => {
     await waitFor(() => expect(mock.update).toHaveBeenCalledWith("pm", "item1", "issue", 1, { status: "done" }));
   });
 
+  it("groups the table via the picker and saves the choice into the view YAML (#GH-projects A)", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({
+      entities: [
+        { number: 1, type_name: "issue", fields: { title: "A", status: "open" }, body: "", diagnostics: [] },
+        { number: 2, type_name: "issue", fields: { title: "B", status: "done" }, body: "", diagnostics: [] },
+      ],
+      invalid: [],
+    });
+    const path = "/views/table.ai.yaml";
+    const text = "view: table\nentity: issue\ncolumns:\n  - title\n  - status\n";
+    const store = new FileBufferStore({
+      readFile: vi.fn(async () => ({ kind: "text" as const, path, size: text.length, text, encoding: "utf-8" as const })),
+      writeFile: vi.fn(async () => {}),
+    });
+    store.ensureLoaded(path);
+    // AiYamlRenderer's "Save to view" writes through the FileService, so mock that.
+    const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+    const svc = { ...investigationFileService("pm", "item1"), writeFile };
+    render(
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={svc}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>,
+    );
+
+    // no grouping yet → no group section
+    await screen.findByLabelText("group by");
+    expect(screen.queryByTestId("group-open")).not.toBeInTheDocument();
+
+    // pick "status" → the table regroups locally
+    fireEvent.change(screen.getByLabelText("group by"), { target: { value: "status" } });
+    expect(await screen.findByTestId("group-open")).toBeInTheDocument();
+    expect(screen.getByTestId("group-done")).toBeInTheDocument();
+
+    // Save writes the choice back into the YAML
+    fireEvent.click(screen.getByRole("button", { name: "Save to view" }));
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]?.[1]).toMatch(/group_by:\s*status/);
+  });
+
   it("degrades a non-view .ai.yaml to a plain structured tree without querying entities", async () => {
     renderView("/notes.ai.yaml", "just: data\ncount: 3\n");
     // the raw yaml tree shows the key; no entity fetch is attempted

@@ -115,6 +115,64 @@ export function QuickCreate({
   );
 }
 
+// ── group-by control (#GH-projects A) ──────────────────────────────────────
+
+/** The view's grouping picker + local-vs-saved state. Changing it applies locally
+ * (the view regroups immediately); "Save to view" persists it into the `.ai.yaml`
+ * (shared). Provided only to writers with groupable fields. */
+export type GroupingControl = {
+  /** Effective group_by ("" = none). */
+  value: string;
+  options: { name: string; label: string }[];
+  onChange: (field: string) => void;
+  dirty: boolean;
+  saving?: boolean;
+  onSave: () => void;
+  onReset: () => void;
+};
+
+function GroupByControl({ grouping }: { grouping: GroupingControl }) {
+  return (
+    <div className="ev-viewbar">
+      <label className="ev-viewbar__item">
+        <span className="ev-viewbar__label">Group by</span>
+        <select
+          className="ev-select"
+          aria-label="group by"
+          value={grouping.value}
+          onChange={(e) => grouping.onChange(e.target.value)}
+        >
+          <option value="">None</option>
+          {grouping.options.map((o) => (
+            <option key={o.name} value={o.name}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      {grouping.dirty && (
+        <span className="ev-viewbar__dirty">
+          <span className="ev-viewbar__dot" aria-hidden />
+          unsaved
+          <button
+            type="button"
+            className="btn"
+            data-variant="primary"
+            data-size="sm"
+            disabled={grouping.saving}
+            onClick={grouping.onSave}
+          >
+            Save to view
+          </button>
+          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={grouping.onReset}>
+            Reset
+          </button>
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ── conflict banner (§B2) ──────────────────────────────────────────────────
 
 /** A non-blocking alert for records whose optimistic-lock write hit a 409. The
@@ -180,10 +238,12 @@ export type EntityViewBodyProps = EntityViewProps & {
   catalogDiagnostics?: EntityDiagnostic[];
   /** The entity type has no usable schema — degrade to raw, read-only fields. */
   schemaMissing?: boolean;
+  /** #GH-projects A — the group-by picker + save-to-view state (writers only). */
+  grouping?: GroupingControl;
 };
 
 export function EntityViewBody(props: EntityViewBodyProps) {
-  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing } =
+  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing, grouping } =
     props;
   const canWrite = props.canWrite !== false; // omitted ≡ writable (§E)
   const renderer = resolveViewRenderer(spec.view);
@@ -207,6 +267,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           />
         )}
       </div>
+      {grouping && grouping.options.length > 0 && <GroupByControl grouping={grouping} />}
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
       {schemaMissing && (

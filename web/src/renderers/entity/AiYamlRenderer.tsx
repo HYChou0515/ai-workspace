@@ -13,10 +13,14 @@
  * structured preview (§E, #361).
  */
 
-import { useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+
+import { dump, load } from "js-yaml";
 
 import type { EntityHealthFinding } from "../../api/entities";
 import { useFileService } from "../../api/fileService";
+import { qk } from "../../api/queryKeys";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
 import { useOpenFile } from "../../hooks/openFile";
@@ -35,7 +39,9 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
   const { entry } = useFileBuffer(path);
   const slug = useWorkspaceSlug();
-  const itemId = useFileService().scopeId;
+  const fileService = useFileService();
+  const itemId = fileService.scopeId;
+  const queryClient = useQueryClient();
 
   // Parse the spec from whatever text is loaded; empty (still loading / not a
   // view) yields no entity name, which gates the queries off (`enabled`), so
@@ -65,6 +71,19 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const type = catalogQ.data?.types.find((t) => t.name === entityName) ?? null;
   const refTypes = useMemo(() => referencedTypes(type), [type]);
   const refIndex = buildRefIndex(useReferencedRecords(slug, itemId, refTypes));
+
+  // #GH-projects A — the group-by picker. `draft` is the picker's uncommitted
+  // choice (applies locally); `saved` bridges the window after a Save until the
+  // file buffer reflects the new YAML (it reads a snapshot store, not the query
+  // cache, so it lags). Hooks stay unconditional (before the early returns).
+  const [draft, setDraft] = useState<string | undefined>(undefined);
+  const [saved, setSaved] = useState<string | undefined>(undefined);
+  const [saving, setSaving] = useState(false);
+  const specGroupBy = spec?.group_by ?? "";
+  const savedGroupBy = saved !== undefined ? saved : specGroupBy;
+  useEffect(() => {
+    if (saved !== undefined && saved === specGroupBy) setSaved(undefined);
+  }, [saved, specGroupBy]);
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
@@ -96,9 +115,48 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const onOpenRecord =
     openFile && type ? (number: number) => openFile(`/${type.records_path}/${number}.md`) : undefined;
 
+  // #GH-projects A — the effective (locally-overridden) group_by drives the view;
+  // "Save to view" serialises it back into the `.ai.yaml` (persisted, shared).
+  const effectiveGroupBy = draft !== undefined ? draft : savedGroupBy;
+  const groupDirty = draft !== undefined && draft !== savedGroupBy;
+  const groupOptions = (type?.fields ?? [])
+    .filter((f) => f.role === "status" || f.role === "actor" || f.role === "ref")
+    .map((f) => ({ name: f.name, label: f.name }));
+  const effectiveSpec = { ...spec, group_by: effectiveGroupBy || undefined };
+  const saveView = async () => {
+    if (entry.status !== "ready") return;
+    setSaving(true);
+    try {
+      const obj = (load(entry.text) ?? {}) as Record<string, unknown>;
+      if (effectiveGroupBy) obj.group_by = effectiveGroupBy;
+      else delete obj.group_by;
+      const yaml = dump(obj);
+      await fileService.writeFile(path, yaml);
+      // Best-effort cache seed; `saved` is what actually keeps the view correct
+      // until the snapshot buffer catches up (it doesn't read this cache).
+      queryClient.setQueryData(qk.file(itemId, path), { kind: "text", path, text: yaml, size: yaml.length, encoding: "utf-8" });
+      setSaved(effectiveGroupBy);
+      setDraft(undefined);
+    } finally {
+      setSaving(false);
+    }
+  };
+  const grouping =
+    canWrite && groupOptions.length > 0
+      ? {
+          value: effectiveGroupBy,
+          options: groupOptions,
+          onChange: (field: string) => setDraft(field),
+          dirty: groupDirty,
+          saving,
+          onSave: () => void saveView(),
+          onReset: () => setDraft(undefined),
+        }
+      : undefined;
+
   return (
     <EntityViewBody
-      spec={spec}
+      spec={effectiveSpec}
       type={type}
       entities={list?.entities ?? []}
       invalid={list?.invalid ?? []}
@@ -115,6 +173,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
       busy={write.isBusy}
       conflicts={write.conflicts}
       onDismissConflict={write.dismissConflict}
+      grouping={grouping}
     />
   );
 }

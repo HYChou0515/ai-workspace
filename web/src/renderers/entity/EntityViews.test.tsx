@@ -146,6 +146,27 @@ describe("TableView", () => {
   });
 });
 
+describe("table grouping (#GH-projects A)", () => {
+  it("splits rows into collapsible group sections when group_by is set", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title"], group_by: "status" };
+    render(
+      <EntityViewBody
+        spec={spec}
+        type={issueType}
+        entities={[issue(1, { title: "A", status: "open" }), issue(2, { title: "B", status: "done" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("group-open")).toBeInTheDocument();
+    expect(screen.getByTestId("group-done")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("edit title")).toHaveLength(2);
+    // collapse the "open" group → its row disappears, the other stays
+    fireEvent.click(screen.getByTestId("group-open"));
+    expect(screen.getAllByLabelText("edit title")).toHaveLength(1);
+  });
+});
+
 describe("QuickCreate", () => {
   it("opens the form and creates with only the filled args", () => {
     const onCreate = vi.fn();

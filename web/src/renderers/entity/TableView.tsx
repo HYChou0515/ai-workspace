@@ -7,11 +7,11 @@
  * Registered as the `table` kind in `viewKindRegistry`.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
-import { refOptions, type RefOption, traverseColumn } from "./refTraversal";
+import { refOptions, type RefIndex, type RefOption, traverseColumn } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { selectColor } from "./selectColor";
 import { fieldText, roleOf } from "./shared";
@@ -91,6 +91,74 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
   // conflict banner while the rest still land ("部分成功 / 部分衝突").
   const applyBatch = (field: string, value: string) => {
     for (const n of selected) onPatch(n, { [field]: value });
+  };
+
+  // #GH-projects A — collapsible grouping when the view sets `group_by` (a
+  // discrete field: status / assignee / milestone). Rows split into labelled
+  // sections; the header resolves an actor→name, a ref→title, else the raw value.
+  const groupField = spec.group_by;
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
+  const toggleGroup = (key: string) =>
+    setCollapsed((s) => {
+      const next = new Set(s);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const groups = groupField ? groupRows(rows, groupField, type, users, refIndex) : null;
+  const colTotal = columns.length + 2; // + checkbox + #
+
+  const renderRow = (e: EntityInstance) => {
+    // A lint warning marks its field's cell yellow, still editable (§D).
+    const warn = warningsByField(e.diagnostics);
+    return (
+      <tr key={e.number}>
+        <td className="ev-table__check">
+          {!readOnly && (
+            <input
+              type="checkbox"
+              aria-label={`select ${e.number}`}
+              checked={selected.has(e.number)}
+              onChange={() => toggleRow(e.number)}
+            />
+          )}
+        </td>
+        <td className="ev-table__num">{e.number}</td>
+        {columns.map((c) => {
+          const warnMsg = warn[c];
+          const td = warnMsg ? { className: "ev-table__cell--warn", title: warnMsg } : {};
+          const traversal = refIndex ? traverseColumn(c, e, type, refIndex) : null;
+          if (traversal) {
+            return (
+              <td key={c} {...td}>
+                {traversal.dangling ? (
+                  <span title="referenced record not found" style={{ color: "var(--warn)" }}>
+                    {traversal.text}
+                  </span>
+                ) : (
+                  traversal.text
+                )}
+              </td>
+            );
+          }
+          const fieldSpec = roleOf(type, c);
+          const opts = fieldSpec?.role === "ref" && refIndex ? refOptions(fieldSpec, refIndex) : undefined;
+          return (
+            <td key={c} {...td}>
+              <EditableCell
+                column={c}
+                fieldSpec={fieldSpec}
+                value={e.fields[c]}
+                users={users}
+                refOptions={opts}
+                disabled={busy || readOnly}
+                onCommit={(next) => onPatch(e.number, { [c]: next })}
+              />
+            </td>
+          );
+        })}
+      </tr>
+    );
   };
 
   return (
@@ -205,62 +273,33 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
             )}
           </thead>
           <tbody>
-            {rows.map((e) => {
-              // A lint warning marks its field's cell yellow, still editable (§D).
-              const warn = warningsByField(e.diagnostics);
-              return (
-                <tr key={e.number}>
-                  <td className="ev-table__check">
-                    {!readOnly && (
-                      <input
-                        type="checkbox"
-                        aria-label={`select ${e.number}`}
-                        checked={selected.has(e.number)}
-                        onChange={() => toggleRow(e.number)}
-                      />
-                    )}
-                  </td>
-                  <td className="ev-table__num">{e.number}</td>
-                  {columns.map((c) => {
-                    const warnMsg = warn[c];
-                    const td = warnMsg
-                      ? { className: "ev-table__cell--warn", title: warnMsg }
-                      : {};
-                    // A dotted `milestone.title` column follows the ref at render time
-                    // (§A4); a dangling target degrades to a marker, never a crash (§D).
-                    const traversal = refIndex ? traverseColumn(c, e, type, refIndex) : null;
-                    if (traversal) {
-                      return (
-                        <td key={c} {...td}>
-                          {traversal.dangling ? (
-                            <span title="referenced record not found" style={{ color: "var(--warn)" }}>
-                              {traversal.text}
+            {groups
+              ? groups.map((g) => {
+                  const open = !collapsed.has(g.key);
+                  return (
+                    <Fragment key={g.key}>
+                      <tr className="ev-table__group">
+                        <td colSpan={colTotal}>
+                          <button
+                            type="button"
+                            className="ev-table__group-btn"
+                            aria-expanded={open}
+                            data-testid={`group-${g.key}`}
+                            onClick={() => toggleGroup(g.key)}
+                          >
+                            <span className="ev-table__group-caret" aria-hidden>
+                              {open ? "▾" : "▸"}
                             </span>
-                          ) : (
-                            traversal.text
-                          )}
+                            {g.chip}
+                            <span className="ev-table__group-count">{g.rows.length}</span>
+                          </button>
                         </td>
-                      );
-                    }
-                    const fieldSpec = roleOf(type, c);
-                    const opts = fieldSpec?.role === "ref" && refIndex ? refOptions(fieldSpec, refIndex) : undefined;
-                    return (
-                      <td key={c} {...td}>
-                        <EditableCell
-                          column={c}
-                          fieldSpec={fieldSpec}
-                          value={e.fields[c]}
-                          users={users}
-                          refOptions={opts}
-                          disabled={busy || readOnly}
-                          onCommit={(next) => onPatch(e.number, { [c]: next })}
-                        />
-                      </td>
-                    );
-                  })}
-                </tr>
-              );
-            })}
+                      </tr>
+                      {open && g.rows.map(renderRow)}
+                    </Fragment>
+                  );
+                })
+              : rows.map(renderRow)}
             {/* Unparseable records degrade to an error row (§D) — never dropped
                 silently; the raw body shows so the fix is visible. */}
             {(invalid ?? []).map((e) => (
@@ -375,6 +414,46 @@ function AutoFocus({ children }: { children: React.ReactNode }) {
       {children}
     </span>
   );
+}
+
+type TableGroup = { key: string; rows: EntityInstance[]; chip: React.ReactNode };
+
+/** Split rows into ordered groups by a discrete field, for the collapsible table
+ * sections (#GH-projects A). */
+function groupRows(
+  rows: EntityInstance[],
+  field: string,
+  type: EntityType | null,
+  users: User[] | undefined,
+  refIndex: RefIndex | undefined,
+): TableGroup[] {
+  const fs = roleOf(type, field);
+  const byKey = new Map<string, EntityInstance[]>();
+  const order: string[] = [];
+  for (const e of rows) {
+    const key = fieldText(e.fields[field]);
+    let bucket = byKey.get(key);
+    if (!bucket) {
+      bucket = [];
+      byKey.set(key, bucket);
+      order.push(key);
+    }
+    bucket.push(e);
+  }
+  return order.map((value) => ({ key: value || "__none__", rows: byKey.get(value)!, chip: groupChip(value, fs, users, refIndex) }));
+}
+
+/** The header label for a group — a coloured status chip / actor name / ref title
+ * / raw value; empty → "(none)". */
+function groupChip(value: string, fs: EntityFieldSpec | undefined, users?: User[], refIndex?: RefIndex): React.ReactNode {
+  if (!value) return <span className="ev-table__group-label ev-cell__empty">(none)</span>;
+  if (fs?.role === "status") return <SelectChip value={value} fieldSpec={fs} />;
+  if (fs?.role === "actor") return <span className="ev-table__group-label">{users?.find((u) => u.id === value)?.name ?? value}</span>;
+  if (fs?.role === "ref" && fs.to && refIndex) {
+    const t = refIndex.get(fs.to)?.get(Number(value));
+    return <span className="ev-table__group-label">{t ? fieldText(t.fields.title) || `#${value}` : `#${value}?`}</span>;
+  }
+  return <span className="ev-table__group-label">{value}</span>;
 }
 
 /** A single-select value as a coloured chip (#GH-projects B). */

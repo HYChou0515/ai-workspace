@@ -255,6 +255,40 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── view toolbar: group-by + save-to-view (#GH-projects A) ───────────────── */
+.ev-viewbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-12);
+  min-width: 0;
+}
+.ev-viewbar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.ev-viewbar__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+}
+.ev-viewbar__dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+}
+.ev-viewbar__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
 /* ── table (§A1) ─────────────────────────────────────────────────────────── */
 /* The view's outer box. `min-width: 0` lets this flex child of `.ev-panel`
  * shrink below the table's min-content width so the table wrap's own horizontal
@@ -406,6 +440,42 @@
 .ev-table tbody td:focus-within .ev-field {
   border-color: var(--paper-3);
   background: var(--white);
+}
+/* collapsible group sections (#GH-projects A) */
+.ev-table__group td {
+  background: var(--paper-2);
+  padding: 0;
+  border-bottom: 1px solid var(--paper-3);
+  position: sticky;
+  top: 57px; /* under the header + filter rows */
+  z-index: 1;
+}
+.ev-table__group-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: var(--space-4) var(--space-12);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+}
+.ev-table__group-btn:hover {
+  background: var(--paper-3);
+}
+.ev-table__group-caret {
+  width: 10px;
+  color: var(--text-paper-d);
+}
+.ev-table__group-label {
+  font-weight: 600;
+}
+.ev-table__group-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
 }
 /* a lint-warning cell (§D) gets a warm left edge, still editable. */
 .ev-table__cell--warn {
