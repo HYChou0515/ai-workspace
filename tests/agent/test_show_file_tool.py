@@ -1,8 +1,8 @@
 """`show_file` — the agent puts a workspace file in front of the user.
 
-The result is a `shown_files` declaration the FE renders. Declaring is separate
-from succeeding: an unresolvable path is an error that declares nothing, so the
-FE is never handed a card it would draw as a broken image.
+The result is a sentence for the model plus a `[shown-files]` declaration the FE
+renders. Declaring is separate from succeeding: an unresolvable path is an error
+that declares nothing, so the FE is never handed a card it would draw as broken.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import json
 from agents import RunContextWrapper
 
 from workspace_app.agent import AgentToolContext, show_file_impl
+from workspace_app.agent.tools import SHOWN_FILES_MARKER
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 
@@ -31,9 +32,10 @@ async def _ctx() -> tuple[RunContextWrapper, WorkspaceFiles]:
 
 def _declared(out: str) -> list[dict]:
     """The `shown_files` the tool declared, or [] when it declared nothing."""
-    parsed = json.loads(out)
-    assert isinstance(parsed, dict)
-    shown = parsed.get("shown_files", [])
+    _head, sep, payload = out.partition(SHOWN_FILES_MARKER)
+    if not sep:
+        return []
+    shown = json.loads(payload)["shown_files"]
     assert isinstance(shown, list)
     return shown
 
@@ -90,7 +92,7 @@ async def test_show_file_declares_nothing_when_the_file_is_missing():
 
     assert out.startswith("error:")
     assert "never-written.png" in out
-    assert "shown_files" not in out
+    assert SHOWN_FILES_MARKER not in out
 
 
 async def test_show_file_omits_an_absent_caption():
@@ -109,7 +111,7 @@ async def test_show_file_tells_the_agent_the_user_can_now_see_it():
     ctx, files = await _ctx()
     await files.write("inv-1", "/a.png", _PNG)
 
-    note = json.loads(await show_file_impl(ctx, "/a.png"))["note"]
+    note = (await show_file_impl(ctx, "/a.png")).partition(SHOWN_FILES_MARKER)[0]
 
     assert "a.png" in note
     # Stated in the agent's own relative dialect (#549), not the internal form.
@@ -122,3 +124,15 @@ async def test_show_file_exercises_the_read_content_verb():
     from workspace_app.agent.tool_authz import TOOL_VERBS
 
     assert TOOL_VERBS["show_file"] == "read_content"
+
+
+async def test_show_file_keeps_the_declaration_out_of_what_the_model_reads():
+    """The declaration is a trailing marker line, so the sentence the model reads
+    is not JSON — a tool result the model has to parse is one it can misread."""
+    ctx, files = await _ctx()
+    await files.write("inv-1", "/a.png", _PNG)
+
+    out = await show_file_impl(ctx, "/a.png")
+
+    assert out.splitlines()[0] == "a.png is now displayed in the chat — the user can see it."
+    assert out.count(SHOWN_FILES_MARKER) == 1

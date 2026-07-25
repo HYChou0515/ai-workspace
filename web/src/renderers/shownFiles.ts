@@ -1,15 +1,18 @@
 /**
  * The files a tool declared for the chat to render.
  *
- * A tool result that means "put these workspace files in front of the user"
- * carries them under one key, `shown_files` — filled in by `show_file` and by the
- * normalised plotting tools (`tooling/shown_files.py`). Everything the card needs
- * is in the declaration: path, mime, size, caption.
+ * A tool result that means "put these workspace files in front of the user" ends
+ * with `[shown-files]{json}` — written by `show_file`, and by the plotting tools
+ * via the backend normalising their stdout (`tooling/registry.py`). Everything the
+ * card needs is in the declaration: path, mime, size, caption.
  *
  * Replaces `toolImages.ts`, which regex-matched every tool's output text for an
- * `"images": [...]`-shaped array. Hence one `JSON.parse` of the whole result and
- * one key: prose can't trigger a render, and existence is the backend's check.
+ * `"images": [...]`-shaped array. Hence a fixed marker: prose can't trigger a
+ * render, and whether the file exists is settled by the backend, which can look.
+ *
+ * Mirrors `SHOWN_FILES_MARKER` in `agent/tools.py` — keep them in sync.
  */
+const MARKER = "\n[shown-files]";
 
 export type ShownFile = {
   /** Workspace-absolute — hand it straight to `fileUrl` / `openFile`. */
@@ -26,9 +29,11 @@ export type ShownFile = {
  * truncated JSON — nothing renders until the declaration is complete. */
 export function parseShownFiles(output: string | undefined | null): ShownFile[] {
   if (!output) return [];
+  const at = output.lastIndexOf(MARKER);
+  if (at < 0) return [];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(output);
+    parsed = JSON.parse(output.slice(at + MARKER.length));
   } catch {
     return [];
   }
@@ -49,6 +54,21 @@ export function parseShownFiles(output: string | undefined | null): ShownFile[] 
     out.push(file);
   }
   return out;
+}
+
+/** `output` without its declaration — what the tool card body shows.
+ *
+ * Strips a partial marker too: mid-stream it can arrive before its JSON, and
+ * `[shown-fil` in the card is a glitch the user sees. */
+export function stripShownFiles(output: string | undefined): string | undefined {
+  if (!output) return output;
+  const at = output.lastIndexOf(MARKER);
+  if (at >= 0) return output.slice(0, at);
+  // A trailing prefix of the marker, still arriving.
+  for (let n = MARKER.length - 1; n > 0; n--) {
+    if (output.endsWith(MARKER.slice(0, n))) return output.slice(0, output.length - n);
+  }
+  return output;
 }
 
 /** Whether the chat shows `file` as the image itself rather than as a card.

@@ -76,7 +76,6 @@ D3 的檢視器已存在：`renderers/registry.ts`（image/pdf/csv/notebook/json
 
 - 刪 `toolImages.ts` 與 `AgentEntryView.tsx:833` 呼叫點及貼圖區塊
 - 後端把 sci-plot `images` / csv-summary `plots` 正規化成 `shown_files`，並驗檔存在
-- ⚠️ 動到既有行為，是否拆獨立 PR 待決
 
 ### P5 — prompt 只正面列能力 ✅
 
@@ -89,7 +88,5 @@ D3 的檢視器已存在：`renderers/registry.ts`（image/pdf/csv/notebook/json
 - **真瀏覽器**（playwright 內建 chromium）：多張圖、超長檔名、暗色主題 —— happy-dom 量不到版面
 - **真模型 live check**：實跑「幫我畫一張圖」，確認模型呼叫 `show_file`、圖真的出現
 
-## 待決
+## push 開 PR 
 
-- P4 拆不拆獨立 PR
-- push / 開 PR 需授權

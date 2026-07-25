@@ -212,9 +212,46 @@ async def read_image_impl(
 
 
 #: The one channel a tool result uses to declare "render these workspace files in
-#: the chat". `show_file` fills it; the provisioned plotting tools get their own
-#: output normalised into it (`tooling.shown_files`).
+#: the chat": a final line `[shown-files]{json}`. `show_file` writes it, and the
+#: provisioned plotting tools get their stdout normalised into it
+#: (`tooling.registry`), so the FE has a single form to read.
+#:
+#: A marker rather than the whole result being JSON, because a tool result also
+#: has to stay readable to the model and to the tool card — `_format_exec`'s
+#: header carries the exit code and anchors attribution for small models. A marker
+#: rather than a new event/`Message` field, because the declaration then survives
+#: a reload for free: it IS the persisted tool message.
 SHOWN_FILES_KEY = "shown_files"
+SHOWN_FILES_MARKER = "\n[shown-files]"
+
+
+def declare_shown_files(text: str, files: list[dict[str, Any]]) -> str:
+    """`text` with `files` declared for the chat to render. No files ⇒ unchanged."""
+    if not files:
+        return text
+    payload = json.dumps({SHOWN_FILES_KEY: files}, ensure_ascii=False)
+    return f"{text}{SHOWN_FILES_MARKER}{payload}"
+
+
+async def describe_for_display(
+    files: WorkspaceFiles, workspace_id: str, path: str
+) -> dict[str, Any]:
+    """One `shown_files` entry for `path`, or `{}` when it doesn't resolve.
+
+    Reads the bytes: the mime has to be sniffed (it decides inline-image vs card,
+    and an extension can lie) and a declaration must never name a file that isn't
+    there — the FE renders whatever is declared."""
+    try:
+        data = await files.read(workspace_id, path)
+    except FileNotFound:
+        return {}
+    return {
+        # Absolute: the FE's fileUrl/openFile seams take that form, the agent
+        # writes relative (#549).
+        "path": abs_path(path),
+        "mime": magic.from_buffer(data, mime=True),
+        "size": len(data),
+    }
 
 
 async def show_file_impl(
@@ -237,33 +274,20 @@ async def show_file_impl(
     if (denied := authorize_tool(ctx.context, "read_content")) is not None:
         return denied
     fs, inv = _workspace(ctx)
-    try:
-        data = await fs.read(inv, path)
-    except FileNotFound:
+    shown = await describe_for_display(fs, inv, path)
+    if not shown:
         # Declare nothing on failure: the FE renders whatever is declared, so an
         # unresolvable path must not travel.
         return (
             f"error: file not found: {rel_path(path)} — nothing was shown. "
             f"Check the path (list_files) and call show_file again."
         )
-    shown: dict[str, Any] = {
-        # Absolute: the FE's fileUrl/openFile seams take that form, the agent
-        # writes relative (#549).
-        "path": abs_path(path),
-        # Sniffed, not from the extension — it decides inline-image vs card.
-        "mime": magic.from_buffer(data, mime=True),
-        "size": len(data),
-    }
     if caption:
         shown["caption"] = caption
-    return json.dumps(
-        {
-            SHOWN_FILES_KEY: [shown],
-            # Tells the model the file is now visible, so it doesn't follow up by
-            # narrating the contents.
-            "note": f"{rel_path(path)} is now displayed in the chat — the user can see it.",
-        },
-        ensure_ascii=False,
+    # A sentence, not JSON: this is what the model reads back, and being told the
+    # file is visible is what stops it narrating the contents next.
+    return declare_shown_files(
+        f"{rel_path(path)} is now displayed in the chat — the user can see it.", [shown]
     )
 
 

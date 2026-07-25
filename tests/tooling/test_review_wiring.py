@@ -3,6 +3,8 @@ stdout image extraction, and the loop folded into the tool result text."""
 
 from __future__ import annotations
 
+import base64
+import json
 from collections.abc import Iterator, Sequence
 from typing import Any
 
@@ -10,6 +12,9 @@ from agents.tool_context import ToolContext
 from agents.usage import Usage
 
 from workspace_app.agent import AgentToolContext
+from workspace_app.agent.tools import SHOWN_FILES_MARKER
+from workspace_app.files import WorkspaceFiles
+from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.vlm import IVlm, VlmDescriber
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import ExecResult, SandboxHandle
@@ -23,6 +28,10 @@ from workspace_app.tooling.registry import (
 )
 
 _HANDLE = SandboxHandle(id="h")
+# A real 1×1 PNG — libmagic sniffs it as image/png.
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 
 
 class _SeqVlm(IVlm):
@@ -119,15 +128,15 @@ def test_images_from_stdout_handles_garbage():
 async def test_review_no_images_returns_text_unchanged():
     actx = _ctx([], _StubSandbox([]))
     text = "Tool `chart` returned (exit_code=0):\n{}"
-    out = await _review_chart(actx, _PKG, _CMD, _HANDLE, "{}", ExecResult(0, b"{}"), text)
-    assert out == text
+    out, best = await _review_chart(actx, _PKG, _CMD, _HANDLE, "{}", ExecResult(0, b"{}"), text)
+    assert (out, best) == (text, "")
 
 
 async def test_review_download_failure_skips():
     actx = _ctx([_ans(overlap=True)], _NoDownloadSandbox([]))
     text = "x charts/c0.png"
-    out = await _review_chart(actx, _PKG, _CMD, _HANDLE, "{}", _RESULT, text)
-    assert out == text  # couldn't read the png back → no review
+    out, best = await _review_chart(actx, _PKG, _CMD, _HANDLE, "{}", _RESULT, text)
+    assert (out, best) == (text, "")  # couldn't read the png back → no review
 
 
 async def test_review_improves_and_rewrites_best_path():
@@ -135,8 +144,11 @@ async def test_review_improves_and_rewrites_best_path():
     sandbox = _StubSandbox([ExecResult(0, b'{"images": ["charts/c1.png"]}')])
     actx = _ctx([_ans(overlap=True), _ans()], sandbox, sink=captured.append)
     text = 'Tool `chart` returned (exit_code=0):\n{"images": ["charts/c0.png"]}'
-    out = await _review_chart(actx, _PKG, _CMD, _HANDLE, '{"chart": "box_scatter"}', _RESULT, text)
+    out, best = await _review_chart(
+        actx, _PKG, _CMD, _HANDLE, '{"chart": "box_scatter"}', _RESULT, text
+    )
     assert "charts/c1.png" in out and "charts/c0.png" not in out  # best path swapped in
+    assert best == "charts/c1.png"  # so the declaration names the same chart
     assert "Visual check" in out
     assert captured  # the VLM stream was relayed to the sink
 
@@ -146,8 +158,9 @@ async def test_review_bad_args_and_no_image_rerender_keeps_first():
     sandbox = _StubSandbox([ExecResult(0, b"{}")])
     actx = _ctx([_ans(overlap=True), _ans(overlap=True)], sandbox)
     text = 'x {"images": ["charts/c0.png"]}'
-    out = await _review_chart(actx, _PKG, _CMD, _HANDLE, "not-json", _RESULT, text)
+    out, best = await _review_chart(actx, _PKG, _CMD, _HANDLE, "not-json", _RESULT, text)
     assert "charts/c0.png" in out and "Visual check" in out  # first path kept
+    assert best == "charts/c0.png"
 
 
 # ─── full FunctionTool invoke (on_invoke review gate) ─────────────────
@@ -183,3 +196,103 @@ async def test_on_invoke_skips_review_without_describer():
     )
     out = await tool.on_invoke_tool(tctx, "{}")
     assert "Visual check" not in out  # no VLM wired → render only, no review
+
+
+# ─── shown-files declaration (the FE's one signal) ────────────────────
+
+
+def _files_ctx(sandbox: MockSandbox, describer=None) -> tuple[AgentToolContext, WorkspaceFiles]:
+    files = WorkspaceFiles(MemoryFileStore())
+    return (
+        AgentToolContext(investigation_id="inv", sandbox=sandbox, files=files, describer=describer),
+        files,
+    )
+
+
+async def test_on_invoke_declares_the_charts_the_command_wrote():
+    """A plotting tool's charts reach the chat through the SAME declaration
+    `show_file` uses, so the FE has one signal to read instead of a regex over
+    output text."""
+    sandbox = _StubSandbox([ExecResult(0, b'{"images": ["charts/c0.png"]}')])
+    actx, files = _files_ctx(sandbox)
+    await files.write("inv", "/charts/c0.png", _PNG)
+    tool = _to_function_tool(_PKG, _CMD)
+    tctx: ToolContext[Any] = ToolContext(
+        context=actx, tool_name="chart", tool_call_id="id", tool_arguments="{}", usage=Usage()
+    )
+
+    out = await tool.on_invoke_tool(tctx, "{}")
+
+    _head, sep, payload = out.partition(SHOWN_FILES_MARKER)
+    assert sep, out
+    assert json.loads(payload)["shown_files"] == [
+        {"path": "/charts/c0.png", "mime": "image/png", "size": len(_PNG)}
+    ]
+
+
+async def test_on_invoke_declares_nothing_for_a_chart_that_is_not_there():
+    """The command named a path but no file landed. Declaring it anyway is how the
+    old FE sniffer produced broken images — only the backend can tell, so it does."""
+    sandbox = _StubSandbox([ExecResult(0, b'{"images": ["charts/missing.png"]}')])
+    actx, _ = _files_ctx(sandbox)
+    tool = _to_function_tool(_PKG, _CMD)
+    tctx: ToolContext[Any] = ToolContext(
+        context=actx, tool_name="chart", tool_call_id="id", tool_arguments="{}", usage=Usage()
+    )
+
+    out = await tool.on_invoke_tool(tctx, "{}")
+
+    assert SHOWN_FILES_MARKER not in out
+
+
+async def test_on_invoke_declares_nothing_for_a_command_that_wrote_no_images():
+    sandbox = _StubSandbox([ExecResult(0, b'{"rows": 12}')])
+    actx, _ = _files_ctx(sandbox)
+    tool = _to_function_tool(_PKG, _CMD)
+    tctx: ToolContext[Any] = ToolContext(
+        context=actx, tool_name="chart", tool_call_id="id", tool_arguments="{}", usage=Usage()
+    )
+
+    assert SHOWN_FILES_MARKER not in await tool.on_invoke_tool(tctx, "{}")
+
+
+async def test_on_invoke_declares_the_chart_the_review_settled_on():
+    """The VLM review can re-render to a better chart and rewrite the path in the
+    text; the declaration has to name the same file the text does, or the user
+    reads about one chart and looks at another."""
+    cmd = CommandInfo(
+        name="chart",
+        description="d",
+        params_json_schema={"$defs": {"v": {"properties": {"style": {}}}}},
+    )
+    sandbox = _StubSandbox(
+        [
+            ExecResult(0, b'{"images": ["charts/c0.png"]}'),
+            ExecResult(0, b'{"images": ["charts/c1.png"]}'),
+        ]
+    )
+    actx, files = _files_ctx(sandbox, describer=VlmDescriber(_SeqVlm([_ans(overlap=True), _ans()])))
+    await files.write("inv", "/charts/c0.png", _PNG)
+    await files.write("inv", "/charts/c1.png", _PNG)
+    tool = _to_function_tool(_PKG, cmd)
+    tctx: ToolContext[Any] = ToolContext(
+        context=actx, tool_name="chart", tool_call_id="id", tool_arguments="{}", usage=Usage()
+    )
+
+    out = await tool.on_invoke_tool(tctx, '{"chart": "box_scatter"}')
+
+    shown = json.loads(out.partition(SHOWN_FILES_MARKER)[2])["shown_files"]
+    assert [f["path"] for f in shown] == ["/charts/c1.png"]
+
+
+async def test_on_invoke_declares_nothing_without_a_workspace_facade():
+    """A context with no file facade (a non-item turn) cannot check anything, so it
+    declares nothing rather than guessing."""
+    sandbox = _StubSandbox([ExecResult(0, b'{"images": ["charts/c0.png"]}')])
+    actx = AgentToolContext(investigation_id="inv", sandbox=sandbox)
+    tool = _to_function_tool(_PKG, _CMD)
+    tctx: ToolContext[Any] = ToolContext(
+        context=actx, tool_name="chart", tool_call_id="id", tool_arguments="{}", usage=Usage()
+    )
+
+    assert SHOWN_FILES_MARKER not in await tool.on_invoke_tool(tctx, "{}")
