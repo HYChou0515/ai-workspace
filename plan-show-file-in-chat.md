@@ -60,35 +60,59 @@ D3 的檢視器已存在：`renderers/registry.ts`（image/pdf/csv/notebook/json
 ### P1 — 後端 `show_file` ✅
 
 - `agent/tools.py::show_file_impl(path, caption=None)`：驗 `read_content` → 讀檔 →
-  不存在回 `error:` 且不宣告 → `magic` 嗅 mime → `{"shown_files":[…], "note":…}`
+  不存在回 `error:` 且不宣告 → `magic` 嗅 mime → 一句話給模型讀 + `[shown-files]` 宣告行
 - 路徑用 `abs_path`（`files/facade.py` 的 `_norm` 改公開，與 `rel_path` 成對）
 - 註冊 `_IMPLS`、`_WORKSPACE_TOOLS`（預設開）、`tool_authz.TOOL_VERBS`、`agent/__init__.py`
-- `tests/agent/test_show_file_tool.py`（7）＋ `test_tools.py::test_show_file_needs_no_opting_in`
-- `tests/agent` + `tests/files`：507 passed
+- `tests/agent/test_show_file_tool.py`（8）＋ `test_tools.py::test_show_file_needs_no_opting_in`
 - `cap_tool_outputs` 自動掛在每個工具，無需額外註冊
 
-### P2 — 前端讀宣告 + 卡片
+### P2 — 前端讀宣告 + 卡片 ✅
 
-- `web/src/renderers/shownFiles.ts` ✅（10 測試）：`parseShownFiles` 零正則、
-  `JSON.parse` 整份讀一個鍵、半截 JSON → `[]`；`isInlineImage` 看嗅出的 mime，SVG 算圖
-- `web/src/components/ShownFiles.tsx` ⬜（12 測試已寫、元件未實作）：圖片 inline、
-  `alt` 用 caption；非圖片卡片給檔名 + `formatBytes`，不露 mime；點擊優先 `useOpenFile()`，
-  無 shell → `fileUrl` 連結，兩者皆無 → 只顯示檔名
+- `web/src/renderers/shownFiles.ts`（15 測試）：`parseShownFiles` 零正則、切固定標記後
+  `JSON.parse`、半截 JSON → `[]`、取最後一個宣告；`stripShownFiles` 把標記從卡片內容剝掉
+  （含半截標記）；`isInlineImage` 看嗅出的 mime，SVG 算圖
+- `web/src/components/ShownFiles.tsx`（12 測試）：圖片縮圖（260px）、`alt` 用 caption；
+  非圖片卡片給檔名 + `formatBytes`，不露 mime；點擊優先 `useOpenFile()`，
+  無 shell → `fileUrl` 連結，兩者皆無 → 只顯示檔名不畫死控件
 
-### P3 — 接進對話流
+### P3 — 接進對話流 ✅
 
 - `AgentEntryView` 分派 `name === "show_file"` 且有宣告 → 畫在摺疊卡片外；
   宣告為空 → 落回普通工具卡（錯誤仍可見）
 - `TOOL_LABEL`（`AgentEntryView.tsx:107`）+ `lib/i18n.tsx` 補 `show_file`
 
-### P4 — 退役正則嗅探
+### P4 — 退役正則嗅探 ✅
 
-- 刪 `toolImages.ts` 與 `AgentEntryView.tsx:833` 呼叫點及貼圖區塊
-- 後端把 sci-plot `images` / csv-summary `plots` 正規化成 `shown_files`，並驗檔存在
+- 刪 `web/src/renderers/toolImages.ts`（含其測試）與 `AgentEntryView` 的呼叫點、貼圖區塊
+- 後端把 sci-plot `images` / csv-summary `plots` 正規化成 `shown_files`
+  （`tooling/registry.py::_declare_images`），**並在後端驗檔存在** —— 命名了卻沒寫出來的圖
+  不會被宣告，也就不會破圖
+- `_review_chart` 改回傳 VLM 複審選定的路徑，讓宣告與文字指向同一張圖
 
 ### P5 — prompt 只正面列能力 ✅
 
 `feedback_prompt_positive_only`。P1 docstring 原有反向敘述，已改。
+
+### P6 — 驗收（跑完之後才有 P7–P9）
+
+- ✅ `uv run ty check` 全專案不 scope；`ruff check` + `format --check` 全綠
+- ✅ `pnpm typecheck`（tsc）乾淨
+- ✅ targeted 後端：`tests/agent`＋`tests/files`＋`tests/apps`＋`tools/test_review_wiring` **745 passed**
+- ✅ 前端全套 **2098 passed / 290 files**
+- ✅ **真模型 live check**：本機 `qwen3-14b-ctx40k` 實跑「畫 sin(x) 並把圖給我看」 ——
+  模型自己推理出「應該用 `show_file`」、呼叫、宣告進串流、圖在對話裡
+- ✅ **真瀏覽器**（playwright 內建 chromium，非 happy-dom）：抓到 P8 的三個缺陷；
+  修完複驗 **淺色 1440 / 深色 1440 / 窄版 900** —— 縮圖 260×196、單斜線、無破圖、
+  無水平溢出、卡片貼齊內容。唯一殘留的 404 是既有的 `collections.json` context-file 探測，
+  與本次無關
+- ✅ 對抗式自我複查 → 抓到 P9（宣告被天花板截斷）
+- 全套 100% gate 交 CI（不在本機空等）
+
+⚠️ 過程中踩到一次：`pnpm build` 因為測試檔的型別錯誤**失敗了**，但我只看背景任務的
+「completed」沒讀 build 自己的 exit code，於是拿舊 bundle 驗了一輪。第二次起改成指令自己
+印 `BUILD_EXIT`。
+
+
 
 ### P7 — 讓工具真的到得了 agent（live check 抓到的缺陷）
 
@@ -104,7 +128,7 @@ D3 的檢視器已存在：`renderers/registry.ts`（image/pdf/csv/notebook/json
   能讀檔的 agent 就該能把檔攤到使用者面前，兩個 grant 必須同進同出。
   含一條「glob 有抓到東西」的自我防呆，否則參數化測試會空轉全綠。
 
-### P8 — 真瀏覽器抓到的兩個缺陷
+### P8 — 真瀏覽器抓到的三個缺陷
 
 happy-dom 量不到、單元測試全綠、只有真瀏覽器看得見：
 
@@ -116,22 +140,30 @@ happy-dom 量不到、單元測試全綠、只有真瀏覽器看得見：
    修法是 `img`/`a` override 走 `fileUrl`（跟檔案檢視器 `MarkdownRenderer` 同一條規則），
    沒有 workspace 的介面（KB 對話）則不畫圖而非畫破圖。
 
+3. **卡片被拉滿整個對話寬**（column flex 預設 stretch），繞著一張 260px 縮圖攤成 832px。
+   加 `alignItems: flex-start` 讓卡片貼齊內容。
+
 ⚠️ **第 2 點是一條額外的路徑，要講明白**：`![](path)` 現在也會顯示圖了。它跟被刪掉的正則嗅探
 不同 —— 那是在自由文字裡猜路徑，這是 markdown AST 裡的明確作者意圖，且與檔案檢視器同規則。
-代價是模型若同時宣告又內嵌，同一張圖會出現兩次（本次實跑就發生了）。**若你要我拿掉，說一聲。**
+代價是模型若同時宣告又內嵌，同一張圖會出現兩次（第二次實跑就發生了；第三次沒有）。
+**若你要我拿掉，說一聲。**
 
-### P6 — 驗收
+### P9 — 對抗式複查抓到的：宣告會被輸出天花板吃掉
 
-- ✅ `uv run ty check` 全專案不 scope；`ruff check` + `format --check` 全綠
-- ✅ `pnpm typecheck`（tsc）乾淨
-- ✅ targeted 後端：`tests/agent`＋`tests/files`＋`tests/apps`＋`tools/test_review_wiring` **745 passed**
-- ✅ 前端全套 **2098 passed / 290 files**
-- ✅ **真模型 live check**：本機 `qwen3-14b-ctx40k` 實跑「畫 sin(x) 並把圖給我看」 ——
-  模型自己推理出「應該用 `show_file`」、呼叫、宣告進串流、圖在對話裡
-- ✅ **真瀏覽器**（playwright 內建 chromium，非 happy-dom）：抓到 P8 的兩個缺陷；
-  修完複驗淺色／深色／窄版
-- ⬜ 對抗式自我複查
-- 全套 100% gate 交 CI（不在本機空等）
+自己重讀 diff 時懷疑、寫測試證實：宣告在工具結果的**最尾端**，而 `truncate_middle` 只留
+1/3 預算給尾巴 —— 超長的工具結果會把宣告截掉。而且是**靜默**的：沒有錯誤、沒有卡片，
+使用者就是永遠看不到那個被告知的檔案，正是這條通道要消滅的失敗。
 
-## push 開 PR 
+修法：天花板先把宣告切開、只截本文（預算扣掉宣告長度）、再原樣接回去。沒有宣告的結果
+輸出逐位元組不變。標記與相關函式搬到 `agent/shown_files.py`，讓 `output_cap` 不必反向
+import `tools`（`tools` 本來就 import 天花板）。
 
+## 已知限制
+
+- `describe_for_display` 為了嗅 mime 會把整個檔讀進記憶體。跟既有的 `read_file` / `read_image`
+  同一條路，不是本次新增的暴露面，但 `show_file` 會鼓勵使用者秀大檔（大 PDF、xlsx）。
+  真的咬到再換成「只讀檔頭給 libmagic + 走 sandbox `size_of`」。
+- 附件不可查詢（D2 的取捨）：沒有「列出本對話所有產出」這種聚合。
+- `![](path)` 在答案裡也會顯示圖（P8 第 2 點）。模型若同時宣告又內嵌，同一張圖會出現兩次。
+
+## push 開 PR
