@@ -78,27 +78,32 @@ export function ItemMembersPanel({
 
   return (
     <div style={variant === "sidebar" ? sidebarBody : popoverBody}>
-      <div style={titleRow}>
-        <span data-testid="members-title" className="caps">
-          {label}
-        </span>
-        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      {/* Header stacks so it fits any sidebar width: the title + access chip share
+          the first line (both short), and the "Manage access…" button gets its own
+          line — a button whose text can't shrink was what clipped a narrow sidebar
+          (#6a). */}
+      <div style={{ display: "grid", gap: 8, minWidth: 0 }}>
+        <div style={titleRow}>
+          <span data-testid="members-title" className="caps" style={ellipsis}>
+            {label}
+          </span>
           {/* The item's access setting up front — a public/private item lists no
               members, so the chip is what tells you the state (#578). */}
           <AccessChip visibility={vis} />
-          {canManage && (
-            <button
-              type="button"
-              data-testid="members-manage"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              onClick={() => (onManage ? onManage() : setSharing(true))}
-            >
-              Manage access…
-            </button>
-          )}
-        </span>
+        </div>
+        {canManage && (
+          <button
+            type="button"
+            data-testid="members-manage"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+            style={{ justifySelf: "start" }}
+            onClick={() => (onManage ? onManage() : setSharing(true))}
+          >
+            Manage access…
+          </button>
+        )}
       </div>
 
       {/* The roster only means something when access is RESTRICTED. Public reaches

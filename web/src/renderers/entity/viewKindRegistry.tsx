@@ -47,7 +47,9 @@ export const viewKindRegistry: Record<string, ViewRenderer> = {
     Component: GanttView,
     roleKeys: ["span", "label", "group_by"],
     ownsEmptyState: true,
-    suppressQuickCreate: true,
+    // + New is offered (via the shared modal) so a gantt-only entity — the
+    // Roadmap is a gantt of milestones — still has a way to add records. It used
+    // to be suppressed only because the OLD inline create form was awkward here.
   },
 };
 

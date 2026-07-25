@@ -157,6 +157,15 @@ describe("QuickCreate", () => {
     expect(onCreate).toHaveBeenCalledWith({ title: "Bug" });
   });
 
+  it("offers quick-create on a gantt view too, so a milestone/roadmap can add records", () => {
+    // The gantt used to suppress + New (its inline create form was awkward); now
+    // that create is a modal there's no reason to, and the Roadmap (a gantt of
+    // milestones) had NO way to add a milestone at all.
+    const spec: ViewSpec = { view: "gantt", entity: "issue", span: "span", label: "title" };
+    render(<EntityViewBody spec={spec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "+ New" })).toBeInTheDocument();
+  });
+
   it("opens the create form in a modal dialog, not crammed into the header (#2)", () => {
     // #2: the expanded form used to live inside the header flex row, so on the
     // board it floated as a lopsided card beside a vertically-centred title. It

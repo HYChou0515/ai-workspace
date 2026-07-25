@@ -63,8 +63,17 @@ harnesses had masked — a reminder that the harness data must match reality:
   are *defined* — an empty list shows the dropdown with just "—", never a number.
 - **#6 (member panel) — narrow sidebar clipped:** adding the access chip widened
   the header past a narrow sidebar, clipping "Manage access…" and the roster's
-  role labels. Fixed with `min-width: 0` on the panel + a wrapping header + name
-  truncation, so it fits any sidebar width.
+  role labels. First pass (`min-width:0` + `flex-wrap`) still clipped at ~185px
+  because the chip + "Manage access…" stayed one non-shrinkable group. Real fix:
+  the header **stacks** — title + chip on line 1, the "Manage access…" button on
+  its own line — so it fits any width. Browser-verified at 185px.
+- **No way to add a milestone:** `milestone` is a `ref`, but the only milestone
+  view is the Roadmap (a **gantt**), which suppressed `+ New` — so a milestone
+  could never be created in the UI, and the ref picker was always empty. Fixed by
+  dropping `suppressQuickCreate` from the gantt renderer (it was only there
+  because the OLD inline create form was awkward; create is a modal now), so the
+  Roadmap — and any gantt — offers `+ New`. A FE registry change, so it applies to
+  existing items immediately.
 - **#6 (member panel) — group members hidden:** a group grant showed only a
   head-count. It now expands (collapsed by default) to reveal its members,
   resolved from `useMyGroups` (`listGroups`, which carries member ids for groups
