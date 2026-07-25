@@ -285,13 +285,19 @@ function ShellBody({
     10,
   );
 
-  // Sidebar / palette open into the active editor group.
+  // Sidebar / palette / a file the agent showed in the chat open into the active
+  // editor group — and unfold the IDE, because collapsing UNMOUNTS it and a tab
+  // opened behind the fold is indistinguishable from the click doing nothing.
+  // Callers inside the IDE (tree, search) are already unfolded, so this is a
+  // no-op for them; it matters for the ones reachable while folded — the chat's
+  // shown-file card and ⌘P.
   const openFile = useCallback<OpenFileFn>(
     (path, opts) => {
       groups.openInActive(path, opts);
       recentFiles.push(path);
+      setIdeCollapsed(false);
     },
-    [groups, recentFiles],
+    [groups, recentFiles, setIdeCollapsed],
   );
 
   // Latest group state for the keyboard handler (bound once via a ref).

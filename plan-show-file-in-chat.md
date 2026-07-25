@@ -158,6 +158,20 @@ happy-dom 量不到、單元測試全綠、只有真瀏覽器看得見：
 輸出逐位元組不變。標記與相關函式搬到 `agent/shown_files.py`，讓 `output_cap` 不必反向
 import `tools`（`tools` 本來就 import 天花板）。
 
+### P10 — 錄 demo 時抓到：點卡片像沒反應
+
+錄 web demo（`web-demo` skill，真瀏覽器 + 可見游標）時發現：卡片寫著「在工作區開啟」，
+點下去畫面**完全沒動**。真因是 chat-first App 預設 `ideCollapsed`，而收起是**卸載**整個 IDE，
+`openFile` 開的分頁在沒被掛載的面板裡 —— 按 Workspace 展開才看得到那個分頁確實開了。
+⌘P palette 在收起狀態同樣可按，所以這個病本來就在，只是這張卡片是第一個會在收起時被點的入口。
+
+修在 `WorkspaceShell` 的 `openFile`：開檔順手 `setIdeCollapsed(false)`。IDE 內的呼叫者
+（檔案樹、搜尋）本來就展開著，對它們是 no-op。
+測試 `WorkspaceShell.openFile.test.tsx` 用一個呼叫 `useOpenFile()` 的假 chat 當縫。
+
+⚠️ 另外，第一次錄失敗是**我的腳本點錯**：`[data-testid="shown-files"]` 是全寬容器，
+它的中心落在卡片右邊的空白。要點卡片本身。
+
 ## 已知限制
 
 - `describe_for_display` 為了嗅 mime 會把整個檔讀進記憶體。跟既有的 `read_file` / `read_image`
