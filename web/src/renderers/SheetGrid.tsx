@@ -1,5 +1,5 @@
 /**
- * SheetGrid — the editable grid itself (docs/plan-ai-sheet.md Phase 1/2), pure
+ * SheetGrid — the editable grid itself (docs/plan-ai-sheet.md Phases 1-3), pure
  * and prop-driven: it takes rows and reports the rows it would like to become,
  * knowing nothing about files, buffers or permissions. `SheetRenderer` is the
  * container that resolves those and feeds this — the same split as
@@ -10,22 +10,31 @@
  * the caller has a single place to serialise and save; a second callback would
  * be a second place for the two to drift.
  *
- * A draft lives locally until it is committed, so Esc can discard it and the
- * caller's dirty state means "you changed the file", not "you are mid-keystroke".
+ * Sorting is a VIEW: it reorders what you see and reports nothing, so clicking a
+ * header never rewrites the file behind your back — "Apply this order to the
+ * file" is the explicit way to make it stick. Because of that, a displayed row
+ * is NOT the file's row, and every edit is keyed by the file index the displayed
+ * row came from.
  */
 
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 import { pxToRem } from "../lib/pxToRem";
-import { insertColumn, insertRow, removeColumn, removeRow } from "./sheetOps";
+import { insertColumn, insertRow, removeColumn, removeRow, type SortDir, sortedIndices } from "./sheetOps";
+import { visibleRange } from "./sheetWindow";
 
-/** A cell's accessible name — `R1C1` spreadsheet notation, 1-based, so a caller
- * (and a screen reader) can address a cell without depending on its contents. */
+/** Row height in px. Fixed, because windowing needs to know a row's height
+ * WITHOUT measuring every row — cells are single-line inputs, so they are all
+ * the same height anyway. */
+const ROW_HEIGHT = 24;
+
+/** A cell's accessible name — `R1C1` spreadsheet notation, 1-based, over what is
+ * DISPLAYED (so R1 is always the header, whatever the sort). */
 export function cellLabel(row: number, col: number): string {
   return `R${row + 1}C${col + 1}`;
 }
 
-type Edit = { row: number; col: number; draft: string };
+type Edit = { fileRow: number; col: number; draft: string };
 
 export function SheetGrid({
   rows,
@@ -39,40 +48,98 @@ export function SheetGrid({
   onRowsChange: (next: string[][]) => void;
 }) {
   const [edit, setEdit] = useState<Edit | null>(null);
-  // The cell the structural actions apply to. Distinct from `edit`, which is
-  // cleared on commit — the selection has to outlive the edit for a toolbar
-  // button pressed afterwards to act on the cell you were just in.
-  const [active, setActive] = useState<{ row: number; col: number }>({ row: 0, col: 0 });
+  // The cell the structural actions apply to, in FILE coordinates. Distinct from
+  // `edit`, which is cleared on commit — the selection has to outlive the edit
+  // for a toolbar button pressed afterwards to act on the cell you were just in.
+  const [active, setActive] = useState<{ fileRow: number; col: number }>({ fileRow: 0, col: 0 });
+  const [sort, setSort] = useState<{ column: number; dir: SortDir } | null>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(0);
   // Scoped to THIS table: two panes can show two sheets, so a document-wide
   // lookup by cell label would sometimes focus the other pane's grid.
   const tableRef = useRef<HTMLTableElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    setViewportHeight(scrollRef.current?.clientHeight ?? 0);
+  }, []);
+
+  const header = rows[0] ?? [];
+  // File indices of the data rows, in display order.
+  const order = sort ? sortedIndices(rows, sort.column, sort.dir) : rows.map((_, i) => i).slice(1);
+  const { start, end } = visibleRange({ scrollTop, viewportHeight, rowHeight: ROW_HEIGHT, total: order.length });
 
   const commit = (pending: Edit | null) => {
     setEdit(null);
     if (!pending || readOnly) return;
-    const current = rows[pending.row]?.[pending.col] ?? "";
+    const current = rows[pending.fileRow]?.[pending.col] ?? "";
     if (pending.draft === current) return; // nothing typed — don't dirty the file
     onRowsChange(
-      rows.map((row, r) => (r === pending.row ? row.map((v, c) => (c === pending.col ? pending.draft : v)) : row)),
+      rows.map((row, r) => (r === pending.fileRow ? row.map((v, c) => (c === pending.col ? pending.draft : v)) : row)),
     );
   };
 
-  /** Move the caret to another cell. Out-of-range is a no-op, so Enter on the
-   * last row keeps the current cell rather than losing focus to the page. */
-  const focusCell = (row: number, col: number) => {
-    const target = tableRef.current?.querySelector<HTMLInputElement>(`[aria-label="${cellLabel(row, col)}"]`);
+  /** Move the caret to another DISPLAYED cell. Out-of-range is a no-op, so Enter
+   * on the last row keeps the current cell rather than losing focus to the page. */
+  const focusCell = (displayRow: number, col: number) => {
+    const target = tableRef.current?.querySelector<HTMLInputElement>(`[aria-label="${cellLabel(displayRow, col)}"]`);
     target?.focus();
     target?.select();
   };
 
+  // Header click cycles none → asc → desc → none, like `TableView`.
+  const cycleSort = (column: number) =>
+    setSort((s) =>
+      s?.column !== column ? { column, dir: "asc" } : s.dir === "asc" ? { column, dir: "desc" } : null,
+    );
+
   const actions: { label: string; run: () => string[][] }[] = [
-    { label: "Insert row above", run: () => insertRow(rows, active.row) },
-    { label: "Insert row below", run: () => insertRow(rows, active.row + 1) },
-    { label: "Delete row", run: () => removeRow(rows, active.row) },
+    { label: "Insert row above", run: () => insertRow(rows, active.fileRow) },
+    { label: "Insert row below", run: () => insertRow(rows, active.fileRow + 1) },
+    { label: "Delete row", run: () => removeRow(rows, active.fileRow) },
     { label: "Insert column left", run: () => insertColumn(rows, active.col) },
     { label: "Insert column right", run: () => insertColumn(rows, active.col + 1) },
     { label: "Delete column", run: () => removeColumn(rows, active.col) },
   ];
+
+  const cellInput = (fileRow: number, displayRow: number, col: number, value: string) => {
+    const editing = edit?.fileRow === fileRow && edit.col === col;
+    return (
+      <input
+        aria-label={cellLabel(displayRow, col)}
+        value={editing ? edit.draft : value}
+        readOnly={readOnly}
+        onFocus={() => {
+          setActive({ fileRow, col });
+          setEdit({ fileRow, col, draft: value });
+        }}
+        onChange={(e) => setEdit({ fileRow, col, draft: e.target.value })}
+        onBlur={() => commit(editing ? edit : null)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            // Enter commits and steps down the column (Shift+Enter steps up) —
+            // Tab/Shift+Tab already walk the row via the inputs' DOM order.
+            e.preventDefault();
+            commit(editing ? edit : null);
+            focusCell(e.shiftKey ? displayRow - 1 : displayRow + 1, col);
+          }
+          // Esc drops the draft; the input falls back to the caller's value, so
+          // the cell visibly reverts.
+          if (e.key === "Escape") setEdit(null);
+        }}
+        style={{
+          border: "none",
+          background: "transparent",
+          color: "inherit",
+          font: "inherit",
+          padding: "3px 8px",
+          width: "100%",
+          height: ROW_HEIGHT,
+          boxSizing: "border-box",
+        }}
+      />
+    );
+  };
 
   return (
     <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
@@ -90,54 +157,82 @@ export function SheetGrid({
               {a.label}
             </button>
           ))}
+          {sort && (
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              onClick={() => onRowsChange([header, ...order.map((i) => rows[i] as string[])])}
+            >
+              Apply this order to the file
+            </button>
+          )}
         </div>
       )}
-      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      <div
+        ref={scrollRef}
+        className="scrollable"
+        style={{ flex: 1, minHeight: 0, overflow: "auto" }}
+        onScroll={(e) => {
+          setScrollTop(e.currentTarget.scrollTop);
+          setViewportHeight(e.currentTarget.clientHeight);
+        }}
+      >
         <table ref={tableRef} className="sheet-table" style={{ borderCollapse: "collapse", fontSize: pxToRem(12) }}>
+          <thead>
+            <tr>
+              {header.map((value, c) => (
+                <th
+                  key={c}
+                  style={{
+                    border: "1px solid var(--paper-3)",
+                    padding: 0,
+                    position: "sticky",
+                    top: 0,
+                    background: "var(--paper-2)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {cellInput(0, 0, c, value)}
+                  <button
+                    type="button"
+                    className="sheet-sort"
+                    aria-label={`Sort by ${value || `column ${c + 1}`}`}
+                    onClick={() => cycleSort(c)}
+                    style={{ border: "none", background: "transparent", color: "inherit", cursor: "pointer" }}
+                  >
+                    {sort?.column === c ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}
+                  </button>
+                </th>
+              ))}
+            </tr>
+          </thead>
           <tbody>
-            {rows.map((row, r) => (
-              <tr key={r}>
-                {row.map((value, c) => {
-                  const editing = edit?.row === r && edit.col === c;
-                  return (
-                    <td key={c} style={{ border: "1px solid var(--paper-3)", padding: 0 }}>
-                      <input
-                        aria-label={cellLabel(r, c)}
-                        value={editing ? edit.draft : value}
-                        readOnly={readOnly}
-                        onFocus={() => {
-                          setActive({ row: r, col: c });
-                          setEdit({ row: r, col: c, draft: value });
-                        }}
-                        onChange={(e) => setEdit({ row: r, col: c, draft: e.target.value })}
-                        onBlur={() => commit(editing ? edit : null)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            // Enter commits and steps down the column (Shift+Enter
-                            // steps up) — Tab/Shift+Tab already walk the row via
-                            // the inputs' DOM order.
-                            e.preventDefault();
-                            commit(editing ? edit : null);
-                            focusCell(e.shiftKey ? r - 1 : r + 1, c);
-                          }
-                          // Esc drops the draft; the input falls back to the
-                          // caller's value, so the cell visibly reverts.
-                          if (e.key === "Escape") setEdit(null);
-                        }}
-                        style={{
-                          border: "none",
-                          background: "transparent",
-                          color: "inherit",
-                          font: "inherit",
-                          padding: "3px 8px",
-                          width: "100%",
-                        }}
-                      />
-                    </td>
-                  );
-                })}
+            {/* Spacers stand in for the rows outside the window, so the scrollbar
+                still reflects the whole file. */}
+            {start > 0 && (
+              <tr aria-hidden style={{ height: start * ROW_HEIGHT }}>
+                <td colSpan={Math.max(1, header.length)} />
               </tr>
-            ))}
+            )}
+            {order.slice(start, end).map((fileRow, k) => {
+              const displayRow = start + k + 1; // +1: the header occupies display row 0
+              return (
+                <tr key={fileRow} style={{ height: ROW_HEIGHT }}>
+                  {(rows[fileRow] ?? []).map((value, c) => (
+                    <td key={c} style={{ border: "1px solid var(--paper-3)", padding: 0 }}>
+                      {cellInput(fileRow, displayRow, c, value)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
+            {end < order.length && (
+              <tr aria-hidden style={{ height: (order.length - end) * ROW_HEIGHT }}>
+                <td colSpan={Math.max(1, header.length)} />
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

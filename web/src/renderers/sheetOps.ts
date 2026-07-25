@@ -26,6 +26,44 @@ export function insertRow(rows: string[][], at: number): string[][] {
   return [...rows.slice(0, index), blankRow(rows), ...rows.slice(index)];
 }
 
+export type SortDir = "asc" | "desc";
+
+/** Sort the DATA rows by one column, leaving row 0 pinned as the header — a CSV's
+ * first row names the columns, and dragging it into the middle of the data is
+ * never what a header click means.
+ *
+ * Numeric cells compare as numbers (otherwise "120" sorts before "9"), and blanks
+ * always sink to the bottom in BOTH directions: a descending sort whose first
+ * screenful is empty cells hides the data the user asked to see. */
+export function sortedIndices(rows: string[][], column: number, dir: SortDir): number[] {
+  const cell = (fileRow: number): string => rows[fileRow]?.[column] ?? "";
+  const asNumber = (text: string): number | null => {
+    if (text.trim() === "") return null;
+    const n = Number(text);
+    return Number.isFinite(n) ? n : null;
+  };
+  // File indices of the DATA rows (row 0 is the header and never moves).
+  const order = rows.map((_, i) => i).slice(1);
+  return order.sort((a, b) => {
+    const x = cell(a);
+    const y = cell(b);
+    if (x === "" || y === "") return x === y ? 0 : x === "" ? 1 : -1; // blanks last, both directions
+    const nx = asNumber(x);
+    const ny = asNumber(y);
+    const cmp = nx !== null && ny !== null ? nx - ny : x.localeCompare(y);
+    return dir === "asc" ? cmp : -cmp;
+  });
+}
+
+/** The sorted rows themselves — the same comparator as `sortedIndices`, which is
+ * what the grid uses so a sorted cell can still be written back to the file row
+ * it came from. One comparator, two shapes. */
+export function sortRows(rows: string[][], column: number, dir: SortDir): string[][] {
+  const header = rows[0];
+  if (header === undefined) return rows;
+  return [header, ...sortedIndices(rows, column, dir).map((i) => rows[i] as string[])];
+}
+
 /** Insert a blank cell at column `at` in every row. A row shorter than `at`
  * gets the cell appended rather than being padded out to the grid width —
  * widening rows the user did not touch would rewrite the file beyond the edit

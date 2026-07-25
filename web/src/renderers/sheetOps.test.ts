@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { insertColumn, insertRow, removeColumn, removeRow } from "./sheetOps";
+import { insertColumn, insertRow, removeColumn, removeRow, sortRows } from "./sheetOps";
 
 const GRID = [
   ["wafer", "qty"],
@@ -55,5 +55,38 @@ describe("removeColumn", () => {
 
   it("never leaves zero columns — removing the last one leaves a blank column", () => {
     expect(removeColumn([["only"], ["x"]], 0)).toEqual([[""], [""]]);
+  });
+});
+
+describe("sortRows", () => {
+  const DATA = [
+    ["wafer", "qty"],
+    ["W02", "98"],
+    ["W01", "120"],
+    ["W03", "9"],
+  ];
+
+  it("keeps the header row pinned and sorts the rest ascending", () => {
+    expect(sortRows(DATA, 0, "asc")).toEqual([
+      ["wafer", "qty"],
+      ["W01", "120"],
+      ["W02", "98"],
+      ["W03", "9"],
+    ]);
+  });
+
+  it("compares numbers as numbers, not as text", () => {
+    // Lexicographic order would put "120" before "9".
+    expect(sortRows(DATA, 1, "asc").map((r) => r[1])).toEqual(["qty", "9", "98", "120"]);
+  });
+
+  it("sorts descending", () => {
+    expect(sortRows(DATA, 1, "desc").map((r) => r[1])).toEqual(["qty", "120", "98", "9"]);
+  });
+
+  it("puts blanks last regardless of direction, so empty cells never bury the data", () => {
+    const withBlank = [["h"], ["b"], [""], ["a"]];
+    expect(sortRows(withBlank, 0, "asc").map((r) => r[0])).toEqual(["h", "a", "b", ""]);
+    expect(sortRows(withBlank, 0, "desc").map((r) => r[0])).toEqual(["h", "b", "a", ""]);
   });
 });
