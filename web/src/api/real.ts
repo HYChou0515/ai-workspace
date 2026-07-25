@@ -203,6 +203,11 @@ export const realApi: ApiClient = {
     });
     return json<{ resource_id: string }>(resp);
   },
+  async deleteAppItem(resourceRoute: string, id: string) {
+    // #chat-private: hard delete (the specstar permanent delete) — owner /
+    // superuser gated by the backend. Removes the chat, not just closes it.
+    await apiFetch(`${resourceRoute}/${encodeURIComponent(id)}/permanently`, { method: "DELETE" });
+  },
 
   async patchAppItemFields(resourceRoute: string, id: string, patch: Record<string, unknown>) {
     // Editing a field is a PARTIAL update, so it goes over PATCH (RFC 6902 ops —

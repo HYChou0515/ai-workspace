@@ -14,6 +14,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import type { AppItem } from "../api/types";
+import { useChatActions } from "../hooks/useChatActions";
 import { useCreateChat } from "../hooks/useCreateChat";
 import { useAppItems, useApps } from "../hooks/useResources";
 
@@ -38,6 +39,7 @@ export function ChatListRail({
   const { items, isPending } = useAppItems(slug, resourceRoute);
   const apps = useApps();
   const createChat = useCreateChat(slug);
+  const actions = useChatActions(slug, resourceRoute);
   const [menuOpen, setMenuOpen] = useState(false);
   // #chat-private #3: the rail can be collapsed to a thin bar (not persisted —
   // like the IDE state, a new tab opens with it shown).
@@ -128,18 +130,115 @@ export function ChatListRail({
           <div className="chat-rail__empty">No chats yet</div>
         ) : (
           items.map((it: AppItem) => (
-            <Link
+            <ChatRailItem
               key={it.resource_id}
-              to={`/a/${slug}/${encodeURIComponent(it.resource_id)}`}
-              className="chat-rail__item"
-              data-active={it.resource_id === currentId ? "true" : undefined}
-              title={it.title || "Untitled chat"}
-            >
-              {it.title || "Untitled chat"}
-            </Link>
+              slug={slug}
+              item={it}
+              active={it.resource_id === currentId}
+              onRename={actions.rename}
+              onDelete={actions.remove}
+            />
           ))
         )}
       </div>
     </nav>
+  );
+}
+
+/** One chat row: a link that switches to it, plus a ⋯ menu to rename (inline) or
+ * delete (confirmed). */
+function ChatRailItem({
+  slug,
+  item,
+  active,
+  onRename,
+  onDelete,
+}: {
+  slug: string;
+  item: AppItem;
+  active: boolean;
+  onRename: (id: string, title: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const title = item.title || "Untitled chat";
+
+  if (editing) {
+    const commit = (value: string) => {
+      const next = value.trim();
+      if (next && next !== title) onRename(item.resource_id, next);
+      setEditing(false);
+    };
+    return (
+      <input
+        // eslint-disable-next-line jsx-a11y/no-autofocus
+        autoFocus
+        className="chat-rail__rename"
+        aria-label="Rename chat"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit(draft);
+          if (e.key === "Escape") setEditing(false);
+        }}
+        onBlur={() => setEditing(false)}
+      />
+    );
+  }
+
+  return (
+    <div className="chat-rail__row">
+      <Link
+        to={`/a/${slug}/${encodeURIComponent(item.resource_id)}`}
+        className="chat-rail__item"
+        data-active={active ? "true" : undefined}
+        title={title}
+      >
+        {title}
+      </Link>
+      <button
+        type="button"
+        className="chat-rail__more"
+        aria-label={`Chat options for ${title}`}
+        aria-expanded={menuOpen}
+        onClick={() => setMenuOpen((o) => !o)}
+      >
+        ⋯
+      </button>
+      {menuOpen && (
+        <>
+          <div className="chat-rail__backdrop" onClick={() => setMenuOpen(false)} />
+          <div className="chat-rail__rowmenu" role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              className="chat-rail__menu-item"
+              onClick={() => {
+                setMenuOpen(false);
+                setDraft(title);
+                setEditing(true);
+              }}
+            >
+              Rename
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="chat-rail__menu-item chat-rail__menu-item--danger"
+              onClick={() => {
+                setMenuOpen(false);
+                if (window.confirm(`Delete “${title}”? This can't be undone.`)) {
+                  onDelete(item.resource_id);
+                }
+              }}
+            >
+              Delete
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   );
 }

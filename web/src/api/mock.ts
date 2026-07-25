@@ -719,6 +719,12 @@ export const mockApi: ApiClient = {
     return { resource_id };
   },
 
+  async deleteAppItem(_resourceRoute: string, id: string) {
+    await delay(10);
+    const idx = _mockAppItems.findIndex((it) => it.resource_id === id);
+    if (idx >= 0) _mockAppItems.splice(idx, 1);
+  },
+
   async patchAppItemFields(_resourceRoute: string, id: string, patch: Record<string, unknown>) {
     await delay(10);
     const idx = _mockAppItems.findIndex((it) => it.resource_id === id);

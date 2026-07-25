@@ -19,6 +19,8 @@ vi.mock("../hooks/useResources", () => ({
 }));
 const newChat = vi.fn();
 vi.mock("../hooks/useCreateChat", () => ({ useCreateChat: () => ({ mutate: newChat, isPending: false }) }));
+const chatActions = { rename: vi.fn(), remove: vi.fn(), busy: false };
+vi.mock("../hooks/useChatActions", () => ({ useChatActions: () => chatActions }));
 
 afterEach(cleanup);
 
@@ -44,6 +46,24 @@ describe("ChatListRail", () => {
     renderRail();
     fireEvent.click(screen.getByRole("button", { name: /New chat/i }));
     expect(newChat).toHaveBeenCalled();
+  });
+
+  it("deletes a chat from its ⋯ menu, after a confirm", () => {
+    window.confirm = vi.fn(() => true); // happy-dom has no confirm — stub it
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
+    expect(chatActions.remove).toHaveBeenCalledWith("rca-investigation/1");
+  });
+
+  it("renames a chat inline from its ⋯ menu", () => {
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
+    const input = screen.getByRole("textbox", { name: /Rename chat/i });
+    fireEvent.change(input, { target: { value: "Oven drift RCA" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(chatActions.rename).toHaveBeenCalledWith("rca-investigation/1", "Oven drift RCA");
   });
 
   it("collapses to a thin bar and re-expands", () => {
