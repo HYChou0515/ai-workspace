@@ -28,6 +28,7 @@ import { CrossHandle } from "../../components/CrossHandle";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { ItemChatShell } from "../../components/ItemChatShell";
 import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembersPanel";
+import { ShareChatDialog } from "../../components/ShareChatDialog";
 import { resolveUploadDir } from "./attach";
 import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
@@ -686,7 +687,9 @@ export function EditItemModal({
         submitLabel="Save"
         onSubmit={(values) => onSubmit(pruneEmpty(values))}
       />
-      {canManageAccess && (
+      {/* #chat-private: a chat-first App shares from the toolbar / rail (simple
+          share), not the role-ladder "manage access" — hide it here. */}
+      {canManageAccess && manifest.layout?.primary_surface !== "chat" && (
         <button
           type="button"
           className="btn"
@@ -864,44 +867,65 @@ export function TopBar({
           from the declared Members count beside it. */}
       <PresenceBar slug={manifest.slug} itemId={item.resource_id} />
 
-      <Popover
-        align="end"
-        trigger={({ onClick, open }) => (
+      {manifest.layout?.primary_surface === "chat" ? (
+        // #chat-private: a chat-first App gets the SIMPLE share (people + groups),
+        // not the members roster + role-ladder "manage access".
+        <>
           <button
             type="button"
-            onClick={onClick}
-            title={manifest.labels?.members ?? "Members"}
-            style={{
-              ...iconBtn,
-              display: "inline-flex",
-              gap: 4,
-              padding: "0 8px",
-              width: "auto",
-              background: open ? "var(--paper-2)" : "transparent",
-            }}
+            onClick={() => setSharing(true)}
+            title="Share"
+            style={{ ...iconBtn, display: "inline-flex", gap: 4, padding: "0 8px", width: "auto" }}
           >
             <Icon name="users" size={15} />
-            <span style={{ fontSize: pxToRem(12) }}>
-              {((item.members as string[] | undefined)?.length ?? 0) + 1}
-            </span>
+            <span style={{ fontSize: pxToRem(12) }}>Share</span>
           </button>
-        )}
-      >
-        {() => (
-          <ItemMembersPanel
-            manifest={manifest}
-            item={item}
-            variant="popover"
-            // The dialog is owned OUTSIDE the popover: a popover is its own
-            // z-index stacking context and closes on any outside mousedown, so a
-            // modal hosted within it would be both z-capped and dismissed by its
-            // own first click.
-            onManage={() => setSharing(true)}
-          />
-        )}
-      </Popover>
-      {sharing && (
-        <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />
+          {sharing && (
+            <ShareChatDialog slug={manifest.slug} item={item} onClose={() => setSharing(false)} />
+          )}
+        </>
+      ) : (
+        <>
+          <Popover
+            align="end"
+            trigger={({ onClick, open }) => (
+              <button
+                type="button"
+                onClick={onClick}
+                title={manifest.labels?.members ?? "Members"}
+                style={{
+                  ...iconBtn,
+                  display: "inline-flex",
+                  gap: 4,
+                  padding: "0 8px",
+                  width: "auto",
+                  background: open ? "var(--paper-2)" : "transparent",
+                }}
+              >
+                <Icon name="users" size={15} />
+                <span style={{ fontSize: pxToRem(12) }}>
+                  {((item.members as string[] | undefined)?.length ?? 0) + 1}
+                </span>
+              </button>
+            )}
+          >
+            {() => (
+              <ItemMembersPanel
+                manifest={manifest}
+                item={item}
+                variant="popover"
+                // The dialog is owned OUTSIDE the popover: a popover is its own
+                // z-index stacking context and closes on any outside mousedown, so a
+                // modal hosted within it would be both z-capped and dismissed by its
+                // own first click.
+                onManage={() => setSharing(true)}
+              />
+            )}
+          </Popover>
+          {sharing && (
+            <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />
+          )}
+        </>
       )}
 
       {/* Close is shown only when the App declares a lifecycle (#89 P7b); its

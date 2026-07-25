@@ -77,6 +77,31 @@ function open() {
   );
 }
 
+// #chat-private: a chat-first App swaps the members roster / role-ladder for the
+// simple Share. Item owned by the current user ("root") so the shell isn't locked.
+const chatManifest = {
+  ...manifest,
+  layout: { ...manifest.layout, primary_surface: "chat" },
+} as unknown as AppManifest;
+const myChat = {
+  resource_id: "C-1",
+  title: "My chat",
+  owner: "root",
+  created_by: "root",
+  permission: { visibility: "private" },
+} as unknown as AppItem;
+
+describe("WorkspaceShell — chat-first sharing", () => {
+  it("offers the simple Share (not the members roster) for a chat-first App", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell manifest={chatManifest} item={myChat} files={[]} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("button", { name: /Share/i })).toBeInTheDocument();
+  });
+});
+
 beforeEach(() => isSuperuser.mockReturnValue(false));
 afterEach(cleanup);
 
