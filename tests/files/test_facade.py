@@ -299,18 +299,18 @@ async def test_paths_with_with_and_without_leading_dot_slash_target_same_file():
     assert await fs.exists("inv-1", "brief.md")
 
 
-async def test_normalize_helper_canonicalises_all_three_forms():
+async def test_abs_path_helper_canonicalises_all_three_forms():
     """Direct unit test on the helper — guards against subtle regressions
     (e.g. someone using `lstrip('./')` which would also strip '.')."""
-    from workspace_app.files.facade import _norm
+    from workspace_app.files.facade import abs_path
 
-    assert _norm("./brief.md") == "/brief.md"
-    assert _norm("/brief.md") == "/brief.md"
-    assert _norm("brief.md") == "/brief.md"
+    assert abs_path("./brief.md") == "/brief.md"
+    assert abs_path("/brief.md") == "/brief.md"
+    assert abs_path("brief.md") == "/brief.md"
     # Subdirs survive.
-    assert _norm("./data/x.csv") == "/data/x.csv"
+    assert abs_path("./data/x.csv") == "/data/x.csv"
     # A bare `.brief.md` (no slash) keeps the leading dot — only `./` strips.
-    assert _norm(".brief.md") == "/.brief.md"
+    assert abs_path(".brief.md") == "/.brief.md"
 
 
 # ---------------- #492: host-managed durable — same-source, never cold-write ----------------
@@ -374,17 +374,17 @@ async def test_warm_op_propagates_busy_and_never_cold_writes_or_rebuilds_492():
     assert await fs.exists(WS, "/x.txt") is False  # never cold-wrote
 
 
-def test_rel_path_is_the_exact_inverse_of_norm():
+def test_rel_path_is_the_exact_inverse_of_abs_path():
     """`rel_path` is the ONE place the whole "agents only ever see relative
     paths" rule is implemented, so it gets its own guard rather than being
     covered incidentally by whoever calls it.
 
-    It must be `_norm`'s inverse: whatever form a path arrives in, `rel_path`
-    yields the workspace-relative one, and feeding that back through `_norm`
+    It must be `abs_path`'s inverse: whatever form a path arrives in, `rel_path`
+    yields the workspace-relative one, and feeding that back through `abs_path`
     returns the canonical store key unchanged. The round-trip is the property
     that makes it safe to show a model — the string it is handed is the string
     the store resolves."""
-    from workspace_app.files.facade import _norm, rel_path
+    from workspace_app.files.facade import abs_path, rel_path
 
     assert rel_path("/brief.md") == "brief.md"
     assert rel_path("/data/x.csv") == "data/x.csv"
@@ -394,9 +394,9 @@ def test_rel_path_is_the_exact_inverse_of_norm():
     # a dotfile keeps its dot — only the leading slash goes
     assert rel_path("/.skill/x/SKILL.md") == ".skill/x/SKILL.md"
 
-    # round-trip: rel_path ∘ _norm and _norm ∘ rel_path both land on the key
+    # round-trip: rel_path ∘ abs_path and abs_path ∘ rel_path both land on the key
     for form in ("./brief.md", "/brief.md", "brief.md", "/data/x.csv", "/.workflows/a.json"):
-        assert _norm(rel_path(_norm(form))) == _norm(form)
+        assert abs_path(rel_path(abs_path(form))) == abs_path(form)
 
 
 # ── move must not leave a half-done state (#588) ───────────────────────────

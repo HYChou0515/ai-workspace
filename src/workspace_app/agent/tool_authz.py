@@ -29,6 +29,9 @@ if TYPE_CHECKING:
 TOOL_VERBS: dict[str, Verb] = {
     "read_file": "read_content",
     "read_image": "read_content",
+    # Showing a file to the user IS a read of it — otherwise the agent would be a
+    # way to look at content the speaker may not read.
+    "show_file": "read_content",
     "list_files": "read_content",
     "exists": "read_content",
     "write_file": "edit_content",

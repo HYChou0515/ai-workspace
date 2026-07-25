@@ -83,17 +83,23 @@ class WorkspaceFull(Exception):
         self.attempted = attempted
 
 
-def _norm(path: str) -> str:
+def abs_path(path: str) -> str:
     """Canonicalise a workspace path: ``./brief.md``, ``brief.md`` and
     ``/brief.md`` all map to the same internal key ``/brief.md``. So
     the agent can write whichever feels natural in prose and the
-    underlying store stays consistent."""
+    underlying store stays consistent.
+
+    The public counterpart of ``rel_path``: this is the form every NON-model
+    surface wants (the store key, a browser fetch URL, the file-tree opener),
+    while ``rel_path`` is the one form a model may be taught. A tool that
+    accepts a path from the agent and hands it to the FE crosses between the
+    two, so it needs both by name."""
     p = path.removeprefix("./")
     return p if p.startswith("/") else "/" + p
 
 
 def rel_path(path: str) -> str:
-    """`_norm`'s inverse — the workspace path as an AGENT should ever see it.
+    """`abs_path`'s inverse — the workspace path as an AGENT should ever see it.
 
     The store's key is absolute-looking (`/brief.md`) and the file tools take it
     back happily, but `exec` runs a real process whose cwd is the workspace and
@@ -109,12 +115,12 @@ def _dir_key(path: str) -> str:
     """`path` as a directory key: `""` for the workspace root, else `/a/b`.
 
     `.` and `./` mean the root here for the same reason `./x` means `/x` in
-    `_norm` — the agent is told the three spellings are interchangeable, so a
+    `abs_path` — the agent is told the three spellings are interchangeable, so a
     bare `.` must not resolve to a directory literally named `.`."""
     p = path.strip()
     if p in ("", ".", "./", "/"):
         return ""
-    return _norm(p).rstrip("/")
+    return abs_path(p).rstrip("/")
 
 
 def _split_level(entries: list[str], prefix: str) -> tuple[list[str], list[str]]:
@@ -222,7 +228,7 @@ class WorkspaceFiles:
     async def _read_with(self, workspace_id: str, path: str, warm) -> bytes:
         """`read` against an ALREADY-resolved liveness. Split out so a multi-step
         operation resolves once and every step provably hits the same store."""
-        path = _norm(path)
+        path = abs_path(path)
         if warm is not None:
             sb, h = warm
             try:
@@ -232,7 +238,7 @@ class WorkspaceFiles:
         return await self._fs.read(workspace_id, path)
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         previous = await self._ensure_headroom(workspace_id, path, len(data), warm)
         await self._write_unchecked(workspace_id, path, data, warm, previous)
@@ -276,7 +282,7 @@ class WorkspaceFiles:
         the destination is rolled back, so a failed move leaves the workspace
         exactly as it was — never a hole, and never a duplicate the user has to
         reconcile against a 500 (#588)."""
-        src, dst = _norm(src), _norm(dst)
+        src, dst = abs_path(src), abs_path(dst)
         # Resolve liveness ONCE for the whole operation (#588). Each step used to
         # resolve it independently, so a sandbox reaped or rebuilt mid-move
         # (#345/#366) could send the read and the delete to DIFFERENT stores —
@@ -313,7 +319,7 @@ class WorkspaceFiles:
         Exemptions stay NAMED operations, like `move` (which cannot grow the
         workspace at all), rather than a flag any caller can pass — an
         ungated write anyone can reach for is not a quota."""
-        path = _norm(path)
+        path = abs_path(path)
         await self._write_unchecked(workspace_id, path, data, await self._warm(workspace_id))
 
     async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
@@ -329,7 +335,7 @@ class WorkspaceFiles:
         an answer callers act on — `entity/store.py` walks to the next free
         number on it — so reporting "full" for a name that was taken anyway
         would abort a search that had nothing to do with space."""
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -356,7 +362,7 @@ class WorkspaceFiles:
         RAM (issue #219). Warm ⇒ stream straight into the live sandbox (the
         snapshot catches up on the next mirror, exactly like any warm write);
         cold ⇒ stream into the FileStore blob."""
-        path = _norm(path)
+        path = abs_path(path)
         # The streaming upload route also checks mid-stream so an over-quota body
         # is rejected before it's staged; this is the backstop that keeps the rule
         # true for any future caller that doesn't.
@@ -377,7 +383,7 @@ class WorkspaceFiles:
         """Like `read`, but stream the bytes out to the on-disk `dest` — RAM-free
         for big files (issue #219). Routes warm→sandbox / cold→snapshot like
         `read`; a missing file maps to `FileNotFound`."""
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -389,7 +395,7 @@ class WorkspaceFiles:
             await self._fs.read_to_file(workspace_id, path, dest)
 
     async def exists(self, workspace_id: str, path: str) -> bool:
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -424,7 +430,7 @@ class WorkspaceFiles:
         check. Warm/cold routed, mirroring `workspace_usage` (#538): the credit
         MUST come from the same source as `used`, or the two halves of the
         subtraction disagree and a warm-only file is charged twice."""
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -577,7 +583,7 @@ class WorkspaceFiles:
         """``(workspace bytes, bytes at path)`` — the quota subtraction's two
         halves, from ONE measurement, so they can never disagree about whether a
         file counts."""
-        path = _norm(path)
+        path = abs_path(path)
         measured = await self._measurement(workspace_id, warm)
         if measured is not None:
             assert warm is not None  # a measurement implies a live sandbox
@@ -625,7 +631,7 @@ class WorkspaceFiles:
 
     async def _delete_with(self, workspace_id: str, path: str, warm) -> None:
         """`delete` against an ALREADY-resolved liveness — see `_read_with`."""
-        path = _norm(path)
+        path = abs_path(path)
         # What it cost, so the measurement can be adjusted instead of dropped.
         # Deleting is exactly what a user does when they are out of space, and
         # dropping the measurement would make every one of those deletes force a
@@ -649,7 +655,7 @@ class WorkspaceFiles:
             self._adjust(workspace_id, -freed)
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
-        prefix = _norm(prefix) if prefix else prefix
+        prefix = abs_path(prefix) if prefix else prefix
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -707,7 +713,7 @@ class WorkspaceFiles:
 
         A store without that optimisation (an exotic backend) degrades to paths
         with an unknown size of 0 — still blob-free."""
-        prefix = _norm(prefix) if prefix else prefix
+        prefix = abs_path(prefix) if prefix else prefix
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -718,7 +724,7 @@ class WorkspaceFiles:
         return [(p, 0) for p in await self._fs.ls(workspace_id, prefix)]
 
     async def mkdir(self, workspace_id: str, path: str) -> None:
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -727,7 +733,7 @@ class WorkspaceFiles:
             await self._fs.mkdir(workspace_id, path)
 
     async def rmdir(self, workspace_id: str, path: str) -> None:
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -742,7 +748,7 @@ class WorkspaceFiles:
         self._tree.pop(workspace_id, None)
 
     async def is_dir(self, workspace_id: str, path: str) -> bool:
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -751,7 +757,7 @@ class WorkspaceFiles:
         return await self._fs.is_dir(workspace_id, path)
 
     async def listdir(self, workspace_id: str, prefix: str = "") -> list[str]:
-        prefix = _norm(prefix) if prefix else prefix
+        prefix = abs_path(prefix) if prefix else prefix
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -769,7 +775,7 @@ class WorkspaceFiles:
         """Create-only write: succeed (return None) if `path` doesn't exist;
         otherwise don't clobber — return the current bytes so the caller can
         decide. Atomic under the per-path lock."""
-        path = _norm(path)
+        path = abs_path(path)
         async with self._locks[(workspace_id, path)]:
             if await self.exists(workspace_id, path):
                 return await self.read(workspace_id, path)
@@ -790,7 +796,7 @@ class WorkspaceFiles:
         so the edit is safe against writers in *other processes* (e.g. a second
         ingest worker), not just other coroutines — the per-path lock only
         covers this process."""
-        path = _norm(path)
+        path = abs_path(path)
         warm = await self._warm(workspace_id)
         write_cas = getattr(self._fs, "write_cas", None)
         read_with_etag = getattr(self._fs, "read_with_etag", None)
