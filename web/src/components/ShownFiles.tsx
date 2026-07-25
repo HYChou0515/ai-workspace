@@ -29,7 +29,17 @@ export function ShownFiles({
   return (
     <div
       data-testid="shown-files"
-      style={{ display: "flex", flexDirection: "column", gap: 8, marginLeft: 28, marginTop: 4 }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        // Hug the content: a column flex parent stretches its children by
+        // default, which blew the card out to the full pane width around a
+        // 260px thumbnail.
+        alignItems: "flex-start",
+        gap: 8,
+        marginLeft: 28,
+        marginTop: 4,
+      }}
     >
       {files.map((file) => (
         <ShownFileView key={file.path} file={file} fileUrl={fileUrl} openFile={openFile} />
