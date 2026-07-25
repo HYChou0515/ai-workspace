@@ -10,17 +10,29 @@
 import { Outlet } from "react-router-dom";
 
 import { BreadcrumbProvider } from "../hooks/breadcrumbs";
+import { NavChromeProvider, useNavChrome } from "../hooks/useNavChrome";
 import { GlobalNav } from "./GlobalNav";
 
 export function GlobalLayout() {
   return (
     <BreadcrumbProvider>
-      <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-        <GlobalNav />
-        <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-          <Outlet />
-        </div>
-      </div>
+      <NavChromeProvider>
+        <GlobalLayoutInner />
+      </NavChromeProvider>
     </BreadcrumbProvider>
+  );
+}
+
+function GlobalLayoutInner() {
+  // A chat-first workspace hides the top bar (its platform overview moves into
+  // the chat rail's menu) so the chat surface stays clean.
+  const { hidden } = useNavChrome();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      {!hidden && <GlobalNav />}
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <Outlet />
+      </div>
+    </div>
   );
 }

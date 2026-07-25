@@ -476,6 +476,8 @@ export interface ApiClient {
   getAppItem(resourceRoute: string, id: string): Promise<AppItem>;
   /** POST /a/{slug}/items — create an item (+ seed its profile); returns the id. */
   createAppItem(slug: string, body: Record<string, unknown>): Promise<{ resource_id: string }>;
+  /** DELETE {resource_route}/{id}/permanently — hard-delete an item (owner/superuser). */
+  deleteAppItem(resourceRoute: string, id: string): Promise<void>;
   /** PATCH {resource_route}/{id} — change SOME of an item's fields, leaving every
    * field it does not name untouched. `patch` is the DIFF, never the whole item:
    * a full-body write off a cached copy reverts whatever changed in between, and
