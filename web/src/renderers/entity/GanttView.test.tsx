@@ -18,9 +18,14 @@ const type: EntityType = {
     { name: "title", role: "text" },
     { name: "span", role: "daterange" },
     { name: "milestone", role: "ref", to: "milestone" },
+    { name: "assignee", role: "actor" },
   ],
   form: [],
 };
+const users = [
+  { id: "alice", name: "Alice Chen", section: "", email: "", photo_url: "" },
+  { id: "bob", name: "Bob Liu", section: "", email: "", photo_url: "" },
+];
 const rec = (number: number, fields: Record<string, unknown>): EntityInstance => ({
   number,
   type_name: "issue",
@@ -93,6 +98,18 @@ describe("GanttView", () => {
       <GanttView {...props({ spec, refIndex, entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-05", milestone: 5 })] })} />,
     );
     expect(screen.getByText("v1.0")).toBeInTheDocument();
+  });
+
+  it("shows the assignee's avatar on the bar when spec.assignee is set (① who is responsible)", () => {
+    const spec = { view: "gantt" as const, entity: "issue", span: "span", label: "title", assignee: "assignee" };
+    render(<GanttView {...props({ spec, users, entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-05", assignee: "alice" })] })} />);
+    expect(screen.getByTestId("bar-1-assignee")).toHaveAttribute("title", "Alice Chen");
+  });
+
+  it("labels an actor group_by lane with the user's name, not the raw id (② resource view)", () => {
+    const spec = { view: "gantt" as const, entity: "issue", span: "span", label: "title", group_by: "assignee" };
+    render(<GanttView {...props({ spec, users, entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-05", assignee: "alice" })] })} />);
+    expect(screen.getByText("Alice Chen")).toBeInTheDocument();
   });
 
   it("switches the time-axis zoom, changing the bar width", () => {

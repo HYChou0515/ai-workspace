@@ -4,3 +4,4 @@ title: Timeline
 span: span
 label: title
 group_by: milestone
+assignee: assignee

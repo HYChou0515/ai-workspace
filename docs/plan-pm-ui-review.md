@@ -50,6 +50,7 @@ NOT the real overflow cause).
 - [x] Commit + push to #640.
 
 | 7 | **Top-bar `👥 N` Members popover feels redundant** (user). It's the same `ItemMembersPanel` as the sidebar (Members mode), so it duplicates the roster; the head-count is noise for the dominant solo/private case and doesn't answer the question that matters (visibility). | **Decided (user): A.** Top bar shows an `AccessChip` (Public/Restricted/Private); clicking it opens "Manage access…" for whoever may change access (else read-only). The member-count popover is removed; the roster lives in the Members sidebar. Browser-verified. | ✅ done |
+| 8 | **Gantt doesn't show who is responsible** — the standard PM-tool need. | **Decided (user): ① + ②.** ① The bar shows the assignee's **avatar** (the Asana/Monday/Jira convention): a `spec.assignee` field → `BarAvatar` at the bar's right end (`gantt.ai.yaml` gains `assignee: assignee`). ② A **Workload** resource view (`views/workload.ai.yaml`, `group_by: assignee`) — one lane per person; `groupLanes` now resolves an `actor` group field to the user's **name**, not the raw id. Browser-verified (avatars on bars + named lanes). ⚠️ Built on the pre-#641 gantt (this branch is off master); reconcile with #641's GanttView rewrite when both land. | ✅ done |
 
 ## Real-app testing follow-ups
 

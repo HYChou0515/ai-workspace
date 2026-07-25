@@ -793,6 +793,17 @@
   text-overflow: ellipsis;
   pointer-events: none;
 }
+/* The assignee avatar sits at the right end of the bar (label ellipsises before
+ * it). Sized to the ~16px bar interior + a light ring so it reads on the bar. */
+.ev-gantt__bar-avatar {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  margin-right: 3px;
+  border-color: var(--white);
+  font-size: 0.5rem;
+  pointer-events: none;
+}
 .ev-gantt__handle {
   position: absolute;
   top: 0;

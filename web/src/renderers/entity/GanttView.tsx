@@ -18,6 +18,7 @@
 import { useState } from "react";
 
 import type { EntityInstance } from "../../api/entities";
+import type { User } from "../../api/types";
 import {
   applyDrag,
   daysBetween,
@@ -45,7 +46,13 @@ type Row = { e: EntityInstance; span: Span };
 type Lane = { key: string; label: string | null; rows: Row[] };
 type Drag = { number: number; mode: DragMode; days: number };
 
-function groupLanes(rows: Row[], groupField: string | undefined, type: EntityViewProps["type"], refIndex: RefIndex | undefined): Lane[] {
+function groupLanes(
+  rows: Row[],
+  groupField: string | undefined,
+  type: EntityViewProps["type"],
+  refIndex: RefIndex | undefined,
+  users: User[] | undefined,
+): Lane[] {
   if (!groupField) return [{ key: "__all__", label: null, rows }];
   const spec = roleOf(type, groupField);
   const byKey = new Map<string, Lane>();
@@ -62,6 +69,11 @@ function groupLanes(rows: Row[], groupField: string | undefined, type: EntityVie
       const target = refIndex.get(spec.to)?.get(num);
       key = String(raw);
       label = target ? fieldText(target.fields.title) || `#${num}` : `#${num}?`;
+    } else if (spec?.role === "actor") {
+      // A resource view (group_by an assignee) labels each lane with the person's
+      // NAME, not the raw user id (§②).
+      key = fieldText(raw);
+      label = users?.find((u) => u.id === key)?.name ?? key;
     } else {
       key = fieldText(raw);
       label = key;
@@ -77,9 +89,10 @@ function groupLanes(rows: Row[], groupField: string | undefined, type: EntityVie
   return order.map((k) => byKey.get(k)!);
 }
 
-export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: EntityViewProps) {
+export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy }: EntityViewProps) {
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
+  const assigneeField = spec.assignee;
   const [zoom, setZoom] = useState<Zoom>("week");
   const [drag, setDrag] = useState<Drag | null>(null);
 
@@ -98,7 +111,7 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
   const chartWidth = totalDays * ppd;
   const xOf = (date: string) => daysBetween(minDate, date) * ppd;
 
-  const lanes = groupLanes(rows, spec.group_by, type, refIndex);
+  const lanes = groupLanes(rows, spec.group_by, type, refIndex, users);
   const grouped = Boolean(spec.group_by);
 
   // Drag: capture the down point + zoom, track on window, commit one patch on up.
@@ -208,6 +221,9 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
                         </span>
+                        {assigneeField && (
+                          <BarAvatar number={row.e.number} value={row.e.fields[assigneeField]} users={users} />
+                        )}
                         <div
                           data-testid={`bar-${row.e.number}-start`}
                           className="ev-gantt__handle ev-gantt__handle--start"
@@ -234,5 +250,31 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
         </div>
       </div>
     </div>
+  );
+}
+
+/** The assignee's avatar on a bar — "who is responsible" at a glance (§①). Reuses
+ * the shared `.ev-avatar` chrome (initials, or a photo when we have one). */
+function BarAvatar({ number, value, users }: { number: number; value: unknown; users?: User[] }) {
+  const id = fieldText(value);
+  if (!id) return null;
+  const u = users?.find((x) => x.id === id);
+  const name = u?.name ?? id;
+  const initials =
+    (name || "?")
+      .split(/[\s_-]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((s) => s[0]?.toUpperCase() ?? "")
+      .join("") || "?";
+  return (
+    <span
+      data-testid={`bar-${number}-assignee`}
+      className="ev-avatar ev-gantt__bar-avatar"
+      title={name}
+      style={u?.photo_url ? { backgroundImage: `url(${u.photo_url})` } : undefined}
+    >
+      {u?.photo_url ? "" : initials}
+    </span>
   );
 }

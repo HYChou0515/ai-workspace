@@ -19,6 +19,9 @@ export type ViewSpec = {
   group_by?: string;
   span?: string;
   label?: string;
+  /** gantt: an `actor`-role field whose avatar is shown on each bar — "who is
+   * responsible" at a glance, the standard PM-tool convention. */
+  assignee?: string;
   card?: { title?: string; badges?: string[] };
 };
 
