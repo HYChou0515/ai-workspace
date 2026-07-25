@@ -170,15 +170,29 @@
   gap: 2px;
 }
 .chat-rail__item {
-  display: block;
+  display: flex;
+  align-items: center;
   padding: var(--space-8);
   border-radius: var(--radius-card);
   color: var(--text-paper);
   text-decoration: none;
   font-size: var(--text-body-sm);
-  white-space: nowrap;
+}
+.chat-rail__item-title {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-rail__shared {
+  flex: 0 0 auto;
+  margin-left: var(--space-4);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-chip);
+  background: var(--paper-3);
+  color: var(--text-paper-d);
+  font-size: var(--text-xs);
 }
 .chat-rail__item:hover {
   background: var(--paper-3);
@@ -248,4 +262,55 @@
   padding: var(--space-8);
   color: var(--text-paper-d);
   font-size: var(--text-body-sm);
+}
+
+/* simplified share dialog (#chat-private #5) — inside ModalShell */
+.chat-share {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  min-width: 320px;
+  padding: var(--space-8);
+}
+.chat-share__title {
+  font-size: var(--text-body-lg);
+  font-weight: 700;
+  color: var(--text-paper);
+}
+.chat-share__hint {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+.chat-share__section {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-mono-caps);
+  color: var(--text-paper-d);
+}
+.chat-share__groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-height: 160px;
+  overflow-y: auto;
+}
+.chat-share__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+.chat-share__none {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+.chat-share__error {
+  color: var(--err);
+  font-size: var(--text-body-sm);
+}
+.chat-share__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-8);
 }

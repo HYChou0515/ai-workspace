@@ -1,14 +1,15 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ChatListRail } from "./ChatListRail";
 
 const items = [
-  { resource_id: "rca-investigation/1", title: "Oven drift", owner: "u" },
-  { resource_id: "rca-investigation/2", title: "Sensor noise", owner: "u" },
+  { resource_id: "rca-investigation/1", title: "Oven drift", owner: "me" },
+  { resource_id: "rca-investigation/2", title: "Sensor noise", owner: "me" },
+  { resource_id: "rca-investigation/9", title: "From a teammate", owner: "someone-else" },
 ];
 vi.mock("../hooks/useResources", () => ({
   useAppItems: () => ({ items, isPending: false }),
@@ -21,6 +22,8 @@ const newChat = vi.fn();
 vi.mock("../hooks/useCreateChat", () => ({ useCreateChat: () => ({ mutate: newChat, isPending: false }) }));
 const chatActions = { rename: vi.fn(), remove: vi.fn(), busy: false };
 vi.mock("../hooks/useChatActions", () => ({ useChatActions: () => chatActions }));
+vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "me" }));
+vi.mock("./ShareChatDialog", () => ({ ShareChatDialog: () => <div data-testid="share-dialog" /> }));
 
 afterEach(cleanup);
 
@@ -64,6 +67,20 @@ describe("ChatListRail", () => {
     fireEvent.change(input, { target: { value: "Oven drift RCA" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(chatActions.rename).toHaveBeenCalledWith("rca-investigation/1", "Oven drift RCA");
+  });
+
+  it("tags chats shared with me and hides owner-only actions on them", () => {
+    renderRail();
+    const row = screen.getByText("From a teammate").closest(".chat-rail__row") as HTMLElement;
+    expect(within(row).getByText("shared")).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /Chat options/i })).not.toBeInTheDocument();
+  });
+
+  it("opens the share dialog from a chat's ⋯ menu", () => {
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Share" }));
+    expect(screen.getByTestId("share-dialog")).toBeInTheDocument();
   });
 
   it("collapses to a thin bar and re-expands", () => {

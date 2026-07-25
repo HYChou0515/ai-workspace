@@ -16,7 +16,9 @@ import { Link } from "react-router-dom";
 import type { AppItem } from "../api/types";
 import { useChatActions } from "../hooks/useChatActions";
 import { useCreateChat } from "../hooks/useCreateChat";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useAppItems, useApps } from "../hooks/useResources";
+import { ShareChatDialog } from "./ShareChatDialog";
 
 // Platform destinations that live behind the menu (App-agnostic — the App
 // switcher is data-driven from useApps, these are the fixed platform surfaces).
@@ -162,7 +164,10 @@ function ChatRailItem({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [draft, setDraft] = useState("");
+  const me = useCurrentUser();
+  const shared = item.owner !== me; // shared WITH me → I don't own it
   const title = item.title || "Untitled chat";
 
   if (editing) {
@@ -196,49 +201,68 @@ function ChatRailItem({
         data-active={active ? "true" : undefined}
         title={title}
       >
-        {title}
+        <span className="chat-rail__item-title">{title}</span>
+        {shared && <span className="chat-rail__shared">shared</span>}
       </Link>
-      <button
-        type="button"
-        className="chat-rail__more"
-        aria-label={`Chat options for ${title}`}
-        aria-expanded={menuOpen}
-        onClick={() => setMenuOpen((o) => !o)}
-      >
-        ⋯
-      </button>
-      {menuOpen && (
+      {/* Rename / Share / Delete only for chats I own; a shared-with-me chat just
+          shows the "shared" tag (the backend would 403 those actions anyway). */}
+      {!shared && (
         <>
-          <div className="chat-rail__backdrop" onClick={() => setMenuOpen(false)} />
-          <div className="chat-rail__rowmenu" role="menu">
-            <button
-              type="button"
-              role="menuitem"
-              className="chat-rail__menu-item"
-              onClick={() => {
-                setMenuOpen(false);
-                setDraft(title);
-                setEditing(true);
-              }}
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="chat-rail__menu-item chat-rail__menu-item--danger"
-              onClick={() => {
-                setMenuOpen(false);
-                if (window.confirm(`Delete “${title}”? This can't be undone.`)) {
-                  onDelete(item.resource_id);
-                }
-              }}
-            >
-              Delete
-            </button>
-          </div>
+          <button
+            type="button"
+            className="chat-rail__more"
+            aria-label={`Chat options for ${title}`}
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <>
+              <div className="chat-rail__backdrop" onClick={() => setMenuOpen(false)} />
+              <div className="chat-rail__rowmenu" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="chat-rail__menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setDraft(title);
+                    setEditing(true);
+                  }}
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="chat-rail__menu-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setSharing(true);
+                  }}
+                >
+                  Share
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="chat-rail__menu-item chat-rail__menu-item--danger"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    if (window.confirm(`Delete “${title}”? This can't be undone.`)) {
+                      onDelete(item.resource_id);
+                    }
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
+            </>
+          )}
         </>
       )}
+      {sharing && <ShareChatDialog slug={slug} item={item} onClose={() => setSharing(false)} />}
     </div>
   );
 }
