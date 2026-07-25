@@ -145,6 +145,18 @@ const TOOL_ARG: Record<string, string> = {
   create_context_card: "title",
 };
 
+/** A workspace-relative ref resolved against the item's file route, or the ref
+ * unchanged when it is already a URL / fragment. `undefined` when there is no way
+ * to resolve it — the caller then draws nothing instead of a dead link. */
+function workspaceUrl(
+  ref: string | undefined,
+  fileUrl: ((path: string) => string) | undefined,
+): string | undefined {
+  if (!ref) return undefined;
+  if (/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(ref)) return ref;
+  return fileUrl?.(ref);
+}
+
 /** A short, plain-text rendering of a tool's primary argument (empty if none). */
 function toolArgHint(name: string, args: Record<string, unknown>): string {
   const key = TOOL_ARG[name];
@@ -306,6 +318,7 @@ export function EntryView({
       onUndo={onUndo}
       onReportWiki={onReportWiki}
       currentUser={currentUser}
+      fileUrl={fileUrl}
     />
   );
 }
@@ -535,6 +548,7 @@ function MessageBlock({
   onUndo,
   onReportWiki,
   currentUser,
+  fileUrl,
 }: {
   message: Message;
   onOpenCitation?: (c: MessageCitation) => void;
@@ -543,6 +557,9 @@ function MessageBlock({
   onUndo?: () => void;
   onReportWiki?: () => void;
   currentUser?: string;
+  /** Resolves a workspace path an answer names, so `![](out/a.png)` in the
+   * model's own text loads instead of 404ing against the SPA route. */
+  fileUrl?: (path: string) => string;
 }) {
   const t = useT();
   // #583: only a HUMAN message I actually wrote moves to the right. `author` is
@@ -690,9 +707,36 @@ function MessageBlock({
               a: ({ href, children, ...rest }) => {
                 const cite = kbCiteAnchor({ href, children }, byMarker, onOpenCitation);
                 if (cite) return cite;
+                const resolved = workspaceUrl(href, fileUrl);
                 return (
-                  <a href={href} {...rest}>
+                  <a
+                    href={resolved}
+                    {...rest}
+                    {...(resolved !== href ? { target: "_blank", rel: "noreferrer" } : {})}
+                  >
                     {children}
+                  </a>
+                );
+              },
+              // A model that names a file often also embeds it. Without this the
+              // src resolves against the SPA route and renders as a broken image
+              // beside the chart `show_file` loaded fine. Same resolution the
+              // file viewer does (renderers/MarkdownRenderer); on a surface with
+              // no workspace there is nothing to resolve against, so nothing is
+              // drawn rather than a broken image.
+              img: ({ src, alt, ...rest }) => {
+                const resolved = workspaceUrl(typeof src === "string" ? src : undefined, fileUrl);
+                if (!resolved) return null;
+                // Same thumbnail treatment a declared file gets, so an embedded
+                // image and a shown one are the same size; click to open.
+                return (
+                  <a href={resolved} target="_blank" rel="noreferrer">
+                    <img
+                      src={resolved}
+                      alt={alt ?? ""}
+                      {...rest}
+                      style={{ display: "block", maxWidth: 260, maxHeight: 260 }}
+                    />
                   </a>
                 );
               },

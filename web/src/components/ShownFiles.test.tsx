@@ -108,3 +108,15 @@ describe("ShownFiles", () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+describe("ShownFiles — thumbnail sizing", () => {
+  it("caps the image at a thumbnail rather than showing it full size", () => {
+    // Asked for after seeing a 420px-tall chart in a real browser: at full size
+    // the picture pushes the words that explain it off screen. The user opens it
+    // when they actually want to look.
+    renderShown([chart]);
+    const img = screen.getByRole("img");
+    expect(img.style.maxWidth).toBe("260px");
+    expect(img.style.maxHeight).toBe("260px");
+  });
+});

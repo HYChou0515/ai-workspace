@@ -34,7 +34,7 @@
 | --- | --- | --- |
 | D1 | 訊號來源＝結構化工具 `show_file(path, caption)` | 教模型寫 `![](path)`（賭小模型合規、驗不到檔）；前端從文字撈路徑（＝病 2 再來一次） |
 | D2 | 騎現有 tool 訊息，零新 event、零 schema | 新 SSE event + `Message.attachments[]`（四處同步，換到的「附件可查詢」本案不需要） |
-| D3 | 圖片 inline；其餘檔卡片＋點開 | 連圖片也只給縮圖（痛點只解一半）；整套 renderer 搬進對話（對話流被切碎） |
+| D3 | 圖片以**縮圖**呈現（260px 上限），點開看全圖；其餘檔卡片＋點開 | 整套 renderer 搬進對話（對話流被切碎） |
 | D4 | 是 tool 不是 skill | skill 是 per-message opt-in（`api/chat_send.py:569`），且無執行時機可驗路徑 |
 | D5 | 歸一到 `shown_files`，退役正則嗅探 | 改 `sample-tools/*` 鍵名（那是對外契約，`test_cli.py` 有斷言） |
 | D6 | 只給有工作區的 app；KB 對話不給 | 給了再拒絕（#537：模型會以為整個能力壞掉） |
@@ -51,6 +51,9 @@ D2 的先例是 `ask_user` / `AskUserCard`（#591，`AgentEntryView.tsx:219`）�
 
 D3 的檢視器已存在：`renderers/registry.ts`（image/pdf/csv/notebook/json）＋
 `hooks/openFile.tsx` 的 `useOpenFile()`（WorkspaceShell 外回傳 `null` → 降級不畫死控件）。
+
+**D3 的「縮圖」是看到實物後改的。** 原本定「圖片 inline」，真瀏覽器跑出來是 420px 高的圖佔滿
+對話流，把解釋它的文字推出畫面；使用者看了實際畫面後拍板改縮圖 —— 大到認得出，想看再點。
 
 ## Phases
 
@@ -100,6 +103,22 @@ D3 的檢視器已存在：`renderers/registry.ts`（image/pdf/csv/notebook/json
 - `tests/apps/test_show_file_granted.py`：**有 `read_file` 就必須有 `show_file`** ——
   能讀檔的 agent 就該能把檔攤到使用者面前，兩個 grant 必須同進同出。
   含一條「glob 有抓到東西」的自我防呆，否則參數化測試會空轉全綠。
+
+### P8 — 真瀏覽器抓到的兩個缺陷
+
+happy-dom 量不到、單元測試全綠、只有真瀏覽器看得見：
+
+1. **URL 雙斜線** `…/files//out/sine.png`。宣告把路徑正規化成絕對，`encodePath` 又直接接在
+   `files/` 後面。後端 `lstrip("/")` 容忍，前面擋一層會正規化路徑的 proxy 就未必。
+   修在 `encodePath`（唯一的編碼入口），配 `web/src/api/fileContentUrl.test.ts`。
+2. **答案裡多一張破圖**。模型同時呼叫了 `show_file` **並且**在答案裡寫 `![](out/sine.png)`，
+   而答案層的 ReactMarkdown 沒有解析 workspace 路徑 → 0×0 破圖 + 404。
+   修法是 `img`/`a` override 走 `fileUrl`（跟檔案檢視器 `MarkdownRenderer` 同一條規則），
+   沒有 workspace 的介面（KB 對話）則不畫圖而非畫破圖。
+
+⚠️ **第 2 點是一條額外的路徑，要講明白**：`![](path)` 現在也會顯示圖了。它跟被刪掉的正則嗅探
+不同 —— 那是在自由文字裡猜路徑，這是 markdown AST 裡的明確作者意圖，且與檔案檢視器同規則。
+代價是模型若同時宣告又內嵌，同一張圖會出現兩次（本次實跑就發生了）。**若你要我拿掉，說一聲。**
 
 ### P6 — 驗收
 

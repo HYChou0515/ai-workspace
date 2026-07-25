@@ -12,6 +12,9 @@ import { pxToRem } from "../lib/pxToRem";
 import { isInlineImage, type ShownFile } from "../renderers/shownFiles";
 import { Icon } from "./Icon";
 
+/** Thumbnail edge, px. Recognisable at a glance without taking over the thread. */
+const THUMB = 260;
+
 export function ShownFiles({
   files,
   fileUrl,
@@ -52,13 +55,16 @@ function ShownFileView({
   const body = (
     <>
       {inline && (
+        // A THUMBNAIL, not the picture at full size: the chat is a conversation,
+        // and a chart that fills the pane pushes the words that explain it off
+        // screen. Big enough to recognise, click to actually look.
         <img
           src={url}
           alt={file.caption ?? name}
           style={{
             display: "block",
-            maxWidth: "100%",
-            maxHeight: 420,
+            maxWidth: THUMB,
+            maxHeight: THUMB,
             borderRadius: "var(--radius-card)",
             border: "1px solid var(--paper-3)",
           }}

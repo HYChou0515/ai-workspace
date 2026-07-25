@@ -36,6 +36,9 @@ vi.mock("./Icon", () => ({
 
 afterEach(cleanup);
 
+// Mirrors `realApi.fileContentUrl`: takes either path dialect, emits one slash.
+const fakeFileUrl = (p: string) => `/api/files/${p.replace(/^\/+/, "")}`;
+
 describe("EntryView — ask_knowledge_base tool card citations", () => {
   it("renders citation cards under an ask_knowledge_base tool call (RCA reload path)", () => {
     // The persisted RCA tool message (BE attaches citations) hydrates into a
@@ -792,7 +795,7 @@ describe("EntryView — show_file (files the agent showed)", () => {
     JSON.stringify({ shown_files: [{ path: "/out/revenue.png", mime: "image/png", size: 145066 }] });
 
   it("shows the declared file instead of a collapsed tool card", () => {
-    render(<EntryView entry={call(declared)} fileUrl={(p) => `/api/files${p}`} />);
+    render(<EntryView entry={call(declared)} fileUrl={fakeFileUrl} />);
     expect(screen.getByTestId("shown-files")).toBeInTheDocument();
     expect(screen.getByRole("img")).toHaveAttribute("src", "/api/files/out/revenue.png");
     expect(document.querySelector("details")).toBeNull();
@@ -839,7 +842,7 @@ describe("EntryView — files declared by an ordinary tool", () => {
               }),
           },
         }}
-        fileUrl={(p) => `/api/files${p}`}
+        fileUrl={fakeFileUrl}
       />,
     );
     // The tool card stays — its stdout is still worth reading — and the chart is
@@ -867,10 +870,64 @@ describe("EntryView — files declared by an ordinary tool", () => {
               }),
           },
         }}
-        fileUrl={(p) => `/api/files${p}`}
+        fileUrl={fakeFileUrl}
       />,
     );
     expect(screen.getByText("chart written")).toBeInTheDocument();
     expect(screen.queryByText(/shown-files/)).not.toBeInTheDocument();
+  });
+});
+
+// A real turn showed the model doing BOTH: calling `show_file` and writing
+// `![chart](out/sine.png)` into its answer. The answer's markdown had no path
+// resolution, so the second one rendered as a broken image with a 404 next to
+// the chart that had loaded fine.
+describe("EntryView — workspace paths in an assistant answer", () => {
+  const answer = (content: string) => ({
+    kind: "message" as const,
+    message: { role: "assistant" as const, content, author: "Agent" },
+  });
+
+  it("resolves a workspace-relative image against the file route", () => {
+    render(
+      <EntryView entry={answer("Here:\n\n![chart](out/sine.png)")} fileUrl={fakeFileUrl} />,
+    );
+    expect(screen.getByRole("img", { name: "chart" })).toHaveAttribute(
+      "src",
+      "/api/files/out/sine.png",
+    );
+  });
+
+  it("resolves a workspace-relative link too", () => {
+    render(
+      <EntryView
+        entry={answer("see [the report](out/report.pdf)")}
+        fileUrl={fakeFileUrl}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "the report" })).toHaveAttribute(
+      "href",
+      "/api/files/out/report.pdf",
+    );
+  });
+
+  it("leaves an external image alone", () => {
+    render(
+      <EntryView
+        entry={answer("![logo](https://example.com/logo.png)")}
+        fileUrl={fakeFileUrl}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "logo" })).toHaveAttribute(
+      "src",
+      "https://example.com/logo.png",
+    );
+  });
+
+  it("renders no image at all on a surface with no workspace", () => {
+    // KB chat has no `fileUrl`: a workspace path means nothing there, and a
+    // broken image is worse than none.
+    render(<EntryView entry={answer("![chart](out/sine.png)")} />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 });
