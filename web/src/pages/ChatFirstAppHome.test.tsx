@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +12,8 @@ vi.mock("../hooks/useResources", () => ({
   useAppItems: () => ({ items: itemsRef.current, isPending: false }),
 }));
 vi.mock("../components/ChatListRail", () => ({ ChatListRail: () => <div data-testid="rail" /> }));
+const newChat = vi.fn();
+vi.mock("../hooks/useCreateChat", () => ({ useCreateChat: () => ({ mutate: newChat, isPending: false }) }));
 
 const mf = {
   resource_route: "/playground-item",
@@ -54,11 +56,12 @@ describe("ChatFirstAppHome", () => {
     expect(screen.getByTestId("workspace")).toBeInTheDocument();
   });
 
-  it("shows a start-new-chat empty state when the App has no chats", () => {
+  it("shows a start-new-chat empty state that creates a chat (no create form)", () => {
     itemsRef.current = [];
     renderAt("/a/playground");
     expect(screen.queryByTestId("workspace")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /new chat/i })).toHaveAttribute("href", "/a/playground/new");
+    fireEvent.click(screen.getByRole("button", { name: /new chat/i }));
+    expect(newChat).toHaveBeenCalled();
   });
 
   it("does not redirect while creating a new chat, so the create form can show", () => {

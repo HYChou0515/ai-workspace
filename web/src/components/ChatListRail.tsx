@@ -14,6 +14,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import type { AppItem } from "../api/types";
+import { useCreateChat } from "../hooks/useCreateChat";
 import { useAppItems, useApps } from "../hooks/useResources";
 
 // Platform destinations that live behind the menu (App-agnostic — the App
@@ -36,6 +37,7 @@ export function ChatListRail({
 }) {
   const { items, isPending } = useAppItems(slug, resourceRoute);
   const apps = useApps();
+  const createChat = useCreateChat(slug);
   const [menuOpen, setMenuOpen] = useState(false);
   // #chat-private #3: the rail can be collapsed to a thin bar (not persisted —
   // like the IDE state, a new tab opens with it shown).
@@ -69,9 +71,14 @@ export function ChatListRail({
         >
           ☰
         </button>
-        <Link className="chat-rail__new" to={`/a/${slug}/new`}>
+        <button
+          type="button"
+          className="chat-rail__new"
+          onClick={() => createChat.mutate()}
+          disabled={createChat.isPending}
+        >
           + New chat
-        </Link>
+        </button>
         <button
           type="button"
           className="chat-rail__collapse"

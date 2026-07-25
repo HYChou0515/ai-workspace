@@ -7,16 +7,18 @@
  */
 
 import { useEffect } from "react";
-import { Link, Navigate, Outlet, useMatch } from "react-router-dom";
+import { Navigate, Outlet, useMatch } from "react-router-dom";
 
 import type { AppManifest } from "../api/types";
 import { ChatListRail } from "../components/ChatListRail";
+import { useCreateChat } from "../hooks/useCreateChat";
 import { useNavChrome } from "../hooks/useNavChrome";
 import { useAppItems } from "../hooks/useResources";
 import { recallLastChat } from "../lib/lastChat";
 
 export function ChatFirstAppHome({ slug, manifest }: { slug: string; manifest: AppManifest }) {
   const { items, isPending } = useAppItems(slug, manifest.resource_route);
+  const createChat = useCreateChat(slug);
   // While the create form is open (`/a/:slug/new`) we must NOT redirect away —
   // the form renders in the Outlet below.
   const creating = Boolean(useMatch("/a/:slug/new"));
@@ -44,9 +46,14 @@ export function ChatFirstAppHome({ slug, manifest }: { slug: string; manifest: A
           <div className="chat-empty__card">
             <div className="chat-empty__title">No chats yet</div>
             <div className="chat-empty__hint">Start a conversation — it stays private to you.</div>
-            <Link className="chat-empty__cta" to={`/a/${slug}/new`}>
+            <button
+              type="button"
+              className="chat-empty__cta"
+              onClick={() => createChat.mutate()}
+              disabled={createChat.isPending}
+            >
               + Start a new chat
-            </Link>
+            </button>
           </div>
         )}
         <Outlet />

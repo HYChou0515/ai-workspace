@@ -17,6 +17,8 @@ vi.mock("../hooks/useResources", () => ({
     { slug: "pm", title: "Product" },
   ],
 }));
+const newChat = vi.fn();
+vi.mock("../hooks/useCreateChat", () => ({ useCreateChat: () => ({ mutate: newChat, isPending: false }) }));
 
 afterEach(cleanup);
 
@@ -38,9 +40,10 @@ describe("ChatListRail", () => {
     expect(current).toHaveAttribute("data-active", "true");
   });
 
-  it("offers a New chat action that opens this App's create flow", () => {
+  it("creates a chat with defaults when New chat is pressed (no create form)", () => {
     renderRail();
-    expect(screen.getByRole("link", { name: /New chat/i })).toHaveAttribute("href", "/a/rca/new");
+    fireEvent.click(screen.getByRole("button", { name: /New chat/i }));
+    expect(newChat).toHaveBeenCalled();
   });
 
   it("collapses to a thin bar and re-expands", () => {
