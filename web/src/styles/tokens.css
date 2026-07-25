@@ -47,22 +47,24 @@
   --info:  #2D6CC9;
 
   /* Categorical chip palette (#GH-projects B) — a small, muted, on-brand set of
-   * hues auto-assigned to single-select values (status/labels). Soft rgba fills
-   * over the theme paper + a readable mid-tone ink work in both light + dark.
-   * `selectColor` hashes a value to one of these; a schema `colors:` map can name
-   * one explicitly. */
-  --cat-1-bg: rgba(58, 138, 74, 0.14);
-  --cat-1-fg: #3A8A4A; /* green */
+   * hues auto-assigned to single-select values (status/labels). A soft rgba fill
+   * over the theme paper + a readable ink. The inks are tuned per theme: these
+   * light-mode inks clear a 3:1 floor on cream, and `[data-theme="dark"]` below
+   * OVERRIDES them with lighter inks so they don't drop to ~2.9:1 on ink — see
+   * contrast.test.ts (#4). `selectColor` hashes a value to one of these; a schema
+   * `colors:` map can name one explicitly. */
+  --cat-1-bg: rgba(58, 138, 74, 0.16);
+  --cat-1-fg: #348044; /* green */
   --cat-2-bg: rgba(45, 108, 201, 0.14);
   --cat-2-fg: #2D6CC9; /* blue */
-  --cat-3-bg: rgba(198, 138, 46, 0.16);
-  --cat-3-fg: #B77E27; /* amber */
+  --cat-3-bg: rgba(176, 122, 32, 0.18);
+  --cat-3-fg: #946617; /* amber */
   --cat-4-bg: rgba(124, 92, 191, 0.16);
   --cat-4-fg: #7C5CBF; /* violet */
-  --cat-5-bg: rgba(46, 138, 130, 0.16);
-  --cat-5-fg: #2E8A82; /* teal */
-  --cat-6-bg: rgba(196, 74, 58, 0.14);
-  --cat-6-fg: #C44A3A; /* rose */
+  --cat-5-bg: rgba(46, 138, 130, 0.18);
+  --cat-5-fg: #237068; /* teal */
+  --cat-6-bg: rgba(196, 74, 58, 0.16);
+  --cat-6-fg: #BE4636; /* rose */
   --cat-7-bg: var(--paper-2);
   --cat-7-fg: #5C5F66; /* slate (neutral) */
 
@@ -150,4 +152,22 @@
 
   /* cream stroke for the mark on the dark surface (= rca-mark-light.svg) */
   --brand-mark:  #F1ECE0;
+
+  /* Categorical chips need LIGHTER inks on ink than on cream — the light-mode
+   * mid-tones read ~2.9:1 here. Slightly stronger fills + brighter inks clear a
+   * 3:1 floor on every dark surface (guarded in contrast.test.ts, #4). */
+  --cat-1-bg: rgba(58, 138, 74, 0.22);
+  --cat-1-fg: #5FBF6E; /* green */
+  --cat-2-bg: rgba(45, 108, 201, 0.24);
+  --cat-2-fg: #6BA6F0; /* blue */
+  --cat-3-bg: rgba(198, 138, 46, 0.22);
+  --cat-3-fg: #E0A64B; /* amber */
+  --cat-4-bg: rgba(124, 92, 191, 0.26);
+  --cat-4-fg: #B197E6; /* violet */
+  --cat-5-bg: rgba(46, 138, 130, 0.22);
+  --cat-5-fg: #4FC2B5; /* teal */
+  --cat-6-bg: rgba(196, 74, 58, 0.24);
+  --cat-6-fg: #ED8171; /* rose */
+  --cat-7-bg: var(--paper-2);
+  --cat-7-fg: #B9BEC7; /* slate (neutral) */
 }
