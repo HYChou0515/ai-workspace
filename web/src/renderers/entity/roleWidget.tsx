@@ -266,7 +266,12 @@ export function RoleField({ widget, name, value, values, users, refOptions, disa
     return <ActorSelect name={name} value={value} users={users} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />;
   if (widget === "daterange")
     return <DateRangeInput name={name} value={value} disabled={disabled} className="ev-field" onCommit={onCommit} />;
-  if (widget === "ref" && refOptions && refOptions.length > 0)
+  // A ref is a pointer to another collection's record, so it edits as a #N-title
+  // picker whenever the caller wired options — even an EMPTY list (no targets yet)
+  // shows the dropdown (with just "—"), never a raw number box: a bare number that
+  // references an invisible record is meaningless to edit. `undefined` options
+  // (caller didn't load referenced records) keep the number fallback below.
+  if (widget === "ref" && refOptions)
     return (
       <RefSelect name={name} value={value} options={refOptions} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />
     );

@@ -51,6 +51,25 @@ NOT the real overflow cause).
 
 | 7 | **Top-bar `👥 N` Members popover feels redundant** (user). It's the same `ItemMembersPanel` as the sidebar (Members mode), so it duplicates the roster; the head-count is noise for the dominant solo/private case and doesn't answer the question that matters (visibility). | **Decided (user): A.** Top bar shows an `AccessChip` (Public/Restricted/Private); clicking it opens "Manage access…" for whoever may change access (else read-only). The member-count popover is removed; the roster lives in the Members sidebar. Browser-verified. | ✅ done |
 
+## Real-app testing follow-ups
+
+Testing on the running app (not just harnesses) surfaced gaps the seeded
+harnesses had masked — a reminder that the harness data must match reality:
+
+- **#5 (ref picker) — empty-target case:** a fresh project has no milestones, so
+  `RoleField` (record editor / table cell) still fell back to a raw number box
+  (its `refOptions.length > 0` guard), even though the create modal already
+  showed a dropdown. Fixed: a `ref` renders the `#N-title` picker whenever options
+  are *defined* — an empty list shows the dropdown with just "—", never a number.
+- **#6 (member panel) — narrow sidebar clipped:** adding the access chip widened
+  the header past a narrow sidebar, clipping "Manage access…" and the roster's
+  role labels. Fixed with `min-width: 0` on the panel + a wrapping header + name
+  truncation, so it fits any sidebar width.
+- **#6 (member panel) — group members hidden:** a group grant showed only a
+  head-count. It now expands (collapsed by default) to reveal its members,
+  resolved from `useMyGroups` (`listGroups`, which carries member ids for groups
+  the viewer can see). Browser-verified at a 234px sidebar.
+
 ## Open decisions (for the user)
 
 - **Card ⋯ menu — Delete?** Needs a backend entity-delete route (record file +

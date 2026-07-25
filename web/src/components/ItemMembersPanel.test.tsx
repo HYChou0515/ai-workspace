@@ -17,6 +17,8 @@ vi.mock("./UserChip", () => ({
 }));
 const pickable = vi.hoisted(() => ({ groups: [] as Array<Record<string, unknown>> }));
 vi.mock("../hooks/usePickableGroups", () => ({ usePickableGroups: () => pickable.groups }));
+const mine = vi.hoisted(() => ({ groups: [] as Array<Record<string, unknown>> }));
+vi.mock("../hooks/useMyGroups", () => ({ useMyGroups: () => mine.groups }));
 vi.mock("./ItemShareDialog", () => ({
   ItemShareDialog: ({ value, onSubmit }: { value: { visibility: string }; onSubmit: (p: unknown) => void }) => (
     <div data-testid="share-dialog" data-visibility={value.visibility}>
@@ -59,6 +61,7 @@ function signInAs(id: string, isSuperuser = false) {
 beforeEach(() => {
   signInAs("alice");
   pickable.groups = [];
+  mine.groups = [];
 });
 afterEach(cleanup);
 
@@ -133,6 +136,21 @@ describe("ItemMembersPanel", () => {
     const row = await screen.findByTestId("group-row-group:g1");
     expect(row).toHaveTextContent("Eng Team");
     expect(row).toHaveTextContent("In workspace");
+  });
+
+  // The group row shows a head-count; expanding it (collapsed by default) reveals
+  // who is actually in the group, resolved from the caller's visible groups.
+  it("expands a granted group to reveal its members, collapsed by default", async () => {
+    pickable.groups = [{ resource_id: "group:g1", name: "Eng Team", description: "", member_count: 2 }];
+    mine.groups = [
+      { resource_id: "group:g1", name: "Eng Team", description: "", members: ["bob", "carol"], owner: "alice", maintainers: [] },
+    ];
+    render({ members: [], permission: { visibility: "restricted", read_meta: ["group:group:g1"], read_chat: ["group:group:g1"] } });
+    // collapsed: members are not shown yet
+    expect(screen.queryByTestId("group-member-group:g1-bob")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: /Eng Team/i }));
+    expect(screen.getByTestId("group-member-group:g1-bob")).toBeInTheDocument();
+    expect(screen.getByTestId("group-member-group:g1-carol")).toBeInTheDocument();
   });
 
   it("offers access management to someone who may change permission", async () => {

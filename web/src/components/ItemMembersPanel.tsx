@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { AppItem, AppManifest } from "../api/types";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useIsSuperuserState } from "../hooks/useIsSuperuser";
+import { useMyGroups } from "../hooks/useMyGroups";
 import { usePickableGroups } from "../hooks/usePickableGroups";
 import { useSetItemPermission } from "../hooks/useResources";
 import {
@@ -55,13 +56,25 @@ export function ItemMembersPanel({
   const me = useCurrentUser();
   const { isSuperuser, groups } = useIsSuperuserState();
   const [sharing, setSharing] = useState(false);
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const owner = (item.created_by as string) || (item.owner as string) || "";
   const raw = (item as Record<string, unknown>).permission;
   const perm = parseItemPermission(raw);
   const vis = itemVisibility(raw);
   const canManage = canChangeItemPermission(perm, me, owner, isSuperuser, groups);
   const pickableGroups = usePickableGroups();
+  const groupGrants = perm ? itemGroupGrantsFromPermission(perm) : [];
+  // Only reach for the richer, permissioned group list (member ids) when there's
+  // a group grant to expand.
+  const myGroups = useMyGroups(groupGrants.length > 0);
   const label = manifest.labels?.members ?? "Members";
+  const toggleGroup = (id: string) =>
+    setExpanded((s) => {
+      const next = new Set(s);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   return (
     <div style={variant === "sidebar" ? sidebarBody : popoverBody}>
@@ -100,26 +113,66 @@ export function ItemMembersPanel({
         <ul style={list}>
           {rosterOf(item, perm, owner).map((row) => (
             <li key={row.userId} data-testid={`member-row-${row.userId}`} style={rowStyle}>
-              <UserChip userId={row.userId} />
-              <span style={roleText}>{row.role}</span>
+              <span style={{ display: "flex", alignItems: "center", minWidth: 0, overflow: "hidden" }}>
+                <UserChip userId={row.userId} />
+              </span>
+              <span style={{ ...roleText, flexShrink: 0 }}>{row.role}</span>
             </li>
           ))}
           {/* #608 — a group granted access is a member too; resolve its name the
-              same way the share dialog does ("Unknown group" if we can't). */}
-          {perm &&
-            itemGroupGrantsFromPermission(perm).map((g) => {
-              const pg = pickableGroups.find((x) => x.resource_id === g.groupId);
-              return (
-                <li key={g.groupId} data-testid={`group-row-${g.groupId}`} style={rowStyle}>
-                  <span style={groupPill}>
-                    <Icon name="users" size={13} color="var(--text-paper-d)" />
-                    {pg?.name ?? "Unknown group"}
-                    {pg ? ` · ${pg.member_count}` : ""}
-                  </span>
-                  <span style={roleText}>{itemRoleDef(g.role).label}</span>
-                </li>
-              );
-            })}
+              same way the share dialog does ("Unknown group" if we can't). When we
+              can see the group's members, the row expands (collapsed by default)
+              to show who is in it. */}
+          {groupGrants.map((g) => {
+            const pg = pickableGroups.find((x) => x.resource_id === g.groupId);
+            const name = pg?.name ?? "Unknown group";
+            const members = myGroups.find((x) => x.resource_id === g.groupId)?.members ?? [];
+            const canExpand = members.length > 0;
+            const open = expanded.has(g.groupId);
+            const face = (
+              <>
+                <span aria-hidden style={{ width: 10, display: "inline-block", color: "var(--text-paper-d)" }}>
+                  {canExpand ? (open ? "▾" : "▸") : ""}
+                </span>
+                <Icon name="users" size={13} color="var(--text-paper-d)" />
+                <span style={ellipsis}>
+                  {name}
+                  {pg ? ` · ${pg.member_count}` : ""}
+                </span>
+              </>
+            );
+            return (
+              <li key={g.groupId} data-testid={`group-row-${g.groupId}`} style={{ display: "grid", gap: 4, minWidth: 0 }}>
+                <div style={rowStyle}>
+                  {canExpand ? (
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      aria-label={`${name} members`}
+                      onClick={() => toggleGroup(g.groupId)}
+                      style={{ ...groupPill, background: "transparent", border: 0, padding: 0, cursor: "pointer", minWidth: 0 }}
+                    >
+                      {face}
+                    </button>
+                  ) : (
+                    <span style={{ ...groupPill, minWidth: 0 }}>{face}</span>
+                  )}
+                  <span style={{ ...roleText, flexShrink: 0 }}>{itemRoleDef(g.role).label}</span>
+                </div>
+                {open && (
+                  <ul style={{ listStyle: "none", margin: 0, padding: "0 0 0 22px", display: "grid", gap: 4 }}>
+                    {members.map((uid) => (
+                      <li key={uid} data-testid={`group-member-${g.groupId}-${uid}`} style={rowStyle}>
+                        <span style={{ display: "flex", alignItems: "center", minWidth: 0 }}>
+                          <UserChip userId={uid} />
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
 
@@ -238,22 +291,29 @@ const unreadableBox: React.CSSProperties = {
   fontSize: pxToRem(13),
 };
 
-const sidebarBody: React.CSSProperties = { padding: 12, display: "grid", gap: 10 };
+// `minWidth: 0` so a narrow sidebar shrinks the panel rather than letting a wide
+// header (title + access chip + Manage button) force the whole panel past the
+// frame and clip the roster's role labels (#6a).
+const sidebarBody: React.CSSProperties = { padding: 12, display: "grid", gap: 10, minWidth: 0 };
 const popoverBody: React.CSSProperties = { minWidth: 240, padding: "10px 12px", display: "grid", gap: 8 };
 const titleRow: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
   gap: 8,
+  flexWrap: "wrap", // Manage button drops to its own line before it clips
 };
-const list: React.CSSProperties = { listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6 };
+const list: React.CSSProperties = { listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 6, minWidth: 0 };
 const rowStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
   gap: 8,
   fontSize: pxToRem(12),
+  minWidth: 0,
 };
 const roleText: React.CSSProperties = { color: "var(--text-paper-d)", fontSize: pxToRem(11) };
 const accessNote: React.CSSProperties = { color: "var(--text-paper-d)", fontSize: pxToRem(12) };
-const groupPill: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4 };
+const groupPill: React.CSSProperties = { display: "inline-flex", alignItems: "center", gap: 4, minWidth: 0 };
+// truncate a long name so the role/label on the right stays visible in a narrow panel.
+const ellipsis: React.CSSProperties = { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" };
