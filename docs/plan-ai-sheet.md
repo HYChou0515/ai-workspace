@@ -70,6 +70,13 @@ or a newline; escape `"` as `""`; tab delimiter for `.tsv`. A file opened and
 saved without edits must come back byte-identical, or the grid silently rewrites
 files just by being opened.
 
+Byte-identity does not follow from the quoting rules alone, because `parseCsv` is
+lossy in two ways: it drops `\r`, and it cannot tell a trailing newline from its
+absence. Left alone, opening a CRLF file rewrites every line ending, and a file
+with no final newline grows one. So `serializeCsv` takes the original text and
+derives both styles from it; the round-trip is pinned by a test using CRLF input
+with no trailing newline.
+
 ## Degradation
 
 Each row is a test.
