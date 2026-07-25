@@ -80,6 +80,8 @@ describe("AiYamlRenderer", () => {
     expect(mock.catalog).toHaveBeenCalledWith("pm", "item1");
     expect(mock.list).toHaveBeenCalledWith("pm", "item1", "issue");
 
+    // status is a chip at rest; click it to reveal the accessible select, then change.
+    fireEvent.click(screen.getByRole("button", { name: "edit status" }));
     fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
     await waitFor(() => expect(mock.update).toHaveBeenCalledWith("pm", "item1", "issue", 1, { status: "done" }));
   });

@@ -722,6 +722,31 @@
   color: var(--text-paper-d);
 }
 
+/* Card status: a coloured chip at rest that opens the select on click (#3), so a
+   board card reads the same as a table cell instead of a raw native dropdown. */
+.ev-card__status-row {
+  margin-top: var(--space-4);
+}
+.ev-card__status {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-chip);
+}
+button.ev-card__status {
+  cursor: pointer;
+}
+button.ev-card__status:hover,
+button.ev-card__status:focus-visible {
+  border-color: var(--paper-3);
+}
+.ev-card__status select {
+  font-size: var(--text-xs);
+}
+
 /* ── avatar / progress / chips (card faces + cells) ──────────────────────── */
 .ev-avatar {
   display: inline-flex;

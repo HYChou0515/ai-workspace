@@ -17,7 +17,7 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
@@ -29,6 +29,7 @@ import { refOptionsForField, type RefOption } from "./refTraversal";
 import { selectColor } from "./selectColor";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
+import { SelectChip } from "./TableView";
 import type { EntityViewProps } from "./types";
 
 export function BoardView({ spec, type, entities, users, canWrite, refIndex, onPatch, onSave, onOpenRecord, busy }: EntityViewProps) {
@@ -261,13 +262,13 @@ function Card({
           ))}
         </div>
       )}
-      {statusSpec?.values && (
-        <div>
-          <RoleField
-            widget={widgetForRole(statusSpec.role)}
-            name={statusSpec.name}
+      {statusSpec && statusSpec.values && (
+        // Stop pointerdown here from arming the card's drag sensor, so a click on
+        // the chip / select is a click, not the start of a drag.
+        <div className="ev-card__status-row" onPointerDown={(e) => e.stopPropagation()}>
+          <CardStatus
+            spec={statusSpec}
             value={entity.fields[groupField]}
-            values={statusSpec.values}
             disabled={busy || readOnly}
             onCommit={(next) => onPatch(entity.number, { [groupField]: next })}
           />
@@ -292,6 +293,74 @@ function Card({
         </div>
       )}
     </div>
+  );
+}
+
+/** The card's status as a coloured chip at rest (GitHub-Projects style, #GH-
+ * projects B / #3); a click swaps to the native select — the keyboard-accessible
+ * way to move a card without dragging. Read-only → the chip alone, no control.
+ * Mirrors the table cell's click-to-edit so both views feel the same. */
+function CardStatus({
+  spec,
+  value,
+  disabled,
+  onCommit,
+}: {
+  spec: EntityFieldSpec;
+  value: unknown;
+  disabled?: boolean;
+  onCommit: (next: unknown) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const boxRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (editing) boxRef.current?.querySelector<HTMLSelectElement>("select")?.focus();
+  }, [editing]);
+
+  const display = fieldText(value);
+  const chip = display ? (
+    <SelectChip value={display} fieldSpec={spec} />
+  ) : (
+    <span className="ev-cell__empty">—</span>
+  );
+
+  if (disabled) return <div className="ev-card__status">{chip}</div>;
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="ev-cell ev-card__status"
+        aria-label={`edit ${spec.name}`}
+        onClick={() => setEditing(true)}
+      >
+        {chip}
+      </button>
+    );
+  }
+
+  return (
+    <span
+      ref={boxRef}
+      className="ev-card__status"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setEditing(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") setEditing(false);
+      }}
+    >
+      <RoleField
+        widget={widgetForRole(spec.role)}
+        name={spec.name}
+        value={value}
+        values={spec.values}
+        onCommit={(next) => {
+          onCommit(next);
+          setEditing(false);
+        }}
+      />
+    </span>
   );
 }
 

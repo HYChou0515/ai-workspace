@@ -58,12 +58,24 @@ function board(props: Partial<EntityViewProps>) {
 }
 
 describe("BoardView (#451)", () => {
-  it("keeps the status select as an accessible fallback that moves a card", () => {
+  it("moves a card via the keyboard-accessible status select behind the chip", () => {
     const onPatch = vi.fn();
     board({ entities: [issue(1, { title: "A", status: "open" })], onPatch });
     expect(screen.getByTestId("col-done")).toBeInTheDocument();
+    // the status shows as a chip at rest; click reveals the select, then change.
+    fireEvent.click(screen.getByRole("button", { name: "edit status" }));
     fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
     expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
+  });
+
+  it("shows the status as a coloured chip at rest, revealing the select only on click (#3)", () => {
+    const { container } = board({ entities: [issue(1, { title: "A", status: "open" })] });
+    // at rest: a coloured chip inside the card, no native select cluttering it.
+    expect(within(screen.getByTestId("card-1")).getByText("open")).toHaveClass("ev-chip");
+    expect(container.querySelector("select")).toBeNull();
+    // clicking the chip opens the accessible select.
+    fireEvent.click(screen.getByRole("button", { name: "edit status" }));
+    expect(screen.getByLabelText("status")).toBeInTheDocument();
   });
 
   it("shows an out-of-vocab status in its own degraded column, card still visible (§D)", () => {
@@ -119,17 +131,20 @@ describe("BoardView (#451)", () => {
   });
 
   describe("read-only gate (§E canWrite)", () => {
-    it("disables the status select and stops the card from dragging when canWrite is false", () => {
-      const onPatch = vi.fn();
-      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false, onPatch });
-      expect(screen.getByLabelText("status")).toBeDisabled();
+    it("shows a read-only status chip with no editable control and stops dragging when canWrite is false", () => {
+      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false });
+      // no way to change status: neither the edit-chip button nor a select.
+      expect(screen.queryByRole("button", { name: "edit status" })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("status")).not.toBeInTheDocument();
+      // the status is still shown as a chip inside the card.
+      expect(within(screen.getByTestId("card-1")).getByText("open")).toHaveClass("ev-chip");
       // @dnd-kit disables the draggable → the card advertises aria-disabled.
       expect(screen.getByTestId("card-1")).toHaveAttribute("aria-disabled", "true");
     });
 
     it("keeps the card draggable + status editable by default (canWrite omitted)", () => {
       board({ entities: [issue(1, { title: "A", status: "open" })] });
-      expect(screen.getByLabelText("status")).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "edit status" })).toBeInTheDocument();
       expect(screen.getByTestId("card-1")).toHaveAttribute("aria-disabled", "false");
     });
   });
