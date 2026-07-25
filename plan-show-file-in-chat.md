@@ -38,6 +38,12 @@
 | D4 | 是 tool 不是 skill | skill 是 per-message opt-in（`api/chat_send.py:569`），且無執行時機可驗路徑 |
 | D5 | 歸一到 `shown_files`，退役正則嗅探 | 改 `sample-tools/*` 鍵名（那是對外契約，`test_cli.py` 有斷言） |
 | D6 | 只給有工作區的 app；KB 對話不給 | 給了再拒絕（#537：模型會以為整個能力壞掉） |
+| D7 | 宣告是工具結果尾端的 `[shown-files]{json}` 一行 | 整份輸出當 JSON（產圖工具的結果是 `_format_exec` header＋JSON，且 header 的 exit code 是小模型的定位點）；新 event＋Message 欄位（＝D2 已否決的四處同步） |
+
+**D7 是實作時才浮現的，grill 沒問出來。** 原本打算「前端把整份工具輸出 `JSON.parse`」，
+但那只對 `show_file` 成立 —— 產圖工具的結果是散文＋JSON。標記讓兩個來源共用同一條前端路徑，
+而且宣告留在**已持久化的 tool 訊息裡**，所以重整後自動還原，不必付 schema 的錢。
+`show_file` 也改走標記（結果＝一句話給模型讀 + 標記行），前端因此只有一條解析路徑。
 
 D2 的先例是 `ask_user` / `AskUserCard`（#591，`AgentEntryView.tsx:219`）：`tool_args` 已持久化
 （`api/turns.py:372` → `web/src/api/types.ts:52`），reducer 已產 `ToolCallView`。
@@ -80,6 +86,20 @@ D3 的檢視器已存在：`renderers/registry.ts`（image/pdf/csv/notebook/json
 ### P5 — prompt 只正面列能力 ✅
 
 `feedback_prompt_positive_only`。P1 docstring 原有反向敘述，已改。
+
+### P7 — 讓工具真的到得了 agent（live check 抓到的缺陷）
+
+真模型第一次實跑就露出來：`show_file` 進了 `_WORKSPACE_TOOLS`、`build_tools(None)` 也發得出來、
+2600 條單元測試全綠 —— 但**每個 `app.json` 都明列 `agent.tools`**，那份清單才是真 turn 的天花板，
+`show_file` 不在任何一份裡。工具等於誰都拿不到。被要求畫圖時，agent 做的正是這個工具存在前的事：
+用 `read_image` 自己看那張 png，然後把路徑打進答案裡。
+
+跟 #613 的 live-probe 回歸同一個形狀，所以護欄下在 **manifest 層**而不是再加一條 `build_tools` 斷言：
+
+- `src/workspace_app/apps/*/app.json` 五份全部補上 `show_file`
+- `tests/apps/test_show_file_granted.py`：**有 `read_file` 就必須有 `show_file`** ——
+  能讀檔的 agent 就該能把檔攤到使用者面前，兩個 grant 必須同進同出。
+  含一條「glob 有抓到東西」的自我防呆，否則參數化測試會空轉全綠。
 
 ### P6 — 驗收
 

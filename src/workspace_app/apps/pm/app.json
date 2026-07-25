@@ -18,7 +18,7 @@
   "agent": {
     "prompt_file": "prompts/system.md",
     "tools": [
-      "exec", "read_file", "write_file", "edit_file", "list_files", "exists",
+      "exec", "read_file", "show_file", "write_file", "edit_file", "list_files", "exists",
       "delete_file", "create_entity", "update_entity", "query_entity", "link_entity",
       "ask_knowledge_base", "lookup_user", "ask_user", "update_todos", "save_skill", "save_workflow"
     ],
