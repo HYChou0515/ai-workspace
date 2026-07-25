@@ -101,6 +101,44 @@
   margin: var(--space-4) 0;
   background: var(--paper-3);
 }
+
+/* chat-first App with no chats yet: a clean "start a new chat" empty state
+ * beside the (empty) rail, instead of the old item-grid dashboard. */
+.chat-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper);
+}
+.chat-empty__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-8);
+  text-align: center;
+  padding: var(--space-16);
+}
+.chat-empty__title {
+  font-size: var(--text-display-sm);
+  font-weight: 700;
+  color: var(--text-paper);
+}
+.chat-empty__hint {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+.chat-empty__cta {
+  padding: var(--space-8) var(--space-16);
+  border-radius: var(--radius-card);
+  background: var(--accent);
+  color: var(--text-dark);
+  text-decoration: none;
+  font-weight: 600;
+}
+.chat-empty__cta:hover {
+  background: var(--accent-h);
+}
 .chat-rail__list {
   flex: 1 1 auto;
   overflow-y: auto;

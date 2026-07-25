@@ -22,7 +22,7 @@ import { usePersistentBoolean } from "../hooks/usePersistentBoolean";
 import { useNavChrome } from "../hooks/useNavChrome";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
-import { LAST_CHAT_KEY } from "./Landing";
+import { rememberLastChat } from "../lib/lastChat";
 import { initialIdeCollapsed, WorkspaceShell } from "./investigation/WorkspaceShell";
 
 export function AppWorkspace() {
@@ -71,13 +71,10 @@ function WorkspaceLoaded({
   );
   const files = useFiles(id, { enabled: !ideCollapsed });
   const chatFirst = manifest.layout.primary_surface === "chat";
-  // Remember this as the last-opened chat so `/` can resume it next time.
+  // Remember this as the App's last-opened chat, so re-entering the App resumes
+  // it (per-App, not one global chat).
   useEffect(() => {
-    try {
-      localStorage.setItem(LAST_CHAT_KEY, `/a/${slug}/${encodeURIComponent(id)}`);
-    } catch {
-      /* privacy mode / disabled storage — resume just won't happen */
-    }
+    rememberLastChat(slug, id);
   }, [slug, id]);
   // A chat-first workspace hides the platform top bar (its overview lives in the
   // rail menu) so the chat surface is clean; restored when leaving.
