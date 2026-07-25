@@ -26,6 +26,7 @@ import { Popover } from "../../components/Popover";
 import { handleDragEnd, partitionColumns, UNSET_COL } from "./boardOps";
 import { EntityFileEditor } from "./EntityFileEditor";
 import { refOptionsForField, type RefOption } from "./refTraversal";
+import { selectColor } from "./selectColor";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
 import type { EntityViewProps } from "./types";
@@ -78,7 +79,7 @@ export function BoardView({ spec, type, entities, users, canWrite, refIndex, onP
     <DndContext sensors={sensors} onDragEnd={(e) => handleDragEnd(e, groupField, onPatch)}>
       <div className="ev-board scrollable">
         {known.map((value) => (
-          <DroppableColumn key={value} value={value} label={value} count={cardsIn(value).length}>
+          <DroppableColumn key={value} value={value} label={value} count={cardsIn(value).length} statusSpec={statusSpec}>
             {cardsIn(value).map(renderCard)}
           </DroppableColumn>
         ))}
@@ -105,18 +106,26 @@ function DroppableColumn({
   value,
   label,
   count,
+  statusSpec,
   children,
 }: {
   value: string;
   label: string;
   count: number;
+  statusSpec?: EntityFieldSpec;
   children: React.ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col-${value}` });
+  // A colour dot on the header — the GitHub-Projects column colour (#GH-projects
+  // B). The unset column stays neutral.
+  const dot = value === UNSET_COL ? undefined : selectColor(value, statusSpec).fg;
   return (
     <div ref={setNodeRef} className={`ev-board__col${isOver ? " ev-board__col--over" : ""}`}>
       <div className="ev-board__col-head" data-testid={`col-${value === UNSET_COL ? "unset" : value}`}>
-        <span className="ev-board__col-name">{label}</span>
+        <span className="ev-board__col-name">
+          {dot && <span className="ev-board__col-dot" style={{ background: dot }} aria-hidden />}
+          {label}
+        </span>
         <span className="ev-board__count">{count}</span>
       </div>
       {children}

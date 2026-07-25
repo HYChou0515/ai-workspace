@@ -381,6 +381,20 @@
 .ev-cell__empty {
   color: var(--text-paper-d2);
 }
+/* Coloured single-select chip (#GH-projects B) — status/label values. */
+.ev-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 1px var(--space-8);
+  border-radius: var(--radius-chip);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* inline cells: chrome only on interaction, so data-heavy tables stay calm. */
 .ev-table tbody .ev-field {
   height: 26px;
@@ -490,7 +504,18 @@
   gap: var(--space-8);
   padding: 0 var(--space-4);
 }
+.ev-board__col-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: var(--space-8);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
 .ev-board__col-name {
+  display: inline-flex;
+  align-items: center;
   font-family: var(--font-mono);
   font-size: var(--text-mono-caps);
   letter-spacing: var(--tracking-mono-caps);

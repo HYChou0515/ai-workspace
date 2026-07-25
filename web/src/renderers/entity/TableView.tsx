@@ -13,6 +13,7 @@ import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/enti
 import type { User } from "../../api/types";
 import { refOptions, type RefOption, traverseColumn } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
+import { selectColor } from "./selectColor";
 import { fieldText, roleOf } from "./shared";
 import { filterEntities, sortEntities, type SortDir } from "./tableOps";
 import type { EntityViewProps, ViewSpec } from "./types";
@@ -316,9 +317,17 @@ function EditableCell({
   }
 
   if (!editing) {
+    // A single-select value shows as a coloured chip (GitHub-Projects style); the
+    // cell still opens the select on click.
+    const face =
+      widget === "select" && display ? (
+        <SelectChip value={display} fieldSpec={fieldSpec} />
+      ) : (
+        display || <span className="ev-cell__empty">—</span>
+      );
     return (
       <button type="button" className="ev-cell" aria-label={`edit ${name}`} onClick={() => setEditing(true)}>
-        {display || <span className="ev-cell__empty">—</span>}
+        {face}
       </button>
     );
   }
@@ -364,6 +373,16 @@ function AutoFocus({ children }: { children: React.ReactNode }) {
   return (
     <span ref={ref} style={{ display: "contents" }}>
       {children}
+    </span>
+  );
+}
+
+/** A single-select value as a coloured chip (#GH-projects B). */
+export function SelectChip({ value, fieldSpec }: { value: string; fieldSpec?: EntityFieldSpec }) {
+  const c = selectColor(value, fieldSpec);
+  return (
+    <span className="ev-chip" style={{ background: c.bg, color: c.fg }}>
+      {value}
     </span>
   );
 }
