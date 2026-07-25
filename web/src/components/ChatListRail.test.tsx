@@ -43,6 +43,15 @@ describe("ChatListRail", () => {
     expect(screen.getByRole("link", { name: /New chat/i })).toHaveAttribute("href", "/a/rca/new");
   });
 
+  it("collapses to a thin bar and re-expands", () => {
+    renderRail();
+    expect(screen.getByText("Oven drift")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /collapse chats/i }));
+    expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /show chats/i }));
+    expect(screen.getByText("Oven drift")).toBeInTheDocument();
+  });
+
   it("tucks the platform overview behind a menu button (Apps + KB / Review / …)", () => {
     renderRail();
     // hidden until the button is pressed — keeps the chat surface clean

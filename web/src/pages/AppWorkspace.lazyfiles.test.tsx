@@ -74,4 +74,12 @@ describe("AppWorkspace — file loading is decoupled from opening the chat", () 
     renderWorkspace();
     await waitFor(() => expect(listFiles).toHaveBeenCalled());
   });
+
+  it("ignores a persisted expanded-IDE value — a new tab opens with the workspace tucked", async () => {
+    manifestRef.current = manifest("chat");
+    localStorage.setItem("layout:ide-collapsed:rca", "false"); // a prior session left it expanded
+    renderWorkspace();
+    expect(await screen.findByTestId("shell")).toBeInTheDocument();
+    expect(listFiles).not.toHaveBeenCalled(); // still collapsed → no file fetch, no warm
+  });
 });

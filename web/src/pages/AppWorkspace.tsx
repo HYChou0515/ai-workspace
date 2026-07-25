@@ -11,14 +11,13 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useRef } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
 import type { AppItem, AppManifest } from "../api/types";
 import { ChatListRail } from "../components/ChatListRail";
 import { useFiles } from "../hooks/useInvestigation";
-import { usePersistentBoolean } from "../hooks/usePersistentBoolean";
 import { useNavChrome } from "../hooks/useNavChrome";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
@@ -65,10 +64,10 @@ function WorkspaceLoaded({
   // The file IDE's collapse state is lifted here so file loading can follow it:
   // a chat-first item opens collapsed and never fetches files (no sandbox warm on
   // open); expanding the IDE enables the fetch. Persisted per-App.
-  const [ideCollapsed, setIdeCollapsed] = usePersistentBoolean(
-    `layout:ide-collapsed:${slug}`,
-    initialIdeCollapsed(manifest),
-  );
+  // #chat-private: the IDE-collapse state is NOT persisted — a new tab always
+  // opens with the workspace tucked (the manifest default), not whatever a
+  // previous session happened to leave expanded.
+  const [ideCollapsed, setIdeCollapsed] = useState<boolean>(initialIdeCollapsed(manifest));
   const files = useFiles(id, { enabled: !ideCollapsed });
   const chatFirst = manifest.layout.primary_surface === "chat";
   // Remember this as the App's last-opened chat, so re-entering the App resumes

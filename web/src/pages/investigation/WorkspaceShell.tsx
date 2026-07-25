@@ -54,7 +54,6 @@ import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
 import { useIsNarrow } from "../../hooks/useMediaQuery";
-import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
@@ -258,8 +257,9 @@ function ShellBody({
   // The first-time default comes from the App's `layout.primary_surface`
   // (chat-first Apps open collapsed; RCA's ide-first opens the workspace), then
   // the user's choice persists per-App so it survives reloads.
-  const [ideCollapsedInternal, setIdeCollapsedInternal] = usePersistentBoolean(
-    `layout:ide-collapsed:${manifest.slug}`,
+  // #chat-private: NOT persisted — a new tab opens with the workspace tucked
+  // (manifest default), not whatever the last session left expanded.
+  const [ideCollapsedInternal, setIdeCollapsedInternal] = useState<boolean>(
     initialIdeCollapsed(manifest),
   );
   // Controlled by AppWorkspace (which lifts this so file loading follows the IDE

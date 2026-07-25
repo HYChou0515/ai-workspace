@@ -23,6 +23,11 @@
   background: var(--paper-2);
   overflow: hidden;
 }
+.chat-rail--collapsed {
+  width: 40px;
+  align-items: center;
+  padding-top: var(--space-8);
+}
 .chat-rail__head {
   flex: 0 0 auto;
   display: flex;
@@ -30,6 +35,23 @@
   gap: var(--space-4);
   padding: var(--space-8);
   border-bottom: 1px solid var(--paper-3);
+}
+.chat-rail__collapse,
+.chat-rail__expand {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  color: var(--text-paper-d);
+  cursor: pointer;
+  line-height: 1;
+}
+.chat-rail__collapse:hover,
+.chat-rail__expand:hover {
+  background: var(--paper-3);
+  color: var(--text-paper);
 }
 .chat-rail__menu-btn {
   flex: 0 0 auto;

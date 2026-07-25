@@ -37,7 +37,25 @@ export function ChatListRail({
   const { items, isPending } = useAppItems(slug, resourceRoute);
   const apps = useApps();
   const [menuOpen, setMenuOpen] = useState(false);
+  // #chat-private #3: the rail can be collapsed to a thin bar (not persisted —
+  // like the IDE state, a new tab opens with it shown).
+  const [collapsed, setCollapsed] = useState(false);
   const closeMenu = () => setMenuOpen(false);
+
+  if (collapsed) {
+    return (
+      <nav className="chat-rail chat-rail--collapsed" aria-label="chats">
+        <button
+          type="button"
+          className="chat-rail__expand"
+          aria-label="Show chats"
+          onClick={() => setCollapsed(false)}
+        >
+          »
+        </button>
+      </nav>
+    );
+  }
 
   return (
     <nav className="chat-rail" aria-label="chats">
@@ -54,6 +72,14 @@ export function ChatListRail({
         <Link className="chat-rail__new" to={`/a/${slug}/new`}>
           + New chat
         </Link>
+        <button
+          type="button"
+          className="chat-rail__collapse"
+          aria-label="Collapse chats"
+          onClick={() => setCollapsed(true)}
+        >
+          «
+        </button>
       </div>
 
       {menuOpen && (
