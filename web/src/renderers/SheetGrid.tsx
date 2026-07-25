@@ -197,16 +197,30 @@ export function SheetGrid({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {cellInput(0, 0, c, value)}
-                  <button
-                    type="button"
-                    className="sheet-sort"
-                    aria-label={`Sort by ${value || `column ${c + 1}`}`}
-                    onClick={() => cycleSort(c)}
-                    style={{ border: "none", background: "transparent", color: "inherit", cursor: "pointer" }}
-                  >
-                    {sort?.column === c ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}
-                  </button>
+                  {/* A flex row, NOT an input followed by a button: the cell
+                      input is width:100%, so in a real browser it paints over
+                      the sort control and swallows the click. happy-dom has no
+                      layout and cannot catch that, so this is verified in a
+                      browser (see docs/plan-ai-sheet.md). */}
+                  <div style={{ display: "flex", alignItems: "center" }}>
+                    <span style={{ flex: 1, minWidth: 0 }}>{cellInput(0, 0, c, value)}</span>
+                    <button
+                      type="button"
+                      className="sheet-sort"
+                      aria-label={`Sort by ${value || `column ${c + 1}`}`}
+                      onClick={() => cycleSort(c)}
+                      style={{
+                        flex: "none",
+                        border: "none",
+                        background: "transparent",
+                        color: "inherit",
+                        cursor: "pointer",
+                        padding: "0 4px",
+                      }}
+                    >
+                      {sort?.column === c ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}
+                    </button>
+                  </div>
                 </th>
               ))}
             </tr>

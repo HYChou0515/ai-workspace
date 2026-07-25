@@ -117,7 +117,18 @@ existing `file_changed` broadcast (`useEntityLiveSync` is the same shape).
 - Component tests cover keyboard navigation, the read-only gate and each row of
   the degradation table.
 - Layout-dependent behaviour (virtualisation, frozen header) is not measurable
-  in happy-dom and must be checked in a real browser.
+  in happy-dom and must be checked in a real browser. Measured in headless
+  Chromium against a 10,000-row file: first paint 64 ms; 102 cell inputs in the
+  DOM at the top and 117 after scrolling 60,000 px (not 30,000); the header stays
+  at y≈35 throughout; the window follows the scroll (row 2497 at scrollTop
+  60,000); a cell 2,500 rows down edits normally; sorting keeps row 1 pinned and
+  offers "Apply this order to the file".
+
+  That pass is not optional decoration — it caught a defect no unit test could:
+  the header's sort control was **unclickable**, because the cell input is
+  `width: 100%` and painted over it, so a real click landed on the input. The
+  component test passed because Testing Library dispatches events at the element
+  without hit-testing. The header is now a flex row for exactly this reason.
 - Before delivery: `pnpm run typecheck`, whole-project `uv run ty check`,
   `ruff check` + `ruff format --check`. The full suite and the 100% coverage
   gate run in CI.
