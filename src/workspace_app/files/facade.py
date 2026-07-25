@@ -89,11 +89,8 @@ def abs_path(path: str) -> str:
     the agent can write whichever feels natural in prose and the
     underlying store stays consistent.
 
-    The public counterpart of ``rel_path``: this is the form every NON-model
-    surface wants (the store key, a browser fetch URL, the file-tree opener),
-    while ``rel_path`` is the one form a model may be taught. A tool that
-    accepts a path from the agent and hands it to the FE crosses between the
-    two, so it needs both by name."""
+    ``rel_path``'s counterpart: this is the form every non-model surface wants
+    (the store key, a fetch URL, the file-tree opener)."""
     p = path.removeprefix("./")
     return p if p.startswith("/") else "/" + p
 

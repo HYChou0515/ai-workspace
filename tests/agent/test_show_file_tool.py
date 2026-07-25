@@ -1,17 +1,8 @@
-"""`show_file` — the agent's "put this workspace file in front of the user"
-capability.
+"""`show_file` — the agent puts a workspace file in front of the user.
 
-Before this tool the only way a produced file reached the chat was the FE
-regex-sniffing every tool's output text for a `"images": [...]`-shaped JSON
-array (`web/src/renderers/toolImages.ts`). That never fired for the common
-case — the agent writes a python script, `exec`s it, and the stdout just says
-"saved to /out/chart.png" — so the user was told a path and had to go dig the
-file out of the file tree themselves.
-
-The tool DECLARES what to render, in one structured place the FE can trust:
-its result is a `shown_files` list. Declaring is deliberately separate from
-succeeding — a path that doesn't resolve is reported as an error and declares
-NOTHING, so the FE can never be handed a card it will render as a broken image.
+The result is a `shown_files` declaration the FE renders. Declaring is separate
+from succeeding: an unresolvable path is an error that declares nothing, so the
+FE is never handed a card it would draw as a broken image.
 """
 
 from __future__ import annotations
@@ -48,9 +39,8 @@ def _declared(out: str) -> list[dict]:
 
 
 async def test_show_file_declares_an_image_for_the_chat_to_render():
-    """The happy path: the file resolves, so the tool declares it with everything
-    the FE needs to render without a second round-trip — the path to fetch it by,
-    the mime that decides inline-image vs card, its size, and the agent's caption."""
+    """The declaration carries everything the FE needs to render without a second
+    round-trip: path, mime, size, caption."""
     ctx, files = await _ctx()
     await files.write("inv-1", "/out/revenue.png", _PNG)
 
@@ -67,9 +57,8 @@ async def test_show_file_declares_an_image_for_the_chat_to_render():
 
 
 async def test_show_file_takes_any_file_not_only_images():
-    """The capability is "show a workspace FILE", not "show an image" — a report
-    the agent produced is exactly as showable as a chart. The mime rides along so
-    the FE renders a pdf as a card-with-opener instead of an <img> that can't load."""
+    """The capability is files, not images. The mime rides along so a pdf renders
+    as a card-with-opener rather than an `<img>` that can't load."""
     ctx, files = await _ctx()
     await files.write("inv-1", "/out/Q3-report.pdf", _PDF)
 
@@ -82,10 +71,8 @@ async def test_show_file_takes_any_file_not_only_images():
 
 
 async def test_show_file_normalises_the_path_the_frontend_will_fetch():
-    """The agent's path dialect is RELATIVE (#549) but the FE's openFile/fileUrl
-    seams take workspace-absolute paths. Normalising here means neither side has
-    to guess: whatever dialect the agent used, the declared path is the one the
-    FE can hand straight to those seams."""
+    """The agent writes relative paths (#549); the FE's openFile/fileUrl seams take
+    absolute ones. Whichever dialect arrives, the declared path is the FE's."""
     ctx, files = await _ctx()
     await files.write("inv-1", "/notes/diagram.svg", b"<svg xmlns='http://www.w3.org/2000/svg'/>")
 
@@ -95,10 +82,8 @@ async def test_show_file_normalises_the_path_the_frontend_will_fetch():
 
 
 async def test_show_file_declares_nothing_when_the_file_is_missing():
-    """A path that doesn't resolve must not reach the FE as a card — that is
-    precisely the broken-image failure the old regex sniffer had, since it
-    matched path-shaped TEXT and never checked whether the file was there.
-    The agent gets a plain error it can act on instead."""
+    """An unresolvable path must not reach the FE as a card. The agent gets a
+    plain error it can act on instead."""
     ctx, _ = await _ctx()
 
     out = await show_file_impl(ctx, "/out/never-written.png")
@@ -109,8 +94,7 @@ async def test_show_file_declares_nothing_when_the_file_is_missing():
 
 
 async def test_show_file_omits_an_absent_caption():
-    """`caption` is the agent's one-line "what am I looking at". Absent means
-    absent — the FE shows the filename alone rather than an empty caption line."""
+    """Absent means absent — the FE shows the filename alone, not an empty line."""
     ctx, files = await _ctx()
     await files.write("inv-1", "/a.png", _PNG)
 
@@ -120,10 +104,8 @@ async def test_show_file_omits_an_absent_caption():
 
 
 async def test_show_file_tells_the_agent_the_user_can_now_see_it():
-    """The result doubles as the model's feedback. Without a plain statement that
-    the file is now VISIBLE, a model that just called the tool goes on to describe
-    the file in prose or re-`read_file`s it to paraphrase — the exact busywork the
-    tool exists to remove."""
+    """The result doubles as the model's feedback: told the file is visible, a
+    model stops following up by narrating its contents."""
     ctx, files = await _ctx()
     await files.write("inv-1", "/a.png", _PNG)
 
@@ -135,9 +117,8 @@ async def test_show_file_tells_the_agent_the_user_can_now_see_it():
 
 
 async def test_show_file_exercises_the_read_content_verb():
-    """Showing a file to the user is a READ of that file, so it goes through the
-    same permission funnel as read_file — a speaker who may not read the item's
-    content cannot use the agent as a way to look at it anyway (#309)."""
+    """Showing a file is a read of it, so it rides the same funnel as read_file —
+    the agent is not a way around the speaker's own grants (#309)."""
     from workspace_app.agent.tool_authz import TOOL_VERBS
 
     assert TOOL_VERBS["show_file"] == "read_content"

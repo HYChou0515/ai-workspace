@@ -211,15 +211,9 @@ async def read_image_impl(
     return _truncate_middle(out, ctx.context.read_file_max_chars)
 
 
-#: The key a tool result uses to declare "render these workspace files in the
-#: chat". ONE channel, so the FE has exactly one thing to look for and nothing
-#: to guess: `show_file` fills it directly, and the provisioned plotting tools
-#: get their own already-structured output normalised into it (see
-#: `tooling.shown_files`). It replaced a FE regex that scanned EVERY tool's
-#: output text for a `"images": [...]`-shaped array — which fired on tools that
-#: had nothing to do with charts, never fired for the ordinary
-#: write-a-script-then-exec-it path, and could not check that the path it
-#: matched named a file that exists.
+#: The one channel a tool result uses to declare "render these workspace files in
+#: the chat". `show_file` fills it; the provisioned plotting tools get their own
+#: output normalised into it (`tooling.shown_files`).
 SHOWN_FILES_KEY = "shown_files"
 
 
@@ -228,21 +222,17 @@ async def show_file_impl(
     path: str,
     caption: str | None = None,
 ) -> str:
-    """Show a file from the workspace to the user, in the chat, right now.
+    """Show a file from the workspace to the user, in the chat.
 
-    Use this whenever you have produced or found a file the user will want to
-    look at — a chart you plotted, a report you wrote, a spreadsheet, a PDF, a
-    screenshot. An image appears in the conversation directly; any other file
-    appears as a card the user can open. Naming a path in your answer does NOT
-    show the file; only this tool does.
+    Use this for any file the user will want to look at — a chart you plotted, a
+    report you wrote, a spreadsheet, a PDF, a screenshot. An image appears in the
+    conversation directly; any other file appears as a card the user can open.
 
     `path` is the workspace path to the file. `caption` is a short line saying
     what the user is looking at ("monthly revenue trend") — include it whenever
     the filename alone would not tell them.
 
-    Call it once per file, as soon as the file exists, then carry on. There is no
-    need to describe the contents of an image you have just shown: the user is
-    looking at it.
+    Call it once per file, as soon as the file exists, then carry on.
     """
     if (denied := authorize_tool(ctx.context, "read_content")) is not None:
         return denied
@@ -250,20 +240,17 @@ async def show_file_impl(
     try:
         data = await fs.read(inv, path)
     except FileNotFound:
-        # Declare NOTHING on failure. The FE renders whatever is declared, so a
-        # path that doesn't resolve must not travel — that is how the sniffer it
-        # replaces produced broken images (it matched text, never a real file).
+        # Declare nothing on failure: the FE renders whatever is declared, so an
+        # unresolvable path must not travel.
         return (
             f"error: file not found: {rel_path(path)} — nothing was shown. "
             f"Check the path (list_files) and call show_file again."
         )
     shown: dict[str, Any] = {
-        # The FE's `fileUrl`/`openFile` seams take workspace-ABSOLUTE paths while
-        # the agent writes relative ones (#549); resolving the dialect here is why
-        # neither side has to.
+        # Absolute: the FE's fileUrl/openFile seams take that form, the agent
+        # writes relative (#549).
         "path": abs_path(path),
-        # Sniffed, not derived from the extension: the mime decides inline-image
-        # vs card, and a `.png` that isn't an image would render as a broken one.
+        # Sniffed, not from the extension — it decides inline-image vs card.
         "mime": magic.from_buffer(data, mime=True),
         "size": len(data),
     }
@@ -272,14 +259,9 @@ async def show_file_impl(
     return json.dumps(
         {
             SHOWN_FILES_KEY: [shown],
-            # The model's own feedback. Without stating that the file is now
-            # VISIBLE, a model follows a successful call by narrating the file's
-            # contents or re-reading it to paraphrase — the busywork this tool
-            # exists to remove.
-            "note": (
-                f"{rel_path(path)} is now displayed in the chat — the user can see it. "
-                f"Do not describe it further unless they ask."
-            ),
+            # Tells the model the file is now visible, so it doesn't follow up by
+            # narrating the contents.
+            "note": f"{rel_path(path)} is now displayed in the chat — the user can see it.",
         },
         ensure_ascii=False,
     )
@@ -2189,11 +2171,6 @@ _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
     "read_image": read_image_impl,
-    # The agent's "put this in front of the user" capability. Deliberately a TOOL
-    # and not a skill: a skill is per-message opt-in (`chat_send.apply_skills`), so
-    # as a skill this would only work on turns the user remembered to switch it on,
-    # and a skill is instructions — it has no execution moment at which the path
-    # can be checked against the real workspace.
     "show_file": show_file_impl,
     "make_deck": make_deck_impl,
     "write_file": write_file_impl,
@@ -2267,10 +2244,8 @@ _WORKSPACE_TOOLS = [
     "list_files",
     "exists",
     "delete_file",
-    # Default-on, like `update_todos`: an ability the user has to enable per turn
-    # is not an ability. Bundled presets carry `allowed_tools: null` and resolve
-    # THIS list, so anything omitted here never reaches them (#613's live-probe
-    # regression) however the app.json ceiling is written.
+    # Default-on: bundled presets carry `allowed_tools: null` and resolve THIS
+    # list, so a tool omitted here never reaches them (#613).
     "show_file",
     "ask_knowledge_base",
     "request_wiki_update",
