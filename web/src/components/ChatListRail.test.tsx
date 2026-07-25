@@ -69,10 +69,16 @@ describe("ChatListRail", () => {
     expect(chatActions.rename).toHaveBeenCalledWith("rca-investigation/1", "Oven drift RCA");
   });
 
-  it("tags chats shared with me and hides owner-only actions on them", () => {
+  it("separates my chats from ones shared with me into tabs", () => {
     renderRail();
+    // default "My chats" tab: my chats show, shared-with-me hidden
+    expect(screen.getByText("Oven drift")).toBeInTheDocument();
+    expect(screen.queryByText("From a teammate")).not.toBeInTheDocument();
+    // "Shared with me" tab: the teammate's chat, with no owner-only ⋯ actions
+    fireEvent.click(screen.getByRole("tab", { name: /Shared with me/i }));
+    expect(screen.getByText("From a teammate")).toBeInTheDocument();
+    expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
     const row = screen.getByText("From a teammate").closest(".chat-rail__row") as HTMLElement;
-    expect(within(row).getByText("shared")).toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: /Chat options/i })).not.toBeInTheDocument();
   });
 

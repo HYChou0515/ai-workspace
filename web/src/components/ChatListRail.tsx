@@ -40,12 +40,18 @@ export function ChatListRail({
 }) {
   const { items, isPending } = useAppItems(slug, resourceRoute);
   const apps = useApps();
+  const me = useCurrentUser();
   const createChat = useCreateChat(slug);
   const actions = useChatActions(slug, resourceRoute);
   const [menuOpen, setMenuOpen] = useState(false);
   // #chat-private #3: the rail can be collapsed to a thin bar (not persisted —
   // like the IDE state, a new tab opens with it shown).
   const [collapsed, setCollapsed] = useState(false);
+  // #chat-private: split my chats from ones shared with me (owner !== me).
+  const [tab, setTab] = useState<"mine" | "shared">("mine");
+  const mine = items.filter((it) => it.owner === me);
+  const shared = items.filter((it) => it.owner !== me);
+  const shown = tab === "mine" ? mine : shared;
   const closeMenu = () => setMenuOpen(false);
 
   if (collapsed) {
@@ -125,13 +131,38 @@ export function ChatListRail({
         </>
       )}
 
+      <div className="chat-rail__tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "mine"}
+          className="chat-rail__tab"
+          data-active={tab === "mine" ? "true" : undefined}
+          onClick={() => setTab("mine")}
+        >
+          My chats
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "shared"}
+          className="chat-rail__tab"
+          data-active={tab === "shared" ? "true" : undefined}
+          onClick={() => setTab("shared")}
+        >
+          Shared with me
+        </button>
+      </div>
+
       <div className="chat-rail__list">
         {isPending && items.length === 0 ? (
           <div className="chat-rail__empty">Loading…</div>
-        ) : items.length === 0 ? (
-          <div className="chat-rail__empty">No chats yet</div>
+        ) : shown.length === 0 ? (
+          <div className="chat-rail__empty">
+            {tab === "mine" ? "No chats yet" : "Nothing shared with you yet"}
+          </div>
         ) : (
-          items.map((it: AppItem) => (
+          shown.map((it: AppItem) => (
             <ChatRailItem
               key={it.resource_id}
               slug={slug}
@@ -202,7 +233,6 @@ function ChatRailItem({
         title={title}
       >
         <span className="chat-rail__item-title">{title}</span>
-        {shared && <span className="chat-rail__shared">shared</span>}
       </Link>
       {/* Rename / Share / Delete only for chats I own; a shared-with-me chat just
           shows the "shared" tag (the backend would 403 those actions anyway). */}
