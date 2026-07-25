@@ -16,6 +16,7 @@
 | [plan-topic-hub.md](plan-topic-hub.md) | Topic Hub App：跨 collection 探究工作區、檔案記憶、多 chat |
 | [plan-collab-workspace.md](plan-collab-workspace.md) | #43 多人協作 workspace（檔案 + chat，無 notebook） |
 | [plan-permissions.md](plan-permissions.md) · [plan-permissions-pr2-handoff.md](plan-permissions-pr2-handoff.md) | 權限模型設計與分階段交接 |
+| [plan-ai-sheet.md](plan-ai-sheet.md) | `*.ai.csv` 試算表編輯：格子直接打字、鍵盤導覽、增刪列欄、虛擬化；單一檔案零 sidecar，後端零知識；附「為何不用 xlsx」實測 |
 
 ## 知識庫（KB）與檢索
 
