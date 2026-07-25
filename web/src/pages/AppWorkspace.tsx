@@ -11,7 +11,7 @@
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useRef } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 
 import { qk } from "../api/queryKeys";
@@ -19,8 +19,10 @@ import type { AppItem, AppManifest } from "../api/types";
 import { ChatListRail } from "../components/ChatListRail";
 import { useFiles } from "../hooks/useInvestigation";
 import { usePersistentBoolean } from "../hooks/usePersistentBoolean";
+import { useNavChrome } from "../hooks/useNavChrome";
 import { useAppItem, useAppManifest } from "../hooks/useResources";
 import { WorkspaceSlugProvider } from "../hooks/useWorkspaceSlug";
+import { LAST_CHAT_KEY } from "./Landing";
 import { initialIdeCollapsed, WorkspaceShell } from "./investigation/WorkspaceShell";
 
 export function AppWorkspace() {
@@ -68,6 +70,22 @@ function WorkspaceLoaded({
     initialIdeCollapsed(manifest),
   );
   const files = useFiles(id, { enabled: !ideCollapsed });
+  const chatFirst = manifest.layout.primary_surface === "chat";
+  // Remember this as the last-opened chat so `/` can resume it next time.
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAST_CHAT_KEY, `/a/${slug}/${encodeURIComponent(id)}`);
+    } catch {
+      /* privacy mode / disabled storage — resume just won't happen */
+    }
+  }, [slug, id]);
+  // A chat-first workspace hides the platform top bar (its overview lives in the
+  // rail menu) so the chat surface is clean; restored when leaving.
+  const { setHidden } = useNavChrome();
+  useEffect(() => {
+    setHidden(chatFirst);
+    return () => setHidden(false);
+  }, [chatFirst, setHidden]);
   // Only the FIRST paint waits on files, so an IDE-first item's editor still
   // opens its default tabs on entry. Once mounted, a later fetch (e.g. expanding
   // the IDE on a chat-first item) must not unmount the shell and flash "Loading…".
@@ -105,7 +123,7 @@ function WorkspaceLoaded({
   // Chat-first Apps get the private-chat framing: a left rail of the user's own
   // chats beside the chat itself (manifest-gated, so it stays App-agnostic).
   // Other surfaces (IDE-first / views-first) keep the plain workspace.
-  if (manifest.layout.primary_surface !== "chat") {
+  if (!chatFirst) {
     return shell;
   }
   return (

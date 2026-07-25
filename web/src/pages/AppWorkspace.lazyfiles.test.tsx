@@ -25,6 +25,7 @@ vi.mock("../hooks/useResources", () => ({
   useAppManifest: () => manifestRef.current,
   useAppItem: () => ({ resource_id: "rca-investigation/1", title: "Oven drift", owner: "u" }),
   useAppItems: () => ({ items: [], isPending: false }),
+  useApps: () => [],
 }));
 vi.mock("./investigation/WorkspaceShell", () => ({
   WorkspaceShell: () => <div data-testid="shell">shell</div>,

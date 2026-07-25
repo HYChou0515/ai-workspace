@@ -14,7 +14,7 @@ import { kbRoutes } from "./pages/kb/kbRoutes";
 import { GraphBrowsePage } from "./pages/kb/GraphBrowsePage";
 import { GraphEntityPage } from "./pages/kb/GraphEntityPage";
 import { ReviewPage } from "./pages/kb/ReviewPage";
-import { Launcher } from "./pages/Launcher";
+import { Landing } from "./pages/Landing";
 import { ReleasesPage } from "./pages/ReleasesPage";
 
 /**
@@ -34,7 +34,7 @@ export function AppRoutes() {
   return (
     <Routes>
       <Route element={<GlobalLayout />}>
-        <Route path="/" element={<Launcher />} />
+        <Route path="/" element={<Landing />} />
         {/* `new` is a CHILD of the dashboard so the create form renders as a modal
             over the live dashboard (design-handoff), not as a standalone page. */}
         <Route path="/a/:slug" element={<AppDashboard />}>

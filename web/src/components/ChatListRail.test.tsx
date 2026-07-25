@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -12,21 +12,43 @@ const items = [
 ];
 vi.mock("../hooks/useResources", () => ({
   useAppItems: () => ({ items, isPending: false }),
+  useApps: () => [
+    { slug: "rca", title: "RCA" },
+    { slug: "pm", title: "Product" },
+  ],
 }));
 
 afterEach(cleanup);
 
+function renderRail() {
+  return render(
+    <MemoryRouter>
+      <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId="rca-investigation/1" />
+    </MemoryRouter>,
+  );
+}
+
 describe("ChatListRail", () => {
   it("lists the app's chats, links each to its item (slash id encoded), marks the current one", () => {
-    render(
-      <MemoryRouter>
-        <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId="rca-investigation/1" />
-      </MemoryRouter>,
-    );
+    renderRail();
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
     const other = screen.getByRole("link", { name: /Sensor noise/ });
     expect(other).toHaveAttribute("href", "/a/rca/rca-investigation%2F2");
     const current = screen.getByRole("link", { name: /Oven drift/ });
     expect(current).toHaveAttribute("data-active", "true");
+  });
+
+  it("offers a New chat action that opens this App's create flow", () => {
+    renderRail();
+    expect(screen.getByRole("link", { name: /New chat/i })).toHaveAttribute("href", "/a/rca/new");
+  });
+
+  it("tucks the platform overview behind a menu button (Apps + KB / Review / …)", () => {
+    renderRail();
+    // hidden until the button is pressed — keeps the chat surface clean
+    expect(screen.queryByRole("menuitem", { name: "Knowledge base" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /platform menu/i }));
+    expect(screen.getByRole("menuitem", { name: "Knowledge base" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Product" })).toHaveAttribute("href", "/a/pm");
   });
 });

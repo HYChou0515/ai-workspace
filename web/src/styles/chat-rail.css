@@ -13,6 +13,7 @@
   height: 100%;
 }
 .chat-rail {
+  position: relative;
   flex: 0 0 auto;
   width: 240px;
   height: 100%;
@@ -21,6 +22,84 @@
   border-right: 1px solid var(--paper-3);
   background: var(--paper-2);
   overflow: hidden;
+}
+.chat-rail__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-8);
+  border-bottom: 1px solid var(--paper-3);
+}
+.chat-rail__menu-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  color: var(--text-paper);
+  cursor: pointer;
+  line-height: 1;
+}
+.chat-rail__menu-btn:hover {
+  background: var(--paper-3);
+}
+.chat-rail__new {
+  flex: 1 1 auto;
+  text-align: center;
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-card);
+  background: var(--accent);
+  color: var(--text-dark);
+  text-decoration: none;
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.chat-rail__new:hover {
+  background: var(--accent-h);
+}
+.chat-rail__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+.chat-rail__menu {
+  position: absolute;
+  top: 44px;
+  left: var(--space-8);
+  z-index: 41;
+  min-width: 200px;
+  padding: var(--space-4);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+}
+.chat-rail__menu-label {
+  padding: var(--space-4) var(--space-8);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-mono-caps);
+  color: var(--text-paper-d);
+}
+.chat-rail__menu-item {
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-card);
+  color: var(--text-paper);
+  text-decoration: none;
+  font-size: var(--text-body-sm);
+}
+.chat-rail__menu-item:hover {
+  background: var(--paper-2);
+}
+.chat-rail__menu-sep {
+  height: 1px;
+  margin: var(--space-4) 0;
+  background: var(--paper-3);
 }
 .chat-rail__list {
   flex: 1 1 auto;
