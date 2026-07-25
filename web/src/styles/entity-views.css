@@ -367,11 +367,14 @@
 .ev-table tbody tr:last-child td {
   border-bottom: 0;
 }
-/* zebra + hover — the grid reads as rows, not a mesh of borders. */
-.ev-table tbody tr:nth-child(even) td {
+/* zebra + hover — the grid reads as rows, not a mesh of borders. Group-header
+ * rows (#GH-projects A) are excluded so their own background isn't overridden by
+ * the zebra/hover rules (which otherwise win on specificity + position — a group
+ * header at an even row would render lighter than one at an odd row). */
+.ev-table tbody tr:not(.ev-table__group):nth-child(even) td {
   background: color-mix(in srgb, var(--paper) 45%, transparent);
 }
-.ev-table tbody tr:hover td {
+.ev-table tbody tr:not(.ev-table__group):hover td {
   background: var(--paper-2);
 }
 .ev-table__num {

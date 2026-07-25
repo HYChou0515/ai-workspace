@@ -34,8 +34,10 @@ describe("entity-views.css", () => {
   });
 
   it("keeps the table calm — zebra + hover, chrome-on-interaction cells", () => {
-    expect(CSS).toMatch(/\.ev-table tbody tr:nth-child\(even\)/);
-    expect(CSS).toMatch(/\.ev-table tbody tr:hover/);
+    // zebra + hover (scoped with :not(.ev-table__group) so group headers keep
+    // their own background — see #GH-projects A).
+    expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:nth-child\(even\)/);
+    expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:hover/);
     // inline cell fields reveal their border only on hover/focus.
     expect(CSS).toMatch(/\.ev-table tbody \.ev-field\s*\{[^}]*border-color:\s*transparent/);
   });
