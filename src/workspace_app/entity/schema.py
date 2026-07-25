@@ -42,6 +42,10 @@ class FieldSpec(msgspec.Struct, frozen=True):
     required: bool = False
     values: list[str] | None = None
     """Closed vocabulary for a `status` role — a value outside it lints (§C7)."""
+    colors: dict[str, str] | None = None
+    """`status`/select → a `{value: hue}` map pinning each value to a semantic
+    colour for the renderer's chip (#GH-projects B); a hue name (`green`/`blue`/
+    `amber`/`red`/…) or a palette slot. Absent → the FE auto-hashes a stable hue."""
     to: str | None = None
     """`ref` → the target entity type (`milestone`). Traversal is to-one only."""
     from_: str | None = None

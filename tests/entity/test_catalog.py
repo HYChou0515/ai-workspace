@@ -133,3 +133,31 @@ async def test_loads_relational_role_config() -> None:
     done = schema.field("done")
     assert done is not None and done.where == {"status": "done"}
     assert diagnostics == []
+
+
+async def test_loads_status_colors_map() -> None:
+    """A `status`/`select` field may pin each value to a semantic hue via a
+    `colors:` map (#GH-projects B) — the renderer's coloured chip reads it;
+    a field without one stays None (auto-hashed)."""
+    fs = MemoryFileStore()
+    await fs.write(
+        "ws1",
+        "/.entity/issue/schema.yaml",
+        b"path: issues\n"
+        b"fields:\n"
+        b"  title: { role: text }\n"
+        b"  status:\n"
+        b"    role: status\n"
+        b"    values: [open, done]\n"
+        b"    colors: { open: blue, done: green }\n",
+    )
+
+    catalog, diagnostics = await discover_catalog(fs, "ws1")
+
+    schema = catalog.get("issue").schema
+    status = schema.field("status")
+    assert status is not None and status.colors == {"open": "blue", "done": "green"}
+    # a field with no colors map stays None (never {} — the FE distinguishes them).
+    title = schema.field("title")
+    assert title is not None and title.colors is None
+    assert diagnostics == []

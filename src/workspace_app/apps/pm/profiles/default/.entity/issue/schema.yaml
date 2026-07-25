@@ -1,7 +1,10 @@
 path: issues
 fields:
   title: { role: text, required: true }
-  status: { role: status, values: [open, in_progress, blocked, done] }
+  status:
+    role: status
+    values: [open, in_progress, blocked, done]
+    colors: { open: blue, in_progress: amber, blocked: red, done: green }
   assignee: { role: actor }
   due: { role: date }
   span: { role: daterange }

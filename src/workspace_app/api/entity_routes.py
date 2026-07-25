@@ -143,6 +143,7 @@ def register_entity_routes(
                             role=f.role.value,
                             required=f.required,
                             values=f.values,
+                            colors=f.colors,
                             to=f.to,
                             **{"from": f.from_},
                             over=f.over,

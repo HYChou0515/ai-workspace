@@ -47,6 +47,27 @@ def test_entity_crud_end_to_end(harness: Harness) -> None:
     assert updated.json()["fields"]["status"] == "done"
 
 
+def test_catalog_surfaces_status_colors(harness: Harness) -> None:
+    """A `status` field's `colors:` map reaches the FE catalog so the renderer
+    can paint semantic chips (#GH-projects B); no map → null, not {}."""
+    schema = (
+        b"path: issues\n"
+        b"fields:\n"
+        b"  title: { role: text, required: true }\n"
+        b"  status:\n"
+        b"    role: status\n"
+        b"    values: [open, done]\n"
+        b"    colors: { open: blue, done: green }\n"
+    )
+    ok = harness.client.put(harness.wpath("/files/.entity/issue/schema.yaml"), content=schema)
+    assert ok.status_code in (200, 201, 204), ok.text
+
+    fields = harness.client.get(harness.wpath("/entities")).json()["types"][0]["fields"]
+    by_name = {f["name"]: f for f in fields}
+    assert by_name["status"]["colors"] == {"open": "blue", "done": "green"}
+    assert by_name["title"]["colors"] is None
+
+
 def test_update_can_replace_the_markdown_body(harness: Harness) -> None:
     """§C2 — the single-entity file editor saves the frontmatter patch AND the
     markdown body through the one update write path (not a raw file write). An
