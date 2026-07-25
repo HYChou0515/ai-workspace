@@ -348,7 +348,7 @@ function EditableCell({
   const widget = fieldSpec ? widgetForRole(fieldSpec.role) : "readonly";
   const [editing, setEditing] = useState(false);
   const name = fieldSpec?.name ?? column;
-  const display = cellDisplay(fieldSpec, value, users);
+  const display = cellDisplay(fieldSpec, value, users, opts);
 
   // Compute-on-read (backref/rollup) or a read-only member: text, never editable.
   if (widget === "readonly" || disabled) {
@@ -466,12 +466,26 @@ export function SelectChip({ value, fieldSpec }: { value: string; fieldSpec?: En
   );
 }
 
-/** The at-rest text for a value cell — the resolved actor name / `N%` progress /
- * else the generic field text. */
-function cellDisplay(fieldSpec: EntityFieldSpec | undefined, value: unknown, users?: User[]): string {
+/** The at-rest text for a value cell — the resolved actor name / referenced
+ * record's title / `N%` progress / else the generic field text. A bare `ref`
+ * column (e.g. `milestone`, not the `milestone.title` traversal) must still read
+ * as the target's title, not the raw id — #1. */
+function cellDisplay(
+  fieldSpec: EntityFieldSpec | undefined,
+  value: unknown,
+  users?: User[],
+  refOpts?: RefOption[],
+): string {
   if (fieldSpec?.role === "actor") {
     const id = fieldText(value);
     return id ? (users?.find((u) => u.id === id)?.name ?? id) : "";
+  }
+  if (fieldSpec?.role === "ref") {
+    const raw = fieldText(value);
+    if (!raw) return "";
+    const opt = refOpts?.find((o) => String(o.number) === raw);
+    // resolved → the referenced title; dangling → "#N" (never the bare number).
+    return opt ? opt.label : `#${raw}`;
   }
   if (fieldSpec?.role === "progress") {
     if (value == null || value === "") return "";

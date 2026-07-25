@@ -371,6 +371,38 @@ describe("ref-traversal in the table (§A4)", () => {
     expect(screen.getByText("v1.0")).toBeInTheDocument();
   });
 
+  it("shows a plain milestone ref column as the referenced title at rest, not the raw number (#1)", () => {
+    const index = buildRefIndex({ milestone: [ms(5, { title: "v1.0" })] });
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["title", "milestone"] }}
+        type={refType}
+        entities={[issue(1, { title: "A", milestone: 5 })]}
+        refIndex={index}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    // the at-rest ref cell resolves 5 → "v1.0"; it must never show the bare id.
+    expect(screen.getByLabelText("edit milestone")).toHaveTextContent("v1.0");
+    expect(screen.getByLabelText("edit milestone")).not.toHaveTextContent("5");
+  });
+
+  it("degrades a plain dangling ref column to #N instead of a bare number", () => {
+    const index = buildRefIndex({ milestone: [] });
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["milestone"] }}
+        type={refType}
+        entities={[issue(1, { milestone: 9 })]}
+        refIndex={index}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("edit milestone")).toHaveTextContent("#9");
+  });
+
   it("degrades a dangling ref column to a marker instead of crashing (§D)", () => {
     const index = buildRefIndex({ milestone: [] });
     render(
@@ -415,6 +447,8 @@ describe("BoardView", () => {
     expect(screen.getByTestId("col-in_progress")).toBeInTheDocument();
     expect(screen.getByTestId("col-done")).toBeInTheDocument();
     expect(screen.getByText("A")).toBeInTheDocument();
+    // status shows as a chip at rest; click it to reveal the accessible select.
+    fireEvent.click(screen.getByRole("button", { name: "edit status" }));
     fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
     expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
   });
