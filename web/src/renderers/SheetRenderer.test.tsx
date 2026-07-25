@@ -89,6 +89,15 @@ describe("SheetRenderer", () => {
     expect(screen.getByLabelText("R2C1")).toHaveFocus();
   });
 
+  it("writes a structural edit back to the file, keeping its CRLF line endings", async () => {
+    const { store, path } = await renderSheet("wafer,qty\r\nW01,120\r\n");
+
+    await userEvent.click(await screen.findByLabelText("R2C1"));
+    await userEvent.click(screen.getByRole("button", { name: "Insert row below" }));
+
+    expect(store.snapshot(path).text).toBe("wafer,qty\r\nW01,120\r\n,\r\n");
+  });
+
   it("discards an edit on Esc, leaving the file clean", async () => {
     const { store, path } = await renderSheet("wafer,qty\nW01,120\n");
 

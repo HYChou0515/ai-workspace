@@ -52,12 +52,9 @@ export function SheetRenderer({ path }: { path: string }) {
       // Two independent reasons a cell can't be typed in: the path itself is
       // read-only (#205) or this member may not write the item (#455 §E).
       readOnly={readOnly || !canWrite}
-      onCommitCell={(row, col, value) => {
-        const updated = rows.map((r, ri) => (ri === row ? r.map((v, ci) => (ci === col ? value : v)) : r));
-        // `entry.text` is passed so the file's line-ending and trailing-newline
-        // style survive the round-trip (see `serializeCsv`).
-        setText(serializeCsv(updated, delimiter, entry.text));
-      }}
+      // `entry.text` is passed so the file's line-ending and trailing-newline
+      // style survive the round-trip (see `serializeCsv`).
+      onRowsChange={(next) => setText(serializeCsv(next, delimiter, entry.text))}
     />
   );
 }
