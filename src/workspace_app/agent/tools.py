@@ -16,11 +16,15 @@ from typing import TYPE_CHECKING, Any, Literal, TypedDict
 import magic
 from agents import FunctionTool, RunContextWrapper, ToolOutputImage, function_tool
 
-from ..files import WorkspaceFiles, WorkspaceFull, abs_path, rel_path
+from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
 from .output_cap import cap_tool_outputs, truncate_middle
+from .shown_files import (
+    declare_shown_files,
+    describe_for_display,
+)
 from .tool_authz import authorize_tool
 
 if TYPE_CHECKING:
@@ -209,49 +213,6 @@ async def read_image_impl(
     else:
         out = describer.describe(data, mime, on_chunk=on_chunk)
     return _truncate_middle(out, ctx.context.read_file_max_chars)
-
-
-#: The one channel a tool result uses to declare "render these workspace files in
-#: the chat": a final line `[shown-files]{json}`. `show_file` writes it, and the
-#: provisioned plotting tools get their stdout normalised into it
-#: (`tooling.registry`), so the FE has a single form to read.
-#:
-#: A marker rather than the whole result being JSON, because a tool result also
-#: has to stay readable to the model and to the tool card — `_format_exec`'s
-#: header carries the exit code and anchors attribution for small models. A marker
-#: rather than a new event/`Message` field, because the declaration then survives
-#: a reload for free: it IS the persisted tool message.
-SHOWN_FILES_KEY = "shown_files"
-SHOWN_FILES_MARKER = "\n[shown-files]"
-
-
-def declare_shown_files(text: str, files: list[dict[str, Any]]) -> str:
-    """`text` with `files` declared for the chat to render. No files ⇒ unchanged."""
-    if not files:
-        return text
-    payload = json.dumps({SHOWN_FILES_KEY: files}, ensure_ascii=False)
-    return f"{text}{SHOWN_FILES_MARKER}{payload}"
-
-
-async def describe_for_display(
-    files: WorkspaceFiles, workspace_id: str, path: str
-) -> dict[str, Any]:
-    """One `shown_files` entry for `path`, or `{}` when it doesn't resolve.
-
-    Reads the bytes: the mime has to be sniffed (it decides inline-image vs card,
-    and an extension can lie) and a declaration must never name a file that isn't
-    there — the FE renders whatever is declared."""
-    try:
-        data = await files.read(workspace_id, path)
-    except FileNotFound:
-        return {}
-    return {
-        # Absolute: the FE's fileUrl/openFile seams take that form, the agent
-        # writes relative (#549).
-        "path": abs_path(path),
-        "mime": magic.from_buffer(data, mime=True),
-        "size": len(data),
-    }
 
 
 async def show_file_impl(

@@ -122,10 +122,16 @@ happy-dom 量不到、單元測試全綠、只有真瀏覽器看得見：
 
 ### P6 — 驗收
 
-- `uv run ty check` 全專案不 scope；`ruff check` + `format --check`
-- targeted：`tests/agent`、`tests/files`、`tests/api`、`web` 相關（全套 gate 交 CI）
-- **真瀏覽器**（playwright 內建 chromium）：多張圖、超長檔名、暗色主題 —— happy-dom 量不到版面
-- **真模型 live check**：實跑「幫我畫一張圖」，確認模型呼叫 `show_file`、圖真的出現
+- ✅ `uv run ty check` 全專案不 scope；`ruff check` + `format --check` 全綠
+- ✅ `pnpm typecheck`（tsc）乾淨
+- ✅ targeted 後端：`tests/agent`＋`tests/files`＋`tests/apps`＋`tools/test_review_wiring` **745 passed**
+- ✅ 前端全套 **2098 passed / 290 files**
+- ✅ **真模型 live check**：本機 `qwen3-14b-ctx40k` 實跑「畫 sin(x) 並把圖給我看」 ——
+  模型自己推理出「應該用 `show_file`」、呼叫、宣告進串流、圖在對話裡
+- ✅ **真瀏覽器**（playwright 內建 chromium，非 happy-dom）：抓到 P8 的兩個缺陷；
+  修完複驗淺色／深色／窄版
+- ⬜ 對抗式自我複查
+- 全套 100% gate 交 CI（不在本機空等）
 
 ## push 開 PR 
 

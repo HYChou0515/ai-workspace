@@ -35,7 +35,8 @@ from agents.tool_context import ToolContext
 from ..agent.context import AgentToolContext
 from ..agent.output_cap import cap_tool_outputs
 from ..agent.plot_review import run_review
-from ..agent.tools import _exec_result_text, declare_shown_files, describe_for_display
+from ..agent.shown_files import declare_shown_files, describe_for_display
+from ..agent.tools import _exec_result_text
 from ..sandbox.protocol import ExecResult, SandboxHandle
 
 logger = logging.getLogger(__name__)

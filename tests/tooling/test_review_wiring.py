@@ -12,7 +12,7 @@ from agents.tool_context import ToolContext
 from agents.usage import Usage
 
 from workspace_app.agent import AgentToolContext
-from workspace_app.agent.tools import SHOWN_FILES_MARKER
+from workspace_app.agent.shown_files import SHOWN_FILES_MARKER
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.vlm import IVlm, VlmDescriber

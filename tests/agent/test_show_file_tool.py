@@ -13,7 +13,7 @@ import json
 from agents import RunContextWrapper
 
 from workspace_app.agent import AgentToolContext, show_file_impl
-from workspace_app.agent.tools import SHOWN_FILES_MARKER
+from workspace_app.agent.shown_files import SHOWN_FILES_MARKER
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 
