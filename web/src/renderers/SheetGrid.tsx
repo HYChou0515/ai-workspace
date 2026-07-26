@@ -63,12 +63,17 @@ export function SheetGrid({
   rows,
   readOnly = false,
   onRowsChange,
+  onUndo,
+  onRedo,
 }: {
   rows: string[][];
   /** Disables every edit affordance. Set for a `.readonly/` path (#205) OR a
    * member without write permission — the grid doesn't care which. */
   readOnly?: boolean;
   onRowsChange: (next: string[][]) => void;
+  /** Sheet-level history. Omitted ⇒ the shortcuts are left to the browser. */
+  onUndo?: () => void;
+  onRedo?: () => void;
 }) {
   const [edit, setEdit] = useState<Edit | null>(null);
   // The cell the structural actions apply to, in FILE coordinates. Distinct from
@@ -255,6 +260,18 @@ export function SheetGrid({
       }}
       onMouseUp={() => {
         dragging.current = false;
+      }}
+      onKeyDown={(e) => {
+        if (e.key.toLowerCase() !== "z" || !(e.ctrlKey || e.metaKey)) return;
+        // Mid-typing, Ctrl+Z belongs to the input: undoing keystrokes inside the
+        // cell you are editing is what the user means. Only once the draft
+        // matches what is stored does the shortcut mean "undo the last EDIT".
+        const typing = edit && edit.draft !== (grid[edit.fileRow]?.[edit.col] ?? "");
+        if (typing) return;
+        const run = e.shiftKey ? onRedo : onUndo;
+        if (!run) return;
+        e.preventDefault();
+        run();
       }}
     >
       {!readOnly && (

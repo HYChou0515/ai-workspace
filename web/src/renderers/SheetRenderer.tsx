@@ -14,7 +14,7 @@
  * behave exactly as they do in Monaco; there is no bespoke save path here.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useOptionalFileService } from "../api/fileService";
 import { useEditMode } from "../hooks/editMode";
@@ -47,6 +47,32 @@ export function SheetRenderer({ path }: { path: string }) {
   // to lose, so pick up their change silently; with unsaved cells in flight,
   // say so and let the user decide — merging or discarding on their behalf would
   // both throw away work without asking.
+  // Sheet-local history: snapshots of the file text this grid itself wrote.
+  // `own` is the last text WE handed to the buffer, which is how a foreign
+  // change is recognised.
+  const history = useRef<{ past: string[]; future: string[]; own: string | null }>({ past: [], future: [], own: null });
+  useEffect(() => {
+    if (entry.status !== "ready" || history.current.own === entry.text) return;
+    // The byte editor, a reload, a peer or the agent replaced the content. The
+    // stack no longer describes this file, and a redo that reapplies a block
+    // onto someone else's text is worse than having no redo at all.
+    history.current = { past: [], future: [], own: entry.text };
+  }, [entry.status, entry.text]);
+
+  const write = (text: string) => {
+    history.current.past.push(entry.text);
+    history.current.future = [];
+    history.current.own = text;
+    setText(text);
+  };
+  const step = (from: "past" | "future", to: "past" | "future") => () => {
+    const next = history.current[from].pop();
+    if (next === undefined) return;
+    history.current[to].push(entry.text);
+    history.current.own = next;
+    setText(next);
+  };
+
   const dirty = entry.save === "dirty" || entry.save === "error";
   useOutsideFileChange(slug, itemId, () => {
     if (dirty) setChangedOutside(true);
@@ -113,7 +139,9 @@ export function SheetRenderer({ path }: { path: string }) {
         readOnly={readOnly || !canWrite}
         // `entry.text` is passed so the file's line-ending and trailing-newline
         // style survive the round-trip (see `serializeCsv`).
-        onRowsChange={(next) => setText(serializeCsv(next, delimiter, entry.text))}
+        onRowsChange={(next) => write(serializeCsv(next, delimiter, entry.text))}
+        onUndo={step("past", "future")}
+        onRedo={step("future", "past")}
       />
     </div>
   );

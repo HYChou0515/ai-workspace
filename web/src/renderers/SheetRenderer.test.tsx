@@ -109,6 +109,36 @@ describe("SheetRenderer", () => {
     expect(store.snapshot(path).text).toBe("wafer,qty\r\nW01,120\r\n,\r\n");
   });
 
+  it("undoes and redoes the sheet's own edits", async () => {
+    const { store, path } = await renderSheet("wafer,qty\nW01,120\n");
+
+    const cell = await screen.findByLabelText("R1C2");
+    await userEvent.clear(cell);
+    await userEvent.type(cell, "130{Enter}");
+    expect(store.snapshot(path).text).toBe("wafer,qty\nW01,130\n");
+
+    await userEvent.keyboard("{Control>}z{/Control}");
+    expect(store.snapshot(path).text).toBe("wafer,qty\nW01,120\n");
+
+    await userEvent.keyboard("{Control>}{Shift>}z{/Shift}{/Control}");
+    expect(store.snapshot(path).text).toBe("wafer,qty\nW01,130\n");
+  });
+
+  it("drops the history when the file is replaced from outside, instead of reapplying stale state", async () => {
+    const { store, path } = await renderSheet("wafer,qty\nW01,120\n");
+
+    const cell = await screen.findByLabelText("R1C2");
+    await userEvent.clear(cell);
+    await userEvent.type(cell, "130{Enter}");
+
+    // A peer / the agent / the byte editor rewrote the file.
+    store.setText(path, "wafer,qty\nW99,1\n");
+    await new Promise((r) => setTimeout(r, 0));
+
+    await userEvent.keyboard("{Control>}z{/Control}");
+    expect(store.snapshot(path).text).toBe("wafer,qty\nW99,1\n");
+  });
+
   it("hands over to the byte editor when Edit is toggled on", async () => {
     // The registry marks this type `editToggle`, and the plan leans on the byte
     // editor being the escape hatch for a file the grid can't help with. If the
