@@ -1,0 +1,176 @@
+/* ── *.ai.csv spreadsheet (docs/plan-ai-sheet.md) ─────────────────────────────
+   Wears the same skin as the entity `.ev-table` — sticky mono-caps header,
+   zebra rows, bottom-only rules, and chrome that appears only on interaction —
+   because a sheet is the most data-dense surface in the app and a full mesh of
+   borders around thousands of live inputs reads as noise. Tokens only; the
+   `no-undefined-tokens` lint keeps it that way.
+   ------------------------------------------------------------------------- */
+
+.sheet {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  gap: var(--space-8);
+}
+
+/* One line, two labelled groups — row actions and column actions. Six
+   equal buttons in a row wrapped onto three lines and read as a wall. */
+.sheet-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+}
+.sheet-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.sheet-toolbar__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+}
+.sheet-toolbar__sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--paper-3);
+}
+
+.sheet-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+}
+
+.sheet-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--text-body-sm);
+}
+
+/* ── header ──────────────────────────────────────────────────────────────── */
+
+.sheet-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--paper-3);
+  padding: 0 var(--space-4) 0 0;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.sheet-th {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.sheet-th__name {
+  flex: 1;
+  min-width: 0;
+}
+/* The header cell's own text wears the caps treatment the other tables use. */
+.sheet-table thead .sheet-cell {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-paper-d);
+}
+/* Sort: invisible until the column is hovered or actually sorted, so 20 columns
+   don't each carry a permanent ↕. */
+.sheet-sort {
+  flex: none;
+  border: 0;
+  padding: 0 var(--space-4);
+  background: none;
+  cursor: pointer;
+  color: var(--text-paper-d);
+  opacity: 0;
+  transition:
+    opacity 0.12s,
+    color 0.12s;
+}
+.sheet-table thead th:hover .sheet-sort,
+.sheet-sort:focus-visible {
+  opacity: 1;
+}
+.sheet-sort[data-sorted] {
+  opacity: 1;
+  color: var(--accent-h);
+}
+
+/* ── cells ───────────────────────────────────────────────────────────────── */
+
+.sheet-table tbody td {
+  border-bottom: 1px solid var(--paper-3);
+  padding: 0;
+  vertical-align: middle;
+}
+.sheet-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.sheet-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--paper) 45%, transparent);
+}
+.sheet-table tbody tr:hover td {
+  background: var(--paper-2);
+}
+
+/* Chrome only on interaction — the calm-until-touched rule the entity table
+   already states. A focused cell gets the accent ring so the caret is findable
+   in a grid of thousands. */
+.sheet-cell {
+  width: 100%;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 var(--space-8);
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+.sheet-cell:hover:not(:read-only) {
+  border-color: var(--paper-3);
+  background: var(--white);
+}
+.sheet-cell:focus {
+  outline: none;
+  border-color: var(--accent-h);
+  background: var(--white);
+  box-shadow: inset 0 0 0 1px var(--accent-h);
+}
+
+/* Row-number gutter — the spreadsheet cue, and the anchor a warning points at. */
+.sheet-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 1%;
+  padding: 0 var(--space-8);
+  text-align: right;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+  background: var(--paper-2);
+  border-right: 1px solid var(--paper-3);
+  user-select: none;
+}
+
+/* A row whose field count disagrees with the header keeps its data and its
+   edits, and says so with a warm left edge — the same cue as a lint-warning
+   cell in the entity table. */
+.sheet-row--ragged .sheet-gutter {
+  box-shadow: inset 3px 0 0 var(--warn);
+  color: var(--warn);
+}

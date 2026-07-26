@@ -26,6 +26,7 @@ import "./styles/brand.css";
 import "./styles/topic-hub.css";
 import "./styles/entity-views.css";
 import "./styles/chat-rail.css";
+import "./styles/sheet.css";
 
 initTheme();
 initFontScale();

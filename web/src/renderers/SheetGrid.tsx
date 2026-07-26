@@ -15,18 +15,21 @@
  * file" is the explicit way to make it stick. Because of that, a displayed row
  * is NOT the file's row, and every edit is keyed by the file index the displayed
  * row came from.
+ *
+ * Styling lives in `styles/sheet.css` and deliberately mirrors the entity
+ * `.ev-table` skin: chrome only on interaction, because a mesh of borders around
+ * thousands of live inputs reads as noise.
  */
 
 import { useLayoutEffect, useRef, useState } from "react";
 
-import { pxToRem } from "../lib/pxToRem";
 import { insertColumn, insertRow, removeColumn, removeRow, type SortDir, sortedIndices } from "./sheetOps";
 import { visibleRange } from "./sheetWindow";
 
 /** Row height in px. Fixed, because windowing needs to know a row's height
  * WITHOUT measuring every row — cells are single-line inputs, so they are all
- * the same height anyway. */
-const ROW_HEIGHT = 24;
+ * the same height anyway. Keep in sync with `.sheet-cell` in sheet.css. */
+const ROW_HEIGHT = 25;
 
 /** A cell's accessible name — `R1C1` spreadsheet notation, 1-based, over what is
  * DISPLAYED (so R1 is always the header, whatever the sort). */
@@ -92,23 +95,39 @@ export function SheetGrid({
 
   // Header click cycles none → asc → desc → none, like `TableView`.
   const cycleSort = (column: number) =>
-    setSort((s) =>
-      s?.column !== column ? { column, dir: "asc" } : s.dir === "asc" ? { column, dir: "desc" } : null,
-    );
+    setSort((s) => (s?.column !== column ? { column, dir: "asc" } : s.dir === "asc" ? { column, dir: "desc" } : null));
 
-  const actions: { label: string; run: () => string[][] }[] = [
-    { label: "Insert row above", run: () => insertRow(grid, active.fileRow) },
-    { label: "Insert row below", run: () => insertRow(grid, active.fileRow + 1) },
-    { label: "Delete row", run: () => removeRow(grid, active.fileRow) },
-    { label: "Insert column left", run: () => insertColumn(grid, active.col) },
-    { label: "Insert column right", run: () => insertColumn(grid, active.col + 1) },
-    { label: "Delete column", run: () => removeColumn(grid, active.col) },
+  const rowActions = [
+    { label: "Insert row above", short: "↑ Insert", run: () => insertRow(grid, active.fileRow) },
+    { label: "Insert row below", short: "↓ Insert", run: () => insertRow(grid, active.fileRow + 1) },
+    { label: "Delete row", short: "Delete", run: () => removeRow(grid, active.fileRow) },
   ];
+  const columnActions = [
+    { label: "Insert column left", short: "← Insert", run: () => insertColumn(grid, active.col) },
+    { label: "Insert column right", short: "→ Insert", run: () => insertColumn(grid, active.col + 1) },
+    { label: "Delete column", short: "Delete", run: () => removeColumn(grid, active.col) },
+  ];
+
+  const actionButton = (a: { label: string; short: string; run: () => string[][] }) => (
+    <button
+      key={a.label}
+      type="button"
+      className="btn"
+      data-variant="ghost"
+      data-size="sm"
+      aria-label={a.label}
+      title={a.label}
+      onClick={() => onRowsChange(a.run())}
+    >
+      {a.short}
+    </button>
+  );
 
   const cellInput = (fileRow: number, displayRow: number, col: number, value: string) => {
     const editing = edit?.fileRow === fileRow && edit.col === col;
     return (
       <input
+        className="sheet-cell"
         aria-label={cellLabel(displayRow, col)}
         value={editing ? edit.draft : value}
         readOnly={readOnly}
@@ -130,36 +149,23 @@ export function SheetGrid({
           // the cell visibly reverts.
           if (e.key === "Escape") setEdit(null);
         }}
-        style={{
-          border: "none",
-          background: "transparent",
-          color: "inherit",
-          font: "inherit",
-          padding: "3px 8px",
-          width: "100%",
-          height: ROW_HEIGHT,
-          boxSizing: "border-box",
-        }}
       />
     );
   };
 
   return (
-    <div style={{ height: "100%", minHeight: 0, display: "flex", flexDirection: "column" }}>
+    <div className="sheet">
       {!readOnly && (
-        <div className="sheet-toolbar" style={{ display: "flex", gap: 4, flexWrap: "wrap", paddingBottom: 6 }}>
-          {actions.map((a) => (
-            <button
-              key={a.label}
-              type="button"
-              className="btn"
-              data-variant="secondary"
-              data-size="sm"
-              onClick={() => onRowsChange(a.run())}
-            >
-              {a.label}
-            </button>
-          ))}
+        <div className="sheet-toolbar">
+          <span className="sheet-toolbar__group">
+            <span className="sheet-toolbar__label">Row</span>
+            {rowActions.map(actionButton)}
+          </span>
+          <span className="sheet-toolbar__sep" aria-hidden />
+          <span className="sheet-toolbar__group">
+            <span className="sheet-toolbar__label">Column</span>
+            {columnActions.map(actionButton)}
+          </span>
           {sort && (
             <button
               type="button"
@@ -175,48 +181,31 @@ export function SheetGrid({
       )}
       <div
         ref={scrollRef}
-        className="scrollable"
-        style={{ flex: 1, minHeight: 0, overflow: "auto" }}
+        className="sheet-wrap scrollable"
         onScroll={(e) => {
           setScrollTop(e.currentTarget.scrollTop);
           setViewportHeight(e.currentTarget.clientHeight);
         }}
       >
-        <table ref={tableRef} className="sheet-table" style={{ borderCollapse: "collapse", fontSize: pxToRem(12) }}>
+        <table ref={tableRef} className="sheet-table">
           <thead>
             <tr>
+              <th className="sheet-gutter" aria-hidden />
               {header.map((value, c) => (
-                <th
-                  key={c}
-                  style={{
-                    border: "1px solid var(--paper-3)",
-                    padding: 0,
-                    position: "sticky",
-                    top: 0,
-                    background: "var(--paper-2)",
-                    whiteSpace: "nowrap",
-                  }}
-                >
+                <th key={c}>
                   {/* A flex row, NOT an input followed by a button: the cell
-                      input is width:100%, so in a real browser it paints over
+                      input is full-width, so in a real browser it paints over
                       the sort control and swallows the click. happy-dom has no
                       layout and cannot catch that, so this is verified in a
                       browser (see docs/plan-ai-sheet.md). */}
-                  <div style={{ display: "flex", alignItems: "center" }}>
-                    <span style={{ flex: 1, minWidth: 0 }}>{cellInput(0, 0, c, value)}</span>
+                  <div className="sheet-th">
+                    <span className="sheet-th__name">{cellInput(0, 0, c, value)}</span>
                     <button
                       type="button"
                       className="sheet-sort"
+                      data-sorted={sort?.column === c ? "" : undefined}
                       aria-label={`Sort by ${value || `column ${c + 1}`}`}
                       onClick={() => cycleSort(c)}
-                      style={{
-                        flex: "none",
-                        border: "none",
-                        background: "transparent",
-                        color: "inherit",
-                        cursor: "pointer",
-                        padding: "0 4px",
-                      }}
                     >
                       {sort?.column === c ? (sort.dir === "asc" ? "▲" : "▼") : "↕"}
                     </button>
@@ -230,43 +219,33 @@ export function SheetGrid({
                 still reflects the whole file. */}
             {start > 0 && (
               <tr aria-hidden style={{ height: start * ROW_HEIGHT }}>
-                <td colSpan={Math.max(1, header.length)} />
+                <td colSpan={Math.max(1, header.length) + 1} />
               </tr>
             )}
             {order.slice(start, end).map((fileRow, k) => {
               const displayRow = start + k + 1; // +1: the header occupies display row 0
               const cells = grid[fileRow] ?? [];
-              // A row whose field count disagrees with the header is SHOWN and
-              // still editable, with the mismatch stated — dropping it or
-              // blanking the pane would hide data the file really contains
-              // (the same lesson as #646 on the ingest side).
+              // A row whose field count disagrees with the header keeps its data
+              // and its edits, and says so — dropping it or blanking the pane
+              // would hide data the file really contains (the same lesson as
+              // #646 on the ingest side). `displayRow` is 0-based; the row
+              // NUMBER a user reads is 1-based, and the header is row 1.
               const ragged = cells.length !== header.length;
-              // `displayRow` is 0-based; the row NUMBER a user reads is 1-based,
-              // and the header is row 1.
               const note = ragged ? `Row ${displayRow + 1} — ${cells.length} of ${header.length} fields` : undefined;
               return (
-                <tr
-                  key={fileRow}
-                  aria-label={note}
-                  className={ragged ? "sheet-row--ragged" : undefined}
-                  style={{ height: ROW_HEIGHT }}
-                >
+                <tr key={fileRow} aria-label={note} className={ragged ? "sheet-row--ragged" : undefined}>
+                  <td className="sheet-gutter" title={note}>
+                    {displayRow + 1}
+                  </td>
                   {cells.map((value, c) => (
-                    <td key={c} style={{ border: "1px solid var(--paper-3)", padding: 0 }}>
-                      {cellInput(fileRow, displayRow, c, value)}
-                    </td>
+                    <td key={c}>{cellInput(fileRow, displayRow, c, value)}</td>
                   ))}
-                  {note && (
-                    <td style={{ color: "var(--warn)", padding: "3px 8px", whiteSpace: "nowrap" }} title={note}>
-                      ⚠ {cells.length} of {header.length} fields
-                    </td>
-                  )}
                 </tr>
               );
             })}
             {end < order.length && (
               <tr aria-hidden style={{ height: (order.length - end) * ROW_HEIGHT }}>
-                <td colSpan={Math.max(1, header.length)} />
+                <td colSpan={Math.max(1, header.length) + 1} />
               </tr>
             )}
           </tbody>

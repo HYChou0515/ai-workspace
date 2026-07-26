@@ -113,8 +113,11 @@ describe("SheetGrid — degradation", () => {
 
     // The row is still there and still editable...
     expect(screen.getByLabelText("R3C1")).toHaveValue("W02");
-    // ...and the mismatch is stated with the row number and both counts.
+    // ...and the mismatch is stated with the row number and both counts. It
+    // rides the row's accessible name (and the gutter's tooltip) rather than an
+    // extra visible cell: the warm gutter edge is the visual cue, and a stray
+    // "1 of 3 fields" column would push the data sideways.
     const marked = screen.getByRole("row", { name: /row 3/i });
-    expect(marked).toHaveTextContent(/1 .*3/);
+    expect(marked).toHaveAccessibleName(/1 of 3 fields/i);
   });
 });
