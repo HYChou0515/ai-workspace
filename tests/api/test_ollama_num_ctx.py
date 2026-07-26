@@ -105,3 +105,47 @@ def test_nothing_answers_stays_unknown_rather_than_guessing() -> None:
 
 def test_no_agent_config_is_unknown_not_a_crash() -> None:
     assert _builder(catalog=40960)._context_window(None).tokens is None
+
+
+# ── saying so when we cannot say how big ─────────────────────────────
+
+
+def _warn(caplog, model: str, **kw) -> list[str]:
+    from workspace_app.api import litellm_runner
+
+    litellm_runner._NUM_CTX_WARNED.clear()
+    caplog.clear()
+    with caplog.at_level("WARNING", logger=litellm_runner.__name__):
+        _agent_for(AgentConfig(name="a", model=model), **kw)
+    return [r.getMessage() for r in caplog.records]
+
+
+def test_an_ollama_endpoint_of_unknown_size_is_warned_about(caplog) -> None:
+    """The one case that still truncates in silence: we are on Ollama, so the
+    endpoint WILL impose a window, and we could not find out how big to ask for.
+    Left unsaid it looks exactly like a model that stopped following its prompt."""
+    msgs = _warn(caplog, "ollama_chat/qwen3-custom")
+    assert len(msgs) == 1
+    assert "num_ctx" in msgs[0] and "qwen3-custom" in msgs[0]
+
+
+def test_a_resolved_window_says_nothing(caplog) -> None:
+    assert _warn(caplog, "ollama_chat/qwen3:14b", context_window=40960) == []
+
+
+def test_a_non_ollama_endpoint_says_nothing(caplog) -> None:
+    """vLLM and hosted endpoints size their own window — not sending `num_ctx`
+    there is correct on every turn, and saying so every turn is noise."""
+    assert _warn(caplog, "hosted_vllm/qwen3") == []
+    assert _warn(caplog, "gpt-4o") == []
+
+
+def test_the_warning_is_once_per_endpoint_not_once_per_turn(caplog) -> None:
+    from workspace_app.api import litellm_runner
+
+    litellm_runner._NUM_CTX_WARNED.clear()
+    caplog.clear()
+    with caplog.at_level("WARNING", logger=litellm_runner.__name__):
+        for _ in range(3):
+            _agent_for(AgentConfig(name="a", model="ollama_chat/qwen3-custom"))
+    assert len(caplog.records) == 1
