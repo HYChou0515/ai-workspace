@@ -5,7 +5,7 @@
  * Not inside the collapsed tool card ordinary results use — a chart behind a
  * `<details>` is the same failure as a path in prose.
  */
-import { useOpenFile } from "../hooks/openFile";
+import { useOpenFile, useWorkspaceVisible } from "../hooks/openFile";
 import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
@@ -24,7 +24,10 @@ export function ShownFiles({
    * scope, which then show the filename without a way to fetch it. */
   fileUrl?: (path: string) => string;
 }) {
-  const openFile = useOpenFile();
+  // Only offer "open in the workspace" when the workspace is actually on screen;
+  // folded away, `openFile` would open a tab the user cannot see.
+  const opener = useOpenFile();
+  const openFile = useWorkspaceVisible() ? opener : null;
   if (files.length === 0) return null;
   return (
     <div

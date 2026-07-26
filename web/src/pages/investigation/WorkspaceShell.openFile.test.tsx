@@ -1,12 +1,14 @@
 // @vitest-environment happy-dom
 /**
- * "Open this file" has to mean the user can see it.
+ * Folding the workspace is the user's choice, and opening a file does not
+ * overrule it.
  *
- * A chat-first App opens with the IDE folded away (`layout.primary_surface:
- * "chat"`), and folding UNMOUNTS it. `openFile` opened a tab in that unmounted
- * pane — so clicking a file the agent showed in the chat looked like nothing at
- * all happened, and the tab was only discoverable by finding the Workspace toggle
- * yourself. Same for ⌘P, which stays reachable while folded.
+ * A chat-first App opens with the IDE folded (`layout.primary_surface: "chat"`),
+ * and folding UNMOUNTS it — so a tab opened while folded is off screen. The
+ * answer is NOT to unfold on the user's behalf: callers that can be reached while
+ * folded ask `useWorkspaceVisible()` first and offer the file another way (the
+ * chat's shown-file card becomes a new-tab link). This pins the half that lives
+ * in the shell: the fold survives an `openFile`.
  */
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -15,7 +17,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AppItem, AppManifest } from "../../api/types";
 import { renderWithQuery } from "../../test/queryWrapper";
-import { useOpenFile } from "../../hooks/openFile";
+import { useOpenFile, useWorkspaceVisible } from "../../hooks/openFile";
 import { WorkspaceShell } from "./WorkspaceShell";
 
 // The chat is where the affordance lives, so stand in for it with a button that
@@ -23,10 +25,18 @@ import { WorkspaceShell } from "./WorkspaceShell";
 vi.mock("../../components/ItemChatShell", () => ({
   ItemChatShell: () => {
     const openFile = useOpenFile();
+    const visible = useWorkspaceVisible();
     return (
-      <button type="button" data-testid="open-from-chat" onClick={() => openFile?.("/out/sine.png")}>
-        show file
-      </button>
+      <>
+        <button
+          type="button"
+          data-testid="open-from-chat"
+          onClick={() => openFile?.("/out/sine.png")}
+        >
+          show file
+        </button>
+        <span data-testid="ws-visible">{visible ? "yes" : "no"}</span>
+      </>
     );
   },
 }));
@@ -92,14 +102,21 @@ afterEach(() => {
 });
 
 describe("WorkspaceShell — opening a file from the chat", () => {
-  it("unfolds the workspace so the file it opened is actually visible", async () => {
+  it("leaves the workspace folded rather than unfolding it for the user", async () => {
     open();
     await waitFor(() => expect(screen.getByTestId("open-from-chat")).toBeInTheDocument());
-    // Folded to start with: no file tree.
     expect(screen.queryByTitle("Search files")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByTestId("open-from-chat"));
 
-    expect(await screen.findByTitle("Search files")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("open-from-chat")).toBeInTheDocument());
+    expect(screen.queryByTitle("Search files")).not.toBeInTheDocument();
+  });
+
+  it("tells the chat whether the workspace is on screen", async () => {
+    // What the card branches on. Folded ⇒ no pane to open into.
+    open();
+    await waitFor(() => expect(screen.getByTestId("ws-visible")).toBeInTheDocument());
+    expect(screen.getByTestId("ws-visible")).toHaveTextContent("no");
   });
 });

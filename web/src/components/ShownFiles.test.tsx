@@ -10,7 +10,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { OpenFileProvider } from "../hooks/openFile";
+import { OpenFileProvider, WorkspaceVisibleProvider } from "../hooks/openFile";
 import type { ShownFile } from "../renderers/shownFiles";
 import { ShownFiles } from "./ShownFiles";
 
@@ -24,10 +24,19 @@ const report: ShownFile = { path: "/out/Q3-report.pdf", mime: "application/pdf",
 
 const fileUrl = (p: string) => `/api/files${p}`;
 
-function renderShown(files: ShownFile[], opts: { openFile?: (p: string) => void } = {}) {
+/** `openFile` = a shell is present. `workspaceVisible` = its file pane is on
+ * screen; when it is folded away, opening a file there would look like nothing
+ * happened, so the card becomes a plain new-tab link instead. */
+function renderShown(
+  files: ShownFile[],
+  opts: { openFile?: (p: string) => void; workspaceVisible?: boolean } = {},
+) {
   const ui = <ShownFiles files={files} fileUrl={fileUrl} />;
+  if (!opts.openFile) return render(ui);
   return render(
-    opts.openFile ? <OpenFileProvider value={opts.openFile}>{ui}</OpenFileProvider> : ui,
+    <OpenFileProvider value={opts.openFile}>
+      <WorkspaceVisibleProvider value={opts.workspaceVisible ?? true}>{ui}</WorkspaceVisibleProvider>
+    </OpenFileProvider>,
   );
 }
 
@@ -87,6 +96,19 @@ describe("ShownFiles", () => {
     const link = screen.getByRole("link", { name: /Q3-report\.pdf/ });
     expect(link).toHaveAttribute("href", "/api/files/out/Q3-report.pdf");
     expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("opens a new tab instead when the workspace pane is folded away", () => {
+    // Folding UNMOUNTS the pane, so opening a file there is invisible. Rather
+    // than unfold the workspace on the user's behalf, hand them the file.
+    const openFile = vi.fn();
+    renderShown([report], { openFile, workspaceVisible: false });
+
+    const link = screen.getByRole("link", { name: /Q3-report\.pdf/ });
+    expect(link).toHaveAttribute("href", "/api/files/out/Q3-report.pdf");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(openFile).not.toHaveBeenCalled();
   });
 
   it("still names the file when there is no way to fetch it at all", () => {
