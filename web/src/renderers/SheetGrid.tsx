@@ -103,18 +103,19 @@ export function SheetGrid({
   // ONE glyph — a plus above a rule — rotated to say which side. A plus beside a
   // separate arrow was two characters wide and read as two ideas; the direction
   // belongs INSIDE the mark, the way a spreadsheet's own insert affordances do.
-  const insertIcon = (deg: number): ReactNode => (
-    <Icon name="insert_line" size={14} style={deg ? { transform: `rotate(${deg}deg)` } : undefined} />
+  const axisIcon = (name: "insert_line" | "remove_line", deg: number): ReactNode => (
+    <Icon name={name} size={14} style={deg ? { transform: `rotate(${deg}deg)` } : undefined} />
   );
+  const insertIcon = (deg: number): ReactNode => axisIcon("insert_line", deg);
   const rowActions = [
     { label: "Insert row above", short: <>{insertIcon(0)} Insert</>, run: () => insertRow(grid, active.fileRow) },
     { label: "Insert row below", short: <>{insertIcon(180)} Insert</>, run: () => insertRow(grid, active.fileRow + 1) },
-    { label: "Delete row", short: <><Icon name="trash" size={14} /> Delete</>, run: () => removeRow(grid, active.fileRow) },
+    { label: "Delete row", short: <>{axisIcon("remove_line", 0)} Delete</>, run: () => removeRow(grid, active.fileRow) },
   ];
   const columnActions = [
     { label: "Insert column left", short: <>{insertIcon(-90)} Insert</>, run: () => insertColumn(grid, active.col) },
     { label: "Insert column right", short: <>{insertIcon(90)} Insert</>, run: () => insertColumn(grid, active.col + 1) },
-    { label: "Delete column", short: <><Icon name="trash" size={14} /> Delete</>, run: () => removeColumn(grid, active.col) },
+    { label: "Delete column", short: <>{axisIcon("remove_line", -90)} Delete</>, run: () => removeColumn(grid, active.col) },
   ];
 
   const actionButton = (a: { label: string; short: ReactNode; run: () => string[][] }) => (

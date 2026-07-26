@@ -12,7 +12,7 @@ export const ICON_NAMES = [
   "arrow_d", "git", "dots_h", "dots_v", "eye", "pin", "clock", "check", "split", "panel_left",
   "layers", "download", "upload", "filter", "tag", "bug", "flame", "refresh", "undo", "quote",
   "external", "paperclip", "pencil", "home", "kanban", "trash", "workflow", "wiki",
-  "insert_line",
+  "insert_line", "remove_line",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -45,15 +45,28 @@ export function Icon({
   };
 
   const paths: Record<IconName, React.ReactNode> = {
-    // Two bands with a plus on the side the new one lands: concrete enough to
-    // read as "add a row here" rather than as an abstract mark. ONE glyph serves
-    // all four directions — the caller rotates it, and rotating stands the bands
-    // up so they read as COLUMNS, which is exactly what the column actions mean.
+    // Two bands = the rows you already have; the ARROW points at the side the new
+    // one lands on. ONE glyph serves all four directions — the caller rotates it,
+    // and rotating stands the bands up so they read as COLUMNS, which is exactly
+    // what the column actions mean.
     insert_line: (
       <>
-        <path d="M12 2.5 V9.5 M8.5 6 H15.5" {...sp} />
+        <path d="M12 9.5 V2.5 M8.5 6 L12 2.5 L15.5 6" {...sp} />
         <rect x="3.5" y="12" width="17" height="4" rx="1" {...sp} />
         <rect x="3.5" y="18" width="17" height="4" rx="1" {...sp} />
+      </>
+    ),
+    // The same bands, struck through. Deliberately NOT a mark sitting above them
+    // like `insert_line`'s arrow: that silhouette was near-identical to
+    // insert-above, and a mark on one side also implies "the top one goes" when
+    // delete actually removes the row you are on. A slash across the whole glyph
+    // is unmistakably removal, and rotating still stands the bands up for the
+    // column variant — which is what a lone trash can could never show.
+    remove_line: (
+      <>
+        <rect x="3.5" y="6" width="17" height="4.5" rx="1" {...sp} />
+        <rect x="3.5" y="13.5" width="17" height="4.5" rx="1" {...sp} />
+        <path d="M4.5 19.5 L19.5 4.5" {...sp} />
       </>
     ),
     search: (
