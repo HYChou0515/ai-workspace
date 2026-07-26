@@ -45,13 +45,15 @@ export function Icon({
   };
 
   const paths: Record<IconName, React.ReactNode> = {
-    // A plus above a rule: "add one next to this line". ONE glyph serves all
-    // four insert directions — the caller rotates it (180° = below, ±90° = the
-    // column axis) rather than the set carrying four near-identical icons.
+    // Two bands with a plus on the side the new one lands: concrete enough to
+    // read as "add a row here" rather than as an abstract mark. ONE glyph serves
+    // all four directions — the caller rotates it, and rotating stands the bands
+    // up so they read as COLUMNS, which is exactly what the column actions mean.
     insert_line: (
       <>
-        <path d="M12 3 V13 M7 8 H17" {...sp} />
-        <path d="M4 18 H20" {...sp} />
+        <path d="M12 2.5 V9.5 M8.5 6 H15.5" {...sp} />
+        <rect x="3.5" y="12" width="17" height="4" rx="1" {...sp} />
+        <rect x="3.5" y="18" width="17" height="4" rx="1" {...sp} />
       </>
     ),
     search: (

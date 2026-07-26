@@ -73,8 +73,9 @@ describe("Icon", () => {
     const { container } = render(<Icon name="insert_line" />);
     const svg = container.querySelector("svg");
     expect(svg).toHaveAttribute("data-icon", "insert_line");
-    // the plus stroke and the rule, not the neutral fallback tile
-    expect(container.querySelectorAll("path")).toHaveLength(2);
-    expect(container.querySelector("rect")).toBeNull();
+    // the plus, plus two bands that read as rows — not the neutral fallback tile
+    // (which is a single rect and no path).
+    expect(container.querySelectorAll("path")).toHaveLength(1);
+    expect(container.querySelectorAll("rect")).toHaveLength(2);
   });
 });

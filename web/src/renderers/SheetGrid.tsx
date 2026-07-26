@@ -109,12 +109,12 @@ export function SheetGrid({
   const rowActions = [
     { label: "Insert row above", short: <>{insertIcon(0)} Insert</>, run: () => insertRow(grid, active.fileRow) },
     { label: "Insert row below", short: <>{insertIcon(180)} Insert</>, run: () => insertRow(grid, active.fileRow + 1) },
-    { label: "Delete row", short: "Delete", run: () => removeRow(grid, active.fileRow) },
+    { label: "Delete row", short: <><Icon name="trash" size={14} /> Delete</>, run: () => removeRow(grid, active.fileRow) },
   ];
   const columnActions = [
     { label: "Insert column left", short: <>{insertIcon(-90)} Insert</>, run: () => insertColumn(grid, active.col) },
     { label: "Insert column right", short: <>{insertIcon(90)} Insert</>, run: () => insertColumn(grid, active.col + 1) },
-    { label: "Delete column", short: "Delete", run: () => removeColumn(grid, active.col) },
+    { label: "Delete column", short: <><Icon name="trash" size={14} /> Delete</>, run: () => removeColumn(grid, active.col) },
   ];
 
   const actionButton = (a: { label: string; short: ReactNode; run: () => string[][] }) => (
