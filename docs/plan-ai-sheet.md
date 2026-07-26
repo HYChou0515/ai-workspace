@@ -109,6 +109,80 @@ sort, view-only, plus the explicit "apply this order to the file" action.
 Every row of the degradation table, including outside-change detection via the
 existing `file_changed` broadcast (`useEntityLiveSync` is the same shape).
 
+## Selection, clipboard and history
+
+Phases 1-4 give you a grid you can type in one cell at a time. This part makes it
+behave like a spreadsheet: select a block, copy it, paste it — including to and
+from Excel — and undo when the paste was wrong.
+
+### Decisions
+
+**The clipboard is TSV on `text/plain`.** That is what Excel and Google Sheets
+put there, so copy-out and copy-in both work with no conversion step and no
+bespoke format. It costs nothing to implement either: `parseCsv` / `serializeCsv`
+already take a delimiter, so the clipboard is the same code with `"\t"`.
+
+**One rectangular range, not disjoint selections.** Ctrl+clicking several
+separate blocks is a different data model (a list of ranges) and every operation
+— copy shape, paste anchor, clear — has to answer "what does this even mean" for
+it. Out of scope; the range covers the cases that matter.
+
+**Paste grows the grid, and never tiles.** Anchored at the selection's top-left;
+if the block overflows the sheet, rows and columns are added. Excel grows too,
+and a paste that silently drops its last rows is the worst kind of data loss.
+Excel also TILES a small clipboard into a larger selection — that one is a
+surprise more often than a feature, so a paste writes the block once.
+
+**Cell-level copy/paste only kicks in when the selection spans more than one
+cell.** Otherwise the cell's own input keeps native text copy/paste, so you can
+still copy half a value out of one cell. This rule exists because of the next one.
+
+**No "selected vs editing" mode — the deliberate divergence from Excel.** In
+Excel a cell is either selected or being edited, which is what frees the arrow
+keys for navigation. Here every cell is always a live input, so plain arrows must
+keep moving the caret inside the value. Shift+Arrow extends the selection,
+click / shift-click / drag define it. Adding a real mode switch would change how
+every existing interaction feels and belongs to its own plan, not to this one.
+
+**Selection is in DISPLAY coordinates.** With a sort active, a rectangular
+selection on screen maps to scattered rows in the file — copy and paste operate
+on what you see, and the write maps back through the file index, the same rule
+the cell editor already follows.
+
+**Undo is sheet-local, and says so by disappearing.** It is a stack of the
+sheet's own edits, not a file history. When the byte editor takes over, or the
+file changes underneath, the stack is dropped rather than kept around pretending
+it still lines up with the content — a "redo" that reapplies a block onto a file
+someone else rewrote is worse than no redo at all.
+
+### Degradation
+
+| situation | behaviour |
+|---|---|
+| paste into a read-only sheet (either axis) | refused, like every other edit |
+| clipboard holds a single value, selection spans a block | writes that one value once at the anchor — no tiling |
+| pasted block is ragged (fewer cells in some lines) | short lines pad, so the grid stays rectangular |
+| Delete / Backspace on a range | clears the contents; it does NOT remove rows |
+| undo after the byte editor or an outside change | the stack is empty; Ctrl+Z does nothing rather than reapplying stale state |
+
+### Phases
+
+Ordered so nothing destructive lands before the thing that can take it back.
+
+**Phase 5 — range selection and copy.** Click, shift-click, drag and Shift+Arrow
+define a rectangle; the selection is visible; Ctrl+C writes TSV. Non-destructive
+from end to end, which is why it goes first.
+
+**Phase 6 — undo / redo.** Ctrl+Z / Ctrl+Shift+Z over the sheet's own edits —
+which retroactively covers the cell edits and the row/column operations from
+Phases 1-2, the ones that have had no way back all along.
+
+**Phase 7 — cut and clear.** Ctrl+X and Delete on a range. Destructive, so it
+lands after undo exists.
+
+**Phase 8 — paste.** Ctrl+V, growing the grid. The most destructive operation in
+the feature, and the last one added.
+
 ## Verification
 
 - Each phase runs through `/tdd` (failing test first) and gets its own commit.
