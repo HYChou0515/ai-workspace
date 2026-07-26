@@ -163,11 +163,23 @@ import `tools`（`tools` 本來就 import 天花板）。
 錄 web demo（`web-demo` skill，真瀏覽器 + 可見游標）時發現：卡片寫著「在工作區開啟」，
 點下去畫面**完全沒動**。真因是 chat-first App 預設 `ideCollapsed`，而收起是**卸載**整個 IDE，
 `openFile` 開的分頁在沒被掛載的面板裡 —— 按 Workspace 展開才看得到那個分頁確實開了。
-⌘P palette 在收起狀態同樣可按，所以這個病本來就在，只是這張卡片是第一個會在收起時被點的入口。
 
-修在 `WorkspaceShell` 的 `openFile`：開檔順手 `setIdeCollapsed(false)`。IDE 內的呼叫者
-（檔案樹、搜尋）本來就展開著，對它們是 no-op。
-測試 `WorkspaceShell.openFile.test.tsx` 用一個呼叫 `useOpenFile()` 的假 chat 當縫。
+第一版修法是「開檔順手展開工作區」，**被 user 否決**：收起是使用者的選擇，點個檔案就把它掀開
+是替使用者做決定。定案改成**看狀態分流**：
+
+- 工作區**開著** → 照舊 `openFile`，在檢視器裡開分頁
+- 工作區**收起** → 卡片就是一個新分頁連結，檔案照樣拿得到，摺疊維持不動
+
+shell 公佈 `useWorkspaceVisible()`（與 IDE 欄位的渲染條件同一個判斷式），卡片據此分流；
+`openFile` 本身回復原狀，所以 ⌘P 與檔案樹行為不變。文案跟著分流：開著「在工作區開啟」、
+收起「開啟」。
+
+真瀏覽器複驗（同一個 item，切換兩種狀態）：
+
+| 狀態 | 卡片 | 點下去 |
+| --- | --- | --- |
+| 收起 | `<a href=…/files/out/sine.png target=_blank>`「開啟」 | 開新分頁，tree 前後皆 false（摺疊不動） |
+| 開著 | `<button>`「在工作區開啟」 | 分頁變成 `["notes.md", "sine.png"]` |
 
 ⚠️ 另外，第一次錄失敗是**我的腳本點錯**：`[data-testid="shown-files"]` 是全寬容器，
 它的中心落在卡片右邊的空白。要點卡片本身。
