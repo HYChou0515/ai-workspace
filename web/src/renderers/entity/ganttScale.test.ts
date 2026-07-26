@@ -110,6 +110,33 @@ describe("axisFor", () => {
     expect(axis.fine.some((t) => t.label === "Feb")).toBe(true);
   });
 
+  it("with a week rule, the detail fine row shows week codes at week starts (not day numbers), over month bands", () => {
+    // 2026-06-29 is a Monday → day 0 is a week start; at the day anchor every
+    // week (7·28px) clears the label width, so ticks are one week apart.
+    const axis = axisFor("2026-06-29", 60, PPD_ANCHORS.day, WW, "2026-08-01");
+    expect(axis.unit).toBe("week");
+    expect(axis.fine.every((t) => /^W\d{3}$/.test(t.label))).toBe(true);
+    expect(axis.fine[0]).toEqual({ day: 0, label: "W627" });
+    expect(axis.fine[1].day).toBe(7);
+    expect(axis.coarse.map((b) => b.label)).toContain("Jul 2026");
+  });
+
+  it("week-code fine labels never overlap across the zoom range (thinned to whole weeks)", () => {
+    for (const ppd of [5, 10, 18, 28]) {
+      const axis = axisFor("2026-03-15", 400, ppd, WW, "2026-08-01");
+      for (let i = 1; i < axis.fine.length; i++) {
+        const gapPx = (axis.fine[i].day - axis.fine[i - 1].day) * ppd;
+        expect(gapPx).toBeGreaterThanOrEqual(AXIS_MIN_LABEL_PX);
+        expect((axis.fine[i].day - axis.fine[i - 1].day) % 7).toBe(0); // whole-week steps
+      }
+    }
+  });
+
+  it("without a week rule the axis is unchanged — day numbers, not week codes", () => {
+    const axis = axisFor("2026-06-29", 60, PPD_ANCHORS.day);
+    expect(axis.fine.every((t) => /^\d{1,2}$/.test(t.label))).toBe(true);
+  });
+
   it("coarse bands tile the whole visible window with no gaps", () => {
     const axis = axisFor("2026-07-10", 120, PPD_ANCHORS.week);
     expect(axis.coarse[0].day).toBe(0);

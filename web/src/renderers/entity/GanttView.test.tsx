@@ -150,6 +150,20 @@ describe("GanttView", () => {
     vi.unstubAllGlobals();
   });
 
+  it("labels the axis with custom week codes when the view carries a week rule", () => {
+    // A mid-year span, so the week codes don't depend on the (real) clock: the
+    // week starting Mon 2026-06-29 is W627 under the user's W{y1}{ww} rule.
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      week: { start: "monday" as const, first_week: "jan1" as const, reset: "yearly" as const, boundary: "by_today" as const, label: "W{y1}{ww}" },
+    };
+    render(<GanttView {...props({ spec, entities: [rec(1, { title: "A", span: "2026-06-29/2026-08-01" })] })} />);
+    expect(screen.getByText("W627")).toBeInTheDocument();
+  });
+
   it("marks today when it falls within the chart range", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2020-01-01/2035-01-01" })] })} />);
     expect(screen.getByTestId("gantt-today")).toBeInTheDocument();

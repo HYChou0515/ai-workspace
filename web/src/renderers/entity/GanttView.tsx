@@ -167,9 +167,12 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   const previewSpan = (row: Row): Span =>
     drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days) : row.span;
 
-  const axis = axisFor(minDate, visibleDays, ppd);
-
+  // `today` also feeds the week axis's `by_today` cross-year boundary, so it is
+  // computed before the axis. The clock is read here (the view shell) and
+  // injected into the pure scale math — never read inside it.
   const today = new Date().toISOString().slice(0, 10);
+  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today);
+
   const todayOffset = daysBetween(minDate, today);
   const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
 

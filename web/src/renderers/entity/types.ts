@@ -7,6 +7,7 @@
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
+import type { WeekRule } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
 
 export type ViewKind = "table" | "board" | "gantt" | "health";
@@ -33,6 +34,9 @@ export type ViewSpec = {
   /** gantt: an `actor`-role field whose avatar is shown on each bar — "who is
    * responsible" at a glance, the standard PM-tool convention. */
   assignee?: string;
+  /** gantt only — a custom (non-ISO) week-numbering rule for the time axis.
+   * Read verbatim off the view file; omit to keep plain day/month labels. */
+  week?: WeekRule;
   card?: { title?: string; badges?: string[] };
 };
 

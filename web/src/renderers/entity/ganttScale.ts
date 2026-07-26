@@ -212,9 +212,15 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick
 
 /** Build the two-tier axis for a visible window of `visibleDays` from `minDate`
  * at `ppd` px/day. Zoomed in → day/week detail over month bands; zoomed out →
- * month labels over year bands. The fine row is always thinned to fit. */
-export function axisFor(minDate: string, visibleDays: number, ppd: number): Axis {
+ * month labels over year bands. The fine row is always thinned to fit.
+ *
+ * When a `week` rule is supplied, the detail-zone fine row shows CUSTOM WEEK
+ * CODES at week starts (e.g. `W627`) instead of day numbers — `today` feeds the
+ * `by_today` cross-year boundary. Zoomed all the way out (month zone) still
+ * shows months, since a week code per column would be far too dense there. */
+export function axisFor(minDate: string, visibleDays: number, ppd: number, week?: WeekRule, today = ""): Axis {
   if (ppd >= DETAIL_PPD) {
+    if (week) return { unit: "week", fine: weekTicks(minDate, visibleDays, ppd, week, today), coarse: monthBands(minDate, visibleDays) };
     const step = [1, 2, 5, 7, 14].find((s) => s * ppd >= AXIS_MIN_LABEL_PX) ?? 14;
     const fine: FineTick[] = [];
     for (let day = 0; day < visibleDays; day += step) {
@@ -338,4 +344,20 @@ export function formatWeekLabel(n: WeekNumber, template = "{yyyy}-W{ww}"): strin
  * Convenience over {@link weekNumberOf} + {@link formatWeekLabel}. */
 export function weekLabelOf(date: string, rule: WeekRule, today: string): string {
   return formatWeekLabel(weekNumberOf(date, rule, today), rule.label);
+}
+
+/** Fine ticks at week starts, labelled with the custom week code and thinned to
+ * whole-week steps so two labels never collide (7·`stepWeeks`·ppd ≥ min width).
+ * Ticks land on real week boundaries; the partial week left of the first
+ * boundary is covered by the month band above. */
+function weekTicks(minDate: string, visibleDays: number, ppd: number, week: WeekRule, today: string): FineTick[] {
+  const start = week.start ?? "monday";
+  const stepWeeks = Math.max(1, Math.ceil(AXIS_MIN_LABEL_PX / (7 * ppd)));
+  const ticks: FineTick[] = [];
+  let day = daysBetween(minDate, weekStart(minDate, start)); // ≤ 0
+  if (day < 0) day += 7; // first week start at/after minDate
+  for (; day < visibleDays; day += 7 * stepWeeks) {
+    ticks.push({ day, label: weekLabelOf(shiftDate(minDate, day), week, today) });
+  }
+  return ticks;
 }
