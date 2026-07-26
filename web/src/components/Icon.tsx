@@ -12,6 +12,7 @@ export const ICON_NAMES = [
   "arrow_d", "git", "dots_h", "dots_v", "eye", "pin", "clock", "check", "split", "panel_left",
   "layers", "download", "upload", "filter", "tag", "bug", "flame", "refresh", "undo", "quote",
   "external", "paperclip", "pencil", "home", "kanban", "trash", "workflow", "wiki",
+  "insert_line",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -44,6 +45,15 @@ export function Icon({
   };
 
   const paths: Record<IconName, React.ReactNode> = {
+    // A plus above a rule: "add one next to this line". ONE glyph serves all
+    // four insert directions — the caller rotates it (180° = below, ±90° = the
+    // column axis) rather than the set carrying four near-identical icons.
+    insert_line: (
+      <>
+        <path d="M12 3 V13 M7 8 H17" {...sp} />
+        <path d="M4 18 H20" {...sp} />
+      </>
+    ),
     search: (
       <>
         <circle cx="10" cy="10" r="6" {...sp} />

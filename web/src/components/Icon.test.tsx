@@ -64,4 +64,17 @@ describe("Icon", () => {
     expect(wiki).not.toBe(layers);
     expect(wiki).not.toBe(fallback);
   });
+
+  it("registers one insert glyph that the caller rotates, rather than four near-identical ones", () => {
+    // A plus above a rule. Only this one name exists; "below" / "left" / "right"
+    // are the same mark turned, so the set doesn't carry four look-alikes.
+    expect(isIconName("insert_line")).toBe(true);
+    expect(isIconName("insert_line_below")).toBe(false);
+    const { container } = render(<Icon name="insert_line" />);
+    const svg = container.querySelector("svg");
+    expect(svg).toHaveAttribute("data-icon", "insert_line");
+    // the plus stroke and the rule, not the neutral fallback tile
+    expect(container.querySelectorAll("path")).toHaveLength(2);
+    expect(container.querySelector("rect")).toBeNull();
+  });
 });

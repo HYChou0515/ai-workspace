@@ -100,21 +100,20 @@ export function SheetGrid({
   const cycleSort = (column: number) =>
     setSort((s) => (s?.column !== column ? { column, dir: "asc" } : s.dir === "asc" ? { column, dir: "desc" } : null));
 
-  // The arrow says WHERE, the plus says WHAT — an arrow alone reads as "move".
-  const insertLabel = (arrow: string): ReactNode => (
-    <>
-      <Icon name="plus" size={11} />
-      {arrow} Insert
-    </>
+  // ONE glyph — a plus above a rule — rotated to say which side. A plus beside a
+  // separate arrow was two characters wide and read as two ideas; the direction
+  // belongs INSIDE the mark, the way a spreadsheet's own insert affordances do.
+  const insertIcon = (deg: number): ReactNode => (
+    <Icon name="insert_line" size={14} style={deg ? { transform: `rotate(${deg}deg)` } : undefined} />
   );
   const rowActions = [
-    { label: "Insert row above", short: insertLabel("↑"), run: () => insertRow(grid, active.fileRow) },
-    { label: "Insert row below", short: insertLabel("↓"), run: () => insertRow(grid, active.fileRow + 1) },
+    { label: "Insert row above", short: <>{insertIcon(0)} Insert</>, run: () => insertRow(grid, active.fileRow) },
+    { label: "Insert row below", short: <>{insertIcon(180)} Insert</>, run: () => insertRow(grid, active.fileRow + 1) },
     { label: "Delete row", short: "Delete", run: () => removeRow(grid, active.fileRow) },
   ];
   const columnActions = [
-    { label: "Insert column left", short: insertLabel("←"), run: () => insertColumn(grid, active.col) },
-    { label: "Insert column right", short: insertLabel("→"), run: () => insertColumn(grid, active.col + 1) },
+    { label: "Insert column left", short: <>{insertIcon(-90)} Insert</>, run: () => insertColumn(grid, active.col) },
+    { label: "Insert column right", short: <>{insertIcon(90)} Insert</>, run: () => insertColumn(grid, active.col + 1) },
     { label: "Delete column", short: "Delete", run: () => removeColumn(grid, active.col) },
   ];
 
