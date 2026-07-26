@@ -137,6 +137,18 @@ describe("axisFor", () => {
     expect(axis.fine.every((t) => /^\d{1,2}$/.test(t.label))).toBe(true);
   });
 
+  it("a week rule with no explicit start still ticks on Monday weeks in the axis", () => {
+    const axis = axisFor("2026-06-29", 20, PPD_ANCHORS.day, { label: "W{y1}{ww}" }, "2026-08-01");
+    expect(axis.fine[0]).toEqual({ day: 0, label: "W627" });
+  });
+
+  it("zoomed out: a start date in December advances the first month tick into the next year", () => {
+    const axis = axisFor("2026-12-15", 120, PPD_ANCHORS.month);
+    expect(axis.unit).toBe("month");
+    expect(axis.coarse.map((b) => b.label)).toEqual(expect.arrayContaining(["2026", "2027"]));
+    expect(axis.fine.some((t) => t.label === "Jan")).toBe(true); // first whole month = Jan 2027
+  });
+
   it("coarse bands tile the whole visible window with no gaps", () => {
     const axis = axisFor("2026-07-10", 120, PPD_ANCHORS.week);
     expect(axis.coarse[0].day).toBe(0);
@@ -276,6 +288,15 @@ describe("weekLabelOf (whole pipeline → the string the axis shows)", () => {
   });
 });
 
+describe("weekNumberOf — a bare {} rule uses the documented defaults", () => {
+  it("defaults to monday / jan1 / yearly / new_year and the {yyyy}-W{ww} label", () => {
+    expect(weekNumberOf("2026-07-01", {}, "2026-08-01")).toEqual({ year: 2026, week: 27 });
+    expect(weekLabelOf("2026-07-01", {}, "2026-08-01")).toBe("2026-W27");
+    // new_year default: the cross-year week is the new year's W01, today-independent
+    expect(weekNumberOf("2026-12-31", {}, "2020-01-01")).toEqual({ year: 2027, week: 1 });
+  });
+});
+
 describe("weekNumberOf — other documented knobs are honored", () => {
   it("first_week:first_full anchors on the first whole week (≠ jan1)", () => {
     // 2026 opens Thu, so its first full week starts Mon 2026-01-05 → one behind jan1.
@@ -294,6 +315,18 @@ describe("weekNumberOf — other documented knobs are honored", () => {
     const cont: WeekRule = { start: "monday", reset: "none", epoch: "2026-01-01" };
     expect(weekNumberOf("2026-01-12", cont, "2026-01-12")).toEqual({ year: 2026, week: 3 });
     expect(weekNumberOf("2027-01-11", cont, "2027-01-11")).toEqual({ year: 2027, week: 55 });
+  });
+
+  it("reset:none without an epoch counts from the Unix epoch week", () => {
+    // 1970-01-01 is a Thu → its Monday week starts 1969-12-29; 1970-01-08's week
+    // (1970-01-05) is one week on → W2.
+    expect(weekNumberOf("1970-01-08", { start: "monday", reset: "none" }, "1970-01-08")).toEqual({ year: 1970, week: 2 });
+  });
+
+  it("when Jan 1 is itself the week start (a Monday), jan1 and first_full coincide — no cross-year straddle", () => {
+    // 2024-01-01 is a Monday, so the Jan-1 week IS the first full week.
+    expect(weekNumberOf("2024-01-01", { start: "monday", first_week: "jan1" }, "2024-06-01")).toEqual({ year: 2024, week: 1 });
+    expect(weekNumberOf("2024-01-01", { start: "monday", first_week: "first_full" }, "2024-06-01")).toEqual({ year: 2024, week: 1 });
   });
 });
 

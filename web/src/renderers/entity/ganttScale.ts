@@ -319,12 +319,13 @@ export function weekNumberOf(date: string, rule: WeekRule, today: string): WeekN
     return { year: ymd(date).y, week: Math.floor(daysBetween(epoch, ws) / 7) + 1 };
   }
   const g = ymd(date).y;
-  // The date's week belongs to the latest year whose W01 has already started.
-  for (const y of [g + 1, g, g - 1]) {
-    const anchor = yearW01Start(y, rule, today);
-    if (ws >= anchor) return { year: y, week: Math.round(daysBetween(anchor, ws) / 7) + 1 };
+  const weekIn = (y: number) => ({ year: y, week: Math.round(daysBetween(yearW01Start(y, rule, today), ws) / 7) + 1 });
+  // The date's week belongs to the latest year whose W01 has already started;
+  // the earliest candidate (g−1) always qualifies, so it is the default.
+  for (const y of [g + 1, g]) {
+    if (ws >= yearW01Start(y, rule, today)) return weekIn(y);
   }
-  return { year: g, week: 1 }; // unreachable: ws always ≥ (g−1)'s anchor
+  return weekIn(g - 1);
 }
 
 /** Render a {@link WeekNumber} through a token template. Tokens: `{yyyy}` full
