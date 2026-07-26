@@ -26,7 +26,17 @@ import { useLayoutEffect, useRef, useState } from "react";
 
 import { Icon } from "../components/Icon";
 
-import { insertColumn, insertRow, removeColumn, removeRow, type SortDir, sortedIndices } from "./sheetOps";
+import { serializeCsv } from "./csv";
+import {
+  insertColumn,
+  insertRow,
+  normalizeRange,
+  type Range,
+  removeColumn,
+  removeRow,
+  type SortDir,
+  sortedIndices,
+} from "./sheetOps";
 import { visibleRange } from "./sheetWindow";
 
 /** Row height in px. Fixed, because windowing needs to know a row's height
@@ -47,6 +57,7 @@ export function cellLabel(displayRow: number, col: number): string {
 }
 
 type Edit = { fileRow: number; col: number; draft: string };
+type Cell = { row: number; col: number };
 
 export function SheetGrid({
   rows,
@@ -65,6 +76,11 @@ export function SheetGrid({
   // for a toolbar button pressed afterwards to act on the cell you were just in.
   const [active, setActive] = useState<{ fileRow: number; col: number }>({ fileRow: 0, col: 0 });
   const [sort, setSort] = useState<{ column: number; dir: SortDir } | null>(null);
+  // The selected rectangle, in DISPLAY coordinates (row 0 = header), so it
+  // follows the sort the way the user's eyes do. Anchor is where the drag or
+  // click started; focus is the end that moves.
+  const [sel, setSel] = useState<{ anchor: Cell; focus: Cell } | null>(null);
+  const dragging = useRef(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   // Scoped to THIS table: two panes can show two sheets, so a document-wide
@@ -83,6 +99,34 @@ export function SheetGrid({
   // File indices of the data rows, in display order.
   const order = sort ? sortedIndices(grid, sort.column, sort.dir) : grid.map((_, i) => i).slice(1);
   const { start, end } = visibleRange({ scrollTop, viewportHeight, rowHeight: ROW_HEIGHT, total: order.length });
+
+  const range: Range | null = sel ? normalizeRange(sel.anchor, sel.focus) : null;
+  const spansManyCells = !!range && (range.top !== range.bottom || range.left !== range.right);
+  const inSelection = (row: number, col: number): boolean =>
+    !!range && row >= range.top && row <= range.bottom && col >= range.left && col <= range.right;
+
+  /** The value shown at a DISPLAY position — display row 0 is the header, and
+   * every other row is whatever the current order puts there. */
+  const valueAt = (displayRow: number, col: number): string =>
+    displayRow === 0 ? (header[col] ?? "") : (grid[order[displayRow - 1] ?? -1]?.[col] ?? "");
+
+  const selectionBlock = (r: Range): string[][] => {
+    const out: string[][] = [];
+    for (let row = r.top; row <= r.bottom; row++) {
+      const line: string[] = [];
+      for (let col = r.left; col <= r.right; col++) line.push(valueAt(row, col));
+      out.push(line);
+    }
+    return out;
+  };
+
+  /** Clamp a display position to the grid so Shift+Arrow can't walk off the end. */
+  const clamp = (c: Cell): Cell => ({
+    row: Math.max(0, Math.min(c.row, order.length)),
+    col: Math.max(0, Math.min(c.col, Math.max(0, header.length - 1))),
+  });
+
+  const extendTo = (c: Cell) => setSel((s) => (s ? { anchor: s.anchor, focus: clamp(c) } : s));
 
   const commit = (pending: Edit | null) => {
     setEdit(null);
@@ -150,6 +194,21 @@ export function SheetGrid({
         onFocus={() => {
           setActive({ fileRow, col });
           setEdit({ fileRow, col, draft: value });
+          setSel((s) => (s && dragging.current ? s : { anchor: { row: displayRow, col }, focus: { row: displayRow, col } }));
+        }}
+        onMouseDown={(e) => {
+          if (e.shiftKey) {
+            // Shift-click extends. Without preventDefault the input would also
+            // run its own shift-select over the text.
+            e.preventDefault();
+            extendTo({ row: displayRow, col });
+            return;
+          }
+          dragging.current = true;
+          setSel({ anchor: { row: displayRow, col }, focus: { row: displayRow, col } });
+        }}
+        onMouseEnter={() => {
+          if (dragging.current) extendTo({ row: displayRow, col });
         }}
         onChange={(e) => setEdit({ fileRow, col, draft: e.target.value })}
         onBlur={() => commit(editing ? edit : null)}
@@ -164,13 +223,40 @@ export function SheetGrid({
           // Esc drops the draft; the input falls back to the caller's value, so
           // the cell visibly reverts.
           if (e.key === "Escape") setEdit(null);
+          // Shift+Arrow grows the selection. Plain arrows are left alone on
+          // purpose: every cell here is a live input, so they belong to the
+          // caret (see docs/plan-ai-sheet.md — there is no "selected" mode).
+          const step: Record<string, Cell> = {
+            ArrowUp: { row: -1, col: 0 },
+            ArrowDown: { row: 1, col: 0 },
+            ArrowLeft: { row: 0, col: -1 },
+            ArrowRight: { row: 0, col: 1 },
+          };
+          const d = e.shiftKey ? step[e.key] : undefined;
+          if (d) {
+            e.preventDefault();
+            const from = sel?.focus ?? { row: displayRow, col };
+            extendTo({ row: from.row + d.row, col: from.col + d.col });
+          }
         }}
       />
     );
   };
 
   return (
-    <div className="sheet">
+    <div
+      className="sheet"
+      onCopy={(e) => {
+        // Only take over when a BLOCK is selected. With one cell the input's own
+        // copy has to keep working, or you could never copy half a value.
+        if (!range || !spansManyCells) return;
+        e.preventDefault();
+        e.clipboardData.setData("text/plain", serializeCsv(selectionBlock(range), "\t"));
+      }}
+      onMouseUp={() => {
+        dragging.current = false;
+      }}
+    >
       {!readOnly && (
         <div className="sheet-toolbar">
           <span className="sheet-toolbar__group">
@@ -266,7 +352,9 @@ export function SheetGrid({
                     {displayRow}
                   </td>
                   {cells.map((value, c) => (
-                    <td key={c}>{cellInput(fileRow, displayRow, c, value)}</td>
+                    <td key={c} className={inSelection(displayRow, c) ? "sheet-td--sel" : undefined}>
+                      {cellInput(fileRow, displayRow, c, value)}
+                    </td>
                   ))}
                 </tr>
               );

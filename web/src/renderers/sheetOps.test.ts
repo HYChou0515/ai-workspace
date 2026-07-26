@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { insertColumn, insertRow, removeColumn, removeRow, sortRows } from "./sheetOps";
+import { applyBlock, insertColumn, insertRow, removeColumn, removeRow, sortRows } from "./sheetOps";
 
 const GRID = [
   ["wafer", "qty"],
@@ -88,5 +88,36 @@ describe("sortRows", () => {
     const withBlank = [["h"], ["b"], [""], ["a"]];
     expect(sortRows(withBlank, 0, "asc").map((r) => r[0])).toEqual(["h", "a", "b", ""]);
     expect(sortRows(withBlank, 0, "desc").map((r) => r[0])).toEqual(["h", "b", "a", ""]);
+  });
+});
+
+describe("applyBlock", () => {
+  const G = [
+    ["a", "b", "c"],
+    ["1", "2", "3"],
+    ["4", "5", "6"],
+  ];
+
+  it("writes the block with its top-left at the anchor", () => {
+    expect(applyBlock(G, { row: 1, col: 1 }, [["X", "Y"]])).toEqual([
+      ["a", "b", "c"],
+      ["1", "X", "Y"],
+      ["4", "5", "6"],
+    ]);
+  });
+
+  it("grows rows and columns when the block overflows, instead of clipping it", () => {
+    // Excel grows the sheet rather than silently dropping what you pasted.
+    expect(applyBlock(G, { row: 2, col: 2 }, [["X", "Y"], ["Z", "W"]])).toEqual([
+      ["a", "b", "c", ""],
+      ["1", "2", "3", ""],
+      ["4", "5", "X", "Y"],
+      ["", "", "Z", "W"],
+    ]);
+  });
+
+  it("pads the rows it grows so the grid stays rectangular", () => {
+    const out = applyBlock([["a"]], { row: 0, col: 0 }, [["X"], ["Y"], ["Z"]]);
+    expect(out).toEqual([["X"], ["Y"], ["Z"]]);
   });
 });

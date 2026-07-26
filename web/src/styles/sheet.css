@@ -155,6 +155,16 @@
   box-shadow: inset 0 0 0 1px var(--accent-h);
 }
 
+/* A selected block. Tinted rather than outlined: an outline per cell would draw
+   a grid of boxes, which is the border mesh this design already refused. The
+   focused cell keeps its accent ring on top, so "where the caret is" stays
+   distinct from "what is selected". */
+.sheet-table tbody td.sheet-td--sel,
+.sheet-table tbody tr:nth-child(even) td.sheet-td--sel,
+.sheet-table tbody tr:hover td.sheet-td--sel {
+  background: color-mix(in srgb, var(--accent-h) 14%, transparent);
+}
+
 /* Row-number gutter — the spreadsheet cue, and the anchor a warning points at. */
 .sheet-gutter {
   position: sticky;

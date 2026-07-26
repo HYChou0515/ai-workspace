@@ -89,3 +89,59 @@ export function removeColumn(rows: string[][], at: number): string[][] {
   const left = rows.map((row) => row.filter((_, c) => c !== at));
   return width(left) > 0 ? left : left.map(() => [""]);
 }
+
+/** A rectangular span of cells, in whatever coordinate space the caller uses. */
+export type Range = { top: number; left: number; bottom: number; right: number };
+
+/** Two corners → a normalised range, so a selection dragged up-and-left is the
+ * same span as one dragged down-and-right. */
+export function normalizeRange(a: { row: number; col: number }, b: { row: number; col: number }): Range {
+  return {
+    top: Math.min(a.row, b.row),
+    left: Math.min(a.col, b.col),
+    bottom: Math.max(a.row, b.row),
+    right: Math.max(a.col, b.col),
+  };
+}
+
+/** The cells inside a range, as its own little grid (what lands on the clipboard). */
+export function sliceBlock(rows: string[][], range: Range): string[][] {
+  const out: string[][] = [];
+  for (let r = range.top; r <= range.bottom; r++) {
+    const row: string[] = [];
+    for (let c = range.left; c <= range.right; c++) row.push(rows[r]?.[c] ?? "");
+    out.push(row);
+  }
+  return out;
+}
+
+/** Write `block` into `rows` with its top-left corner at `at`, GROWING the grid
+ * when it overflows — Excel grows rather than silently dropping what you pasted,
+ * and a paste that quietly loses its last rows is the worst kind of data loss.
+ * Rows the growth creates are padded so the grid stays rectangular. */
+export function applyBlock(rows: string[][], at: { row: number; col: number }, block: string[][]): string[][] {
+  const height = Math.max(rows.length, at.row + block.length);
+  const widest = block.reduce((w, r) => Math.max(w, r.length), 0);
+  const cols = Math.max(width(rows), at.col + widest);
+  const out: string[][] = [];
+  for (let r = 0; r < height; r++) {
+    const source = rows[r] ?? [];
+    const row: string[] = [];
+    for (let c = 0; c < cols; c++) {
+      const inBlock = r >= at.row && r < at.row + block.length && c >= at.col && c < at.col + widest;
+      row.push(inBlock ? (block[r - at.row]?.[c - at.col] ?? "") : (source[c] ?? ""));
+    }
+    out.push(row);
+  }
+  return out;
+}
+
+/** Blank every cell in the range, leaving the grid's shape alone — Delete clears
+ * contents, it does not remove rows. */
+export function clearBlock(rows: string[][], range: Range): string[][] {
+  return rows.map((row, r) =>
+    r < range.top || r > range.bottom
+      ? row
+      : row.map((v, c) => (c >= range.left && c <= range.right ? "" : v)),
+  );
+}

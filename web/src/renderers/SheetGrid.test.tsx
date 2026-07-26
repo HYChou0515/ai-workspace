@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -153,5 +153,55 @@ describe("SheetGrid — degradation", () => {
     // "1 of 3 fields" column would push the data sideways.
     const marked = screen.getByRole("row", { name: /row 2/i });
     expect(marked).toHaveAccessibleName(/1 of 3 fields/i);
+  });
+});
+
+describe("SheetGrid — range selection and the clipboard", () => {
+  afterEach(cleanup);
+
+  const SHEET = [
+    ["wafer", "qty", "note"],
+    ["W01", "120", "ok"],
+    ["W02", "98", "rework"],
+    ["W03", "77", "ok"],
+  ];
+
+  /** Fire a clipboard event the way the browser does, capturing what the grid writes. */
+  function copyFrom(el: Element) {
+    const written: Record<string, string> = {};
+    fireEvent.copy(el, {
+      clipboardData: { setData: (kind: string, value: string) => (written[kind] = value), getData: () => "" },
+    });
+    return written;
+  }
+
+  it("copies a shift-selected block as TSV, which is what Excel reads", async () => {
+    render(<SheetGrid rows={SHEET} onRowsChange={vi.fn()} />);
+
+    await userEvent.click(screen.getByLabelText("R1C1"));
+    fireEvent.mouseDown(screen.getByLabelText("R2C2"), { shiftKey: true });
+
+    expect(copyFrom(screen.getByLabelText("R2C2"))["text/plain"]).toBe("W01\t120\nW02\t98\n");
+  });
+
+  it("leaves a single cell's copy to the input, so half a value can still be copied", async () => {
+    render(<SheetGrid rows={SHEET} onRowsChange={vi.fn()} />);
+
+    const cell = screen.getByLabelText("R1C1");
+    await userEvent.click(cell);
+
+    // No range — the grid must not hijack the event.
+    expect(copyFrom(cell)["text/plain"]).toBeUndefined();
+  });
+
+  it("extends the selection with Shift+Arrow", async () => {
+    render(<SheetGrid rows={SHEET} onRowsChange={vi.fn()} />);
+
+    const cell = screen.getByLabelText("R1C1");
+    await userEvent.click(cell);
+    fireEvent.keyDown(cell, { key: "ArrowDown", shiftKey: true });
+    fireEvent.keyDown(cell, { key: "ArrowRight", shiftKey: true });
+
+    expect(copyFrom(cell)["text/plain"]).toBe("W01\t120\nW02\t98\n");
   });
 });
