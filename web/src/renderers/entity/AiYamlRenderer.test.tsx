@@ -33,7 +33,7 @@ const ISSUE_TYPE = {
 };
 
 const BOARD = "view: board\nentity: issue\ngroup_by: status\ncard:\n  title: title\n";
-const HEALTH = "view: health\ntitle: Project health\n";
+const HEALTH = "view: health\ntitle: Data issues\n";
 
 function storeWith(text: string, path: string): FileBufferStore {
   return new FileBufferStore({

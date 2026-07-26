@@ -72,7 +72,7 @@ describe("HealthView", () => {
 
   it("shows an all-clear when there are no findings", () => {
     render(<HealthView findings={[]} />);
-    expect(screen.getByText(/All records are healthy/)).toBeInTheDocument();
+    expect(screen.getByText(/every record is valid/)).toBeInTheDocument();
   });
 });
 
