@@ -5,9 +5,9 @@ Locked decisions (docs/plan-kb-parsers.md §2-P8, research-corrected):
     ``column: value`` lines so the column names travel with every row
     (bare comma-joined values are an anti-pattern — the embedding
     loses what each value means).
-  - CsvParser wraps LlamaIndex ``PagedCSVReader`` (already does
-    exactly that); ``.tsv`` rides the same reader via
-    ``delimiter="\\t"``.
+  - CsvParser walks the rows itself with the stdlib ``csv`` module, so a
+    row whose field count differs from the header cannot abort the file
+    (#646); ``.tsv`` rides the same code with ``delimiter="\\t"``.
   - ExcelParser renders the same paged shape via pandas + openpyxl;
     ``sheet_name=None`` reads ALL sheets; sheet name prepended as
     context when the workbook has more than one sheet.
@@ -166,3 +166,33 @@ def test_excel_multi_sheet_rows_carry_sheet_context():
     assert docs[0].metadata["sheet"] == "People"
     assert docs[1].text == "sheet: Tools\ntool: etcher"
     assert docs[2].metadata["sheet"] == "Tools"
+
+
+# ── #646: a ragged row must not cost the whole file ──────────────────
+
+
+def test_csv_short_row_is_kept_with_its_missing_fields_blank():
+    """#646: a row with FEWER fields than the header used to abort the whole
+    document with `AttributeError: 'NoneType' object has no attribute 'strip'`,
+    surfaced to the user verbatim. Ragged CSVs are ordinary (a truncated export,
+    a hand-edited file), so one short row must not cost the other thousands."""
+    data = b"name,email,note\nBob,bob@x.com,ok\nAmy\n"
+    docs = list(CsvParser().parse(_input(data), filename="u.csv", mime="text/csv"))
+    assert len(docs) == 2
+    assert docs[1].text == "name: Amy\nemail: \nnote: "
+
+
+def test_csv_long_row_keeps_its_extra_fields_instead_of_dropping_them():
+    """The other direction: MORE fields than the header. The extras are data the
+    file really contains, so they are named by position rather than discarded."""
+    data = b"name,email\nBob,bob@x.com,surprise\n"
+    docs = list(CsvParser().parse(_input(data), filename="u.csv", mime="text/csv"))
+    assert len(docs) == 1
+    assert docs[0].text == "name: Bob\nemail: bob@x.com\ncolumn 3: surprise"
+
+
+def test_csv_count_units_survives_a_ragged_row():
+    """`count_units` runs the same row walk (#227 fan-out sizing), so it has to
+    survive what `parse` survives — it crashed first, before any embedding."""
+    data = b"name,email\nBob,bob@x.com\nAmy\n"
+    assert CsvParser().count_units(_input(data), filename="u.csv", mime="text/csv") == 2
