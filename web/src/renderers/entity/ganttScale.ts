@@ -156,28 +156,29 @@ function firstOfMonth(y: number, m: number): string {
   return `${y}-${String(m + 1).padStart(2, "0")}-01`;
 }
 
-/** Calendar-month bands clipped to [0, visibleDays), in day-offsets from
- * minDate. A band opening before minDate is clamped to day 0. */
-function monthBands(minDate: string, visibleDays: number): CoarseBand[] {
+/** Calendar-month bands clipped to [0, visibleDays), in COLUMN offsets from
+ * minDate (working-day columns when `skip`, else calendar days). A band opening
+ * before minDate is clamped to column 0. */
+function monthBands(minDate: string, visibleDays: number, skip: boolean): CoarseBand[] {
   const bands: CoarseBand[] = [];
   let cursor = 0;
   while (cursor < visibleDays) {
-    const { y, m } = ymd(shiftDate(minDate, cursor));
+    const { y, m } = ymd(dateAtColumn(minDate, cursor, skip));
     const nextStart = firstOfMonth(m === 11 ? y + 1 : y, m === 11 ? 0 : m + 1);
-    const bandEnd = Math.min(daysBetween(minDate, nextStart), visibleDays);
+    const bandEnd = Math.min(columnOf(minDate, nextStart, skip), visibleDays);
     bands.push({ day: cursor, days: bandEnd - cursor, label: `${MONTHS[m]} ${y}` });
     cursor = bandEnd;
   }
   return bands;
 }
 
-/** Calendar-year bands clipped to [0, visibleDays), in day-offsets from minDate. */
-function yearBands(minDate: string, visibleDays: number): CoarseBand[] {
+/** Calendar-year bands clipped to [0, visibleDays), in COLUMN offsets from minDate. */
+function yearBands(minDate: string, visibleDays: number, skip: boolean): CoarseBand[] {
   const bands: CoarseBand[] = [];
   let cursor = 0;
   while (cursor < visibleDays) {
-    const { y } = ymd(shiftDate(minDate, cursor));
-    const bandEnd = Math.min(daysBetween(minDate, `${y + 1}-01-01`), visibleDays);
+    const { y } = ymd(dateAtColumn(minDate, cursor, skip));
+    const bandEnd = Math.min(columnOf(minDate, `${y + 1}-01-01`, skip), visibleDays);
     bands.push({ day: cursor, days: bandEnd - cursor, label: String(y) });
     cursor = bandEnd;
   }
@@ -185,8 +186,9 @@ function yearBands(minDate: string, visibleDays: number): CoarseBand[] {
 }
 
 /** Fine ticks at calendar-month starts, thinned so labels fit at this density. */
-function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick[] {
-  const step = [1, 2, 3, 6, 12].find((s) => s * 30 * ppd >= AXIS_MIN_LABEL_PX) ?? 12;
+function monthTicks(minDate: string, visibleDays: number, ppd: number, skip: boolean): FineTick[] {
+  const monthCols = skip ? 22 : 30; // a month is ~22 working days when skipping weekends
+  const step = [1, 2, 3, 6, 12].find((s) => s * monthCols * ppd >= AXIS_MIN_LABEL_PX) ?? 12;
   const ticks: FineTick[] = [];
   let { y, m } = ymd(minDate);
   if (ymd(minDate).d !== 1) {
@@ -199,7 +201,7 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick
     }
   }
   for (let count = 0; ; count += 1) {
-    const day = daysBetween(minDate, firstOfMonth(y, m));
+    const day = columnOf(minDate, firstOfMonth(y, m), skip);
     if (day >= visibleDays) break;
     if (day >= 0 && count % step === 0) ticks.push({ day, label: MONTHS[m] });
     if (m === 11) {
@@ -220,7 +222,7 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick
  * CODES at week starts (e.g. `W627`) instead of day numbers — `today` feeds the
  * `by_today` cross-year boundary. Zoomed all the way out (month zone) still
  * shows months, since a week code per column would be far too dense there. */
-export function axisFor(minDate: string, visibleDays: number, ppd: number, week?: WeekRule, today = ""): Axis {
+export function axisFor(minDate: string, visibleDays: number, ppd: number, week?: WeekRule, today = "", skip = false): Axis {
   if (ppd >= DETAIL_PPD) {
     const step = [1, 2, 5, 7, 14].find((s) => s * ppd >= AXIS_MIN_LABEL_PX) ?? 14;
     // With a week rule, week codes are a MIDDLE tier: once the day labels would
@@ -228,15 +230,17 @@ export function axisFor(minDate: string, visibleDays: number, ppd: number, week?
     // zoomed in tighter than that it stays on day numbers (dates). So dragging
     // day → week visibly flips dates into week codes.
     if (week && step >= 5) {
-      return { unit: "week", fine: weekTicks(minDate, visibleDays, ppd, week, today), coarse: monthBands(minDate, visibleDays) };
+      return { unit: "week", fine: weekTicks(minDate, visibleDays, ppd, week, today, skip), coarse: monthBands(minDate, visibleDays, skip) };
     }
     const fine: FineTick[] = [];
-    for (let day = 0; day < visibleDays; day += step) {
-      fine.push({ day, label: String(ymd(shiftDate(minDate, day)).d) });
+    let d = minDate; // date at column 0
+    for (let col = 0; col < visibleDays; col += step) {
+      fine.push({ day: col, label: String(ymd(d).d) });
+      if (col + step < visibleDays) d = shiftWorkingDays(d, step, skip);
     }
-    return { unit: step >= 7 ? "week" : "day", fine, coarse: monthBands(minDate, visibleDays) };
+    return { unit: step >= 7 ? "week" : "day", fine, coarse: monthBands(minDate, visibleDays, skip) };
   }
-  return { unit: "month", fine: monthTicks(minDate, visibleDays, ppd), coarse: yearBands(minDate, visibleDays) };
+  return { unit: "month", fine: monthTicks(minDate, visibleDays, ppd, skip), coarse: yearBands(minDate, visibleDays, skip) };
 }
 
 // ── custom week numbering (非 ISO) ──────────────────────────────────────────
@@ -420,14 +424,18 @@ export function weekLabelOf(date: string, rule: WeekRule, today: string): string
  * whole-week steps so two labels never collide (7·`stepWeeks`·ppd ≥ min width).
  * Ticks land on real week boundaries; the partial week left of the first
  * boundary is covered by the month band above. */
-function weekTicks(minDate: string, visibleDays: number, ppd: number, week: WeekRule, today: string): FineTick[] {
+function weekTicks(minDate: string, visibleDays: number, ppd: number, week: WeekRule, today: string, skip: boolean): FineTick[] {
   const start = week.start ?? "monday";
-  const stepWeeks = Math.max(1, Math.ceil(AXIS_MIN_LABEL_PX / (7 * ppd)));
+  const weekCols = skip ? 5 : 7; // a week spans 5 working columns when skipping weekends
+  const stepWeeks = Math.max(1, Math.ceil(AXIS_MIN_LABEL_PX / (weekCols * ppd)));
   const ticks: FineTick[] = [];
-  let day = daysBetween(minDate, weekStart(minDate, start)); // ≤ 0
-  if (day < 0) day += 7; // first week start at/after minDate
-  for (; day < visibleDays; day += 7 * stepWeeks) {
-    ticks.push({ day, label: weekLabelOf(shiftDate(minDate, day), week, today) });
+  let d = weekStart(minDate, start); // the week-start DATE (≤ minDate)
+  if (columnOf(minDate, d, skip) < 0) d = shiftDate(d, 7); // first week start at/after minDate
+  for (;;) {
+    const col = columnOf(minDate, d, skip);
+    if (col >= visibleDays) break;
+    ticks.push({ day: col, label: weekLabelOf(d, week, today) });
+    d = shiftDate(d, 7 * stepWeeks);
   }
   return ticks;
 }

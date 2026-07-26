@@ -159,6 +159,21 @@ describe("axisFor", () => {
     expect(axis.fine.some((t) => t.label === "Jan")).toBe(true); // first whole month = Jan 2027
   });
 
+  it("with skip-weekends, week-code ticks are one WORKING week (5 columns) apart, not 7", () => {
+    const skip = axisFor("2026-06-29", 60, PPD_ANCHORS.week, WW, "2026-08-01", true);
+    const cal = axisFor("2026-06-29", 60, PPD_ANCHORS.week, WW, "2026-08-01", false);
+    expect(skip.fine[0].label).toBe("W627");
+    expect(skip.fine[1].day - skip.fine[0].day).toBe(5); // a working week
+    expect(cal.fine[1].day - cal.fine[0].day).toBe(7); // a calendar week
+  });
+
+  it("with skip-weekends, day-density fine ticks land only on working days", () => {
+    const axis = axisFor("2026-06-29", 30, PPD_ANCHORS.day, undefined, "", true);
+    expect(axis.unit).toBe("day");
+    expect(axis.fine.length).toBeGreaterThan(1);
+    for (const t of axis.fine) expect(isWeekend(dateAtColumn("2026-06-29", t.day, true))).toBe(false);
+  });
+
   it("coarse bands tile the whole visible window with no gaps", () => {
     const axis = axisFor("2026-07-10", 120, PPD_ANCHORS.week);
     expect(axis.coarse[0].day).toBe(0);
