@@ -182,7 +182,19 @@ export function SheetGrid({
               className="btn"
               data-variant="secondary"
               data-size="sm"
-              onClick={() => onRowsChange([header, ...order.map((i) => grid[i] as string[])])}
+              onClick={() => {
+                // The file is being reordered UNDER the selection, so the
+                // selection has to travel with its row: `active` holds a FILE
+                // index, and after this write that index points at a different
+                // row. Left stale, the very next toolbar action lands somewhere
+                // the user isn't looking.
+                const moved = order.indexOf(active.fileRow);
+                if (moved >= 0) setActive({ fileRow: moved + 1, col: active.col });
+                // The view now IS the file order, so there is nothing left to
+                // apply — dropping the sort also retires the button.
+                setSort(null);
+                onRowsChange([header, ...order.map((i) => grid[i] as string[])]);
+              }}
             >
               Apply this order to the file
             </button>

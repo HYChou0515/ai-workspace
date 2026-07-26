@@ -81,6 +81,31 @@ describe("SheetGrid — sorting is a view, not a rewrite", () => {
     ]);
   });
 
+  it("keeps the selection on the same ROW after the order is applied to the file", async () => {
+    // Applying the order rewrites the file, so the focused cell's file index
+    // moves. If the selection kept the stale index, the very next toolbar action
+    // would land on a different row than the one the user is looking at.
+    const onRowsChange = vi.fn();
+    const { rerender } = render(<SheetGrid rows={DATA} onRowsChange={onRowsChange} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /sort by wafer/i }));
+    await userEvent.click(screen.getByLabelText("R2C1")); // W01 — file row 2
+    await userEvent.click(screen.getByRole("button", { name: "Apply this order to the file" }));
+
+    const applied = onRowsChange.mock.calls.at(-1)![0] as string[][];
+    onRowsChange.mockClear();
+    rerender(<SheetGrid rows={applied} onRowsChange={onRowsChange} />);
+
+    // W01 now sits at file row 1; inserting below it must land at index 2.
+    await userEvent.click(screen.getByRole("button", { name: "Insert row below" }));
+    expect(onRowsChange).toHaveBeenCalledWith([
+      ["wafer", "qty"],
+      ["W01", "120"],
+      ["", ""],
+      ["W02", "98"],
+    ]);
+  });
+
   it("renders only a window of rows for a large file", () => {
     const big = [["h"], ...Array.from({ length: 1000 }, (_, i) => [`r${i}`])];
     render(<SheetGrid rows={big} onRowsChange={vi.fn()} />);
