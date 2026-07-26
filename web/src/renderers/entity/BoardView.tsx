@@ -40,6 +40,10 @@ export function BoardView({ spec, type, entities, users, canWrite, refIndex, onP
   const { known, extra } = partitionColumns(statusSpec, entities, groupField);
   const titleField = spec.card?.title ?? "title";
   const badges = spec.card?.badges ?? [];
+  // #GH-projects P4 — manual drag-reorder writes `rank`, but only when no field
+  // sort is active (a sorted board follows the sort, GitHub's model). A card drop
+  // still changes status either way.
+  const sortActive = Boolean(spec.sort?.length);
 
   const sensors = useSensors(
     // A small drag threshold so a click on the card's status select / buttons
@@ -86,7 +90,7 @@ export function BoardView({ spec, type, entities, users, canWrite, refIndex, onP
   const unset = cardsIn(null);
 
   return (
-    <DndContext sensors={sensors} onDragEnd={(e) => handleDragEnd(e, groupField, onPatch)}>
+    <DndContext sensors={sensors} onDragEnd={(e) => handleDragEnd(e, groupField, onPatch, entities, sortActive)}>
       <div className="ev-board scrollable">
         {known.map((value) => (
           <DroppableColumn key={value} value={value} label={value} count={cardsIn(value).length} statusSpec={statusSpec}>
@@ -196,6 +200,14 @@ function Card({
     id: `card-${entity.number}`,
     disabled: readOnly,
   });
+  // #GH-projects P4 — a card is also a DROP target, so dropping another card onto
+  // it reorders in front of it (manual `rank`). Same id as the draggable; dnd-kit
+  // keeps the draggable + droppable registries separate.
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: `card-${entity.number}` });
+  const setRefs = (node: HTMLElement | null) => {
+    setNodeRef(node);
+    setDropRef(node);
+  };
 
   // The card face only shows read-only badges + the status select, so the ⋯ menu
   // is the way to reach the rest of the fields (Edit) or the raw file (Open file).
@@ -204,8 +216,9 @@ function Card({
 
   return (
     <div
-      ref={setNodeRef}
+      ref={setRefs}
       data-testid={`card-${entity.number}`}
+      data-over={isOver ? "" : undefined}
       className={`ev-card${readOnly ? " ev-card--readonly" : ""}`}
       style={{ transform: transform ? `translate(${transform.x}px, ${transform.y}px)` : undefined }}
       {...attributes}

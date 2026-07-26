@@ -57,12 +57,15 @@ and the #GH-projects epic (B colored chips ✅, A group-by ✅).
   + one **Save to view**. Retires the standalone Columns + Group-by controls.
   (Column drag-**reorder** is deferred to a follow-up — see Deferred; show/hide is
   the core Fields need.)
-- **P4 — manual drag order (GH model).** Table rows + Board cards become
-  drag-reorderable (@dnd-kit; Board already uses core, add sortable-style reorder)
-  **only when no sort is active**; a drop writes the moved record's `rank`
-  (fractional midpoint). While a sort is active, drag is disabled with a hint
-  ("clear the sort to reorder manually"). Board cross-column drag keeps the
-  existing status change AND sets rank within the target column.
+- **P4 — manual order (GH model).** Ordering by the shared `rank`, editable
+  **only when no sort is active** (a sorted view follows the sort). Pure rank math
+  (`rankForDrop` / `rankForMove` — fractional midpoint, rewrites one record).
+  **Board:** drag a card onto another to reorder in front of it (writes `rank`);
+  a cross-column card drop adopts the target's status too; when a sort is active a
+  card drop still changes status but writes no rank. **Table:** ▲/▼ reorder
+  handles per row in the plain manual view (no grouping, no sort). Board card-drag
+  reorder ships here; full Table row-**drag** (vs the ▲/▼ handles) is deferred with
+  column drag-reorder (see Deferred) — both need the dnd-in-table refactor.
 - **P5 — persistence wiring.** `saveView` serializes `sort` + `hidden_fields` +
   `group_by` together into the view YAML; the panel drives it. `rank` writes go
   through the entity update path (optimistic + 409 like every other edit).
@@ -75,8 +78,8 @@ and the #GH-projects epic (B colored chips ✅, A group-by ✅).
 
 Field sum / aggregations · Slice by · Show hierarchy (sub-issues) · Roadmap in the
 panel · agent sessions toggle · **column drag-reorder in the Fields section**
-(show/hide ships in P3; reordering is a polish follow-up). Tracked once the
-ordering block lands.
+(show/hide ships in P3) · **Table row drag-reorder** (the ▲/▼ handles ship in P4;
+true drag needs a dnd-in-table refactor). Tracked once the ordering block lands.
 
 ## Open points to confirm
 

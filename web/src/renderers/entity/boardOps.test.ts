@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { EntityFieldSpec, EntityInstance } from "../../api/entities";
-import { dropPatch, handleDragEnd, partitionColumns, UNSET_COL } from "./boardOps";
+import { dropPatch, dropResult, handleDragEnd, partitionColumns, UNSET_COL } from "./boardOps";
 
 const rec = (number: number, fields: Record<string, unknown>): EntityInstance => ({
   number,
@@ -46,5 +46,41 @@ describe("handleDragEnd", () => {
     const onPatch = vi.fn();
     handleDragEnd({ active: { id: "card-3" }, over: null }, "status", onPatch);
     expect(onPatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("dropResult (card-onto-card reorder, #GH-projects P4)", () => {
+  const entities = [
+    rec(1, { status: "open", rank: 10 }),
+    rec(2, { status: "open", rank: 20 }),
+    rec(3, { status: "done", rank: 30 }),
+  ];
+
+  it("reorders within a column: adopt status + a rank in front of the target", () => {
+    // drop #1 in front of #2 (open column) → between nothing-above and #2(20) = 19
+    expect(dropResult("card-1", "card-2", "status", entities, false)).toEqual({
+      number: 1,
+      patch: { status: "open", rank: 19 },
+    });
+  });
+
+  it("cross-column card drop adopts the target's status (and a rank there)", () => {
+    // drop #1 onto #3 (done column: just #3(30)) → status done, rank 30 - 1 = 29
+    expect(dropResult("card-1", "card-3", "status", entities, false)).toEqual({
+      number: 1,
+      patch: { status: "done", rank: 29 },
+    });
+  });
+
+  it("with a sort active, a card drop changes status but writes NO rank (GitHub model)", () => {
+    expect(dropResult("card-1", "card-3", "status", entities, true)).toEqual({
+      number: 1,
+      patch: { status: "done" },
+    });
+  });
+
+  it("a column drop still just sets the status; a self-drop is a no-op", () => {
+    expect(dropResult("card-1", "col-done", "status", entities, false)).toEqual({ number: 1, patch: { status: "done" } });
+    expect(dropResult("card-1", "card-1", "status", entities, false)).toBeNull();
   });
 });

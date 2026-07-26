@@ -82,9 +82,49 @@ function compareField(
 
 /** The manual position: the `rank` field, falling back to the record number for a
  * record that has none yet (so un-ranked records still order deterministically). */
-function rankOf(e: EntityInstance): number {
+export function rankOf(e: EntityInstance): number {
   const r = Number(e.fields.rank);
   return Number.isFinite(r) ? r : e.number;
+}
+
+/** The `rank` to write when a drag drops the `active` record immediately BEFORE
+ * the `over` record — the fractional midpoint between `over` and whatever sits
+ * above it, so a reorder rewrites ONE record's rank (GitHub-style), never the
+ * whole list. `ordered` is the target list (a board column, or the table) in its
+ * current display order. `null` = a no-op (dropped on itself / unknown target). */
+export function rankForDrop(
+  ordered: EntityInstance[],
+  activeNumber: number,
+  overNumber: number,
+): number | null {
+  if (activeNumber === overNumber) return null;
+  const others = ordered.filter((r) => r.number !== activeNumber);
+  const overIdx = others.findIndex((r) => r.number === overNumber);
+  if (overIdx < 0) return null;
+  const above = others[overIdx - 1]; // the record that will sit just above `active`
+  const overRank = rankOf(others[overIdx]);
+  if (!above) return overRank - 1; // dropped at the top of the list
+  return (rankOf(above) + overRank) / 2; // between `above` and `over`
+}
+
+/** The `rank` to write to nudge a record one slot UP (`dir` -1) or DOWN (+1) in
+ * the current `ordered` list — the keyboard/button reorder that mirrors a drag
+ * (#GH-projects P4). `null` when already at that edge. */
+export function rankForMove(
+  ordered: EntityInstance[],
+  number: number,
+  dir: -1 | 1,
+): number | null {
+  const i = ordered.findIndex((r) => r.number === number);
+  if (i < 0) return null;
+  if (dir === -1) {
+    if (i === 0) return null;
+    return rankForDrop(ordered, number, ordered[i - 1].number); // in front of the one above
+  }
+  if (i >= ordered.length - 1) return null;
+  const below = ordered[i + 2]; // the record that will sit just below after moving down
+  if (below) return rankForDrop(ordered, number, below.number);
+  return rankOf(ordered[ordered.length - 1]) + 1; // to the very end
 }
 
 /** Order rows by the view's sort tiers, or — when there are none — by the manual

@@ -464,6 +464,31 @@
   white-space: nowrap;
   text-align: center;
 }
+/* manual reorder handle column (#GH-projects P4) */
+.ev-table__reorder {
+  width: 26px;
+  white-space: nowrap;
+  text-align: center;
+  line-height: 1;
+}
+.ev-iconbtn {
+  display: block;
+  width: 100%;
+  border: none;
+  background: none;
+  color: var(--text-paper-d);
+  cursor: pointer;
+  padding: 0;
+  font-size: var(--text-xs);
+  line-height: 1.1;
+}
+.ev-iconbtn:hover:not(:disabled) {
+  color: var(--text-paper);
+}
+.ev-iconbtn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
 /* At-rest value cell: plain text (no native select / date-picker chrome) so the
  * grid reads as data AND stays narrow — a row of always-on controls pushed the
  * DUE / PROGRESS columns off-screen (#3). Click / focus swaps in the editor. */

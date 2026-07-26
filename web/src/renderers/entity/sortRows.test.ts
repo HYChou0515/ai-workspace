@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
 import { buildRefIndex } from "./refTraversal";
-import { sortRows } from "./sortRows";
+import { rankForDrop, rankForMove, sortRows } from "./sortRows";
 import type { SortRule } from "./types";
 
 const type: EntityType = {
@@ -111,5 +111,55 @@ describe("sortRows", () => {
     const rows = [rec(2, { rank: 2 }), rec(1, { rank: 1 })];
     sortRows(rows, undefined, type, refIndex, users);
     expect(nums(rows)).toEqual([2, 1]);
+  });
+});
+
+describe("rankForDrop", () => {
+  // ordered display list (by rank): #1(10), #2(20), #3(30)
+  const ordered = [rec(1, { rank: 10 }), rec(2, { rank: 20 }), rec(3, { rank: 30 })];
+
+  it("drops before a middle card → midpoint of the card above and the target", () => {
+    // move #3 to just before #2 → between #1(10) and #2(20) = 15
+    expect(rankForDrop(ordered, 3, 2)).toBe(15);
+  });
+
+  it("drops before the first card → just under it", () => {
+    // move #3 to the very top (before #1) → 10 - 1 = 9
+    expect(rankForDrop(ordered, 3, 1)).toBe(9);
+  });
+
+  it("is a no-op when dropped on itself or an unknown target", () => {
+    expect(rankForDrop(ordered, 2, 2)).toBeNull();
+    expect(rankForDrop(ordered, 2, 99)).toBeNull();
+  });
+
+  it("falls back to the record number for un-ranked neighbours", () => {
+    const noRanks = [rec(1, {}), rec(2, {}), rec(3, {})]; // rankOf = number
+    // move #3 before #2 → between #1(1) and #2(2) = 1.5
+    expect(rankForDrop(noRanks, 3, 2)).toBe(1.5);
+  });
+});
+
+describe("rankForMove", () => {
+  const ordered = [rec(1, { rank: 10 }), rec(2, { rank: 20 }), rec(3, { rank: 30 })];
+
+  it("moves up one slot (in front of the row above)", () => {
+    // #2 up → in front of #1(10) → top → 10 - 1 = 9
+    expect(rankForMove(ordered, 2, -1)).toBe(9);
+    // #3 up → in front of #2(20), between #1(10) and #2(20) = 15
+    expect(rankForMove(ordered, 3, -1)).toBe(15);
+  });
+
+  it("moves down one slot", () => {
+    // #1 down → past #2, in front of #3(30) → between #2(20) and #3(30) = 25
+    expect(rankForMove(ordered, 1, 1)).toBe(25);
+    // #2 down → it's second-last, so it goes to the very end → 30 + 1 = 31
+    expect(rankForMove(ordered, 2, 1)).toBe(31);
+  });
+
+  it("is a no-op at the edges", () => {
+    expect(rankForMove(ordered, 1, -1)).toBeNull(); // already top
+    expect(rankForMove(ordered, 3, 1)).toBeNull(); // already bottom
+    expect(rankForMove(ordered, 99, -1)).toBeNull(); // unknown
   });
 });

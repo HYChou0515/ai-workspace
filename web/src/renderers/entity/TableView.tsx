@@ -15,7 +15,7 @@ import { refOptions, type RefIndex, type RefOption, traverseColumn } from "./ref
 import { RoleField, widgetForRole } from "./roleWidget";
 import { selectColor } from "./selectColor";
 import { fieldText, roleOf } from "./shared";
-import { sortRows } from "./sortRows";
+import { rankForMove, sortRows } from "./sortRows";
 import { filterEntities, sortEntities, type SortDir } from "./tableOps";
 import type { EntityViewProps, ViewSpec } from "./types";
 
@@ -105,13 +105,46 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
       return next;
     });
   const groups = groupField ? groupRows(rows, groupField, type, users, refIndex) : null;
-  const colTotal = columns.length + 2; // + checkbox + #
+  // #GH-projects P4 — manual drag-order reorder (▲/▼) shows only in the plain
+  // manual view: a writer, no grouping, and no active sort (a sorted or grouped
+  // table follows that order, GitHub's model). Writes the shared `rank`.
+  const manualMode = !readOnly && !groupField && !sort && !(spec.sort?.length);
+  const colTotal = columns.length + 2 + (manualMode ? 1 : 0); // + checkbox + # (+ reorder)
 
   const renderRow = (e: EntityInstance) => {
     // A lint warning marks its field's cell yellow, still editable (§D).
     const warn = warningsByField(e.diagnostics);
+    const idx = rows.findIndex((r) => r.number === e.number);
     return (
       <tr key={e.number}>
+        {manualMode && (
+          <td className="ev-table__reorder">
+            <button
+              type="button"
+              className="ev-iconbtn"
+              aria-label={`move ${e.number} up`}
+              disabled={busy || idx === 0}
+              onClick={() => {
+                const rank = rankForMove(rows, e.number, -1);
+                if (rank != null) onPatch(e.number, { rank });
+              }}
+            >
+              ▲
+            </button>
+            <button
+              type="button"
+              className="ev-iconbtn"
+              aria-label={`move ${e.number} down`}
+              disabled={busy || idx === rows.length - 1}
+              onClick={() => {
+                const rank = rankForMove(rows, e.number, 1);
+                if (rank != null) onPatch(e.number, { rank });
+              }}
+            >
+              ▼
+            </button>
+          </td>
+        )}
         <td className="ev-table__check">
           {!readOnly && (
             <input
@@ -202,6 +235,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
         <table className="ev-table">
           <thead>
             <tr>
+              {manualMode && <th className="ev-table__reorder" aria-hidden />}
               <th className="ev-table__check">
                 {/* §E — no multi-select / batch for a read-only member. */}
                 {!readOnly && (
@@ -225,6 +259,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
             </tr>
             {hasFilters && (
               <tr className="ev-table__filters">
+                {manualMode && <th />}
                 <th />
                 <th />
                 {columns.map((c) => {
