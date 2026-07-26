@@ -27,10 +27,13 @@
 
 ### 2.1 記憶就是 workspace 檔案
 
-item ↔ workspace 是 1:1，而「持久的東西一律是檔案」是本專案既有的設計模式
-——`docs/topic-hub.md` §「collection 集合是一個檔案」明確記載：collection 集合刻意做成
-**檔案**而非 `WorkItem` 上的欄位，理由是「讓 Hub 裡的一切都是檔案形狀（像 memory），
-並讓 `WorkItem` 保持輕薄」。
+item ↔ workspace 是 1:1，而「持久的東西一律是檔案」是本專案既有的設計模式。
+`docs/topic-hub.md:157` 把這條規矩寫死過一次 —— 當時決定 collection 集合要做成**檔案**：
+
+> **而非** item 資源上的一個欄位。這讓 Hub 裡的一切都是檔案形狀（像 memory），
+> 並讓 `WorkItem` 保持輕薄
+
+記憶適用同一條理由，所以這不是新決定，是既有模式的延用。
 
 因此**不需要**：scope 欄位、新的 specstar resource、per-user 儲存、新的權限模型。
 以下全部免費繼承：
@@ -53,30 +56,36 @@ item ↔ workspace 是 1:1，而「持久的東西一律是檔案」是本專案
 | 4 | **格式完全照抄 Claude Code** | 不自己發明改良版（見 §5） |
 | 5 | **寫入邊界** | 「換一個 item 還成立嗎？」成立 → context card / wiki；不成立 → memory |
 | 6 | **workflow turn 讀不寫** | 要寫就明確做成 workflow 的一個 step（像 `→memory`） |
-| 7 | **索引不設上限** | 照抄；代價見 §6.2 |
+| 7 | **索引不設上限** | 照抄；代價見 §4.4 |
 | 8 | **入口點只有 App chat** | 其餘見下表 |
 
 決定 2 的理由是**寫入時機決定寫入品質**：agent 在 turn 中寫的時候知道「這件事為什麼重要」
 （使用者剛剛糾正了它、剛剛講了一個決定的理由）；事後 job 讀 transcript 必須**重新推導意圖**，
 而本專案預設模型是 Ollama 上的本地 Qwen，小模型做事後意圖重建會很差。
 
-決定 3 的關鍵事實：`apps/context_files.py` 的 `context_files_block` 會過濾掉空白檔案
+決定 3 的關鍵事實：`apps/context_files.py` 的 `context_files_block()` 會過濾掉空白檔案
 （`real = [(path, content) for path, content in entries if content.strip()]`），
-全空就回傳 `""`。**空記憶 = 零 token**，所以「預設開」幾乎沒有成本。
+全空就回傳 `""`，呼叫端因而什麼都不 prepend。**空記憶 = 零 token**，
+所以「預設開」對還沒累積記憶的 App 幾乎沒有成本。
 
 ### 2.3 入口點 × 受控方式
 
 四個入口**因為沒有 item workspace 而自動出局** —— 記憶是 workspace 檔案，
 沒有 workspace 就沒有家。這是物理，不是取捨。
 
-| 入口點 | 有 item workspace？ | 記憶 |
-|---|---|---|
-| **App chat**（`api/chat_send.py`） | ✅ | **讀 + 寫** |
-| **Workflow turn**（`api/workflow_exec.py`） | ✅ 同一個 item | **讀，不主動寫** |
-| KB chat（`api/kb_chat_routes.py`） | ❌ 只有 `retriever` | 不適用 |
-| 子 agent（`ask_knowledge_base` / `ask_wiki`） | ❌ 拋棄式 context（#270 的重點就是隔離） | 不適用 |
-| 卡片生成 job（`api/card_drafter_agent.py`） | ❌ | 不適用 |
-| Wiki job（`kb/wiki/*`） | ❌ 有 filestore，但那是 wiki 的不是 item 的 | 不適用 |
+| 入口點 | 有 item workspace？ | 記憶 | 現況 |
+|---|---|---|---|
+| **App chat**（`api/chat_send.py`） | ✅ | **讀 + 寫** | 已注入 `context_files` |
+| **Workflow turn**（`api/workflow_exec.py`） | ✅ 同一個 item | **讀，不主動寫** | ⚠️ **今天完全沒注入** —— 見下 |
+| KB chat（`api/kb_chat_routes.py`） | ❌ 只有 `retriever` | 不適用 | — |
+| 子 agent（`ask_knowledge_base` / `ask_wiki`） | ❌ 拋棄式 context（#270 的重點就是隔離） | 不適用 | — |
+| 卡片生成 job（`api/card_drafter_agent.py`） | ❌ | 不適用 | — |
+| Wiki job（`kb/wiki/*`） | ❌ 有 filestore，但那是 wiki 的不是 item 的 | 不適用 | — |
+
+> ⚠️ **workflow turn 的「讀」是新工作，不是免費的。** 稽核時查證：`api/workflow_exec.py`
+> 走 `TurnContextBuilder.build_workflow_turn`，**完全沒有呼叫 `build_context_block`**
+> （`rg "context_files|build_context_block" api/workflow_exec.py api/turn_context.py` 零命中）。
+> 也就是說今天的 workflow turn 看不到 `MEMORY.md`。決定 6 要成立，**Phase 1 必須明確涵蓋這條路徑**。
 
 ### 2.4 與既有知識機制的分工
 
@@ -163,19 +172,26 @@ item 成員共享、且人可直接編輯的。若無此條，任何人（或 ag
 
 ## 4. 量測數據
 
-在一個真實的 Claude Code 記憶目錄上實測（258 檔 / 1.5 MB，約兩個月重度使用）。
+在一個真實的 Claude Code 記憶目錄上實測（約兩個月重度使用）。
 
-### 4.1 規模
+> ⚠️ **這是活目錄的快照，不是穩定事實。** 下列數字取自 **2026-07-26**；
+> 同一天內第二次量測時，多項指標就已改變（見 §4.4(a)）。
+> 引用時請當成**量級**而非定值。
+
+### 4.1 規模（2026-07-26 第二次量測）
 
 | 指標 | 值 |
 |---|---|
-| 記憶檔數 | 257 |
-| 單檔大小 | min 975 B / **中位數 3.1 KB** / max 33 KB |
-| `MEMORY.md` | 105 行 / 25 KB |
-| type 分布 | project 204、feedback 44、reference 7、**user 1** |
+| 記憶檔數 | 261 |
+| 單檔大小 | min 975 B / **中位數 3,258 B** / max 33,159 B |
+| `MEMORY.md` | 106 行 / **22,365 bytes = 17,652 字元** |
+| type 分布 | project 207、feedback 45、reference 7、**user 1** |
+
+> 單位注意：`MEMORY.md` 以 UTF-8 存中文，**1 字元約 3 bytes**。
+> 談 context 成本時只有「字元」與「token」有意義（見 §4.4(b)），bytes 會誤導。
 
 **type 分布回頭驗證了 item scope 的決定**：起心動念是「記得使用者」，
-但真實長出來的記憶 99% 是專案狀態，`user` 型只有 1 則。
+但真實長出來的記憶 99% 是專案狀態，`user` 型自始至終只有 1 則。
 
 ### 4.2 `description` ≠ 索引 hook
 
@@ -183,32 +199,63 @@ item 成員共享、且人可直接編輯的。若無此條，任何人（或 ag
 
 | | 位置 | 平均長度 | 用途 |
 |---|---|---|---|
-| `description` | 記憶檔 frontmatter | 110 字元 | 決定「要不要撈這則」 |
-| 索引 hook | `MEMORY.md` | 更短更硬 | **常駐吃 token** |
+| `description` | 記憶檔 frontmatter | 109 字元 | 決定「要不要撈這則」 |
+| 索引 hook | `MEMORY.md` | 49–131 字元（見 §4.3） | **常駐吃 token** |
 
-連標題都不一樣（索引寫「加速要靠索引不是欄位」，`name` 是 `feedback_index_not_column`）。
+連標題都不一樣。實例：
+
+```
+name        : feedback_index_not_column
+description : "user 要的是『使用者完全無痛轉成更有效存法、且無痛退回或修改』
+               → 加速要靠『索引』(衍生 metadata)而非『欄位』(狀態);
+               且 msgspec 已保證型別,別過度擔心型別漂移"
+索引 hook   : - [加速要靠索引不是欄位](feedback_index_not_column.md)
+               — 欄位=狀態(要backfill·會靜默錯),索引=衍生metadata(不存在只會慢)。
+```
+
+三者（`name` / `description` / 索引標題+hook）**各寫各的**。這正是 §5 否決
+「索引由 frontmatter 推導」的直接原因。
 
 ### 4.3 索引會自己長出兩層
 
 | | 則數 | 每則成本 |
 |---|---|---|
-| 熱記憶：獨占一行 | 94 | ~143 字元 |
-| 冷記憶：折進 11 條打包行 | 123 | **~50 字元** |
+| 熱記憶：獨占一行 | 98 | ~131 字元 |
+| 冷記憶：折進 8 條打包行 | 94 | **~49 字元** |
 
-**沒有任何模板教這件事** —— 這是在 context 壓力下自發演化出的分層，
-也是 257 則記憶的索引只有 20 KB 而非線性爆炸的原因。
+冷記憶的常駐成本只有熱記憶的 **約 1/3**。**沒有任何模板教這件事** ——
+這是在 context 壓力下自發演化出的分層，也是索引能維持在 1.7 萬字元
+而非隨記憶數線性爆炸的原因。
 
 ### 4.4 兩個知情接受的代價
 
-**(a) 索引漂移 —— 16% 孤兒。** 257 個檔，索引只連到 216，
-**41 則（16%）寫了但永遠不會進 context**，且**完全靜默**（檔在、內容對，就是不出現）。
-反向斷鏈為 0，所以漂移是單向的：agent 會寫檔、會忘記補索引。
+**(a) 索引漂移 —— 而且會即時累積。** 同一天內兩次量測：
+
+| | 第一次 | 第二次 | 變化 |
+|---|---|---|---|
+| 記憶檔數 | 257 | 261 | +4 |
+| 索引連到 | 216 | 191 | **−25** |
+| **孤兒（有檔、索引沒連）** | 41（**16%**） | 70（**27%**） | **+29** |
+| 斷鏈（有連、檔不存在） | 0 | 0 | — |
+| 打包行 | 11 條 | 8 條 | −3 |
+
+孤兒 = **寫進去了但永遠不會進 context**，而且**完全靜默**（檔在、內容對，就是不出現）。
+斷鏈始終為 0，所以漂移是**單向**的：會寫檔、會忘記補索引，不會反過來。
+
+> 第二次量測的「索引連到」比第一次**少了 25** —— 代表 `MEMORY.md` 有行被移除
+> （該檔在對談期間確實被外部改動過）。這使結論更強：**漂移不是一次性的初始誤差，
+> 它在正常使用中持續累積。** 16% 是樂觀值。
 
 **(b) 索引排擠對話。** `MEMORY.md` 用本專案的 CJK-aware estimator
-（`context_budget.estimate_tokens`）估為 **5,554 tokens**（該模組註解說估計還會低估約 15%）。
-而它是掛在**最新那則 user 訊息**上的 prefix（`api/chat_send.py`），
-`context_reducers.py` 第 3 階段保證 **"The newest message always survives"**
-（`_keep_newest_that_fit` 至少留 `messages[-1:]`）。
+（`context_budget.estimate_tokens`）估為 **5,860 tokens**。該模組的
+`DEFAULT_MARGIN_RATIO = 0.1` 註解說明為什麼要保留餘裕：
+
+> The CJK estimate runs **~15% off** against a real tokenizer, so aiming exactly at
+> the limit would **overshoot** on a bad estimate
+
+也就是**真實 token 數可能高於這個估計**。而這塊是掛在**最新那則 user 訊息**上的 prefix
+（`api/chat_send.py`），`context_reducers.py` 第 3 階段保證
+**"The newest message always survives"**（`_keep_newest_that_fit` 至少留 `messages[-1:]`）。
 
 > ⇒ **記憶區塊在結構上免疫於壓縮。它不會被截斷，它會吃掉對話。**
 > 索引一大，reducer 就依序犧牲工具輸出 → 中段對話 → 連最初的任務描述都丟，
@@ -234,7 +281,7 @@ Claude Code 的 prompt 寫 `name: <short-kebab-case-slug>`，但真實檔案 keb
 |---|---|
 | **scope 做成第一級欄位**（user / item / app / global） | 會加一個永遠等於 `item` 的欄位。**欄位 = 狀態，要 backfill、會靜默錯**；沒人設定、沒人消費、值恆定。等跨 item 真的是需求時再加，成本一樣。 |
 | **記憶塞進既有向量 KB** | 記憶是幾百則不是幾百萬 chunk。這個量級要**確定性注入**而非機率檢索（檢索漏一則 = 使用者體感「又忘了」）；向量庫無法讓模型**原地改掉某一則**，人也看不懂改不動。Anthropic 四種實作（Claude Code / API memory tool / Managed Agents memory store / context editing）**沒有一種用 embedding**。 |
-| **索引由 frontmatter 推導** | 實測：每檔一行 `description` ≈ 31.6K 字元，是現況 19.8K 的 **1.6 倍**；**失去分層折疊**（成長變線性）；且 **257 檔中有 46 個根本沒有 `description`** 可推導。 |
+| **索引由 frontmatter 推導** | 實測（§4.2 / §4.3）：每檔一行 `description` ≈ 32.2K 字元，是現況 17.7K 的 **1.8 倍**；**失去分層折疊**（冷記憶回到全額成本，成長變線性）；且 **261 檔中有 46 個根本沒有 `description`** 可推導；而且 `name` / `description` / 索引標題+hook 三者本來就各寫各的。 |
 | **agent 策展 + 機械對帳**（抓孤兒 / 斷鏈） | 使用者否決：「按照 claude code 來，他是大公司維護的作法，**它如果都不能解決，我也沒指望我能夠花時間解決**」。成熟產品的缺陷通常是知情取捨而非沒想到；量測可以用來理解代價，但代價存在本身不是推翻的理由。 |
 | **讓 reducer 可以犧牲記憶** | 靜靜丟掉記憶 = AI 忘記，且無聲。比排擠對話更糟。 |
 | **背景 job 事後從 transcript 抽取** | 事後必須重新推導意圖；本地小模型做不好。 |
@@ -248,21 +295,35 @@ Claude Code 的 prompt 寫 `name: <short-kebab-case-slug>`，但真實檔案 keb
 
 **Goal.** 記憶從 topic-hub 專屬變成平台能力。
 
-**Changes.** `app.json` 新增 `agent.memory`（預設 `true`）；開啟時 `context_files`
-自動含 `MEMORY.md`。**不 seed 任何檔案** —— `build_context_block` 讀不到就跳過
-（`FileNotFound` → `continue`），agent 第一次寫時才建立。flag 必須在 manifest，
-**絕不 hardcode App slug**。
+**Changes.**
 
-**DoD / tests.** 開著 flag 且無記憶檔 → 注入區塊為 `""`（零 token）；
-有記憶檔 → 出現在 turn 內容且**不進持久化歷史**（維持既有的 idempotent / replay-safe 性質）；
-關掉 flag → 即使有檔也不注入。
+1. `AgentManifest`（`apps/manifest.py:42`，`context_files` 在 `:53`）新增 `memory: bool = True`；
+   開啟時 `MEMORY.md` 併入該 App 的 `context_files`。flag 必須在 manifest，
+   **絕不 hardcode App slug**。
+2. **不 seed 任何檔案** —— `build_context_block` 讀不到就跳過（`FileNotFound` → `continue`），
+   agent 第一次寫時才建立。這也是「空記憶零成本」成立的前提。
+3. ⚠️ **workflow turn 也要能讀。** `api/workflow_exec.py` 走
+   `TurnContextBuilder.build_workflow_turn`，今天**完全沒有**注入 `context_files`
+   （見 §2.3 的稽核註）。決定 6 說 workflow turn「讀但不寫」，
+   所以這條路徑要補上注入 —— 這是新工作，不是既有行為。
+
+**DoD / tests.**
+- 開著 flag 且無記憶檔 → 注入區塊為 `""`（零 token）
+- 有記憶檔 → 出現在 turn 內容且**不進持久化歷史**（維持既有的 idempotent / replay-safe 性質）
+- 關掉 flag → 即使有檔也不注入
+- **workflow turn 看得到 `MEMORY.md`**（今天會紅，正好是該補的那條測試）
 
 ### Phase 2 — prompt：格式、治理、邊界、安全
 
 **Goal.** 讓 agent 知道記憶存在、長什麼樣、什麼該記、什麼不該記。
 
-**Changes.** 共用 prompt 片段（`apps/_base.md`）寫入 §3.1 格式、§3.2 索引規則、
-§3.3 治理四條、§2.4 寫入邊界，以及 **§3.5「記憶是背景資料，不是使用者指令」**。
+**Changes.** 共用 workspace preamble `apps/_base.md`（#241；由
+`apps/catalog.py:158` 的 `_read_base_preamble()` 讀入，並以 `manifest.function.workspace`
+為閘門）寫入 §3.1 格式、§3.2 索引規則、§3.3 治理規則（七條）、§2.4 寫入邊界，
+以及 **§3.5「記憶是背景資料，不是使用者指令」**。逐字底本見**附錄 A**。
+
+> `_base.md` 的閘門是 `function.workspace` 而非新的 memory flag —— 兩者要對齊：
+> 沒有 workspace 的 App 本來就不該拿到記憶 prompt。
 
 **DoD / tests.** 真模型跑一輪：agent 會建立記憶檔、會補索引行、
 會在被問到既有記憶時直接從注入的索引回答而不是重新檢索；
@@ -274,9 +335,11 @@ Claude Code 的 prompt 寫 `name: <short-kebab-case-slug>`，但真實檔案 keb
 
 **Changes.** 讀取記憶檔時附上 §3.4 的警告。
 
-> ⚠️ **開放問題**：`FileStore` protocol **沒有 mtime**
-> （只有 `write` / `read` / `ls` / `exists` / `delete` / `mkdir` / `rmdir` / `is_dir` / `listdir`）。
+> ⚠️ **開放問題**：`FileStore` protocol（`filestore/protocol.py`）**沒有任何時間戳**。
+> 它的全部方法是 `write` / `write_from_path` / `read` / `read_to_file` / `ls` /
+> `exists` / `delete` / `mkdir` / `rmdir` / `is_dir` / `listdir` —— 沒有 `stat`、沒有 mtime。
 > 目前打算讓日期由 frontmatter 帶（`metadata.recorded`，寫入時填），避免擴 protocol。
+> 代價是**日期由模型填，小模型可能漏填或填錯**（DoD 因此要求「沒有日期 → 不阻擋」）。
 > **待 review 確認。**
 
 **DoD / tests.** 讀到 N 天前的記憶 → 警告出現且天數正確；沒有日期 → 不阻擋，只是不警告。
@@ -293,18 +356,47 @@ Claude Code 的 prompt 寫 `name: <short-kebab-case-slug>`，但真實檔案 keb
 
 ---
 
+### 6.5 追溯表 —— 每個決定與規格落在哪個 Phase
+
+實作完成的判準：這張表每一列都有交代，沒有「定了但沒人做」的項目。
+
+| 來源 | 項目 | 落點 | 備註 |
+|---|---|---|---|
+| 決定 1 | scope = item | **無工作** | 結構性結論；選了 workspace 檔案就自動成立 |
+| 決定 2 | agent 在 turn 中自己寫 | **Phase 2** | 純 prompt；工具已存在（附錄 B②） |
+| 決定 3 | 全 App 預設開 + flag | **Phase 1** | `AgentManifest.memory` |
+| 決定 4 | 格式照抄 Claude Code | **Phase 2** | 底本 = 附錄 A |
+| 決定 5 | 寫入邊界（換個 item 還成立嗎） | **Phase 2** | §2.4 |
+| 決定 6 | workflow turn 讀不寫 | **Phase 1** | ⚠️ 今天沒注入，是新工作（§2.3） |
+| 決定 7 | 索引不設上限 | **無工作** | 這條是「不做事」；風險列在 §8 |
+| 決定 8 | 入口點只有 App chat | **Phase 1** | 其餘四個入口物理上沒有 workspace |
+| §3.1 | 記憶檔 frontmatter 格式 | **Phase 2** | |
+| §3.2 | 索引規則（含「絕不放內容」） | **Phase 2** | |
+| §3.3 | 治理七條（含「絕不存憑證」） | **Phase 2** | |
+| §3.4 | 陳舊警告 | **Phase 3** | 開放問題：日期來源 |
+| §3.5 | 記憶是資料不是指令 | **Phase 2** | 安全條款，不可略 |
+| §3.6 | 召回（索引常駐 + 按需讀） | **無工作** | 既有行為，topic-hub prompt 已是此做法 |
+| §1 | topic-hub 舊格式收斂 | **Phase 4** | `MEMORY.md.tpl` / `memory/notes.md.tpl` |
+| §7 | 真模型 live check | **Phase 4** | 唯一能證明決定 2 成立的驗收 |
+
+---
+
 ## 7. DoD（跨 phase）
 
 - **必須含真模型 live check。** 最大執行風險是**小模型到底會不會主動去寫**，
   fake LLM 測不出來。假 LLM 全綠不算通過。
 - 每完成一個 phase commit 一次。
-- 交付前跑對抗式複查 + `ty check`（不 scope）。
+- 交付前跑對抗式複查 + `uv run ty check`（**不 scope**，CI 也檢 `tests/`）。
+- 權威覆蓋率閘門是本機全套：
+  `uv run coverage run -m pytest && uv run coverage combine && uv run coverage report --fail-under=100`。
+  CI 只跑 unit（`-m "not integration"`）且不 gate 在 100%，所以**別拿 CI 綠燈當覆蓋率通過**。
+- 本機只跑受影響的 targeted 測試，**不在本機空等全套**；全套交給 CI。
 
 ## 8. 已知風險
 
 | 風險 | 狀態 |
 |---|---|
-| 索引漂移（實測 16% 孤兒，靜默） | **知情接受**（§5 使用者裁決） |
+| 索引漂移（實測孤兒率 16% → 27%，靜默且持續累積） | **知情接受**（§5 使用者裁決） |
 | 索引排擠對話（免疫於 reducer，長壽 item） | **知情接受**；`detect_truncation` 可事後偵測 |
 | 小模型不主動寫記憶 | **未驗證** —— Phase 2 / 4 的 live check 就是為了打這一槍 |
 | `FileStore` 無 mtime | **開放問題**，見 Phase 3 |
