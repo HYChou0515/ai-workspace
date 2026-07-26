@@ -449,18 +449,30 @@ class WorkflowExecutor:
         return False
 
     async def release(self, item_id: str, terminal: bool, chat_key: str) -> None:
-        """Free resources when a run ends/pauses (§16). The sandbox + workspace are
-        shared across the item's chats (§3.1), so tear the sandbox down only when no
-        OTHER run is still running — a parallel run keeps it alive (§3). On terminal,
-        drop the finished run's own chat turn session (never the item's other chats)."""
+        """Free resources when a run ENDS (§16). The sandbox + workspace are shared
+        across the item's chats (§3.1), so tear the sandbox down only when no OTHER
+        run is still running — a parallel run keeps it alive (§3). Also drop the
+        finished run's own chat turn session (never the item's other chats).
+
+        A PAUSE deliberately frees nothing (#652). A run pauses to ask a human to
+        act — typically ON the workspace, which is the whole point of the gate — so
+        deleting that workspace at the moment we ask for the edit is both wrong on
+        its face and a live data hazard: #345 keys the dir to the item, so a
+        `close_session` racing the human's write rmtree's a file the API already
+        acknowledged with a 204, and the next read 404s. Nothing leaks by waiting:
+        `kill_idle` reaps a sandbox nobody has touched past the threshold, and it
+        checks GLOBAL idleness before removing a shared dir — which is exactly the
+        judgement a pause cannot make, because a paused run is precisely when
+        someone is expected to be touching it."""
         logger.info(
             "workflow_exec: release run resources for item %s (terminal=%s)", item_id, terminal
         )
+        if not terminal:
+            return
         if not self._any_running(item_id):
             await self._registry.close_session(item_id)
-        if terminal:
-            await self._turn_engine.forget(chat_key)
-            self._run_baseline.pop(chat_key, None)
+        await self._turn_engine.forget(chat_key)
+        self._run_baseline.pop(chat_key, None)
 
     def notify_failure(self, run: WorkflowRun) -> None:
         """In-app failure notification to the item's owner (manual §17)."""
