@@ -110,10 +110,10 @@ describe("axisFor", () => {
     expect(axis.fine.some((t) => t.label === "Feb")).toBe(true);
   });
 
-  it("with a week rule, the detail fine row shows week codes at week starts (not day numbers), over month bands", () => {
-    // 2026-06-29 is a Monday → day 0 is a week start; at the day anchor every
-    // week (7·28px) clears the label width, so ticks are one week apart.
-    const axis = axisFor("2026-06-29", 60, PPD_ANCHORS.day, WW, "2026-08-01");
+  it("with a week rule, the WEEK-density fine row shows week codes at week starts, over month bands", () => {
+    // 2026-06-29 is a Monday → day 0 is a week start; at the week anchor every
+    // week (7·10px) clears the label width, so ticks are one week apart.
+    const axis = axisFor("2026-06-29", 60, PPD_ANCHORS.week, WW, "2026-08-01");
     expect(axis.unit).toBe("week");
     expect(axis.fine.every((t) => /^W\d{3}$/.test(t.label))).toBe(true);
     expect(axis.fine[0]).toEqual({ day: 0, label: "W627" });
@@ -121,8 +121,14 @@ describe("axisFor", () => {
     expect(axis.coarse.map((b) => b.label)).toContain("Jul 2026");
   });
 
-  it("week-code fine labels never overlap across the zoom range (thinned to whole weeks)", () => {
-    for (const ppd of [5, 10, 18, 28]) {
+  it("zoomed IN (day density), a week rule shows DATES (day numbers), not week codes — the week↔date transition", () => {
+    const axis = axisFor("2026-06-29", 40, PPD_ANCHORS.day, WW, "2026-08-01");
+    expect(axis.unit).toBe("day");
+    expect(axis.fine.every((t) => /^\d{1,2}$/.test(t.label))).toBe(true); // day-of-month, not W…
+  });
+
+  it("week-code fine labels never overlap at week/month density (thinned to whole weeks)", () => {
+    for (const ppd of [5, 7, 10, 14]) {
       const axis = axisFor("2026-03-15", 400, ppd, WW, "2026-08-01");
       for (let i = 1; i < axis.fine.length; i++) {
         const gapPx = (axis.fine[i].day - axis.fine[i - 1].day) * ppd;
@@ -138,7 +144,7 @@ describe("axisFor", () => {
   });
 
   it("a week rule with no explicit start still ticks on Monday weeks in the axis", () => {
-    const axis = axisFor("2026-06-29", 20, PPD_ANCHORS.day, { label: "W{y1}{ww}" }, "2026-08-01");
+    const axis = axisFor("2026-06-29", 20, PPD_ANCHORS.week, { label: "W{y1}{ww}" }, "2026-08-01");
     expect(axis.fine[0]).toEqual({ day: 0, label: "W627" });
   });
 

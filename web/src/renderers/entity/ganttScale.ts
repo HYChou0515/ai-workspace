@@ -220,8 +220,14 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick
  * shows months, since a week code per column would be far too dense there. */
 export function axisFor(minDate: string, visibleDays: number, ppd: number, week?: WeekRule, today = ""): Axis {
   if (ppd >= DETAIL_PPD) {
-    if (week) return { unit: "week", fine: weekTicks(minDate, visibleDays, ppd, week, today), coarse: monthBands(minDate, visibleDays) };
     const step = [1, 2, 5, 7, 14].find((s) => s * ppd >= AXIS_MIN_LABEL_PX) ?? 14;
+    // With a week rule, week codes are a MIDDLE tier: once the day labels would
+    // thin past every other day (step ≥ 5) the row switches to week codes;
+    // zoomed in tighter than that it stays on day numbers (dates). So dragging
+    // day → week visibly flips dates into week codes.
+    if (week && step >= 5) {
+      return { unit: "week", fine: weekTicks(minDate, visibleDays, ppd, week, today), coarse: monthBands(minDate, visibleDays) };
+    }
     const fine: FineTick[] = [];
     for (let day = 0; day < visibleDays; day += step) {
       fine.push({ day, label: String(ymd(shiftDate(minDate, day)).d) });
