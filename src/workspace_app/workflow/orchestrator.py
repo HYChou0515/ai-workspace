@@ -713,6 +713,19 @@ class WorkflowOrchestrator:
         data = self._get(run_id)
         if data.status in (RunStatus.RUNNING, RunStatus.PENDING):
             await self.cancel(run_id, item_id)
+        else:
+            # A terminal status is NOT proof the driver has finished: it flips inside
+            # the driver, which then still has to tear down. That teardown
+            # (`release(terminal=True)`) forgets this run's chat — advancing the shared
+            # turn epoch and cancelling any in-flight turn on that key — so a steerer
+            # started in this window is killed by the teardown of the very run it is
+            # steering, and the run lands `cancelled` with its original result and no
+            # plan. Same class as the `_track` fix one layer up: a finished predecessor
+            # must not reach past its own end and take out its successor.
+            prior = self._tasks.get(run_id)
+            if prior is not None and not prior.done():
+                with contextlib.suppress(BaseException):
+                    await prior
         self._patch(run_id, status=RunStatus.RUNNING)  # the steerer is working
         self._track(
             run_id,

@@ -1130,3 +1130,55 @@ async def test_workspace_workflow_resolution_shadows_package_and_falls_back(
     assert pkg_run.status is RunStatus.DONE and pkg_run.result == {"who": "package"}
     assert [p.phase for p in pkg_run.phases] == ["think", "review"]  # the package MANIFEST
     assert calls == ["workspace", "package"]
+
+
+async def test_steer_waits_for_a_finished_run_to_finish_tearing_down(spec_instance: SpecStar):
+    """#288 flake: a run's status flips to DONE *before* its driver finishes, and the
+    teardown it still has to do (`release(terminal=True)`) forgets the run's chat —
+    advancing the shared turn epoch and cancelling any in-flight turn on that key.
+
+    A steer that starts in that window gets killed by the teardown of the run it is
+    steering: the steerer's turn aborts, `_propose` sees CancelledError, and the run
+    lands `cancelled` with the ORIGINAL result and no `pending_steer`. That is exactly
+    what CI saw intermittently. So `steer` must wait for the prior driver to settle,
+    even though the status already reads terminal."""
+    from workspace_app.workflow.orchestrator import WorkflowOrchestrator
+
+    async def run(wf, inputs):
+        await run_step(wf, name="s", phase="think", args={}, execute=_ok)
+        return {"ok": True}
+
+    teardown = asyncio.Event()
+    released: list[bool] = []
+
+    async def slow_release(_item_id: str, terminal: bool, _key: str) -> None:
+        released.append(terminal)
+        await teardown.wait()  # the driver is stuck mid-teardown
+
+    orch = WorkflowOrchestrator(
+        spec=spec_instance,
+        store=MemoryFileStore(),
+        load_run=lambda _s, _p, _w="": run,
+        load_manifest=lambda _s, _p, _w="": MANIFEST,
+        wire_handle=lambda *_a: None,
+        release=slow_release,
+        now=_clock(),
+    )
+    run_id = await orch.start(slug="rca", item_id="id", profile="echo", captured_user="u")
+    rm = spec_instance.get_resource_manager(WorkflowRun)
+    for _ in range(200):  # the status goes terminal while the driver is still working
+        if rm.get(run_id).data.status is RunStatus.DONE and released:
+            break
+        await asyncio.sleep(0)
+    assert rm.get(run_id).data.status is RunStatus.DONE
+    assert released == [True]
+
+    steering = asyncio.create_task(
+        orch.steer(slug="rca", item_id="id", profile="echo", run_id=run_id, instruction="x")
+    )
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert not steering.done(), "steer started while the previous driver was still tearing down"
+
+    teardown.set()
+    await asyncio.wait_for(steering, timeout=2)
