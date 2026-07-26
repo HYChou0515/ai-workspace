@@ -178,6 +178,14 @@ class AgentToolContext:
     # SDK yields MaxTurnsExceeded and the run ends having written nothing.
     max_turns: int | None = None
 
+    # #624: this endpoint's context window in tokens, resolved once per turn by
+    # the turn builder (operator override → learned → registry). Already used to
+    # size the history budget; carried here so the runner can also TELL the
+    # endpoint to open that much — Ollama otherwise opens its own 4,096 default
+    # and drops the overflow silently. `None` ⇒ nothing could answer how big this
+    # endpoint is, so nobody may guess.
+    context_window: int | None = None
+
     # Per-message reasoning effort from the UI selector ("low"/"medium"/"high");
     # None → the model's default. Threaded to the model's ModelSettings.
     reasoning_effort: str | None = None
