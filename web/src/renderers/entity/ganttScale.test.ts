@@ -15,7 +15,11 @@ import {
   sliderToPpd,
   spanToDates,
   visibleDaysFor,
+  columnOf,
+  dateAtColumn,
   formatWeekLabel,
+  isWeekend,
+  shiftWorkingDays,
   weekLabelOf,
   weekNumberOf,
   type WeekRule,
@@ -223,6 +227,39 @@ describe("visibleDaysFor", () => {
   });
 });
 
+describe("working-day columns (skip weekends)", () => {
+  // 2026-06-29 is a Monday; that week runs Mon 06-29 … Fri 07-03, weekend 07-04/05,
+  // next Mon 07-06.
+  it("columnOf counts working days when skipping weekends (weekend collapses to the next working column)", () => {
+    expect(columnOf("2026-06-29", "2026-06-29", true)).toBe(0);
+    expect(columnOf("2026-06-29", "2026-07-03", true)).toBe(4); // Mon→Fri = 4 working steps
+    expect(columnOf("2026-06-29", "2026-07-04", true)).toBe(5); // Sat collapses onto col 5
+    expect(columnOf("2026-06-29", "2026-07-05", true)).toBe(5); // Sun too
+    expect(columnOf("2026-06-29", "2026-07-06", true)).toBe(5); // next Mon shares that column
+    expect(columnOf("2026-06-29", "2026-07-13", true)).toBe(10); // two weeks = 10 working days
+    expect(columnOf("2026-07-06", "2026-06-29", true)).toBe(-5); // signed
+  });
+  it("columnOf is plain calendar days when NOT skipping", () => {
+    expect(columnOf("2026-06-29", "2026-07-06", false)).toBe(7);
+  });
+  it("dateAtColumn is the inverse — the calendar date at a working-day column", () => {
+    expect(dateAtColumn("2026-06-29", 4, true)).toBe("2026-07-03"); // Fri
+    expect(dateAtColumn("2026-06-29", 5, true)).toBe("2026-07-06"); // skips the weekend to next Mon
+    expect(dateAtColumn("2026-06-29", 10, true)).toBe("2026-07-13");
+    expect(dateAtColumn("2026-06-29", 5, false)).toBe("2026-07-04"); // calendar
+  });
+  it("shiftWorkingDays hops over weekends", () => {
+    expect(shiftWorkingDays("2026-07-03", 1, true)).toBe("2026-07-06"); // Fri +1 wd = Mon
+    expect(shiftWorkingDays("2026-07-06", -1, true)).toBe("2026-07-03"); // Mon −1 wd = Fri
+    expect(shiftWorkingDays("2026-07-03", 1, false)).toBe("2026-07-04"); // calendar
+  });
+  it("isWeekend flags Saturday and Sunday", () => {
+    expect(isWeekend("2026-07-04")).toBe(true); // Sat
+    expect(isWeekend("2026-07-05")).toBe(true); // Sun
+    expect(isWeekend("2026-07-03")).toBe(false); // Fri
+  });
+});
+
 describe("weekStart", () => {
   it("returns the week's first day — the Monday on/before a date — for a monday-start week", () => {
     expect(weekStart("2026-12-28", "monday")).toBe("2026-12-28"); // a Monday → itself
@@ -369,5 +406,11 @@ describe("applyDrag", () => {
   it("end resizes the right edge, clamped not to precede the start", () => {
     expect(applyDrag(span, "end", -3)).toEqual({ start: "2026-01-10", end: "2026-01-17" });
     expect(applyDrag(span, "end", -999)).toEqual({ start: "2026-01-10", end: "2026-01-10" });
+  });
+
+  it("with skip-weekends, a drag hops over the weekend (Fri +1 working day = Mon)", () => {
+    const fri = { start: "2026-07-03", end: "2026-07-03" }; // a Friday
+    expect(applyDrag(fri, "move", 1, true)).toEqual({ start: "2026-07-06", end: "2026-07-06" });
+    expect(applyDrag(fri, "move", 1, false)).toEqual({ start: "2026-07-04", end: "2026-07-04" }); // calendar
   });
 });

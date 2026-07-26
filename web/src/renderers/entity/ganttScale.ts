@@ -107,16 +107,18 @@ export function spanToDates(value: unknown): Span | null {
 }
 
 /** Apply a drag of `days` to a span: `move` shifts both ends (keeps duration);
- * `start` / `end` resize one edge, clamped so the range never inverts. */
-export function applyDrag(span: Span, mode: DragMode, days: number): Span {
+ * `start` / `end` resize one edge, clamped so the range never inverts. With
+ * `skip`, `days` is a count of WORKING days so the drag hops over weekends. */
+export function applyDrag(span: Span, mode: DragMode, days: number, skip = false): Span {
+  const shift = (d: string) => shiftWorkingDays(d, days, skip);
   if (mode === "move") {
-    return { start: shiftDate(span.start, days), end: shiftDate(span.end, days) };
+    return { start: shift(span.start), end: shift(span.end) };
   }
   if (mode === "start") {
-    const start = shiftDate(span.start, days);
+    const start = shift(span.start);
     return { start: start > span.end ? span.end : start, end: span.end };
   }
-  const end = shiftDate(span.end, days);
+  const end = shift(span.end);
   return { start: span.start, end: end < span.start ? span.start : end };
 }
 
@@ -265,6 +267,57 @@ function weekdayOf(date: string): number {
 export function weekStart(date: string, start: Weekday = "monday"): string {
   const offset = (weekdayOf(date) - WEEKDAY_INDEX[start] + 7) % 7;
   return shiftDate(date, -offset);
+}
+
+// ── working-day (skip-weekends) columns ─────────────────────────────────────
+// A "column" is a unit of horizontal gantt space. With skip-weekends on, one
+// column = one WORKING day (Mon–Fri) and weekends collapse to zero width; off,
+// one column = one calendar day (so every fn below is a no-op passthrough then).
+
+/** Whether `date` is a Saturday or Sunday. */
+export function isWeekend(date: string): boolean {
+  const d = weekdayOf(date);
+  return d === 0 || d === 6;
+}
+
+/** The column index of `date` relative to `from`: working days when `skip`, else
+ * calendar days. Signed; a weekend date collapses onto the following working
+ * column (so Fri, Sat, Sun, next-Mon are cols n, n+1, n+1, n+1). */
+export function columnOf(from: string, date: string, skip: boolean): number {
+  if (!skip) return daysBetween(from, date);
+  if (date === from) return 0;
+  const sign = date > from ? 1 : -1;
+  const lo = sign > 0 ? from : date;
+  const total = daysBetween(lo, sign > 0 ? date : from); // ≥ 0
+  const fullWeeks = Math.floor(total / 7);
+  let wd = fullWeeks * 5;
+  const dow = weekdayOf(lo);
+  for (let i = fullWeeks * 7; i < total; i++) {
+    const w = (dow + i) % 7;
+    if (w !== 0 && w !== 6) wd++;
+  }
+  return sign * wd;
+}
+
+/** The calendar date at working-day column `col` from `minDate` (inverse of
+ * {@link columnOf}); plain `shiftDate` when not skipping. */
+export function dateAtColumn(minDate: string, col: number, skip: boolean): string {
+  if (!skip) return shiftDate(minDate, col);
+  const dir = col >= 0 ? 1 : -1;
+  let remaining = Math.abs(col);
+  let d = minDate;
+  while (remaining > 0) {
+    d = shiftDate(d, dir);
+    if (!isWeekend(d)) remaining--;
+  }
+  return d;
+}
+
+/** Add (or subtract) `n` WORKING days to a date, hopping over weekends; plain
+ * `shiftDate` when not skipping. */
+export function shiftWorkingDays(date: string, n: number, skip: boolean): string {
+  if (!skip) return shiftDate(date, n);
+  return dateAtColumn(date, n, true);
 }
 
 /** How a year's first week is anchored. `jan1` = the week containing Jan 1;
