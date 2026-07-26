@@ -178,26 +178,23 @@ describe("TableView", () => {
     expect(screen.getAllByLabelText("edit title").map((el) => el.textContent)).toEqual(["A", "B", "C"]);
   });
 
-  it("reorders a row up via the manual handle, writing a rank (#GH-projects P4)", () => {
-    const onPatch = vi.fn();
+  it("gives each row a drag grip for manual reorder (#GH-projects)", () => {
     const typeWithRank: EntityType = { ...issueType, fields: [...issueType.fields, { name: "rank", role: "rank" }] };
     render(
       <EntityViewBody
         spec={{ view: "table", entity: "issue", columns: ["title"] }}
         type={typeWithRank}
-        entities={[issue(1, { title: "A", rank: 1 }), issue(2, { title: "B", rank: 2 }), issue(3, { title: "C", rank: 3 })]}
+        entities={[issue(1, { title: "A", rank: 1 }), issue(2, { title: "B", rank: 2 })]}
         onCreate={vi.fn()}
-        onPatch={onPatch}
+        onPatch={vi.fn()}
       />,
     );
-    // move #2 up → in front of #1(1) → rank 0
-    fireEvent.click(screen.getByLabelText("move 2 up"));
-    expect(onPatch).toHaveBeenCalledWith(2, { rank: 0 });
-    // the top row can't move up
-    expect(screen.getByLabelText("move 1 up")).toBeDisabled();
+    // a drag handle per row (the reorder OUTCOME is covered by tableDragResult unit tests)
+    expect(screen.getByLabelText("drag 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("drag 2")).toBeInTheDocument();
   });
 
-  it("hides the manual reorder handle when a sort or grouping is active (#GH-projects P4)", () => {
+  it("hides the manual reorder grip when a sort or grouping is active (#GH-projects)", () => {
     const typeWithRank: EntityType = { ...issueType, fields: [...issueType.fields, { name: "rank", role: "rank" }] };
     const entities = [issue(1, { title: "A", status: "open", rank: 1 }), issue(2, { title: "B", status: "done", rank: 2 })];
     const { rerender } = render(
@@ -209,7 +206,7 @@ describe("TableView", () => {
         onPatch={vi.fn()}
       />,
     );
-    expect(screen.queryByLabelText(/move \d+ up/)).not.toBeInTheDocument(); // sorted → no manual handle
+    expect(screen.queryByLabelText(/drag \d+/)).not.toBeInTheDocument(); // sorted → no manual handle
     rerender(
       <EntityViewBody
         spec={{ view: "table", entity: "issue", columns: ["title", "status"], group_by: "status" }}
@@ -219,7 +216,7 @@ describe("TableView", () => {
         onPatch={vi.fn()}
       />,
     );
-    expect(screen.queryByLabelText(/move \d+ up/)).not.toBeInTheDocument(); // grouped → no manual handle
+    expect(screen.queryByLabelText(/drag \d+/)).not.toBeInTheDocument(); // grouped → no manual handle
   });
 
   it("shows a value cell as text at rest and reveals the editor only on click (#3)", () => {

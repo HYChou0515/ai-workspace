@@ -7,6 +7,16 @@
  * Registered as the `table` kind in `viewKindRegistry`.
  */
 
+import {
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 import { Fragment, useEffect, useRef, useState } from "react";
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
@@ -15,8 +25,8 @@ import { refOptions, type RefIndex, type RefOption, traverseColumn } from "./ref
 import { RoleField, widgetForRole } from "./roleWidget";
 import { selectColor } from "./selectColor";
 import { fieldText, roleOf } from "./shared";
-import { rankForMove, sortRows } from "./sortRows";
-import { filterEntities, sortEntities, type SortDir } from "./tableOps";
+import { sortRows } from "./sortRows";
+import { filterEntities, sortEntities, type SortDir, tableDragResult } from "./tableOps";
 import type { EntityViewProps, ViewSpec } from "./types";
 
 function columnsFor(spec: ViewSpec, type: EntityType | null, entities: EntityInstance[]): string[] {
@@ -105,46 +115,26 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
       return next;
     });
   const groups = groupField ? groupRows(rows, groupField, type, users, refIndex) : null;
-  // #GH-projects P4 — manual drag-order reorder (▲/▼) shows only in the plain
-  // manual view: a writer, no grouping, and no active sort (a sorted or grouped
-  // table follows that order, GitHub's model). Writes the shared `rank`.
+  // #GH-projects — manual drag-reorder is offered only in the plain manual view:
+  // a writer, no grouping, and no active sort (a sorted / grouped table follows
+  // THAT order, GitHub's model). Dragging a row's grip writes the shared `rank`;
+  // dragging a row that's part of a multi-selection moves the whole block.
   const manualMode = !readOnly && !groupField && !sort && !(spec.sort?.length);
-  const colTotal = columns.length + 2 + (manualMode ? 1 : 0); // + checkbox + # (+ reorder)
+  const colTotal = columns.length + 2 + (manualMode ? 1 : 0); // + checkbox + # (+ drag grip)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor),
+  );
+  const onRowDragEnd = (ev: DragEndEvent) => {
+    const updates = tableDragResult(String(ev.active.id), ev.over ? String(ev.over.id) : null, rows, selected);
+    updates.forEach((rank, number) => onPatch(number, { rank }));
+  };
 
   const renderRow = (e: EntityInstance) => {
     // A lint warning marks its field's cell yellow, still editable (§D).
     const warn = warningsByField(e.diagnostics);
-    const idx = rows.findIndex((r) => r.number === e.number);
     return (
-      <tr key={e.number}>
-        {manualMode && (
-          <td className="ev-table__reorder">
-            <button
-              type="button"
-              className="ev-iconbtn"
-              aria-label={`move ${e.number} up`}
-              disabled={busy || idx === 0}
-              onClick={() => {
-                const rank = rankForMove(rows, e.number, -1);
-                if (rank != null) onPatch(e.number, { rank });
-              }}
-            >
-              ▲
-            </button>
-            <button
-              type="button"
-              className="ev-iconbtn"
-              aria-label={`move ${e.number} down`}
-              disabled={busy || idx === rows.length - 1}
-              onClick={() => {
-                const rank = rankForMove(rows, e.number, 1);
-                if (rank != null) onPatch(e.number, { rank });
-              }}
-            >
-              ▼
-            </button>
-          </td>
-        )}
+      <DraggableRow key={e.number} number={e.number} manualMode={manualMode} selected={selected.has(e.number)}>
         <td className="ev-table__check">
           {!readOnly && (
             <input
@@ -189,7 +179,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
             </td>
           );
         })}
-      </tr>
+      </DraggableRow>
     );
   };
 
@@ -231,9 +221,10 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
         </div>
       )}
 
-      <div className="ev-table-wrap scrollable">
-        <table className="ev-table">
-          <thead>
+      <DndContext sensors={sensors} onDragEnd={onRowDragEnd}>
+        <div className="ev-table-wrap scrollable">
+          <table className="ev-table">
+            <thead>
             <tr>
               {manualMode && <th className="ev-table__reorder" aria-hidden />}
               <th className="ev-table__check">
@@ -331,9 +322,52 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
               </tr>
             ))}
           </tbody>
-        </table>
-      </div>
+          </table>
+        </div>
+      </DndContext>
     </div>
+  );
+}
+
+/** A table row that is a drag SOURCE (its leading grip) and a drop TARGET (the
+ * whole row), for manual reorder (#GH-projects). Dragging the grip of a row
+ * that's part of a multi-selection moves the whole block (see tableDragResult).
+ * Outside manual mode both hooks are disabled and the grip cell is omitted. */
+function DraggableRow({
+  number,
+  manualMode,
+  selected,
+  children,
+}: {
+  number: number;
+  manualMode: boolean;
+  selected: boolean;
+  children: React.ReactNode;
+}) {
+  const { attributes, listeners, setNodeRef: setDrag } = useDraggable({ id: `row-${number}`, disabled: !manualMode });
+  const { setNodeRef: setDrop, isOver } = useDroppable({ id: `row-${number}`, disabled: !manualMode });
+  return (
+    <tr
+      ref={setDrop}
+      className={selected ? "ev-table__row--selected" : undefined}
+      data-over={manualMode && isOver ? "" : undefined}
+    >
+      {manualMode && (
+        <td className="ev-table__reorder">
+          <span
+            ref={setDrag}
+            className="ev-drag-grip"
+            {...attributes}
+            {...listeners}
+            aria-label={`drag ${number}`}
+            title="Drag to reorder"
+          >
+            ⠿
+          </span>
+        </td>
+      )}
+      {children}
+    </tr>
   );
 }
 

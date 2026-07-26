@@ -464,30 +464,35 @@
   white-space: nowrap;
   text-align: center;
 }
-/* manual reorder handle column (#GH-projects P4) */
+/* manual drag-reorder grip column (#GH-projects) */
 .ev-table__reorder {
-  width: 26px;
+  width: 24px;
   white-space: nowrap;
   text-align: center;
   line-height: 1;
 }
-.ev-iconbtn {
-  display: block;
-  width: 100%;
-  border: none;
-  background: none;
+.ev-drag-grip {
+  display: inline-block;
+  cursor: grab;
   color: var(--text-paper-d);
-  cursor: pointer;
-  padding: 0;
-  font-size: var(--text-xs);
-  line-height: 1.1;
+  font-size: var(--text-body);
+  line-height: 1;
+  user-select: none;
+  touch-action: none; /* dnd-kit pointer sensor needs the browser to not pan */
 }
-.ev-iconbtn:hover:not(:disabled) {
+.ev-drag-grip:hover {
   color: var(--text-paper);
 }
-.ev-iconbtn:disabled {
-  opacity: 0.3;
-  cursor: default;
+.ev-drag-grip:active {
+  cursor: grabbing;
+}
+/* a multi-selected row (moves as a block when dragged) */
+.ev-table__row--selected td {
+  background: var(--accent-soft);
+}
+/* the row a drag is hovering over — a drop-before indicator line */
+.ev-table tbody tr[data-over] td {
+  box-shadow: inset 0 2px 0 var(--accent);
 }
 /* At-rest value cell: plain text (no native select / date-picker chrome) so the
  * grid reads as data AND stays narrow — a row of always-on controls pushed the

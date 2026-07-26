@@ -107,24 +107,29 @@ export function rankForDrop(
   return (rankOf(above) + overRank) / 2; // between `above` and `over`
 }
 
-/** The `rank` to write to nudge a record one slot UP (`dir` -1) or DOWN (+1) in
- * the current `ordered` list — the keyboard/button reorder that mirrors a drag
- * (#GH-projects P4). `null` when already at that edge. */
-export function rankForMove(
+/** The `rank`s to write when a drag drops a BLOCK of records (one, or a whole
+ * multi-selection) immediately BEFORE the `over` record — evenly spaced between
+ * `over` and whatever sits above it, keeping the block's current relative order.
+ * Returns a `{number → rank}` map for exactly the moved records (empty = no-op:
+ * dropped onto the block itself or an unknown target). A single-record block is
+ * the same midpoint `rankForDrop` gives. */
+export function ranksForBlockDrop(
   ordered: EntityInstance[],
-  number: number,
-  dir: -1 | 1,
-): number | null {
-  const i = ordered.findIndex((r) => r.number === number);
-  if (i < 0) return null;
-  if (dir === -1) {
-    if (i === 0) return null;
-    return rankForDrop(ordered, number, ordered[i - 1].number); // in front of the one above
-  }
-  if (i >= ordered.length - 1) return null;
-  const below = ordered[i + 2]; // the record that will sit just below after moving down
-  if (below) return rankForDrop(ordered, number, below.number);
-  return rankOf(ordered[ordered.length - 1]) + 1; // to the very end
+  moving: number[],
+  overNumber: number,
+): Map<number, number> {
+  const movingSet = new Set(moving);
+  const out = new Map<number, number>();
+  if (movingSet.size === 0 || movingSet.has(overNumber)) return out;
+  const others = ordered.filter((r) => !movingSet.has(r.number));
+  const overIdx = others.findIndex((r) => r.number === overNumber);
+  if (overIdx < 0) return out;
+  const above = others[overIdx - 1];
+  const hi = rankOf(others[overIdx]);
+  const block = ordered.filter((r) => movingSet.has(r.number)); // keep display order
+  const lo = above ? rankOf(above) : hi - (block.length + 1); // room below `over` at the top
+  block.forEach((r, k) => out.set(r.number, lo + ((hi - lo) * (k + 1)) / (block.length + 1)));
+  return out;
 }
 
 /** Order rows by the view's sort tiers, or — when there are none — by the manual

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { buildRefIndex } from "./refTraversal";
-import { filterEntities, sortEntities } from "./tableOps";
+import { filterEntities, sortEntities, tableDragResult } from "./tableOps";
 
 const type: EntityType = {
   name: "issue",
@@ -62,5 +62,34 @@ describe("filterEntities", () => {
   it("ANDs multiple active filters", () => {
     const es2 = [rec(1, { status: "open", title: "a" }), rec(2, { status: "open", title: "b" })];
     expect(nums(filterEntities(es2, { status: "open", title: "b" }, type, undefined))).toEqual([2]);
+  });
+});
+
+describe("tableDragResult (drag reorder, single + multi-select)", () => {
+  const rec = (n: number, rank: number): EntityInstance => ({ number: n, type_name: "issue", fields: { rank }, body: "", diagnostics: [] });
+  const rows = [rec(1, 10), rec(2, 20), rec(3, 30), rec(4, 40)];
+
+  it("drags one row before another, writing just that row's rank", () => {
+    const m = tableDragResult("row-4", "row-2", rows, new Set());
+    // move #4 before #2 → between #1(10) and #2(20) = 15
+    expect([...m]).toEqual([[4, 15]]);
+  });
+
+  it("drags the WHOLE multi-selection when the dragged row is selected", () => {
+    const m = tableDragResult("row-1", "row-3", rows, new Set([1, 4])); // #1 dragged, {1,4} selected
+    expect(m.has(1)).toBe(true);
+    expect(m.has(4)).toBe(true);
+    expect(m.get(1)! < m.get(4)!).toBe(true); // block keeps order, lands before #3
+  });
+
+  it("ignores the selection when only one row is selected (drags just the dragged)", () => {
+    const m = tableDragResult("row-4", "row-2", rows, new Set([4]));
+    expect([...m]).toEqual([[4, 15]]);
+  });
+
+  it("is a no-op for a non-row id or a drop on the moving block", () => {
+    expect(tableDragResult("row-4", null, rows, new Set()).size).toBe(0);
+    expect(tableDragResult("row-4", "col-done", rows, new Set()).size).toBe(0);
+    expect(tableDragResult("row-2", "row-2", rows, new Set()).size).toBe(0);
   });
 });

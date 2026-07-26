@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
 import { buildRefIndex } from "./refTraversal";
-import { rankForDrop, rankForMove, sortRows } from "./sortRows";
+import { ranksForBlockDrop, rankForDrop, sortRows } from "./sortRows";
 import type { SortRule } from "./types";
 
 const type: EntityType = {
@@ -140,26 +140,38 @@ describe("rankForDrop", () => {
   });
 });
 
-describe("rankForMove", () => {
-  const ordered = [rec(1, { rank: 10 }), rec(2, { rank: 20 }), rec(3, { rank: 30 })];
+describe("ranksForBlockDrop (drag reorder, single + multi-select)", () => {
+  const ordered = [rec(1, { rank: 10 }), rec(2, { rank: 20 }), rec(3, { rank: 30 }), rec(4, { rank: 40 })];
 
-  it("moves up one slot (in front of the row above)", () => {
-    // #2 up → in front of #1(10) → top → 10 - 1 = 9
-    expect(rankForMove(ordered, 2, -1)).toBe(9);
-    // #3 up → in front of #2(20), between #1(10) and #2(20) = 15
-    expect(rankForMove(ordered, 3, -1)).toBe(15);
+  it("a single row drops before a middle row → the midpoint (same as rankForDrop)", () => {
+    // move [3] before #2 → between #1(10) and #2(20) = 15
+    expect([...ranksForBlockDrop(ordered, [3], 2)]).toEqual([[3, 15]]);
   });
 
-  it("moves down one slot", () => {
-    // #1 down → past #2, in front of #3(30) → between #2(20) and #3(30) = 25
-    expect(rankForMove(ordered, 1, 1)).toBe(25);
-    // #2 down → it's second-last, so it goes to the very end → 30 + 1 = 31
-    expect(rankForMove(ordered, 2, 1)).toBe(31);
+  it("a single row drops before the first row → just under it", () => {
+    // move [4] before #1(10) → 10 - (1+1) = 8 lo → midpoint (8,10) = 9
+    expect([...ranksForBlockDrop(ordered, [4], 1)]).toEqual([[4, 9]]);
   });
 
-  it("is a no-op at the edges", () => {
-    expect(rankForMove(ordered, 1, -1)).toBeNull(); // already top
-    expect(rankForMove(ordered, 3, 1)).toBeNull(); // already bottom
-    expect(rankForMove(ordered, 99, -1)).toBeNull(); // unknown
+  it("a multi-selection moves as a contiguous block, keeping its relative order", () => {
+    // move [1,4] before #3 → between #2(20) and #3(30), evenly spaced, #1 before #4
+    const m = ranksForBlockDrop(ordered, [1, 4], 3);
+    expect(m.get(1)).toBeCloseTo(23.333, 2);
+    expect(m.get(4)).toBeCloseTo(26.667, 2);
+    expect(m.get(1)! < m.get(4)!).toBe(true); // relative order preserved
+  });
+
+  it("a multi-selection dropped at the top gets ranks all below the target", () => {
+    // move [3,4] before #1(10) → lo = 10 - (2+1) = 7, spaced in (7,10): 8, 9
+    const m = ranksForBlockDrop(ordered, [3, 4], 1);
+    expect(m.get(3)).toBeCloseTo(8, 5);
+    expect(m.get(4)).toBeCloseTo(9, 5);
+  });
+
+  it("is a no-op when the target is inside the moving block, or unknown", () => {
+    expect(ranksForBlockDrop(ordered, [2], 2).size).toBe(0);
+    expect(ranksForBlockDrop(ordered, [1, 2], 1).size).toBe(0);
+    expect(ranksForBlockDrop(ordered, [2], 99).size).toBe(0);
+    expect(ranksForBlockDrop(ordered, [], 2).size).toBe(0);
   });
 });
