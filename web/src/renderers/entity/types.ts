@@ -34,6 +34,9 @@ export type ViewSpec = {
   /** gantt: an `actor`-role field whose avatar is shown on each bar — "who is
    * responsible" at a glance, the standard PM-tool convention. */
   assignee?: string;
+  /** gantt: how the `assignee` shows on each bar — `avatar` (default, round
+   * photo/initials), `name` (full name text), or `none` (hidden). */
+  assignee_display?: "avatar" | "name" | "none";
   /** gantt only — a custom (non-ISO) week-numbering rule for the time axis.
    * Read verbatim off the view file; omit to keep plain day/month labels. */
   week?: WeekRule;
@@ -63,6 +66,10 @@ export type ViewConfig = {
    * shows a "Working days" section; toggling persists straight to the view file. */
   skipWeekends?: boolean;
   onToggleSkipWeekends?: (next: boolean) => void;
+  /** gantt only — how each bar shows its assignee (avatar | name | none). Present
+   * ⇒ the panel shows a "People" section; changing it persists to the view file. */
+  assigneeDisplay?: string;
+  onSetAssigneeDisplay?: (mode: string) => void;
   dirty: boolean;
   saving?: boolean;
   onSave: () => void;

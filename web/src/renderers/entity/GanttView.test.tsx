@@ -106,6 +106,18 @@ describe("GanttView", () => {
     expect(screen.getByTestId("bar-1-assignee")).toHaveAttribute("title", "Alice Chen");
   });
 
+  it("shows the assignee's NAME on the bar when assignee_display is 'name'", () => {
+    const spec = { view: "gantt" as const, entity: "issue", span: "span", label: "title", assignee: "assignee", assignee_display: "name" as const };
+    render(<GanttView {...props({ spec, users, entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-05", assignee: "alice" })] })} />);
+    expect(screen.getByTestId("bar-1-assignee")).toHaveTextContent("Alice Chen");
+  });
+
+  it("hides the assignee when assignee_display is 'none'", () => {
+    const spec = { view: "gantt" as const, entity: "issue", span: "span", label: "title", assignee: "assignee", assignee_display: "none" as const };
+    render(<GanttView {...props({ spec, users, entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-05", assignee: "alice" })] })} />);
+    expect(screen.queryByTestId("bar-1-assignee")).not.toBeInTheDocument();
+  });
+
   it("labels an actor group_by lane with the user's name, not the raw id (② resource view)", () => {
     const spec = { view: "gantt" as const, entity: "issue", span: "span", label: "title", group_by: "assignee" };
     render(<GanttView {...props({ spec, users, entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-05", assignee: "alice" })] })} />);

@@ -99,6 +99,7 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
   const assigneeField = spec.assignee;
+  const assigneeDisplay = spec.assignee_display ?? "avatar";
   // null ⇒ auto-fit the whole project to the measured pane (fills the width on
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
   const [manualPpd, setManualPpd] = useState<number | null>(null);
@@ -283,8 +284,13 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
                         </span>
-                        {assigneeField && (
-                          <BarAvatar number={row.e.number} value={row.e.fields[assigneeField]} users={users} />
+                        {assigneeField && assigneeDisplay !== "none" && (
+                          <BarAssignee
+                            number={row.e.number}
+                            value={row.e.fields[assigneeField]}
+                            users={users}
+                            mode={assigneeDisplay}
+                          />
                         )}
                         <div
                           data-testid={`bar-${row.e.number}-start`}
@@ -315,13 +321,21 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   );
 }
 
-/** The assignee's avatar on a bar — "who is responsible" at a glance (§①). Reuses
- * the shared `.ev-avatar` chrome (initials, or a photo when we have one). */
-function BarAvatar({ number, value, users }: { number: number; value: unknown; users?: User[] }) {
+/** The assignee on a bar — "who is responsible" at a glance (§①). `mode` picks the
+ * shape: `avatar` (round photo/initials, the shared `.ev-avatar` chrome) or `name`
+ * (the full name as text). Callers skip it entirely for `none`. */
+function BarAssignee({ number, value, users, mode }: { number: number; value: unknown; users?: User[]; mode: string }) {
   const id = fieldText(value);
   if (!id) return null;
   const u = users?.find((x) => x.id === id);
   const name = u?.name ?? id;
+  if (mode === "name") {
+    return (
+      <span data-testid={`bar-${number}-assignee`} className="ev-gantt__bar-assignee-name" title={name}>
+        {name}
+      </span>
+    );
+  }
   const initials =
     (name || "?")
       .split(/[\s_-]+/)

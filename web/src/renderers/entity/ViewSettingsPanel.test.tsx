@@ -69,6 +69,16 @@ describe("ViewSettingsPanel", () => {
     expect(screen.queryByText("Fields")).not.toBeInTheDocument();
   });
 
+  it("shows a People display select when the config carries it, and changing it calls onSetAssigneeDisplay", () => {
+    const onSetAssigneeDisplay = vi.fn();
+    render(<ViewSettingsPanel config={config({ assigneeDisplay: "avatar", onSetAssigneeDisplay })} />);
+    open();
+    const sel = screen.getByRole("combobox", { name: "people display" });
+    expect(sel).toHaveValue("avatar");
+    fireEvent.change(sel, { target: { value: "name" } });
+    expect(onSetAssigneeDisplay).toHaveBeenCalledWith("name");
+  });
+
   it("toggles a field's visibility", () => {
     const onToggleField = vi.fn();
     render(<ViewSettingsPanel config={config({ onToggleField })} />);

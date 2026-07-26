@@ -160,6 +160,25 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
             </section>
           )}
 
+          {config.onSetAssigneeDisplay && (
+            <section className="ev-viewpanel__sec">
+              <label className="ev-viewpanel__label" htmlFor="ev-people">
+                People
+              </label>
+              <select
+                id="ev-people"
+                className="ev-select"
+                aria-label="people display"
+                value={config.assigneeDisplay ?? "avatar"}
+                onChange={(e) => config.onSetAssigneeDisplay?.(e.target.value)}
+              >
+                <option value="avatar">Avatar</option>
+                <option value="name">Name</option>
+                <option value="none">Off</option>
+              </select>
+            </section>
+          )}
+
           {config.dirty && (
             <div className="ev-viewpanel__foot">
               <button
