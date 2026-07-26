@@ -89,6 +89,13 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+#: Window decisions already reported (see `_agent_for`), as `(model, window)`.
+#: Keyed on the DECISION rather than the model: a deploy states its window once
+#: instead of every turn, but a window that later changes — the learner supplying
+#: what a rejection taught it — is stated again instead of hiding behind the first
+#: turn's line.
+_NUM_CTX_SEEN: set[tuple[str, int | None]] = set()
+
 # Drop params a model doesn't support (e.g. reasoning_effort on a non-reasoning
 # model) instead of erroring — the per-message reasoning-effort selector sends
 # it to every model, and LiteLLM's support varies by provider.
@@ -274,6 +281,7 @@ def _agent_for(
     base_url: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    context_window: int | None = None,
     app_slug: str | None = None,
     template_profile: str | None = None,
     fallback_chains: FallbackChains | None = None,
@@ -365,13 +373,56 @@ def _agent_for(
         if config.repetition_penalty is not None
         else {}
     )
+    # Ollama opens its OWN default window (4,096), not the model's, and drops the
+    # overflow silently from the FRONT — so an over-long turn loses the App's
+    # identity and instructions and keeps the tool inventory that sits at the end,
+    # then answers fluently from a prompt it never saw the start of. Measured: a
+    # turn sending ~11,000 tokens (6.5k system prompt + 4.5k tool schemas) was
+    # reported back as exactly 4,096 read, three calls out of three.
+    #
+    # `context_window` is the SAME figure `resolve_context_limit` already gives the
+    # turn builder to size the history budget, so what we plan for and what we ask
+    # the endpoint to open are one number, not two. `None` (nothing could answer
+    # how big this endpoint is) leaves the endpoint's own default alone — a guess
+    # here would be the invented-constant defect #624 exists for.
+    #
+    # It must ride `extra_args` (splatted as a top-level completion kwarg), NOT
+    # `extra_body`: measured against the daemon on an over-long prompt, top-level
+    # read 9,023 tokens where the same value in `extra_body` still read 4,096.
+    is_ollama = config.model.startswith(("ollama/", "ollama_chat/"))
+    ollama_args = {"num_ctx": context_window} if is_ollama and context_window else {}
+    # Report the decision once — an operator's first question is how big a window
+    # this deploy settled on, and answering only on failure leaves the working case
+    # unknowable. Non-Ollama endpoints size their own window, so there is no
+    # decision of ours to report and their silence is correct on every turn.
+    if is_ollama and (key := (config.model, context_window)) not in _NUM_CTX_SEEN:
+        _NUM_CTX_SEEN.add(key)
+        if context_window:
+            _LOGGER.info(
+                "litellm_runner: opening a %d-token window on %s (num_ctx)",
+                context_window,
+                config.model,
+            )
+        else:
+            # The one combination that still truncates in silence: Ollama WILL
+            # impose a window, and nothing could tell us how big to ask for — so it
+            # serves its own default and drops the rest, from the front. Unsaid,
+            # that reads as a model which stopped following its prompt.
+            _LOGGER.warning(
+                "litellm_runner: no context window resolved for %s, so no num_ctx "
+                "is sent — Ollama will serve its own default and silently drop "
+                "anything over it. Set agents.context_limit, or bake num_ctx into "
+                "the model's Modelfile.",
+                config.model,
+            )
     if reasoning_effort == "none":
         from ..agent.reasoning import reasoning_off_kwargs
 
         off = reasoning_off_kwargs(config.model)
         # think → extra_args (top-level kwarg); extra_body → extra_body.
         model_settings = ModelSettings(
-            extra_args={"think": off["think"]} if "think" in off else None,
+            extra_args={**ollama_args, **({"think": off["think"]} if "think" in off else {})}
+            or None,
             extra_body={**(off.get("extra_body") or {}), **rep_body} or None,
             frequency_penalty=freq,
             presence_penalty=pres,
@@ -380,12 +431,14 @@ def _agent_for(
         # effort is validated to low/medium/high by the request body.
         model_settings = ModelSettings(
             reasoning=Reasoning(effort=reasoning_effort),  # ty: ignore[invalid-argument-type]
+            extra_args=ollama_args or None,
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
         )
     else:
         model_settings = ModelSettings(
+            extra_args=ollama_args or None,
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
@@ -1167,6 +1220,7 @@ class LitellmAgentRunner:
             base_url=self._base_url,
             api_key=self._api_key,
             reasoning_effort=ctx.reasoning_effort,
+            context_window=ctx.context_window,
             app_slug=ctx.app_slug,
             template_profile=ctx.template_profile,
             fallback_chains=self._fallback_chains,
@@ -1326,6 +1380,7 @@ class LitellmAgentRunner:
             base_url=self._base_url,
             api_key=self._api_key,
             reasoning_effort=ctx.reasoning_effort,
+            context_window=ctx.context_window,
             app_slug=ctx.app_slug,
             template_profile=ctx.template_profile,
             fallback_chains=self._fallback_chains,
