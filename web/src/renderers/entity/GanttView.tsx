@@ -15,6 +15,15 @@
  * backend role vocabulary doesn't have yet (tracked as a #450 sub-item).
  */
 
+import {
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 import { useEffect, useRef, useState } from "react";
 
 import type { EntityInstance } from "../../api/entities";
@@ -24,7 +33,7 @@ import {
   axisFor,
   canvasWidthFor,
   clampPpd,
-  daysBetween,
+  columnOf,
   deltaDays,
   type DragMode,
   PPD_ANCHORS,
@@ -38,6 +47,7 @@ import {
 } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
+import { rankForDrop, sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
 
 const GUTTER = 150;
@@ -99,6 +109,7 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
   const assigneeField = spec.assignee;
+  const assigneeDisplay = spec.assignee_display ?? "avatar";
   // null ⇒ auto-fit the whole project to the measured pane (fills the width on
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
   const [manualPpd, setManualPpd] = useState<number | null>(null);
@@ -116,8 +127,11 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  const rows: Row[] = entities
+  // #GH-projects — order rows by the view's sort tiers, or (with none) the manual
+  // `rank`, exactly like the table/board, so the Timeline reads in the SAME order.
+  const rows: Row[] = sortRows(entities, spec.sort, type ?? null, refIndex, users)
     .map((e) => ({ e, span: spanToDates(e.fields[spanField]) }))
     .filter((r): r is Row => r.span !== null);
 
@@ -125,9 +139,13 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
     return <div style={{ color: "var(--text-paper-d)" }}>No records with a date range to chart yet.</div>;
   }
 
+  // #648: `skip_weekends` collapses Sat/Sun — every position is a COLUMN offset
+  // (working days when on, calendar days when off) via columnOf, so the whole
+  // gantt — axis, bars, drag, today — counts only working days.
+  const skip = spec.skip_weekends ?? false;
   const minDate = rows.map((r) => r.span.start).reduce((m, s) => (s < m ? s : m));
   const maxDate = rows.map((r) => r.span.end).reduce((m, e) => (e > m ? e : m));
-  const totalDays = daysBetween(minDate, maxDate) + 1;
+  const totalDays = columnOf(minDate, maxDate, skip) + 1;
   // Default density fits the whole project into the pane (fills the width with
   // no empty gap); once measured, the user's slider choice takes over. Fall back
   // to the week anchor before the pane is measured (first paint / SSR).
@@ -138,10 +156,28 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   // grid then spans the whole canvas so there is no empty gap.
   const canvasWidth = canvasWidthFor(totalDays, ppd, paneAvail);
   const visibleDays = visibleDaysFor(canvasWidth, ppd);
-  const xOf = (date: string) => daysBetween(minDate, date) * ppd;
+  const xOf = (date: string) => columnOf(minDate, date, skip) * ppd;
 
   const lanes = groupLanes(rows, spec.group_by, type, refIndex, users);
   const grouped = Boolean(spec.group_by);
+
+  // #GH-projects — drag a row's left label up/down to reorder (writes the shared
+  // `rank`). Disabled while a sort is active (sort takes over) or a write is busy.
+  // Reorder stays WITHIN a swimlane; a drop onto another lane is a no-op.
+  const manualReorder = !busy && !(spec.sort?.length ?? 0);
+  const onRowDragEnd = (ev: DragEndEvent) => {
+    const active = ev.active.id as number;
+    const over = ev.over?.id as number | undefined;
+    if (over == null || active === over) return;
+    const lane = lanes.find((l) => l.rows.some((r) => r.e.number === active));
+    if (!lane || !lane.rows.some((r) => r.e.number === over)) return;
+    const rank = rankForDrop(
+      lane.rows.map((r) => r.e),
+      active,
+      over,
+    );
+    if (rank != null) onPatch(active, { rank });
+  };
 
   // Drag: capture the down point + density, track on window, commit one patch on up.
   const startDrag = (number: number, mode: DragMode, e: React.PointerEvent) => {
@@ -157,7 +193,7 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
       window.removeEventListener("pointerup", onUp);
       setDrag(null);
       const days = deltaDays(ev.clientX - downX, dragPpd);
-      if (days !== 0) onPatch(number, { [spanField]: spanValue(applyDrag(row.span, mode, days)) });
+      if (days !== 0) onPatch(number, { [spanField]: spanValue(applyDrag(row.span, mode, days, skip)) });
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -165,17 +201,21 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   };
 
   const previewSpan = (row: Row): Span =>
-    drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days) : row.span;
+    drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days, skip) : row.span;
 
-  const axis = axisFor(minDate, visibleDays, ppd);
-
+  // `today` also feeds the week axis's `by_today` cross-year boundary, so it is
+  // computed before the axis. The clock is read here (the view shell) and
+  // injected into the pure scale math — never read inside it.
   const today = new Date().toISOString().slice(0, 10);
-  const todayOffset = daysBetween(minDate, today);
+  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip);
+
+  const todayOffset = columnOf(minDate, today, skip);
   const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
 
   return (
-    <div>
-      <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
+    <DndContext sensors={sensors} onDragEnd={onRowDragEnd}>
+      <div>
+        <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
         <div className="ev-gantt__zoom">
           <input
             type="range"
@@ -218,9 +258,9 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
                   </div>
                 )}
                 {lane.rows.map((row) => (
-                  <div key={row.e.number} className="ev-gantt__row-label" style={{ height: ROW_H }}>
+                  <GutterRow key={row.e.number} number={row.e.number} enabled={manualReorder}>
                     {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
-                  </div>
+                  </GutterRow>
                 ))}
               </div>
             ))}
@@ -262,7 +302,7 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
                 {lane.rows.map((row) => {
                   const ps = previewSpan(row);
                   const left = xOf(ps.start);
-                  const width = Math.max(daysBetween(ps.start, ps.end), 1) * ppd;
+                  const width = Math.max(columnOf(ps.start, ps.end, skip), 1) * ppd;
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
@@ -276,8 +316,13 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
                         </span>
-                        {assigneeField && (
-                          <BarAvatar number={row.e.number} value={row.e.fields[assigneeField]} users={users} />
+                        {assigneeField && assigneeDisplay !== "none" && (
+                          <BarAssignee
+                            number={row.e.number}
+                            value={row.e.fields[assigneeField]}
+                            users={users}
+                            mode={assigneeDisplay}
+                          />
                         )}
                         <div
                           data-testid={`bar-${row.e.number}-start`}
@@ -304,17 +349,50 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
           </div>
         </div>
       </div>
+      </div>
+    </DndContext>
+  );
+}
+
+/** A gantt gutter row: the left label doubles as a drag SOURCE + drop TARGET for
+ * manual reorder (#GH-projects) — no grip, the label itself drags up/down. When
+ * disabled (a sort is active / busy) it's an inert label. */
+function GutterRow({ number, enabled, children }: { number: number; enabled: boolean; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef: setDrag } = useDraggable({ id: number, disabled: !enabled });
+  const { setNodeRef: setDrop, isOver } = useDroppable({ id: number, disabled: !enabled });
+  return (
+    <div
+      ref={(el) => {
+        setDrag(el);
+        setDrop(el);
+      }}
+      className="ev-gantt__row-label"
+      style={{ height: ROW_H }}
+      data-drag={enabled ? "" : undefined}
+      data-over={enabled && isOver ? "" : undefined}
+      {...(enabled ? attributes : {})}
+      {...(enabled ? listeners : {})}
+    >
+      {children}
     </div>
   );
 }
 
-/** The assignee's avatar on a bar — "who is responsible" at a glance (§①). Reuses
- * the shared `.ev-avatar` chrome (initials, or a photo when we have one). */
-function BarAvatar({ number, value, users }: { number: number; value: unknown; users?: User[] }) {
+/** The assignee on a bar — "who is responsible" at a glance (§①). `mode` picks the
+ * shape: `avatar` (round photo/initials, the shared `.ev-avatar` chrome) or `name`
+ * (the full name as text). Callers skip it entirely for `none`. */
+function BarAssignee({ number, value, users, mode }: { number: number; value: unknown; users?: User[]; mode: string }) {
   const id = fieldText(value);
   if (!id) return null;
   const u = users?.find((x) => x.id === id);
   const name = u?.name ?? id;
+  if (mode === "name") {
+    return (
+      <span data-testid={`bar-${number}-assignee`} className="ev-gantt__bar-assignee-name" title={name}>
+        {name}
+      </span>
+    );
+  }
   const initials =
     (name || "?")
       .split(/[\s_-]+/)

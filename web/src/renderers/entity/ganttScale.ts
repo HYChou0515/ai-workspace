@@ -14,13 +14,13 @@ export type Span = { start: string; end: string };
 
 const DAY_MS = 86_400_000;
 
-/** The three named zoom stops, in px-per-day. They are no longer the ONLY
- * densities — the zoom is continuous (a slider) — but they remain the labelled
- * anchor points the slider snaps to, and bound its travel: `month` is the most
- * zoomed-out density we offer, `day` the most zoomed-in. */
+/** The three named zoom stops, in px-per-day — labelled anchor points the slider
+ * snaps to. They are NOT the ends of the track: it travels past `day` (zoom in
+ * further, days grow wider) and past `month` (zoom out further, months compress).
+ * So the anchors sit INSIDE [PPD_MIN, PPD_MAX]. */
 export const PPD_ANCHORS: Record<Zoom, number> = { day: 28, week: 10, month: 3 };
-export const PPD_MIN = PPD_ANCHORS.month;
-export const PPD_MAX = PPD_ANCHORS.day;
+export const PPD_MIN = 1; // most zoomed-out (further out than the `month` anchor)
+export const PPD_MAX = 56; // most zoomed-in (further in than the `day` anchor)
 
 export function pxPerDay(zoom: Zoom): number {
   return PPD_ANCHORS[zoom];
@@ -107,16 +107,18 @@ export function spanToDates(value: unknown): Span | null {
 }
 
 /** Apply a drag of `days` to a span: `move` shifts both ends (keeps duration);
- * `start` / `end` resize one edge, clamped so the range never inverts. */
-export function applyDrag(span: Span, mode: DragMode, days: number): Span {
+ * `start` / `end` resize one edge, clamped so the range never inverts. With
+ * `skip`, `days` is a count of WORKING days so the drag hops over weekends. */
+export function applyDrag(span: Span, mode: DragMode, days: number, skip = false): Span {
+  const shift = (d: string) => shiftWorkingDays(d, days, skip);
   if (mode === "move") {
-    return { start: shiftDate(span.start, days), end: shiftDate(span.end, days) };
+    return { start: shift(span.start), end: shift(span.end) };
   }
   if (mode === "start") {
-    const start = shiftDate(span.start, days);
+    const start = shift(span.start);
     return { start: start > span.end ? span.end : start, end: span.end };
   }
-  const end = shiftDate(span.end, days);
+  const end = shift(span.end);
   return { start: span.start, end: end < span.start ? span.start : end };
 }
 
@@ -154,28 +156,29 @@ function firstOfMonth(y: number, m: number): string {
   return `${y}-${String(m + 1).padStart(2, "0")}-01`;
 }
 
-/** Calendar-month bands clipped to [0, visibleDays), in day-offsets from
- * minDate. A band opening before minDate is clamped to day 0. */
-function monthBands(minDate: string, visibleDays: number): CoarseBand[] {
+/** Calendar-month bands clipped to [0, visibleDays), in COLUMN offsets from
+ * minDate (working-day columns when `skip`, else calendar days). A band opening
+ * before minDate is clamped to column 0. */
+function monthBands(minDate: string, visibleDays: number, skip: boolean): CoarseBand[] {
   const bands: CoarseBand[] = [];
   let cursor = 0;
   while (cursor < visibleDays) {
-    const { y, m } = ymd(shiftDate(minDate, cursor));
+    const { y, m } = ymd(dateAtColumn(minDate, cursor, skip));
     const nextStart = firstOfMonth(m === 11 ? y + 1 : y, m === 11 ? 0 : m + 1);
-    const bandEnd = Math.min(daysBetween(minDate, nextStart), visibleDays);
+    const bandEnd = Math.min(columnOf(minDate, nextStart, skip), visibleDays);
     bands.push({ day: cursor, days: bandEnd - cursor, label: `${MONTHS[m]} ${y}` });
     cursor = bandEnd;
   }
   return bands;
 }
 
-/** Calendar-year bands clipped to [0, visibleDays), in day-offsets from minDate. */
-function yearBands(minDate: string, visibleDays: number): CoarseBand[] {
+/** Calendar-year bands clipped to [0, visibleDays), in COLUMN offsets from minDate. */
+function yearBands(minDate: string, visibleDays: number, skip: boolean): CoarseBand[] {
   const bands: CoarseBand[] = [];
   let cursor = 0;
   while (cursor < visibleDays) {
-    const { y } = ymd(shiftDate(minDate, cursor));
-    const bandEnd = Math.min(daysBetween(minDate, `${y + 1}-01-01`), visibleDays);
+    const { y } = ymd(dateAtColumn(minDate, cursor, skip));
+    const bandEnd = Math.min(columnOf(minDate, `${y + 1}-01-01`, skip), visibleDays);
     bands.push({ day: cursor, days: bandEnd - cursor, label: String(y) });
     cursor = bandEnd;
   }
@@ -183,8 +186,9 @@ function yearBands(minDate: string, visibleDays: number): CoarseBand[] {
 }
 
 /** Fine ticks at calendar-month starts, thinned so labels fit at this density. */
-function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick[] {
-  const step = [1, 2, 3, 6, 12].find((s) => s * 30 * ppd >= AXIS_MIN_LABEL_PX) ?? 12;
+function monthTicks(minDate: string, visibleDays: number, ppd: number, skip: boolean): FineTick[] {
+  const monthCols = skip ? 22 : 30; // a month is ~22 working days when skipping weekends
+  const step = [1, 2, 3, 6, 12].find((s) => s * monthCols * ppd >= AXIS_MIN_LABEL_PX) ?? 12;
   const ticks: FineTick[] = [];
   let { y, m } = ymd(minDate);
   if (ymd(minDate).d !== 1) {
@@ -197,7 +201,7 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick
     }
   }
   for (let count = 0; ; count += 1) {
-    const day = daysBetween(minDate, firstOfMonth(y, m));
+    const day = columnOf(minDate, firstOfMonth(y, m), skip);
     if (day >= visibleDays) break;
     if (day >= 0 && count % step === 0) ticks.push({ day, label: MONTHS[m] });
     if (m === 11) {
@@ -212,15 +216,226 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number): FineTick
 
 /** Build the two-tier axis for a visible window of `visibleDays` from `minDate`
  * at `ppd` px/day. Zoomed in → day/week detail over month bands; zoomed out →
- * month labels over year bands. The fine row is always thinned to fit. */
-export function axisFor(minDate: string, visibleDays: number, ppd: number): Axis {
+ * month labels over year bands. The fine row is always thinned to fit.
+ *
+ * When a `week` rule is supplied, the detail-zone fine row shows CUSTOM WEEK
+ * CODES at week starts (e.g. `W627`) instead of day numbers — `today` feeds the
+ * `by_today` cross-year boundary. Zoomed all the way out (month zone) still
+ * shows months, since a week code per column would be far too dense there. */
+export function axisFor(minDate: string, visibleDays: number, ppd: number, week?: WeekRule, today = "", skip = false): Axis {
   if (ppd >= DETAIL_PPD) {
     const step = [1, 2, 5, 7, 14].find((s) => s * ppd >= AXIS_MIN_LABEL_PX) ?? 14;
-    const fine: FineTick[] = [];
-    for (let day = 0; day < visibleDays; day += step) {
-      fine.push({ day, label: String(ymd(shiftDate(minDate, day)).d) });
+    // With a week rule, week codes are a MIDDLE tier: once the day labels would
+    // thin past every other day (step ≥ 5) the row switches to week codes;
+    // zoomed in tighter than that it stays on day numbers (dates). So dragging
+    // day → week visibly flips dates into week codes.
+    if (week && step >= 5) {
+      return { unit: "week", fine: weekTicks(minDate, visibleDays, ppd, week, today, skip), coarse: monthBands(minDate, visibleDays, skip) };
     }
-    return { unit: step >= 7 ? "week" : "day", fine, coarse: monthBands(minDate, visibleDays) };
+    const fine: FineTick[] = [];
+    let d = minDate; // date at column 0
+    for (let col = 0; col < visibleDays; col += step) {
+      fine.push({ day: col, label: String(ymd(d).d) });
+      if (col + step < visibleDays) d = shiftWorkingDays(d, step, skip);
+    }
+    return { unit: step >= 7 ? "week" : "day", fine, coarse: monthBands(minDate, visibleDays, skip) };
   }
-  return { unit: "month", fine: monthTicks(minDate, visibleDays, ppd), coarse: yearBands(minDate, visibleDays) };
+  return { unit: "month", fine: monthTicks(minDate, visibleDays, ppd, skip), coarse: yearBands(minDate, visibleDays, skip) };
+}
+
+// ── custom week numbering (非 ISO) ──────────────────────────────────────────
+// A configurable "week code" scheme (e.g. manufacturing work-weeks) driven by a
+// per-view `week:` rule, NOT hardcoded to ISO-8601. All math is UTC + pure so it
+// unit-tests cleanly; the one clock input (`today`, for the `by_today` boundary)
+// is passed in, never read here.
+
+export type Weekday = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+
+const WEEKDAY_INDEX: Record<Weekday, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+/** The UTC day-of-week of a `YYYY-MM-DD` date, 0 = Sunday … 6 = Saturday. */
+function weekdayOf(date: string): number {
+  return new Date(`${date}T00:00:00Z`).getUTCDay();
+}
+
+/** The first day of the week `date` falls in, for a week that begins on `start`
+ * (default Monday). Returned as `YYYY-MM-DD`. */
+export function weekStart(date: string, start: Weekday = "monday"): string {
+  const offset = (weekdayOf(date) - WEEKDAY_INDEX[start] + 7) % 7;
+  return shiftDate(date, -offset);
+}
+
+// ── working-day (skip-weekends) columns ─────────────────────────────────────
+// A "column" is a unit of horizontal gantt space. With skip-weekends on, one
+// column = one WORKING day (Mon–Fri) and weekends collapse to zero width; off,
+// one column = one calendar day (so every fn below is a no-op passthrough then).
+
+/** Whether `date` is a Saturday or Sunday. */
+export function isWeekend(date: string): boolean {
+  const d = weekdayOf(date);
+  return d === 0 || d === 6;
+}
+
+/** The column index of `date` relative to `from`: working days when `skip`, else
+ * calendar days. Signed; a weekend date collapses onto the following working
+ * column (so Fri, Sat, Sun, next-Mon are cols n, n+1, n+1, n+1). */
+export function columnOf(from: string, date: string, skip: boolean): number {
+  if (!skip) return daysBetween(from, date);
+  if (date === from) return 0;
+  const sign = date > from ? 1 : -1;
+  const lo = sign > 0 ? from : date;
+  const total = daysBetween(lo, sign > 0 ? date : from); // ≥ 0
+  const fullWeeks = Math.floor(total / 7);
+  let wd = fullWeeks * 5;
+  const dow = weekdayOf(lo);
+  for (let i = fullWeeks * 7; i < total; i++) {
+    const w = (dow + i) % 7;
+    if (w !== 0 && w !== 6) wd++;
+  }
+  return sign * wd;
+}
+
+/** The calendar date at working-day column `col` from `minDate` (inverse of
+ * {@link columnOf}); plain `shiftDate` when not skipping. */
+export function dateAtColumn(minDate: string, col: number, skip: boolean): string {
+  if (!skip) return shiftDate(minDate, col);
+  const dir = col >= 0 ? 1 : -1;
+  let remaining = Math.abs(col);
+  let d = minDate;
+  while (remaining > 0) {
+    d = shiftDate(d, dir);
+    if (!isWeekend(d)) remaining--;
+  }
+  return d;
+}
+
+/** Add (or subtract) `n` WORKING days to a date, hopping over weekends; plain
+ * `shiftDate` when not skipping. */
+export function shiftWorkingDays(date: string, n: number, skip: boolean): string {
+  if (!skip) return shiftDate(date, n);
+  return dateAtColumn(date, n, true);
+}
+
+/** How a year's first week is anchored. `jan1` = the week containing Jan 1;
+ * `iso` = the ISO-8601 week (the one holding the year's first Thursday / Jan 4);
+ * `first_full` = the first week lying wholly inside the new year. */
+export type WeekAnchor = "jan1" | "iso" | "first_full";
+
+/** What to do with the cross-year week that holds BOTH Dec 31 and Jan 1 — it can
+ * be read as the old year's last week OR the new year's W01. `new_year` anchors
+ * every year at its Jan-1 week, so that week is the new year's W01 (the old year
+ * stops the week before); `old_year` anchors every year at its first FULL week,
+ * so that week is the old year's last; `by_today` picks per crossing by comparing
+ * `today` to that Jan 1 (before → old year's last, on/after → new year's W01). */
+export type WeekBoundary = "new_year" | "old_year" | "by_today";
+
+/** A per-view week-numbering rule. Every field has a default so a bare `{}` is
+ * a valid (ISO-ish `jan1`) rule; the FE reads it verbatim off the view file. */
+export type WeekRule = {
+  start?: Weekday;
+  first_week?: WeekAnchor;
+  reset?: "yearly" | "none";
+  boundary?: WeekBoundary;
+  epoch?: string;
+  label?: string;
+};
+
+export type WeekNumber = { year: number; week: number };
+
+/** The `YYYY-MM-DD` on which year `y`'s W01 begins, per the STATIC anchor rules
+ * (`by_today` is resolved in {@link weekNumberOf}, not here). This is where the
+ * anchor / `new_year` vs `old_year` choice lives; numbering is then a plain week
+ * count from here. */
+function yearW01Start(y: number, rule: WeekRule): string {
+  const start = rule.start ?? "monday";
+  const anchor = rule.first_week ?? "jan1";
+  // ISO carries its own boundary rule (the first-Thursday week), so the `jan1`
+  // boundary knobs don't apply to it.
+  if (anchor === "iso") return weekStart(`${y}-01-04`, start);
+  const jan1 = `${y}-01-01`;
+  const jan1Week = weekStart(jan1, start); // the week holding Jan 1
+  const firstFull = jan1Week === jan1 ? jan1Week : shiftDate(jan1Week, 7);
+  if (anchor === "first_full") return firstFull;
+  // anchor === "jan1": new_year keeps the Jan-1 week as W01; old_year gives it to
+  // the previous year, so this year opens at its first full week.
+  return (rule.boundary ?? "new_year") === "old_year" ? firstFull : jan1Week;
+}
+
+/** The (year, week) a date carries under a custom week rule. `today` only
+ * matters for `boundary: by_today` (the cross-year week); every other date is
+ * clock-independent. */
+export function weekNumberOf(date: string, rule: WeekRule, today: string): WeekNumber {
+  const start = rule.start ?? "monday";
+  const ws = weekStart(date, start);
+  if ((rule.reset ?? "yearly") === "none") {
+    const epoch = weekStart(rule.epoch ?? "1970-01-01", start);
+    return { year: ymd(date).y, week: Math.floor(daysBetween(epoch, ws) / 7) + 1 };
+  }
+  // `by_today` numbers off the plain jan1 calendar and RELABELS only the
+  // cross-year week (below) — it must NOT shift the anchor, or every week after it
+  // would renumber (that pushed W01 a week late — #648 review).
+  const boundary = rule.boundary ?? "new_year";
+  const base: WeekRule = boundary === "by_today" ? { ...rule, boundary: "new_year" } : rule;
+  const g = ymd(date).y;
+  const weekIn = (y: number) => ({ year: y, week: Math.round(daysBetween(yearW01Start(y, base), ws) / 7) + 1 });
+  // The date's week belongs to the latest year whose W01 has already started;
+  // the earliest candidate (g−1) always qualifies, so it is the default.
+  const n = ws >= yearW01Start(g + 1, base) ? weekIn(g + 1) : ws >= yearW01Start(g, base) ? weekIn(g) : weekIn(g - 1);
+  // The cross-year week is `n.year`'s W01 yet starts in the previous December; if
+  // its New Year hasn't arrived (today before it), show it as the OLD year's last
+  // week instead. Weeks after it keep `n.year`'s numbering either way.
+  if (boundary === "by_today" && n.week === 1) {
+    const crossing = `${n.year}-01-01`;
+    if (ws < crossing && today < crossing) {
+      return { year: n.year - 1, week: Math.round(daysBetween(yearW01Start(n.year - 1, base), ws) / 7) + 1 };
+    }
+  }
+  return n;
+}
+
+/** Render a {@link WeekNumber} through a token template. Tokens: `{yyyy}` full
+ * year, `{yy}` last two year digits, `{y1}` last one, `{ww}` zero-padded week,
+ * `{w}` bare week. Defaults to `{yyyy}-W{ww}`. */
+export function formatWeekLabel(n: WeekNumber, template = "{yyyy}-W{ww}"): string {
+  const yyyy = String(n.year);
+  return template
+    .replace(/\{yyyy\}/g, yyyy)
+    .replace(/\{yy\}/g, yyyy.slice(-2))
+    .replace(/\{y1\}/g, yyyy.slice(-1))
+    .replace(/\{ww\}/g, String(n.week).padStart(2, "0"))
+    .replace(/\{w\}/g, String(n.week));
+}
+
+/** The custom week-code label a date carries — the one string the axis renders.
+ * Convenience over {@link weekNumberOf} + {@link formatWeekLabel}. */
+export function weekLabelOf(date: string, rule: WeekRule, today: string): string {
+  return formatWeekLabel(weekNumberOf(date, rule, today), rule.label);
+}
+
+/** Fine ticks at week starts, labelled with the custom week code and thinned to
+ * whole-week steps so two labels never collide (7·`stepWeeks`·ppd ≥ min width).
+ * Ticks land on real week boundaries; the partial week left of the first
+ * boundary is covered by the month band above. */
+function weekTicks(minDate: string, visibleDays: number, ppd: number, week: WeekRule, today: string, skip: boolean): FineTick[] {
+  const start = week.start ?? "monday";
+  const weekCols = skip ? 5 : 7; // a week spans 5 working columns when skipping weekends
+  const stepWeeks = Math.max(1, Math.ceil(AXIS_MIN_LABEL_PX / (weekCols * ppd)));
+  const ticks: FineTick[] = [];
+  let d = weekStart(minDate, start); // the week-start DATE (≤ minDate)
+  if (columnOf(minDate, d, skip) < 0) d = shiftDate(d, 7); // first week start at/after minDate
+  for (;;) {
+    const col = columnOf(minDate, d, skip);
+    if (col >= visibleDays) break;
+    ticks.push({ day: col, label: weekLabelOf(d, week, today) });
+    d = shiftDate(d, 7 * stepWeeks);
+  }
+  return ticks;
 }

@@ -7,6 +7,7 @@
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
+import type { WeekRule } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
 
 export type ViewKind = "table" | "board" | "gantt" | "health";
@@ -33,6 +34,15 @@ export type ViewSpec = {
   /** gantt: an `actor`-role field whose avatar is shown on each bar — "who is
    * responsible" at a glance, the standard PM-tool convention. */
   assignee?: string;
+  /** gantt: how the `assignee` shows on each bar — `avatar` (default, round
+   * photo/initials), `name` (full name text), or `none` (hidden). */
+  assignee_display?: "avatar" | "name" | "none";
+  /** gantt only — a custom (non-ISO) week-numbering rule for the time axis.
+   * Read verbatim off the view file; omit to keep plain day/month labels. */
+  week?: WeekRule;
+  /** gantt only — collapse Saturdays/Sundays so the timeline shows only working
+   * days (bars, axis, drag all count Mon–Fri). Default off. */
+  skip_weekends?: boolean;
   card?: { title?: string; badges?: string[] };
 };
 
@@ -52,6 +62,14 @@ export type ViewConfig = {
   sort: SortRule[];
   sortOptions: { name: string; label: string }[];
   onSetSort: (rules: SortRule[]) => void;
+  /** gantt only — the working-day (skip weekends) toggle. Present ⇒ the panel
+   * shows a "Working days" section; toggling persists straight to the view file. */
+  skipWeekends?: boolean;
+  onToggleSkipWeekends?: (next: boolean) => void;
+  /** gantt only — how each bar shows its assignee (avatar | name | none). Present
+   * ⇒ the panel shows a "People" section; changing it persists to the view file. */
+  assigneeDisplay?: string;
+  onSetAssigneeDisplay?: (mode: string) => void;
   dirty: boolean;
   saving?: boolean;
   onSave: () => void;

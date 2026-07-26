@@ -62,6 +62,26 @@ export function parseViewSpec(text: string): ViewSpec | null {
   };
 }
 
+/** Set (or remove) a TOP-LEVEL scalar `key` in a view file's raw YAML, preserving
+ * every comment and the rest of the layout: replace the value when the key exists,
+ * append it when absent, or drop the whole line when `value` is null. The gantt
+ * gear persists its toggles through this rather than a YAML parse+dump (which would
+ * strip the self-documenting `week:` comments). */
+export function setViewScalar(text: string, key: string, value: string | null): string {
+  const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (value === null) {
+    return text.replace(new RegExp(`^\\s*${esc}\\s*:.*(\\r?\\n)?`, "m"), "");
+  }
+  const line = new RegExp(`^(\\s*${esc}\\s*:).*$`, "m");
+  if (line.test(text)) return text.replace(line, `$1 ${value}`);
+  return `${text.replace(/\s*$/, "")}\n${key}: ${value}\n`;
+}
+
+/** Convenience for the boolean `skip_weekends` flag. */
+export function setSkipWeekendsInYaml(text: string, next: boolean): string {
+  return setViewScalar(text, "skip_weekends", String(next));
+}
+
 // ── value formatting ───────────────────────────────────────────────────────
 
 export function fieldText(value: unknown): string {

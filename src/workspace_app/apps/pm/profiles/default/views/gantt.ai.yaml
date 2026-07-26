@@ -5,3 +5,55 @@ span: span
 label: title
 group_by: milestone
 assignee: assignee
+
+# ── Custom week numbering (週別) ─────────────────────────────────────────────
+# Label the timeline with your own work-week code — deliberately NOT ISO-8601.
+# Delete this whole `week:` block to fall back to plain day / month labels.
+# Every field has a default, so a bare `week: {}` is already a valid rule.
+#
+#   start:       the first day of a week.
+#                monday | tuesday | wednesday | thursday | friday | saturday | sunday
+#                (default: monday)
+#
+#   first_week:  how a year's WEEK 1 is anchored.
+#                jan1        the week containing Jan 1                    ← we use this
+#                iso         the ISO-8601 week (the one holding the first Thursday / Jan 4)
+#                first_full  the first week lying wholly inside the new year
+#                (default: jan1)
+#
+#   reset:       yearly  numbering restarts at W01 every year            ← we use this
+#                none    count continuously from `epoch`, never resetting
+#                (default: yearly)
+#
+#   boundary:    the cross-year week holds BOTH Dec 31 and Jan 1 — whose week is it?
+#                new_year   -> the new year's W01 (the old year stops the week before)
+#                old_year   -> the old year's LAST week (the new year's W01 slips on a week)
+#                by_today   -> decided per crossing by comparing "today" to that     ← we use this
+#                              Jan 1: BEFORE it, the week reads as the old year's last
+#                              week; ON/AFTER it, as the new year's W01. So a past
+#                              new-year reads new, a future one reads old, and the
+#                              current crossing flips at midnight on Jan 1.
+#                (default: new_year)
+#
+#   epoch:       only for `reset: none` — the YYYY-MM-DD whose week is week 1
+#                (snapped to `start`). Ignored when `reset: yearly`.
+#
+#   label:       the label template. tokens:
+#                {yyyy}=2026   {yy}=26   {y1}=6   {ww}=07 (zero-padded)   {w}=7
+#                (default: "{yyyy}-W{ww}")
+#
+# With the rule below: 2026 week 1 -> "W601", 2027's 44th week -> "W744"; and the
+# 2026/2027 cross-year week reads "W653" until 2027-01-01, then "W701".
+week:
+  start: monday
+  first_week: jan1
+  reset: yearly
+  boundary: by_today
+  label: "W{y1}{ww}"
+
+# ── Working-day timeline (skip weekends) ─────────────────────────────────────
+# true  → collapse Saturdays & Sundays: the timeline shows ONLY working days, so
+#         bars, axis ticks, week codes and drag all count Mon–Fri (a Fri→Mon task
+#         is 2 working days wide, and weekends take no horizontal space).
+# false → keep calendar days, weekends included (the default if this key is absent).
+skip_weekends: true

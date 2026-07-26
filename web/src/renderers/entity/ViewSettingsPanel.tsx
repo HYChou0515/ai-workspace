@@ -51,6 +51,7 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
       </button>
       {open && (
         <div role="dialog" aria-label="view settings" className="ev-viewpanel__pop">
+          {config.groupOptions.length > 0 && (
           <section className="ev-viewpanel__sec">
             <label className="ev-viewpanel__label" htmlFor="ev-groupby">
               Group by
@@ -70,7 +71,9 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
               ))}
             </select>
           </section>
+          )}
 
+          {config.sortOptions.length > 0 && (
           <section className="ev-viewpanel__sec">
             <div className="ev-viewpanel__label">Sort by</div>
             {config.sort.length === 0 && <div className="ev-viewpanel__hint">Manual order (drag to reorder)</div>}
@@ -123,7 +126,9 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
               </button>
             )}
           </section>
+          )}
 
+          {config.fieldOptions.length > 0 && (
           <section className="ev-viewpanel__sec">
             <div className="ev-viewpanel__label">Fields</div>
             {config.fieldOptions.map((f) => (
@@ -138,6 +143,41 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
               </label>
             ))}
           </section>
+          )}
+
+          {config.onToggleSkipWeekends && (
+            <section className="ev-viewpanel__sec">
+              <div className="ev-viewpanel__label">Working days</div>
+              <label className="ev-viewpanel__field">
+                <input
+                  type="checkbox"
+                  aria-label="Skip weekends"
+                  checked={config.skipWeekends ?? false}
+                  onChange={() => config.onToggleSkipWeekends?.(!config.skipWeekends)}
+                />
+                Skip weekends (Mon–Fri only)
+              </label>
+            </section>
+          )}
+
+          {config.onSetAssigneeDisplay && (
+            <section className="ev-viewpanel__sec">
+              <label className="ev-viewpanel__label" htmlFor="ev-people">
+                People
+              </label>
+              <select
+                id="ev-people"
+                className="ev-select"
+                aria-label="people display"
+                value={config.assigneeDisplay ?? "avatar"}
+                onChange={(e) => config.onSetAssigneeDisplay?.(e.target.value)}
+              >
+                <option value="avatar">Avatar</option>
+                <option value="name">Name</option>
+                <option value="none">Off</option>
+              </select>
+            </section>
+          )}
 
           {config.dirty && (
             <div className="ev-viewpanel__foot">
