@@ -22,6 +22,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { NotebookRenderer } from "./notebook/NotebookRenderer";
 import { PdfRenderer } from "./PdfRenderer";
 import { ReportRenderer } from "./report/ReportRenderer";
+import { SheetRenderer } from "./SheetRenderer";
 import { JsonRenderer, JsonlRenderer, YamlRenderer } from "./structuredRenderers";
 import { TextRenderer } from "./TextRenderer";
 
@@ -70,6 +71,18 @@ export const RENDERERS: RendererDef[] = [
   },
   { key: "markdown", match: ext("md", "markdown"), Component: MarkdownRenderer, editToggle: true, outline: true },
   { key: "notebook", match: ext("ipynb"), Component: NotebookRenderer },
+  // A `*.ai.csv` / `*.ai.tsv` is an EDITABLE spreadsheet (docs/plan-ai-sheet.md):
+  // the `.ai.` marker is the opt-in, so a plain `.csv` keeps the cheap read-only
+  // preview below and nothing regresses for files that are only looked at.
+  // Anchored on the double-suffix basename so it wins over the generic `csv`
+  // entry; `editToggle` keeps the byte editor reachable as the escape hatch for
+  // a file too malformed for a grid.
+  {
+    key: "sheet",
+    match: (p) => /\.ai\.(csv|tsv)$/i.test(p),
+    Component: SheetRenderer,
+    editToggle: true,
+  },
   { key: "csv", match: ext("csv", "tsv"), Component: CsvRenderer, editToggle: true },
   { key: "html", match: ext("html", "htm"), Component: HtmlRenderer, editToggle: true },
   // #117: a .pdf gets the browser's native PDF viewer in an iframe — without
