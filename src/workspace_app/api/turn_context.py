@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING, Any
 
 from ..agent.context import AgentToolContext
 from ..context_budget import ContextLimit, catalog_limit, estimate_tokens
+from ..entity.brief import entity_schema_brief
+from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .turns import history_items
@@ -358,6 +360,20 @@ class TurnContextBuilder:
             entity_write_sink=self.entity_write_sink,
         )
 
+    async def _entity_schema_note(self, item_id: str) -> str:
+        """#pm: the item's record-type schema rendered for the turn's prompt, so
+        the agent creates valid records (right field names, the closed status
+        vocab, the date-range a timeline reads) instead of guessing — a small
+        local model otherwise invents fields/statuses that lint or hide from the
+        gantt. Derived live from `.entity/`, so it stays correct as the schema
+        evolves; empty for an item with no entity types. Never breaks a turn."""
+        try:
+            catalog, _ = await discover_catalog(self._filestore, item_id)
+            return entity_schema_brief(catalog)
+        except Exception:  # noqa: BLE001 — schema guidance is best-effort, never fatal
+            logger.debug("turn-context: entity schema brief skipped for %s", item_id, exc_info=True)
+            return ""
+
     async def build_chat_turn(
         self,
         item_id: str,
@@ -385,6 +401,9 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 history_messages=history_messages,
             ),
+            # #pm: live record-type schema so the agent creates valid issues /
+            # milestones up front (field names, status vocab, timeline date-range).
+            entity_schema_note=await self._entity_schema_note(item_id),
             # The turn's depth override also rides the ctx so any direct kb tool
             # on the RCA agent applies the same cascade.
             kb_enhancements=kb_enhancements,

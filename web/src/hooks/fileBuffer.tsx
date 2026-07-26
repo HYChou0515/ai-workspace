@@ -268,6 +268,29 @@ export class FileBufferStore {
   flush(path: string): Promise<void> {
     return this.save(path);
   }
+
+  /** Sync the buffer to content an EXTERNAL writer just persisted for `path` — a
+   * renderer that writes a DERIVED file straight through the FileService instead
+   * of via this buffer's own save() (the entity view's "Save to view" rewrites
+   * its own `.ai.yaml`). Updates the text + baseline (clean) and the shared
+   * cache, so a later read — including a switch away and back to an
+   * already-loaded path, which won't re-fetch — sees the new bytes instead of
+   * the pre-write entry. Without it the writer's change vanished on revisit. */
+  applyExternalWrite(path: string, text: string): void {
+    const prev = this.entries.get(path) ?? LOADING;
+    const size = new TextEncoder().encode(text).byteLength;
+    this.set(path, {
+      status: "ready",
+      kind: "text",
+      text,
+      savedText: text,
+      encoding: prev.encoding,
+      size,
+      error: null,
+      save: "clean",
+    });
+    this.cache?.put(path, { kind: "text", path, size, text, encoding: prev.encoding });
+  }
 }
 
 const FileBufferContext = createContext<FileBufferStore | null>(null);
@@ -321,5 +344,6 @@ export function useFileBuffer(path: string) {
     save: useCallback(() => store.save(path), [store, path]),
     flush: useCallback(() => store.flush(path), [store, path]),
     reload: useCallback(() => store.reload(path), [store, path]),
+    applyExternalWrite: useCallback((t: string) => store.applyExternalWrite(path, t), [store, path]),
   };
 }

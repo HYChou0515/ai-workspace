@@ -49,6 +49,17 @@ describe("HealthView filtering (§F)", () => {
     fireEvent.change(screen.getByLabelText("filter level"), { target: { value: "warning" } });
     expect(screen.getByText(/no findings match/i)).toBeInTheDocument();
   });
+
+  it("frames the empty state as data validity, not project health (#3 rename)", () => {
+    render(<HealthView findings={[]} />);
+    expect(screen.getByText(/no data issues — every record is valid/i)).toBeInTheDocument();
+    expect(screen.queryByText(/healthy/i)).not.toBeInTheDocument();
+  });
+
+  it("defaults its title to 'Data issues' when the view gives none", () => {
+    render(<HealthView findings={[err(2, "boom")]} />);
+    expect(screen.getByText("Data issues")).toBeInTheDocument();
+  });
 });
 
 describe("HealthView jump (§F)", () => {

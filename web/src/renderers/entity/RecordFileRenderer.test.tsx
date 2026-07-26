@@ -7,7 +7,7 @@ import { FileServiceProvider, investigationFileService } from "../../api/fileSer
 import { EditModeProvider } from "../../hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../../hooks/fileBuffer";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
-import { QueryWrap } from "../../test/queryWrapper";
+import { makeTestQueryClient, QueryWrap } from "../../test/queryWrapper";
 
 // Stub only the network leaf; keep the real EntityConflictError so the hook's
 // `instanceof` conflict branch fires exactly as in production.
@@ -169,6 +169,44 @@ describe("RecordFileRenderer (§C2)", () => {
     // #999 isn't in the projection (unparseable / stray file) → don't blank out;
     // fall back to the raw markdown so the user can still see + fix it.
     expect(await screen.findByText("Orphan file")).toBeInTheDocument();
+  });
+
+  it("re-seeds the editor when switching to another record file (no cross-record state bleed)", async () => {
+    // #1 state-bleed bug: after editing issues/5.md, opening issues/6.md showed
+    // #5's title/date. The editor seeds its form from `record` via useState (run
+    // once on mount); the whole IDE has ONE FileView mount point, so a tab switch
+    // only swaps the `path` prop and the reused EntityFileEditor keeps #5's
+    // values. A per-record key must remount it. A stable QueryClient keeps the
+    // catalog/list cached so the switch renders straight from cache — no loading
+    // flash that would remount the editor and mask the bug.
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({
+      entities: [RECORD5, { ...RECORD5, number: 6, fields: { title: "B", status: "done" }, body: "six" }],
+      invalid: [],
+    });
+
+    const client = makeTestQueryClient();
+    const store = storeWith("", "/issues/5.md");
+    const tree = (path: string) => (
+      <QueryWrap client={client}>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={investigationFileService("pm", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <RecordFileRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+
+    const { rerender } = render(tree("/issues/5.md"));
+    expect(await screen.findByLabelText("title")).toHaveValue("A");
+
+    rerender(tree("/issues/6.md"));
+    expect(await screen.findByLabelText("title")).toHaveValue("B");
+    expect(screen.getByLabelText("status")).toHaveValue("done");
   });
 
   it("surfaces a 409 as a non-blocking conflict banner (§B2)", async () => {

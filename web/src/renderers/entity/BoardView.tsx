@@ -17,21 +17,33 @@ import {
   useSensor,
   useSensors,
 } from "@dnd-kit/core";
+import { useEffect, useRef, useState } from "react";
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
+import { ModalShell } from "../../components/ModalShell";
+import { Popover } from "../../components/Popover";
 import { handleDragEnd, partitionColumns, UNSET_COL } from "./boardOps";
+import { EntityFileEditor } from "./EntityFileEditor";
+import { refOptionsForField, type RefOption } from "./refTraversal";
+import { selectColor } from "./selectColor";
+import { sortRows } from "./sortRows";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
+import { SelectChip } from "./TableView";
 import type { EntityViewProps } from "./types";
 
-export function BoardView({ spec, type, entities, users, canWrite, onPatch, busy }: EntityViewProps) {
+export function BoardView({ spec, type, entities, users, canWrite, refIndex, onPatch, onSave, onOpenRecord, busy }: EntityViewProps) {
   const readOnly = canWrite === false; // §E — a non-writer can't drag or change status
   const groupField = spec.group_by ?? "status";
   const statusSpec = roleOf(type, groupField);
   const { known, extra } = partitionColumns(statusSpec, entities, groupField);
   const titleField = spec.card?.title ?? "title";
   const badges = spec.card?.badges ?? [];
+  // #GH-projects P4 — manual drag-reorder writes `rank`, but only when no field
+  // sort is active (a sorted board follows the sort, GitHub's model). A card drop
+  // still changes status either way.
+  const sortActive = Boolean(spec.sort?.length);
 
   const sensors = useSensors(
     // A small drag threshold so a click on the card's status select / buttons
@@ -40,11 +52,21 @@ export function BoardView({ spec, type, entities, users, canWrite, onPatch, busy
     useSensor(KeyboardSensor),
   );
 
+  // Each column's cards follow the view's multi-level `spec.sort`, or — with none —
+  // the manual `rank` order (drag position), same ordering the Table uses (#GH-projects).
   const cardsIn = (value: string | null) =>
-    entities.filter((e) => {
-      const v = fieldText(e.fields[groupField]);
-      return value === null ? v === "" : v === value;
-    });
+    sortRows(
+      entities.filter((e) => {
+        const v = fieldText(e.fields[groupField]);
+        return value === null ? v === "" : v === value;
+      }),
+      spec.sort,
+      type,
+      refIndex,
+      users,
+    );
+
+  const refOptionsFor = (name: string) => refOptionsForField(type, refIndex, name);
 
   const renderCard = (e: EntityInstance) => (
     <Card
@@ -59,16 +81,19 @@ export function BoardView({ spec, type, entities, users, canWrite, onPatch, busy
       busy={busy}
       readOnly={readOnly}
       onPatch={onPatch}
+      onSave={onSave}
+      onOpenRecord={onOpenRecord}
+      refOptionsFor={refOptionsFor}
     />
   );
 
   const unset = cardsIn(null);
 
   return (
-    <DndContext sensors={sensors} onDragEnd={(e) => handleDragEnd(e, groupField, onPatch)}>
+    <DndContext sensors={sensors} onDragEnd={(e) => handleDragEnd(e, groupField, onPatch, entities, sortActive)}>
       <div className="ev-board scrollable">
         {known.map((value) => (
-          <DroppableColumn key={value} value={value} label={value} count={cardsIn(value).length}>
+          <DroppableColumn key={value} value={value} label={value} count={cardsIn(value).length} statusSpec={statusSpec}>
             {cardsIn(value).map(renderCard)}
           </DroppableColumn>
         ))}
@@ -95,18 +120,26 @@ function DroppableColumn({
   value,
   label,
   count,
+  statusSpec,
   children,
 }: {
   value: string;
   label: string;
   count: number;
+  statusSpec?: EntityFieldSpec;
   children: React.ReactNode;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `col-${value}` });
+  // A colour dot on the header — the GitHub-Projects column colour (#GH-projects
+  // B). The unset column stays neutral.
+  const dot = value === UNSET_COL ? undefined : selectColor(value, statusSpec).fg;
   return (
     <div ref={setNodeRef} className={`ev-board__col${isOver ? " ev-board__col--over" : ""}`}>
       <div className="ev-board__col-head" data-testid={`col-${value === UNSET_COL ? "unset" : value}`}>
-        <span className="ev-board__col-name">{label}</span>
+        <span className="ev-board__col-name">
+          {dot && <span className="ev-board__col-dot" style={{ background: dot }} aria-hidden />}
+          {label}
+        </span>
         <span className="ev-board__count">{count}</span>
       </div>
       {children}
@@ -143,6 +176,9 @@ function Card({
   busy,
   readOnly,
   onPatch,
+  onSave,
+  onOpenRecord,
+  refOptionsFor,
 }: {
   entity: EntityInstance;
   titleField: string;
@@ -154,22 +190,93 @@ function Card({
   busy?: boolean;
   readOnly?: boolean;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
+  onSave?: (number: number, patch: Record<string, unknown>, body: string) => void;
+  onOpenRecord?: (number: number) => void;
+  refOptionsFor?: (name: string) => RefOption[] | undefined;
 }) {
+  const [editing, setEditing] = useState(false);
   // §E — a read-only member can neither drag the card nor change its status.
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
     id: `card-${entity.number}`,
     disabled: readOnly,
   });
+  // #GH-projects P4 — a card is also a DROP target, so dropping another card onto
+  // it reorders in front of it (manual `rank`). Same id as the draggable; dnd-kit
+  // keeps the draggable + droppable registries separate.
+  const { setNodeRef: setDropRef, isOver } = useDroppable({ id: `card-${entity.number}` });
+  const setRefs = (node: HTMLElement | null) => {
+    setNodeRef(node);
+    setDropRef(node);
+  };
+
+  // The card face only shows read-only badges + the status select, so the ⋯ menu
+  // is the way to reach the rest of the fields (Edit) or the raw file (Open file).
+  const canEdit = !readOnly && !!onSave && !!type;
+  const canOpen = !!onOpenRecord;
+
   return (
     <div
-      ref={setNodeRef}
+      ref={setRefs}
       data-testid={`card-${entity.number}`}
+      data-over={isOver ? "" : undefined}
       className={`ev-card${readOnly ? " ev-card--readonly" : ""}`}
       style={{ transform: transform ? `translate(${transform.x}px, ${transform.y}px)` : undefined }}
       {...attributes}
       {...listeners}
     >
-      <div className="ev-card__title">{fieldText(entity.fields[titleField]) || `#${entity.number}`}</div>
+      <div className="ev-card__head">
+        <div className="ev-card__title">{fieldText(entity.fields[titleField]) || `#${entity.number}`}</div>
+        {(canEdit || canOpen) && (
+          // Isolate the menu (and the modal it opens) from the card's drag
+          // listeners — a pointerdown here must not arm a drag.
+          <div className="ev-card__menu" onPointerDown={(e) => e.stopPropagation()}>
+            <Popover
+              align="end"
+              width={160}
+              trigger={({ onClick, open }) => (
+                <button
+                  type="button"
+                  className="ev-card__menu-btn"
+                  aria-label={`card ${entity.number} menu`}
+                  aria-expanded={open}
+                  onClick={onClick}
+                >
+                  ⋯
+                </button>
+              )}
+            >
+              {(close) => (
+                <div className="ev-cardmenu">
+                  {canEdit && (
+                    <button
+                      type="button"
+                      className="ev-cardmenu__item"
+                      onClick={() => {
+                        setEditing(true);
+                        close();
+                      }}
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {canOpen && (
+                    <button
+                      type="button"
+                      className="ev-cardmenu__item"
+                      onClick={() => {
+                        onOpenRecord?.(entity.number);
+                        close();
+                      }}
+                    >
+                      Open file
+                    </button>
+                  )}
+                </div>
+              )}
+            </Popover>
+          </div>
+        )}
+      </div>
       {badges.length > 0 && (
         <div className="ev-card__badges">
           {badges.map((b) => (
@@ -177,19 +284,105 @@ function Card({
           ))}
         </div>
       )}
-      {statusSpec?.values && (
-        <div>
-          <RoleField
-            widget={widgetForRole(statusSpec.role)}
-            name={statusSpec.name}
+      {statusSpec && statusSpec.values && (
+        // Stop pointerdown here from arming the card's drag sensor, so a click on
+        // the chip / select is a click, not the start of a drag.
+        <div className="ev-card__status-row" onPointerDown={(e) => e.stopPropagation()}>
+          <CardStatus
+            spec={statusSpec}
             value={entity.fields[groupField]}
-            values={statusSpec.values}
             disabled={busy || readOnly}
             onCommit={(next) => onPatch(entity.number, { [groupField]: next })}
           />
         </div>
       )}
+      {editing && type && (
+        <div onPointerDown={(e) => e.stopPropagation()}>
+          <ModalShell onClose={() => setEditing(false)} ariaLabel={`Edit #${entity.number}`} align="top" width={640}>
+            <EntityFileEditor
+              type={type}
+              record={entity}
+              users={users}
+              canWrite={!readOnly}
+              busy={busy}
+              refOptionsFor={refOptionsFor}
+              onSave={(patch, body) => {
+                onSave?.(entity.number, patch, body);
+                setEditing(false);
+              }}
+            />
+          </ModalShell>
+        </div>
+      )}
     </div>
+  );
+}
+
+/** The card's status as a coloured chip at rest (GitHub-Projects style, #GH-
+ * projects B / #3); a click swaps to the native select — the keyboard-accessible
+ * way to move a card without dragging. Read-only → the chip alone, no control.
+ * Mirrors the table cell's click-to-edit so both views feel the same. */
+function CardStatus({
+  spec,
+  value,
+  disabled,
+  onCommit,
+}: {
+  spec: EntityFieldSpec;
+  value: unknown;
+  disabled?: boolean;
+  onCommit: (next: unknown) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const boxRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (editing) boxRef.current?.querySelector<HTMLSelectElement>("select")?.focus();
+  }, [editing]);
+
+  const display = fieldText(value);
+  const chip = display ? (
+    <SelectChip value={display} fieldSpec={spec} />
+  ) : (
+    <span className="ev-cell__empty">—</span>
+  );
+
+  if (disabled) return <div className="ev-card__status">{chip}</div>;
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        className="ev-cell ev-card__status"
+        aria-label={`edit ${spec.name}`}
+        onClick={() => setEditing(true)}
+      >
+        {chip}
+      </button>
+    );
+  }
+
+  return (
+    <span
+      ref={boxRef}
+      className="ev-card__status"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setEditing(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") setEditing(false);
+      }}
+    >
+      <RoleField
+        widget={widgetForRole(spec.role)}
+        name={spec.name}
+        value={value}
+        values={spec.values}
+        onCommit={(next) => {
+          onCommit(next);
+          setEditing(false);
+        }}
+      />
+    </span>
   );
 }
 

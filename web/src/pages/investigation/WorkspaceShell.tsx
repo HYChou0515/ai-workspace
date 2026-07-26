@@ -13,7 +13,7 @@ import type { AppItem, AppManifest, CloseStatus, FileInfo } from "../../api/type
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useIsSuperuserState } from "../../hooks/useIsSuperuser";
 import { useItemAccess } from "../../hooks/useItemAccess";
-import { canChangeItemPermission, parseItemPermission } from "../../lib/itemPermission";
+import { canChangeItemPermission, itemVisibility, parseItemPermission } from "../../lib/itemPermission";
 import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
@@ -25,6 +25,7 @@ import { Icon, type IconName } from "../../components/Icon";
 import { ModalShell } from "../../components/ModalShell";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { CrossHandle } from "../../components/CrossHandle";
+import { AccessChip } from "../../components/AccessChip";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { ItemChatShell } from "../../components/ItemChatShell";
 import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembersPanel";
@@ -742,6 +743,15 @@ export function TopBar({
   const isNarrow = useIsNarrow();
   // Owned here rather than in the roster popover below — see the `onManage` note.
   const [sharing, setSharing] = useState(false);
+  // #578/#608 — the top bar shows the item's ACCESS (Public/Restricted/Private)
+  // at a glance rather than a member head-count; the full roster lives in the
+  // Members sidebar. Clicking the chip opens the share dialog for whoever may
+  // change access (owner / delegate / superuser); everyone else sees it read-only.
+  const me = useCurrentUser();
+  const { isSuperuser, groups } = useIsSuperuserState();
+  const owner = (item.created_by as string) || (item.owner as string) || "";
+  const rawPerm = (item as Record<string, unknown>).permission;
+  const canManageAccess = canChangeItemPermission(parseItemPermission(rawPerm), me, owner, isSuperuser, groups);
   return (
     <div
       style={{
@@ -888,51 +898,29 @@ export function TopBar({
             <Icon name="users" size={15} />
             <span style={{ fontSize: pxToRem(12) }}>Share</span>
           </button>
-          {sharing && (
-            <ShareChatDialog slug={manifest.slug} item={item} onClose={() => setSharing(false)} />
-          )}
+          {sharing && <ShareChatDialog slug={manifest.slug} item={item} onClose={() => setSharing(false)} />}
         </>
       ) : (
+        // Access at a glance — click to manage. Replaces the old member-count
+        // popover (redundant with the Members sidebar + a head-count doesn't say
+        // whether the item is public); the roster lives in the sidebar.
         <>
-          <Popover
-            align="end"
-            trigger={({ onClick, open }) => (
-              <button
-                type="button"
-                onClick={onClick}
-                title={manifest.labels?.members ?? "Members"}
-                style={{
-                  ...iconBtn,
-                  display: "inline-flex",
-                  gap: 4,
-                  padding: "0 8px",
-                  width: "auto",
-                  background: open ? "var(--paper-2)" : "transparent",
-                }}
-              >
-                <Icon name="users" size={15} />
-                <span style={{ fontSize: pxToRem(12) }}>
-                  {((item.members as string[] | undefined)?.length ?? 0) + 1}
-                </span>
-              </button>
-            )}
-          >
-            {() => (
-              <ItemMembersPanel
-                manifest={manifest}
-                item={item}
-                variant="popover"
-                // The dialog is owned OUTSIDE the popover: a popover is its own
-                // z-index stacking context and closes on any outside mousedown, so a
-                // modal hosted within it would be both z-capped and dismissed by its
-                // own first click.
-                onManage={() => setSharing(true)}
-              />
-            )}
-          </Popover>
-          {sharing && (
-            <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />
+          {canManageAccess ? (
+            <button
+              type="button"
+              data-testid="topbar-access"
+              onClick={() => setSharing(true)}
+              title={`${manifest.labels?.members ?? "Members"} — manage access`}
+              style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", display: "inline-flex" }}
+            >
+              <AccessChip visibility={itemVisibility(rawPerm)} />
+            </button>
+          ) : (
+            <span data-testid="topbar-access">
+              <AccessChip visibility={itemVisibility(rawPerm)} />
+            </span>
           )}
+          {sharing && <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />}
         </>
       )}
 

@@ -218,4 +218,28 @@ describe("FileBufferStore backed by a shared react-query content cache", () => {
     expect(s.snapshot("/a.md").text).toBe("plain");
     expect(io.readFile).toHaveBeenCalledTimes(1);
   });
+
+  it("applyExternalWrite syncs a loaded path to externally-written bytes, clean + no refetch", async () => {
+    const io = makeIO({ "/v.ai.yaml": "view: table\n" });
+    const s = new FileBufferStore(io);
+    s.ensureLoaded("/v.ai.yaml");
+    await tick();
+    s.applyExternalWrite("/v.ai.yaml", "view: table\ngroup_by: status\n");
+    expect(s.snapshot("/v.ai.yaml").text).toBe("view: table\ngroup_by: status\n");
+    expect(s.isDirty("/v.ai.yaml")).toBe(false); // baseline moved with it → not dirty
+    expect(io.readFile).toHaveBeenCalledTimes(1); // no reload round-trip
+  });
+
+  it("applyExternalWrite writes through the shared cache so a fresh reader sees it", async () => {
+    const io = makeIO({ "/v.ai.yaml": "view: table\n" });
+    const qc = new QueryClient();
+    const cache = reactQueryContentCache(qc, "s", io);
+    const s = new FileBufferStore(io, cache);
+    s.ensureLoaded("/v.ai.yaml");
+    await tick();
+    s.applyExternalWrite("/v.ai.yaml", "view: table\ngroup_by: milestone\n");
+    expect(qc.getQueryData(qk.file("s", "/v.ai.yaml"))).toMatchObject({
+      text: "view: table\ngroup_by: milestone\n",
+    });
+  });
 });

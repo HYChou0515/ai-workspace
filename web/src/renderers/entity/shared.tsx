@@ -9,7 +9,31 @@
 import { load as parseYaml } from "js-yaml";
 
 import type { EntityFieldSpec, EntityType } from "../../api/entities";
-import type { ViewKind, ViewSpec } from "./types";
+import type { SortRule, ViewKind, ViewSpec } from "./types";
+
+/** Normalise a raw `sort:` value into clean `SortRule[]` — keep only entries with
+ * a non-empty `field`, default `dir` to "asc", drop anything malformed. Returns
+ * `undefined` when nothing usable is left, so the view falls back to manual
+ * `rank` order (#GH-projects). Hand-edited YAML can't crash the sort. */
+export function normalizeSort(raw: unknown): SortRule[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const rules: SortRule[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const { field, dir } = r as Record<string, unknown>;
+    if (typeof field !== "string" || !field) continue;
+    rules.push({ field, dir: dir === "desc" ? "desc" : "asc" });
+  }
+  return rules.length > 0 ? rules : undefined;
+}
+
+/** Keep only the string entries of a raw list (e.g. `hidden_fields:`), or
+ * `undefined` when none — so a malformed value degrades to "nothing hidden". */
+export function normalizeStringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw.filter((x): x is string => typeof x === "string" && x.length > 0);
+  return out.length > 0 ? out : undefined;
+}
 
 /** Parse a `views/*.ai.yaml` doc into a `ViewSpec`, or `null` when it isn't a
  * well-formed view (bad YAML, missing/unknown `view`, or — for the record-bound
@@ -27,7 +51,35 @@ export function parseViewSpec(text: string): ViewSpec | null {
   const { view, entity } = o;
   if (view !== "table" && view !== "board" && view !== "gantt" && view !== "health") return null;
   if (view !== "health" && (typeof entity !== "string" || !entity)) return null;
-  return { ...(o as ViewSpec), view: view as ViewKind, entity: (entity as string) ?? "" };
+  const sort = normalizeSort(o.sort);
+  const hidden_fields = normalizeStringList(o.hidden_fields);
+  return {
+    ...(o as ViewSpec),
+    view: view as ViewKind,
+    entity: (entity as string) ?? "",
+    sort,
+    hidden_fields,
+  };
+}
+
+/** Set (or remove) a TOP-LEVEL scalar `key` in a view file's raw YAML, preserving
+ * every comment and the rest of the layout: replace the value when the key exists,
+ * append it when absent, or drop the whole line when `value` is null. The gantt
+ * gear persists its toggles through this rather than a YAML parse+dump (which would
+ * strip the self-documenting `week:` comments). */
+export function setViewScalar(text: string, key: string, value: string | null): string {
+  const esc = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (value === null) {
+    return text.replace(new RegExp(`^\\s*${esc}\\s*:.*(\\r?\\n)?`, "m"), "");
+  }
+  const line = new RegExp(`^(\\s*${esc}\\s*:).*$`, "m");
+  if (line.test(text)) return text.replace(line, `$1 ${value}`);
+  return `${text.replace(/\s*$/, "")}\n${key}: ${value}\n`;
+}
+
+/** Convenience for the boolean `skip_weekends` flag. */
+export function setSkipWeekendsInYaml(text: string, next: boolean): string {
+  return setViewScalar(text, "skip_weekends", String(next));
 }
 
 // ── value formatting ───────────────────────────────────────────────────────

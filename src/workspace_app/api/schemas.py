@@ -321,6 +321,7 @@ class _EntityFieldSpec(BaseModel):
     role: str
     required: bool = False
     values: list[str] | None = None
+    colors: dict[str, str] | None = None
     to: str | None = None
     from_: str | None = Field(default=None, alias="from")
     over: str | None = None

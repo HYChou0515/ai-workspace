@@ -171,15 +171,30 @@
 /* ── quick-create (§C1) ──────────────────────────────────────────────────── */
 /* Opens into a raised card of labelled role widgets rather than a bare inline
  * row of native inputs. */
+/* The create form now lives inside a ModalShell (which supplies the card chrome
+ * + padding), so this is just the inner column: title, a responsive field grid,
+ * then the actions. */
 .ev-quickcreate {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  padding: var(--space-24);
+  min-width: 0;
+}
+.ev-quickcreate__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-display-sm);
+  line-height: var(--leading-display-sm);
+  letter-spacing: -0.02em;
+  color: var(--text-paper);
+}
+.ev-quickcreate__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: var(--space-12);
   align-items: end;
-  padding: var(--space-16);
-  background: var(--white);
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-card);
 }
 .ev-quickcreate__field {
   display: flex;
@@ -198,7 +213,6 @@
   color: var(--accent);
 }
 .ev-quickcreate__actions {
-  grid-column: 1 / -1;
   display: flex;
   gap: var(--space-8);
   justify-content: flex-end;
@@ -241,7 +255,122 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ── view toolbar: group-by + save-to-view (#GH-projects A) ───────────────── */
+.ev-viewbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-12);
+  min-width: 0;
+}
+.ev-viewbar__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.ev-viewbar__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+}
+.ev-viewbar__dirty {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+}
+.ev-viewbar__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+/* ── View settings panel (#GH-projects P3) ───────────────────────────────── */
+.ev-panel__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+}
+.ev-viewpanel {
+  position: relative;
+  display: inline-flex;
+}
+.ev-viewpanel__dot {
+  width: 6px;
+  height: 6px;
+  margin-left: var(--space-4);
+  border-radius: 50%;
+  background: var(--warn);
+}
+.ev-viewpanel__pop {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: var(--z-modal);
+  margin-top: var(--space-4);
+  width: 260px;
+  max-width: 80vw;
+  padding: var(--space-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+.ev-viewpanel__sec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+.ev-viewpanel__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+}
+.ev-viewpanel__hint {
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+}
+.ev-viewpanel__tier {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+.ev-viewpanel__tier .ev-select {
+  flex: 1;
+  min-width: 0;
+}
+.ev-viewpanel__field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+.ev-viewpanel__foot {
+  display: flex;
+  gap: var(--space-8);
+  padding-top: var(--space-8);
+  border-top: 1px solid var(--paper-2);
+}
+
 /* ── table (§A1) ─────────────────────────────────────────────────────────── */
+/* The view's outer box. `min-width: 0` lets this flex child of `.ev-panel`
+ * shrink below the table's min-content width so the table wrap's own horizontal
+ * scroll engages, rather than the flex item's automatic minimum stretching the
+ * whole panel past the pane (which clipped DUE / PROGRESS — #3 "text cut"). */
+.ev-tableview {
+  min-width: 0;
+}
 .ev-table-wrap {
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -252,6 +381,11 @@
   border-collapse: separate;
   border-spacing: 0;
   width: 100%;
+  /* Fixed layout so the table fills the pane and long values (a wordy title)
+   * truncate in-cell instead of stretching the column and pushing later columns
+   * (DUE / PROGRESS) off-screen (#3). Columns share the width evenly; the # and
+   * select boxes get fixed minimal widths below. */
+  table-layout: fixed;
   font-size: var(--text-body-sm);
 }
 .ev-table thead th {
@@ -264,6 +398,8 @@
   text-align: left;
   vertical-align: middle;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* second header row (filters) shouldn't cast the caps styling. */
 .ev-table thead tr.ev-table__filters th {
@@ -305,11 +441,14 @@
 .ev-table tbody tr:last-child td {
   border-bottom: 0;
 }
-/* zebra + hover — the grid reads as rows, not a mesh of borders. */
-.ev-table tbody tr:nth-child(even) td {
+/* zebra + hover — the grid reads as rows, not a mesh of borders. Group-header
+ * rows (#GH-projects A) are excluded so their own background isn't overridden by
+ * the zebra/hover rules (which otherwise win on specificity + position — a group
+ * header at an even row would render lighter than one at an odd row). */
+.ev-table tbody tr:not(.ev-table__group):nth-child(even) td {
   background: color-mix(in srgb, var(--paper) 45%, transparent);
 }
-.ev-table tbody tr:hover td {
+.ev-table tbody tr:not(.ev-table__group):hover td {
   background: var(--paper-2);
 }
 .ev-table__num {
@@ -317,13 +456,85 @@
   font-size: var(--text-xs);
   color: var(--text-paper-d);
   text-align: right;
-  width: 1%;
+  width: 44px;
   white-space: nowrap;
 }
 .ev-table__check {
-  width: 1%;
+  width: 36px;
   white-space: nowrap;
   text-align: center;
+}
+/* manual drag-reorder grip column (#GH-projects) */
+.ev-table__reorder {
+  width: 24px;
+  white-space: nowrap;
+  text-align: center;
+  line-height: 1;
+}
+.ev-drag-grip {
+  display: inline-block;
+  cursor: grab;
+  color: var(--text-paper-d);
+  font-size: var(--text-body);
+  line-height: 1;
+  user-select: none;
+  touch-action: none; /* dnd-kit pointer sensor needs the browser to not pan */
+}
+.ev-drag-grip:hover {
+  color: var(--text-paper);
+}
+.ev-drag-grip:active {
+  cursor: grabbing;
+}
+/* a multi-selected row (moves as a block when dragged) */
+.ev-table__row--selected td {
+  background: var(--accent-soft);
+}
+/* the row a drag is hovering over — a drop-before indicator line */
+.ev-table tbody tr[data-over] td {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+/* At-rest value cell: plain text (no native select / date-picker chrome) so the
+ * grid reads as data AND stays narrow — a row of always-on controls pushed the
+ * DUE / PROGRESS columns off-screen (#3). Click / focus swaps in the editor. */
+.ev-table tbody .ev-cell {
+  display: block;
+  width: 100%;
+  height: 26px;
+  line-height: 24px;
+  padding: 0 var(--space-8);
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-btn);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: text;
+}
+.ev-table tbody .ev-cell:hover,
+.ev-table tbody .ev-cell:focus-visible {
+  border-color: var(--paper-3);
+  background: var(--white);
+}
+.ev-cell__empty {
+  color: var(--text-paper-d2);
+}
+/* Coloured single-select chip (#GH-projects B) — status/label values. */
+.ev-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 1px var(--space-8);
+  border-radius: var(--radius-chip);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* inline cells: chrome only on interaction, so data-heavy tables stay calm. */
 .ev-table tbody .ev-field {
@@ -336,6 +547,42 @@
 .ev-table tbody td:focus-within .ev-field {
   border-color: var(--paper-3);
   background: var(--white);
+}
+/* collapsible group sections (#GH-projects A) */
+.ev-table__group td {
+  background: var(--paper-2);
+  padding: 0;
+  border-bottom: 1px solid var(--paper-3);
+  position: sticky;
+  top: 57px; /* under the header + filter rows */
+  z-index: 1;
+}
+.ev-table__group-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 100%;
+  padding: var(--space-4) var(--space-12);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+}
+.ev-table__group-btn:hover {
+  background: var(--paper-3);
+}
+.ev-table__group-caret {
+  width: 10px;
+  color: var(--text-paper-d);
+}
+.ev-table__group-label {
+  font-weight: 600;
+}
+.ev-table__group-count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
 }
 /* a lint-warning cell (§D) gets a warm left edge, still editable. */
 .ev-table__cell--warn {
@@ -401,6 +648,9 @@
   overflow-x: auto;
   align-items: flex-start;
   padding-bottom: var(--space-8);
+  /* shrink below the columns' combined width so the board scrolls inside itself
+   * instead of stretching the panel past the pane (#3). */
+  min-width: 0;
 }
 .ev-board__col {
   min-width: 264px;
@@ -431,7 +681,18 @@
   gap: var(--space-8);
   padding: 0 var(--space-4);
 }
+.ev-board__col-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: var(--space-8);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
 .ev-board__col-name {
+  display: inline-flex;
+  align-items: center;
   font-family: var(--font-mono);
   font-size: var(--text-mono-caps);
   letter-spacing: var(--tracking-mono-caps);
@@ -484,11 +745,72 @@
 .ev-card--readonly:hover {
   transform: none;
 }
+.ev-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-8);
+}
 .ev-card__title {
   font-weight: 600;
   font-size: var(--text-body-sm);
   color: var(--text-paper);
   line-height: var(--leading-body-sm);
+  min-width: 0;
+}
+/* ⋯ card menu trigger — quiet until the card is hovered / the menu is open. */
+.ev-card__menu {
+  flex: none;
+  margin: calc(var(--space-4) * -1) calc(var(--space-4) * -1) 0 0;
+}
+.ev-card__menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  color: var(--text-paper-d);
+  font-size: var(--text-body);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, border-color 0.12s;
+}
+.ev-card:hover .ev-card__menu-btn,
+.ev-card__menu-btn:focus-visible,
+.ev-card__menu-btn[aria-expanded="true"] {
+  opacity: 1;
+}
+.ev-card__menu-btn:hover,
+.ev-card__menu-btn[aria-expanded="true"] {
+  background: var(--paper-2);
+  border-color: var(--paper-3);
+  color: var(--text-paper);
+}
+/* card ⋯ action list — lives inside a Popover (which supplies the chrome). */
+.ev-cardmenu {
+  display: flex;
+  flex-direction: column;
+}
+.ev-cardmenu__item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: var(--space-8) var(--space-12);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-btn);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+.ev-cardmenu__item:hover,
+.ev-cardmenu__item:focus-visible {
+  background: var(--paper-2);
 }
 .ev-card__badges {
   display: flex;
@@ -502,6 +824,31 @@
   gap: var(--space-4);
   font-size: var(--text-xs);
   color: var(--text-paper-d);
+}
+
+/* Card status: a coloured chip at rest that opens the select on click (#3), so a
+   board card reads the same as a table cell instead of a raw native dropdown. */
+.ev-card__status-row {
+  margin-top: var(--space-4);
+}
+.ev-card__status {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-chip);
+}
+button.ev-card__status {
+  cursor: pointer;
+}
+button.ev-card__status:hover,
+button.ev-card__status:focus-visible {
+  border-color: var(--paper-3);
+}
+.ev-card__status select {
+  font-size: var(--text-xs);
 }
 
 /* ── avatar / progress / chips (card faces + cells) ──────────────────────── */
@@ -542,11 +889,52 @@
   gap: var(--space-4);
   align-items: center;
 }
+/* continuous zoom: a range slider whose track carries day / week / month snap
+ * anchors — drag anywhere, or click an anchor for that preset's best form. */
+.ev-gantt__zoom {
+  position: relative;
+  width: 220px;
+  padding: 0 var(--space-8) 16px;
+}
+.ev-gantt__zoom-range {
+  display: block;
+  width: 100%;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.ev-gantt__zoom-anchors {
+  position: absolute;
+  left: var(--space-8);
+  right: var(--space-8);
+  bottom: 0;
+  height: 14px;
+}
+.ev-gantt__zoom-anchor {
+  position: absolute;
+  transform: translateX(-50%);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1;
+  color: var(--text-paper-d);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ev-gantt__zoom-anchor:hover {
+  color: var(--text-paper);
+}
+.ev-gantt__zoom-anchor[data-active] {
+  color: var(--accent);
+  font-weight: 600;
+}
 .ev-gantt__scroll {
   overflow-x: auto;
-  /* hug the chart instead of stretching a half-empty card across the pane */
-  width: fit-content;
-  max-width: 100%;
+  /* fill the pane — the canvas stretches its dated grid to match (max(pane,
+   * content)), so a short project fills the width and a long one scrolls. */
+  width: 100%;
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   background: var(--white);
@@ -589,6 +977,19 @@
 .ev-gantt__row-label:hover {
   background: var(--paper-2);
 }
+/* manual reorder: the label itself is the drag handle (no grip) */
+.ev-gantt__row-label[data-drag] {
+  cursor: grab;
+  touch-action: none;
+}
+.ev-gantt__row-label[data-drag]:active {
+  cursor: grabbing;
+}
+/* drop indicator: a line at the top edge where the row would land */
+.ev-gantt__row-label[data-over] {
+  box-shadow: inset 0 2px 0 var(--accent);
+  background: var(--accent-soft);
+}
 .ev-gantt__canvas {
   position: relative;
   flex: 0 0 auto;
@@ -608,6 +1009,30 @@
   z-index: 1;
   border-bottom: 1px solid var(--paper-3);
   background: var(--paper-2);
+}
+/* two-tier axis: a coarse context band (month / year) over the fine tick row */
+.ev-gantt__axis-coarse {
+  position: relative;
+  border-bottom: 1px solid color-mix(in srgb, var(--paper-3) 60%, transparent);
+}
+.ev-gantt__axis-fine {
+  position: relative;
+}
+.ev-gantt__coarse-band {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--paper-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-paper);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
 }
 .ev-gantt__tick {
   position: absolute;
@@ -645,8 +1070,9 @@
   bottom: 5px;
   display: flex;
   align-items: center;
-  /* a soft vertical gradient reads calmer than a flat slab of pure accent */
-  background: linear-gradient(180deg, var(--accent), var(--accent-h));
+  /* task bars carry their own (blue) hue so they never blend into the red
+   * accent "today" line; a soft vertical gradient reads calmer than a slab */
+  background: linear-gradient(180deg, var(--info), color-mix(in srgb, var(--info), var(--ink) 22%));
   border-radius: var(--radius-chip);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
   cursor: grab;
@@ -671,6 +1097,29 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  pointer-events: none;
+}
+/* The assignee avatar sits at the right end of the bar (label ellipsises before
+ * it). Sized to the ~16px bar interior + a light ring so it reads on the bar. */
+.ev-gantt__bar-avatar {
+  width: 16px;
+  height: 16px;
+  margin-left: auto;
+  margin-right: 3px;
+  border-color: var(--white);
+  font-size: 0.5rem;
+  pointer-events: none;
+}
+/* the assignee shown as a name instead of an avatar (People → Name) */
+.ev-gantt__bar-assignee-name {
+  margin-left: auto;
+  padding-left: var(--space-8);
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--white);
+  font-size: var(--text-xs);
   pointer-events: none;
 }
 .ev-gantt__handle {

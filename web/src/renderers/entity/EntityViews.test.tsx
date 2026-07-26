@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityHealthFinding, EntityInstance, EntityType } from "../../api/entities";
@@ -50,6 +50,25 @@ describe("parseViewSpec", () => {
   it("rejects a record-bound spec with no entity", () => {
     expect(parseViewSpec("view: table\n")).toBeNull();
   });
+  it("normalises multi-level sort rules, defaulting dir + dropping malformed (#GH-projects)", () => {
+    const spec = parseViewSpec(
+      "view: table\nentity: issue\nsort:\n  - { field: status, dir: desc }\n  - { field: title }\n  - { dir: asc }\n",
+    );
+    expect(spec?.sort).toEqual([
+      { field: "status", dir: "desc" },
+      { field: "title", dir: "asc" }, // dir defaulted; the field-less rule dropped
+    ]);
+  });
+  it("treats an absent / non-array sort as manual order (undefined)", () => {
+    expect(parseViewSpec("view: table\nentity: issue\n")?.sort).toBeUndefined();
+    expect(parseViewSpec("view: table\nentity: issue\nsort: nonsense\n")?.sort).toBeUndefined();
+  });
+  it("keeps hidden_fields as a string list, dropping non-strings", () => {
+    expect(parseViewSpec("view: table\nentity: issue\nhidden_fields: [due, 5, progress]\n")?.hidden_fields).toEqual([
+      "due",
+      "progress",
+    ]);
+  });
   it("accepts a health spec with no entity (it's cross-type)", () => {
     expect(parseViewSpec("view: health\ntitle: Health\n")).toMatchObject({ view: "health" });
   });
@@ -72,7 +91,7 @@ describe("HealthView", () => {
 
   it("shows an all-clear when there are no findings", () => {
     render(<HealthView findings={[]} />);
-    expect(screen.getByText(/All records are healthy/)).toBeInTheDocument();
+    expect(screen.getByText(/every record is valid/)).toBeInTheDocument();
   });
 });
 
@@ -108,13 +127,112 @@ describe("TableView", () => {
     );
     expect(screen.getByRole("columnheader", { name: "title" })).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "status" })).toBeInTheDocument();
-    // scalar cells are inline-editable inputs — the value lives on the input.
-    expect(screen.getByLabelText("title")).toHaveValue("Login broken");
+    // scalar cells show the value as text at rest (#3) — click to edit.
+    expect(screen.getByLabelText("edit title")).toHaveTextContent("Login broken");
+  });
+
+  it("keeps a rank-role field out of the default columns (manual-order infra, #GH-projects)", () => {
+    const typeWithRank: EntityType = {
+      ...issueType,
+      fields: [...issueType.fields, { name: "rank", role: "rank" }],
+    };
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue" }} // no explicit columns → schema-derived
+        type={typeWithRank}
+        entities={[issue(1, { title: "A", status: "open", rank: 1 })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("columnheader", { name: "rank" })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "title" })).toBeInTheDocument();
+  });
+
+  it("orders rows by the view's multi-level sort (#GH-projects P2)", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"], sort: [{ field: "status", dir: "asc" }] };
+    render(
+      <EntityViewBody
+        spec={spec}
+        type={issueType}
+        entities={[issue(1, { title: "C", status: "done" }), issue(2, { title: "A", status: "open" }), issue(3, { title: "B", status: "in_progress" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    // status vocab order open < in_progress < done → A, B, C
+    expect(screen.getAllByLabelText("edit title").map((el) => el.textContent)).toEqual(["A", "B", "C"]);
+  });
+
+  it("orders rows by the manual rank when the view has no sort (#GH-projects P2)", () => {
+    const typeWithRank: EntityType = { ...issueType, fields: [...issueType.fields, { name: "rank", role: "rank" }] };
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["title"] }}
+        type={typeWithRank}
+        entities={[issue(1, { title: "C", rank: 3 }), issue(2, { title: "A", rank: 1 }), issue(3, { title: "B", rank: 2 })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByLabelText("edit title").map((el) => el.textContent)).toEqual(["A", "B", "C"]);
+  });
+
+  it("gives each row a drag grip for manual reorder (#GH-projects)", () => {
+    const typeWithRank: EntityType = { ...issueType, fields: [...issueType.fields, { name: "rank", role: "rank" }] };
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["title"] }}
+        type={typeWithRank}
+        entities={[issue(1, { title: "A", rank: 1 }), issue(2, { title: "B", rank: 2 })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    // a drag handle per row (the reorder OUTCOME is covered by tableDragResult unit tests)
+    expect(screen.getByLabelText("drag 1")).toBeInTheDocument();
+    expect(screen.getByLabelText("drag 2")).toBeInTheDocument();
+  });
+
+  it("hides the manual reorder grip when a sort or grouping is active (#GH-projects)", () => {
+    const typeWithRank: EntityType = { ...issueType, fields: [...issueType.fields, { name: "rank", role: "rank" }] };
+    const entities = [issue(1, { title: "A", status: "open", rank: 1 }), issue(2, { title: "B", status: "done", rank: 2 })];
+    const { rerender } = render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["title", "status"], sort: [{ field: "title", dir: "asc" }] }}
+        type={typeWithRank}
+        entities={entities}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText(/drag \d+/)).not.toBeInTheDocument(); // sorted → no manual handle
+    rerender(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["title", "status"], group_by: "status" }}
+        type={typeWithRank}
+        entities={entities}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText(/drag \d+/)).not.toBeInTheDocument(); // grouped → no manual handle
+  });
+
+  it("shows a value cell as text at rest and reveals the editor only on click (#3)", () => {
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "A", status: "open" })]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    // no always-on native select at rest — just the value as text.
+    expect(screen.queryByRole("combobox", { name: "status" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("edit status")).toHaveTextContent("open");
+    // clicking the cell swaps in the shared editor.
+    fireEvent.click(screen.getByLabelText("edit status"));
+    expect(screen.getByLabelText("status").tagName).toBe("SELECT");
   });
 
   it("commits a status change through onPatch (the update write path)", () => {
     const onPatch = vi.fn();
     render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { status: "open" })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.click(screen.getByLabelText("edit status"));
     fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
     expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
   });
@@ -122,6 +240,7 @@ describe("TableView", () => {
   it("commits an edited numeric cell as a number on blur", () => {
     const onPatch = vi.fn();
     render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { progress: 0 })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.click(screen.getByLabelText("edit progress"));
     const cell = screen.getByLabelText("progress");
     fireEvent.change(cell, { target: { value: "40" } });
     fireEvent.blur(cell);
@@ -134,6 +253,27 @@ describe("TableView", () => {
   });
 });
 
+describe("table grouping (#GH-projects A)", () => {
+  it("splits rows into collapsible group sections when group_by is set", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title"], group_by: "status" };
+    render(
+      <EntityViewBody
+        spec={spec}
+        type={issueType}
+        entities={[issue(1, { title: "A", status: "open" }), issue(2, { title: "B", status: "done" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("group-open")).toBeInTheDocument();
+    expect(screen.getByTestId("group-done")).toBeInTheDocument();
+    expect(screen.getAllByLabelText("edit title")).toHaveLength(2);
+    // collapse the "open" group → its row disappears, the other stays
+    fireEvent.click(screen.getByTestId("group-open"));
+    expect(screen.getAllByLabelText("edit title")).toHaveLength(1);
+  });
+});
+
 describe("QuickCreate", () => {
   it("opens the form and creates with only the filled args", () => {
     const onCreate = vi.fn();
@@ -143,6 +283,27 @@ describe("QuickCreate", () => {
     fireEvent.change(screen.getByLabelText("title"), { target: { value: "Bug" } });
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
     expect(onCreate).toHaveBeenCalledWith({ title: "Bug" });
+  });
+
+  it("offers quick-create on a gantt view too, so a milestone/roadmap can add records", () => {
+    // The gantt used to suppress + New (its inline create form was awkward); now
+    // that create is a modal there's no reason to, and the Roadmap (a gantt of
+    // milestones) had NO way to add a milestone at all.
+    const spec: ViewSpec = { view: "gantt", entity: "issue", span: "span", label: "title" };
+    render(<EntityViewBody spec={spec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "+ New" })).toBeInTheDocument();
+  });
+
+  it("opens the create form in a modal dialog, not crammed into the header (#2)", () => {
+    // #2: the expanded form used to live inside the header flex row, so on the
+    // board it floated as a lopsided card beside a vertically-centred title. It
+    // now opens in a ModalShell — the fields + Create action live in a dialog.
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByLabelText("title")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Create" })).toBeInTheDocument();
   });
 });
 
@@ -159,6 +320,7 @@ describe("role widgets in the table (§B3)", () => {
     render(
       <EntityViewBody spec={spec} type={withActor} entities={[issue(1, { assignee: "" })]} users={users} onCreate={vi.fn()} onPatch={onPatch} />,
     );
+    fireEvent.click(screen.getByLabelText("edit assignee"));
     fireEvent.change(screen.getByLabelText("assignee"), { target: { value: "bob" } });
     expect(onPatch).toHaveBeenCalledWith(1, { assignee: "bob" });
   });
@@ -167,6 +329,7 @@ describe("role widgets in the table (§B3)", () => {
     const onPatch = vi.fn();
     const spec: ViewSpec = { view: "table", entity: "issue", columns: ["span"] };
     render(<EntityViewBody spec={spec} type={issueType} entities={[issue(1, { span: "" })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.click(screen.getByLabelText("edit span"));
     fireEvent.change(screen.getByLabelText("span start"), { target: { value: "2026-01-01" } });
     fireEvent.change(screen.getByLabelText("span end"), { target: { value: "2026-02-01" } });
     expect(onPatch).toHaveBeenLastCalledWith(1, { span: "2026-01-01/2026-02-01" });
@@ -186,6 +349,23 @@ describe("role widgets in the table (§B3)", () => {
     fireEvent.click(screen.getByRole("button", { name: "+ New" }));
     expect(screen.getByLabelText("assignee").tagName).toBe("SELECT");
   });
+
+  it("renders a ref field in quick-create as a #N-title picker, not a raw number", () => {
+    const withRef: EntityType = {
+      name: "issue",
+      records_path: "issues",
+      fields: [{ name: "milestone", role: "ref", to: "milestone" }],
+      form: [{ name: "milestone", widget: "ref", required: false }],
+    };
+    const index = buildRefIndex({
+      milestone: [{ number: 5, type_name: "milestone", fields: { title: "v1.0" }, body: "", diagnostics: [] }],
+    });
+    render(<EntityViewBody spec={tableSpec} type={withRef} entities={[]} refIndex={index} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    const sel = screen.getByLabelText("milestone");
+    expect(sel.tagName).toBe("SELECT");
+    expect(within(sel).getByRole("option", { name: "#5 v1.0" })).toBeInTheDocument();
+  });
 });
 
 describe("table sort / filter / column visibility (§A1)", () => {
@@ -201,7 +381,7 @@ describe("table sort / filter / column visibility (§A1)", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /^title/ }));
-    const values = screen.getAllByLabelText("title").map((i) => (i as HTMLInputElement).value);
+    const values = screen.getAllByLabelText("edit title").map((el) => el.textContent);
     expect(values).toEqual(["alpha", "Beta"]);
   });
 
@@ -217,19 +397,20 @@ describe("table sort / filter / column visibility (§A1)", () => {
       />,
     );
     fireEvent.change(screen.getByLabelText("filter status"), { target: { value: "done" } });
-    expect(screen.queryByDisplayValue("A")).not.toBeInTheDocument();
-    expect(screen.getByDisplayValue("B")).toBeInTheDocument();
+    // titles show as text cells now (#3) — filter hides row A, keeps row B.
+    expect(screen.queryByLabelText("edit title")).toHaveTextContent("B");
+    expect(screen.getAllByLabelText("edit title")).toHaveLength(1);
   });
 
-  it("hides a column through the columns menu", () => {
-    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"] };
+  it("hides a column named in the view's hidden_fields (#GH-projects P3)", () => {
+    // Column show/hide now persists on the spec (set in the View panel) — a
+    // hidden field simply doesn't render as a column.
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"], hidden_fields: ["status"] };
     render(
       <EntityViewBody spec={spec} type={issueType} entities={[issue(1, { title: "A", status: "open" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
     );
-    expect(screen.getByRole("button", { name: /^status/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Columns" }));
-    fireEvent.click(screen.getByLabelText("toggle status"));
-    expect(screen.queryByRole("button", { name: /^status/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "title" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "status" })).not.toBeInTheDocument();
   });
 });
 
@@ -297,6 +478,38 @@ describe("ref-traversal in the table (§A4)", () => {
     expect(screen.getByText("v1.0")).toBeInTheDocument();
   });
 
+  it("shows a plain milestone ref column as the referenced title at rest, not the raw number (#1)", () => {
+    const index = buildRefIndex({ milestone: [ms(5, { title: "v1.0" })] });
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["title", "milestone"] }}
+        type={refType}
+        entities={[issue(1, { title: "A", milestone: 5 })]}
+        refIndex={index}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    // the at-rest ref cell resolves 5 → "v1.0"; it must never show the bare id.
+    expect(screen.getByLabelText("edit milestone")).toHaveTextContent("v1.0");
+    expect(screen.getByLabelText("edit milestone")).not.toHaveTextContent("5");
+  });
+
+  it("degrades a plain dangling ref column to #N instead of a bare number", () => {
+    const index = buildRefIndex({ milestone: [] });
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["milestone"] }}
+        type={refType}
+        entities={[issue(1, { milestone: 9 })]}
+        refIndex={index}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText("edit milestone")).toHaveTextContent("#9");
+  });
+
   it("degrades a dangling ref column to a marker instead of crashing (§D)", () => {
     const index = buildRefIndex({ milestone: [] });
     render(
@@ -325,6 +538,7 @@ describe("ref-traversal in the table (§A4)", () => {
         onPatch={onPatch}
       />,
     );
+    fireEvent.click(screen.getByLabelText("edit milestone"));
     fireEvent.change(screen.getByLabelText("milestone"), { target: { value: "5" } });
     expect(onPatch).toHaveBeenCalledWith(1, { milestone: 5 });
   });
@@ -340,6 +554,8 @@ describe("BoardView", () => {
     expect(screen.getByTestId("col-in_progress")).toBeInTheDocument();
     expect(screen.getByTestId("col-done")).toBeInTheDocument();
     expect(screen.getByText("A")).toBeInTheDocument();
+    // status shows as a chip at rest; click it to reveal the accessible select.
+    fireEvent.click(screen.getByRole("button", { name: "edit status" }));
     fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
     expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
   });
@@ -424,8 +640,10 @@ describe("read-only gate (§E canWrite)", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "+ New" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("status")).toBeDisabled();
-    expect(screen.getByLabelText("title")).toBeDisabled();
+    // §E — a read-only member sees plain text, not even a click-to-edit cell.
+    expect(screen.queryByLabelText("edit status")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("edit title")).not.toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
   });
 
   it("hides multi-select + batch (§A1) when canWrite is false", () => {
@@ -449,7 +667,7 @@ describe("read-only gate (§E canWrite)", () => {
       <EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "A" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
     );
     expect(screen.getByRole("button", { name: "+ New" })).toBeInTheDocument();
-    expect(screen.getByLabelText("title")).not.toBeDisabled();
+    expect(screen.getByLabelText("edit title")).toBeInTheDocument();
     expect(screen.getByLabelText("select all")).toBeInTheDocument();
   });
 });

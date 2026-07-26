@@ -51,6 +51,10 @@ export type EntityFieldSpec = {
   role: EntityRole;
   required?: boolean;
   values?: string[] | null;
+  /** #GH-projects B — optional per-value chip colour override for a status/select
+   * field: a value → a hue name ("green"/"blue"/…) or palette slot. Absent values
+   * fall back to an auto-assigned hue. */
+  colors?: Record<string, string> | null;
   to?: string | null;
   from?: string | null;
   over?: string | null;

@@ -32,6 +32,30 @@ def test_turn_instructions_none_when_nothing_to_add():
     assert _turn_instructions(AgentToolContext(), None) is None
 
 
+def test_turn_instructions_includes_the_entity_schema_note():
+    out = _turn_instructions(
+        AgentToolContext(entity_schema_note="## This workspace's record types"), None
+    )
+    assert out is not None
+    assert "This workspace's record types" in out
+
+
+def test_entity_schema_note_reaches_the_agent_system_prompt():
+    note = _turn_instructions(
+        AgentToolContext(
+            entity_schema_note="- **issue** (issues/N.md): status (one of: open, done)"
+        ),
+        None,
+    )
+    agent = _agent_for(
+        AgentConfig(name="a", model="m", system_prompt="BASE PROMPT"),
+        extra_instructions=note,
+    )
+    assert isinstance(agent.instructions, str)
+    assert "BASE PROMPT" in agent.instructions
+    assert "status (one of: open, done)" in agent.instructions
+
+
 def test_speaker_note_reaches_the_agent_system_prompt():
     note = _turn_instructions(AgentToolContext(speaker=_ALICE), None)
     agent = _agent_for(

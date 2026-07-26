@@ -15,9 +15,12 @@ import { useState } from "react";
 
 import type { EntityDiagnostic, EntityFormField } from "../../api/entities";
 import type { User } from "../../api/types";
+import { ModalShell } from "../../components/ModalShell";
+import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
 import { fieldText, parseSpan, parseViewSpec } from "./shared";
-import type { EntityViewProps, ViewKind, ViewSpec } from "./types";
+import type { EntityViewProps, ViewConfig, ViewKind, ViewSpec } from "./types";
+import { ViewSettingsPanel } from "./ViewSettingsPanel";
 import { resolveViewRenderer } from "./viewKindRegistry";
 
 // Re-exports so existing importers (`AiYamlRenderer`, tests) keep their
@@ -33,11 +36,18 @@ export function QuickCreate({
   users,
   onCreate,
   busy,
+  entityLabel,
+  refOptionsFor,
 }: {
   form: EntityFormField[];
   users?: User[];
   onCreate: (args: Record<string, unknown>) => void;
   busy?: boolean;
+  /** Entity name for the modal title ("New issue"). */
+  entityLabel?: string;
+  /** Per-field ref picker options — a `ref` field renders a #N-title dropdown
+   * instead of a raw number box when its target records are loaded. */
+  refOptionsFor?: (name: string) => RefOption[] | undefined;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -50,6 +60,11 @@ export function QuickCreate({
     );
   }
 
+  const close = () => {
+    setDraft({});
+    setOpen(false);
+  };
+
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     const args: Record<string, unknown> = {};
@@ -58,40 +73,52 @@ export function QuickCreate({
       if (v !== "") args[f.name] = v;
     }
     onCreate(args);
-    setDraft({});
-    setOpen(false);
+    close();
   };
 
+  // #2: the expanded form used to sit in the panel's flex header, so on the board
+  // it floated as a lopsided card next to a vertically-centred title. It now opens
+  // in a modal — the header keeps just the "+ New" button.
   return (
-    <form onSubmit={submit} className="ev-quickcreate">
-      {form.map((f) => (
-        <label key={f.name} className="ev-quickcreate__field">
-          <span className="ev-quickcreate__label">
-            {f.name}
-            {f.required ? <span className="ev-quickcreate__req"> *</span> : ""}
-          </span>
-          <RoleCreateInput
-            widget={f.widget as WidgetKind}
-            name={f.name}
-            value={draft[f.name] ?? ""}
-            values={f.values}
-            users={users}
-            required={f.required}
-            onChange={(v) => setDraft((d) => ({ ...d, [f.name]: v }))}
-          />
-        </label>
-      ))}
-      <div className="ev-quickcreate__actions">
-        <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => setOpen(false)}>
-          Cancel
-        </button>
-        <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>
-          Create
-        </button>
-      </div>
-    </form>
+    <ModalShell onClose={close} ariaLabel={`New ${entityLabel ?? "record"}`} width={560} align="top">
+      <form onSubmit={submit} className="ev-quickcreate">
+        <h3 className="ev-quickcreate__title">New {entityLabel ?? "record"}</h3>
+        <div className="ev-quickcreate__grid">
+          {form.map((f) => (
+            <label key={f.name} className="ev-quickcreate__field">
+              <span className="ev-quickcreate__label">
+                {f.name}
+                {f.required ? <span className="ev-quickcreate__req"> *</span> : ""}
+              </span>
+              <RoleCreateInput
+                widget={f.widget as WidgetKind}
+                name={f.name}
+                value={draft[f.name] ?? ""}
+                values={f.values}
+                users={users}
+                refOptions={refOptionsFor?.(f.name)}
+                required={f.required}
+                onChange={(v) => setDraft((d) => ({ ...d, [f.name]: v }))}
+              />
+            </label>
+          ))}
+        </div>
+        <div className="ev-quickcreate__actions">
+          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={close}>
+            Cancel
+          </button>
+          <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>
+            Create
+          </button>
+        </div>
+      </form>
+    </ModalShell>
   );
 }
+
+// The Group-by / Sort / Fields controls now live in the "View" gear panel
+// (#GH-projects P3) — see ViewSettingsPanel, driven by the ViewConfig the
+// container builds. The old standalone GroupByControl is retired.
 
 // ── conflict banner (§B2) ──────────────────────────────────────────────────
 
@@ -158,10 +185,13 @@ export type EntityViewBodyProps = EntityViewProps & {
   catalogDiagnostics?: EntityDiagnostic[];
   /** The entity type has no usable schema — degrade to raw, read-only fields. */
   schemaMissing?: boolean;
+  /** #GH-projects P3 — the "View" settings panel model (Group by / Sort / Fields
+   * + save-to-view state); provided only to writers of a table/board view. */
+  viewConfig?: ViewConfig;
 };
 
 export function EntityViewBody(props: EntityViewBodyProps) {
-  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing } =
+  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing, viewConfig } =
     props;
   const canWrite = props.canWrite !== false; // omitted ≡ writable (§E)
   const renderer = resolveViewRenderer(spec.view);
@@ -174,9 +204,19 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           {spec.title ?? spec.entity}
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
-        {type && !renderer.suppressQuickCreate && canWrite && (
-          <QuickCreate form={type.form} users={users} onCreate={onCreate} busy={busy} />
-        )}
+        <div className="ev-panel__actions">
+          {viewConfig && <ViewSettingsPanel config={viewConfig} />}
+          {type && !renderer.suppressQuickCreate && canWrite && (
+            <QuickCreate
+              form={type.form}
+              users={users}
+              onCreate={onCreate}
+              busy={busy}
+              entityLabel={type.name}
+              refOptionsFor={(name) => refOptionsForField(type, props.refIndex, name)}
+            />
+          )}
+        </div>
       </div>
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}

@@ -1,7 +1,23 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+// The card Edit modal reuses EntityFileEditor, whose body/YAML ride the lazy
+// Monaco stack — swap it for a plain textarea keyed on `ariaLabel`.
+vi.mock("../../components/MonacoEditor", () => ({
+  MonacoEditor: ({
+    value,
+    onChange,
+    readOnly,
+    ariaLabel,
+  }: {
+    value: string;
+    onChange?: (next: string) => void;
+    readOnly?: boolean;
+    ariaLabel?: string;
+  }) => <textarea aria-label={ariaLabel} value={value} disabled={readOnly} onChange={(e) => onChange?.(e.target.value)} />,
+}));
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
@@ -42,12 +58,56 @@ function board(props: Partial<EntityViewProps>) {
 }
 
 describe("BoardView (#451)", () => {
-  it("keeps the status select as an accessible fallback that moves a card", () => {
+  it("moves a card via the keyboard-accessible status select behind the chip", () => {
     const onPatch = vi.fn();
     board({ entities: [issue(1, { title: "A", status: "open" })], onPatch });
     expect(screen.getByTestId("col-done")).toBeInTheDocument();
+    // the status shows as a chip at rest; click reveals the select, then change.
+    fireEvent.click(screen.getByRole("button", { name: "edit status" }));
     fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
     expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
+  });
+
+  it("shows the status as a coloured chip at rest, revealing the select only on click (#3)", () => {
+    const { container } = board({ entities: [issue(1, { title: "A", status: "open" })] });
+    // at rest: a coloured chip inside the card, no native select cluttering it.
+    expect(within(screen.getByTestId("card-1")).getByText("open")).toHaveClass("ev-chip");
+    expect(container.querySelector("select")).toBeNull();
+    // clicking the chip opens the accessible select.
+    fireEvent.click(screen.getByRole("button", { name: "edit status" }));
+    expect(screen.getByLabelText("status")).toBeInTheDocument();
+  });
+
+  it("orders cards within a column by the manual rank (#GH-projects P2)", () => {
+    board({
+      entities: [
+        issue(1, { title: "C", status: "open", rank: 3 }),
+        issue(2, { title: "A", status: "open", rank: 1 }),
+        issue(3, { title: "B", status: "open", rank: 2 }),
+      ],
+    });
+    // one 'open' column → its cards follow rank 1,2,3 = #2, #3, #1
+    expect(screen.getAllByTestId(/^card-\d+$/).map((c) => c.getAttribute("data-testid"))).toEqual([
+      "card-2",
+      "card-3",
+      "card-1",
+    ]);
+  });
+
+  it("orders cards within a column by the view's sort (#GH-projects P2)", () => {
+    board({
+      spec: { ...boardSpec, sort: [{ field: "title", dir: "asc" }] },
+      entities: [
+        issue(1, { title: "C", status: "open" }),
+        issue(2, { title: "A", status: "open" }),
+        issue(3, { title: "B", status: "open" }),
+      ],
+    });
+    expect(screen.getAllByTestId(/^card-\d+$/).map((c) => c.getAttribute("data-testid"))).toEqual([
+      "card-2",
+      "card-3",
+      "card-1",
+    ]);
   });
 
   it("shows an out-of-vocab status in its own degraded column, card still visible (§D)", () => {
@@ -71,18 +131,52 @@ describe("BoardView (#451)", () => {
     expect(screen.getByTestId("card-1")).toHaveAttribute("aria-roledescription", "draggable");
   });
 
+  describe("card actions menu (#4)", () => {
+    it("opens the record's file from the card menu", () => {
+      const onOpenRecord = vi.fn();
+      board({ entities: [issue(1, { title: "A", status: "open" })], onOpenRecord });
+      fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Open file" }));
+      expect(onOpenRecord).toHaveBeenCalledWith(1);
+    });
+
+    it("edits a card in a modal that saves through the file-editor path", () => {
+      const onSave = vi.fn();
+      board({ entities: [issue(1, { title: "A", status: "open" })], onSave });
+      fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+      const dialog = screen.getByRole("dialog");
+      expect(within(dialog).getByLabelText("title")).toHaveValue("A");
+      fireEvent.change(within(dialog).getByLabelText("status"), { target: { value: "done" } });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+      expect(onSave).toHaveBeenCalledWith(1, expect.objectContaining({ status: "done" }), expect.any(String));
+      // saving closes the modal.
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+
+    it("hides Edit for a read-only member but still offers Open file (§E)", () => {
+      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false, onSave: vi.fn(), onOpenRecord: vi.fn() });
+      fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
+      expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open file" })).toBeInTheDocument();
+    });
+  });
+
   describe("read-only gate (§E canWrite)", () => {
-    it("disables the status select and stops the card from dragging when canWrite is false", () => {
-      const onPatch = vi.fn();
-      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false, onPatch });
-      expect(screen.getByLabelText("status")).toBeDisabled();
+    it("shows a read-only status chip with no editable control and stops dragging when canWrite is false", () => {
+      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false });
+      // no way to change status: neither the edit-chip button nor a select.
+      expect(screen.queryByRole("button", { name: "edit status" })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("status")).not.toBeInTheDocument();
+      // the status is still shown as a chip inside the card.
+      expect(within(screen.getByTestId("card-1")).getByText("open")).toHaveClass("ev-chip");
       // @dnd-kit disables the draggable → the card advertises aria-disabled.
       expect(screen.getByTestId("card-1")).toHaveAttribute("aria-disabled", "true");
     });
 
     it("keeps the card draggable + status editable by default (canWrite omitted)", () => {
       board({ entities: [issue(1, { title: "A", status: "open" })] });
-      expect(screen.getByLabelText("status")).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "edit status" })).toBeInTheDocument();
       expect(screen.getByTestId("card-1")).toHaveAttribute("aria-disabled", "false");
     });
   });

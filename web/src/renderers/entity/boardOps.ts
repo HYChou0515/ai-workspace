@@ -6,6 +6,7 @@
 
 import type { EntityFieldSpec, EntityInstance } from "../../api/entities";
 import { fieldText } from "./shared";
+import { rankForDrop, rankOf } from "./sortRows";
 
 /** The synthetic "no status" column id (droppable → clears the field). */
 export const UNSET_COL = "__unset__";
@@ -53,13 +54,58 @@ export function dropPatch(
   return { number, patch: { [groupField]: col[1] } };
 }
 
-/** @dnd-kit `onDragEnd` → the single write path. Kept tiny + pure so the
- * drag *outcome* is fully tested; only the gesture is delegated to the library. */
+/** The full outcome of a board drop (#GH-projects P4): dropping onto a COLUMN
+ * changes the status (`dropPatch`); dropping onto a CARD adopts that card's
+ * status AND — unless a sort is active — reorders in front of it by writing a
+ * fractional `rank` (manual order). `null` = no-op. Pure, so the drag outcome is
+ * fully tested; the gesture stays the library's job. */
+export function dropResult(
+  activeId: string,
+  overId: string | null,
+  groupField: string,
+  entities: EntityInstance[],
+  sortActive: boolean,
+): { number: number; patch: Record<string, unknown> } | null {
+  const col = dropPatch(activeId, overId, groupField);
+  if (col) return col; // dropped on a column / the unset column
+  if (!overId) return null;
+  const am = /^card-(\d+)$/.exec(activeId);
+  const om = /^card-(\d+)$/.exec(overId);
+  if (!am || !om) return null;
+  const number = Number(am[1]);
+  const overNumber = Number(om[1]);
+  if (number === overNumber) return null;
+  const over = entities.find((e) => e.number === overNumber);
+  if (!over) return null;
+  const status = fieldText(over.fields[groupField]);
+  const patch: Record<string, unknown> = { [groupField]: status };
+  if (!sortActive) {
+    // Reorder within the target column: rank between `over` and the card above it.
+    const column = entities
+      .filter((e) => fieldText(e.fields[groupField]) === status)
+      .sort((a, b) => rankOf(a) - rankOf(b) || a.number - b.number);
+    const rank = rankForDrop(column, number, overNumber);
+    if (rank != null) patch.rank = rank;
+  }
+  return { number, patch };
+}
+
+/** @dnd-kit `onDragEnd` → the single write path. Column-only callers can omit
+ * `entities`/`sortActive` (a status-change drop needs neither); passing them
+ * enables card-onto-card manual reorder (#GH-projects P4). */
 export function handleDragEnd(
   event: { active: { id: string | number }; over: { id: string | number } | null },
   groupField: string,
   onPatch: (number: number, patch: Record<string, unknown>) => void,
+  entities: EntityInstance[] = [],
+  sortActive = false,
 ): void {
-  const patch = dropPatch(String(event.active.id), event.over ? String(event.over.id) : null, groupField);
-  if (patch) onPatch(patch.number, patch.patch);
+  const result = dropResult(
+    String(event.active.id),
+    event.over ? String(event.over.id) : null,
+    groupField,
+    entities,
+    sortActive,
+  );
+  if (result) onPatch(result.number, result.patch);
 }

@@ -11,6 +11,10 @@ import { TopBar, initialIdeCollapsed, mainSurfaceTabs, showAgentPanel } from "./
 // reads the current user through TanStack Query. These layout tests render TopBar
 // bare (no providers) and only exercise the Workspace toggle — stub presence out.
 vi.mock("../../components/PresenceBar", () => ({ PresenceBar: () => null }));
+// The top bar's access chip reads identity through TanStack Query too; these
+// provider-free layout tests only exercise the Workspace toggle, so stub both.
+vi.mock("../../hooks/useCurrentUser", () => ({ useCurrentUser: () => "alice" }));
+vi.mock("../../hooks/useIsSuperuser", () => ({ useIsSuperuserState: () => ({ isSuperuser: false, groups: [] }) }));
 
 afterEach(cleanup);
 

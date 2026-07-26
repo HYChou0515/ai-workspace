@@ -1,0 +1,6 @@
+view: gantt
+entity: issue
+title: Workload
+span: span
+label: title
+group_by: assignee

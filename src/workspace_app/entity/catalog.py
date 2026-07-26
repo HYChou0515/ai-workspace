@@ -69,12 +69,16 @@ def _load_type(
             )
             role = Role.TEXT
         where = spec.get("where")
+        colors = spec.get("colors")
         fields.append(
             FieldSpec(
                 name=str(fname),
                 role=role,
                 required=bool(spec.get("required", False)),
                 values=spec.get("values"),
+                colors={str(k): str(v) for k, v in colors.items()}
+                if isinstance(colors, dict)
+                else None,
                 to=spec.get("to"),
                 from_=spec.get("from"),
                 over=spec.get("over"),

@@ -15,9 +15,11 @@
  *   - the raw byte-edit escape hatch (the tab-strip Edit toggle).
  */
 
+import { useMemo } from "react";
+
 import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
-import { useEntities, useEntityCatalog } from "../../hooks/useEntities";
+import { useEntities, useEntityCatalog, useReferencedRecords } from "../../hooks/useEntities";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
 import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
@@ -25,6 +27,7 @@ import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { pxToRem } from "../../lib/pxToRem";
 import { MarkdownRenderer } from "../MarkdownRenderer";
 import { EntityFileEditor } from "./EntityFileEditor";
+import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
 
 /** `{records_path}/{N}.md` → its folder + number, or null if the basename isn't a
  * bare integer `.md`. The folder is normalised (no leading slash) to compare with
@@ -63,6 +66,11 @@ export function RecordFileRenderer({ path }: { path: string }) {
   const canWrite = useItemCanWrite(slug, itemId);
   const write = useEntityWrite(slug, itemId, entityName, { canWrite });
   const users = useUsers();
+  // Load the records this type's `ref` fields point at (e.g. milestones) so the
+  // editor can offer a #N-title picker instead of a raw number box (§A4). Hooks
+  // stay unconditional — an empty refTypes list gates the queries off.
+  const refTypes = useMemo(() => referencedTypes(type), [type]);
+  const refIndex = buildRefIndex(useReferencedRecords(slug, itemId, refTypes));
 
   // The tab-strip Edit toggle is the raw full-file escape hatch (fix a record the
   // structured editor can't express, or a plain doc) — hand off to markdown/Monaco.
@@ -109,11 +117,19 @@ export function RecordFileRenderer({ path }: { path: string }) {
         </div>
       )}
       <EntityFileEditor
+        // The whole IDE mounts ONE <FileView>, so switching tabs only swaps the
+        // `path` prop and this editor is reused in place. Its form seeds from
+        // `record` via useState (run once on mount), so without a per-record key
+        // the reused instance keeps the previous record's field values — opening
+        // issues/2.md after editing issues/1.md showed #1's title/date. Key it to
+        // the path so a different record file remounts + re-seeds the form.
+        key={path}
         type={type}
         record={record}
         users={users}
         canWrite={write.canWrite}
         busy={write.isBusy}
+        refOptionsFor={(name) => refOptionsForField(type, refIndex, name)}
         onSave={(patch, body) => write.save(record.number, patch, body)}
       />
     </div>

@@ -9,8 +9,29 @@
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { traverseColumn, type RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
+import { ranksForBlockDrop } from "./sortRows";
 
 export type SortDir = "asc" | "desc";
+
+/** The `rank` updates a table drag-reorder writes (#GH-projects). Pure so the drag
+ * *outcome* is fully tested; the gesture stays @dnd-kit's job. When the dragged
+ * row is part of a multi-selection, the WHOLE selection moves as one block before
+ * the drop target; otherwise just the dragged row. `rows` is the current display
+ * order. Empty map = a no-op (dropped on itself / the selection / a non-row). */
+export function tableDragResult(
+  activeId: string,
+  overId: string | null,
+  rows: EntityInstance[],
+  selected: ReadonlySet<number>,
+): Map<number, number> {
+  const am = /^row-(\d+)$/.exec(activeId);
+  const om = overId ? /^row-(\d+)$/.exec(overId) : null;
+  if (!am || !om) return new Map();
+  const active = Number(am[1]);
+  const over = Number(om[1]);
+  const moving = selected.has(active) && selected.size > 1 ? [...selected] : [active];
+  return ranksForBlockDrop(rows, moving, over);
+}
 
 const NUMERIC_ROLES = new Set(["progress", "rank", "ref"]);
 

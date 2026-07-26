@@ -1,8 +1,10 @@
 /**
- * project-health view (#419 §E3, #448 F / #454) — a cross-type list of the
- * parser/lint findings the layered degradation (§D) collects. Not entity-bound,
- * so it lives outside `EntityViewBody` / the `viewKindRegistry`; the container
- * feeds it the health endpoint's findings directly.
+ * data-issues view (#419 §E3, #448 F / #454) — a cross-type list of the
+ * per-record parser/lint findings the layered degradation (§D) collects. It
+ * surfaces BROKEN / INVALID records to hand-fix (a data-integrity / trouble-
+ * shooting surface — why a record won't show on a view), NOT project-planning
+ * risk. Not entity-bound, so it lives outside `EntityViewBody` /
+ * the `viewKindRegistry`; the container feeds it the endpoint's findings directly.
  *
  * #454 deepens it into a queryable panel: filter by level / entity type / field,
  * and click a finding to jump to the offending record (the container wires
@@ -75,14 +77,14 @@ export function HealthView({
   return (
     <div className="ev-panel">
       <div className="ev-panel__head">
-        <h3 className="ev-panel__title">{title ?? "Health"}</h3>
+        <h3 className="ev-panel__title">{title ?? "Data issues"}</h3>
       </div>
       {findings.length === 0 ? (
         <div className="ev-empty">
           <span className="ev-empty__icon" aria-hidden>
             ✓
           </span>
-          <div className="ev-ok">All records are healthy — no findings.</div>
+          <div className="ev-ok">No data issues — every record is valid.</div>
         </div>
       ) : (
         <>

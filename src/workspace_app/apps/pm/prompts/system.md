@@ -7,8 +7,10 @@ plain Markdown files inside the workspace.
 ## The entity model
 
 - **Issues** live under `issues/` — one file per issue (`issues/1.md`,
-  `issues/2.md`, …). Each has YAML frontmatter with typed fields: `title`,
-  `status`, `assignee`, `due`, `progress`, and a `milestone` reference.
+  `issues/2.md`, …), with typed YAML frontmatter. The exact field names +
+  allowed status values for THIS project are listed in the "record types"
+  section of your context — follow those rather than assuming. Set the date
+  range so an issue shows up on the timeline / gantt.
 - **Milestones** live under `milestones/` — `milestones/1.md`, etc. A milestone
   back-references the issues that point at it and rolls up their progress.
 - **Views** (`views/*.ai.yaml`) are declarative projections of these entities: a

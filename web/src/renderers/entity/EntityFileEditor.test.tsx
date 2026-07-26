@@ -90,4 +90,40 @@ describe("EntityFileEditor (§C2)", () => {
     render(<EntityFileEditor type={issueType} record={record} canWrite={false} onSave={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
+
+  it("renders a ref field as a #N-title picker when ref options are supplied", () => {
+    const withRef: EntityType = {
+      name: "issue",
+      records_path: "issues",
+      fields: [{ name: "milestone", role: "ref", to: "milestone" }],
+      form: [],
+    };
+    const rec: EntityInstance = { number: 1, type_name: "issue", fields: { milestone: 5 }, body: "", diagnostics: [], version: "v1" };
+    render(
+      <EntityFileEditor
+        type={withRef}
+        record={rec}
+        onSave={vi.fn()}
+        refOptionsFor={(n) => (n === "milestone" ? [{ number: 5, label: "v1.0" }] : undefined)}
+      />,
+    );
+    const sel = screen.getByLabelText("milestone");
+    expect(sel.tagName).toBe("SELECT");
+    expect((sel as HTMLSelectElement).value).toBe("5");
+  });
+
+  it("edits a ref as a picker even with NO targets yet — never a raw number box", () => {
+    // The real bug: a fresh project has no milestones, so the editor fell back to
+    // a number input ("milestone 只能填數字"). An empty option list must still be
+    // the dropdown, so it's clearly a picker (create a milestone → it appears).
+    const withRef: EntityType = {
+      name: "issue",
+      records_path: "issues",
+      fields: [{ name: "milestone", role: "ref", to: "milestone" }],
+      form: [],
+    };
+    const rec: EntityInstance = { number: 1, type_name: "issue", fields: {}, body: "", diagnostics: [], version: "v1" };
+    render(<EntityFileEditor type={withRef} record={rec} onSave={vi.fn()} refOptionsFor={() => []} />);
+    expect(screen.getByLabelText("milestone").tagName).toBe("SELECT");
+  });
 });

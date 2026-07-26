@@ -34,8 +34,10 @@ describe("entity-views.css", () => {
   });
 
   it("keeps the table calm — zebra + hover, chrome-on-interaction cells", () => {
-    expect(CSS).toMatch(/\.ev-table tbody tr:nth-child\(even\)/);
-    expect(CSS).toMatch(/\.ev-table tbody tr:hover/);
+    // zebra + hover (scoped with :not(.ev-table__group) so group headers keep
+    // their own background — see #GH-projects A).
+    expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:nth-child\(even\)/);
+    expect(CSS).toMatch(/\.ev-table tbody tr[^{]*:hover/);
     // inline cell fields reveal their border only on hover/focus.
     expect(CSS).toMatch(/\.ev-table tbody \.ev-field\s*\{[^}]*border-color:\s*transparent/);
   });
@@ -43,6 +45,13 @@ describe("entity-views.css", () => {
   it("gives the board real columns with a drop-target + degraded state (§D)", () => {
     expect(CSS).toContain(".ev-board__col--over");
     expect(CSS).toContain(".ev-board__col--degraded");
+  });
+
+  it("distinguishes gantt task bars from the today marker by colour", () => {
+    const today = CSS.match(/\.ev-gantt__today\s*\{[^}]*\}/)?.[0] ?? "";
+    const bar = CSS.match(/\.ev-gantt__bar\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(today).toMatch(/--accent/); // the today line stays the one red signal
+    expect(bar).not.toMatch(/--accent\b/); // bars must not reuse it, or they blend in
   });
 
   it("only references declared design tokens (no hardcoded brand colors)", () => {

@@ -83,6 +83,60 @@ async def test_chat_turn_wires_the_sink_but_has_no_origin(monkeypatch):
     assert ctx.entity_write_origin is None
 
 
+_ISSUE_SCHEMA = b"""\
+path: issues
+fields:
+  title: { role: text, required: true }
+  status: { role: status, values: [open, in_progress, blocked, done] }
+  span: { role: daterange }
+"""
+
+
+async def test_chat_turn_injects_the_live_entity_schema_brief(monkeypatch):
+    """#pm: a turn on an item that declares record types carries a schema brief in
+    its prompt note, so the agent creates valid records (field names, the closed
+    status vocab, the timeline date-range) instead of guessing."""
+    _spec, executor, item_id = _build(monkeypatch)
+    await executor._turn_ctx._filestore.write(item_id, "/.entity/issue/schema.yaml", _ISSUE_SCHEMA)
+
+    ctx = await executor._turn_ctx.build_chat_turn(
+        item_id,
+        agent_config=None,
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+    )
+
+    assert "**issue** (issues/N.md)" in ctx.entity_schema_note
+    assert "status (one of: open, in_progress, blocked, done)" in ctx.entity_schema_note
+    assert "timeline / gantt" in ctx.entity_schema_note  # the span guidance (#4)
+
+
+async def test_chat_turn_injects_nothing_when_no_entity_types(monkeypatch):
+    """A non-entity item (no `.entity/`) injects an empty note — nothing added."""
+    _spec, executor, item_id = _build(monkeypatch)
+
+    ctx = await executor._turn_ctx.build_chat_turn(
+        item_id,
+        agent_config=None,
+        run_subagent=_dummy_subagent,
+        history_messages=[],
+        reasoning_effort=None,
+        kb_enhancements=None,
+        collection_ids=[],
+        collection_tiers=[],
+        acting_user="u",
+        speaker=None,
+    )
+
+    assert ctx.entity_schema_note == ""
+
+
 async def test_wire_handle_threads_the_runs_origin_into_the_agent_turn(monkeypatch):
     """The end-to-end wiring the DoD rests on: a triggered run's handle carries an
     EntityOrigin; wire_handle binds wf.drive_turn so that origin reaches the agent
