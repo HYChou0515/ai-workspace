@@ -423,14 +423,35 @@ class InvestigationRegistry:
     async def close_session(self, investigation_id: str) -> None:
         """Manually tear down one investigation's sandbox + remove from
         the registry. Used by the close-investigation API endpoint
-        (plan-backend §6)."""
-        s = self._sessions.pop(investigation_id, None)
+        (plan-backend §6) and by a workflow pause freeing its sandbox.
+
+        Runs UNDER the session lock, and clears the cached handle before the
+        teardown. It used to pop the session first and then write back + kill —
+        which loses writes, because #345 keys the sandbox dir to the ITEM: a
+        request arriving in that window built a NEW session (with its own new
+        lock, so nothing serialised it), warmed the SAME dir and wrote into it,
+        and then this method's ``kill`` rmtree'd the dir underneath it. The write
+        had already been acknowledged. Symptom: a 204 PUT followed by a 404 GET,
+        which is how the workflow-pause test found it intermittently.
+
+        Holding the lock means a concurrent file op either lands BEFORE the
+        write-back (so it is mirrored to the durable store) or waits and then
+        finds ``handle is None`` and re-acquires a fresh dir. Either way the write
+        survives. `kill_idle` already reasons this way about the shared dir; this
+        path simply never did."""
+        s = self._sessions.get(investigation_id)
         if s is None:
             return
-        logger.info("registry: close_session tearing down item %s", investigation_id)
-        if s.handle is not None:
-            if self._has_durable:
-                await self._writeback(investigation_id, s.handle, delete=True)
-            await self.sandbox.kill(s.handle)
-            if self.activity is not None:
-                await self.activity.forget(investigation_id)
+        async with s.lock:
+            # Re-read under the lock: a concurrent close may have finished first.
+            if self._sessions.get(investigation_id) is not s:
+                return
+            logger.info("registry: close_session tearing down item %s", investigation_id)
+            handle, s.handle = s.handle, None
+            if handle is not None:
+                if self._has_durable:
+                    await self._writeback(investigation_id, handle, delete=True)
+                await self.sandbox.kill(handle)
+                if self.activity is not None:
+                    await self.activity.forget(investigation_id)
+        self._sessions.pop(investigation_id, None)
