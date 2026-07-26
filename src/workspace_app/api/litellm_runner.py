@@ -89,9 +89,12 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-#: Models already warned about for a missing `num_ctx` (see `_agent_for`). Keyed by
-#: model name so an unregistered deploy says it once rather than every turn.
-_NUM_CTX_WARNED: set[str] = set()
+#: Window decisions already reported (see `_agent_for`), as `(model, window)`.
+#: Keyed on the DECISION rather than the model: a deploy states its window once
+#: instead of every turn, but a window that later changes — the learner supplying
+#: what a rejection taught it — is stated again instead of hiding behind the first
+#: turn's line.
+_NUM_CTX_SEEN: set[tuple[str, int | None]] = set()
 
 # Drop params a model doesn't support (e.g. reasoning_effort on a non-reasoning
 # model) instead of erroring — the per-message reasoning-effort selector sends
@@ -388,22 +391,30 @@ def _agent_for(
     # read 9,023 tokens where the same value in `extra_body` still read 4,096.
     is_ollama = config.model.startswith(("ollama/", "ollama_chat/"))
     ollama_args = {"num_ctx": context_window} if is_ollama and context_window else {}
-    if is_ollama and not context_window and config.model not in _NUM_CTX_WARNED:
-        # The one combination that still truncates in silence: Ollama WILL impose
-        # a window, and nothing could tell us how big to ask for — so it serves its
-        # own default and drops the rest, from the front. Unsaid, that reads as a
-        # model which stopped following its prompt. Once per model, not per turn:
-        # a deploy on an unregistered name would otherwise warn on every message.
-        # Non-Ollama endpoints size their own window, so their silence is correct
-        # and is deliberately NOT logged.
-        _NUM_CTX_WARNED.add(config.model)
-        _LOGGER.warning(
-            "litellm_runner: no context window resolved for %s, so no num_ctx is "
-            "sent — Ollama will serve its own default and silently drop anything "
-            "over it. Set agents.context_limit, or bake num_ctx into the model's "
-            "Modelfile.",
-            config.model,
-        )
+    # Report the decision once — an operator's first question is how big a window
+    # this deploy settled on, and answering only on failure leaves the working case
+    # unknowable. Non-Ollama endpoints size their own window, so there is no
+    # decision of ours to report and their silence is correct on every turn.
+    if is_ollama and (key := (config.model, context_window)) not in _NUM_CTX_SEEN:
+        _NUM_CTX_SEEN.add(key)
+        if context_window:
+            _LOGGER.info(
+                "litellm_runner: opening a %d-token window on %s (num_ctx)",
+                context_window,
+                config.model,
+            )
+        else:
+            # The one combination that still truncates in silence: Ollama WILL
+            # impose a window, and nothing could tell us how big to ask for — so it
+            # serves its own default and drops the rest, from the front. Unsaid,
+            # that reads as a model which stopped following its prompt.
+            _LOGGER.warning(
+                "litellm_runner: no context window resolved for %s, so no num_ctx "
+                "is sent — Ollama will serve its own default and silently drop "
+                "anything over it. Set agents.context_limit, or bake num_ctx into "
+                "the model's Modelfile.",
+                config.model,
+            )
     if reasoning_effort == "none":
         from ..agent.reasoning import reasoning_off_kwargs
 

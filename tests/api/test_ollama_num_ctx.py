@@ -107,45 +107,62 @@ def test_no_agent_config_is_unknown_not_a_crash() -> None:
     assert _builder(catalog=40960)._context_window(None).tokens is None
 
 
-# ── saying so when we cannot say how big ─────────────────────────────
+# ── saying, once, what window we settled on ──────────────────────────
 
 
-def _warn(caplog, model: str, **kw) -> list[str]:
+def _say(caplog, *calls) -> list[tuple[str, str]]:
+    """Run `_agent_for` once per (model, kwargs) and return (level, message)."""
     from workspace_app.api import litellm_runner
 
-    litellm_runner._NUM_CTX_WARNED.clear()
+    litellm_runner._NUM_CTX_SEEN.clear()
     caplog.clear()
-    with caplog.at_level("WARNING", logger=litellm_runner.__name__):
-        _agent_for(AgentConfig(name="a", model=model), **kw)
-    return [r.getMessage() for r in caplog.records]
+    with caplog.at_level("INFO", logger=litellm_runner.__name__):
+        for model, kw in calls:
+            _agent_for(AgentConfig(name="a", model=model), **kw)
+    return [(r.levelname, r.getMessage()) for r in caplog.records]
+
+
+def test_the_chosen_window_is_logged(caplog) -> None:
+    """The operator's first question is "so how big did it decide?" — answering
+    only on failure leaves the working case unknowable."""
+    said = _say(caplog, ("ollama_chat/qwen3:14b", {"context_window": 40960}))
+    assert len(said) == 1
+    level, msg = said[0]
+    assert level == "INFO"
+    assert "40960" in msg and "qwen3:14b" in msg
+
+
+def test_the_same_decision_is_not_repeated_every_turn(caplog) -> None:
+    said = _say(caplog, *[("ollama_chat/qwen3:14b", {"context_window": 40960})] * 4)
+    assert len(said) == 1
+
+
+def test_a_changed_window_is_stated_again(caplog) -> None:
+    """Keyed on the decision, not the model: when a later turn resolves a
+    different window (the learner supplying what a rejection taught it), staying
+    quiet would hide the change behind the first turn's line."""
+    said = _say(
+        caplog,
+        ("ollama_chat/qwen3:14b", {"context_window": 40960}),
+        ("ollama_chat/qwen3:14b", {"context_window": 8192}),
+    )
+    assert len(said) == 2
+    assert "8192" in said[1][1]
 
 
 def test_an_ollama_endpoint_of_unknown_size_is_warned_about(caplog) -> None:
     """The one case that still truncates in silence: we are on Ollama, so the
     endpoint WILL impose a window, and we could not find out how big to ask for.
     Left unsaid it looks exactly like a model that stopped following its prompt."""
-    msgs = _warn(caplog, "ollama_chat/qwen3-custom")
-    assert len(msgs) == 1
-    assert "num_ctx" in msgs[0] and "qwen3-custom" in msgs[0]
-
-
-def test_a_resolved_window_says_nothing(caplog) -> None:
-    assert _warn(caplog, "ollama_chat/qwen3:14b", context_window=40960) == []
+    said = _say(caplog, ("ollama_chat/qwen3-custom", {}))
+    assert len(said) == 1
+    level, msg = said[0]
+    assert level == "WARNING"
+    assert "num_ctx" in msg and "qwen3-custom" in msg
 
 
 def test_a_non_ollama_endpoint_says_nothing(caplog) -> None:
-    """vLLM and hosted endpoints size their own window — not sending `num_ctx`
-    there is correct on every turn, and saying so every turn is noise."""
-    assert _warn(caplog, "hosted_vllm/qwen3") == []
-    assert _warn(caplog, "gpt-4o") == []
-
-
-def test_the_warning_is_once_per_endpoint_not_once_per_turn(caplog) -> None:
-    from workspace_app.api import litellm_runner
-
-    litellm_runner._NUM_CTX_WARNED.clear()
-    caplog.clear()
-    with caplog.at_level("WARNING", logger=litellm_runner.__name__):
-        for _ in range(3):
-            _agent_for(AgentConfig(name="a", model="ollama_chat/qwen3-custom"))
-    assert len(caplog.records) == 1
+    """vLLM and hosted endpoints size their own window — `num_ctx` is not theirs
+    to receive, so there is no decision to report on any turn."""
+    assert _say(caplog, ("hosted_vllm/qwen3", {"context_window": 40960})) == []
+    assert _say(caplog, ("gpt-4o", {})) == []
