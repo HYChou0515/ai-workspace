@@ -59,6 +59,7 @@ describe("SheetGrid — sorting is a view, not a rewrite", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /sort by wafer/i }));
     const cell = screen.getByLabelText("R1C1"); // displays W01, which is file row 2
+    await userEvent.dblClick(cell);
     await userEvent.clear(cell);
     await userEvent.type(cell, "W99{Enter}");
 
@@ -192,16 +193,6 @@ describe("SheetGrid — range selection and the clipboard", () => {
     expect(copyFrom(screen.getByLabelText("R2C2"))["text/plain"]).toBe("W01\t120\nW02\t98\n");
   });
 
-  it("leaves a single cell's copy to the input, so half a value can still be copied", async () => {
-    render(<SheetGrid rows={SHEET} onRowsChange={vi.fn()} />);
-
-    const cell = screen.getByLabelText("R1C1");
-    await userEvent.click(cell);
-
-    // No range — the grid must not hijack the event.
-    expect(copyFrom(cell)["text/plain"]).toBeUndefined();
-  });
-
   it("clears a selected block with Delete, without removing rows", async () => {
     const onRowsChange = vi.fn();
     render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
@@ -297,12 +288,12 @@ describe("SheetGrid — range selection and the clipboard", () => {
     expect(onUndo).toHaveBeenCalled();
   });
 
-  it("leaves a single-value paste to the input, so you can paste into a word", async () => {
+  it("leaves a single-value paste to the input while EDITING, so you can paste into a word", async () => {
     const onRowsChange = vi.fn();
     render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
 
     const cell = screen.getByLabelText("R1C1");
-    await userEvent.click(cell);
+    await userEvent.dblClick(cell);
     pasteInto(cell, "just-text");
 
     expect(onRowsChange).not.toHaveBeenCalled();
@@ -319,12 +310,12 @@ describe("SheetGrid — range selection and the clipboard", () => {
     expect(onRowsChange).not.toHaveBeenCalled();
   });
 
-  it("leaves Delete to the input when only one cell is selected", async () => {
+  it("leaves Delete to the input while EDITING, so a value stays editable per character", async () => {
     const onRowsChange = vi.fn();
     render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
 
     const cell = screen.getByLabelText("R1C1");
-    await userEvent.click(cell);
+    await userEvent.dblClick(cell);
     fireEvent.keyDown(cell, { key: "Delete" });
 
     expect(onRowsChange).not.toHaveBeenCalled();
@@ -339,5 +330,122 @@ describe("SheetGrid — range selection and the clipboard", () => {
     fireEvent.keyDown(cell, { key: "ArrowRight", shiftKey: true });
 
     expect(copyFrom(cell)["text/plain"]).toBe("W01\t120\nW02\t98\n");
+  });
+});
+
+describe("SheetGrid — a click selects, a double-click edits", () => {
+  afterEach(cleanup);
+
+  const SHEET2 = [
+    ["wafer", "qty"],
+    ["W01", "120"],
+    ["W02", "98"],
+  ];
+
+  function clip(el: Element) {
+    const written: Record<string, string> = {};
+    fireEvent.copy(el, {
+      clipboardData: { setData: (k: string, v: string) => (written[k] = v), getData: () => "" },
+    });
+    return written["text/plain"];
+  }
+
+  it("copies a SINGLE clicked cell — the whole reason the mode exists", async () => {
+    // Without a mode, clicking put you in a text input and Ctrl+C copied the
+    // input's (empty) text selection, so copying one cell was impossible.
+    render(<SheetGrid rows={SHEET2} onRowsChange={vi.fn()} />);
+
+    const cell = screen.getByLabelText("R1C2");
+    await userEvent.click(cell);
+
+    expect(cell).toHaveAttribute("readonly"); // selected, not editing
+    expect(clip(cell)).toBe("120\n");
+  });
+
+  it("edits on double-click, and hands the clipboard back to the input", async () => {
+    render(<SheetGridHarness rows={SHEET2} />);
+
+    const cell = screen.getByLabelText("R1C2");
+    await userEvent.dblClick(cell);
+    expect(cell).not.toHaveAttribute("readonly");
+
+    // While editing, copy belongs to the text — the grid must not hijack it.
+    expect(clip(cell)).toBeUndefined();
+  });
+
+  it("moves the selection with plain arrows", async () => {
+    render(<SheetGrid rows={SHEET2} onRowsChange={vi.fn()} />);
+
+    await userEvent.click(screen.getByLabelText("R1C1"));
+    fireEvent.keyDown(screen.getByLabelText("R1C1"), { key: "ArrowDown" });
+
+    expect(clip(screen.getByLabelText("R2C1"))).toBe("W02\n");
+  });
+
+  it("starts editing when you just type, replacing the value like Excel", async () => {
+    render(<SheetGridHarness rows={SHEET2} />);
+
+    const cell = screen.getByLabelText("R1C2");
+    await userEvent.click(cell);
+    await userEvent.type(cell, "7{Enter}");
+
+    expect(screen.getByLabelText("R1C2")).toHaveValue("7");
+  });
+});
+
+describe("SheetGrid — row and column selection", () => {
+  afterEach(cleanup);
+
+  const SHEET3 = [
+    ["wafer", "qty"],
+    ["W01", "120"],
+    ["W02", "98"],
+  ];
+
+  function clipFrom(el: Element) {
+    const written: Record<string, string> = {};
+    fireEvent.copy(el, {
+      clipboardData: { setData: (k: string, v: string) => (written[k] = v), getData: () => "" },
+    });
+    return written["text/plain"];
+  }
+
+  it("selects a whole row from the number gutter", async () => {
+    render(<SheetGrid rows={SHEET3} onRowsChange={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Select row 2" }));
+
+    expect(clipFrom(screen.getByLabelText("R2C1"))).toBe("W02\t98\n");
+  });
+
+  it("selects a whole column from its header, header cell included", async () => {
+    // The header really is a line of the CSV, so a copied column carries its name.
+    render(<SheetGrid rows={SHEET3} onRowsChange={vi.fn()} />);
+
+    await userEvent.click(screen.getByLabelText("Column 2 name"));
+
+    expect(clipFrom(screen.getByLabelText("R1C2"))).toBe("qty\n120\n98\n");
+    // and the header cell has to LOOK selected, or copying its name is a surprise
+    expect(screen.getByLabelText("Column 2 name").closest("th")).toHaveClass("sheet-td--sel");
+  });
+
+  it("extends by whole rows when the gutter is shift-clicked", async () => {
+    render(<SheetGrid rows={SHEET3} onRowsChange={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Select row 1" }));
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Select row 2" }), { shiftKey: true });
+
+    expect(clipFrom(screen.getByLabelText("R1C1"))).toBe("W01\t120\nW02\t98\n");
+  });
+
+  it("still renames a column on double-click, so the header obeys the same rule as any cell", async () => {
+    render(<SheetGridHarness rows={SHEET3} />);
+
+    const head = screen.getByLabelText("Column 2 name");
+    await userEvent.dblClick(head);
+    await userEvent.clear(head);
+    await userEvent.type(head, "count{Enter}");
+
+    expect(screen.getByLabelText("Column 2 name")).toHaveValue("count");
   });
 });

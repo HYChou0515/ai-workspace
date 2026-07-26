@@ -62,6 +62,7 @@ describe("SheetRenderer", () => {
     const { store, path } = await renderSheet("wafer,qty\nW01,120\n");
 
     const cell = await screen.findByLabelText("R1C2"); // the 120
+    await userEvent.dblClick(cell); // a click selects; editing needs the second one
     await userEvent.clear(cell);
     await userEvent.type(cell, "130{Enter}");
 
@@ -113,6 +114,7 @@ describe("SheetRenderer", () => {
     const { store, path } = await renderSheet("wafer,qty\nW01,120\n");
 
     const cell = await screen.findByLabelText("R1C2");
+    await userEvent.dblClick(cell); // a click selects; editing needs the second one
     await userEvent.clear(cell);
     await userEvent.type(cell, "130{Enter}");
     expect(store.snapshot(path).text).toBe("wafer,qty\nW01,130\n");
@@ -128,6 +130,7 @@ describe("SheetRenderer", () => {
     const { store, path } = await renderSheet("wafer,qty\nW01,120\n");
 
     const cell = await screen.findByLabelText("R1C2");
+    await userEvent.dblClick(cell); // a click selects; editing needs the second one
     await userEvent.clear(cell);
     await userEvent.type(cell, "130{Enter}");
 
@@ -204,6 +207,7 @@ describe("SheetRenderer", () => {
     const { store, path } = await renderSheet("wafer,qty\nW01,120\n");
 
     const cell = await screen.findByLabelText("R1C2");
+    await userEvent.dblClick(cell); // a click selects; editing needs the second one
     await userEvent.clear(cell);
     await userEvent.type(cell, "999{Escape}");
 

@@ -91,6 +91,9 @@ export function SheetGrid({
   // click started; focus is the end that moves.
   const [sel, setSel] = useState<{ anchor: Cell; focus: Cell } | null>(null);
   const dragging = useRef(false);
+  // Set when a gutter/header click just selected a whole band, so the focus that
+  // follows doesn't immediately narrow it back to one cell.
+  const bandSelect = useRef(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   // Scoped to THIS table: two panes can show two sheets, so a document-wide
@@ -111,7 +114,6 @@ export function SheetGrid({
   const { start, end } = visibleRange({ scrollTop, viewportHeight, rowHeight: ROW_HEIGHT, total: order.length });
 
   const range: Range | null = sel ? normalizeRange(sel.anchor, sel.focus) : null;
-  const spansManyCells = !!range && (range.top !== range.bottom || range.left !== range.right);
   const inSelection = (row: number, col: number): boolean =>
     !!range && row >= range.top && row <= range.bottom && col >= range.left && col <= range.right;
 
@@ -137,6 +139,26 @@ export function SheetGrid({
   });
 
   const extendTo = (c: Cell) => setSel((s) => (s ? { anchor: s.anchor, focus: clamp(c) } : s));
+
+  const lastCol = Math.max(0, header.length - 1);
+  /** Select (or extend by) a whole row / column. `bandSelect` stops the focus
+   * that follows a header click from shrinking the band to a single cell. */
+  const selectRow = (displayRow: number, extend: boolean) => {
+    bandSelect.current = true;
+    setSel((s) =>
+      extend && s
+        ? { anchor: { row: s.anchor.row, col: 0 }, focus: { row: displayRow, col: lastCol } }
+        : { anchor: { row: displayRow, col: 0 }, focus: { row: displayRow, col: lastCol } },
+    );
+  };
+  const selectColumn = (col: number, extend: boolean) => {
+    bandSelect.current = true;
+    setSel((s) =>
+      extend && s
+        ? { anchor: { row: 0, col: s.anchor.col }, focus: { row: order.length, col } }
+        : { anchor: { row: 0, col }, focus: { row: order.length, col } },
+    );
+  };
 
   /** The FILE row behind a display row (display 0 is the header). */
   const fileRowAt = (displayRow: number): number => (displayRow === 0 ? 0 : (order[displayRow - 1] ?? -1));
@@ -218,11 +240,17 @@ export function SheetGrid({
         className="sheet-cell"
         aria-label={cellLabel(displayRow, col)}
         value={editing ? edit.draft : value}
-        readOnly={readOnly}
+        readOnly={readOnly || !editing}
         onFocus={() => {
           setActive({ fileRow, col });
-          setEdit({ fileRow, col, draft: value, typed: false });
+          if (bandSelect.current) {
+            bandSelect.current = false;
+            return;
+          }
           setSel((s) => (s && dragging.current ? s : { anchor: { row: displayRow, col }, focus: { row: displayRow, col } }));
+        }}
+        onDoubleClick={() => {
+          if (!readOnly) setEdit({ fileRow, col, draft: value, typed: false });
         }}
         onMouseDown={(e) => {
           if (e.shiftKey) {
@@ -251,20 +279,38 @@ export function SheetGrid({
           // Esc drops the draft; the input falls back to the caller's value, so
           // the cell visibly reverts.
           if (e.key === "Escape") setEdit(null);
-          // Shift+Arrow grows the selection. Plain arrows are left alone on
-          // purpose: every cell here is a live input, so they belong to the
-          // caret (see docs/plan-ai-sheet.md — there is no "selected" mode).
+
           const step: Record<string, Cell> = {
             ArrowUp: { row: -1, col: 0 },
             ArrowDown: { row: 1, col: 0 },
             ArrowLeft: { row: 0, col: -1 },
             ArrowRight: { row: 0, col: 1 },
           };
-          const d = e.shiftKey ? step[e.key] : undefined;
-          if (d) {
+          const d = step[e.key];
+          if (d && (e.shiftKey || !editing)) {
+            // Selected: arrows MOVE. Editing: they belong to the caret, so only
+            // Shift+Arrow reaches here. This is what having a mode buys.
             e.preventDefault();
-            const from = sel?.focus ?? { row: displayRow, col };
-            extendTo({ row: from.row + d.row, col: from.col + d.col });
+            if (e.shiftKey) {
+              const from = sel?.focus ?? { row: displayRow, col };
+              extendTo({ row: from.row + d.row, col: from.col + d.col });
+            } else {
+              const to = clamp({ row: displayRow + d.row, col: col + d.col });
+              focusCell(to.row, to.col);
+            }
+            return;
+          }
+          if (editing || readOnly) return;
+          // F2 opens the cell for editing without disturbing its value; typing a
+          // character opens it and REPLACES, the way Excel does.
+          if (e.key === "F2") {
+            e.preventDefault();
+            setEdit({ fileRow, col, draft: value, typed: false });
+            return;
+          }
+          if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+            e.preventDefault();
+            setEdit({ fileRow, col, draft: e.key, typed: true });
           }
         }}
       />
@@ -277,7 +323,9 @@ export function SheetGrid({
       onCopy={(e) => {
         // Only take over when a BLOCK is selected. With one cell the input's own
         // copy has to keep working, or you could never copy half a value.
-        if (!range || !spansManyCells) return;
+        // Selected ⇒ the grid copies cells (one or many). Editing ⇒ the input
+        // copies text, so half a value is still copyable.
+        if (!range || edit) return;
         e.preventDefault();
         e.clipboardData.setData("text/plain", serializeCsv(selectionBlock(range), "\t"));
       }}
@@ -294,7 +342,9 @@ export function SheetGrid({
         // paste. A single value stays with the input, so it can still be pasted
         // into the middle of a word.
         const manyCells = block.length > 1 || (block[0]?.length ?? 0) > 1;
-        if (!manyCells) return;
+        // A single value lands in the selected cell; only while EDITING does it
+        // belong to the text, so it can be pasted into the middle of a word.
+        if (!manyCells && edit) return;
         e.preventDefault();
         const at = range ? { row: range.top, col: range.left } : { row: 1, col: 0 };
         const writes: { row: number; col: number; value: string }[] = [];
@@ -314,16 +364,15 @@ export function SheetGrid({
       }}
       onCut={(e) => {
         // Same "block only" rule as copy: one cell keeps the input's own cut.
-        if (!range || !spansManyCells || readOnly) return;
+        if (!range || edit || readOnly) return;
         e.preventDefault();
         e.clipboardData.setData("text/plain", serializeCsv(selectionBlock(range), "\t"));
         clearSelection(range);
       }}
       onKeyDown={(e) => {
-        if ((e.key === "Delete" || e.key === "Backspace") && range && spansManyCells && !readOnly) {
-          // A block selection means "clear these cells"; a single cell is still
-          // the input's own backspace, so a value stays editable character by
-          // character.
+        if ((e.key === "Delete" || e.key === "Backspace") && range && !edit && !readOnly) {
+          // Selected ⇒ clear the cells. Editing ⇒ the input's own backspace, so
+          // a value stays editable character by character.
           e.preventDefault();
           clearSelection(range);
           return;
@@ -388,14 +437,19 @@ export function SheetGrid({
             <tr>
               <th className="sheet-gutter" aria-hidden />
               {header.map((value, c) => (
-                <th key={c}>
+                <th key={c} className={inSelection(0, c) ? "sheet-td--sel" : undefined}>
                   {/* A flex row, NOT an input followed by a button: the cell
                       input is full-width, so in a real browser it paints over
                       the sort control and swallows the click. happy-dom has no
                       layout and cannot catch that, so this is verified in a
                       browser (see docs/plan-ai-sheet.md). */}
                   <div className="sheet-th">
-                    <span className="sheet-th__name">{cellInput(0, 0, c, value)}</span>
+                    <span
+                      className="sheet-th__name"
+                      onMouseDown={(e) => selectColumn(c, e.shiftKey)}
+                    >
+                      {cellInput(0, 0, c, value)}
+                    </span>
                     <button
                       type="button"
                       className="sheet-sort"
@@ -431,7 +485,14 @@ export function SheetGrid({
               return (
                 <tr key={fileRow} aria-label={note} className={ragged ? "sheet-row--ragged" : undefined}>
                   <td className="sheet-gutter" title={note}>
-                    {displayRow}
+                    <button
+                      type="button"
+                      className="sheet-gutter__pick"
+                      aria-label={`Select row ${displayRow}`}
+                      onMouseDown={(e) => selectRow(displayRow, e.shiftKey)}
+                    >
+                      {displayRow}
+                    </button>
                   </td>
                   {cells.map((value, c) => (
                     <td key={c} className={inSelection(displayRow, c) ? "sheet-td--sel" : undefined}>

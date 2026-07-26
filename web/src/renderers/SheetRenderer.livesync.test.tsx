@@ -65,6 +65,7 @@ describe("SheetRenderer — the file changed outside the editor", () => {
 
     // An unsaved edit is in flight.
     const cell = await screen.findByLabelText("R1C2");
+    await userEvent.dblClick(cell); // a click selects; editing needs the second one
     await userEvent.clear(cell);
     await userEvent.type(cell, "130{Enter}");
     expect(store.isDirty(PATH)).toBe(true);

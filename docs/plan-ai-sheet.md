@@ -133,21 +133,37 @@ and a paste that silently drops its last rows is the worst kind of data loss.
 Excel also TILES a small clipboard into a larger selection — that one is a
 surprise more often than a feature, so a paste writes the block once.
 
-**Copy and paste are triggered by different things, and conflating them breaks
-the main use case.** Copy and cut take over when the SELECTION spans more than
-one cell — otherwise the input keeps its native copy, so half a value is still
-copyable. Paste takes over when the CLIPBOARD holds more than one cell, whatever
-is selected: the common move is to copy a block in Excel, click one cell here and
-paste, and a selection-based rule would refuse exactly that. A single pasted
-value stays with the input so it can land in the middle of a word. (Written the
-other way round first; the paste test is what caught it.)
+**Paste takes over whenever the clipboard holds more than one cell**, whatever is
+selected: the common move is to copy a block in Excel, click ONE cell here and
+paste, and a selection-size rule would refuse exactly that. A single pasted value
+goes into the selected cell while selected, and into the text while editing.
 
-**No "selected vs editing" mode — the deliberate divergence from Excel.** In
-Excel a cell is either selected or being edited, which is what frees the arrow
-keys for navigation. Here every cell is always a live input, so plain arrows must
-keep moving the caret inside the value. Shift+Arrow extends the selection,
-click / shift-click / drag define it. Adding a real mode switch would change how
-every existing interaction feels and belongs to its own plan, not to this one.
+**Two modes, like Excel: a click SELECTS, a double-click EDITS.**
+
+This reverses the original decision, which was to have no mode at all — every
+cell a live input, plain arrows left to the caret, and selection only via
+shift-click or Shift+Arrow. That was wrong in use, for a reason the design never
+predicted: **you could not copy a single cell.** Clicking put you in a text
+input, and the "one cell keeps its native copy" rule then handed Ctrl+C to an
+input with no text selected — so the most ordinary spreadsheet action in
+existence did nothing.
+
+So: a single click selects. Double-click, F2, Enter, or simply typing enters edit
+mode on that cell (typing replaces, as Excel does). Enter / Tab commit and move,
+Esc reverts. While selected, plain arrows move the selection and Shift+Arrow
+extends it — which is what having a mode buys, and why Excel has one.
+
+Copy therefore follows the MODE, not the size of the selection: selected ⇒ the
+grid copies the cells (one or many); editing ⇒ the input copies text, so half a
+value is still copyable. The old size-based rule is gone, not layered under this
+one — two rules for one question is how one of them ends up lying.
+
+**Row and column selection.** Clicking the row-number gutter selects that row;
+clicking a column header selects that column, header cell included, since the
+header really is a line of the CSV. Shift-click extends by whole rows / columns.
+Renaming a column is a double-click on its header — the same click-selects,
+double-click-edits rule as any other cell, rather than a second convention for
+the header band.
 
 **Selection is in DISPLAY coordinates.** With a sort active, a rectangular
 selection on screen maps to scattered rows in the file — copy and paste operate
@@ -187,6 +203,15 @@ lands after undo exists.
 
 **Phase 8 — paste.** Ctrl+V, growing the grid. The most destructive operation in
 the feature, and the last one added.
+
+**Phase 9 — the two modes.** A click selects, a double-click (or F2 / Enter /
+typing) edits. Plain arrows move the selection, Shift+Arrow extends. Copy follows
+the mode. This is the foundation the next phase needs, and it retires the
+size-based clipboard rule.
+
+**Phase 10 — row and column selection.** Click the gutter for a row, the header
+for a column; shift-click extends. Column rename becomes a double-click on the
+header, so the header obeys the same rule as every other cell.
 
 ## Verification
 

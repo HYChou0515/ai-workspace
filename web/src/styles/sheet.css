@@ -159,6 +159,7 @@
    a grid of boxes, which is the border mesh this design already refused. The
    focused cell keeps its accent ring on top, so "where the caret is" stays
    distinct from "what is selected". */
+.sheet-table thead th.sheet-td--sel,
 .sheet-table tbody td.sheet-td--sel,
 .sheet-table tbody tr:nth-child(even) td.sheet-td--sel,
 .sheet-table tbody tr:hover td.sheet-td--sel {
@@ -179,6 +180,27 @@
   background: var(--paper-2);
   border-right: 1px solid var(--paper-3);
   user-select: none;
+}
+
+/* The gutter's number IS the row picker. A real button so it is reachable by
+   keyboard and announces itself, wearing no button chrome — it has to keep
+   reading as a row number. */
+.sheet-gutter__pick {
+  width: 100%;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: right;
+  cursor: pointer;
+}
+.sheet-gutter:hover {
+  color: var(--text-paper);
+}
+/* Clicking a header selects its column, so the whole band is a pointer target. */
+.sheet-th__name {
+  cursor: cell;
 }
 
 /* A row whose field count disagrees with the header keeps its data and its
