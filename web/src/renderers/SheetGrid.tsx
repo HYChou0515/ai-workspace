@@ -432,7 +432,10 @@ export function SheetGrid({
           setViewportHeight(e.currentTarget.clientHeight);
         }}
       >
-        <table ref={tableRef} className="sheet-table">
+        {/* `data-readonly` lets the stylesheet scope the hover cue to a writable
+            sheet without testing the CELL's readOnly, which is now also how a
+            merely selected cell is expressed. */}
+        <table ref={tableRef} className="sheet-table" data-readonly={readOnly ? "" : undefined}>
           <thead>
             <tr>
               <th className="sheet-gutter" aria-hidden />

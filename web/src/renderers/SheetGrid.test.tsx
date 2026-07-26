@@ -26,6 +26,17 @@ describe("SheetGrid — structural edits", () => {
     expect(onRowsChange).toHaveBeenCalledWith([["wafer", "qty"], ["W01", "120"], ["", ""]]);
   });
 
+  it("flags a read-only sheet on the table, which is what the hover cue keys off", () => {
+    // The hover rule used to test the CELL's readOnly. Once a merely SELECTED
+    // cell became a read-only input, that test stopped matching anything and the
+    // cue silently died. It now keys off this flag instead.
+    const { rerender } = render(<SheetGrid rows={GRID} onRowsChange={vi.fn()} />);
+    expect(document.querySelector("table.sheet-table")).not.toHaveAttribute("data-readonly");
+
+    rerender(<SheetGrid rows={GRID} readOnly onRowsChange={vi.fn()} />);
+    expect(document.querySelector("table.sheet-table")).toHaveAttribute("data-readonly");
+  });
+
   it("hides every structural affordance when read-only", () => {
     render(<SheetGrid rows={GRID} readOnly onRowsChange={vi.fn()} />);
 

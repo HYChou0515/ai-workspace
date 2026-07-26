@@ -144,15 +144,36 @@
   color: inherit;
   font: inherit;
 }
-.sheet-cell:hover:not(:read-only) {
+/* Hover chrome, but only on a writable sheet. Scoped through the table's
+   `data-readonly` flag rather than `:not(:read-only)` on the cell: since a merely
+   SELECTED cell is a read-only input, a cell-level test would have silently
+   stopped matching the moment the two modes arrived. */
+.sheet-table:not([data-readonly]) .sheet-cell:hover:not(:focus) {
   border-color: var(--paper-3);
   background: var(--white);
 }
+
+/* Selected: a box around the cell and NO caret. A blinking caret is the
+   universal sign of "you are typing", which is exactly what selected is not —
+   showing one made a single click look like it had entered edit mode. */
 .sheet-cell:focus {
   outline: none;
   border-color: var(--accent-h);
-  background: var(--white);
+  /* Deliberately does NOT take a background: the row's own colour shows through,
+     so "selected" is a box drawn on the sheet rather than a lifted field. */
   box-shadow: inset 0 0 0 1px var(--accent-h);
+  caret-color: transparent;
+}
+/* Editing: the caret comes back and the box thickens, so the two modes can never
+   be mistaken for each other. */
+.sheet-cell:focus:not(:read-only) {
+  /* Editing LIFTS: solid surface, thicker box, a shadow, and the caret back.
+     A 1px-vs-2px border alone is not a difference anyone notices at real size. */
+  caret-color: var(--accent-h);
+  background: var(--white);
+  box-shadow:
+    inset 0 0 0 2px var(--accent-h),
+    0 2px 6px color-mix(in srgb, var(--accent-h) 32%, transparent);
 }
 
 /* A selected block. Tinted rather than outlined: an outline per cell would draw
