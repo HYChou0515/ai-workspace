@@ -21,10 +21,11 @@ import {
   renderCitedText,
 } from "../renderers/kbCite";
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
-import { extractToolImages } from "../renderers/toolImages";
+import { parseShownFiles, stripShownFiles } from "../renderers/shownFiles";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { AskUserCard, type AskUserAnswer } from "./AskUserCard";
+import { ShownFiles } from "./ShownFiles";
 import { useUser } from "../hooks/useUsers";
 import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
@@ -108,6 +109,7 @@ const TOOL_LABEL: Record<string, MsgKey> = {
   exec: "tool.exec",
   read_file: "tool.read_file",
   read_image: "tool.read_image",
+  show_file: "tool.show_file",
   write_file: "tool.write_file",
   edit_file: "tool.edit_file",
   delete_file: "tool.delete_file",
@@ -142,6 +144,18 @@ const TOOL_ARG: Record<string, string> = {
   update_context_card: "title",
   create_context_card: "title",
 };
+
+/** A workspace-relative ref resolved against the item's file route, or the ref
+ * unchanged when it is already a URL / fragment. `undefined` when there is no way
+ * to resolve it — the caller then draws nothing instead of a dead link. */
+function workspaceUrl(
+  ref: string | undefined,
+  fileUrl: ((path: string) => string) | undefined,
+): string | undefined {
+  if (!ref) return undefined;
+  if (/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(ref)) return ref;
+  return fileUrl?.(ref);
+}
 
 /** A short, plain-text rendering of a tool's primary argument (empty if none). */
 function toolArgHint(name: string, args: Record<string, unknown>): string {
@@ -188,9 +202,9 @@ export function EntryView({
   /** #397: report this assistant answer as a wiki error — provided only for
    * assistant messages by wiki-backed surfaces (KB chat); absent → no button. */
   onReportWiki?: () => void;
-  /** #285: resolve a workspace-relative path to a content URL so a tool card
-   * can render the charts it wrote inline. Provided by item-scoped surfaces
-   * (RCA / Playground AgentPanel); absent on KB chat → no inline images. */
+  /** Resolve a workspace path to a content URL, so a file the agent showed can be
+   * fetched. Provided by item-scoped surfaces (RCA / Playground AgentPanel);
+   * absent on KB chat, which has no workspace. */
   fileUrl?: (path: string) => string;
   /** #583: the signed-in user's id, so MY messages can sit on the right of a
    * shared thread. Absent → nothing is claimed and everything stays left, which
@@ -216,6 +230,16 @@ export function EntryView({
     // grill-me: `ask_user` is a question, not a result — render it as choices
     // the user can click. Falls through to the ordinary tool card when there
     // is no way to answer (replay, read-only), so it is never a dead end.
+    // Any tool may declare files for the chat to show; they render outside the
+    // `<details>` its result sits behind, because a chart the user has to expand
+    // is the same failure as a path in prose. `show_file` has nothing else to
+    // show, so the file IS its rendering — but a call that declared nothing (an
+    // unresolvable path) still falls through to the ordinary card, so the failure
+    // stays visible in the log.
+    const shown = parseShownFiles(entry.call.output);
+    if (entry.call.name === "show_file" && shown.length > 0) {
+      return <ShownFiles files={shown} fileUrl={fileUrl} />;
+    }
     if (entry.call.name === "ask_user" && onAnswerQuestion) {
       return (
         // 28 = the avatar column every assistant block is indented past. Flush
@@ -231,12 +255,10 @@ export function EntryView({
       );
     }
     return (
-      <ToolCallCard
-        call={entry.call}
-        onOpenCitation={onOpenCitation}
-        onReplay={onReplay}
-        fileUrl={fileUrl}
-      />
+      <>
+        <ToolCallCard call={entry.call} onOpenCitation={onOpenCitation} onReplay={onReplay} />
+        {shown.length > 0 && <ShownFiles files={shown} fileUrl={fileUrl} />}
+      </>
     );
   }
   if (entry.kind === "mention") {
@@ -296,6 +318,7 @@ export function EntryView({
       onUndo={onUndo}
       onReportWiki={onReportWiki}
       currentUser={currentUser}
+      fileUrl={fileUrl}
     />
   );
 }
@@ -525,6 +548,7 @@ function MessageBlock({
   onUndo,
   onReportWiki,
   currentUser,
+  fileUrl,
 }: {
   message: Message;
   onOpenCitation?: (c: MessageCitation) => void;
@@ -533,6 +557,9 @@ function MessageBlock({
   onUndo?: () => void;
   onReportWiki?: () => void;
   currentUser?: string;
+  /** Resolves a workspace path an answer names, so `![](out/a.png)` in the
+   * model's own text loads instead of 404ing against the SPA route. */
+  fileUrl?: (path: string) => string;
 }) {
   const t = useT();
   // #583: only a HUMAN message I actually wrote moves to the right. `author` is
@@ -680,9 +707,36 @@ function MessageBlock({
               a: ({ href, children, ...rest }) => {
                 const cite = kbCiteAnchor({ href, children }, byMarker, onOpenCitation);
                 if (cite) return cite;
+                const resolved = workspaceUrl(href, fileUrl);
                 return (
-                  <a href={href} {...rest}>
+                  <a
+                    href={resolved}
+                    {...rest}
+                    {...(resolved !== href ? { target: "_blank", rel: "noreferrer" } : {})}
+                  >
                     {children}
+                  </a>
+                );
+              },
+              // A model that names a file often also embeds it. Without this the
+              // src resolves against the SPA route and renders as a broken image
+              // beside the chart `show_file` loaded fine. Same resolution the
+              // file viewer does (renderers/MarkdownRenderer); on a surface with
+              // no workspace there is nothing to resolve against, so nothing is
+              // drawn rather than a broken image.
+              img: ({ src, alt, ...rest }) => {
+                const resolved = workspaceUrl(typeof src === "string" ? src : undefined, fileUrl);
+                if (!resolved) return null;
+                // Same thumbnail treatment a declared file gets, so an embedded
+                // image and a shown one are the same size; click to open.
+                return (
+                  <a href={resolved} target="_blank" rel="noreferrer">
+                    <img
+                      src={resolved}
+                      alt={alt ?? ""}
+                      {...rest}
+                      style={{ display: "block", maxWidth: 260, maxHeight: 260 }}
+                    />
                   </a>
                 );
               },
@@ -815,25 +869,20 @@ function ToolCallCard({
   call,
   onOpenCitation,
   onReplay,
-  fileUrl,
 }: {
   call: ToolCallView;
   onOpenCitation?: (c: MessageCitation) => void;
   onReplay?: () => void;
-  fileUrl?: (path: string) => string;
 }) {
   const t = useT();
   // While running, show whatever stdout has streamed so far; once done, the
   // final formatted output supersedes it. Auto-expand a streaming tool.
-  const body = call.status === "done" ? call.output : (call.liveOutput ?? call.output);
-  const streamingLive = call.status === "running" && !!call.liveOutput;
-  // #285: charts the tool wrote, rendered inline (when an item-scoped surface
-  // gave us a way to resolve the path). Only after the tool finishes — a
-  // half-streamed result has no complete path yet.
-  const images = useMemo(
-    () => (call.status === "done" && fileUrl ? extractToolImages(body) : []),
-    [call.status, fileUrl, body],
+  // The declaration is plumbing for the file cards, not part of what the tool
+  // said — strip it so the card body reads as the tool's own output.
+  const body = stripShownFiles(
+    call.status === "done" ? call.output : (call.liveOutput ?? call.output),
   );
+  const streamingLive = call.status === "running" && !!call.liveOutput;
   // #221: resolve the body's `[n]` markers (ask_knowledge_base attaches its KB
   // citations here) so each becomes a restrained clickable. Empty while
   // streaming / for tools with no citations ⇒ the body stays plain text.
@@ -927,26 +976,6 @@ function ToolCallCard({
         >
           {renderCitedText(body, byMarker, onOpenCitation)}
         </pre>
-      )}
-      {images.length > 0 && fileUrl && (
-        // #285: charts the tool wrote, rendered inline. Click to open full size.
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
-          {images.map((src) => (
-            <a key={src} href={fileUrl(src)} target="_blank" rel="noreferrer">
-              <img
-                src={fileUrl(src)}
-                alt={src.split("/").pop() ?? "chart"}
-                style={{
-                  maxWidth: "100%",
-                  maxHeight: 360,
-                  borderRadius: 4,
-                  border: "1px solid var(--paper-3)",
-                  display: "block",
-                }}
-              />
-            </a>
-          ))}
-        </div>
       )}
       {call.citations && call.citations.length > 0 && (
         // Reference cards under an ask_knowledge_base tool card — same

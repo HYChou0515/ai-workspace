@@ -35,6 +35,7 @@ from agents.tool_context import ToolContext
 from ..agent.context import AgentToolContext
 from ..agent.output_cap import cap_tool_outputs
 from ..agent.plot_review import run_review
+from ..agent.shown_files import declare_shown_files, describe_for_display
 from ..agent.tools import _exec_result_text
 from ..sandbox.protocol import ExecResult, SandboxHandle
 
@@ -254,12 +255,15 @@ async def _review_chart(
     args_json: str,
     result: ExecResult,
     text: str,
-) -> str:
+) -> tuple[str, str]:
     """Run the VLM self-review loop over a chart command's output and fold its
-    outcome into the tool result text (best image path + a one-line summary)."""
+    outcome into the tool result text (best image path + a one-line summary).
+
+    Returns `(text, best_image_path)`; the path is `""` when no review ran, so the
+    caller declares the command's own images unchanged."""
     images = _images_from_stdout(result.stdout)
     if not images:
-        return text
+        return text, ""
     first = images[0]
     sandbox = actx.sandbox
     assert sandbox is not None  # provisioned tools imply a sandbox
@@ -269,7 +273,7 @@ async def _review_chart(
         logger.warning(
             "registry: chart review skipped, cannot read render %s", first, exc_info=True
         )
-        return text
+        return text, ""
     try:
         base_args: dict[str, Any] = json.loads(args_json or "{}")
     except ValueError:
@@ -299,7 +303,33 @@ async def _review_chart(
     )
     if outcome.image_path != first:
         text = text.replace(first, outcome.image_path)
-    return f"{text}\n\n{outcome.summary()}"
+    return f"{text}\n\n{outcome.summary()}", outcome.image_path
+
+
+async def _declare_images(actx: AgentToolContext, result: ExecResult, text: str, best: str) -> str:
+    """`text` with the command's images declared for the chat to render.
+
+    The images a plotting command reports on stdout are already structured, so the
+    only thing missing was a channel the FE can trust — this puts them in the same
+    one `show_file` writes. Each is resolved through the workspace facade, which is
+    both the mime sniff and the existence check: a command can name a path it did
+    not write, and a declared file that isn't there renders as a broken image.
+
+    `best` (non-empty when the VLM review re-rendered) replaces the first image, so
+    the declaration names the same chart the text does."""
+    images = _images_from_stdout(result.stdout)
+    if not images or actx.files is None or actx.investigation_id is None:
+        return text
+    if best:
+        images[0] = best
+    shown: list[dict[str, Any]] = []
+    for path in images:
+        entry = await describe_for_display(actx.files, actx.investigation_id, path)
+        if entry:
+            shown.append(entry)
+        else:
+            logger.info("registry: not declaring %s — no such file in the workspace", path)
+    return declare_shown_files(text, shown)
 
 
 def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
@@ -336,9 +366,10 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         # (detect layout issues → restyle → re-render, ≤2 passes) when a vision
         # model is wired. Gated on the command accepting a `style` override so a
         # re-render can actually adjust the layout.
+        best = ""
         if actx.describer is not None and _accepts_style(cmd.params_json_schema):
-            text = await _review_chart(actx, pkg, cmd, handle, args_json, result, text)
-        return text
+            text, best = await _review_chart(actx, pkg, cmd, handle, args_json, result, text)
+        return await _declare_images(actx, result, text, best)
 
     return FunctionTool(
         name=cmd.name,

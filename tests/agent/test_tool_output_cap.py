@@ -1,6 +1,8 @@
 """Every tool the agent can call has a ceiling on what it puts in the model's
 context — enforced by the toolset, not by each tool's author remembering."""
 
+import json
+
 from agents import Agent, FunctionTool, RunContextWrapper, ToolOutputImage
 from agents.tool_context import ToolContext
 from agents.tool_guardrails import ToolOutputGuardrailData
@@ -112,3 +114,26 @@ async def test_a_text_tool_output_object_is_capped_like_any_other_text():
 
     assert isinstance(out, str)
     assert len(out) < 400
+
+
+async def test_a_shown_files_declaration_survives_the_cap():
+    """The cap keeps head AND tail, and a declaration is the last thing in a
+    result — so an oversized tool result still tells the chat what to render.
+
+    Losing it would be the failure this whole channel exists to remove: no error,
+    no card, the user just never sees the file they were told about."""
+    from workspace_app.agent.shown_files import SHOWN_FILES_MARKER, declare_shown_files
+
+    tool = cap_tool_outputs(build_tools(["exec"]))[0]
+    declared = declare_shown_files(
+        "x" * 5_000, [{"path": "/out/a.png", "mime": "image/png", "size": 12}]
+    )
+
+    capped = await _run_cap(tool, declared, cap=200)
+
+    assert isinstance(capped, str)
+    _head, sep, payload = capped.partition(SHOWN_FILES_MARKER)
+    assert sep, capped
+    assert json.loads(payload)["shown_files"] == [
+        {"path": "/out/a.png", "mime": "image/png", "size": 12}
+    ]

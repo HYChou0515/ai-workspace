@@ -20,6 +20,7 @@
     "tools": ["ask_user", "update_todos", 
       "read_file",
       "read_image",
+      "show_file",
       "write_file",
       "edit_file",
       "list_files",
