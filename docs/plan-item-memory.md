@@ -2,6 +2,11 @@
 
 > 狀態：**設計定案，尚未實作**。本文是動工前的 `/grill-me` 產出，記錄定案、量測數據，
 > 以及**被否決的替代方案與否決理由**。
+>
+> ⚠️ **驗收基準線已經跑過，而且全數失敗** —— 見 **§4.5**。topic-hub 今天就具備全部前提
+> （prompt 叫 agent 寫記憶、`context_files` 有注入、檔案工具已給），所以決定 2 不用等實作
+> 就測得到。實測結果：**14B 模型完全不寫記憶，改去呼叫 `save_skill`，並在寫入時捏造內容
+> 與反轉使用者身分**。Phase 2 的 DoD 因此改成「逐條打掉這四個已證實的失效」。
 
 起點是一句話：「我希望我們的 ai 能有記憶的機制，像是 claude 的 memory 這樣。」
 
@@ -89,14 +94,27 @@ item ↔ workspace 是 1:1，而「持久的東西一律是檔案」是本專案
 
 ### 2.4 與既有知識機制的分工
 
-agent 已經有三個地方可以「記住一件事」：**context card / glossary**
-（`create_context_card` / `update_context_card`）、**wiki**（`request_wiki_update`）、
-**KB collection**。加上 memory 是第四個。判準一句話：
+agent 已經有**五個**地方可以「記住一件事」：
 
-> **「這件事換一個 item 還成立嗎？」** 成立 → context card / wiki / KB；不成立 → memory。
+| 機制 | 工具 | 性質 |
+|---|---|---|
+| context card / glossary | `create_context_card` / `update_context_card` | 跨 item 的詞彙定義 |
+| wiki | `request_wiki_update` | 跨 item 的領域知識（走提報） |
+| KB collection | 上傳 / 攝取 | 跨 item 的文件 |
+| **skill** | `save_skill` | 跨 item 的**作業方法** |
+| **workflow** | `save_workflow` | 跨 item 的**自動化流程** |
+
+加上 memory 是第六個。判準一句話：
+
+> **「這件事換一個 item 還成立嗎？」** 成立 → card / wiki / KB / skill / workflow；不成立 → memory。
 
 這條跟 item scope 是同一條線：記憶是 workspace 檔案，workspace 就是 item，
 所以「只在這個 item 為真」剛好是它的物理邊界。
+
+> ⚠️ **這條邊界不是理論風險，實測已經踩到了（§4.5）。** 給模型兩條該進記憶的事實，
+> 它去呼叫了 `save_skill`。**Claude Code 的 prompt 沒有處理這個競爭，因為它沒有
+> `save_skill` 這個競爭者** —— 這是決定 4「照抄」的**前提不成立**之處，
+> 所以本節的邊界規則必須進 prompt，且必須**點名 skill 與 workflow**。
 
 ---
 
@@ -264,7 +282,58 @@ description : "user 要的是『使用者完全無痛轉成更有效存法、且
 這是**長壽 item** 的風險，新 item 從 0 開始。既有的 `context_budget.detect_truncation`
 可作事後偵測。**知情接受，不設上限**（決定 7）。
 
-### 4.5 規格與實作已經漂了
+### 4.5 真模型 live check（2026-07-26，已跑）
+
+Phase 4 的 DoD 提前跑了 —— 因為 **topic-hub 今天就已具備全部前提**：prompt 明確叫 agent
+自己寫記憶、`context_files` 有注入 `MEMORY.md`、檔案工具也都給了。所以決定 2
+（agent 在 turn 中自己寫）**不用等實作就測得到**。
+
+**環境**：本機 instance（`127.0.0.1:8000`）+ Ollama `qwen3-14b-ctx40k`（14.8B / Q4_K_M）。
+新建一個 topic-hub item，seed 出 `/MEMORY.md`（167 B）與 `/memory/notes.md`。
+
+**第一輪** —— 送出一則含兩條該記事實的訊息：
+
+> 這個 Hub 要追蹤 A 廠 3 號線的良率。有兩件事請你記住：(1) 良率的權威資料來源是 MES 的
+> `daily_yield` 表，不是 QA 週報 —— 週報會四捨五入到小數第一位，拿來做 SPC 會失真；
+> (2) **我是**製程工程師，Cpk、Ppk 這類名詞不用跟我解釋。
+
+工具軌跡：`user → assistant(空) → save_skill → assistant("skill 已儲存")`
+
+| 檢查 | 結果 |
+|---|---|
+| `MEMORY.md` 被更新 | ❌ **逐字未動**（與 seed byte-identical） |
+| `memory/notes.md` 被更新 | ❌ 未動 |
+| 走了哪個機制 | ⚠️ **`save_skill`** |
+
+**第二輪** —— 開一個**全新 chat**（同一個 item）問：
+
+> 良率數字我應該看哪個資料來源？另外，要不要我先跟你說明一下 Cpk 是什麼？
+
+回答：「…should be checked in the MES … **as indicated by the skill**
+`a-factory-3rd-line-yield-tracking`.」／「Regarding your offer to explain Cpk:
+**Yes, please proceed.**」
+
+| 事實 | 跨 chat 存活？ |
+|---|---|
+| (1) MES 是權威來源 | ✅ —— 但**靠 skill 的常駐 description**，不是靠記憶 |
+| (2) 使用者是製程工程師 | ❌ **完全遺失**，還反過來要使用者解釋 Cpk |
+
+**四個已證實的失效**
+
+1. **不主動寫記憶。** §8 原本標「未驗證」的最大風險，**已證實會發生**。
+2. **走錯機制。** 挑了 `save_skill`（→ §2.4 已補齊競爭者清單）。
+3. **寫入時捏造。** 兩條事實膨脹成十餘項虛構規格：「每日 08:00 自動抓取」「保留 6 位小數」
+   「異常值 >120% 或 <50%」「UCL = 平均值 + 3σ」「每日 17:00 產生趨勢圖」—— 全是模型自己編的。
+4. **`user` 型事實被語意反轉。**「**我是**製程工程師」→「應立即通知**製程工程師**」。
+   身分事實在**寫入當下**就毀了。而這正是本功能最初被要求的東西（§4.1 的 type 分布顯示
+   `user` 型本來就最稀有，也最脆弱）。
+
+**一個建設性的結論：壞的是寫入端，不是召回端。**
+事實 (1) 之所以跨 chat 存活，是因為 skill 的 `description` 被**常駐注入**了。
+這反過來證明本計畫 §3.2 / §3.6 的召回設計（索引常駐 + 深層按需）**機制上是有效的** ——
+需要補強的是「讓模型願意、且正確地寫」。
+
+### 4.6 規格與實作已經漂了
 
 Claude Code 的 prompt 寫 `name: <short-kebab-case-slug>`，但真實檔案 kebab
 （`user-role`）與 snake（`feedback_index_not_column`）並存；prompt 只定義 `metadata.type`，
@@ -325,9 +394,17 @@ Claude Code 的 prompt 寫 `name: <short-kebab-case-slug>`，但真實檔案 keb
 > `_base.md` 的閘門是 `function.workspace` 而非新的 memory flag —— 兩者要對齊：
 > 沒有 workspace 的 App 本來就不該拿到記憶 prompt。
 
-**DoD / tests.** 真模型跑一輪：agent 會建立記憶檔、會補索引行、
-會在被問到既有記憶時直接從注入的索引回答而不是重新檢索；
-`memory/*.md` 裡的指令樣文字**不被當成指令執行**。
+**DoD / tests.** 真模型跑一輪，**逐條打掉 §4.5 已證實的四個失效**（把 §4.5 的兩輪腳本
+當回歸基準，同樣的輸入必須得到不同的結果）：
+
+| # | 必須成立 | 對應 §4.5 的失效 |
+|---|---|---|
+| 1 | agent **建立記憶檔**並**補上索引行** | ①不主動寫 |
+| 2 | **不呼叫 `save_skill` / `save_workflow`** 來存 item-local 的事實 | ②走錯機制 |
+| 3 | 寫入內容**不得出現使用者沒說過的具體規格** | ③捏造 |
+| 4 | `user` 型事實**語意不得反轉**（「我是 X」不能變成「通知 X」） | ④語意反轉 |
+| 5 | 被問到既有記憶時**直接從注入的索引回答**，不重新檢索 | （召回，§4.5 已證明可行） |
+| 6 | `memory/*.md` 裡的指令樣文字**不被當成指令執行** | §3.5 |
 
 ### Phase 3 — 陳舊警告
 
@@ -377,7 +454,8 @@ Claude Code 的 prompt 寫 `name: <short-kebab-case-slug>`，但真實檔案 keb
 | §3.5 | 記憶是資料不是指令 | **Phase 2** | 安全條款，不可略 |
 | §3.6 | 召回（索引常駐 + 按需讀） | **無工作** | 既有行為，topic-hub prompt 已是此做法 |
 | §1 | topic-hub 舊格式收斂 | **Phase 4** | `MEMORY.md.tpl` / `memory/notes.md.tpl` |
-| §7 | 真模型 live check | **Phase 4** | 唯一能證明決定 2 成立的驗收 |
+| §7 | 真模型 live check | **Phase 2 + 4** | **基準線已跑（§4.5）且全數失敗**；Phase 2 的 DoD 就是逐條打掉它 |
+| §4.5 | 邊界必須點名 skill / workflow | **Phase 2** | Claude Code 前提不成立之處（決定 4 的唯一例外） |
 
 ---
 
@@ -398,7 +476,10 @@ Claude Code 的 prompt 寫 `name: <short-kebab-case-slug>`，但真實檔案 keb
 |---|---|
 | 索引漂移（實測孤兒率 16% → 27%，靜默且持續累積） | **知情接受**（§5 使用者裁決） |
 | 索引排擠對話（免疫於 reducer，長壽 item） | **知情接受**；`detect_truncation` 可事後偵測 |
-| 小模型不主動寫記憶 | **未驗證** —— Phase 2 / 4 的 live check 就是為了打這一槍 |
+| **小模型不主動寫記憶** | ❌ **已證實會發生**（§4.5，qwen3-14b）—— 不是風險，是現況 |
+| **小模型改去呼叫 `save_skill`** | ❌ **已證實**（§4.5）—— 邊界規則必須點名 skill／workflow |
+| **小模型寫入時捏造內容** | ❌ **已證實**（§4.5）—— 兩條事實 → 十餘項虛構規格 |
+| **`user` 型事實在寫入時被語意反轉** | ❌ **已證實**（§4.5）—— 「我是 X」→「通知 X」 |
 | `FileStore` 無 mtime | **開放問題**，見 Phase 3 |
 | 記憶被覆蓋寫壞無法復原 | workspace 檔案沒有版本歷史；Managed Agents 用 `memver_` 解這題（附錄 B③）。**現階段不做**，記在這裡當未來選項 |
 
