@@ -178,6 +178,54 @@ describe("AiYamlRenderer", () => {
     expect(screen.queryByTestId("group-open")).not.toBeInTheDocument();
   });
 
+  it("keeps a saved group-by on its own file and off the others, across switches (board→table report)", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({
+      entities: [
+        { number: 1, type_name: "issue", fields: { title: "A", status: "open" }, body: "", diagnostics: [] },
+        { number: 2, type_name: "issue", fields: { title: "B", status: "done" }, body: "", diagnostics: [] },
+      ],
+      invalid: [],
+    });
+    const text = "view: table\nentity: issue\ncolumns:\n  - title\n  - status\n";
+    const store = new FileBufferStore({
+      readFile: vi.fn(async (p: string) => ({ kind: "text" as const, path: p, size: text.length, text, encoding: "utf-8" as const })),
+      writeFile: vi.fn(async () => {}),
+    });
+    const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+    const svc = { ...investigationFileService("pm", "item1"), writeFile };
+    const Harness = ({ path }: { path: string }) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={svc}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const { rerender } = render(<Harness path="/views/table-a.ai.yaml" />);
+
+    // group + SAVE on file A
+    fireEvent.change(await screen.findByLabelText("group by"), { target: { value: "status" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save to view" }));
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+
+    // switch to a DIFFERENT view file — the save must NOT appear there
+    rerender(<Harness path="/views/table-b.ai.yaml" />);
+    await screen.findByLabelText("group by");
+    expect(screen.getByLabelText("group by")).toHaveValue("");
+
+    // switch back to A — its saved grouping is still there (didn't vanish on revisit)
+    rerender(<Harness path="/views/table-a.ai.yaml" />);
+    await screen.findByLabelText("group by");
+    expect(screen.getByLabelText("group by")).toHaveValue("status");
+    expect(screen.getByTestId("group-open")).toBeInTheDocument();
+  });
+
   it("degrades a non-view .ai.yaml to a plain structured tree without querying entities", async () => {
     renderView("/notes.ai.yaml", "just: data\ncount: 3\n");
     // the raw yaml tree shows the key; no entity fetch is attempted

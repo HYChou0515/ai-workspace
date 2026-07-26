@@ -13,14 +13,12 @@
  * structured preview (§E, #361).
  */
 
-import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { dump, load } from "js-yaml";
 
 import type { EntityHealthFinding } from "../../api/entities";
 import { useFileService } from "../../api/fileService";
-import { qk } from "../../api/queryKeys";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
 import { useOpenFile } from "../../hooks/openFile";
@@ -37,11 +35,10 @@ import { buildRefIndex, referencedTypes } from "./refTraversal";
 
 export function AiYamlRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
-  const { entry } = useFileBuffer(path);
+  const { entry, applyExternalWrite } = useFileBuffer(path);
   const slug = useWorkspaceSlug();
   const fileService = useFileService();
   const itemId = fileService.scopeId;
-  const queryClient = useQueryClient();
 
   // Parse the spec from whatever text is loaded; empty (still loading / not a
   // view) yields no entity name, which gates the queries off (`enabled`), so
@@ -73,32 +70,25 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const refIndex = buildRefIndex(useReferencedRecords(slug, itemId, refTypes));
 
   // #GH-projects A — the group-by picker. `draft` is the picker's uncommitted
-  // choice (applies locally); `saved` bridges the window after a Save until the
-  // file buffer reflects the new YAML (it reads a snapshot store, not the query
-  // cache, so it lags). Hooks stay unconditional (before the early returns).
+  // choice (applies locally); once saved, the choice lives in the file buffer
+  // (see saveView), so the picker's committed value is just the parsed
+  // `spec.group_by`. Hooks stay unconditional (before the early returns).
   const [draft, setDraft] = useState<string | undefined>(undefined);
-  const [saved, setSaved] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
   // The IDE mounts ONE <FileView> and only swaps the `path` prop on a file
   // switch, so this renderer instance is REUSED across view files (same as the
-  // record editor — see RecordFileRenderer's key={path}). Reset the group-by
-  // picker state the moment `path` changes, or the previous view's uncommitted
-  // `draft` (and just-saved `saved` bridge) bleed into the next file: it shows —
-  // and, on a second Save, actually persists — that grouping on an unrelated
-  // view. Adjusting state during render (React's documented pattern) resets
-  // before commit, so the stale grouping never paints.
+  // record editor — see RecordFileRenderer's key={path}). Reset the uncommitted
+  // `draft` the moment `path` changes, or the previous view's unsaved grouping
+  // bleeds into the next file. Adjusting state during render (React's documented
+  // pattern) resets before commit, so the stale grouping never paints. (The
+  // SAVED grouping can't bleed: it's per-path in the file buffer, not here.)
   const [statePath, setStatePath] = useState(path);
   if (path !== statePath) {
     setStatePath(path);
     setDraft(undefined);
-    setSaved(undefined);
     setSaving(false);
   }
   const specGroupBy = spec?.group_by ?? "";
-  const savedGroupBy = saved !== undefined ? saved : specGroupBy;
-  useEffect(() => {
-    if (saved !== undefined && saved === specGroupBy) setSaved(undefined);
-  }, [saved, specGroupBy]);
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
@@ -132,8 +122,8 @@ export function AiYamlRenderer({ path }: { path: string }) {
 
   // #GH-projects A — the effective (locally-overridden) group_by drives the view;
   // "Save to view" serialises it back into the `.ai.yaml` (persisted, shared).
-  const effectiveGroupBy = draft !== undefined ? draft : savedGroupBy;
-  const groupDirty = draft !== undefined && draft !== savedGroupBy;
+  const effectiveGroupBy = draft !== undefined ? draft : specGroupBy;
+  const groupDirty = draft !== undefined && draft !== specGroupBy;
   const groupOptions = (type?.fields ?? [])
     .filter((f) => f.role === "status" || f.role === "actor" || f.role === "ref")
     .map((f) => ({ name: f.name, label: f.name }));
@@ -147,10 +137,11 @@ export function AiYamlRenderer({ path }: { path: string }) {
       else delete obj.group_by;
       const yaml = dump(obj);
       await fileService.writeFile(path, yaml);
-      // Best-effort cache seed; `saved` is what actually keeps the view correct
-      // until the snapshot buffer catches up (it doesn't read this cache).
-      queryClient.setQueryData(qk.file(itemId, path), { kind: "text", path, text: yaml, size: yaml.length, encoding: "utf-8" });
-      setSaved(effectiveGroupBy);
+      // Reflect the just-written YAML in THIS path's buffer, so the committed
+      // grouping now IS `spec.group_by`: it survives a switch away and back (the
+      // buffer won't re-fetch an already-loaded path) and stays per-file (no
+      // cross-view bleed) without a per-instance bridge.
+      applyExternalWrite(yaml);
       setDraft(undefined);
     } finally {
       setSaving(false);
