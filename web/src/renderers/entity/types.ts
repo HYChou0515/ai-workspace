@@ -37,6 +37,9 @@ export type ViewSpec = {
   /** gantt only — a custom (non-ISO) week-numbering rule for the time axis.
    * Read verbatim off the view file; omit to keep plain day/month labels. */
   week?: WeekRule;
+  /** gantt only — collapse Saturdays/Sundays so the timeline shows only working
+   * days (bars, axis, drag all count Mon–Fri). Default off. */
+  skip_weekends?: boolean;
   card?: { title?: string; badges?: string[] };
 };
 

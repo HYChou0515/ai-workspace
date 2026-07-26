@@ -27,6 +27,10 @@ describe("shipped PM gantt view — custom week rule", () => {
     });
   });
 
+  it("ships with the working-day (skip weekends) option on", () => {
+    expect(parseViewSpec(yaml)?.skip_weekends).toBe(true);
+  });
+
   it("yields the exact codes the file's own comment promises", () => {
     const rule = parseViewSpec(yaml)!.week!;
     expect(weekLabelOf("2026-01-01", rule, "2026-06-01")).toBe("W601"); // 2026 W01

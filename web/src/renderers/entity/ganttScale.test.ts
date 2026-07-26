@@ -174,6 +174,13 @@ describe("axisFor", () => {
     for (const t of axis.fine) expect(isWeekend(dateAtColumn("2026-06-29", t.day, true))).toBe(false);
   });
 
+  it("with skip-weekends, the zoomed-out month axis still builds (months over year bands)", () => {
+    const axis = axisFor("2026-01-01", 300, PPD_ANCHORS.month, undefined, "", true);
+    expect(axis.unit).toBe("month");
+    expect(axis.coarse.map((b) => b.label)).toEqual(expect.arrayContaining(["2026"]));
+    expect(axis.fine.some((t) => t.label === "Feb")).toBe(true);
+  });
+
   it("coarse bands tile the whole visible window with no gaps", () => {
     const axis = axisFor("2026-07-10", 120, PPD_ANCHORS.week);
     expect(axis.coarse[0].day).toBe(0);

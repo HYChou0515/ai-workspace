@@ -164,6 +164,19 @@ describe("GanttView", () => {
     expect(screen.getByText("W627")).toBeInTheDocument();
   });
 
+  it("with skip_weekends, a bar spanning a weekend collapses to working days only", () => {
+    const base = { view: "gantt" as const, entity: "issue", span: "span", label: "title" };
+    const ent = [rec(1, { title: "A", span: "2026-07-03/2026-07-13" })]; // Fri → Mon, over a weekend
+    const r1 = render(<GanttView {...props({ spec: base, entities: ent })} />);
+    const calWidth = screen.getByTestId("bar-1").style.width; // 10 calendar days @ 10px = 100px
+    r1.unmount();
+    render(<GanttView {...props({ spec: { ...base, skip_weekends: true }, entities: ent })} />);
+    const wdWidth = screen.getByTestId("bar-1").style.width; // 6 working days @ 10px = 60px
+    expect(Number.parseInt(wdWidth, 10)).toBeLessThan(Number.parseInt(calWidth, 10));
+    expect(calWidth).toBe("100px");
+    expect(wdWidth).toBe("60px");
+  });
+
   it("marks today when it falls within the chart range", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2020-01-01/2035-01-01" })] })} />);
     expect(screen.getByTestId("gantt-today")).toBeInTheDocument();

@@ -24,7 +24,7 @@ import {
   axisFor,
   canvasWidthFor,
   clampPpd,
-  daysBetween,
+  columnOf,
   deltaDays,
   type DragMode,
   PPD_ANCHORS,
@@ -125,9 +125,13 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
     return <div style={{ color: "var(--text-paper-d)" }}>No records with a date range to chart yet.</div>;
   }
 
+  // #648: `skip_weekends` collapses Sat/Sun — every position is a COLUMN offset
+  // (working days when on, calendar days when off) via columnOf, so the whole
+  // gantt — axis, bars, drag, today — counts only working days.
+  const skip = spec.skip_weekends ?? false;
   const minDate = rows.map((r) => r.span.start).reduce((m, s) => (s < m ? s : m));
   const maxDate = rows.map((r) => r.span.end).reduce((m, e) => (e > m ? e : m));
-  const totalDays = daysBetween(minDate, maxDate) + 1;
+  const totalDays = columnOf(minDate, maxDate, skip) + 1;
   // Default density fits the whole project into the pane (fills the width with
   // no empty gap); once measured, the user's slider choice takes over. Fall back
   // to the week anchor before the pane is measured (first paint / SSR).
@@ -138,7 +142,7 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   // grid then spans the whole canvas so there is no empty gap.
   const canvasWidth = canvasWidthFor(totalDays, ppd, paneAvail);
   const visibleDays = visibleDaysFor(canvasWidth, ppd);
-  const xOf = (date: string) => daysBetween(minDate, date) * ppd;
+  const xOf = (date: string) => columnOf(minDate, date, skip) * ppd;
 
   const lanes = groupLanes(rows, spec.group_by, type, refIndex, users);
   const grouped = Boolean(spec.group_by);
@@ -157,7 +161,7 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
       window.removeEventListener("pointerup", onUp);
       setDrag(null);
       const days = deltaDays(ev.clientX - downX, dragPpd);
-      if (days !== 0) onPatch(number, { [spanField]: spanValue(applyDrag(row.span, mode, days)) });
+      if (days !== 0) onPatch(number, { [spanField]: spanValue(applyDrag(row.span, mode, days, skip)) });
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -165,15 +169,15 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   };
 
   const previewSpan = (row: Row): Span =>
-    drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days) : row.span;
+    drag && drag.number === row.e.number ? applyDrag(row.span, drag.mode, drag.days, skip) : row.span;
 
   // `today` also feeds the week axis's `by_today` cross-year boundary, so it is
   // computed before the axis. The clock is read here (the view shell) and
   // injected into the pure scale math — never read inside it.
   const today = new Date().toISOString().slice(0, 10);
-  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today);
+  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip);
 
-  const todayOffset = daysBetween(minDate, today);
+  const todayOffset = columnOf(minDate, today, skip);
   const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
 
   return (
@@ -265,7 +269,7 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
                 {lane.rows.map((row) => {
                   const ps = previewSpan(row);
                   const left = xOf(ps.start);
-                  const width = Math.max(daysBetween(ps.start, ps.end), 1) * ppd;
+                  const width = Math.max(columnOf(ps.start, ps.end, skip), 1) * ppd;
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div

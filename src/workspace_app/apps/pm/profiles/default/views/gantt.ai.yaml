@@ -50,3 +50,10 @@ week:
   reset: yearly
   boundary: by_today
   label: "W{y1}{ww}"
+
+# ── Working-day timeline (skip weekends) ─────────────────────────────────────
+# true  → collapse Saturdays & Sundays: the timeline shows ONLY working days, so
+#         bars, axis ticks, week codes and drag all count Mon–Fri (a Fri→Mon task
+#         is 2 working days wide, and weekends take no horizontal space).
+# false → keep calendar days, weekends included (the default if this key is absent).
+skip_weekends: true
