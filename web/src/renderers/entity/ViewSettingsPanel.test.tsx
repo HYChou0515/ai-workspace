@@ -46,6 +46,29 @@ describe("ViewSettingsPanel", () => {
     expect(screen.queryByRole("dialog", { name: "view settings" })).not.toBeInTheDocument();
   });
 
+  it("shows a Skip weekends toggle when the config carries it, and toggling calls onToggleSkipWeekends", () => {
+    const onToggleSkipWeekends = vi.fn();
+    render(<ViewSettingsPanel config={config({ skipWeekends: false, onToggleSkipWeekends })} />);
+    open();
+    const cb = screen.getByRole("checkbox", { name: "Skip weekends" });
+    expect(cb).not.toBeChecked();
+    fireEvent.click(cb);
+    expect(onToggleSkipWeekends).toHaveBeenCalledWith(true);
+  });
+
+  it("a gantt (skip-only) config hides Group by / Sort / Fields, showing just Working days", () => {
+    render(
+      <ViewSettingsPanel
+        config={config({ groupOptions: [], sortOptions: [], fieldOptions: [], skipWeekends: true, onToggleSkipWeekends: vi.fn() })}
+      />,
+    );
+    open();
+    expect(screen.getByRole("checkbox", { name: "Skip weekends" })).toBeChecked();
+    expect(screen.queryByText("Group by")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sort by")).not.toBeInTheDocument();
+    expect(screen.queryByText("Fields")).not.toBeInTheDocument();
+  });
+
   it("toggles a field's visibility", () => {
     const onToggleField = vi.fn();
     render(<ViewSettingsPanel config={config({ onToggleField })} />);

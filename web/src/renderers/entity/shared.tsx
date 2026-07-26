@@ -62,6 +62,17 @@ export function parseViewSpec(text: string): ViewSpec | null {
   };
 }
 
+/** Set a view file's `skip_weekends` flag in the raw YAML text, preserving every
+ * comment and the rest of the layout: replace the value when the key exists, else
+ * append it. The gantt gear's "Skip weekends" toggle persists through this rather
+ * than a YAML parse+dump (which would strip the self-documenting `week:` comments). */
+export function setSkipWeekendsInYaml(text: string, next: boolean): string {
+  if (/^\s*skip_weekends\s*:/m.test(text)) {
+    return text.replace(/^(\s*skip_weekends\s*:).*$/m, `$1 ${next}`);
+  }
+  return `${text.replace(/\s*$/, "")}\nskip_weekends: ${next}\n`;
+}
+
 // ── value formatting ───────────────────────────────────────────────────────
 
 export function fieldText(value: unknown): string {

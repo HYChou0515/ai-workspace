@@ -59,6 +59,10 @@ export type ViewConfig = {
   sort: SortRule[];
   sortOptions: { name: string; label: string }[];
   onSetSort: (rules: SortRule[]) => void;
+  /** gantt only — the working-day (skip weekends) toggle. Present ⇒ the panel
+   * shows a "Working days" section; toggling persists straight to the view file. */
+  skipWeekends?: boolean;
+  onToggleSkipWeekends?: (next: boolean) => void;
   dirty: boolean;
   saving?: boolean;
   onSave: () => void;
