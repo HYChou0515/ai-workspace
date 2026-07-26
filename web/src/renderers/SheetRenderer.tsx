@@ -17,6 +17,7 @@
 import { useState } from "react";
 
 import { useOptionalFileService } from "../api/fileService";
+import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { useItemCanWrite } from "../hooks/useItemCanWrite";
 import { useOutsideFileChange } from "../hooks/useOutsideFileChange";
@@ -32,6 +33,7 @@ export function delimiterFor(path: string): string {
 }
 
 export function SheetRenderer({ path }: { path: string }) {
+  const { isEditing } = useEditMode();
   const { entry, setText, readOnly, reload } = useFileBuffer(path);
   const [changedOutside, setChangedOutside] = useState(false);
   const slug = useWorkspaceSlug();
@@ -50,6 +52,12 @@ export function SheetRenderer({ path }: { path: string }) {
     if (dirty) setChangedOutside(true);
     else reload();
   });
+
+  // Edit hands the whole pane to the byte editor, like every other structured
+  // preview (`StructuredPane`). Without this the registry's `editToggle` flag is
+  // a lie: the button flips a switch nothing reads, so a file the grid can't
+  // help with has no escape hatch at all.
+  if (isEditing(path)) return <TextRenderer path={path} />;
 
   if (entry.status === "loading") {
     return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;

@@ -64,7 +64,7 @@ describe("SheetRenderer — the file changed outside the editor", () => {
     const store = await renderSheet();
 
     // An unsaved edit is in flight.
-    const cell = await screen.findByLabelText("R2C2");
+    const cell = await screen.findByLabelText("R1C2");
     await userEvent.clear(cell);
     await userEvent.type(cell, "130{Enter}");
     expect(store.isDirty(PATH)).toBe(true);
@@ -74,7 +74,7 @@ describe("SheetRenderer — the file changed outside the editor", () => {
 
     // The unsaved edit is still there, and the user is told.
     expect(await screen.findByText(/changed outside/i)).toBeInTheDocument();
-    expect(screen.getByLabelText("R2C2")).toHaveValue("130");
+    expect(screen.getByLabelText("R1C2")).toHaveValue("130");
     expect(screen.getByRole("button", { name: /keep my changes/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reload/i })).toBeInTheDocument();
   });

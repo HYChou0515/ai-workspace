@@ -56,7 +56,7 @@ describe("SheetRenderer — read-only member (#455 §E)", () => {
   it("cannot type into a cell, and the file stays untouched", async () => {
     const store = await renderReadOnlyMember();
 
-    const cell = await screen.findByLabelText("R2C2");
+    const cell = await screen.findByLabelText("R1C2");
     expect(cell).toHaveAttribute("readonly");
 
     await userEvent.type(cell, "999");

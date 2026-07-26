@@ -172,9 +172,15 @@
 }
 
 /* A row whose field count disagrees with the header keeps its data and its
-   edits, and says so with a warm left edge — the same cue as a lint-warning
-   cell in the entity table. */
+   edits, and says so with a warm tint across the row — the same shape as
+   `.ev-table__row--error`. A hard inset bar on the gutter was the first attempt
+   and it sat on top of the row number, which is the one thing the warning needs
+   you to be able to read. */
+.sheet-table tbody tr.sheet-row--ragged td,
+.sheet-table tbody tr.sheet-row--ragged:nth-child(even) td {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+}
 .sheet-row--ragged .sheet-gutter {
-  box-shadow: inset 3px 0 0 var(--warn);
   color: var(--warn);
+  font-weight: 600;
 }

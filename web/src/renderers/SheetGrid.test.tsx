@@ -18,7 +18,7 @@ describe("SheetGrid — structural edits", () => {
     const onRowsChange = vi.fn();
     render(<SheetGrid rows={GRID} onRowsChange={onRowsChange} />);
 
-    await userEvent.click(screen.getByLabelText("R2C1")); // focus the W01 row
+    await userEvent.click(screen.getByLabelText("R1C1")); // focus the W01 row
     await userEvent.click(screen.getByRole("button", { name: "Insert row below" }));
 
     expect(onRowsChange).toHaveBeenCalledWith([["wafer", "qty"], ["W01", "120"], ["", ""]]);
@@ -47,7 +47,7 @@ describe("SheetGrid — sorting is a view, not a rewrite", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /sort by wafer/i }));
 
-    expect(screen.getByLabelText("R2C1")).toHaveValue("W01"); // view reordered
+    expect(screen.getByLabelText("R1C1")).toHaveValue("W01"); // view reordered
     expect(onRowsChange).not.toHaveBeenCalled(); // file untouched
   });
 
@@ -56,7 +56,7 @@ describe("SheetGrid — sorting is a view, not a rewrite", () => {
     render(<SheetGrid rows={DATA} onRowsChange={onRowsChange} />);
 
     await userEvent.click(screen.getByRole("button", { name: /sort by wafer/i }));
-    const cell = screen.getByLabelText("R2C1"); // displays W01, which is file row 2
+    const cell = screen.getByLabelText("R1C1"); // displays W01, which is file row 2
     await userEvent.clear(cell);
     await userEvent.type(cell, "W99{Enter}");
 
@@ -89,7 +89,7 @@ describe("SheetGrid — sorting is a view, not a rewrite", () => {
     const { rerender } = render(<SheetGrid rows={DATA} onRowsChange={onRowsChange} />);
 
     await userEvent.click(screen.getByRole("button", { name: /sort by wafer/i }));
-    await userEvent.click(screen.getByLabelText("R2C1")); // W01 — file row 2
+    await userEvent.click(screen.getByLabelText("R1C1")); // W01 — file row 2
     await userEvent.click(screen.getByRole("button", { name: "Apply this order to the file" }));
 
     const applied = onRowsChange.mock.calls.at(-1)![0] as string[][];
@@ -118,10 +118,19 @@ describe("SheetGrid — sorting is a view, not a rewrite", () => {
 describe("SheetGrid — degradation", () => {
   afterEach(cleanup);
 
+  it("numbers the DATA rows from 1 — the header is not row 1", () => {
+    // The header sits in its own band with no number, so starting the gutter at
+    // 2 reads as "row 1 is missing".
+    render(<SheetGrid rows={GRID} onRowsChange={vi.fn()} />);
+
+    const gutters = [...document.querySelectorAll("tbody .sheet-gutter")].map((td) => td.textContent);
+    expect(gutters).toEqual(["1"]);
+  });
+
   it("an empty file gets one editable cell, not a blank pane", () => {
     render(<SheetGrid rows={[]} onRowsChange={vi.fn()} />);
 
-    expect(screen.getByLabelText("R1C1")).toBeInTheDocument();
+    expect(screen.getByLabelText("Column 1 name")).toBeInTheDocument();
   });
 
   it("marks a ragged row and names it, instead of hiding or dropping it", () => {
@@ -137,12 +146,12 @@ describe("SheetGrid — degradation", () => {
     );
 
     // The row is still there and still editable...
-    expect(screen.getByLabelText("R3C1")).toHaveValue("W02");
+    expect(screen.getByLabelText("R2C1")).toHaveValue("W02");
     // ...and the mismatch is stated with the row number and both counts. It
     // rides the row's accessible name (and the gutter's tooltip) rather than an
     // extra visible cell: the warm gutter edge is the visual cue, and a stray
     // "1 of 3 fields" column would push the data sideways.
-    const marked = screen.getByRole("row", { name: /row 3/i });
+    const marked = screen.getByRole("row", { name: /row 2/i });
     expect(marked).toHaveAccessibleName(/1 of 3 fields/i);
   });
 });

@@ -34,10 +34,16 @@ import { visibleRange } from "./sheetWindow";
  * the same height anyway. Keep in sync with `.sheet-cell` in sheet.css. */
 const ROW_HEIGHT = 25;
 
-/** A cell's accessible name — `R1C1` spreadsheet notation, 1-based, over what is
- * DISPLAYED (so R1 is always the header, whatever the sort). */
-export function cellLabel(row: number, col: number): string {
-  return `R${row + 1}C${col + 1}`;
+/** A cell's accessible name, keyed by DISPLAY position (so it follows the sort).
+ *
+ * The header is not row 1: it sits in its own band with no number, so numbering
+ * the first data row "2" would read as "row 1 is missing". Data rows are 1..N and
+ * the header cells are named for the column they head — which also announces
+ * something more useful than a coordinate to a screen reader. The visible gutter
+ * and this name are the SAME number on purpose; two numbering schemes would
+ * guarantee one of them ends up lying. */
+export function cellLabel(displayRow: number, col: number): string {
+  return displayRow === 0 ? `Column ${col + 1} name` : `R${displayRow}C${col + 1}`;
 }
 
 type Edit = { fileRow: number; col: number; draft: string };
@@ -250,14 +256,14 @@ export function SheetGrid({
               // A row whose field count disagrees with the header keeps its data
               // and its edits, and says so — dropping it or blanking the pane
               // would hide data the file really contains (the same lesson as
-              // #646 on the ingest side). `displayRow` is 0-based; the row
-              // NUMBER a user reads is 1-based, and the header is row 1.
+              // #646 on the ingest side). `displayRow` already counts data rows
+              // from 1, which is exactly what the gutter shows.
               const ragged = cells.length !== header.length;
-              const note = ragged ? `Row ${displayRow + 1} — ${cells.length} of ${header.length} fields` : undefined;
+              const note = ragged ? `Row ${displayRow} — ${cells.length} of ${header.length} fields` : undefined;
               return (
                 <tr key={fileRow} aria-label={note} className={ragged ? "sheet-row--ragged" : undefined}>
                   <td className="sheet-gutter" title={note}>
-                    {displayRow + 1}
+                    {displayRow}
                   </td>
                   {cells.map((value, c) => (
                     <td key={c}>{cellInput(fileRow, displayRow, c, value)}</td>
