@@ -380,6 +380,11 @@ class AgentToolContext:
     # tool was dropped because its allowance was 0, rather than never granted).
     # The runner appends it to the system prompt; "" ⇒ nothing appended.
     search_allowance_note: str = ""
+    # #pm: this item's record-type schema (field names + status vocab + which
+    # field a timeline reads), rendered for the prompt so the agent creates valid
+    # records up front instead of guessing. Set where the catalog is discovered
+    # for the turn. The runner appends it to the system prompt; "" ⇒ nothing.
+    entity_schema_note: str = ""
     # #62: a per-turn map from an exec tool's LLM-facing result (the cleaned
     # `_format_exec`, which IS the ToolEnd.output) to the FULL display result
     # (stderr kept even on success). The runner keys off ToolEnd.output to

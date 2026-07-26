@@ -261,9 +261,15 @@ def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | Non
     agent is replying to in a shared workspace), the #537 knowledge-source
     allowance (how many times this reply may consult each source — stated up
     front so the agent budgets deliberately instead of discovering the ceiling
-    by being refused), then any retry feedback. `None` when none is present, so
-    `_agent_for` leaves the base prompt unchanged."""
-    parts = [s for s in (speaker_note(ctx.speaker), ctx.search_allowance_note, feedback) if s]
+    by being refused), the #pm entity-schema brief (the item's record types +
+    fields + status vocab, so the agent creates valid records without guessing),
+    then any retry feedback. `None` when none is present, so `_agent_for` leaves
+    the base prompt unchanged."""
+    parts = [
+        s
+        for s in (speaker_note(ctx.speaker), ctx.search_allowance_note, ctx.entity_schema_note, feedback)
+        if s
+    ]
     return "\n\n".join(parts) if parts else None
 
 
