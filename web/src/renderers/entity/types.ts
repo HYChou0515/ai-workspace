@@ -36,6 +36,28 @@ export type ViewSpec = {
   card?: { title?: string; badges?: string[] };
 };
 
+/** The View settings panel's model (#GH-projects P3) — the effective, locally
+ * overridden view config the "View" gear popover edits (Fields show/hide, Group
+ * by, multi-level Sort), plus save/reset. AiYamlRenderer builds it; every change
+ * applies immediately (local), and "Save to view" persists it into the YAML. */
+export type ViewConfig = {
+  /** Candidate columns, in display order, each toggleable. */
+  fieldOptions: { name: string; label: string }[];
+  hidden: string[];
+  onToggleField: (name: string) => void;
+  /** "" = no grouping. */
+  groupBy: string;
+  groupOptions: { name: string; label: string }[];
+  onGroupBy: (field: string) => void;
+  sort: SortRule[];
+  sortOptions: { name: string; label: string }[];
+  onSetSort: (rules: SortRule[]) => void;
+  dirty: boolean;
+  saving?: boolean;
+  onSave: () => void;
+  onReset: () => void;
+};
+
 export type EntityViewProps = {
   spec: ViewSpec;
   /** The entity type from the catalog — supplies field roles + the create form.

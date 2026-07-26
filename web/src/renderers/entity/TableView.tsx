@@ -37,9 +37,9 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
   const readOnly = canWrite === false; // §E — disable inline edits for non-writers
   const [sort, setSort] = useState<{ column: string; dir: SortDir } | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
-  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
-  const [menuOpen, setMenuOpen] = useState(false);
-
+  // Hidden columns come from the view spec (set in the "View" panel, #GH-projects
+  // P3), not local state — so the choice persists via "Save to view".
+  const hidden = new Set(spec.hidden_fields ?? []);
   const columns = allColumns.filter((c) => !hidden.has(c));
   const filtered = filterEntities(entities, filters, type ?? null, refIndex);
   // A live header-click sort (single column) overrides; otherwise the view's own
@@ -65,14 +65,6 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
     return null;
   };
   const hasFilters = columns.some((c) => filterDomain(c));
-
-  const toggleColumn = (c: string) =>
-    setHidden((h) => {
-      const next = new Set(h);
-      if (next.has(c)) next.delete(c);
-      else next.add(c);
-      return next;
-    });
 
   // ── multi-select + batch (§A1) ─────────────────────────────────────────────
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
@@ -175,27 +167,8 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
     // PROGRESS) get clipped at the pane edge instead of scrolling inside the
     // bordered table wrap (#3 "text cut").
     <div className="ev-tableview">
-      <div className="ev-toolbar" style={{ position: "relative", marginBottom: 8 }}>
-        <button
-          type="button"
-          className="btn"
-          data-variant="secondary"
-          data-size="sm"
-          onClick={() => setMenuOpen((o) => !o)}
-        >
-          Columns
-        </button>
-        {menuOpen && (
-          <div role="menu" className="ev-menu" style={{ top: "100%" }}>
-            {allColumns.map((c) => (
-              <label key={c} className="ev-menu__item">
-                <input type="checkbox" aria-label={`toggle ${c}`} checked={!hidden.has(c)} onChange={() => toggleColumn(c)} /> {c}
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
-
+      {/* Columns show/hide now lives in the "View" gear panel (#GH-projects P3),
+          driven by spec.hidden_fields — no standalone Columns menu here. */}
       {selected.size > 0 && (
         <div role="toolbar" aria-label="batch actions" className="ev-toolbar" style={{ marginBottom: 8 }}>
           <span className="ev-toolbar__meta">{selected.size} selected</span>

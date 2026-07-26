@@ -19,7 +19,8 @@ import { ModalShell } from "../../components/ModalShell";
 import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
 import { fieldText, parseSpan, parseViewSpec } from "./shared";
-import type { EntityViewProps, ViewKind, ViewSpec } from "./types";
+import type { EntityViewProps, ViewConfig, ViewKind, ViewSpec } from "./types";
+import { ViewSettingsPanel } from "./ViewSettingsPanel";
 import { resolveViewRenderer } from "./viewKindRegistry";
 
 // Re-exports so existing importers (`AiYamlRenderer`, tests) keep their
@@ -115,63 +116,9 @@ export function QuickCreate({
   );
 }
 
-// ── group-by control (#GH-projects A) ──────────────────────────────────────
-
-/** The view's grouping picker + local-vs-saved state. Changing it applies locally
- * (the view regroups immediately); "Save to view" persists it into the `.ai.yaml`
- * (shared). Provided only to writers with groupable fields. */
-export type GroupingControl = {
-  /** Effective group_by ("" = none). */
-  value: string;
-  options: { name: string; label: string }[];
-  onChange: (field: string) => void;
-  dirty: boolean;
-  saving?: boolean;
-  onSave: () => void;
-  onReset: () => void;
-};
-
-function GroupByControl({ grouping }: { grouping: GroupingControl }) {
-  return (
-    <div className="ev-viewbar">
-      <label className="ev-viewbar__item">
-        <span className="ev-viewbar__label">Group by</span>
-        <select
-          className="ev-select"
-          aria-label="group by"
-          value={grouping.value}
-          onChange={(e) => grouping.onChange(e.target.value)}
-        >
-          <option value="">None</option>
-          {grouping.options.map((o) => (
-            <option key={o.name} value={o.name}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </label>
-      {grouping.dirty && (
-        <span className="ev-viewbar__dirty">
-          <span className="ev-viewbar__dot" aria-hidden />
-          unsaved
-          <button
-            type="button"
-            className="btn"
-            data-variant="primary"
-            data-size="sm"
-            disabled={grouping.saving}
-            onClick={grouping.onSave}
-          >
-            Save to view
-          </button>
-          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={grouping.onReset}>
-            Reset
-          </button>
-        </span>
-      )}
-    </div>
-  );
-}
+// The Group-by / Sort / Fields controls now live in the "View" gear panel
+// (#GH-projects P3) — see ViewSettingsPanel, driven by the ViewConfig the
+// container builds. The old standalone GroupByControl is retired.
 
 // ── conflict banner (§B2) ──────────────────────────────────────────────────
 
@@ -238,12 +185,13 @@ export type EntityViewBodyProps = EntityViewProps & {
   catalogDiagnostics?: EntityDiagnostic[];
   /** The entity type has no usable schema — degrade to raw, read-only fields. */
   schemaMissing?: boolean;
-  /** #GH-projects A — the group-by picker + save-to-view state (writers only). */
-  grouping?: GroupingControl;
+  /** #GH-projects P3 — the "View" settings panel model (Group by / Sort / Fields
+   * + save-to-view state); provided only to writers of a table/board view. */
+  viewConfig?: ViewConfig;
 };
 
 export function EntityViewBody(props: EntityViewBodyProps) {
-  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing, grouping } =
+  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing, viewConfig } =
     props;
   const canWrite = props.canWrite !== false; // omitted ≡ writable (§E)
   const renderer = resolveViewRenderer(spec.view);
@@ -256,18 +204,20 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           {spec.title ?? spec.entity}
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
-        {type && !renderer.suppressQuickCreate && canWrite && (
-          <QuickCreate
-            form={type.form}
-            users={users}
-            onCreate={onCreate}
-            busy={busy}
-            entityLabel={type.name}
-            refOptionsFor={(name) => refOptionsForField(type, props.refIndex, name)}
-          />
-        )}
+        <div className="ev-panel__actions">
+          {viewConfig && <ViewSettingsPanel config={viewConfig} />}
+          {type && !renderer.suppressQuickCreate && canWrite && (
+            <QuickCreate
+              form={type.form}
+              users={users}
+              onCreate={onCreate}
+              busy={busy}
+              entityLabel={type.name}
+              refOptionsFor={(name) => refOptionsForField(type, props.refIndex, name)}
+            />
+          )}
+        </div>
       </div>
-      {grouping && grouping.options.length > 0 && <GroupByControl grouping={grouping} />}
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
       {schemaMissing && (

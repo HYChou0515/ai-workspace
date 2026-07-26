@@ -51,10 +51,12 @@ and the #GH-projects epic (B colored chips ✅, A group-by ✅).
   order, ref by resolved title, actor by name, date/number/progress natural, each
   tier asc/desc; ties fall through to the next tier, final tie = `rank`. Applied
   in `TableView` and within each `BoardView` column. Unit-tested.
-- **P3 — View gear panel.** A popover consolidating **Fields** (show/hide +
-  drag-reorder columns), **Group by** (move the existing `GroupByControl` in), and
-  **Sort by** (add/remove tiers, pick field + asc/desc). Local apply + one
-  **Save to view**. Retires the standalone Columns + Group-by controls.
+- **P3 — View gear panel.** A "View" popover consolidating **Fields**
+  (show/hide columns), **Group by** (move the existing `GroupByControl` in), and
+  **Sort by** (add/remove tiers, pick field + asc/desc, capped at 3). Local apply
+  + one **Save to view**. Retires the standalone Columns + Group-by controls.
+  (Column drag-**reorder** is deferred to a follow-up — see Deferred; show/hide is
+  the core Fields need.)
 - **P4 — manual drag order (GH model).** Table rows + Board cards become
   drag-reorderable (@dnd-kit; Board already uses core, add sortable-style reorder)
   **only when no sort is active**; a drop writes the moved record's `rank`
@@ -72,7 +74,9 @@ and the #GH-projects epic (B colored chips ✅, A group-by ✅).
 ## Deferred (explicit — not this version)
 
 Field sum / aggregations · Slice by · Show hierarchy (sub-issues) · Roadmap in the
-panel · agent sessions toggle. Tracked for a follow-up once the ordering block lands.
+panel · agent sessions toggle · **column drag-reorder in the Fields section**
+(show/hide ships in P3; reordering is a polish follow-up). Tracked once the
+ordering block lands.
 
 ## Open points to confirm
 

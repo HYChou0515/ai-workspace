@@ -361,15 +361,15 @@ describe("table sort / filter / column visibility (§A1)", () => {
     expect(screen.getAllByLabelText("edit title")).toHaveLength(1);
   });
 
-  it("hides a column through the columns menu", () => {
-    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"] };
+  it("hides a column named in the view's hidden_fields (#GH-projects P3)", () => {
+    // Column show/hide now persists on the spec (set in the View panel) — a
+    // hidden field simply doesn't render as a column.
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"], hidden_fields: ["status"] };
     render(
       <EntityViewBody spec={spec} type={issueType} entities={[issue(1, { title: "A", status: "open" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
     );
-    expect(screen.getByRole("button", { name: /^status/ })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Columns" }));
-    fireEvent.click(screen.getByLabelText("toggle status"));
-    expect(screen.queryByRole("button", { name: /^status/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "title" })).toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: "status" })).not.toBeInTheDocument();
   });
 });
 
