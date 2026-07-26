@@ -336,6 +336,59 @@ Phase 4 的 DoD 提前跑了 —— 因為 **topic-hub 今天就已具備全部�
 這反過來證明本計畫 §3.2 / §3.6 的召回設計（索引常駐 + 深層按需）**機制上是有效的** ——
 需要補強的是「讓模型願意、且正確地寫」。
 
+#### 4.5.0 ⚠️ 真因不是模型判斷力，是 **prompt 被靜默截掉 63%**
+
+追下去之後，§4.5 觀測到的失效**幾乎全部**要歸給一個平台層缺陷，而不是模型的取捨。
+證據取自 `logs/llm/` 的請求記錄（本專案自己的 LLM trace）：
+
+| 量到的 | 值 |
+|---|---|
+| system prompt | 25,309 字元 ≈ **6,497 tokens** |
+| 工具 schema（18 個） | 17,980 字元 ≈ **4,495 tokens** |
+| 合計送出 | **≈ 11,000 tokens** |
+| 端點回報 `prompt_tokens` | **4,096**（三次呼叫全部剛好 4096） |
+| 請求裡的 `num_ctx` | **沒有** |
+
+**約 63% 的 prompt 被丟掉，而且完全靜默。** Ollama / llama.cpp 截的是**前段**，
+保留尾端 —— 而 topic-hub 的身分說明與**整段 Memory 指示**都在最前面，尾端留下的
+正好是那 19k 字元的工具清單。所以模型「看不到要寫記憶」卻「看得到一整排工具」。
+
+**根因：app 從不送 `num_ctx`。** `rg num_ctx src/` 在整個 codebase 零命中，
+所以窗口完全取決於 operator 指到哪個模型 tag：
+
+| 模型 tag | Modelfile 的 `num_ctx` | 實際窗口 |
+|---|---|---|
+| `qwen3:14b`（跑著的設定用這個） | **未設定** | Ollama 預設 **4,096** |
+| `qwen3-14b-ctx40k`（手工建的） | **`40960`** | 40,960 |
+
+兩者底層都是同一顆 14B（`qwen3.context_length = 40960`）。也就是說，
+**目前的解法是「手工烤一顆把 num_ctx 焊死的模型」**，而不是請求時講清楚。
+
+**修正通道已驗證**（同一長 prompt，三種送法）：
+
+| 送法 | 回報 `prompt_tokens` |
+|---|---|
+| 不送 `num_ctx`（現況） | 4,096 |
+| `num_ctx` 當**頂層 kwarg** | **9,023** ✅ |
+| `num_ctx` 放 `extra_body` | 4,096 ❌ |
+
+在 SDK 裡頂層 kwarg 就是 `ModelSettings(extra_args={"num_ctx": …})` ——
+`litellm_runner.py` 自己的註解已經寫明「the SDK LitellmModel splats extra_args as
+top-level completion kwargs」，`think=False` 就是走這條。
+
+**尚待裁決（你的旋鈕範圍決定）**：`num_ctx` 的值從哪來。`resolve_context_limit`
+的階梯是 configured > learned > catalog，但 **`learned` 在這裡是循環的** ——
+它正是「沒送 num_ctx 而被截斷」學來的 4096。建議用 **configured > catalog**，
+略過 learned。實作上還要把解析出的 limit 從 `TurnContextBuilder` 接到 `_agent_for`
+（目前算完 history budget 就丟掉），且 `catalog_limit` 有網路 I/O，必須走
+`deferred_lookup` 不能放在請求路徑上。
+
+> **這是平台層缺陷，不是記憶功能的缺陷** —— 它影響**每一個** Ollama turn。
+> 建議獨立開 issue，本計畫只記錄它如何污染了 §4.5 的量測。
+>
+> **§4.5 的四個「失效」因此要降級**：在一個吃掉 63% prompt 的端點上，
+> 那些觀測**不足以判定**模型行為。修好 `num_ctx` 之前，Phase 2 的 DoD 跑不出有效數據。
+
 #### 4.5.1 ⚠️ 失效是**機率性**的，不是確定性的
 
 上面那一輪是**單次**觀測。用同一個 prompt、同一個模型、同一段輸入重跑，模型**會**正確地
