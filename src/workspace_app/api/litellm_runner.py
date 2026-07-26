@@ -267,7 +267,12 @@ def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | Non
     the base prompt unchanged."""
     parts = [
         s
-        for s in (speaker_note(ctx.speaker), ctx.search_allowance_note, ctx.entity_schema_note, feedback)
+        for s in (
+            speaker_note(ctx.speaker),
+            ctx.search_allowance_note,
+            ctx.entity_schema_note,
+            feedback,
+        )
         if s
     ]
     return "\n\n".join(parts) if parts else None

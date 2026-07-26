@@ -21,7 +21,11 @@ def _issue() -> EntityType:
         schema=EntitySchema(
             fields=[
                 FieldSpec(name="title", role=Role.TEXT, required=True),
-                FieldSpec(name="status", role=Role.STATUS, values=["open", "in_progress", "blocked", "done"]),
+                FieldSpec(
+                    name="status",
+                    role=Role.STATUS,
+                    values=["open", "in_progress", "blocked", "done"],
+                ),
                 FieldSpec(name="assignee", role=Role.ACTOR),
                 FieldSpec(name="due", role=Role.DATE),
                 FieldSpec(name="span", role=Role.DATERANGE),
@@ -46,7 +50,9 @@ def _milestone() -> EntityType:
                 FieldSpec(name="span", role=Role.DATERANGE),
                 # derived — must be omitted from create guidance
                 FieldSpec(name="issues", role=Role.BACKREF, from_="issue.milestone"),
-                FieldSpec(name="progress", role=Role.ROLLUP, over="issues", agg="avg", field="progress"),
+                FieldSpec(
+                    name="progress", role=Role.ROLLUP, over="issues", agg="avg", field="progress"
+                ),
             ]
         ),
     )
