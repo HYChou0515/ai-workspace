@@ -79,6 +79,21 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const [draft, setDraft] = useState<string | undefined>(undefined);
   const [saved, setSaved] = useState<string | undefined>(undefined);
   const [saving, setSaving] = useState(false);
+  // The IDE mounts ONE <FileView> and only swaps the `path` prop on a file
+  // switch, so this renderer instance is REUSED across view files (same as the
+  // record editor — see RecordFileRenderer's key={path}). Reset the group-by
+  // picker state the moment `path` changes, or the previous view's uncommitted
+  // `draft` (and just-saved `saved` bridge) bleed into the next file: it shows —
+  // and, on a second Save, actually persists — that grouping on an unrelated
+  // view. Adjusting state during render (React's documented pattern) resets
+  // before commit, so the stale grouping never paints.
+  const [statePath, setStatePath] = useState(path);
+  if (path !== statePath) {
+    setStatePath(path);
+    setDraft(undefined);
+    setSaved(undefined);
+    setSaving(false);
+  }
   const specGroupBy = spec?.group_by ?? "";
   const savedGroupBy = saved !== undefined ? saved : specGroupBy;
   useEffect(() => {

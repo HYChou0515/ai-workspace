@@ -134,6 +134,50 @@ describe("AiYamlRenderer", () => {
     expect(writeFile.mock.calls[0]?.[1]).toMatch(/group_by:\s*status/);
   });
 
+  it("resets the group-by choice when the open file changes (no cross-file bleed, #1/#2)", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({
+      entities: [
+        { number: 1, type_name: "issue", fields: { title: "A", status: "open" }, body: "", diagnostics: [] },
+        { number: 2, type_name: "issue", fields: { title: "B", status: "done" }, body: "", diagnostics: [] },
+      ],
+      invalid: [],
+    });
+    // Two DIFFERENT view files, both ungrouped in their YAML. The IDE reuses ONE
+    // renderer instance across a file switch (only `path` changes), so the first
+    // view's uncommitted group-by must NOT carry into the second.
+    const text = "view: table\nentity: issue\ncolumns:\n  - title\n  - status\n";
+    const store = new FileBufferStore({
+      readFile: vi.fn(async (p: string) => ({ kind: "text" as const, path: p, size: text.length, text, encoding: "utf-8" as const })),
+      writeFile: vi.fn(async () => {}),
+    });
+    const Harness = ({ path }: { path: string }) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={investigationFileService("pm", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+    const { rerender } = render(<Harness path="/views/table-a.ai.yaml" />);
+
+    // group the first view locally (an unsaved draft)
+    fireEvent.change(await screen.findByLabelText("group by"), { target: { value: "status" } });
+    expect(await screen.findByTestId("group-open")).toBeInTheDocument();
+
+    // switch to a different view file — the reused instance must reset its picker
+    rerender(<Harness path="/views/table-b.ai.yaml" />);
+
+    await screen.findByLabelText("group by");
+    expect(screen.getByLabelText("group by")).toHaveValue("");
+    expect(screen.queryByTestId("group-open")).not.toBeInTheDocument();
+  });
+
   it("degrades a non-view .ai.yaml to a plain structured tree without querying entities", async () => {
     renderView("/notes.ai.yaml", "just: data\ncount: 3\n");
     // the raw yaml tree shows the key; no entity fetch is attempted
