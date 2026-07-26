@@ -15,7 +15,17 @@ import {
   sliderToPpd,
   spanToDates,
   visibleDaysFor,
+  formatWeekLabel,
+  weekLabelOf,
+  weekNumberOf,
+  type WeekRule,
+  weekStart,
 } from "./ganttScale";
+
+// The user's real convention (Taiwanese manufacturing work-week, deliberately
+// NOT ISO): weeks run Mon→Sun, week 1 is the week containing Jan 1, numbering
+// resets each year, and the cross-year week's label follows "today".
+const WW: WeekRule = { start: "monday", first_week: "jan1", reset: "yearly", boundary: "by_today", label: "W{y1}{ww}" };
 
 describe("shiftDate", () => {
   it("adds days in UTC without timezone drift, crossing month/year", () => {
@@ -157,6 +167,106 @@ describe("visibleDaysFor", () => {
     expect(visibleDaysFor(405, 10)).toBe(41);
     // never zero, even for a degenerate canvas
     expect(visibleDaysFor(0, 10)).toBe(1);
+  });
+});
+
+describe("weekStart", () => {
+  it("returns the week's first day — the Monday on/before a date — for a monday-start week", () => {
+    expect(weekStart("2026-12-28", "monday")).toBe("2026-12-28"); // a Monday → itself
+    expect(weekStart("2026-12-31", "monday")).toBe("2026-12-28"); // Thu → back to Monday
+    expect(weekStart("2027-01-03", "monday")).toBe("2026-12-28"); // Sun → same week's Monday
+  });
+});
+
+describe("weekNumberOf", () => {
+  it("numbers a mid-year date from the week containing Jan 1 (jan1 anchor, yearly reset)", () => {
+    // 2026-07-01 is in the week starting Mon 2026-06-29; 2026 W01 starts Mon
+    // 2025-12-29 (the week holding Thu 2026-01-01) → 27 weeks on.
+    expect(weekNumberOf("2026-07-01", WW, "2026-08-01")).toEqual({ year: 2026, week: 27 });
+  });
+});
+
+describe("weekNumberOf — by_today cross-year week", () => {
+  // The physical week Mon 2026-12-28 … Sun 2027-01-03 holds both Dec 31 2026 and
+  // Jan 1 2027, so it is simultaneously 2026's last week and 2027's W01.
+  const overlap = "2026-12-31";
+
+  it("reads as the OLD year's last week while today is still before that New Year", () => {
+    expect(weekNumberOf(overlap, WW, "2026-06-01")).toEqual({ year: 2026, week: 53 });
+    expect(weekNumberOf(overlap, WW, "2026-12-31")).toEqual({ year: 2026, week: 53 });
+  });
+
+  it("reads as the NEW year's W01 once today is on/after that New Year", () => {
+    expect(weekNumberOf(overlap, WW, "2027-01-01")).toEqual({ year: 2027, week: 1 });
+    expect(weekNumberOf(overlap, WW, "2027-06-01")).toEqual({ year: 2027, week: 1 });
+  });
+
+  it("applies per-crossing: a PAST crossing reads new, a FUTURE crossing reads old (from one 'today')", () => {
+    // today = mid-2027: the 2026→2027 crossing is past (new: 2027 W01) …
+    expect(weekNumberOf("2026-12-31", WW, "2027-06-01")).toEqual({ year: 2027, week: 1 });
+    // … while the 2027→2028 crossing (week holding 2028-01-01) is still future (old: 2027 W53).
+    expect(weekNumberOf("2027-12-31", WW, "2027-06-01")).toEqual({ year: 2027, week: 53 });
+  });
+});
+
+describe("weekNumberOf — static boundary modes", () => {
+  const NEW: WeekRule = { ...WW, boundary: "new_year" };
+  const OLD: WeekRule = { ...WW, boundary: "old_year" };
+
+  it("new_year: the cross-year week is the new year's W01, and its numbering carries on (first full week = W02)", () => {
+    expect(weekNumberOf("2026-12-31", NEW, "2000-01-01")).toEqual({ year: 2027, week: 1 });
+    expect(weekNumberOf("2027-01-04", NEW, "2000-01-01")).toEqual({ year: 2027, week: 2 });
+  });
+
+  it("old_year: the cross-year week is the old year's LAST week (52 here — both years first-full-anchored), and the new year's W01 slips to the first full week", () => {
+    // Pure old_year anchors EVERY year at its first full week, so 2026 too runs
+    // W01=2026-01-05 … its last (the cross-year week) = W52. (The W53 you see in
+    // by_today comes from 2026 staying jan1-anchored while 2027 is first-full.)
+    expect(weekNumberOf("2026-12-31", OLD, "2099-01-01")).toEqual({ year: 2026, week: 52 });
+    expect(weekNumberOf("2027-01-04", OLD, "2099-01-01")).toEqual({ year: 2027, week: 1 });
+  });
+});
+
+describe("formatWeekLabel", () => {
+  it("renders the user's W{y1}{ww} format (year's last digit + zero-padded week)", () => {
+    expect(formatWeekLabel({ year: 2026, week: 1 }, "W{y1}{ww}")).toBe("W601");
+    expect(formatWeekLabel({ year: 2027, week: 44 }, "W{y1}{ww}")).toBe("W744");
+  });
+  it("supports the full token set and defaults to {yyyy}-W{ww}", () => {
+    expect(formatWeekLabel({ year: 2026, week: 5 }, "{yyyy}-W{ww}")).toBe("2026-W05");
+    expect(formatWeekLabel({ year: 2026, week: 5 }, "{yy}W{w}")).toBe("26W5");
+    expect(formatWeekLabel({ year: 2026, week: 5 })).toBe("2026-W05");
+  });
+});
+
+describe("weekLabelOf (whole pipeline → the string the axis shows)", () => {
+  it("renders a plain week as W{y1}{ww}", () => {
+    expect(weekLabelOf("2026-07-01", WW, "2026-08-01")).toBe("W627");
+  });
+  it("shows the cross-year week as W653 before its New Year, W701 on/after — the exact case the user described", () => {
+    expect(weekLabelOf("2026-12-31", WW, "2026-06-01")).toBe("W653");
+    expect(weekLabelOf("2026-12-31", WW, "2027-06-01")).toBe("W701");
+  });
+});
+
+describe("weekNumberOf — other documented knobs are honored", () => {
+  it("first_week:first_full anchors on the first whole week (≠ jan1)", () => {
+    // 2026 opens Thu, so its first full week starts Mon 2026-01-05 → one behind jan1.
+    expect(weekNumberOf("2026-07-01", { start: "monday", first_week: "first_full" }, "2026-08-01")).toEqual({ year: 2026, week: 26 });
+    expect(weekNumberOf("2026-07-01", { start: "monday", first_week: "jan1" }, "2026-08-01")).toEqual({ year: 2026, week: 27 });
+  });
+
+  it("first_week:iso is the ISO-8601 week (first-Thursday), so early-Jan can roll into the prior ISO year", () => {
+    // Sat 2027-01-02 is in the week holding Jan 1 2027; ISO puts that week in 2026
+    // (a 53-week ISO year), whereas jan1 calls it 2027 W01.
+    expect(weekNumberOf("2027-01-02", { start: "monday", first_week: "iso" }, "2027-06-01")).toEqual({ year: 2026, week: 53 });
+    expect(weekNumberOf("2027-01-02", { start: "monday", first_week: "jan1" }, "2027-06-01")).toEqual({ year: 2027, week: 1 });
+  });
+
+  it("reset:none counts continuously from epoch (never rolls back to W01)", () => {
+    const cont: WeekRule = { start: "monday", reset: "none", epoch: "2026-01-01" };
+    expect(weekNumberOf("2026-01-12", cont, "2026-01-12")).toEqual({ year: 2026, week: 3 });
+    expect(weekNumberOf("2027-01-11", cont, "2027-01-11")).toEqual({ year: 2027, week: 55 });
   });
 });
 

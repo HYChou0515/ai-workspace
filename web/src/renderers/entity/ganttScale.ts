@@ -224,3 +224,118 @@ export function axisFor(minDate: string, visibleDays: number, ppd: number): Axis
   }
   return { unit: "month", fine: monthTicks(minDate, visibleDays, ppd), coarse: yearBands(minDate, visibleDays) };
 }
+
+// ── custom week numbering (非 ISO) ──────────────────────────────────────────
+// A configurable "week code" scheme (e.g. manufacturing work-weeks) driven by a
+// per-view `week:` rule, NOT hardcoded to ISO-8601. All math is UTC + pure so it
+// unit-tests cleanly; the one clock input (`today`, for the `by_today` boundary)
+// is passed in, never read here.
+
+export type Weekday = "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday";
+
+const WEEKDAY_INDEX: Record<Weekday, number> = {
+  sunday: 0,
+  monday: 1,
+  tuesday: 2,
+  wednesday: 3,
+  thursday: 4,
+  friday: 5,
+  saturday: 6,
+};
+
+/** The UTC day-of-week of a `YYYY-MM-DD` date, 0 = Sunday … 6 = Saturday. */
+function weekdayOf(date: string): number {
+  return new Date(`${date}T00:00:00Z`).getUTCDay();
+}
+
+/** The first day of the week `date` falls in, for a week that begins on `start`
+ * (default Monday). Returned as `YYYY-MM-DD`. */
+export function weekStart(date: string, start: Weekday = "monday"): string {
+  const offset = (weekdayOf(date) - WEEKDAY_INDEX[start] + 7) % 7;
+  return shiftDate(date, -offset);
+}
+
+/** How a year's first week is anchored. `jan1` = the week containing Jan 1;
+ * `iso` = the ISO-8601 week (the one holding the year's first Thursday / Jan 4);
+ * `first_full` = the first week lying wholly inside the new year. */
+export type WeekAnchor = "jan1" | "iso" | "first_full";
+
+/** What to do with the cross-year week that holds BOTH Dec 31 and Jan 1 — it can
+ * be read as the old year's last week OR the new year's W01. `new_year` anchors
+ * every year at its Jan-1 week, so that week is the new year's W01 (the old year
+ * stops the week before); `old_year` anchors every year at its first FULL week,
+ * so that week is the old year's last; `by_today` picks per crossing by comparing
+ * `today` to that Jan 1 (before → old year's last, on/after → new year's W01). */
+export type WeekBoundary = "new_year" | "old_year" | "by_today";
+
+/** A per-view week-numbering rule. Every field has a default so a bare `{}` is
+ * a valid (ISO-ish `jan1`) rule; the FE reads it verbatim off the view file. */
+export type WeekRule = {
+  start?: Weekday;
+  first_week?: WeekAnchor;
+  reset?: "yearly" | "none";
+  boundary?: WeekBoundary;
+  epoch?: string;
+  label?: string;
+};
+
+export type WeekNumber = { year: number; week: number };
+
+/** The `YYYY-MM-DD` on which year `y`'s W01 begins, per the rule + `today`. This
+ * is the ONE place the anchor / boundary / by_today logic lives; numbering is
+ * then a plain week count from here. */
+function yearW01Start(y: number, rule: WeekRule, today: string): string {
+  const start = rule.start ?? "monday";
+  const anchor = rule.first_week ?? "jan1";
+  // ISO carries its own boundary rule (the first-Thursday week), so the `jan1`
+  // boundary knobs don't apply to it.
+  if (anchor === "iso") return weekStart(`${y}-01-04`, start);
+  const jan1 = `${y}-01-01`;
+  const jan1Week = weekStart(jan1, start); // the week holding Jan 1
+  const firstFull = jan1Week === jan1 ? jan1Week : shiftDate(jan1Week, 7);
+  if (anchor === "first_full") return firstFull;
+  // anchor === "jan1": boundary decides whether the Jan-1 week is this year's
+  // W01 or belongs to the previous year (so this year opens at its first full week).
+  const boundary = rule.boundary ?? "new_year";
+  if (boundary === "old_year") return firstFull;
+  if (boundary === "by_today") return today >= jan1 ? jan1Week : firstFull;
+  return jan1Week; // new_year: the Jan-1 week is this year's W01
+}
+
+/** The (year, week) a date carries under a custom week rule. `today` only
+ * matters for `boundary: by_today` (the cross-year week); every other date is
+ * clock-independent. */
+export function weekNumberOf(date: string, rule: WeekRule, today: string): WeekNumber {
+  const start = rule.start ?? "monday";
+  const ws = weekStart(date, start);
+  if ((rule.reset ?? "yearly") === "none") {
+    const epoch = weekStart(rule.epoch ?? "1970-01-01", start);
+    return { year: ymd(date).y, week: Math.floor(daysBetween(epoch, ws) / 7) + 1 };
+  }
+  const g = ymd(date).y;
+  // The date's week belongs to the latest year whose W01 has already started.
+  for (const y of [g + 1, g, g - 1]) {
+    const anchor = yearW01Start(y, rule, today);
+    if (ws >= anchor) return { year: y, week: Math.round(daysBetween(anchor, ws) / 7) + 1 };
+  }
+  return { year: g, week: 1 }; // unreachable: ws always ≥ (g−1)'s anchor
+}
+
+/** Render a {@link WeekNumber} through a token template. Tokens: `{yyyy}` full
+ * year, `{yy}` last two year digits, `{y1}` last one, `{ww}` zero-padded week,
+ * `{w}` bare week. Defaults to `{yyyy}-W{ww}`. */
+export function formatWeekLabel(n: WeekNumber, template = "{yyyy}-W{ww}"): string {
+  const yyyy = String(n.year);
+  return template
+    .replace(/\{yyyy\}/g, yyyy)
+    .replace(/\{yy\}/g, yyyy.slice(-2))
+    .replace(/\{y1\}/g, yyyy.slice(-1))
+    .replace(/\{ww\}/g, String(n.week).padStart(2, "0"))
+    .replace(/\{w\}/g, String(n.week));
+}
+
+/** The custom week-code label a date carries — the one string the axis renders.
+ * Convenience over {@link weekNumberOf} + {@link formatWeekLabel}. */
+export function weekLabelOf(date: string, rule: WeekRule, today: string): string {
+  return formatWeekLabel(weekNumberOf(date, rule, today), rule.label);
+}
