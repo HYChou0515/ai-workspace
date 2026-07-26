@@ -376,18 +376,20 @@ Phase 4 的 DoD 提前跑了 —— 因為 **topic-hub 今天就已具備全部�
 `litellm_runner.py` 自己的註解已經寫明「the SDK LitellmModel splats extra_args as
 top-level completion kwargs」，`think=False` 就是走這條。
 
-**尚待裁決（你的旋鈕範圍決定）**：`num_ctx` 的值從哪來。`resolve_context_limit`
-的階梯是 configured > learned > catalog，但 **`learned` 在這裡是循環的** ——
-它正是「沒送 num_ctx 而被截斷」學來的 4096。建議用 **configured > catalog**，
-略過 learned。實作上還要把解析出的 limit 從 `TurnContextBuilder` 接到 `_agent_for`
-（目前算完 history budget 就丟掉），且 `catalog_limit` 有網路 I/O，必須走
-`deferred_lookup` 不能放在請求路徑上。
+**✅ 已修（`fix: tell Ollama how large a window to open`）。** 使用者裁決「預設調高、
+不另開 issue」。實作重點：
 
-> **這是平台層缺陷，不是記憶功能的缺陷** —— 它影響**每一個** Ollama turn。
-> 建議獨立開 issue，本計畫只記錄它如何污染了 §4.5 的量測。
->
-> **§4.5 的四個「失效」因此要降級**：在一個吃掉 63% prompt 的端點上，
-> 那些觀測**不足以判定**模型行為。修好 `num_ctx` 之前，Phase 2 的 DoD 跑不出有效數據。
+- 值不是新常數 —— 用 `resolve_context_limit` **本來就在解析**的那個窗口
+  （operator override → learned → registry）。原本只拿去算 history budget、算完就丟；
+  現在抽成 `TurnContextBuilder._context_window`，**同一個數字餵給兩個消費者**，
+  所以「編預算用的窗口」與「跟端點要的窗口」不可能漂開。
+- 解析不出來 ⇒ `None` ⇒ **不送**，端點保留自己的預設。此處猜一個數字，
+  正是 #624 的原始缺陷。
+- 只對 `ollama/` `ollama_chat/` 送；其他端點自己決定窗口。
+- 走 `extra_args`（頂層 kwarg），與 `think=False` 同一條路。
+
+> **§4.5 的四個「失效」仍須降級**：在一個吃掉 63% prompt 的端點上，
+> 那些觀測不足以判定模型行為。修好之後的乾淨基準見 §4.5.0b。
 
 #### 4.5.0b 修好窗口之後的乾淨基準（n=4）
 
