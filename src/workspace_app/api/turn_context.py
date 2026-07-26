@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agent.context import AgentToolContext
-from ..context_budget import catalog_limit, estimate_tokens
+from ..context_budget import ContextLimit, catalog_limit, estimate_tokens
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .turns import history_items
@@ -141,6 +141,38 @@ class TurnContextBuilder:
             profile=self._locator.profile_of(item_id),
         )
 
+    def _context_window(self, agent_config: AgentConfig | None) -> ContextLimit:
+        """This endpoint's context window, with the source that answered (#624).
+        ``.tokens is None`` when nothing could answer.
+
+        Resolved once per turn and used twice: to size the history budget, and —
+        for endpoints that open a window on request rather than from the model —
+        to tell the endpoint how much to open. Both must read the SAME number, or
+        we budget against one window and are served another, which is exactly the
+        shape of the silent truncation this resolves against.
+        """
+        from ..context_budget import deferred_lookup, resolve_context_limit
+
+        if agent_config is None:
+            return ContextLimit(tokens=None, source="unknown")
+        return resolve_context_limit(
+            configured=self._context_limit,
+            # #624: what the endpoint told us in a past rejection. Wired to the
+            # runner's learner — the adversarial review caught this as a dangling
+            # `learned=None  # P3 feeds this` comment that nothing ever fed.
+            learned=self._learned_limit(agent_config),
+            # #624 §9.12: NOT a table lookup, whatever its name says — litellm
+            # resolves an `ollama/*` name by asking the daemon, untimed (measured
+            # 129,781 ms against an address that does not answer). This runs on
+            # every turn, inside `async def build_chat_turn`, so it is deferred
+            # off the loop like the probe.
+            catalog=deferred_lookup(
+                self._catalog_cache,
+                agent_config.model,
+                lambda: self._catalog_fn(agent_config.model),
+            ),
+        )
+
     def _learned_limit(self, agent_config: AgentConfig) -> int | None:
         """What the endpoint stated in a past rejection, via the runner's
         learner. None when nothing has been learned (or no runner is wired —
@@ -188,32 +220,11 @@ class TurnContextBuilder:
         a turn needs the same figure twice — for this budget and for the ctx field
         the truncation check reads.
         """
-        from ..context_budget import (
-            deferred_lookup,
-            estimate_tokens,
-            history_budget,
-            resolve_context_limit,
-        )
+        from ..context_budget import estimate_tokens, history_budget
 
         if agent_config is None:
             return None
-        limit = resolve_context_limit(
-            configured=self._context_limit,
-            # #624: what the endpoint told us in a past rejection. Wired to the
-            # runner's learner — the adversarial review caught this as a dangling
-            # `learned=None  # P3 feeds this` comment that nothing ever fed.
-            learned=self._learned_limit(agent_config),
-            # #624 §9.12: NOT a table lookup, whatever its name says — litellm
-            # resolves an `ollama/*` name by asking the daemon, untimed (measured
-            # 129,781 ms against an address that does not answer). This runs on
-            # every turn, inside `async def build_chat_turn`, so it is deferred
-            # off the loop like the probe.
-            catalog=deferred_lookup(
-                self._catalog_cache,
-                agent_config.model,
-                lambda: self._catalog_fn(agent_config.model),
-            ),
-        )
+        limit = self._context_window(agent_config)
         overhead = overhead_tokens
         if overhead is None:
             overhead = estimate_tokens(agent_config.system_prompt or "")
@@ -281,6 +292,10 @@ class TurnContextBuilder:
         # the history budget, and as the ctx field the silent-truncation check
         # compares against.
         overhead = self._overhead_for(agent_config, item_id)
+        # #624: the same window the history budget below is derived from, carried
+        # on the ctx so the runner can tell the endpoint to OPEN that much rather
+        # than serve its own default and truncate the difference away in silence.
+        window = self._context_window(agent_config)
         history = history_items(
             history_messages,
             max_messages=self._history_max_messages,
@@ -327,6 +342,7 @@ class TurnContextBuilder:
             history_trimmed=cut[0] if cut else 0,
             history_reduced_note=said[0] if said else "",
             context_overhead_tokens=overhead,
+            context_window=window.tokens,
             packages=self._packages or [],
             prebuilt_dir=self._prebuilt_dir,
             app_slug=self._locator.slug_of(item_id),

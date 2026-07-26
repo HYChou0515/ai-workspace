@@ -7,9 +7,11 @@ means and embed badly; fixed-token windows shred rows and orphan the
 header. Each row-Document is small enough that the downstream
 SentenceSplitter keeps it intact (one row = one chunk in practice).
 
-- ``CsvParser`` wraps LlamaIndex's ``PagedCSVReader`` (which produces
-  exactly this shape); ``.tsv`` rides the same reader via
-  ``delimiter="\\t"``.
+- ``CsvParser`` walks the rows itself with the stdlib ``csv`` module;
+  ``.tsv`` rides the same code with ``delimiter="\\t"``. It used to wrap
+  LlamaIndex's ``PagedCSVReader``, which produces this shape but dies on
+  any row whose field count differs from the header (#646) — see
+  ``CsvParser._rows``.
 - ``ExcelParser`` renders the same paged shape itself via pandas
   (openpyxl engine) — there is no PagedExcelReader, and the stock
   ``PandasExcelReader`` drops the header row (the anti-pattern above).
@@ -40,13 +42,46 @@ class CsvParser(IParser):
         return mime in _CSV_MIMES or filename.lower().endswith((".csv", ".tsv"))
 
     def _rows(self, source: IParserInput, *, filename: str, mime: str) -> list[Document]:
-        from llama_index.readers.file import PagedCSVReader
+        """One Document per data row, ``column: value`` lines.
+
+        Walks the rows here instead of through ``PagedCSVReader`` (#646). That
+        reader formats every cell as ``f"{k.strip()}: {v.strip()}"`` over
+        ``csv.DictReader``, whose two padding behaviours both produce something
+        that is not a ``str``: a SHORT row fills missing columns with ``restval``
+        (``None``), and a LONG row parks the extras under the ``None`` key as a
+        list. Either one raised ``AttributeError: 'NoneType' object has no
+        attribute 'strip'`` — which ``ingest`` then surfaced verbatim on the doc
+        row — and it aborted the WHOLE file, so one truncated line cost the other
+        thousands of rows their index. Ragged CSVs are ordinary: a cut-short
+        export, a hand-edited file, a trailing partial line.
+
+        So: a short row's missing columns read blank, and a long row's extra
+        fields are kept and named by position, because they are data the file
+        really contains.
+        """
+        import csv
+
+        from llama_index.core.schema import Document
 
         delimiter = "\t" if filename.lower().endswith(".tsv") else ","
-        docs = PagedCSVReader().load_data(file=source.as_path(), delimiter=delimiter)
-        for d in docs:
-            d.metadata.setdefault("filename", filename)
-            d.metadata.setdefault("mime", mime)
+        docs: list[Document] = []
+        with open(source.as_path(), newline="", encoding="utf-8", errors="replace") as fh:
+            reader = csv.reader(fh, delimiter=delimiter)
+            header = next(reader, None)
+            if header is None:  # an empty file has no rows to index
+                return docs
+            names = [name.strip() for name in header]
+            for row in reader:
+                if not row:  # a blank line is not a row (DictReader skipped these too)
+                    continue
+                lines = [
+                    f"{name}: {(row[i] if i < len(row) else '').strip()}"
+                    for i, name in enumerate(names)
+                ]
+                lines += [f"column {i + 1}: {row[i].strip()}" for i in range(len(names), len(row))]
+                docs.append(
+                    Document(text="\n".join(lines), metadata={"filename": filename, "mime": mime})
+                )
         return docs
 
     def count_units(self, source: IParserInput, *, filename: str, mime: str) -> int:
