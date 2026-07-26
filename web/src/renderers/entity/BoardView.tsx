@@ -27,6 +27,7 @@ import { handleDragEnd, partitionColumns, UNSET_COL } from "./boardOps";
 import { EntityFileEditor } from "./EntityFileEditor";
 import { refOptionsForField, type RefOption } from "./refTraversal";
 import { selectColor } from "./selectColor";
+import { sortRows } from "./sortRows";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
 import { SelectChip } from "./TableView";
@@ -47,11 +48,19 @@ export function BoardView({ spec, type, entities, users, canWrite, refIndex, onP
     useSensor(KeyboardSensor),
   );
 
+  // Each column's cards follow the view's multi-level `spec.sort`, or — with none —
+  // the manual `rank` order (drag position), same ordering the Table uses (#GH-projects).
   const cardsIn = (value: string | null) =>
-    entities.filter((e) => {
-      const v = fieldText(e.fields[groupField]);
-      return value === null ? v === "" : v === value;
-    });
+    sortRows(
+      entities.filter((e) => {
+        const v = fieldText(e.fields[groupField]);
+        return value === null ? v === "" : v === value;
+      }),
+      spec.sort,
+      type,
+      refIndex,
+      users,
+    );
 
   const refOptionsFor = (name: string) => refOptionsForField(type, refIndex, name);
 

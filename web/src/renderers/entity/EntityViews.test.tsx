@@ -149,6 +149,35 @@ describe("TableView", () => {
     expect(screen.getByRole("columnheader", { name: "title" })).toBeInTheDocument();
   });
 
+  it("orders rows by the view's multi-level sort (#GH-projects P2)", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"], sort: [{ field: "status", dir: "asc" }] };
+    render(
+      <EntityViewBody
+        spec={spec}
+        type={issueType}
+        entities={[issue(1, { title: "C", status: "done" }), issue(2, { title: "A", status: "open" }), issue(3, { title: "B", status: "in_progress" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    // status vocab order open < in_progress < done → A, B, C
+    expect(screen.getAllByLabelText("edit title").map((el) => el.textContent)).toEqual(["A", "B", "C"]);
+  });
+
+  it("orders rows by the manual rank when the view has no sort (#GH-projects P2)", () => {
+    const typeWithRank: EntityType = { ...issueType, fields: [...issueType.fields, { name: "rank", role: "rank" }] };
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["title"] }}
+        type={typeWithRank}
+        entities={[issue(1, { title: "C", rank: 3 }), issue(2, { title: "A", rank: 1 }), issue(3, { title: "B", rank: 2 })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByLabelText("edit title").map((el) => el.textContent)).toEqual(["A", "B", "C"]);
+  });
+
   it("shows a value cell as text at rest and reveals the editor only on click (#3)", () => {
     render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "A", status: "open" })]} onCreate={vi.fn()} onPatch={vi.fn()} />);
     // no always-on native select at rest — just the value as text.

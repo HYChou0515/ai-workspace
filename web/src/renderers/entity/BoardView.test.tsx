@@ -78,6 +78,38 @@ describe("BoardView (#451)", () => {
     expect(screen.getByLabelText("status")).toBeInTheDocument();
   });
 
+  it("orders cards within a column by the manual rank (#GH-projects P2)", () => {
+    board({
+      entities: [
+        issue(1, { title: "C", status: "open", rank: 3 }),
+        issue(2, { title: "A", status: "open", rank: 1 }),
+        issue(3, { title: "B", status: "open", rank: 2 }),
+      ],
+    });
+    // one 'open' column → its cards follow rank 1,2,3 = #2, #3, #1
+    expect(screen.getAllByTestId(/^card-\d+$/).map((c) => c.getAttribute("data-testid"))).toEqual([
+      "card-2",
+      "card-3",
+      "card-1",
+    ]);
+  });
+
+  it("orders cards within a column by the view's sort (#GH-projects P2)", () => {
+    board({
+      spec: { ...boardSpec, sort: [{ field: "title", dir: "asc" }] },
+      entities: [
+        issue(1, { title: "C", status: "open" }),
+        issue(2, { title: "A", status: "open" }),
+        issue(3, { title: "B", status: "open" }),
+      ],
+    });
+    expect(screen.getAllByTestId(/^card-\d+$/).map((c) => c.getAttribute("data-testid"))).toEqual([
+      "card-2",
+      "card-3",
+      "card-1",
+    ]);
+  });
+
   it("shows an out-of-vocab status in its own degraded column, card still visible (§D)", () => {
     board({ entities: [issue(1, { title: "A", status: "weird" })] });
     expect(screen.getByTestId("col-weird")).toBeInTheDocument();

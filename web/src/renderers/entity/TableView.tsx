@@ -15,6 +15,7 @@ import { refOptions, type RefIndex, type RefOption, traverseColumn } from "./ref
 import { RoleField, widgetForRole } from "./roleWidget";
 import { selectColor } from "./selectColor";
 import { fieldText, roleOf } from "./shared";
+import { sortRows } from "./sortRows";
 import { filterEntities, sortEntities, type SortDir } from "./tableOps";
 import type { EntityViewProps, ViewSpec } from "./types";
 
@@ -41,7 +42,11 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
 
   const columns = allColumns.filter((c) => !hidden.has(c));
   const filtered = filterEntities(entities, filters, type ?? null, refIndex);
-  const rows = sort ? sortEntities(filtered, sort.column, sort.dir, type ?? null, refIndex) : filtered;
+  // A live header-click sort (single column) overrides; otherwise the view's own
+  // multi-level `spec.sort`, or — with neither — the manual `rank` order (#GH-projects).
+  const rows = sort
+    ? sortEntities(filtered, sort.column, sort.dir, type ?? null, refIndex)
+    : sortRows(filtered, spec.sort, type ?? null, refIndex, users);
 
   // click a header: none → asc → desc → none
   const cycleSort = (c: string) =>
