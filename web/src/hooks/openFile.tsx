@@ -23,3 +23,26 @@ export function OpenFileProvider({ value, children }: { value: OpenFile; childre
 export function useOpenFile(): OpenFile | null {
   return useContext(OpenFileContext);
 }
+
+// Whether that opener leads anywhere the user can SEE. Collapsing the workspace
+// unmounts it, so `openFile` still succeeds while the pane is folded — the tab is
+// opened, just off screen, which reads as the click doing nothing. A caller that
+// can be reached while folded (the chat's shown-file card) checks this and offers
+// the file another way instead.
+const WorkspaceVisibleContext = createContext(false);
+
+export function WorkspaceVisibleProvider({
+  value,
+  children,
+}: {
+  value: boolean;
+  children: ReactNode;
+}) {
+  return <WorkspaceVisibleContext.Provider value={value}>{children}</WorkspaceVisibleContext.Provider>;
+}
+
+/** True when the workspace's file pane is on screen. `false` by default: a
+ * surface that never published it has no pane to open into. */
+export function useWorkspaceVisible(): boolean {
+  return useContext(WorkspaceVisibleContext);
+}

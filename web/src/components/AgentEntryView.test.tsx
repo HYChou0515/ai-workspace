@@ -36,6 +36,9 @@ vi.mock("./Icon", () => ({
 
 afterEach(cleanup);
 
+// Mirrors `realApi.fileContentUrl`: takes either path dialect, emits one slash.
+const fakeFileUrl = (p: string) => `/api/files/${p.replace(/^\/+/, "")}`;
+
 describe("EntryView — ask_knowledge_base tool card citations", () => {
   it("renders citation cards under an ask_knowledge_base tool call (RCA reload path)", () => {
     // The persisted RCA tool message (BE attaches citations) hydrates into a
@@ -611,16 +614,26 @@ describe("EntryView — clickable inline [n] in an ask_knowledge_base tool card 
   });
 });
 
+// #285's inline charts, now driven by the backend's declaration rather than a FE
+// regex over the tool's output text. Same outcome for the user; the signal is the
+// part that changed, and it is the reason the chart no longer appears for a path
+// the tool merely mentioned.
 describe("EntryView — inline chart images (#285)", () => {
-  const chartCall = (output: string, status: "done" | "running" = "done") => ({
+  const chartCall = (output: string | undefined, status: "done" | "running" = "done") => ({
     kind: "tool_call" as const,
     call: { call_id: "c1", name: "chart", args: { chart: "box_scatter" }, status, output },
   });
-  const body = 'Tool `chart` returned (exit_code=0):\n{\n  "images": [\n    "charts/box_scatter_1.png"\n  ]\n}';
+  const body =
+    'Tool `chart` returned (exit_code=0):\n{"images": ["charts/box_scatter_1.png"]}\n[shown-files]' +
+    JSON.stringify({
+      shown_files: [
+        { path: "/charts/box_scatter_1.png", mime: "image/png", size: 4096 },
+      ],
+    });
 
   it("renders the chart inline via fileUrl when the tool finished", () => {
     const { container } = render(
-      <EntryView entry={chartCall(body)} fileUrl={(p) => `/files/${p}`} />,
+      <EntryView entry={chartCall(body)} fileUrl={(p) => `/files${p}`} />,
     );
     const img = container.querySelector("img");
     expect(img?.getAttribute("src")).toBe("/files/charts/box_scatter_1.png");
@@ -637,8 +650,21 @@ describe("EntryView — inline chart images (#285)", () => {
   });
 
   it("renders no image while the tool is still streaming", () => {
+    // Nothing is declared until the result is complete.
     const { container } = render(
-      <EntryView entry={chartCall(body, "running")} fileUrl={(p) => `/files/${p}`} />,
+      <EntryView entry={chartCall(undefined, "running")} fileUrl={(p) => `/files${p}`} />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("renders no image for a path the tool only mentioned", () => {
+    // The old regex fired on this. Charts appear because the backend declared a
+    // file it could see, not because output text looked like a path.
+    const { container } = render(
+      <EntryView
+        entry={chartCall('Tool `chart` returned (exit_code=0):\n{"images": ["charts/gone.png"]}')}
+        fileUrl={(p) => `/files${p}`}
+      />,
     );
     expect(container.querySelector("img")).toBeNull();
   });
@@ -747,5 +773,161 @@ describe("EntryView — message authorship uses the directory (#583)", () => {
     );
     expect(screen.getByText("Analyst")).toBeInTheDocument();
     expect(document.querySelector('[data-avatar="Analyst"]')).toBeNull();
+  });
+});
+
+// A `show_file` call is not a result to inspect, it is a file to look at — so it
+// renders as the file itself, outside the `<details>` every other tool result
+// sits behind. A collapsed chart is the same failure as a path in prose.
+describe("EntryView — show_file (files the agent showed)", () => {
+  const call = (output: string) => ({
+    kind: "tool_call" as const,
+    call: {
+      call_id: "c1",
+      name: "show_file",
+      status: "done" as const,
+      args: { path: "out/revenue.png" },
+      output,
+    },
+  });
+  const declared =
+    "out/revenue.png is now displayed in the chat.\n[shown-files]" +
+    JSON.stringify({ shown_files: [{ path: "/out/revenue.png", mime: "image/png", size: 145066 }] });
+
+  it("shows the declared file instead of a collapsed tool card", () => {
+    render(<EntryView entry={call(declared)} fileUrl={fakeFileUrl} />);
+    expect(screen.getByTestId("shown-files")).toBeInTheDocument();
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/api/files/out/revenue.png");
+    expect(document.querySelector("details")).toBeNull();
+  });
+
+  it("falls back to the ordinary tool card when the call declared nothing", () => {
+    // `show_file` on a path that does not resolve returns an error and declares
+    // nothing. That has to stay visible in the log, so it renders as any other
+    // failed tool call rather than vanishing.
+    render(<EntryView entry={call("error: file not found: out/gone.png")} />);
+    expect(screen.queryByTestId("shown-files")).not.toBeInTheDocument();
+    expect(document.querySelector("details")).not.toBeNull();
+    expect(screen.getByText(/file not found/)).toBeInTheDocument();
+  });
+
+  it("falls back to the ordinary tool card while the call is still running", () => {
+    render(
+      <EntryView
+        entry={{ ...call(""), call: { ...call("").call, status: "running", output: undefined } }}
+      />,
+    );
+    expect(screen.queryByTestId("shown-files")).not.toBeInTheDocument();
+  });
+});
+
+// Any tool may declare files, not just `show_file` — a plotting tool's charts
+// render the same way. This is what replaced the FE regex that used to scan every
+// tool's output text for a `"images": [...]`-shaped array.
+describe("EntryView — files declared by an ordinary tool", () => {
+  it("renders the charts a plotting tool declared, outside its tool card", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "tool_call",
+          call: {
+            call_id: "c2",
+            name: "line-chart",
+            status: "done",
+            args: { csv: "data.csv" },
+            output:
+              'Tool `line-chart` returned (exit_code=0):\n{"images": ["out/a.png"]}\n[shown-files]' +
+              JSON.stringify({
+                shown_files: [{ path: "/out/a.png", mime: "image/png", size: 99 }],
+              }),
+          },
+        }}
+        fileUrl={fakeFileUrl}
+      />,
+    );
+    // The tool card stays — its stdout is still worth reading — and the chart is
+    // NOT inside it.
+    const details = document.querySelector("details");
+    expect(details).not.toBeNull();
+    expect(screen.getByRole("img")).toHaveAttribute("src", "/api/files/out/a.png");
+    expect(within(details as HTMLElement).queryByRole("img")).toBeNull();
+  });
+
+  it("keeps the declaration out of the tool card body", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "tool_call",
+          call: {
+            call_id: "c3",
+            name: "line-chart",
+            status: "done",
+            args: {},
+            output:
+              "chart written\n[shown-files]" +
+              JSON.stringify({
+                shown_files: [{ path: "/out/a.png", mime: "image/png", size: 99 }],
+              }),
+          },
+        }}
+        fileUrl={fakeFileUrl}
+      />,
+    );
+    expect(screen.getByText("chart written")).toBeInTheDocument();
+    expect(screen.queryByText(/shown-files/)).not.toBeInTheDocument();
+  });
+});
+
+// A real turn showed the model doing BOTH: calling `show_file` and writing
+// `![chart](out/sine.png)` into its answer. The answer's markdown had no path
+// resolution, so the second one rendered as a broken image with a 404 next to
+// the chart that had loaded fine.
+describe("EntryView — workspace paths in an assistant answer", () => {
+  const answer = (content: string) => ({
+    kind: "message" as const,
+    message: { role: "assistant" as const, content, author: "Agent" },
+  });
+
+  it("resolves a workspace-relative image against the file route", () => {
+    render(
+      <EntryView entry={answer("Here:\n\n![chart](out/sine.png)")} fileUrl={fakeFileUrl} />,
+    );
+    expect(screen.getByRole("img", { name: "chart" })).toHaveAttribute(
+      "src",
+      "/api/files/out/sine.png",
+    );
+  });
+
+  it("resolves a workspace-relative link too", () => {
+    render(
+      <EntryView
+        entry={answer("see [the report](out/report.pdf)")}
+        fileUrl={fakeFileUrl}
+      />,
+    );
+    expect(screen.getByRole("link", { name: "the report" })).toHaveAttribute(
+      "href",
+      "/api/files/out/report.pdf",
+    );
+  });
+
+  it("leaves an external image alone", () => {
+    render(
+      <EntryView
+        entry={answer("![logo](https://example.com/logo.png)")}
+        fileUrl={fakeFileUrl}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "logo" })).toHaveAttribute(
+      "src",
+      "https://example.com/logo.png",
+    );
+  });
+
+  it("renders no image at all on a surface with no workspace", () => {
+    // KB chat has no `fileUrl`: a workspace path means nothing there, and a
+    // broken image is worse than none.
+    render(<EntryView entry={answer("![chart](out/sine.png)")} />);
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
   });
 });

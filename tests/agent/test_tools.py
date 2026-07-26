@@ -351,9 +351,23 @@ def test_build_tools_returns_the_workspace_set_by_default():
         "mention_user",
         "lookup_user",
         "update_todos",  # #613
+        "show_file",
     }
     assert "kb_search" not in names
     assert all(isinstance(t, FunctionTool) for t in tools)
+
+
+def test_show_file_needs_no_opting_in():
+    """`show_file` is part of the DEFAULT workspace set, not an opt-in extra.
+
+    Every bundled workspace preset stores `allowed_tools: null` and resolves that
+    default set, so a tool left out of it never reaches them no matter what the
+    app.json ceiling says (#613's live-probe regression). Being able to put a file
+    in front of the user is not a per-conversation nicety — an ability the user has
+    to remember to enable is, in practice, an ability they do not have. This is
+    also why it is a tool and not a skill: skills are per-message opt-in.
+    """
+    assert "show_file" in {t.name for t in build_tools()}
 
 
 def test_build_tools_filters_by_allowed_list():

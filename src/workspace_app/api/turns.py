@@ -737,6 +737,15 @@ class ChatTurnEngine:
         (and broadcast) and the (partial) result is always persisted."""
         reducer = _TurnReducer()
         try:
+            # Warm the sandbox as the turn begins (best-effort) so its cold-start
+            # overlaps the model's first response, instead of stalling when the
+            # agent first calls exec. Opening/viewing a chat never drives a turn,
+            # so a sandbox is only spun up once the user actually sends a message.
+            # A KB turn carries no sandbox (ensure_sandbox_via is None) → skipped;
+            # a warm failure must never fail the turn (exec would still wake it).
+            if ctx.ensure_sandbox_via is not None:
+                with contextlib.suppress(Exception):
+                    await ctx.ensure_sandbox()
             async for ev in self._events(content, ctx):
                 reducer.add(ev)
                 publish(ev)

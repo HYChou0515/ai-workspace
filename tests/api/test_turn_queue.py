@@ -286,6 +286,54 @@ async def test_busy_failure_is_detected_even_when_wrapped_by_the_runner():
     assert errs and "busy" in errs[-1].content.lower()
 
 
+async def test_app_turn_warms_the_sandbox_at_turn_start():
+    """An app/workspace turn proactively warms the sandbox as the turn begins, so
+    the cold-start overlaps the model's first response instead of stalling when
+    the agent first calls exec. (Opening/viewing a chat never drives a turn, so a
+    sandbox is only ever spun up when the user actually sends a message.)"""
+    warmed: list[object] = []
+
+    async def fake_warm(_on_progress):
+        handle = object()
+        warmed.append(handle)
+        return handle
+
+    class _Runner:
+        async def run(self, content, ctx):
+            yield MessageDelta(text="hi")
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+    done = asyncio.Event()
+    # An app ctx carries a sandbox + the registry wake-hook (ensure_sandbox_via).
+    ctx = AgentToolContext(sandbox=object(), ensure_sandbox_via=fake_warm)  # ty: ignore[invalid-argument-type]
+    engine.enqueue("inv", "q", ctx, on_complete=lambda m: done.set())
+    await asyncio.wait_for(done.wait(), 3)
+    await engine.forget("inv")
+    assert warmed, "the sandbox should be warmed once at turn start"
+
+
+async def test_kb_turn_does_not_warm_a_sandbox():
+    """A KB-chat turn carries no sandbox (ensure_sandbox_via is None), so the
+    turn-start warm is skipped entirely — a KB question never spins one up."""
+    from unittest.mock import AsyncMock, patch
+
+    class _Runner:
+        async def run(self, content, ctx):
+            yield MessageDelta(text="hi")
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+    done = asyncio.Event()
+    ctx = AgentToolContext()  # KB-style: no sandbox, ensure_sandbox_via is None
+    warm = AsyncMock()
+    with patch.object(ctx, "ensure_sandbox", warm):
+        engine.enqueue("inv", "q", ctx, on_complete=lambda m: done.set())
+        await asyncio.wait_for(done.wait(), 3)
+        await engine.forget("inv")
+    assert warm.await_count == 0, "a KB turn must never warm a sandbox"
+
+
 async def test_cancel_current_when_idle_is_a_noop():
     """Stop after a turn already finished (session exists, nothing in flight) is
     a clean no-op."""

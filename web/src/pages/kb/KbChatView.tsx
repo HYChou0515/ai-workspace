@@ -49,27 +49,30 @@ export function KbChatView({
   const me = useCurrentUser();
   const isSuperuser = useIsSuperuser();
   const pinned = usePersistentSet("kb:pinned-chats");
-  // Freeze the thread id at mount: when a fresh thread gets its real id mid-turn
-  // the parent updates the chatId prop, but we must NOT swap threads under the
-  // running stream. The parent remounts (via key) for genuine thread switches.
+  // Freeze the thread id at mount for the CHAT CORE only: when a fresh thread
+  // gets its real id mid-turn the parent updates the chatId prop, and swapping
+  // the panel's thread would abort the stream and blank the log. The parent
+  // remounts (via key) for genuine thread switches.
   const [mountChatId] = useState(chatId);
-
+  // The HEADER, by contrast, follows the LIVE id: once a brand-new thread exists
+  // its title, meta and actions belong to it, and freezing them left a started
+  // conversation stuck on "New chat" with no pin / share / export at all.
   const { data: chat } = useQuery({
-    queryKey: qk.kb.chat(mountChatId ?? "__new__"),
-    queryFn: () => client.getChat(mountChatId as string),
-    enabled: mountChatId != null,
+    queryKey: qk.kb.chat(chatId ?? "__new__"),
+    queryFn: () => client.getChat(chatId as string),
+    enabled: chatId != null,
   });
   // #357: label an unnamed thread by its first user message (name_hint) instead
   // of a generic "Chat", matching the list. A not-yet-created chat stays "New chat".
-  const title = mountChatId == null ? "New chat" : chat?.title || chat?.name_hint || "Chat";
+  const title = chatId == null ? "New chat" : chat?.title || chat?.name_hint || "Chat";
 
   const shareMut = useMutation({
     mutationFn: (v: { userId: string; on: boolean }) =>
       v.on
-        ? client.shareChat(mountChatId as string, [v.userId])
-        : client.unshareChat(mountChatId as string, v.userId),
+        ? client.shareChat(chatId as string, [v.userId])
+        : client.unshareChat(chatId as string, v.userId),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: qk.kb.chat(mountChatId ?? "__new__") });
+      void qc.invalidateQueries({ queryKey: qk.kb.chat(chatId ?? "__new__") });
       void qc.invalidateQueries({ queryKey: qk.kb.chats });
     },
   });
@@ -80,7 +83,7 @@ export function KbChatView({
   // Share mirrors the backend change_permission gate: owner OR superuser.
   const canShare = chat != null && canManageAccess(chat.owner, me, isSuperuser);
   const sharedWith = chat?.shared_with ?? [];
-  const isPinned = mountChatId != null && pinned.has(mountChatId);
+  const isPinned = chatId != null && pinned.has(chatId);
   const msgs = chat?.messages.length ?? 0;
   const lastAt = chat?.messages.reduce((m, x) => Math.max(m, x.created_at ?? 0), 0) ?? 0;
 
@@ -157,7 +160,7 @@ export function KbChatView({
               className={`kb-btn kb-btn--sm${isPinned ? " kb-btn--on" : ""}`}
               aria-pressed={isPinned}
               aria-label={isPinned ? "Unpin conversation" : "Pin conversation"}
-              onClick={() => pinned.toggle(mountChatId as string)}
+              onClick={() => pinned.toggle(chatId as string)}
             >
               <Icon name="pin" size={13} /> {isPinned ? "Pinned" : "Pin"}
             </button>

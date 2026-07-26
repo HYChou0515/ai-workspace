@@ -2,7 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
@@ -18,6 +18,23 @@ function LocationProbe() {
   return <div data-testid="loc">{loc.pathname + loc.search}</div>;
 }
 
+/** Stands in for the browser's Back button (MemoryRouter has no window.history). */
+function BackProbe() {
+  const navigate = useNavigate();
+  return (
+    <button type="button" data-testid="go-back" onClick={() => navigate(-1)}>
+      go back
+    </button>
+  );
+}
+
+/** Run one full turn against the mock so a thread has a message to identify it. */
+async function seedTurn(chatId: string, content: string) {
+  for await (const _ of mockKbApi.streamMessage({ chatId, content })) {
+    /* drain the stream — the mock persists the turn as it goes */
+  }
+}
+
 /** Mount the whole KB route subtree (the App's single source of truth for KB
  * routes) at `path`, wired with the in-memory mock client. */
 function renderAt(path: string) {
@@ -25,6 +42,7 @@ function renderAt(path: string) {
     <MemoryRouter initialEntries={[path]}>
       <Routes>{kbRoutes(mockKbApi)}</Routes>
       <LocationProbe />
+      <BackProbe />
     </MemoryRouter>,
   );
 }
@@ -138,6 +156,23 @@ describe("KB routes", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /msgs/ })).toBeInTheDocument());
   });
 
+  it("gives a brand-new thread its header the moment it exists", async () => {
+    await mockKbApi.createCollection("kb");
+    renderAt("/kb/chats/new");
+    await userEvent.type(
+      await screen.findByPlaceholderText("Ask the knowledge base…"),
+      "why did zone three drift?",
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^send$/i }));
+
+    // The thread exists now, so its header is a thread's header: the per-thread
+    // actions and the message count, not the composer's blank chrome.
+    // (The mount stays frozen so the stream survives; only the header follows.)
+    expect(await screen.findByRole("button", { name: /^export$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^pin conversation$/i })).toBeInTheDocument();
+    expect(screen.getByText(/^\d+ messages?$/)).toBeInTheDocument();
+  });
+
   it("deep-links straight to an existing conversation", async () => {
     const chat = await mockKbApi.createChat("Reflow thread", []);
     renderAt(`/kb/chats/${encodeURIComponent(chat.resource_id)}`);
@@ -154,6 +189,42 @@ describe("KB routes", () => {
     expect(screen.getByTestId("loc")).toHaveTextContent(
       `/kb/chats/${encodeURIComponent(chat.resource_id)}`,
     );
+  });
+
+  it("shows the conversation you clicked — one click, not two", async () => {
+    const alpha = await mockKbApi.createChat("Alpha thread", []);
+    const bravo = await mockKbApi.createChat("Bravo thread", []);
+    await seedTurn(alpha.resource_id, "alpha question");
+    await seedTurn(bravo.resource_id, "bravo question");
+
+    renderAt("/kb/chats");
+    await userEvent.click(await screen.findByRole("button", { name: /^Bravo thread/ }));
+    expect(await screen.findByText("bravo question")).toBeInTheDocument();
+
+    // Switching threads must swap the BODY, not just the URL: the view is keyed
+    // on the opened thread, so one click lands on Alpha instead of leaving Bravo
+    // on screen until you click a second time.
+    await userEvent.click(screen.getByRole("button", { name: /^Alpha thread/ }));
+    expect(await screen.findByText("alpha question")).toBeInTheDocument();
+    expect(screen.queryByText("bravo question")).not.toBeInTheDocument();
+  });
+
+  it("follows browser back to the conversation it came from", async () => {
+    const alpha = await mockKbApi.createChat("Alpha thread", []);
+    const bravo = await mockKbApi.createChat("Bravo thread", []);
+    await seedTurn(alpha.resource_id, "alpha question");
+    await seedTurn(bravo.resource_id, "bravo question");
+
+    renderAt("/kb/chats");
+    await userEvent.click(await screen.findByRole("button", { name: /^Alpha thread/ }));
+    expect(await screen.findByText("alpha question")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^Bravo thread/ }));
+    expect(await screen.findByText("bravo question")).toBeInTheDocument();
+
+    // The URL is the open thread, so history navigation moves threads too.
+    await userEvent.click(screen.getByTestId("go-back"));
+    expect(await screen.findByText("alpha question")).toBeInTheDocument();
+    expect(screen.queryByText("bravo question")).not.toBeInTheDocument();
   });
 
   // ---- P7: the citation / doc overlay rides a ?doc= search param ----

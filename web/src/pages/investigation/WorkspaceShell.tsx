@@ -29,12 +29,13 @@ import { AccessChip } from "../../components/AccessChip";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { ItemChatShell } from "../../components/ItemChatShell";
 import { ItemAccessDialog, ItemMembersPanel } from "../../components/ItemMembersPanel";
+import { ShareChatDialog } from "../../components/ShareChatDialog";
 import { resolveUploadDir } from "./attach";
 import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
-import { OpenFileProvider } from "../../hooks/openFile";
+import { OpenFileProvider, WorkspaceVisibleProvider } from "../../hooks/openFile";
 import {
   FileBufferProvider,
   FileBufferStore,
@@ -55,7 +56,6 @@ import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
 import { useIsNarrow } from "../../hooks/useMediaQuery";
-import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
@@ -116,6 +116,8 @@ export function WorkspaceShell({
   manifest,
   files,
   dirs = [],
+  ideCollapsed,
+  onIdeCollapsedChange,
   onFilesChanged,
   onInvestigationChanged,
 }: {
@@ -123,6 +125,10 @@ export function WorkspaceShell({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
+  // Optionally controlled: AppWorkspace lifts the IDE-collapse state so file
+  // loading can follow it. Omitted ⇒ the shell owns its own persisted state.
+  ideCollapsed?: boolean;
+  onIdeCollapsedChange?: (b: boolean | ((prev: boolean) => boolean)) => void;
   onFilesChanged?: () => void;
   onInvestigationChanged?: () => void;
 }) {
@@ -150,6 +156,8 @@ export function WorkspaceShell({
                 manifest={manifest}
                 files={files}
                 dirs={dirs}
+                ideCollapsed={ideCollapsed}
+                onIdeCollapsedChange={onIdeCollapsedChange}
                 onFilesChanged={onFilesChanged}
                 onInvestigationChanged={onInvestigationChanged}
                 bufferStore={bufferStore}
@@ -168,6 +176,8 @@ function ShellBody({
   manifest,
   files,
   dirs = [],
+  ideCollapsed: propIdeCollapsed,
+  onIdeCollapsedChange: propOnIdeCollapsedChange,
   onFilesChanged,
   onInvestigationChanged,
   bufferStore,
@@ -176,6 +186,8 @@ function ShellBody({
   manifest: AppManifest;
   files: FileInfo[];
   dirs?: string[];
+  ideCollapsed?: boolean;
+  onIdeCollapsedChange?: (b: boolean | ((prev: boolean) => boolean)) => void;
   onFilesChanged?: () => void;
   onInvestigationChanged?: () => void;
   bufferStore: FileBufferStore;
@@ -247,10 +259,16 @@ function ShellBody({
   // The first-time default comes from the App's `layout.primary_surface`
   // (chat-first Apps open collapsed; RCA's ide-first opens the workspace), then
   // the user's choice persists per-App so it survives reloads.
-  const [ideCollapsed, setIdeCollapsed] = usePersistentBoolean(
-    `layout:ide-collapsed:${manifest.slug}`,
+  // #chat-private: NOT persisted — a new tab opens with the workspace tucked
+  // (manifest default), not whatever the last session left expanded.
+  const [ideCollapsedInternal, setIdeCollapsedInternal] = useState<boolean>(
     initialIdeCollapsed(manifest),
   );
+  // Controlled by AppWorkspace (which lifts this so file loading follows the IDE
+  // being open); falls back to the internal persisted state when standalone.
+  // Nullish (not `||`) so an explicit `false` from the parent is honoured.
+  const ideCollapsed = propIdeCollapsed ?? ideCollapsedInternal;
+  const setIdeCollapsed = propOnIdeCollapsedChange ?? setIdeCollapsedInternal;
   // Cap the chat width so the editor always keeps a usable minimum. The chat is
   // fixed-width (flexShrink:0), so an over-wide agentW would otherwise squeeze
   // the editor into a broken sliver (the #108 regression). Dragging stops at
@@ -286,7 +304,10 @@ function ShellBody({
     10,
   );
 
-  // Sidebar / palette open into the active editor group.
+  // Sidebar / palette open into the active editor group. Deliberately does NOT
+  // unfold the workspace: folding is the user's choice, and a caller that can be
+  // reached while folded checks `workspaceVisible` and offers the file another
+  // way instead (the chat's shown-file card becomes a new-tab link).
   const openFile = useCallback<OpenFileFn>(
     (path, opts) => {
       groups.openInActive(path, opts);
@@ -294,6 +315,9 @@ function ShellBody({
     },
     [groups, recentFiles],
   );
+  // Is the file pane actually on screen? Same condition the IDE column renders
+  // under — anything else would have the chat believe in a pane that isn't there.
+  const workspaceVisible = Boolean(manifest.function.workspace && !ideCollapsed && _canSeeFiles);
 
   // Latest group state for the keyboard handler (bound once via a ref).
   const gRef = useRef(groups);
@@ -401,6 +425,7 @@ function ShellBody({
 
   return (
     <OpenFileProvider value={openFile}>
+      <WorkspaceVisibleProvider value={workspaceVisible}>
     <RequestCloseContext.Provider value={requestCloseTab}>
       <div
         data-testid="page-item"
@@ -624,6 +649,7 @@ function ShellBody({
         />
       </div>
     </RequestCloseContext.Provider>
+      </WorkspaceVisibleProvider>
     </OpenFileProvider>
   );
 }
@@ -670,7 +696,9 @@ export function EditItemModal({
         submitLabel="Save"
         onSubmit={(values) => onSubmit(pruneEmpty(values))}
       />
-      {canManageAccess && (
+      {/* #chat-private: a chat-first App shares from the toolbar / rail (simple
+          share), not the role-ladder "manage access" — hide it here. */}
+      {canManageAccess && manifest.layout?.primary_surface !== "chat" && (
         <button
           type="button"
           className="btn"
@@ -857,26 +885,43 @@ export function TopBar({
           from the declared Members count beside it. */}
       <PresenceBar slug={manifest.slug} itemId={item.resource_id} />
 
-      {/* Access at a glance — click to manage. Replaces the old member-count
-          popover (redundant with the Members sidebar + a head-count doesn't say
-          whether the item is public); the roster lives in the sidebar. */}
-      {canManageAccess ? (
-        <button
-          type="button"
-          data-testid="topbar-access"
-          onClick={() => setSharing(true)}
-          title={`${manifest.labels?.members ?? "Members"} — manage access`}
-          style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", display: "inline-flex" }}
-        >
-          <AccessChip visibility={itemVisibility(rawPerm)} />
-        </button>
+      {manifest.layout?.primary_surface === "chat" ? (
+        // #chat-private: a chat-first App gets the SIMPLE share (people + groups),
+        // not the members roster + role-ladder "manage access".
+        <>
+          <button
+            type="button"
+            onClick={() => setSharing(true)}
+            title="Share"
+            style={{ ...iconBtn, display: "inline-flex", gap: 4, padding: "0 8px", width: "auto" }}
+          >
+            <Icon name="users" size={15} />
+            <span style={{ fontSize: pxToRem(12) }}>Share</span>
+          </button>
+          {sharing && <ShareChatDialog slug={manifest.slug} item={item} onClose={() => setSharing(false)} />}
+        </>
       ) : (
-        <span data-testid="topbar-access">
-          <AccessChip visibility={itemVisibility(rawPerm)} />
-        </span>
-      )}
-      {sharing && (
-        <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />
+        // Access at a glance — click to manage. Replaces the old member-count
+        // popover (redundant with the Members sidebar + a head-count doesn't say
+        // whether the item is public); the roster lives in the sidebar.
+        <>
+          {canManageAccess ? (
+            <button
+              type="button"
+              data-testid="topbar-access"
+              onClick={() => setSharing(true)}
+              title={`${manifest.labels?.members ?? "Members"} — manage access`}
+              style={{ background: "transparent", border: 0, padding: 0, cursor: "pointer", display: "inline-flex" }}
+            >
+              <AccessChip visibility={itemVisibility(rawPerm)} />
+            </button>
+          ) : (
+            <span data-testid="topbar-access">
+              <AccessChip visibility={itemVisibility(rawPerm)} />
+            </span>
+          )}
+          {sharing && <ItemAccessDialog manifest={manifest} item={item} onClose={() => setSharing(false)} />}
+        </>
       )}
 
       {/* Close is shown only when the App declares a lifecycle (#89 P7b); its

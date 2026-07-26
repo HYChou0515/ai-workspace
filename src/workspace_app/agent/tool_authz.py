@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 TOOL_VERBS: dict[str, Verb] = {
     "read_file": "read_content",
     "read_image": "read_content",
+    "show_file": "read_content",
     "list_files": "read_content",
     "exists": "read_content",
     "write_file": "edit_content",

@@ -26,6 +26,8 @@ describe("AppRoutes", () => {
   });
 
   it("renders an App dashboard at /a/:slug", () => {
+    // /a/:slug dispatches on the manifest (chat-first → chat home); until it
+    // loads — and for every ide/views App — the grid dashboard renders.
     renderAt("/a/rca");
     expect(screen.getByTestId("page-app-dashboard")).toBeTruthy();
   });

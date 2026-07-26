@@ -3,7 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { BrandIntro } from "./components/BrandIntro";
 import { GlobalLayout } from "./components/GlobalLayout";
 import { GlobalProgressBar } from "./components/GlobalProgressBar";
-import { AppDashboard } from "./pages/AppDashboard";
+import { AppHome } from "./pages/AppHome";
 import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
@@ -37,7 +37,7 @@ export function AppRoutes() {
         <Route path="/" element={<Launcher />} />
         {/* `new` is a CHILD of the dashboard so the create form renders as a modal
             over the live dashboard (design-handoff), not as a standalone page. */}
-        <Route path="/a/:slug" element={<AppDashboard />}>
+        <Route path="/a/:slug" element={<AppHome />}>
           <Route path="new" element={<AppNewItem />} />
         </Route>
         <Route path="/a/:slug/:itemId" element={<AppWorkspace />} />

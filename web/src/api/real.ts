@@ -88,7 +88,10 @@ function toQuery(params?: SearchParams): string {
 }
 
 function encodePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
+  // Drop the leading slash before joining: workspace paths reach the FE in both
+  // dialects (a `shown_files` declaration normalises to absolute, a file tree row
+  // is relative) and `…/files/` + `/out/a.png` would otherwise emit `files//out`.
+  return path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
 }
 
 /** Map FE SearchOptions → the BE _SearchBody field names. */
@@ -202,6 +205,11 @@ export const realApi: ApiClient = {
       body: JSON.stringify(body),
     });
     return json<{ resource_id: string }>(resp);
+  },
+  async deleteAppItem(resourceRoute: string, id: string) {
+    // #chat-private: hard delete (the specstar permanent delete) — owner /
+    // superuser gated by the backend. Removes the chat, not just closes it.
+    await apiFetch(`${resourceRoute}/${encodeURIComponent(id)}/permanently`, { method: "DELETE" });
   },
 
   async patchAppItemFields(resourceRoute: string, id: string, patch: Record<string, unknown>) {
