@@ -15,6 +15,15 @@
  * backend role vocabulary doesn't have yet (tracked as a #450 sub-item).
  */
 
+import {
+  DndContext,
+  type DragEndEvent,
+  PointerSensor,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
 import { useEffect, useRef, useState } from "react";
 
 import type { EntityInstance } from "../../api/entities";
@@ -38,6 +47,7 @@ import {
 } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
+import { rankForDrop, sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
 
 const GUTTER = 150;
@@ -117,8 +127,11 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  const rows: Row[] = entities
+  // #GH-projects — order rows by the view's sort tiers, or (with none) the manual
+  // `rank`, exactly like the table/board, so the Timeline reads in the SAME order.
+  const rows: Row[] = sortRows(entities, spec.sort, type ?? null, refIndex, users)
     .map((e) => ({ e, span: spanToDates(e.fields[spanField]) }))
     .filter((r): r is Row => r.span !== null);
 
@@ -147,6 +160,24 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
 
   const lanes = groupLanes(rows, spec.group_by, type, refIndex, users);
   const grouped = Boolean(spec.group_by);
+
+  // #GH-projects — drag a row's left label up/down to reorder (writes the shared
+  // `rank`). Disabled while a sort is active (sort takes over) or a write is busy.
+  // Reorder stays WITHIN a swimlane; a drop onto another lane is a no-op.
+  const manualReorder = !busy && !(spec.sort?.length ?? 0);
+  const onRowDragEnd = (ev: DragEndEvent) => {
+    const active = ev.active.id as number;
+    const over = ev.over?.id as number | undefined;
+    if (over == null || active === over) return;
+    const lane = lanes.find((l) => l.rows.some((r) => r.e.number === active));
+    if (!lane || !lane.rows.some((r) => r.e.number === over)) return;
+    const rank = rankForDrop(
+      lane.rows.map((r) => r.e),
+      active,
+      over,
+    );
+    if (rank != null) onPatch(active, { rank });
+  };
 
   // Drag: capture the down point + density, track on window, commit one patch on up.
   const startDrag = (number: number, mode: DragMode, e: React.PointerEvent) => {
@@ -182,8 +213,9 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
 
   return (
-    <div>
-      <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
+    <DndContext sensors={sensors} onDragEnd={onRowDragEnd}>
+      <div>
+        <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
         <div className="ev-gantt__zoom">
           <input
             type="range"
@@ -226,9 +258,9 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
                   </div>
                 )}
                 {lane.rows.map((row) => (
-                  <div key={row.e.number} className="ev-gantt__row-label" style={{ height: ROW_H }}>
+                  <GutterRow key={row.e.number} number={row.e.number} enabled={manualReorder}>
                     {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
-                  </div>
+                  </GutterRow>
                 ))}
               </div>
             ))}
@@ -317,6 +349,31 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
           </div>
         </div>
       </div>
+      </div>
+    </DndContext>
+  );
+}
+
+/** A gantt gutter row: the left label doubles as a drag SOURCE + drop TARGET for
+ * manual reorder (#GH-projects) — no grip, the label itself drags up/down. When
+ * disabled (a sort is active / busy) it's an inert label. */
+function GutterRow({ number, enabled, children }: { number: number; enabled: boolean; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef: setDrag } = useDraggable({ id: number, disabled: !enabled });
+  const { setNodeRef: setDrop, isOver } = useDroppable({ id: number, disabled: !enabled });
+  return (
+    <div
+      ref={(el) => {
+        setDrag(el);
+        setDrop(el);
+      }}
+      className="ev-gantt__row-label"
+      style={{ height: ROW_H }}
+      data-drag={enabled ? "" : undefined}
+      data-over={enabled && isOver ? "" : undefined}
+      {...(enabled ? attributes : {})}
+      {...(enabled ? listeners : {})}
+    >
+      {children}
     </div>
   );
 }

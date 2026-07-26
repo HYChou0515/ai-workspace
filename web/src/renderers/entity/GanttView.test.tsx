@@ -100,6 +100,28 @@ describe("GanttView", () => {
     expect(screen.getByText("v1.0")).toBeInTheDocument();
   });
 
+  it("orders rows by the manual rank, so the Timeline matches the board/table order", () => {
+    const spec = { view: "gantt" as const, entity: "issue", span: "span", label: "title" };
+    const ent = [
+      rec(1, { title: "A", span: "2026-01-01/2026-01-05", rank: 3 }),
+      rec(2, { title: "B", span: "2026-01-01/2026-01-05", rank: 1 }),
+      rec(3, { title: "C", span: "2026-01-01/2026-01-05", rank: 2 }),
+    ];
+    render(<GanttView {...props({ spec, entities: ent })} />);
+    const labels = Array.from(document.querySelectorAll(".ev-gantt__row-label")).map((n) => n.textContent);
+    expect(labels).toEqual(["B", "C", "A"]); // rank 1, 2, 3
+  });
+
+  it("makes the gutter row labels draggable to reorder — but inert while a sort is active", () => {
+    const base = { view: "gantt" as const, entity: "issue", span: "span", label: "title" };
+    const ent = [rec(1, { title: "A", span: "2026-01-01/2026-01-05" }), rec(2, { title: "B", span: "2026-01-06/2026-01-10" })];
+    const r1 = render(<GanttView {...props({ spec: base, entities: ent })} />);
+    expect(document.querySelectorAll(".ev-gantt__row-label[data-drag]").length).toBe(2); // manual reorder on
+    r1.unmount();
+    render(<GanttView {...props({ spec: { ...base, sort: [{ field: "title", dir: "asc" as const }] }, entities: ent })} />);
+    expect(document.querySelectorAll(".ev-gantt__row-label[data-drag]").length).toBe(0); // sort takes over
+  });
+
   it("shows the assignee's avatar on the bar when spec.assignee is set (① who is responsible)", () => {
     const spec = { view: "gantt" as const, entity: "issue", span: "span", label: "title", assignee: "assignee" };
     render(<GanttView {...props({ spec, users, entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-05", assignee: "alice" })] })} />);
