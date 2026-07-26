@@ -11,12 +11,23 @@ import type { RefIndex } from "./refTraversal";
 
 export type ViewKind = "table" | "board" | "gantt" | "health";
 
+export type SortDir = "asc" | "desc";
+/** One tier of a multi-level sort (#GH-projects). Ties fall through to the next
+ * rule; the final tie-break is always the manual `rank`. */
+export type SortRule = { field: string; dir: SortDir };
+
 export type ViewSpec = {
   view: ViewKind;
   entity: string;
   title?: string;
   columns?: string[];
+  /** #GH-projects — fields hidden from the Table via the View panel. Persisted so
+   * the choice survives a reload (the standalone Columns toggle was ephemeral). */
+  hidden_fields?: string[];
   group_by?: string;
+  /** #GH-projects — the multi-level sort. Empty / absent ⇒ manual `rank` order
+   * (drag-to-reorder). A non-empty list takes over and disables manual drag. */
+  sort?: SortRule[];
   span?: string;
   label?: string;
   /** gantt: an `actor`-role field whose avatar is shown on each bar — "who is

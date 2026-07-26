@@ -10,3 +10,6 @@ fields:
   span: { role: daterange }
   progress: { role: progress }
   milestone: { role: ref, to: milestone }
+  # Manual board/table order (#GH-projects) — a fractional position the user sets
+  # by dragging; hidden infrastructure, not shown as a column. Default order.
+  rank: { role: rank }

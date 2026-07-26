@@ -50,6 +50,25 @@ describe("parseViewSpec", () => {
   it("rejects a record-bound spec with no entity", () => {
     expect(parseViewSpec("view: table\n")).toBeNull();
   });
+  it("normalises multi-level sort rules, defaulting dir + dropping malformed (#GH-projects)", () => {
+    const spec = parseViewSpec(
+      "view: table\nentity: issue\nsort:\n  - { field: status, dir: desc }\n  - { field: title }\n  - { dir: asc }\n",
+    );
+    expect(spec?.sort).toEqual([
+      { field: "status", dir: "desc" },
+      { field: "title", dir: "asc" }, // dir defaulted; the field-less rule dropped
+    ]);
+  });
+  it("treats an absent / non-array sort as manual order (undefined)", () => {
+    expect(parseViewSpec("view: table\nentity: issue\n")?.sort).toBeUndefined();
+    expect(parseViewSpec("view: table\nentity: issue\nsort: nonsense\n")?.sort).toBeUndefined();
+  });
+  it("keeps hidden_fields as a string list, dropping non-strings", () => {
+    expect(parseViewSpec("view: table\nentity: issue\nhidden_fields: [due, 5, progress]\n")?.hidden_fields).toEqual([
+      "due",
+      "progress",
+    ]);
+  });
   it("accepts a health spec with no entity (it's cross-type)", () => {
     expect(parseViewSpec("view: health\ntitle: Health\n")).toMatchObject({ view: "health" });
   });
@@ -110,6 +129,24 @@ describe("TableView", () => {
     expect(screen.getByRole("columnheader", { name: "status" })).toBeInTheDocument();
     // scalar cells show the value as text at rest (#3) — click to edit.
     expect(screen.getByLabelText("edit title")).toHaveTextContent("Login broken");
+  });
+
+  it("keeps a rank-role field out of the default columns (manual-order infra, #GH-projects)", () => {
+    const typeWithRank: EntityType = {
+      ...issueType,
+      fields: [...issueType.fields, { name: "rank", role: "rank" }],
+    };
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue" }} // no explicit columns → schema-derived
+        type={typeWithRank}
+        entities={[issue(1, { title: "A", status: "open", rank: 1 })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("columnheader", { name: "rank" })).not.toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "title" })).toBeInTheDocument();
   });
 
   it("shows a value cell as text at rest and reveals the editor only on click (#3)", () => {

@@ -18,9 +18,11 @@ from __future__ import annotations
 from .catalog import EntityCatalog
 from .schema import FieldSpec, Role
 
-# Backref / rollup are computed at render time from other records — read-only, so
-# they are never settable on a create/update and are omitted from the guidance.
-_DERIVED = frozenset({Role.BACKREF, Role.ROLLUP})
+# Omitted from create/update guidance: backref / rollup are computed at render
+# time from other records (read-only), and `rank` is manual board/table order
+# (#GH-projects) — auto-assigned on create + set by dragging, never something the
+# agent picks when filling a record's fields.
+_DERIVED = frozenset({Role.BACKREF, Role.ROLLUP, Role.RANK})
 
 
 def _role_detail(f: FieldSpec) -> str:

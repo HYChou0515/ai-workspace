@@ -20,7 +20,9 @@ import type { EntityViewProps, ViewSpec } from "./types";
 
 function columnsFor(spec: ViewSpec, type: EntityType | null, entities: EntityInstance[]): string[] {
   if (spec.columns && spec.columns.length > 0) return spec.columns;
-  if (type) return type.fields.map((f) => f.name);
+  // `rank` is manual-order infrastructure (#GH-projects), never a real column —
+  // keep it out of the schema-derived default so it can't leak into the table.
+  if (type) return type.fields.filter((f) => f.role !== "rank").map((f) => f.name);
   // No schema + no explicit columns → union of the records' own keys.
   const seen = new Set<string>();
   for (const e of entities) for (const k of Object.keys(e.fields)) seen.add(k);

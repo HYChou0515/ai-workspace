@@ -27,6 +27,8 @@ def _issue() -> EntityType:
                 FieldSpec(name="span", role=Role.DATERANGE),
                 FieldSpec(name="progress", role=Role.PROGRESS),
                 FieldSpec(name="milestone", role=Role.REF, to="milestone"),
+                # manual board/table order — infra, auto-assigned / drag-set
+                FieldSpec(name="rank", role=Role.RANK),
             ]
         ),
     )
@@ -82,6 +84,12 @@ def test_omits_derived_backref_and_rollup_fields() -> None:
     # `issues` (backref) + `progress` (rollup) are read-only projections
     assert "issues" not in brief
     assert "progress" not in brief
+
+
+def test_omits_the_rank_field_agent_never_sets_manual_order() -> None:
+    # `rank` is manual board/table order — auto/drag-assigned, not agent-picked
+    brief = entity_schema_brief(_catalog(_issue()))
+    assert "rank" not in brief
 
 
 def test_empty_catalog_injects_nothing() -> None:
