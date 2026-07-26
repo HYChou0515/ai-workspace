@@ -27,6 +27,10 @@
   align-items: center;
   gap: var(--space-4);
 }
+/* plus + arrow read as one glyph pair ("insert, this way"). */
+.sheet-toolbar .btn {
+  gap: var(--space-4);
+}
 .sheet-toolbar__label {
   font-family: var(--font-mono);
   font-size: var(--text-mono-caps);

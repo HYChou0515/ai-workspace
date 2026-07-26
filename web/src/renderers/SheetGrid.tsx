@@ -21,7 +21,10 @@
  * thousands of live inputs reads as noise.
  */
 
+import type { ReactNode } from "react";
 import { useLayoutEffect, useRef, useState } from "react";
+
+import { Icon } from "../components/Icon";
 
 import { insertColumn, insertRow, removeColumn, removeRow, type SortDir, sortedIndices } from "./sheetOps";
 import { visibleRange } from "./sheetWindow";
@@ -97,18 +100,25 @@ export function SheetGrid({
   const cycleSort = (column: number) =>
     setSort((s) => (s?.column !== column ? { column, dir: "asc" } : s.dir === "asc" ? { column, dir: "desc" } : null));
 
+  // The arrow says WHERE, the plus says WHAT — an arrow alone reads as "move".
+  const insertLabel = (arrow: string): ReactNode => (
+    <>
+      <Icon name="plus" size={11} />
+      {arrow} Insert
+    </>
+  );
   const rowActions = [
-    { label: "Insert row above", short: "↑ Insert", run: () => insertRow(grid, active.fileRow) },
-    { label: "Insert row below", short: "↓ Insert", run: () => insertRow(grid, active.fileRow + 1) },
+    { label: "Insert row above", short: insertLabel("↑"), run: () => insertRow(grid, active.fileRow) },
+    { label: "Insert row below", short: insertLabel("↓"), run: () => insertRow(grid, active.fileRow + 1) },
     { label: "Delete row", short: "Delete", run: () => removeRow(grid, active.fileRow) },
   ];
   const columnActions = [
-    { label: "Insert column left", short: "← Insert", run: () => insertColumn(grid, active.col) },
-    { label: "Insert column right", short: "→ Insert", run: () => insertColumn(grid, active.col + 1) },
+    { label: "Insert column left", short: insertLabel("←"), run: () => insertColumn(grid, active.col) },
+    { label: "Insert column right", short: insertLabel("→"), run: () => insertColumn(grid, active.col + 1) },
     { label: "Delete column", short: "Delete", run: () => removeColumn(grid, active.col) },
   ];
 
-  const actionButton = (a: { label: string; short: string; run: () => string[][] }) => (
+  const actionButton = (a: { label: string; short: ReactNode; run: () => string[][] }) => (
     <button
       key={a.label}
       type="button"
