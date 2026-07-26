@@ -34,7 +34,7 @@ import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
-import { OpenFileProvider } from "../../hooks/openFile";
+import { OpenFileProvider, WorkspaceVisibleProvider } from "../../hooks/openFile";
 import {
   FileBufferProvider,
   FileBufferStore,
@@ -303,7 +303,10 @@ function ShellBody({
     10,
   );
 
-  // Sidebar / palette open into the active editor group.
+  // Sidebar / palette open into the active editor group. Deliberately does NOT
+  // unfold the workspace: folding is the user's choice, and a caller that can be
+  // reached while folded checks `workspaceVisible` and offers the file another
+  // way instead (the chat's shown-file card becomes a new-tab link).
   const openFile = useCallback<OpenFileFn>(
     (path, opts) => {
       groups.openInActive(path, opts);
@@ -311,6 +314,9 @@ function ShellBody({
     },
     [groups, recentFiles],
   );
+  // Is the file pane actually on screen? Same condition the IDE column renders
+  // under — anything else would have the chat believe in a pane that isn't there.
+  const workspaceVisible = Boolean(manifest.function.workspace && !ideCollapsed && _canSeeFiles);
 
   // Latest group state for the keyboard handler (bound once via a ref).
   const gRef = useRef(groups);
@@ -418,6 +424,7 @@ function ShellBody({
 
   return (
     <OpenFileProvider value={openFile}>
+      <WorkspaceVisibleProvider value={workspaceVisible}>
     <RequestCloseContext.Provider value={requestCloseTab}>
       <div
         data-testid="page-item"
@@ -641,6 +648,7 @@ function ShellBody({
         />
       </div>
     </RequestCloseContext.Provider>
+      </WorkspaceVisibleProvider>
     </OpenFileProvider>
   );
 }

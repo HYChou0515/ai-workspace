@@ -88,7 +88,10 @@ function toQuery(params?: SearchParams): string {
 }
 
 function encodePath(path: string): string {
-  return path.split("/").map(encodeURIComponent).join("/");
+  // Drop the leading slash before joining: workspace paths reach the FE in both
+  // dialects (a `shown_files` declaration normalises to absolute, a file tree row
+  // is relative) and `…/files/` + `/out/a.png` would otherwise emit `files//out`.
+  return path.replace(/^\/+/, "").split("/").map(encodeURIComponent).join("/");
 }
 
 /** Map FE SearchOptions → the BE _SearchBody field names. */

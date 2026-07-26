@@ -205,6 +205,11 @@ export const messages = {
   // Caption over still-streaming tool output (#170) — so a half-written stdout
   // isn't mistaken for the final result.
   "tool.streamingHint": { "zh-TW": "即時輸出，可能未完成", en: "Live output — may be incomplete" },
+  "tool.show_file": { "zh-TW": "顯示檔案", en: "Show a file" },
+  // The affordance on a file the agent showed. "openHere" = a workspace shell is
+  // present and the file opens in its viewer; "open" = the fallback link.
+  "shownFile.openHere": { "zh-TW": "在工作區開啟", en: "Open in workspace" },
+  "shownFile.open": { "zh-TW": "開啟", en: "Open" },
   "entry.retry": { "zh-TW": "重試：", en: "Retry: " },
   "entry.sources": { "zh-TW": "來源", en: "Sources" },
   // Permission-disclosure: relevant sources the user can see-exist but not read.

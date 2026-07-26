@@ -190,29 +190,9 @@ def test_disabled_tools_preserve_ceiling_order():
     """#480: disabled tools are emitted in App-ceiling order (deterministic
     prompt rendering), same convention as ``allowed_tools``."""
     cfg = AppCatalog(presets=_presets()).resolve(app_slug="rca", profile="tool-demo")
-    ceiling = [
-        "exec",
-        "read_file",
-        "read_image",
-        "write_file",
-        "edit_file",
-        "list_files",
-        "exists",
-        "delete_file",
-        "ask_knowledge_base",
-        "request_wiki_update",
-        "lookup_user",
-        "ask_user",
-        "update_todos",  # #613
-        "make_deck",
-        "data-fetch",
-        "csv-column-summary",
-        "sci-plot",
-        "rca-tools",
-        "python-stack",
-        "save_skill",
-        "save_workflow",
-    ]
+    # Read the ceiling from the manifest rather than restating it: a second copy
+    # here only ever goes stale, and the order under test IS the manifest's.
+    ceiling = load_app_manifest("rca").agent.tools
     order = {name: i for i, name in enumerate(ceiling)}
     idxs = [order[t] for t in cfg.disabled_tools]
     assert idxs == sorted(idxs)

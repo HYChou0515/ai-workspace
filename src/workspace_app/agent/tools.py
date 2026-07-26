@@ -21,6 +21,10 @@ from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
 from .output_cap import cap_tool_outputs, truncate_middle
+from .shown_files import (
+    declare_shown_files,
+    describe_for_display,
+)
 from .tool_authz import authorize_tool
 
 if TYPE_CHECKING:
@@ -209,6 +213,43 @@ async def read_image_impl(
     else:
         out = describer.describe(data, mime, on_chunk=on_chunk)
     return _truncate_middle(out, ctx.context.read_file_max_chars)
+
+
+async def show_file_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    path: str,
+    caption: str | None = None,
+) -> str:
+    """Show a file from the workspace to the user, in the chat.
+
+    Use this for any file the user will want to look at — a chart you plotted, a
+    report you wrote, a spreadsheet, a PDF, a screenshot. An image appears in the
+    conversation directly; any other file appears as a card the user can open.
+
+    `path` is the workspace path to the file. `caption` is a short line saying
+    what the user is looking at ("monthly revenue trend") — include it whenever
+    the filename alone would not tell them.
+
+    Call it once per file, as soon as the file exists, then carry on.
+    """
+    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
+        return denied
+    fs, inv = _workspace(ctx)
+    shown = await describe_for_display(fs, inv, path)
+    if not shown:
+        # Declare nothing on failure: the FE renders whatever is declared, so an
+        # unresolvable path must not travel.
+        return (
+            f"error: file not found: {rel_path(path)} — nothing was shown. "
+            f"Check the path (list_files) and call show_file again."
+        )
+    if caption:
+        shown["caption"] = caption
+    # A sentence, not JSON: this is what the model reads back, and being told the
+    # file is visible is what stops it narrating the contents next.
+    return declare_shown_files(
+        f"{rel_path(path)} is now displayed in the chat — the user can see it.", [shown]
+    )
 
 
 async def make_deck_impl(
@@ -2115,6 +2156,7 @@ _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
     "read_image": read_image_impl,
+    "show_file": show_file_impl,
     "make_deck": make_deck_impl,
     "write_file": write_file_impl,
     "edit_file": edit_file_impl,
@@ -2187,6 +2229,9 @@ _WORKSPACE_TOOLS = [
     "list_files",
     "exists",
     "delete_file",
+    # Default-on: bundled presets carry `allowed_tools: null` and resolve THIS
+    # list, so a tool omitted here never reaches them (#613).
+    "show_file",
     "ask_knowledge_base",
     "request_wiki_update",
     "infer_modules",

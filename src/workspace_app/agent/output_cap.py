@@ -38,6 +38,7 @@ from agents.tool_guardrails import (
 )
 
 from .context import AgentToolContext
+from .shown_files import split_declaration
 
 TOOL_OUTPUT_CAP_NAME = "tool_output_cap"
 
@@ -109,15 +110,21 @@ def _cap_output(data: ToolOutputGuardrailData) -> ToolGuardrailFunctionOutput:
     rendered = _rendered(data.output)
     if rendered is None or len(rendered) <= ctx.tool_output_max_chars:
         return ToolGuardrailFunctionOutput.allow()
+    # Cap the BODY and put the declaration back verbatim. It lives at the very
+    # end, which is exactly what a head-and-tail cut eats first, and losing it is
+    # silent: no error, no card, the user never sees the file they were told
+    # about. It is a handful of chars against a 200k budget.
+    body, declaration = split_declaration(rendered)
     return ToolGuardrailFunctionOutput.reject_content(
         truncate_middle(
-            rendered,
-            ctx.tool_output_max_chars,
+            body,
+            max(1, ctx.tool_output_max_chars - len(declaration)),
             hint=(
                 "this tool answered with more than the context can hold — ask it for a "
                 "narrower slice (a sub-path, a filter, a page) instead of the whole thing"
             ),
-        ),
+        )
+        + declaration,
         output_info={"tool": data.context.tool_name, "rendered_chars": len(rendered)},
     )
 
