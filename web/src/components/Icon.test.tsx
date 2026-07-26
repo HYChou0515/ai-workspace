@@ -64,4 +64,28 @@ describe("Icon", () => {
     expect(wiki).not.toBe(layers);
     expect(wiki).not.toBe(fallback);
   });
+
+  it("registers one insert glyph that the caller rotates, rather than four near-identical ones", () => {
+    // A plus above a rule. Only this one name exists; "below" / "left" / "right"
+    // are the same mark turned, so the set doesn't carry four look-alikes.
+    expect(isIconName("insert_line")).toBe(true);
+    expect(isIconName("insert_line_below")).toBe(false);
+    const { container } = render(<Icon name="insert_line" />);
+    const svg = container.querySelector("svg");
+    expect(svg).toHaveAttribute("data-icon", "insert_line");
+    // an arrow, plus two bands that read as rows — not the neutral fallback tile
+    // (which is a single rect and no path).
+    expect(container.querySelectorAll("path")).toHaveLength(1);
+    expect(container.querySelectorAll("rect")).toHaveLength(2);
+  });
+
+  it("gives removal its own glyph so Delete row and Delete column stop looking identical", () => {
+    // A trash can says "delete" but not "delete WHAT" — the two buttons were
+    // indistinguishable. `remove_line` carries the bands, so rotating it stands
+    // them up and the column variant reads differently at a glance.
+    expect(isIconName("remove_line")).toBe(true);
+    const { container } = render(<Icon name="remove_line" />);
+    expect(container.querySelector("svg")).toHaveAttribute("data-icon", "remove_line");
+    expect(container.querySelectorAll("rect")).toHaveLength(2);
+  });
 });
