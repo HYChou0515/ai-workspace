@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { useState } from "react";
+
 import { SheetGrid } from "./SheetGrid";
 
 const GRID = [
@@ -156,6 +158,12 @@ describe("SheetGrid — degradation", () => {
   });
 });
 
+/** Holds the rows, so an edit re-renders the grid the way the container does. */
+function SheetGridHarness({ rows, onUndo }: { rows: string[][]; onUndo?: () => void }) {
+  const [current, setCurrent] = useState(rows);
+  return <SheetGrid rows={current} onRowsChange={setCurrent} onUndo={onUndo} />;
+}
+
 describe("SheetGrid — range selection and the clipboard", () => {
   afterEach(cleanup);
 
@@ -261,6 +269,32 @@ describe("SheetGrid — range selection and the clipboard", () => {
 
     const out = onRowsChange.mock.calls.at(-1)![0] as string[][];
     expect(out[3]).toEqual(["W03", "77", "x", "y"]);
+  });
+
+  it("shows the pasted value in the cell that had focus, not the value it used to hold", async () => {
+    // The focused cell carries a draft captured when it was focused. A paste
+    // changes the value underneath it, so a stale draft would keep painting the
+    // OLD value over the new one.
+    render(<SheetGridHarness rows={SHEET} />);
+
+    await userEvent.click(screen.getByLabelText("R2C2"));
+    pasteInto(screen.getByLabelText("R2C2"), "9\tnine\n");
+
+    expect(screen.getByLabelText("R2C2")).toHaveValue("9");
+  });
+
+  it("undoes immediately after a paste, with focus still in the pasted cell", async () => {
+    // Same stale draft, second symptom: it made the grid think the user was
+    // mid-typing, and Ctrl+Z is deliberately left to the input while typing —
+    // so the undo was swallowed exactly when it was most needed.
+    const onUndo = vi.fn();
+    render(<SheetGridHarness rows={SHEET} onUndo={onUndo} />);
+
+    await userEvent.click(screen.getByLabelText("R2C2"));
+    pasteInto(screen.getByLabelText("R2C2"), "9\tnine\n");
+    fireEvent.keyDown(screen.getByLabelText("R2C2"), { key: "z", ctrlKey: true });
+
+    expect(onUndo).toHaveBeenCalled();
   });
 
   it("leaves a single-value paste to the input, so you can paste into a word", async () => {

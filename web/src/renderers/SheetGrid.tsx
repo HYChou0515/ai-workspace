@@ -57,7 +57,11 @@ export function cellLabel(displayRow: number, col: number): string {
   return displayRow === 0 ? `Column ${col + 1} name` : `R${displayRow}C${col + 1}`;
 }
 
-type Edit = { fileRow: number; col: number; draft: string };
+/** The in-progress edit. `typed` records whether the user has actually changed
+ * anything since focusing — inferring that by comparing the draft to the stored
+ * value looks equivalent and is not: a paste or a clear changes the stored value
+ * underneath the caret, and the comparison then reports "typing" forever. */
+type Edit = { fileRow: number; col: number; draft: string; typed: boolean };
 type Cell = { row: number; col: number };
 
 export function SheetGrid({
@@ -147,7 +151,9 @@ export function SheetGrid({
       for (let c = r.left; c <= r.right; c++) writes.push({ row: fileRow, col: c, value: "" });
     }
     const next = writeCells(grid, writes);
-    if (next !== grid) onRowsChange(next);
+    if (next === grid) return;
+    setEdit(null); // the value under the caret just changed; the draft is stale
+    onRowsChange(next);
   };
 
   const commit = (pending: Edit | null) => {
@@ -215,7 +221,7 @@ export function SheetGrid({
         readOnly={readOnly}
         onFocus={() => {
           setActive({ fileRow, col });
-          setEdit({ fileRow, col, draft: value });
+          setEdit({ fileRow, col, draft: value, typed: false });
           setSel((s) => (s && dragging.current ? s : { anchor: { row: displayRow, col }, focus: { row: displayRow, col } }));
         }}
         onMouseDown={(e) => {
@@ -232,7 +238,7 @@ export function SheetGrid({
         onMouseEnter={() => {
           if (dragging.current) extendTo({ row: displayRow, col });
         }}
-        onChange={(e) => setEdit({ fileRow, col, draft: e.target.value })}
+        onChange={(e) => setEdit({ fileRow, col, draft: e.target.value, typed: true })}
         onBlur={() => commit(editing ? edit : null)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
@@ -302,7 +308,9 @@ export function SheetGrid({
           line.forEach((value, j) => writes.push({ row: fileRow, col: at.col + j, value }));
         });
         const next = writeCells(grid, writes);
-        if (next !== grid) onRowsChange(next);
+        if (next === grid) return;
+        setEdit(null); // the value under the caret just changed; the draft is stale
+        onRowsChange(next);
       }}
       onCut={(e) => {
         // Same "block only" rule as copy: one cell keeps the input's own cut.
@@ -324,8 +332,7 @@ export function SheetGrid({
         // Mid-typing, Ctrl+Z belongs to the input: undoing keystrokes inside the
         // cell you are editing is what the user means. Only once the draft
         // matches what is stored does the shortcut mean "undo the last EDIT".
-        const typing = edit && edit.draft !== (grid[edit.fileRow]?.[edit.col] ?? "");
-        if (typing) return;
+        if (edit?.typed) return; // mid-typing: Ctrl+Z belongs to the input
         const run = e.shiftKey ? onRedo : onUndo;
         if (!run) return;
         e.preventDefault();
