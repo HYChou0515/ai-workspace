@@ -133,9 +133,14 @@ and a paste that silently drops its last rows is the worst kind of data loss.
 Excel also TILES a small clipboard into a larger selection — that one is a
 surprise more often than a feature, so a paste writes the block once.
 
-**Cell-level copy/paste only kicks in when the selection spans more than one
-cell.** Otherwise the cell's own input keeps native text copy/paste, so you can
-still copy half a value out of one cell. This rule exists because of the next one.
+**Copy and paste are triggered by different things, and conflating them breaks
+the main use case.** Copy and cut take over when the SELECTION spans more than
+one cell — otherwise the input keeps its native copy, so half a value is still
+copyable. Paste takes over when the CLIPBOARD holds more than one cell, whatever
+is selected: the common move is to copy a block in Excel, click one cell here and
+paste, and a selection-based rule would refuse exactly that. A single pasted
+value stays with the input so it can land in the middle of a word. (Written the
+other way round first; the paste test is what caught it.)
 
 **No "selected vs editing" mode — the deliberate divergence from Excel.** In
 Excel a cell is either selected or being edited, which is what frees the arrow

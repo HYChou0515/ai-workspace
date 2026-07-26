@@ -231,6 +231,60 @@ describe("SheetGrid — range selection and the clipboard", () => {
     ]);
   });
 
+  function pasteInto(el: Element, text: string) {
+    fireEvent.paste(el, { clipboardData: { getData: () => text, setData: () => {} } });
+  }
+
+  it("pastes a block into a SINGLE selected cell — the Excel round trip", async () => {
+    // The common move: copy a block in Excel, click one cell here, paste. The
+    // trigger is what the CLIPBOARD holds, not how much is selected.
+    const onRowsChange = vi.fn();
+    render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
+
+    await userEvent.click(screen.getByLabelText("R2C2"));
+    pasteInto(screen.getByLabelText("R2C2"), "9\tnine\n8\teight\n");
+
+    expect(onRowsChange).toHaveBeenCalledWith([
+      ["wafer", "qty", "note"],
+      ["W01", "120", "ok"],
+      ["W02", "9", "nine"],
+      ["W03", "8", "eight"],
+    ]);
+  });
+
+  it("grows the sheet when the pasted block runs past the end", async () => {
+    const onRowsChange = vi.fn();
+    render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
+
+    await userEvent.click(screen.getByLabelText("R3C3"));
+    pasteInto(screen.getByLabelText("R3C3"), "x\ty\n");
+
+    const out = onRowsChange.mock.calls.at(-1)![0] as string[][];
+    expect(out[3]).toEqual(["W03", "77", "x", "y"]);
+  });
+
+  it("leaves a single-value paste to the input, so you can paste into a word", async () => {
+    const onRowsChange = vi.fn();
+    render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
+
+    const cell = screen.getByLabelText("R1C1");
+    await userEvent.click(cell);
+    pasteInto(cell, "just-text");
+
+    expect(onRowsChange).not.toHaveBeenCalled();
+  });
+
+  it("refuses to paste into a read-only sheet", async () => {
+    const onRowsChange = vi.fn();
+    render(<SheetGrid rows={SHEET} readOnly onRowsChange={onRowsChange} />);
+
+    const cell = screen.getByLabelText("R1C1");
+    await userEvent.click(cell);
+    pasteInto(cell, "a\tb\n");
+
+    expect(onRowsChange).not.toHaveBeenCalled();
+  });
+
   it("leaves Delete to the input when only one cell is selected", async () => {
     const onRowsChange = vi.fn();
     render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);

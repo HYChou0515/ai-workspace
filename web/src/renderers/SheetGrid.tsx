@@ -26,7 +26,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 
 import { Icon } from "../components/Icon";
 
-import { serializeCsv } from "./csv";
+import { parseCsv, serializeCsv } from "./csv";
 import {
   insertColumn,
   insertRow,
@@ -277,6 +277,32 @@ export function SheetGrid({
       }}
       onMouseUp={() => {
         dragging.current = false;
+      }}
+      onPaste={(e) => {
+        if (readOnly) return;
+        const text = e.clipboardData.getData("text/plain");
+        if (!text) return;
+        const block = parseCsv(text, "\t");
+        // The trigger is what the CLIPBOARD holds, not how much is selected: the
+        // common move is to copy a block in Excel, click ONE cell here and
+        // paste. A single value stays with the input, so it can still be pasted
+        // into the middle of a word.
+        const manyCells = block.length > 1 || (block[0]?.length ?? 0) > 1;
+        if (!manyCells) return;
+        e.preventDefault();
+        const at = range ? { row: range.top, col: range.left } : { row: 1, col: 0 };
+        const writes: { row: number; col: number; value: string }[] = [];
+        block.forEach((line, i) => {
+          const display = at.row + i;
+          // Past the last displayed row the block spills onto NEW rows at the
+          // end of the file — with a sort active there is no "next row" in file
+          // order to grow into.
+          const fileRow = display <= order.length ? fileRowAt(display) : grid.length + (display - order.length - 1);
+          if (fileRow < 0) return;
+          line.forEach((value, j) => writes.push({ row: fileRow, col: at.col + j, value }));
+        });
+        const next = writeCells(grid, writes);
+        if (next !== grid) onRowsChange(next);
       }}
       onCut={(e) => {
         // Same "block only" rule as copy: one cell keeps the input's own cut.
