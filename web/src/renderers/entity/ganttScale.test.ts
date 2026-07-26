@@ -246,6 +246,15 @@ describe("weekNumberOf — by_today cross-year week", () => {
     // … while the 2027→2028 crossing (week holding 2028-01-01) is still future (old: 2027 W53).
     expect(weekNumberOf("2027-12-31", WW, "2027-06-01")).toEqual({ year: 2027, week: 53 });
   });
+
+  it("only RELABELS the cross-year week — weeks after it keep the fixed jan1 numbering (no anchor shift)", () => {
+    // The Jan-1 week itself is 2027 W01 (it contains Jan 1); the FOLLOWING week is
+    // 2027 W02 regardless of today. by_today must not push W01 a week late.
+    expect(weekNumberOf("2027-01-04", WW, "2026-06-01")).toEqual({ year: 2027, week: 2 }); // today before NY
+    expect(weekNumberOf("2027-01-04", WW, "2027-06-01")).toEqual({ year: 2027, week: 2 }); // today after NY
+    // The week before the overlap is 2026 W52 either way (it holds no Jan 1).
+    expect(weekNumberOf("2026-12-21", WW, "2026-06-01")).toEqual({ year: 2026, week: 52 });
+  });
 });
 
 describe("weekNumberOf — static boundary modes", () => {

@@ -287,10 +287,11 @@ export type WeekRule = {
 
 export type WeekNumber = { year: number; week: number };
 
-/** The `YYYY-MM-DD` on which year `y`'s W01 begins, per the rule + `today`. This
- * is the ONE place the anchor / boundary / by_today logic lives; numbering is
- * then a plain week count from here. */
-function yearW01Start(y: number, rule: WeekRule, today: string): string {
+/** The `YYYY-MM-DD` on which year `y`'s W01 begins, per the STATIC anchor rules
+ * (`by_today` is resolved in {@link weekNumberOf}, not here). This is where the
+ * anchor / `new_year` vs `old_year` choice lives; numbering is then a plain week
+ * count from here. */
+function yearW01Start(y: number, rule: WeekRule): string {
   const start = rule.start ?? "monday";
   const anchor = rule.first_week ?? "jan1";
   // ISO carries its own boundary rule (the first-Thursday week), so the `jan1`
@@ -300,12 +301,9 @@ function yearW01Start(y: number, rule: WeekRule, today: string): string {
   const jan1Week = weekStart(jan1, start); // the week holding Jan 1
   const firstFull = jan1Week === jan1 ? jan1Week : shiftDate(jan1Week, 7);
   if (anchor === "first_full") return firstFull;
-  // anchor === "jan1": boundary decides whether the Jan-1 week is this year's
-  // W01 or belongs to the previous year (so this year opens at its first full week).
-  const boundary = rule.boundary ?? "new_year";
-  if (boundary === "old_year") return firstFull;
-  if (boundary === "by_today") return today >= jan1 ? jan1Week : firstFull;
-  return jan1Week; // new_year: the Jan-1 week is this year's W01
+  // anchor === "jan1": new_year keeps the Jan-1 week as W01; old_year gives it to
+  // the previous year, so this year opens at its first full week.
+  return (rule.boundary ?? "new_year") === "old_year" ? firstFull : jan1Week;
 }
 
 /** The (year, week) a date carries under a custom week rule. `today` only
@@ -318,14 +316,26 @@ export function weekNumberOf(date: string, rule: WeekRule, today: string): WeekN
     const epoch = weekStart(rule.epoch ?? "1970-01-01", start);
     return { year: ymd(date).y, week: Math.floor(daysBetween(epoch, ws) / 7) + 1 };
   }
+  // `by_today` numbers off the plain jan1 calendar and RELABELS only the
+  // cross-year week (below) — it must NOT shift the anchor, or every week after it
+  // would renumber (that pushed W01 a week late — #648 review).
+  const boundary = rule.boundary ?? "new_year";
+  const base: WeekRule = boundary === "by_today" ? { ...rule, boundary: "new_year" } : rule;
   const g = ymd(date).y;
-  const weekIn = (y: number) => ({ year: y, week: Math.round(daysBetween(yearW01Start(y, rule, today), ws) / 7) + 1 });
+  const weekIn = (y: number) => ({ year: y, week: Math.round(daysBetween(yearW01Start(y, base), ws) / 7) + 1 });
   // The date's week belongs to the latest year whose W01 has already started;
   // the earliest candidate (g−1) always qualifies, so it is the default.
-  for (const y of [g + 1, g]) {
-    if (ws >= yearW01Start(y, rule, today)) return weekIn(y);
+  const n = ws >= yearW01Start(g + 1, base) ? weekIn(g + 1) : ws >= yearW01Start(g, base) ? weekIn(g) : weekIn(g - 1);
+  // The cross-year week is `n.year`'s W01 yet starts in the previous December; if
+  // its New Year hasn't arrived (today before it), show it as the OLD year's last
+  // week instead. Weeks after it keep `n.year`'s numbering either way.
+  if (boundary === "by_today" && n.week === 1) {
+    const crossing = `${n.year}-01-01`;
+    if (ws < crossing && today < crossing) {
+      return { year: n.year - 1, week: Math.round(daysBetween(yearW01Start(n.year - 1, base), ws) / 7) + 1 };
+    }
   }
-  return weekIn(g - 1);
+  return n;
 }
 
 /** Render a {@link WeekNumber} through a token template. Tokens: `{yyyy}` full
