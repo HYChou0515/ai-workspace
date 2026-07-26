@@ -178,29 +178,37 @@ describe("canvasWidthFor", () => {
 });
 
 describe("slider ↔ ppd mapping", () => {
-  it("puts the month anchor at 0 and the day anchor at 1, log-scaled and monotonic", () => {
-    expect(sliderToPpd(0)).toBeCloseTo(PPD_ANCHORS.month);
-    expect(sliderToPpd(1)).toBeCloseTo(PPD_ANCHORS.day);
+  it("travels PAST the named anchors — further in than day, further out than month", () => {
+    // the ends of the track are beyond the anchors …
+    expect(sliderToPpd(1)).toBeGreaterThan(PPD_ANCHORS.day); // zoom in past `day` (days widen)
+    expect(sliderToPpd(0)).toBeLessThan(PPD_ANCHORS.month); // zoom out past `month` (months compress)
+    // … and the three anchors sit strictly inside the track, in order.
+    const [m, w, d] = [PPD_ANCHORS.month, PPD_ANCHORS.week, PPD_ANCHORS.day].map(ppdToSlider);
+    expect(0).toBeLessThan(m);
+    expect(m).toBeLessThan(w);
+    expect(w).toBeLessThan(d);
+    expect(d).toBeLessThan(1);
+  });
+  it("is log-scaled and monotonic", () => {
     expect(sliderToPpd(0.3)).toBeLessThan(sliderToPpd(0.7));
-    expect(ppdToSlider(PPD_ANCHORS.month)).toBeCloseTo(0);
-    expect(ppdToSlider(PPD_ANCHORS.day)).toBeCloseTo(1);
   });
   it("round-trips a slider position back to itself", () => {
     for (const pos of [0.1, 0.42, 0.75]) {
       expect(ppdToSlider(sliderToPpd(pos))).toBeCloseTo(pos);
     }
   });
-  it("clamps an out-of-track position to the anchor densities", () => {
-    expect(sliderToPpd(-0.5)).toBeCloseTo(PPD_ANCHORS.month);
-    expect(sliderToPpd(1.5)).toBeCloseTo(PPD_ANCHORS.day);
+  it("clamps an out-of-track position to the range ends", () => {
+    expect(sliderToPpd(-0.5)).toBeCloseTo(sliderToPpd(0));
+    expect(sliderToPpd(1.5)).toBeCloseTo(sliderToPpd(1));
   });
 });
 
 describe("clampPpd", () => {
-  it("holds ppd between the month (min) and day (max) anchors", () => {
-    expect(clampPpd(PPD_ANCHORS.week)).toBe(PPD_ANCHORS.week);
-    expect(clampPpd(1000)).toBe(PPD_ANCHORS.day); // never zoom past the day anchor
-    expect(clampPpd(0.1)).toBe(PPD_ANCHORS.month); // never zoom out past the month anchor
+  it("holds ppd inside the extended range (which runs past both anchors)", () => {
+    expect(clampPpd(PPD_ANCHORS.week)).toBe(PPD_ANCHORS.week); // an anchor is untouched
+    expect(clampPpd(PPD_ANCHORS.day + 10)).toBe(PPD_ANCHORS.day + 10); // past `day` is allowed
+    expect(clampPpd(1000)).toBeGreaterThan(PPD_ANCHORS.day); // clamps to the (extended) max, past day
+    expect(clampPpd(0.01)).toBeLessThan(PPD_ANCHORS.month); // clamps to the (extended) min, past month
   });
 });
 

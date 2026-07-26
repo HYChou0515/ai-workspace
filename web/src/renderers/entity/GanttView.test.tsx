@@ -143,10 +143,10 @@ describe("GanttView", () => {
     }
     vi.stubGlobal("ResizeObserver", FakeRO);
     // an 11-day project (daysBetween 10) in a 900px pane (750 after the gutter)
-    // auto-fits to the day-anchor density (28px/day) instead of staying tiny at
-    // the week density (10px/day → 100px) — so the bar stretches to fill.
+    // auto-fits toward the pane: the ideal ~68px/day is capped at the extended
+    // max zoom (56px/day, past the `day` anchor), so the 10-day bar is 560px.
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-15" })] })} />);
-    expect(screen.getByTestId("bar-1").style.width).toBe("280px");
+    expect(screen.getByTestId("bar-1").style.width).toBe("560px");
     vi.unstubAllGlobals();
   });
 

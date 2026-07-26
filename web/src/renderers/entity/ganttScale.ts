@@ -14,13 +14,13 @@ export type Span = { start: string; end: string };
 
 const DAY_MS = 86_400_000;
 
-/** The three named zoom stops, in px-per-day. They are no longer the ONLY
- * densities — the zoom is continuous (a slider) — but they remain the labelled
- * anchor points the slider snaps to, and bound its travel: `month` is the most
- * zoomed-out density we offer, `day` the most zoomed-in. */
+/** The three named zoom stops, in px-per-day — labelled anchor points the slider
+ * snaps to. They are NOT the ends of the track: it travels past `day` (zoom in
+ * further, days grow wider) and past `month` (zoom out further, months compress).
+ * So the anchors sit INSIDE [PPD_MIN, PPD_MAX]. */
 export const PPD_ANCHORS: Record<Zoom, number> = { day: 28, week: 10, month: 3 };
-export const PPD_MIN = PPD_ANCHORS.month;
-export const PPD_MAX = PPD_ANCHORS.day;
+export const PPD_MIN = 1; // most zoomed-out (further out than the `month` anchor)
+export const PPD_MAX = 56; // most zoomed-in (further in than the `day` anchor)
 
 export function pxPerDay(zoom: Zoom): number {
   return PPD_ANCHORS[zoom];
