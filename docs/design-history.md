@@ -14,6 +14,7 @@
 | [plan-backend.md](plan-backend.md) | 最初的後端設計計畫（分層 / Protocol / SSE 的原始脈絡） |
 | [plan-frontend.md](plan-frontend.md) | 最初的前端設計計畫（VSCode 風格 UI） |
 | [plan-topic-hub.md](plan-topic-hub.md) | Topic Hub App：跨 collection 探究工作區、檔案記憶、多 chat |
+| [plan-item-memory.md](plan-item-memory.md) | item 記憶機制（仿 Claude Code memory）：記憶即 workspace 檔案、agent 在 turn 中自寫、全 App 預設開 |
 | [plan-collab-workspace.md](plan-collab-workspace.md) | #43 多人協作 workspace（檔案 + chat，無 notebook） |
 | [plan-permissions.md](plan-permissions.md) · [plan-permissions-pr2-handoff.md](plan-permissions-pr2-handoff.md) | 權限模型設計與分階段交接 |
 
