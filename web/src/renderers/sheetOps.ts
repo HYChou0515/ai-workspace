@@ -115,33 +115,31 @@ export function sliceBlock(rows: string[][], range: Range): string[][] {
   return out;
 }
 
-/** Write `block` into `rows` with its top-left corner at `at`, GROWING the grid
- * when it overflows — Excel grows rather than silently dropping what you pasted,
- * and a paste that quietly loses its last rows is the worst kind of data loss.
- * Rows the growth creates are padded so the grid stays rectangular. */
-export function applyBlock(rows: string[][], at: { row: number; col: number }, block: string[][]): string[][] {
-  const height = Math.max(rows.length, at.row + block.length);
-  const widest = block.reduce((w, r) => Math.max(w, r.length), 0);
-  const cols = Math.max(width(rows), at.col + widest);
-  const out: string[][] = [];
-  for (let r = 0; r < height; r++) {
-    const source = rows[r] ?? [];
-    const row: string[] = [];
-    for (let c = 0; c < cols; c++) {
-      const inBlock = r >= at.row && r < at.row + block.length && c >= at.col && c < at.col + widest;
-      row.push(inBlock ? (block[r - at.row]?.[c - at.col] ?? "") : (source[c] ?? ""));
-    }
-    out.push(row);
+/** Apply a list of cell writes, GROWING the grid to fit any that fall outside it.
+ *
+ * One primitive serves paste, cut and clear, and it takes SCATTERED targets on
+ * purpose: with a sort active a rectangle on screen is a set of rows all over the
+ * file, so an op shaped as "a contiguous block at an offset" could only ever be
+ * right for the unsorted case. Growing rather than clipping matters for the same
+ * reason a paste must not silently lose its last rows.
+ *
+ * Returns the input untouched when there is nothing to write, so a no-op edit
+ * can't dirty the file. */
+export function writeCells(rows: string[][], writes: { row: number; col: number; value: string }[]): string[][] {
+  if (writes.length === 0) return rows;
+  const height = Math.max(rows.length, ...writes.map((w) => w.row + 1));
+  const out: string[][] = Array.from({ length: height }, (_, r) => [...(rows[r] ?? [])]);
+  // Rows that did not exist start at the grid's current width so they line up
+  // with their neighbours; rows that DID exist keep their own length, because
+  // padding untouched rows would silently rewrite a ragged file into a
+  // rectangular one (the rule `insertColumn` already follows).
+  const base = width(rows);
+  for (let r = rows.length; r < height; r++) out[r] = Array.from({ length: base }, () => "");
+  for (const w of writes) {
+    const row = out[w.row];
+    if (!row) continue;
+    while (row.length <= w.col) row.push("");
+    row[w.col] = w.value;
   }
   return out;
-}
-
-/** Blank every cell in the range, leaving the grid's shape alone — Delete clears
- * contents, it does not remove rows. */
-export function clearBlock(rows: string[][], range: Range): string[][] {
-  return rows.map((row, r) =>
-    r < range.top || r > range.bottom
-      ? row
-      : row.map((v, c) => (c >= range.left && c <= range.right ? "" : v)),
-  );
 }

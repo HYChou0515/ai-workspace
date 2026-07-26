@@ -36,6 +36,7 @@ import {
   removeRow,
   type SortDir,
   sortedIndices,
+  writeCells,
 } from "./sheetOps";
 import { visibleRange } from "./sheetWindow";
 
@@ -132,6 +133,22 @@ export function SheetGrid({
   });
 
   const extendTo = (c: Cell) => setSel((s) => (s ? { anchor: s.anchor, focus: clamp(c) } : s));
+
+  /** The FILE row behind a display row (display 0 is the header). */
+  const fileRowAt = (displayRow: number): number => (displayRow === 0 ? 0 : (order[displayRow - 1] ?? -1));
+
+  /** Blank every cell in the selection. Contents only — Delete never removes
+   * rows, and the targets are scattered whenever a sort is active. */
+  const clearSelection = (r: Range) => {
+    const writes: { row: number; col: number; value: string }[] = [];
+    for (let d = r.top; d <= r.bottom; d++) {
+      const fileRow = fileRowAt(d);
+      if (fileRow < 0) continue;
+      for (let c = r.left; c <= r.right; c++) writes.push({ row: fileRow, col: c, value: "" });
+    }
+    const next = writeCells(grid, writes);
+    if (next !== grid) onRowsChange(next);
+  };
 
   const commit = (pending: Edit | null) => {
     setEdit(null);
@@ -261,7 +278,22 @@ export function SheetGrid({
       onMouseUp={() => {
         dragging.current = false;
       }}
+      onCut={(e) => {
+        // Same "block only" rule as copy: one cell keeps the input's own cut.
+        if (!range || !spansManyCells || readOnly) return;
+        e.preventDefault();
+        e.clipboardData.setData("text/plain", serializeCsv(selectionBlock(range), "\t"));
+        clearSelection(range);
+      }}
       onKeyDown={(e) => {
+        if ((e.key === "Delete" || e.key === "Backspace") && range && spansManyCells && !readOnly) {
+          // A block selection means "clear these cells"; a single cell is still
+          // the input's own backspace, so a value stays editable character by
+          // character.
+          e.preventDefault();
+          clearSelection(range);
+          return;
+        }
         if (e.key.toLowerCase() !== "z" || !(e.ctrlKey || e.metaKey)) return;
         // Mid-typing, Ctrl+Z belongs to the input: undoing keystrokes inside the
         // cell you are editing is what the user means. Only once the draft

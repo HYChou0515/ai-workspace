@@ -194,6 +194,54 @@ describe("SheetGrid — range selection and the clipboard", () => {
     expect(copyFrom(cell)["text/plain"]).toBeUndefined();
   });
 
+  it("clears a selected block with Delete, without removing rows", async () => {
+    const onRowsChange = vi.fn();
+    render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
+
+    await userEvent.click(screen.getByLabelText("R1C1"));
+    fireEvent.mouseDown(screen.getByLabelText("R2C2"), { shiftKey: true });
+    fireEvent.keyDown(screen.getByLabelText("R2C2"), { key: "Delete" });
+
+    expect(onRowsChange).toHaveBeenCalledWith([
+      ["wafer", "qty", "note"],
+      ["", "", "ok"],
+      ["", "", "rework"],
+      ["W03", "77", "ok"],
+    ]);
+  });
+
+  it("cuts: the block reaches the clipboard AND leaves the sheet", async () => {
+    const onRowsChange = vi.fn();
+    render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
+
+    await userEvent.click(screen.getByLabelText("R1C1"));
+    fireEvent.mouseDown(screen.getByLabelText("R2C2"), { shiftKey: true });
+
+    const written: Record<string, string> = {};
+    fireEvent.cut(screen.getByLabelText("R2C2"), {
+      clipboardData: { setData: (k: string, v: string) => (written[k] = v), getData: () => "" },
+    });
+
+    expect(written["text/plain"]).toBe("W01\t120\nW02\t98\n");
+    expect(onRowsChange).toHaveBeenCalledWith([
+      ["wafer", "qty", "note"],
+      ["", "", "ok"],
+      ["", "", "rework"],
+      ["W03", "77", "ok"],
+    ]);
+  });
+
+  it("leaves Delete to the input when only one cell is selected", async () => {
+    const onRowsChange = vi.fn();
+    render(<SheetGrid rows={SHEET} onRowsChange={onRowsChange} />);
+
+    const cell = screen.getByLabelText("R1C1");
+    await userEvent.click(cell);
+    fireEvent.keyDown(cell, { key: "Delete" });
+
+    expect(onRowsChange).not.toHaveBeenCalled();
+  });
+
   it("extends the selection with Shift+Arrow", async () => {
     render(<SheetGrid rows={SHEET} onRowsChange={vi.fn()} />);
 

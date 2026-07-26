@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyBlock, insertColumn, insertRow, removeColumn, removeRow, sortRows } from "./sheetOps";
+import { insertColumn, insertRow, removeColumn, removeRow, sortRows, writeCells } from "./sheetOps";
 
 const GRID = [
   ["wafer", "qty"],
@@ -91,33 +91,46 @@ describe("sortRows", () => {
   });
 });
 
-describe("applyBlock", () => {
+describe("writeCells", () => {
   const G = [
     ["a", "b", "c"],
     ["1", "2", "3"],
-    ["4", "5", "6"],
   ];
 
-  it("writes the block with its top-left at the anchor", () => {
-    expect(applyBlock(G, { row: 1, col: 1 }, [["X", "Y"]])).toEqual([
+  it("writes each cell where it is told", () => {
+    expect(writeCells(G, [{ row: 1, col: 1, value: "X" }])).toEqual([
       ["a", "b", "c"],
-      ["1", "X", "Y"],
-      ["4", "5", "6"],
+      ["1", "X", "3"],
     ]);
   });
 
-  it("grows rows and columns when the block overflows, instead of clipping it", () => {
-    // Excel grows the sheet rather than silently dropping what you pasted.
-    expect(applyBlock(G, { row: 2, col: 2 }, [["X", "Y"], ["Z", "W"]])).toEqual([
-      ["a", "b", "c", ""],
-      ["1", "2", "3", ""],
-      ["4", "5", "X", "Y"],
-      ["", "", "Z", "W"],
+  it("grows rows and columns to fit, instead of dropping writes that fall outside", () => {
+    // A paste that quietly loses its last rows is the worst kind of data loss,
+    // and a sorted sheet routinely targets rows that don't exist yet.
+    expect(writeCells(G, [{ row: 3, col: 4, value: "X" }])).toEqual([
+      ["a", "b", "c"],
+      ["1", "2", "3"],
+      ["", "", ""],
+      ["", "", "", "", "X"],
     ]);
   });
 
-  it("pads the rows it grows so the grid stays rectangular", () => {
-    const out = applyBlock([["a"]], { row: 0, col: 0 }, [["X"], ["Y"], ["Z"]]);
-    expect(out).toEqual([["X"], ["Y"], ["Z"]]);
+  it("does not widen rows it was not asked to write to", () => {
+    // Padding every row out to the new width would silently rewrite a ragged
+    // file into a rectangular one — the same rule `insertColumn` follows.
+    const ragged = [["a", "b", "c"], ["x"]];
+    expect(writeCells(ragged, [{ row: 0, col: 4, value: "X" }])).toEqual([["a", "b", "c", "", "X"], ["x"]]);
+  });
+
+  it("takes scattered targets, which is what a sorted view produces", () => {
+    const rows = [["h"], ["a"], ["b"], ["c"]];
+    expect(writeCells(rows, [
+      { row: 3, col: 0, value: "X" },
+      { row: 1, col: 0, value: "Y" },
+    ])).toEqual([["h"], ["Y"], ["b"], ["X"]]);
+  });
+
+  it("leaves the grid untouched when there is nothing to write", () => {
+    expect(writeCells(G, [])).toBe(G);
   });
 });
