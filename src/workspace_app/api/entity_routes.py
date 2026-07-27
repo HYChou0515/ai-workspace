@@ -86,11 +86,15 @@ def register_entity_routes(
     async def _store(
         slug: str, item_id: str, type_name: str | None = None
     ) -> tuple[str, EntityStore]:
-        """`type_name` loads JUST that type. A request that names its type never
-        looks at the others, and rebuilding the whole catalog read every declared
-        type's schema and skeleton first — half of it, on a PM item, for a type
-        the request does not mention. Only `entity_health` genuinely spans them
-        all, and `list_entity_types` builds its own."""
+        """`type_name` loads JUST that type — for a request that reads nothing
+        but its own type. Rebuilding the whole catalog read every declared type's
+        schema and skeleton first, half of it (on a PM item) for a type the
+        request does not mention.
+
+        Only `create` qualifies: it renders a skeleton and writes one record.
+        `query` and `update` PROJECT, and a projection crosses types — a
+        milestone rolls up the issues pointing at it — so they still need the
+        whole catalog, as do `entity_health` and `list_entity_types`."""
         investigation_id = locator.require_item(slug, item_id)
         catalog, _diags = (
             await load_entity_type(files, investigation_id, type_name)
@@ -202,7 +206,7 @@ def register_entity_routes(
 
     @app.get("/a/{slug}/items/{item_id}/entities/{type_name}")
     async def query_entities(slug: str, item_id: str, type_name: str) -> _EntityListOut:
-        _iid, store = await _store(slug, item_id, type_name)
+        _iid, store = await _store(slug, item_id)
         _require_type(store.catalog, type_name)
         result = await store.query(type_name)
         return _EntityListOut(
@@ -227,7 +231,7 @@ def register_entity_routes(
     async def update_entity(
         slug: str, item_id: str, type_name: str, number: int, body: _EntityUpdateBody
     ) -> _EntityOut:
-        iid, store = await _store(slug, item_id, type_name)
+        iid, store = await _store(slug, item_id)
         _require_type(store.catalog, type_name)
         try:
             updated = await store.update(
