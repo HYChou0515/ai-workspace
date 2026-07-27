@@ -753,6 +753,23 @@ def _browse_entities(
     rows: list[tuple[str, GraphEntity]] = []
     want = limit + offset + 1
     with erm.using(as_user, apply_access_scope=True):  # ty: ignore[unknown-argument]
+        # A kind is an entity, so the word the reader typed resolves through the
+        # same name index as anything else — and `kind_id` is indexed, so the
+        # narrowing belongs in the query. It used to run in Python over the rows
+        # already fetched, which meant a kind filter could only ever see the
+        # first `want` rows of the table: it returned a fraction of the matches
+        # and then reported `has_more: false`, i.e. "that is all of them". More
+        # data made it worse. Pushing it down also makes the query far more
+        # selective, which is the opposite of what the old shape did.
+        kind_ids: list[str] = []
+        if kind:
+            wanted_kind = norm_surface(kind)
+            for r in erm.list_resources(QB["norm_keys"].contains(wanted_kind).build()):
+                kind_ids.append(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+            if not kind_ids:
+                # Nothing is called that, so nothing can be of that kind. Saying
+                # so beats scanning the table to discover it.
+                return GraphEntityPageOut(items=[], has_more=False, next_offset=offset)
         if q:
             seen: set[str] = set()
             for _name, hit_ids in graph_name_index(spec).get().search(q, limit=want):
@@ -770,11 +787,15 @@ def _browse_entities(
                         continue
                     if collection and collection not in data.collection_ids:
                         continue
+                    if kind_ids and data.kind_id not in kind_ids:
+                        continue
                     rows.append((rid, data))
         else:
             cond = QB.all() if include_merged else (QB["merged_into"] == "")
             if collection:
                 cond = cond & QB["collection_ids"].contains(collection)
+            if kind_ids:
+                cond = cond & QB["kind_id"].in_(kind_ids)
             for r in erm.list_resources(cond.limit(want).build()):
                 data = r.data
                 if isinstance(data, GraphEntity) and data.collection_ids:
@@ -792,14 +813,6 @@ def _browse_entities(
                         continue
                     if isinstance(krow, GraphEntity):
                         kinds[data.kind_id] = krow.canonical_name
-    if kind:
-        wanted = norm_surface(kind)
-        rows = [
-            (rid, d)
-            for rid, d in rows
-            if d.kind_id and norm_surface(kinds.get(d.kind_id, "")) == wanted
-        ]
-
     window = rows[offset : offset + limit + 1]
     return GraphEntityPageOut(
         items=[
