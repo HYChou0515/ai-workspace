@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -80,6 +80,12 @@ class InvestigationRegistry:
     # `sandbox.persist`). None/False → the app-side SandboxSync path (shared-vol
     # local / non-http), unchanged.
     host_managed_durable: bool = False
+    # #492/M2: drain one item's durable store into the PHYSICAL tree the host
+    # restores from, returning how many files it had to copy. Wired only for a
+    # host-managed deployment whose durable store still spans two backends (the
+    # `migrate_from` dual-read layer); None everywhere else, including once the
+    # migration is retired. See `_acquire` for why it must run before `create`.
+    durable_backfill: Callable[[str], Awaitable[int]] | None = None
     _sessions: dict[str, InvestigationSession] = field(default_factory=dict)
 
     @property
@@ -258,6 +264,30 @@ class InvestigationRegistry:
                 )
                 stale = existing  # dead address → rebuild + swap it out below
         fresh = await self._is_cold(item)
+        # #492/M2: the host restores a sandbox by rsyncing the PHYSICAL durable
+        # tree — it never reads through the app's FileStore, so the dual-read
+        # migration layer's lazy per-file backfill never reaches it. Drain the
+        # item into that tree FIRST or the sandbox comes up holding only the
+        # files somebody happened to open, while the union `ls` still lists them
+        # all, so nothing on screen looks wrong.
+        #
+        # This runs BEFORE `create` on purpose. These are the user's own files,
+        # and a workspace that reaches the agent missing some of them is the
+        # failure we refuse: work would accumulate on top of a partial state,
+        # and once the migration retires the legacy store the gap is permanent.
+        # Failing here leaves no sandbox at all, which is recoverable; a
+        # half-filled one is not. (Seeding a NEW item's profile stays
+        # best-effort — that is regenerable template, not the user's data.)
+        if self.durable_backfill is not None:
+            try:
+                await self.durable_backfill(item)
+            except Exception:
+                logger.exception(
+                    "registry: durable drain failed for item %s - refusing to build a "
+                    "sandbox that would reach the agent missing the user's files",
+                    item,
+                )
+                raise
         handle = await self.sandbox.create(self.default_spec, sandbox_id=item)
         logger.info(
             "registry: created sandbox handle %s for item %s (cold=%s)",

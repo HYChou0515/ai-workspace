@@ -57,3 +57,24 @@ def test_default_off_boots_with_a_plain_sandbox():
         runner=_runner(),
     )
     assert app is not None
+
+
+def test_drain_hook_is_wired_only_while_durable_still_spans_two_stores():
+    """#492/M2: the host restores a sandbox from the physical durable tree, so an
+    item still half-migrated has to be drained into that tree before create.
+
+    That only applies while `migrate_from` has durable split across two backends.
+    A store that IS the tree (migration retired) has nothing to drain, and a
+    non-host-managed deployment restores through the FileStore itself — which
+    already unions both — so neither gets the hook.
+    """
+    from workspace_app.api.app import resolve_durable_backfill
+    from workspace_app.filestore.migrating import MigratingFileStore
+    from workspace_app.filestore.nfs_tree import NfsTreeFileStore
+
+    migrating = MigratingFileStore(NfsTreeFileStore("/tmp/tree"), MemoryFileStore())
+    plain = NfsTreeFileStore("/tmp/tree")
+
+    assert resolve_durable_backfill(migrating, host_managed_durable=True) is not None
+    assert resolve_durable_backfill(plain, host_managed_durable=True) is None
+    assert resolve_durable_backfill(migrating, host_managed_durable=False) is None

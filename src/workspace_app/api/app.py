@@ -89,6 +89,29 @@ from .workflow_routes import register_workflow_routes
 logger = logging.getLogger(__name__)
 
 
+def resolve_durable_backfill(
+    filestore: FileStore, *, host_managed_durable: bool
+) -> Callable[[str], Awaitable[int]] | None:
+    """#492/M2: the per-item drain `InvestigationRegistry` runs before a
+    host-managed `create`, or None when there is nothing to drain.
+
+    A host-managed sandbox is filled by the host rsyncing the PHYSICAL durable
+    tree; that copy never reads through this FileStore, so a durable store still
+    split across two backends (`sandbox.durable.migrate_from`) has to be drained
+    into the tree first — its dual-read layer backfills one file at a time, on
+    read, which the host never triggers.
+
+    Hence both conditions. A store that IS the tree (migration retired) has no
+    second backend to drain, and a non-host-managed deployment restores through
+    the FileStore itself, which already unions both. Duck-typed on the store's
+    own `backfill_workspace`, like the `persist` guard below.
+    """
+    if not host_managed_durable:
+        return None
+    backfill = getattr(filestore, "backfill_workspace", None)
+    return backfill if callable(backfill) else None
+
+
 def _reconcile_after_turn(
     flush: Callable[[str], Awaitable[None]],
     forget_usage: Callable[[str], None],
@@ -480,6 +503,9 @@ def create_app(
         activity=activity_store,
         address=address_store,
         host_managed_durable=host_managed_durable,
+        durable_backfill=resolve_durable_backfill(
+            filestore, host_managed_durable=host_managed_durable
+        ),
     )
     # The single chokepoint for workspace file ops (agent tools + file routes):
     # reads AND writes route to the item's ONE live sandbox (resolved globally via
