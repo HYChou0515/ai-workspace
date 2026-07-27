@@ -297,6 +297,7 @@ export const messages = {
   "kb.brand": { "zh-TW": "知識庫", en: "Knowledge base" },
   "kb.collections": { "zh-TW": "知識集", en: "Collections" },
   "kb.chats": { "zh-TW": "對話", en: "Chats" },
+  "kb.graph": { "zh-TW": "知識圖譜", en: "Knowledge graph" },
   "kb.conversations": { "zh-TW": "對話", en: "Conversations" },
   "kb.empty": {
     "zh-TW": "選擇一個對話，或開始新的對話。",
