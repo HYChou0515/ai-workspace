@@ -42,6 +42,9 @@ type Related = {
   source_doc_id: string;
 };
 
+/** An edge between two of this entity's neighbours (#534). */
+type NeighborLink = { from_entity_id: string; to_entity_id: string; predicate: string };
+
 // #628: a number stated on a slide that names this entity — co-located, so it
 // arrives with the slide it came from.
 type Claim = {
@@ -64,6 +67,7 @@ type Entity = {
   occurrences: number;
   mentions: Mention[];
   related: Related[];
+  neighbor_links?: NeighborLink[];
   claims: Claim[];
   // #630: the same statements from the far end — what holds THIS as a value.
   value_of: Claim[];
@@ -158,6 +162,7 @@ export function GraphEntityPage() {
           surface: m.surface,
           occurrences: m.occurrences,
         }))}
+        links={e.neighbor_links ?? []}
         rels={e.related.map((r) => ({
           direction: r.direction,
           predicate: r.predicate,

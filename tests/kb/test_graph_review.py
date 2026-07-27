@@ -457,3 +457,61 @@ def test_a_proposal_says_what_kind_each_side_is():
     (proposal,) = list_proposals(spec, as_user="bob")
     assert proposal.kind == "機台"
     assert proposal.other_kind == "機台"
+
+
+def _entity_id(spec: SpecStar, surface: str) -> str:
+    from workspace_app.resources.graph import GraphEntity
+
+    rm = spec.get_resource_manager(GraphEntity)
+    for r in rm.list_resources(QB["norm_keys"].contains(norm_surface(surface)).build()):
+        return r.info.resource_id  # ty: ignore[unresolved-attribute]
+    raise AssertionError(f"no entity for {surface}")
+
+
+def _triangle(spec: SpecStar, *, private: bool = False) -> str:
+    """A 影響 B, B 影響 C, A 影響 C — so C is a neighbour of A *and* of B."""
+    cid = _private_collection(spec) if private else _collection(spec)
+    for s in ("回焊爐", "空洞率", "良率"):
+        _mention(spec, cid, "deck-A", s, private=private)
+    link_identical_mentions(spec)
+    _relationship(spec, cid, "deck-A", "回焊爐", "影響", "空洞率", private=private)
+    _relationship(spec, cid, "deck-A", "空洞率", "影響", "良率", private=private)
+    _relationship(spec, cid, "deck-A", "回焊爐", "影響", "良率", private=private)
+    return cid
+
+
+def test_the_page_carries_the_edges_between_its_neighbours():
+    """A star cannot show a graph. The centre's own edges say what it touches;
+    the edges AMONG those neighbours are what make the picture a network — that
+    回焊爐 reaches 良率 both directly and through 空洞率 is the whole point, and
+    it is invisible if only the centre's spokes are drawn."""
+    spec = make_spec(default_user=lambda: "bob")
+    _triangle(spec)
+    page = entity_page(spec, _entity_id(spec, "回焊爐"), as_user="bob")
+
+    between = {(e.from_entity_id, e.to_entity_id) for e in page.neighbor_links}
+    assert (_entity_id(spec, "空洞率"), _entity_id(spec, "良率")) in between
+
+
+def test_neighbour_edges_never_repeat_the_centre_s_own():
+    """The centre's spokes are already in `related`; repeating them here would
+    draw every one of them twice."""
+    spec = make_spec(default_user=lambda: "bob")
+    _triangle(spec)
+    centre = _entity_id(spec, "回焊爐")
+    page = entity_page(spec, centre, as_user="bob")
+    assert all(centre not in (e.from_entity_id, e.to_entity_id) for e in page.neighbor_links)
+
+
+def test_neighbour_edges_stay_inside_what_the_reader_may_read():
+    """Same rule as everything else on this page — the scope does it, not a
+    second copy here."""
+    spec = make_spec(default_user=lambda: "bob")
+    import pytest
+    from specstar.types import ResourceIDNotFoundError
+
+    _triangle(spec, private=True)
+    page = entity_page(spec, _entity_id(spec, "回焊爐"), as_user="bob")
+    assert page.neighbor_links, "the owner sees the edge between the two neighbours"
+    with pytest.raises(ResourceIDNotFoundError):
+        entity_page(spec, _entity_id(spec, "回焊爐"), as_user="alice")
