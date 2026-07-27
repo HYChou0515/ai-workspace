@@ -150,6 +150,10 @@ class CollectionOut(BaseModel):
     # #377: auto-generate context cards (+ raise clarification questions) for every
     # doc as it finishes indexing. User-owned; the settings panel toggles it.
     auto_digest: bool = False
+    # #534: knowledge-graph metric extraction opt-in. The graph dispatch only ever
+    # visits collections where this is True, so the settings panel has to be able
+    # to read it back — without it the toggle can be written but never reflected.
+    use_graph: bool = False
     # Issue #90: per-collection wiki guidance, so the editor can prefill the
     # current values. Blank ⇒ the bundled wiki prompt is used verbatim.
     wiki_maintainer_guidance: str = ""
@@ -842,6 +846,7 @@ def register_kb_routes(
             use_wiki=data.use_wiki,
             is_global=data.is_global,
             auto_digest=data.auto_digest,
+            use_graph=data.use_graph,
             wiki_maintainer_guidance=data.wiki_maintainer_guidance,
             wiki_reader_guidance=data.wiki_reader_guidance,
             quality_rubric=data.quality_rubric,
