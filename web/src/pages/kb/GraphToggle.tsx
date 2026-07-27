@@ -4,19 +4,23 @@ import { kbApi, type KbApi, type KbCollection } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { useT } from "../../lib/i18n";
 import { pxToRem } from "../../lib/pxToRem";
+import { SettingRow } from "./SettingRow";
 
 /**
- * "Knowledge graph" toggle on the collection settings panel (#534). When on, the
+ * "Knowledge graph" row on the collection settings panel (#534). When on, the
  * extraction pass reads every document in the collection and writes its metric
- * claims + mentions. It's a user-owned setting persisted through the standard
+ * claims + mentions. A user-owned setting persisted through the standard
  * `PATCH /collection/{id}` (`use_graph`), like `auto_digest`.
  *
- * The toggle deliberately does NOT start a run: extraction is expensive VLM/LLM
+ * The switch deliberately does NOT start a run: extraction is expensive VLM/LLM
  * work, and a switch that silently spends it is the footgun #534 set out to
- * avoid. The dispatch cronjob is weekly, though, so waiting for it would make a
- * freshly opted-in collection look broken — hence the explicit "extract now"
- * button beside it, disabled until the collection has opted in (the route
- * answers `disabled` there, so offering it would promise work that never runs).
+ * avoid — the same split the retrieval settings already use, where the toggle
+ * persists and the rebuild button is its own press.
+ *
+ * The dispatch cronjob is weekly, though, so opting in and waiting would look
+ * broken. Hence "extract now" inside the row, disabled until the collection has
+ * opted in — the route answers `disabled` there, so offering it would promise
+ * work that never runs.
  */
 export function GraphToggle({
   collection,
@@ -37,42 +41,29 @@ export function GraphToggle({
   });
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <label
-        className="kb-usegraph-toggle"
-        style={{ display: "inline-flex", alignItems: "center", gap: 8, cursor: "pointer" }}
-      >
-        <input
-          type="checkbox"
-          data-testid="kb-usegraph-toggle"
-          checked={collection.use_graph}
-          disabled={toggle.isPending}
-          onChange={(e) => toggle.mutate(e.target.checked)}
-        />
-        <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.3 }}>
-          <span style={{ fontSize: pxToRem(13), fontWeight: 600, color: "var(--text-paper)" }}>
-            {t("kb.useGraph.label")}
-          </span>
-          <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-            {t("kb.useGraph.help")}
-          </span>
-        </span>
-      </label>
-      <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+    <SettingRow
+      icon="branch"
+      title={t("kb.useGraph.label")}
+      desc={t("kb.useGraph.help")}
+      on={collection.use_graph}
+      disabled={toggle.isPending}
+      onToggle={() => toggle.mutate(!collection.use_graph)}
+      testId="kb-usegraph-toggle"
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
         <button
           type="button"
           className="kb-btn"
           data-testid="kb-usegraph-rebuild"
           disabled={!collection.use_graph || rebuild.isPending}
           onClick={() => rebuild.mutate()}
-          style={{ fontSize: pxToRem(12) }}
         >
           {t("kb.useGraph.rebuild")}
         </button>
         {rebuild.data && (
           <span
             data-testid="kb-usegraph-result"
-            style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}
+            style={{ fontSize: pxToRem(11.5), color: "var(--text-paper-d)" }}
           >
             {rebuild.data.status === "disabled"
               ? t("kb.useGraph.rebuildDisabled")
@@ -80,6 +71,6 @@ export function GraphToggle({
           </span>
         )}
       </div>
-    </div>
+    </SettingRow>
   );
 }
