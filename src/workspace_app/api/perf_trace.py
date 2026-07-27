@@ -40,6 +40,7 @@ import contextlib
 import contextvars
 import logging
 import os
+import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -49,6 +50,11 @@ from typing import Any
 from starlette.types import Scope
 
 logger = logging.getLogger(__name__)
+
+# Bumped by hand whenever this module changes in a way an operator must be
+# able to confirm from the logs. "Which build is actually running?" is not a
+# question worth spending a deploy on.
+_BUILD = 3
 
 _ENV = "WORKSPACE_PERF_TRACE"
 _ENV_SLOW_MS = "WORKSPACE_PERF_TRACE_SLOW_MS"
@@ -184,6 +190,30 @@ def _patch_async(cls: type, name: str) -> None:
     setattr(cls, name, wrapper)
 
 
+def _install_own_handler() -> None:
+    """Emit through our OWN stdout handler instead of the ambient config.
+
+    This app configures Python logging nowhere — ``uvicorn.run`` is called with
+    no ``log_config`` and no ``log_level``, and uvicorn's defaults only touch its
+    own loggers. So ``workspace_app.*`` records fall through to the stdlib's
+    handler of last resort, which drops everything below WARNING: an INFO-level
+    diagnostic emits absolutely nothing, and the only way to discover that is to
+    deploy and see an empty log.
+
+    Owning the handler (and ``propagate = False``) makes these lines appear
+    regardless of what does or doesn't configure logging around them. The
+    timestamp is millisecond-resolution on purpose: proving that four requests
+    OVERLAPPED needs their start and end times, not just their durations."""
+    if any(getattr(h, "_perf_trace", False) for h in logger.handlers):
+        return
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter("%(asctime)s.%(msecs)03d %(message)s", "%H:%M:%S"))
+    handler._perf_trace = True  # ty: ignore[unresolved-attribute]
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+
 def install(spec: Any, sandbox: Any) -> None:
     """Patch the classes whose calls we want attributed.
 
@@ -191,6 +221,7 @@ def install(spec: Any, sandbox: Any) -> None:
     composition root branches on ``isinstance(sandbox, HttpSandbox)`` to decide
     whether to wire the shared address store (#366), and a proxy would silently
     turn that off."""
+    _install_own_handler()
     try:
         from workspace_app.apps.registry import registered_apps
 
@@ -206,10 +237,20 @@ def install(spec: Any, sandbox: Any) -> None:
         logger.exception("perf_trace: install failed - continuing without tracing")
         return
     logger.warning(
-        "perf_trace: ACTIVE - logging one 'perf:' line per request, with per-call "
-        "detail above %.0fms. Set %s=0 to silence.",
+        "perf_trace: ACTIVE build=%d - one 'perf:' line per request, per-call detail "
+        "above %.0fms. Set %s=0 to silence.",
+        _BUILD,
         _slow_ms(),
         _ENV,
+    )
+    # Emit a specimen through the EXACT path the request lines use. If this line
+    # is absent from the logs, the request lines were never going to appear
+    # either, and the reason is here (build, level, handler) rather than in the
+    # middleware — which is the difference between reading a log and spending
+    # another deploy to find out.
+    logger.info(
+        "perf: SELFTEST - if you can read this, per-request lines will appear too (build=%d)",
+        _BUILD,
     )
 
 
