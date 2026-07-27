@@ -84,10 +84,13 @@ def test_request_line_counts_the_database_round_trips_it_made(
     traced.get(f"/a/pm/items/{item['resource_id']}/files")
 
     line = next(m for m in _perf_lines(perf_log) if "/files" in m)
-    # Six today: four are `find_work_item` guessing which App owns the id (the
-    # miss costs a get AND a get_meta), one is a get_meta the guess already did,
-    # one is the caller's groups. A drop here is the fix landing, not a break.
-    assert _field(line, "db") >= 5, line
+    # Was six: four were `find_work_item` guessing which App owns the id (a
+    # miss costs a get AND a get_meta), one a get_meta the guess had already
+    # done, one the caller's groups. The id names its own table, so the guessing
+    # is gone. Pinned as a CEILING — at ~268ms a round-trip in production, a
+    # regression here is a second of latency on every route, not a tidiness
+    # issue.
+    assert _field(line, "db") <= 4, line
     assert "other=" in line  # the residual — wall clock spent outside its own calls
 
 
