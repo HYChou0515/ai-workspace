@@ -302,6 +302,36 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_preset_required_fields(merged, source=source)
     _check_retrieval_llm_reference(merged, source=source)
     _check_max_searches(merged, source=source)
+    _check_host_managed_durable(merged, source=source)
+
+
+def _check_host_managed_durable(merged: dict[str, Any], *, source: str) -> None:
+    """#492: `sandbox.http.host_managed_durable` hands the sandbox host ownership
+    of durable — it fills a fresh sandbox by rsyncing `sandbox.durable`'s tree and
+    persists back to it. If the app's own sandbox durable store is not that tree,
+    the two halves never meet: the app seeds and reads one store while the host
+    restores and persists another, so every sandbox comes up without the item's
+    files and nothing in the running system says why.
+
+    The mismatch is visible only in the config, so it is refused here — naming
+    both knobs — rather than booting a deployment that cannot work. Gated on
+    `sandbox.kind: http`, the same condition that makes the flag take effect.
+    """
+    # `or {}` throughout: a half-typed block (`http:` with nothing under it) is
+    # YAML None, not a mapping, and a validator whose job is a clean operator
+    # message must not blow up on the shapes operators actually leave behind.
+    sandbox = merged.get("sandbox") or {}
+    if sandbox.get("kind") != "http" or not (sandbox.get("http") or {}).get("host_managed_durable"):
+        return
+    kind = (sandbox.get("durable") or {}).get("kind")
+    if kind != "nfs_tree":
+        raise ValueError(
+            f"config {source}: sandbox.http.host_managed_durable is on, so the host "
+            f"restores and persists sandboxes through sandbox.durable's tree — but "
+            f"sandbox.durable.kind is {kind or 'unset'!r}, a different store. Set "
+            f"sandbox.durable.kind: nfs_tree (with nfs_root pointing at the SAME tree "
+            f"as the host's SANDBOX_HOST_NFS_ROOT), or turn host_managed_durable off."
+        )
 
 
 def _check_max_searches(merged: dict[str, Any], *, source: str) -> None:

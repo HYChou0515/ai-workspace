@@ -1129,3 +1129,65 @@ def test_health_judge_llm_referencing_unknown_preset_raises(tmp_path: Path):
     )
     with pytest.raises(ValueError, match="made-up-judge"):
         load(config_path=cfg, env={})
+
+
+def test_host_managed_durable_without_an_nfs_tree_durable_store_is_refused(tmp_path: Path):
+    """#492: the host fills a sandbox by rsyncing `sandbox.durable`'s tree, so if
+    the app's sandbox durable store is not that tree the two never meet — the app
+    seeds and reads one store while the host restores and persists another. Every
+    sandbox then comes up without the item's files, and nothing says so.
+
+    An operator can only see that from the config, so refuse it there, naming
+    both knobs rather than booting into a deployment that cannot work.
+    """
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            sandbox:
+              kind: http
+              http:
+                base_url: http://sandbox-host
+                host_managed_durable: true
+        """),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="sandbox.durable.kind"):
+        load(config_path=cfg, env={})
+
+
+def test_host_managed_durable_with_an_nfs_tree_durable_store_loads(tmp_path: Path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            sandbox:
+              kind: http
+              http:
+                base_url: http://sandbox-host
+                host_managed_durable: true
+              durable:
+                kind: nfs_tree
+                nfs_root: /data/workspaces
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.sandbox.durable.kind == "nfs_tree"
+
+
+def test_host_managed_durable_check_survives_an_empty_sandbox_block(tmp_path: Path):
+    """A half-typed block (`http:` with nothing under it) is YAML `None`, not a
+    mapping. The validator exists to hand operators a clean message, so it must
+    not itself blow up on the shapes an operator actually leaves behind.
+    """
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            sandbox:
+              kind: http
+              http:
+              durable:
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})  # host_managed_durable unset ⇒ nothing to refuse
+    assert s.sandbox.kind == "http"
