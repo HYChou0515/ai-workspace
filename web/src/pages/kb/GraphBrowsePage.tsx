@@ -27,7 +27,7 @@ import { qk } from "../../api/queryKeys";
 import { Skeleton } from "../../components/Skeleton";
 import { useT } from "../../lib/i18n";
 
-type Row = { id: string; name: string; kind: string; aliases: string[] };
+type Row = { id: string; name: string; kind: string; aliases: string[]; collection_ids: string[] };
 type Page = { items: Row[]; has_more: boolean; next_offset: number };
 
 const LIMIT = 50;
@@ -71,6 +71,11 @@ export function GraphBrowsePage() {
   });
 
   const rows = page.data?.items ?? [];
+  // The collections query is already here for the filter, and it only ever
+  // contains what this reader may open — so it doubles as the permission
+  // filter for the "found in" column, with no second copy of the rule and no
+  // extra request.
+  const nameOf = new Map((collections.data ?? []).map((c) => [c.resource_id, c.name]));
 
   return (
     <div className="gbr" data-testid="graph-browse">
@@ -120,6 +125,7 @@ export function GraphBrowsePage() {
           <div className="gbr__cols gbr__colhead" aria-hidden="true">
             <span>{t("graph.browse.colName")}</span>
             <span>{t("graph.browse.colKind")}</span>
+            <span>{t("graph.browse.colFoundIn")}</span>
             <span>{t("graph.browse.colAliases")}</span>
           </div>
           <ul className="gbr__list" data-testid="graph-browse-list">
@@ -129,6 +135,35 @@ export function GraphBrowsePage() {
                   {r.name}
                 </Link>
                 <span className="gbr__kind-chip">{r.kind}</span>
+                {/* Named where we can, counted where we cannot: an identity is
+                    visible when ANY of its collections is readable, so a row can
+                    rest on evidence this reader may not open. Dropping those
+                    silently would report the corpus as smaller than it is. */}
+                <span className="gbr__found-in">
+                  {(() => {
+                    // `?? []` is deploy insurance, not doubt about the API:
+                    // a bundle newer than the pod answering it would other-
+                    // wise take the whole page down over one absent field.
+                    const ids = r.collection_ids ?? [];
+                    const known = ids.map((id) => nameOf.get(id)).filter(Boolean);
+                    const hidden = ids.length - known.length;
+                    return (
+                      <>
+                        <span className="gbr__found-in-names" title={known.join(", ")}>
+                          {known.join(", ")}
+                        </span>
+                        {hidden > 0 && (
+                          <span
+                            className="gbr__found-in-more"
+                            title={t("graph.browse.foundInHidden")}
+                          >
+                            +{hidden}
+                          </span>
+                        )}
+                      </>
+                    );
+                  })()}
+                </span>
                 {/* Every alias, truncated by the column rather than capped at
                     three — the column is wider than the old right-aligned tail,
                     so more of them fit, and `title` keeps the rest reachable

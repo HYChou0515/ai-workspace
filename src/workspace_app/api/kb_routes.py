@@ -499,6 +499,12 @@ class GraphEntityRowOut(BaseModel):
     name: str
     kind: str
     aliases: list[str]  # the other spellings, so a search hit explains itself
+    # Which corpora vouch for it. Already on the row — it is what the access
+    # scope reads to decide visibility — so saying it costs no extra query.
+    # Sent as ids: the caller resolves names from the collection list it already
+    # holds, which is permission-filtered, rather than this route growing a
+    # second copy of the rule (see review.entity_page).
+    collection_ids: list[str]
 
 
 class GraphEntityPageOut(BaseModel):
@@ -802,6 +808,7 @@ def _browse_entities(
                 name=data.canonical_name,
                 kind=kinds.get(data.kind_id, ""),
                 aliases=sorted(k for k in data.norm_keys if k != norm_surface(data.canonical_name)),
+                collection_ids=data.collection_ids,
             )
             for rid, data in window[:limit]
         ],

@@ -121,3 +121,17 @@ def test_search_results_respect_permission_too():
     _seed(spec, private=True)
     who["id"] = "alice"
     assert client.get("/kb/graph/entities?limit=50&q=ppooi").json()["items"] == []
+
+
+def test_a_row_says_which_collections_it_was_found_in():
+    """A reader deciding whether to open an entity wants to know whose corpus it
+    came from — a collection is a boundary of responsibility. The row already
+    carries `collection_ids` (it is what the access scope reads), so saying it
+    costs no extra query."""
+    who = {"id": "bob"}
+    client, spec = _client(who)
+    cid = _seed(spec)
+    body = client.get("/kb/graph/entities?limit=5").json()
+    assert body["items"], "seeded entities are listed"
+    for row in body["items"]:
+        assert row["collection_ids"] == [cid]

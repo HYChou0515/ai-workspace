@@ -142,6 +142,11 @@ export const messages = {
   "graph.browse.colName": { "zh-TW": "名稱", en: "Name" },
   "graph.browse.colKind": { "zh-TW": "類別", en: "Kind" },
   "graph.browse.colAliases": { "zh-TW": "也寫作", en: "Also written" },
+  "graph.browse.colFoundIn": { "zh-TW": "收錄於", en: "Found in" },
+  "graph.browse.foundInHidden": {
+    "zh-TW": "另有你無權開啟的知識庫也收錄了它",
+    en: "also found in knowledge bases you cannot open",
+  },
   "graph.browse.empty": { "zh-TW": "沒有符合的東西。", en: "Nothing matches." },
   "graph.browse.next": { "zh-TW": "下一頁", en: "Next" },
   "graph.browse.prev": { "zh-TW": "上一頁", en: "Previous" },
