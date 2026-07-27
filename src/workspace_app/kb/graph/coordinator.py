@@ -78,6 +78,23 @@ class GraphCoordinator:
         """Kick off a whole extraction pass over every opted-in collection."""
         self._job_rm.create(GraphJob(payload=GraphJobPayload(kind="dispatch")))
 
+    def enqueue_collection_rebuild(self, collection_id: str) -> None:
+        """Re-extract ONE collection now, skipping the opted-in sweep.
+
+        The dispatch cronjob runs weekly, so a collection that was just opted in
+        would otherwise sit untouched for up to seven days. This queues the same
+        ``split`` the dispatch would have — same ``partition_key``, so a second
+        press serialises behind the first instead of fanning the same docs out
+        twice. Per-doc writes are an idempotent wipe+rewrite, so re-running is
+        safe by construction.
+        """
+        self._job_rm.create(
+            GraphJob(
+                payload=GraphJobPayload(kind="split", collection_id=collection_id),
+                partition_key=collection_id,
+            )
+        )
+
     # ── consume ──────────────────────────────────────────────────────
     def _handle(self, job) -> None:  # job: Resource[GraphJob]
         payload = job.data.payload

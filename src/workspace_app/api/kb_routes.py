@@ -70,6 +70,7 @@ from .permission_body import PermissionOut, build_permission
 from .permission_body import granted_user_ids as _granted_user_ids
 
 if TYPE_CHECKING:
+    from ..kb.graph.coordinator import GraphCoordinator
     from ..kb.index_coordinator import IndexCoordinator
     from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
 
@@ -218,6 +219,16 @@ class WikiPageDeletedOut(BaseModel):
 class WikiRebuildOut(BaseModel):
     """Result of POST /kb/collections/:id/wiki/rebuild — how many sources were
     queued for re-folding into the wiki."""
+
+    queued: int
+    status: str = "rebuilding"
+
+
+class GraphRebuildOut(BaseModel):
+    """Result of POST /kb/collections/:id/graph/rebuild — how many documents the
+    queued extraction pass covers. ``status`` is ``disabled`` when the collection
+    has not opted in (``use_graph``), so the UI can say why nothing happened
+    instead of claiming a run that isn't happening."""
 
     queued: int
     status: str = "rebuilding"
@@ -805,6 +816,7 @@ def register_kb_routes(
     ingestor: Ingestor,
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     *,
+    graph_coordinator: "GraphCoordinator | None" = None,
     index_coordinator: IndexCoordinator,
     retriever: Retriever,
     get_user_id: Callable[[], str],
@@ -1836,6 +1848,33 @@ def register_kb_routes(
         return WikiRebuildOut(
             queued=queued, status="rebuilding" if started else "already_rebuilding"
         )
+
+    @app.post("/kb/collections/{collection_id}/graph/rebuild")
+    async def rebuild_graph(collection_id: str) -> GraphRebuildOut:
+        # #534: manual "extract now" for one collection. The dispatch cronjob runs
+        # WEEKLY (0 3 * * 6, Asia/Taipei), so a collection that was just opted in
+        # would otherwise sit untouched for up to seven days — the toggle would
+        # look broken. Accept-and-return, same shape as the wiki rebuild (#571):
+        # queue the one `split` the dispatch would have queued and answer. The
+        # per-doc extraction is an idempotent wipe+rewrite, so re-running is safe.
+        _authorize_collection(collection_id, "edit_content")  # #607
+        coll_rm = spec.get_resource_manager(Collection)
+        try:
+            coll = coll_rm.get(collection_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Extraction is expensive VLM/LLM work. A collection that never opted in
+        # must not get it because someone found the button.
+        if graph_coordinator is None or not (isinstance(coll, Collection) and coll.use_graph):
+            return GraphRebuildOut(queued=0, status="disabled")
+        # `queued` counts what the run covers — still-indexing docs carry no chunks
+        # yet, so extraction would find nothing to read. An indexed count push-down;
+        # counted BEFORE the enqueue so a worker claiming the job immediately can't
+        # race the number as it flips docs.
+        ready = (QB["collection_id"] == collection_id) & (QB["status"] == "ready")
+        queued = spec.get_resource_manager(SourceDoc).count_resources(ready.build())
+        graph_coordinator.enqueue_collection_rebuild(collection_id)
+        return GraphRebuildOut(queued=queued)
 
     @app.post("/kb/collections/{collection_id}/wiki/reflect")
     async def reflect_wiki(collection_id: str) -> WikiReflectOut:
