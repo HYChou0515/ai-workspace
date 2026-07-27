@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, FastAPI, HTTPException
 from specstar import SpecStar
 
-from ..entity.catalog import EntityCatalog, discover_catalog
+from ..entity.catalog import EntityCatalog, discover_catalog, load_entity_type
 from ..entity.events import EntityWriteSink
 from ..entity.forms import form_spec
 from ..entity.parser import ParsedEntity
@@ -83,9 +83,20 @@ def register_entity_routes(
     # one pod can't both claim a number (single-pod serialization, §N5).
     locks: dict[str, asyncio.Lock] = {}
 
-    async def _store(slug: str, item_id: str) -> tuple[str, EntityStore]:
+    async def _store(
+        slug: str, item_id: str, type_name: str | None = None
+    ) -> tuple[str, EntityStore]:
+        """`type_name` loads JUST that type. A request that names its type never
+        looks at the others, and rebuilding the whole catalog read every declared
+        type's schema and skeleton first — half of it, on a PM item, for a type
+        the request does not mention. Only `entity_health` genuinely spans them
+        all, and `list_entity_types` builds its own."""
         investigation_id = locator.require_item(slug, item_id)
-        catalog, _diags = await discover_catalog(files, investigation_id)
+        catalog, _diags = (
+            await load_entity_type(files, investigation_id, type_name)
+            if type_name is not None
+            else await discover_catalog(files, investigation_id)
+        )
         return investigation_id, EntityStore(
             files, investigation_id, catalog, locks=locks, on_write=on_entity_write
         )
@@ -191,7 +202,7 @@ def register_entity_routes(
 
     @app.get("/a/{slug}/items/{item_id}/entities/{type_name}")
     async def query_entities(slug: str, item_id: str, type_name: str) -> _EntityListOut:
-        _iid, store = await _store(slug, item_id)
+        _iid, store = await _store(slug, item_id, type_name)
         _require_type(store.catalog, type_name)
         result = await store.query(type_name)
         return _EntityListOut(
@@ -203,7 +214,7 @@ def register_entity_routes(
     async def create_entity(
         slug: str, item_id: str, type_name: str, body: _EntityCreateBody
     ) -> _EntityOut:
-        iid, store = await _store(slug, item_id)
+        iid, store = await _store(slug, item_id, type_name)
         _require_type(store.catalog, type_name)
         created = await store.create(
             type_name, body.args, actor=get_user_id(), now=datetime.now(UTC).date().isoformat()
@@ -216,7 +227,7 @@ def register_entity_routes(
     async def update_entity(
         slug: str, item_id: str, type_name: str, number: int, body: _EntityUpdateBody
     ) -> _EntityOut:
-        iid, store = await _store(slug, item_id)
+        iid, store = await _store(slug, item_id, type_name)
         _require_type(store.catalog, type_name)
         try:
             updated = await store.update(
