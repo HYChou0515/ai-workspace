@@ -913,7 +913,9 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
           <CardGenToggle collection={selected} client={client} />
           {/* #534: knowledge-graph extraction opt-in + the manual "extract now"
               button — the dispatch cronjob is weekly. */}
-          <GraphToggle collection={selected} client={client} />
+          <div style={{ marginTop: 10 }}>
+            <GraphToggle collection={selected} client={client} />
+          </div>
           {/* Global collection = part of every AI chat's baseline retrieval
               scope, so it belongs with "how answers are found". Superuser-only —
               renders nothing for others (tucked in settings, not the bare header). */}

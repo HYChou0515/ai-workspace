@@ -61,6 +61,7 @@ export function GraphToggle({
       <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
         <button
           type="button"
+          className="kb-btn"
           data-testid="kb-usegraph-rebuild"
           disabled={!collection.use_graph || rebuild.isPending}
           onClick={() => rebuild.mutate()}
