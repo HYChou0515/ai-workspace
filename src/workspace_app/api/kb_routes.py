@@ -816,7 +816,7 @@ def register_kb_routes(
     ingestor: Ingestor,
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     *,
-    graph_coordinator: "GraphCoordinator | None" = None,
+    graph_coordinator: GraphCoordinator | None = None,
     index_coordinator: IndexCoordinator,
     retriever: Retriever,
     get_user_id: Callable[[], str],
