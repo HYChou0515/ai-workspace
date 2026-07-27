@@ -748,6 +748,20 @@ export const messages = {
     "zh-TW": "（另有 {n} 份仍在索引，完成後再生成）",
     en: "({n} still indexing — generate again once ready)",
   },
+  "kb.useGraph.label": { "zh-TW": "知識圖譜", en: "Knowledge graph" },
+  "kb.useGraph.help": {
+    "zh-TW": "從文件抽取指標與實體,建成可交叉查詢的圖譜。抽取會用到視覺/語言模型,建議只對含指標的文件庫開啟。",
+    en: "Extract metrics and entities from documents into a cross-referenced graph. Extraction spends VLM/LLM work, so turn it on for metric-bearing collections.",
+  },
+  "kb.useGraph.rebuild": { "zh-TW": "立即抽取", en: "Extract now" },
+  "kb.useGraph.rebuildQueued": {
+    "zh-TW": "已排入 {n} 份文件",
+    en: "Queued {n} documents",
+  },
+  "kb.useGraph.rebuildDisabled": {
+    "zh-TW": "尚未開啟知識圖譜",
+    en: "Knowledge graph is off",
+  },
   "kb.autoDigest.label": { "zh-TW": "自動生成卡片", en: "Auto-generate cards" },
   "kb.autoDigest.help": {
     "zh-TW": "文件索引完成後，自動草擬卡片並提出待釐清的問題。",
