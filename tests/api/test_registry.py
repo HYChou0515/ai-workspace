@@ -1,5 +1,13 @@
+import tempfile
+from pathlib import Path
+
+import pytest
+
 from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.api.sandbox_activity import IActivityStore
+from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.filestore.migrating import MigratingFileStore
+from workspace_app.filestore.nfs_tree import NfsTreeFileStore
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
 
@@ -773,13 +781,23 @@ class _PersistSandbox(_HttpStyleSandbox):
 async def test_host_managed_ensure_handle_skips_app_side_restore_492():
     # The host restored the archive into the fresh sandbox during create, so the
     # app must NOT run its own restore (that would fight the host's copy).
-    sandbox = _PersistSandbox()
+    #
+    # Both halves are asserted on purpose. "The app ran no restore" alone says
+    # only that we correctly did nothing; it stays green however empty the
+    # sandbox is, because the component that fills it lives in another process
+    # and outside the Sandbox interface. `_HostManagedSandbox` models that
+    # component's contract, so the wake can also be held to its OUTCOME.
+    tree = Path(tempfile.mkdtemp())
+    (tree / "ws-1").mkdir()
+    (tree / "ws-1" / "notes.md").write_bytes(b"hi")
+    sandbox = _HostManagedSandbox(tree)
     sync = _RecordingSync()
     registry = InvestigationRegistry(
         sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, host_managed_durable=True
     )
-    await registry.ensure_handle(await registry.session("ws-1"))
+    handle = await registry.ensure_handle(await registry.session("ws-1"))
     assert sync.calls == []  # no app-side restore in host-managed mode
+    assert [e.path for e in await sandbox.walk(handle, "/")] == ["/notes.md"]  # host filled it
 
 
 async def test_host_managed_flush_persists_via_host_with_delete_492():
@@ -859,3 +877,105 @@ async def test_http_ensure_handle_reuses_live_handle_without_churn_366():
     h2 = await registry.ensure_handle(s)  # sandbox still alive → keep it
     assert h2 is h1
     assert sandbox.create_calls == 1
+
+
+class _HostManagedSandbox(MockSandbox):
+    """The #492 sandbox-host, modelled by its CONTRACT instead of by its calls.
+
+    The real host restores a fresh sandbox from the durable NFS archive DURING
+    `create` (`NfsArchive.restore` = `rsync {nfs_root}/{item_id}/` into the
+    working dir) and marks it ready; the app deliberately runs no restore of its
+    own. So the only bytes that ever reach a host-managed sandbox are the ones
+    PHYSICALLY present in that tree at create time — this double copies exactly
+    those, and nothing else.
+
+    A double that merely records the call cannot express that invariant, which
+    is how every host-managed test could assert "the app correctly did nothing"
+    while the sandbox came up missing the user's files.
+    """
+
+    def __init__(self, tree: Path) -> None:
+        super().__init__()
+        self._tree = tree
+        self.persisted: list[tuple[str, bool]] = []
+
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        handle = await super().create(spec, sandbox_id)
+        if sandbox_id is not None:
+            src = self._tree / sandbox_id
+            if src.is_dir():
+                for p in sorted(src.rglob("*")):
+                    if p.is_file():
+                        rel = "/" + p.relative_to(src).as_posix()
+                        self._fs[handle.id][rel] = p.read_bytes()
+            await self.mark_ready(handle)
+        return handle
+
+    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
+        self.persisted.append((handle.id, delete))
+
+
+def _m2_store(tree: Path) -> tuple[MigratingFileStore, MemoryFileStore]:
+    """The user's production shape: `sandbox.durable.kind: nfs_tree` with
+    `migrate_from: specstar` — writes land in the physical tree, reads fall back
+    to the (frozen) legacy store and lazily backfill one file at a time."""
+    legacy = MemoryFileStore()
+    return MigratingFileStore(NfsTreeFileStore(tree), legacy), legacy
+
+
+async def test_host_managed_wake_gives_the_sandbox_every_durable_file_492():
+    """#492/M2: an item whose files are still only in the LEGACY store must come
+    up with its whole workspace.
+
+    The host restores from the physical NFS tree, so a file the app has not yet
+    drained into that tree is simply absent from the sandbox — even though the
+    dual-read `ls` lists it, so nothing on screen looks wrong. That gap is what
+    made a migrated workspace reach the agent with only the handful of files
+    somebody happened to open (the lazy read-backfill), and it is invisible to
+    any double that only records calls.
+    """
+    tree = Path(tempfile.mkdtemp())
+    files, legacy = _m2_store(tree)
+    for path in ("/README.md", "/views/board.ai.yaml", "/.entity/issue/schema.yaml"):
+        await legacy.write("ws-1", path, b"x")
+
+    sandbox = _HostManagedSandbox(tree)
+    registry = InvestigationRegistry(
+        sandbox=sandbox,
+        default_spec=SandboxSpec(),
+        host_managed_durable=True,
+        durable_backfill=files.backfill_workspace,
+    )
+    handle = await registry.ensure_handle(await registry.session("ws-1"))
+
+    assert sorted(e.path for e in await sandbox.walk(handle, "/")) == [
+        "/.entity/issue/schema.yaml",
+        "/README.md",
+        "/views/board.ai.yaml",
+    ]
+
+
+async def test_host_managed_wake_refuses_to_build_a_sandbox_it_cannot_fill_492():
+    """#492/M2: when the drain fails, no sandbox is built at all.
+
+    Half a workspace is the one outcome worth failing for: the user would keep
+    working on top of the missing files, and the write-back would then stamp
+    that partial state over the archive. A wake that raises is recoverable —
+    nothing has been created, nothing has been overwritten. Seeding a new item's
+    profile stays best-effort by contrast, because template files regenerate and
+    the user's do not.
+    """
+
+    async def _explode(_item: str) -> int:
+        raise OSError("nfs unreachable")
+
+    sandbox = _HostManagedSandbox(Path(tempfile.mkdtemp()))
+    registry = InvestigationRegistry(
+        sandbox=sandbox,
+        default_spec=SandboxSpec(),
+        host_managed_durable=True,
+        durable_backfill=_explode,
+    )
+    with pytest.raises(OSError, match="nfs unreachable"):
+        await registry.ensure_handle(await registry.session("ws-1"))
+    assert sandbox._fs == {}  # never created — not even an empty one to work in
