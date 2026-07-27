@@ -116,23 +116,30 @@ export function GraphBrowsePage() {
           {t("graph.browse.empty")}
         </p>
       ) : (
-        <ul className="gbr__list" data-testid="graph-browse-list">
-          {rows.map((r) => (
-            <li className="gbr__row" key={r.id}>
-              <Link className="gbr__name" to={`/kb/graph/entities/${r.id}`}>
-                {r.name}
-              </Link>
-              {r.kind ? <span className="gbr__kind-chip">{r.kind}</span> : null}
-              {r.aliases.length > 0 && (
-                <span className="gbr__aliases">
-                  {t("graph.browse.alsoWritten")}
-                  {r.aliases.slice(0, 3).join(", ")}
-                  {r.aliases.length > 3 ? ` +${r.aliases.length - 3}` : ""}
+        <div className="gbr__table">
+          <div className="gbr__cols gbr__colhead" aria-hidden="true">
+            <span>{t("graph.browse.colName")}</span>
+            <span>{t("graph.browse.colKind")}</span>
+            <span>{t("graph.browse.colAliases")}</span>
+          </div>
+          <ul className="gbr__list" data-testid="graph-browse-list">
+            {rows.map((r) => (
+              <li className="gbr__row gbr__cols" key={r.id}>
+                <Link className="gbr__name" to={`/kb/graph/entities/${r.id}`}>
+                  {r.name}
+                </Link>
+                <span className="gbr__kind-chip">{r.kind}</span>
+                {/* Every alias, truncated by the column rather than capped at
+                    three — the column is wider than the old right-aligned tail,
+                    so more of them fit, and `title` keeps the rest reachable
+                    without a second request. */}
+                <span className="gbr__aliases" title={r.aliases.join(", ")}>
+                  {r.aliases.join(", ")}
                 </span>
-              )}
-            </li>
-          ))}
-        </ul>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
 
       <div className="gbr__pager">
