@@ -4,6 +4,7 @@
  * swaps to a textarea editor with debounced autosave.
  */
 
+import { useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -23,6 +24,9 @@ export function MarkdownRenderer({ path }: { path: string }) {
   const { entry, setText, readOnly } = useFileBuffer(path);
   const { isEditing } = useEditMode();
   const svc = useFileService();
+  // Stable across re-renders so <MarpDeck> memoises its render+shadow injection
+  // (a fresh closure per render re-parsed the deck and wiped present-mode state).
+  const resolveAsset = useCallback((src: string) => svc.fileUrl(src, path), [svc, path]);
 
   if (entry.status === "loading") return <Status>Loading {path}…</Status>;
   if (entry.status === "error") {
@@ -48,7 +52,7 @@ export function MarkdownRenderer({ path }: { path: string }) {
   // A Marp deck (frontmatter `marp: true`) renders as slides, not prose;
   // its workspace-relative images resolve through the same file API.
   if (isMarpDoc(text)) {
-    return <MarpDeck text={text} resolveAsset={(src) => svc.fileUrl(src, path)} />;
+    return <MarpDeck text={text} resolveAsset={resolveAsset} />;
   }
 
   return (

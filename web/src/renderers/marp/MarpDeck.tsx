@@ -29,6 +29,23 @@ div.marpit > section {
   margin: 0 0 calc(720px * (var(--marp-scale, 1) - 1) + 1rem) 0;
   scroll-snap-align: start;
 }
+
+/* Present mode: show only the active slide, centred, scaled to fit the whole
+   viewport (min of width/height fit) rather than the pane-width stack scale. */
+.marp-slides[data-present] {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.marp-slides[data-present] div.marpit { display: contents; }
+.marp-slides[data-present] div.marpit > section {
+  display: none;
+  margin: 0;
+  transform: scale(var(--present-scale, 1));
+  transform-origin: center center;
+}
+.marp-slides[data-present] div.marpit > section[data-active] { display: block; }
 `;
 
 export type MarpDeckProps = {
@@ -119,12 +136,34 @@ export function MarpDeck({ text, resolveAsset, render = renderMarp }: MarpDeckPr
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  // Bring the active slide into view as it changes while presenting.
+  // Toggle present layout in the shadow: flag the container and mark the one
+  // active slide so the CSS above shows only it, centred.
+  useEffect(() => {
+    const sr = hostRef.current?.shadowRoot;
+    const slides = sr?.querySelector(".marp-slides");
+    if (!slides) return;
+    slides.toggleAttribute("data-present", present);
+    sr?.querySelectorAll<HTMLElement>(".marpit > section").forEach((s, i) => {
+      s.toggleAttribute("data-active", present && i === active);
+    });
+  }, [present, active, result]);
+
+  // Scale the active slide to fit the ACTUAL present surface while presenting —
+  // measured, not `window`, so it fits whether or not the fullscreen request
+  // grew the element (headless / blocked fullscreen keep the pane's own size).
   useEffect(() => {
     if (!present) return;
-    const slides = hostRef.current?.shadowRoot?.querySelectorAll<HTMLElement>(".marpit > section");
-    slides?.[active]?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [present, active]);
+    const el = scrollRef.current;
+    if (!el) return;
+    const setPresentScale = () => {
+      const s = Math.min(el.clientWidth / 1280, el.clientHeight / 720);
+      hostRef.current?.style.setProperty("--present-scale", String(s || 1));
+    };
+    setPresentScale();
+    const ro = new ResizeObserver(setPresentScale);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [present]);
 
   if (!result.ok) {
     return <div className="ev-marp__error">Couldn’t render this Marp deck: {result.error}</div>;
@@ -132,7 +171,7 @@ export function MarpDeck({ text, resolveAsset, render = renderMarp }: MarpDeckPr
   return (
     <div ref={containerRef} className={present ? "ev-marp ev-marp--present" : "ev-marp"}>
       <div className="ev-marp__toolbar">
-        {count > 0 && (
+        {!present && count > 0 && (
           <button type="button" className="ev-marp__present-btn" onClick={startPresent}>
             Present
           </button>

@@ -24,6 +24,8 @@ const RUNTIME_ASSIGNED = new Set([
   "--filetree-header-bg",
   // fit-to-width scale for marp slides, set on the deck host from JS (MarpDeck)
   "--marp-scale",
+  // fit-to-surface scale for the single slide shown in marp present mode (MarpDeck)
+  "--present-scale",
 ]);
 
 /** Third-party custom-property namespaces we don't own (Mantine admin UI). */

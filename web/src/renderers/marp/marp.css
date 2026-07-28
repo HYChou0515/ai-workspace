@@ -46,10 +46,30 @@
   padding: 1rem;
 }
 
-/* Presenting: snap each slide to the viewport as the arrow keys scroll it in. */
+/* Presenting: dark backdrop; the shadow root centres the single active slide,
+   which is scaled to fit the whole (fullscreen) viewport. */
+.ev-marp--present {
+  position: relative;
+  background: var(--text-paper);
+}
+.ev-marp--present .ev-marp__toolbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-bottom: 0;
+  z-index: 1;
+}
+.ev-marp--present .ev-marp__counter {
+  color: var(--white);
+}
 .ev-marp--present .ev-marp__scroll {
-  scroll-snap-type: y mandatory;
+  display: flex;
+  overflow: hidden;
   padding: 0;
+}
+.ev-marp--present .ev-marp__host {
+  flex: 1;
+  min-width: 0;
 }
 
 .ev-marp__host {

@@ -62,6 +62,15 @@ describe("MarpDeck", () => {
     const { container } = render(<MarpDeck text="" resolveAsset={resolveAsset} render={boom} />);
     expect(container.textContent).toMatch(/render this Marp deck/i);
   });
+
+  it("does not re-run the deck render (nor re-inject the shadow) on a re-render with identical props", () => {
+    // A fresh resolveAsset/render each parent render used to re-parse the deck
+    // and wipe present-mode state every frame; stable props must memoise.
+    const renderFn = vi.fn(fakeRender);
+    const { rerender } = render(<MarpDeck text="x" resolveAsset={resolveAsset} render={renderFn} />);
+    rerender(<MarpDeck text="x" resolveAsset={resolveAsset} render={renderFn} />);
+    expect(renderFn).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("MarpDeck — present mode", () => {
