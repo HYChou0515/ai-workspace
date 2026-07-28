@@ -288,12 +288,29 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # the item uid so the carrier launcher's HOME/caches + a user's `pip
         # --user` install land there. No default ACL — only the uid writes here.
         # Idempotent — a re-create chowns to the same derived uid (a no-op).
-        home = workspace.parent / _HOME
-        os.chown(home, uid, -1)
-        os.chmod(home, 0o700)
+        self._own_home(workspace.parent / _HOME, uid)
         logger.debug(
             "isolated: provisioned %s -> uid=%d (chown 0700 + default ACL)", workspace, uid
         )
+
+    def _own_home(self, home: Path, uid: int) -> None:
+        """Hand `.home` to the item uid, 0700. Idempotent — chowning to the same
+        derived uid is a no-op, which is what lets the exec path redo it."""
+        os.chown(home, uid, -1)
+        os.chmod(home, 0o700)
+
+    def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
+        """The base makes the dir; here it also has to be OWNED correctly.
+
+        When `_ensure_home` has to create it at exec time — a sandbox older than
+        the dir, or one an older image built — the creating process is the pod's,
+        while the command that follows drops to the item uid via `setpriv`. A
+        plain `mkdir` would therefore hand that uid a HOME it cannot write: the
+        same "User installation could not be completed", reached from the
+        permission side instead of the missing-directory side."""
+        home = super()._ensure_home(handle, root)
+        self._own_home(home, self._uid_for(handle.id))
+        return home
 
     async def kill(self, handle: SandboxHandle) -> None:
         # The cgroup path is DERIVED from the id (no per-pod identity map), so a
