@@ -28,12 +28,13 @@ import { useEffect, useRef, useState } from "react";
 
 import type { EntityInstance } from "../../api/entities";
 import type { User } from "../../api/types";
+import { rowDropResult } from "./ganttOps";
 import {
   applyDrag,
   axisFor,
+  barColumns,
   canvasWidthFor,
   clampPpd,
-  barColumns,
   columnOf,
   deltaDays,
   type DragMode,
@@ -48,7 +49,7 @@ import {
 } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
-import { rankForDrop, sortRows } from "./sortRows";
+import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
 
 const GUTTER = 150;
@@ -162,22 +163,22 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   const lanes = groupLanes(rows, spec.group_by, type, refIndex, users);
   const grouped = Boolean(spec.group_by);
 
-  // #GH-projects — drag a row's left label up/down to reorder (writes the shared
-  // `rank`). Disabled while a sort is active (sort takes over) or a write is busy.
-  // Reorder stays WITHIN a swimlane; a drop onto another lane is a no-op.
+  // #GH-projects — drag a row's left label to reorder (writes the shared `rank`),
+  // and across a swimlane to REGROUP: the drop moves the record into the lane it
+  // landed in, exactly like dragging a board card into another column. Disabled
+  // while a sort is active (sort takes over) or a write is busy.
   const manualReorder = !busy && !(spec.sort?.length ?? 0);
   const onRowDragEnd = (ev: DragEndEvent) => {
     const active = ev.active.id as number;
     const over = ev.over?.id as number | undefined;
-    if (over == null || active === over) return;
-    const lane = lanes.find((l) => l.rows.some((r) => r.e.number === active));
-    if (!lane || !lane.rows.some((r) => r.e.number === over)) return;
-    const rank = rankForDrop(
-      lane.rows.map((r) => r.e),
+    if (over == null) return;
+    const drop = rowDropResult(
+      rows.map((r) => r.e),
+      spec.group_by,
       active,
       over,
     );
-    if (rank != null) onPatch(active, { rank });
+    if (drop) onPatch(drop.number, drop.patch);
   };
 
   // Drag: capture the down point + density, track on window, commit one patch on up.
