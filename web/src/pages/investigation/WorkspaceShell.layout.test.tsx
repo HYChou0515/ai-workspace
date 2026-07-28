@@ -113,6 +113,7 @@ function renderTopBar(over: {
   workspace?: boolean;
   ideCollapsed?: boolean;
   onToggleIde?: () => void;
+  isNarrow?: boolean;
 }) {
   return render(
     <MemoryRouter>
@@ -120,6 +121,7 @@ function renderTopBar(over: {
         item={item}
         manifest={manifest({ workspace: over.workspace })}
         onEditField={vi.fn()}
+        isNarrow={over.isNarrow ?? false}
         ideCollapsed={over.ideCollapsed ?? false}
         onToggleIde={over.onToggleIde ?? vi.fn()}
         onCommandPalette={vi.fn()}
@@ -196,5 +198,27 @@ describe("TopBar item title stays on one line (#fe-responsive)", () => {
   it("keeps the full title reachable as a tooltip once it ellipsizes", () => {
     renderTopBar({ workspace: true });
     expect(screen.getByTestId("topbar-title")).toHaveAttribute("title", "Oven drift");
+  });
+});
+
+describe("TopBar takes its layout mode from the shell, not the viewport (#fe-responsive)", () => {
+  // The bar used to call `useIsNarrow()` itself, i.e. ask the WINDOW. But the
+  // bar lives inside the shell, and the shell does not own the window: a
+  // chat-first App puts a 240px rail beside it. Measured in a real browser at
+  // 768px, the shell had 528px and the bar still laid its controls out in one
+  // nowrap row — which `page-item` then clipped. The shell measures itself and
+  // tells the bar; the bar must honour what it is told.
+  it("wraps its controls when the SHELL says narrow, regardless of the viewport", () => {
+    renderTopBar({ workspace: true, isNarrow: true });
+    const row = screen.getByTestId("topbar");
+    expect(row.style.flexWrap).toBe("wrap");
+    expect(row.style.height).toBe("auto");
+  });
+
+  it("keeps one nowrap row when the shell says wide", () => {
+    renderTopBar({ workspace: true, isNarrow: false });
+    const row = screen.getByTestId("topbar");
+    expect(row.style.flexWrap).toBe("nowrap");
+    expect(row.style.height).toBe("52px");
   });
 });

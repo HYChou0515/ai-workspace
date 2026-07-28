@@ -56,6 +56,7 @@ import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
+import { shellIsNarrow, useContainerWidth } from "../../hooks/useContainerWidth";
 import { useIsNarrow } from "../../hooks/useMediaQuery";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
@@ -216,6 +217,9 @@ function ShellBody({
     [surfaceTabs, files],
   );
   const groups = useEditorGroups(initialPaths);
+  // Attached to `page-item` below. Every width decision in this shell is made
+  // from THIS box, not from the window — see `isNarrow` / `maxChatW`.
+  const [shellRef, shellWidth] = useContainerWidth<HTMLDivElement>();
   const [activityMode, setActivityMode] = useState<ActivityMode>("evidence");
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Permission-disclosure graceful-degrade: lock the panels the user lacks the
@@ -276,9 +280,14 @@ function ShellBody({
   // this cap; truly full chat is the explicit fold, not an unbounded drag.
   const EDITOR_MIN_W = 360;
   const ACTIVITY_BAR_W = 50;
-  const viewportW = typeof window === "undefined" ? 1440 : window.innerWidth;
+  // The shell's OWN width, not the window's. Two things were wrong with
+  // `window.innerWidth` here: a chat-first App puts a 240px rail in front of
+  // the shell (so the window over-reports by 240), and the read happened during
+  // render with nothing subscribed to `resize`, so the cap went stale the
+  // moment the window changed without crossing the 767px media boundary.
+  const shellW = shellWidth || (typeof window === "undefined" ? 1440 : window.innerWidth);
   const chromeW = ACTIVITY_BAR_W + (sidebarOpen ? sidebarW : 0);
-  const maxChatW = Math.max(280, viewportW - chromeW - EDITOR_MIN_W);
+  const maxChatW = Math.max(280, shellW - chromeW - EDITOR_MIN_W);
   const effectiveAgentW = Math.min(agentW, maxChatW);
   // #200: the chat fills the whole row when there's no IDE beside it — a
   // workspace=false App has none, and collapsing the IDE unmounts it. Otherwise
@@ -289,7 +298,14 @@ function ShellBody({
   // The shell goes single-column — the agent panel and the IDE become mutually
   // exclusive (toggled by the TopBar `Workspace` button), and the file-tree
   // sidebar becomes a tap-to-open overlay so the editor keeps the full width.
-  const isNarrow = useIsNarrow();
+  //
+  // #fe-responsive: measured from the shell's own box, not the viewport. The
+  // shell does not own the viewport — a chat-first App puts a 240px chat rail
+  // beside it — so a 768px window left the shell 528px wide while it still
+  // believed it was wide, and laid out four columns into it. Everything past
+  // 528px was then silently clipped by this element's `overflow: hidden`.
+  const viewportNarrow = useIsNarrow();
+  const isNarrow = shellIsNarrow(shellWidth, viewportNarrow);
   useEffect(() => {
     // Track the breakpoint symmetrically: narrow starts editor-first (the sidebar
     // is a tap-to-open overlay), wide restores the persistent tree column. One-way
@@ -430,6 +446,11 @@ function ShellBody({
     <RequestCloseContext.Provider value={requestCloseTab}>
       <div
         data-testid="page-item"
+        ref={shellRef}
+        // The layout mode this shell resolved to, from its own measured width.
+        // Exposed as an attribute so it is inspectable (and assertable) rather
+        // than only implied by which children happen to be mounted.
+        data-narrow={isNarrow ? "true" : "false"}
         style={{
           // Fill the global layout's content area (#158), not the whole viewport
           // — the global bar takes the top 40px.
@@ -444,6 +465,7 @@ function ShellBody({
           item={item}
           manifest={manifest}
           onEditField={setField}
+          isNarrow={isNarrow}
           ideCollapsed={ideCollapsed}
           onToggleIde={() => setIdeCollapsed((v) => !v)}
           onCommandPalette={() => setPaletteOpen(true)}
@@ -725,6 +747,7 @@ export function TopBar({
   item,
   manifest,
   onEditField,
+  isNarrow,
   ideCollapsed,
   onToggleIde,
   onCommandPalette,
@@ -733,6 +756,10 @@ export function TopBar({
   item: AppItem;
   manifest: AppManifest;
   onEditField: (name: string, value: string) => void;
+  /** #fe-responsive: the SHELL decides this, from its own measured width — the
+   * bar used to ask the viewport itself, which over-reports by the width of
+   * whatever sits beside the shell (a chat-first App's 240px rail). */
+  isNarrow: boolean;
   /** #159: whether the file IDE is currently folded away (chat is the main
    * stage). Drives the `Workspace` toggle's pressed state + hides IDE-only
    * chrome (the command palette) while collapsed. */
@@ -741,7 +768,6 @@ export function TopBar({
   onCommandPalette: () => void;
   onEdit: () => void;
 }) {
-  const isNarrow = useIsNarrow();
   // Owned here rather than in the roster popover below — see the `onManage` note.
   const [sharing, setSharing] = useState(false);
   // #578/#608 — the top bar shows the item's ACCESS (Public/Restricted/Private)
@@ -755,6 +781,7 @@ export function TopBar({
   const canManageAccess = canChangeItemPermission(parseItemPermission(rawPerm), me, owner, isSuperuser, groups);
   return (
     <div
+      data-testid="topbar"
       style={{
         // Narrow: the trailing control cluster (Workspace toggle + palette +
         // members + Close + Notifications + avatar) can't fit one 360px row, so
