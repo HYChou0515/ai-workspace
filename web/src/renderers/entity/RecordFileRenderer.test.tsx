@@ -117,8 +117,88 @@ describe("RecordFileRenderer (§C2)", () => {
 
     renderAt("/issues/5.md");
 
-    expect(await screen.findByLabelText("title")).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    // A record opens in its reading state, so the gate now shows up a step
+    // earlier: a reader is offered no way INTO the form at all. (The disabled
+    // form itself is still covered — EntityFileEditor.test drives canWrite
+    // directly, and the board mounts that editor without a reading view.)
+    expect(await screen.findByText("A")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+  });
+
+  it("opens a record in its reading state — rendered body, no form", async () => {
+    // The complaint this answers: opening an issue dropped you into eight input
+    // boxes with the body as raw source, so simply READING one was unpleasant.
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({ entities: [{ ...RECORD5, body: "## Repro\n\nsteps here" }], invalid: [] });
+
+    renderAt("/issues/5.md");
+
+    expect(await screen.findByRole("heading", { name: "Repro" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("title")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+  });
+
+  it("Edit opens the form, and saving returns to reading", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({ entities: [RECORD5], invalid: [] });
+    mock.update.mockResolvedValue({});
+
+    renderAt("/issues/5.md");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+
+    expect(await screen.findByLabelText("title")).toHaveValue("A");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("title")).not.toBeInTheDocument();
+  });
+
+  it("lets go of the form without saving", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({ entities: [RECORD5], invalid: [] });
+
+    renderAt("/issues/5.md");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    fireEvent.change(await screen.findByLabelText("title"), { target: { value: "typo" } });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(mock.update).not.toHaveBeenCalled();
+  });
+
+  it("each record file opens in its own reading state (no mode bleed across tabs)", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({
+      entities: [RECORD5, { ...RECORD5, number: 6, fields: { title: "B", status: "done" }, body: "six" }],
+      invalid: [],
+    });
+
+    const client = makeTestQueryClient();
+    const store = storeWith("", "/issues/5.md");
+    const tree = (path: string) => (
+      <QueryWrap client={client}>
+        <WorkspaceSlugProvider value="pm">
+          <FileServiceProvider value={investigationFileService("pm", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <RecordFileRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+
+    const { rerender } = render(tree("/issues/5.md"));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+    expect(await screen.findByLabelText("title")).toHaveValue("A");
+
+    // Switching tabs must not carry #5's edit mode onto #6 — the IDE keeps ONE
+    // mount point, so state that isn't keyed to the path follows you around.
+    rerender(tree("/issues/6.md"));
+    expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("title")).not.toBeInTheDocument();
   });
 
   it("renders the entity file editor for a record file and saves through the update route", async () => {
@@ -127,6 +207,7 @@ describe("RecordFileRenderer (§C2)", () => {
     mock.update.mockResolvedValue({});
 
     renderAt("/issues/5.md");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
 
     expect(await screen.findByLabelText("title")).toHaveValue("A");
     expect(mock.list).toHaveBeenCalledWith("pm", "item1", "issue");
@@ -202,9 +283,11 @@ describe("RecordFileRenderer (§C2)", () => {
     );
 
     const { rerender } = render(tree("/issues/5.md"));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
     expect(await screen.findByLabelText("title")).toHaveValue("A");
 
     rerender(tree("/issues/6.md"));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
     expect(await screen.findByLabelText("title")).toHaveValue("B");
     expect(screen.getByLabelText("status")).toHaveValue("done");
   });
@@ -215,6 +298,7 @@ describe("RecordFileRenderer (§C2)", () => {
     mock.update.mockRejectedValueOnce(new EntityConflictError());
 
     renderAt("/issues/5.md");
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
 
     fireEvent.click(await screen.findByRole("button", { name: "Save" }));
 
