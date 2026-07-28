@@ -514,11 +514,12 @@ export function AgentPanel({
             // grill-me: answering an `ask_user` question is an ordinary send
             // that records which question it answers. While a turn is running
             // the callback is WITHHELD rather than handed over and then ignored
-            // — the card sends on the click and latches, so a silently dropped
-            // answer would look sent and be gone. Withholding renders it as a
-            // plain tool card, which is how this surface already says "not
-            // answerable here" (replay, read-only), and matches the composer
-            // being disabled for the same stretch.
+            // — the card now takes 送出 away as soon as it is pressed, so an
+            // answer dropped here would look sent and be gone, with no button
+            // left to try again with. Withholding renders it as a plain tool
+            // card, which is how this surface already says "not answerable
+            // here" (replay, read-only), and matches the composer being
+            // disabled for the same stretch.
             onAnswerQuestion={
               log.streaming
                 ? undefined
