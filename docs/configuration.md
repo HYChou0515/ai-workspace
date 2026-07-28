@@ -85,6 +85,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **調 KB 檢索深度（recall vs 延遲）** | `kb.retrieval.enhancements`（`expand` / `hyde` / `rerank`） |
 | **關掉 KB 的 multi-query/HyDE/rerank** | `kb.retrieval_llm: null` |
 | **關掉 wiki 維護 / 圖片 VLM** | `kb.wiki.llm: null` / `kb.vlm_llm: null` |
+| **gateway 吃 session cookie / 要對背景工作收更緊配額** | 不是 config——實作 `ITokenService` 接進 `factories.get_runner()`（[§11.5](#115-每個使用者的-llm-憑證與呼叫-lane接自家系統)） |
 | **模型會塞車 → 自動切備援** | preset 加 `fallbacks: [...]`；全域門檻在 `failover.*`（[§11](#11-忙碌時的-llm-備援-failover)） |
 | **長時間 exec 不要被砍** | `sandbox.exec_timeout: 0` + 設 `sandbox.log_timeout`（idle 上限） |
 | **關/搬 LLM 呼叫記錄** | 環境變數 `WORKSPACE_LLM_LOG=0` 或 `observability.llm_log.dir` |
@@ -406,27 +407,96 @@ failover:
 
 ---
 
-## 11.5 每個使用者的 LLM 憑證與呼叫 lane
+## 11.5 每個使用者的 LLM 憑證與呼叫 lane★接自家系統
 
-對外的 LLM gateway 若不是用 bearer token 認證（例如吃 session cookie），或要對「背景工作」收更緊的
-rate limit，兩者都靠**同一個縫**：`ITokenService`（`src/workspace_app/tokens/`）。
+對外的 LLM gateway 若**不是**用 bearer token 認證（例如吃 session cookie），或要對「背景工作」收更緊的
+rate limit，兩件事靠**同一個縫**：`ITokenService`（`src/workspace_app/tokens/`）。
+
+這個縫只做一件事：**在每次 LLM 呼叫前，替「這個使用者、這條 lane、這個 endpoint」換一組憑證**。
+本專案**不做限流**——配額由對面 gateway 執行，我們只負責把憑證與 lane 送到 wire 上。
+
+### 你要實作什麼
+
+一個方法：
 
 ```python
-async def get_credential(user_id: str, current_key: str | None, lane: CallLane) -> LlmCredential
-#                                                                                  ^ api_key + headers
+from workspace_app.tokens import CallLane, ITokenService, LlmCredential
+
+
+class OurGatewayCredentials(ITokenService):
+    async def get_credential(
+        self, user_id: str, current_key: str | None, lane: CallLane
+    ) -> LlmCredential:
+        session = await our_sso.session_for(user_id)   # 你們的邏輯
+        return LlmCredential(
+            api_key=current_key,                        # 照舊送 Authorization: Bearer
+            headers={
+                "Cookie": f"OUR_SESSION={session.token}",   # 名稱你們決定
+                "X-Call-Lane": lane,                        # gateway 用它套不同配額
+            },
+        )
 ```
 
-- `headers` 原樣變成該次請求的 HTTP header（litellm 對 `openai/*`、`ollama*` 三條路都照送）。
-  **這個縫不決定 header 叫什麼**——cookie 名稱、lane 要用哪個 header 表示、值長怎樣，全由 impl 決定。
-- `lane` 只有兩個值：`interactive`（有人在等）與 `background`（系統自己在跑）。
-  我方**不做限流**，只負責把 lane 送到 wire 上；配額由 gateway 執行。
-- 換 impl：改 `factories.get_agent_runner` 的 `token_service=`（或自己組 `LitellmAgentRunner`
-  傳進 `create_app`）。預設的 `PassthroughTokenService` 回傳 endpoint 原本的 key、零 header，
-  所以沒接 impl 的部署跟以前一字不差。過期會刷新的憑證可包一層 `CachingTokenService`
-  （TTL 快取，key 含 lane）。
+- `user_id`：這次呼叫替誰跑。互動 turn 是送訊息的人；背景 turn 是 `acting_user`（見下表）。
+- `current_key`：這個 endpoint 原本要用的 key（preset 的 `llm_api_key`，或 runner 的預設）。
+  同一個 turn 可能有多個 endpoint（failover 鏈），**每個都會各問你一次**。
+- `lane`：`"interactive"`（有人在等）或 `"background"`（系統自己在跑）。
+- 回傳的 `headers` **原樣**變成該次請求的 HTTP header——litellm 對 `openai/*`、`ollama_chat/*`、
+  `ollama/*` 三條路都照送。**這個縫不決定 header 叫什麼**：cookie 名稱、lane 放哪個 header、值長怎樣，
+  全在你們的 impl。
 
-lane 由**建 turn 的地方**決定，預設一律 `background`（漏標只會讓那次比較慢；反過來讓批次吃掉互動配額
-才是這功能要防的事）：
+**三條必須遵守的契約**：
+
+1. `api_key=None` 的意思是「不送顯式 key」（例如本機 Ollama 不需要），**不是**「這個 user 沒有 token」。
+2. 查不到這個 user 的憑證時，要嘛 fallback 回 `current_key`、要嘛丟例外——**不可以**回一個空憑證，
+   那等於把認證整個拔掉送出去。
+3. 丟出的例外**不會被吞掉**，但它會先**被重試**：`run()` 把它當一般回合失敗處理，在還沒有任何內容
+   streaming 出去之前最多重跑 `runner.max_retries`（預設 2）次，才變成使用者看得到的錯誤訊息。
+   所以憑證來源掛掉時，一個回合會打你們的系統最多三次——要嘛自己做熔斷，要嘛讓它快速失敗。
+
+### 怎麼插進來
+
+兩條路，挑一條：
+
+**A. 改 composition root 一行**（`src/workspace_app/factories.py`，`get_runner()` 裡）：
+
+```python
+    return LitellmAgentRunner(
+        ...
+-       token_service=PassthroughTokenService(),
++       token_service=OurGatewayCredentials(),
+    )
+```
+
+**B. 不動本專案的檔案**，自己組 runner 傳進 `create_app`（`__main__.py` 的做法就是這樣，
+它只是把 `get_runner(settings)` 的結果丟進去）：
+
+```python
+from workspace_app.api import create_app
+from workspace_app.api.litellm_runner import LitellmAgentRunner
+
+app = create_app(..., runner=LitellmAgentRunner(..., token_service=OurGatewayCredentials()))
+```
+
+**憑證會過期**（session cookie 幾乎一定會）就包一層 `CachingTokenService`：
+
+```python
+from workspace_app.tokens import CachingTokenService
+
+token_service = CachingTokenService(OurGatewayCredentials(), ttl_seconds=300)
+```
+
+它是 `{(user_id, lane): (credential, expires_at)}` 的 TTL 快取，**只快取成功**（丟例外不會被記住），
+且 **lane 是 key 的一部分**——把互動 turn 剛拿到的憑證餵給背景 job，正是 lane 要防的事。
+它**沒有**「401 就作廢重取」的路：TTL 要設得比憑證壽命短。
+
+沒接任何 impl 時的預設 `PassthroughTokenService` 回傳 endpoint 原本的 key、零 header，
+所以現有部署的行為**一字不差**。
+
+### lane 是誰決定的
+
+由**建 turn 的地方**決定，預設一律 `background`——漏標只會讓那次比較慢，反過來讓批次吃掉互動配額
+才是這功能要防的事：
 
 | 誰 | lane |
 | --- | --- |
@@ -434,8 +504,27 @@ lane 由**建 turn 的地方**決定，預設一律 `background`（漏標只會�
 | goal 自動續跑、workflow node、card generation、wiki 維護 | `background` |
 | sub-agent（`ask_knowledge_base`） | 繼承呼叫它的 turn |
 
-**目前不在這條線上的**：`kb/llm.py`（multi-query / HyDE / rerank）、`kb/embedder.py`、`kb/vlm/`、
-health check 的 replay —— 它們直接呼叫 `litellm`，且沒有 user 可解析，所以維持用設定檔裡的 key。
+⚠️ goal 自動續跑走的是**跟人送訊息同一個** `ChatSendService.send`，方法本身分不出來，所以 lane 由呼叫端傳。
+新增一個會驅動 turn 的入口時，若那裡有人在等，記得傳 `lane="interactive"`；不傳就是 background。
+
+### 怎麼確認你接對了
+
+不要只看單元測試——中間任何一層都可能把 header 弄丟，而「cookie 沒送到」在 gateway 端看起來
+跟「密碼錯」一模一樣。照 `tests/tokens/test_credential_reaches_the_wire.py` 的手法：
+起一個本機 HTTP server 當假 gateway，跑**真的 runner**打過去，直接讀 wire 上的 header。
+
+### 目前不在這條線上的
+
+`kb/llm.py`（multi-query / HyDE / rerank）、`kb/embedder.py`、`kb/vlm/`、health check 的 replay——
+它們直接呼叫 `litellm`，且**沒有 user 可解析**，所以維持用設定檔裡的 key。若 gateway 要求所有呼叫
+都帶 cookie，這幾條要另外處理（並先決定「這些呼叫算誰的」）。
+
+另外：限流由 gateway 執行 ⇒ **429 會直接回到我方**，而背景那條路目前沒有退避重試
+（`failover` 只在設定了多 endpoint 時才會切換）。
+
+⚠️ **憑證會被寫進 LLM log**：`extra_headers` 會進 litellm 的 `optional_params`，而
+`observability.llm_log` 的 `request` 區塊為了「可複製重播」刻意存真值（`api_key` 本來就是）。
+不想讓 session cookie 落地就把它關掉（`observability.llm_log.enabled: false` 或 `WORKSPACE_LLM_LOG=0`，見 §12）。
 
 ---
 
