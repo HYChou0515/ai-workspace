@@ -5,14 +5,23 @@
  * the like. This edits them; the backend renders them into the sandbox each
  * turn and the tool launchers export them.
  *
- * Values are shown in PLAIN TEXT, deliberately. Masking would read as
- * protection it cannot deliver: anyone who can converse with this item's agent
- * can have it read the delivered file, so the only thing a mask would actually
- * remove is the ability to spot a mistyped key.
+ * ONE text box holding the whole set as `.env` text, not a row per variable.
+ * What people actually do with these is paste a block in from somewhere else —
+ * a colleague, a password manager, another project's `.env` — and a row editor
+ * turns that into one Add plus two clicks per line. It also makes the format
+ * the same one they already have on their disk, so Import is a convenience
+ * rather than the only way in.
  *
- * Rows are edited as a LIST and collapsed into the stored map on save. A map
- * cannot hold two rows with the same name, so a duplicate is refused up front
- * rather than silently dropping one of them at save time.
+ * Storage is unchanged: the text is parsed into `dict[str, str]` on save
+ * (`lib/envFile.ts`). Two consequences worth knowing rather than hiding:
+ * comments and blank lines are not stored, so they do not survive a reopen; and
+ * a name written twice keeps the last, which is dotenv's own rule and is at
+ * least visible here, both lines being on screen.
+ *
+ * Nothing is masked, deliberately. Masking would read as protection it cannot
+ * deliver: anyone who can converse with this item's agent can have it read the
+ * delivered file, so the only thing a mask removes is the ability to spot a
+ * mistyped key.
  */
 import { useRef, useState } from "react";
 
@@ -20,42 +29,6 @@ import { mergeEnv, parseEnvText, toEnvText } from "../lib/envFile";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
-
-type Row = { name: string; value: string };
-
-/** The rows as they will be stored. Nameless rows are dropped — pressing Add and
- * changing your mind is common, and a blank row must not become a variable
- * nobody can find again. */
-export function toEnvVars(rows: Row[]): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const r of rows) {
-    if (r.name.trim()) out[r.name.trim()] = r.value;
-  }
-  return out;
-}
-
-/** The first name used by more than one row, or "" when there is none. */
-export function firstDuplicate(rows: Row[]): string {
-  const seen = new Set<string>();
-  for (const r of rows) {
-    const name = r.name.trim();
-    if (!name) continue;
-    if (seen.has(name)) return name;
-    seen.add(name);
-  }
-  return "";
-}
-
-const input: React.CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  padding: "5px 8px",
-  border: "1px solid var(--paper-3)",
-  borderRadius: 6,
-  background: "var(--paper)",
-  color: "var(--text-paper)",
-  fontSize: pxToRem(12),
-};
 
 export function EnvVarsModal({
   envVars,
@@ -67,30 +40,23 @@ export function EnvVarsModal({
   onClose: () => void;
 }) {
   const t = useT();
-  const [rows, setRows] = useState<Row[]>(() =>
-    Object.entries(envVars).map(([name, value]) => ({ name, value })),
-  );
-  const [error, setError] = useState("");
+  const [text, setText] = useState(() => toEnvText(envVars));
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const rowsOf = (vars: Record<string, string>) =>
-    Object.entries(vars).map(([name, value]) => ({ name, value }));
-
-  /** Import MERGES into what is on screen (not into the last SAVED state):
-   * the panel is what the user is looking at, and importing on top of
-   * something they cannot see would be a different operation than it appears. */
+  /** Import MERGES into what is in the BOX, not into the last saved state: the
+   * box is what the user is looking at, and importing on top of something they
+   * cannot see would be a different operation than it appears to be. */
   const importFile = async (file: File) => {
-    const merged = mergeEnv(toEnvVars(rows), parseEnvText(await file.text()));
-    setRows(rowsOf(merged));
-    setError("");
+    setText(toEnvText(mergeEnv(parseEnvText(text), parseEnvText(await file.text()))));
   };
 
-  /** Export what is ON SCREEN, unsaved edits included — a download that
-   * silently disagreed with the panel would be worse than no download. Straight
-   * to the browser, never into the workspace: a file there is one the agent can
-   * simply read. */
+  /** Export what is in the box, unsaved edits included — a download that
+   * silently disagreed with the panel would be worse than none. Straight to the
+   * browser, never into the workspace: a file there is one the agent can read. */
   const exportFile = () => {
-    const url = URL.createObjectURL(new Blob([toEnvText(toEnvVars(rows))], { type: "text/plain" }));
+    const url = URL.createObjectURL(
+      new Blob([toEnvText(parseEnvText(text))], { type: "text/plain" }),
+    );
     const a = document.createElement("a");
     a.href = url;
     a.download = ".env";
@@ -98,19 +64,6 @@ export function EnvVarsModal({
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-  };
-
-  const edit = (i: number, patch: Partial<Row>) =>
-    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
-
-  const save = () => {
-    const dup = firstDuplicate(rows);
-    if (dup) {
-      setError(t("env.duplicate", { name: dup }));
-      return;
-    }
-    setError("");
-    void onSave(toEnvVars(rows));
   };
 
   return (
@@ -127,74 +80,35 @@ export function EnvVarsModal({
         {t("env.desc")}
       </p>
 
-      {rows.length === 0 ? (
-        <p
-          data-testid="env-empty"
-          style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}
-        >
-          {t("env.empty")}
-        </p>
-      ) : (
-        <div
-          className="scrollable"
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 6,
-            overflowY: "auto",
-            maxHeight: "50vh",
-          }}
-        >
-          {rows.map((r, i) => (
-            <div key={i} style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="text"
-                aria-label={t("env.name")}
-                value={r.name}
-                onChange={(e) => edit(i, { name: e.target.value })}
-                style={{ ...input, flex: "0 1 40%" }}
-              />
-              {/* `type="text"`, never `password`: see the note at the top. */}
-              <input
-                type="text"
-                aria-label={t("env.value")}
-                value={r.value}
-                onChange={(e) => edit(i, { value: e.target.value })}
-                style={input}
-              />
-              <button
-                type="button"
-                className="btn"
-                data-variant="secondary"
-                data-size="sm"
-                data-testid="env-delete"
-                aria-label={t("env.delete", { name: r.name })}
-                onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
-              >
-                ✕
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {error ? (
-        <p data-testid="env-error" style={{ margin: 0, fontSize: pxToRem(12), color: "var(--err)" }}>
-          {error}
-        </p>
-      ) : null}
+      <textarea
+        data-testid="env-text"
+        aria-label={t("env.title")}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        placeholder={"FOO=BAR\nBAZ=HOO"}
+        spellCheck={false}
+        rows={10}
+        style={{
+          width: "100%",
+          boxSizing: "border-box",
+          padding: "8px 10px",
+          border: "1px solid var(--paper-3)",
+          borderRadius: 6,
+          background: "var(--paper)",
+          color: "var(--text-paper)",
+          // Monospace: these are keys, and a column of them is proofread by
+          // eye. Proportional type hides the difference between l/1 and O/0.
+          fontFamily: "var(--font-mono, ui-monospace, monospace)",
+          fontSize: pxToRem(12),
+          lineHeight: 1.6,
+          resize: "vertical",
+          whiteSpace: "pre",
+          overflowWrap: "normal",
+          overflowX: "auto",
+        }}
+      />
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-        <button
-          type="button"
-          className="btn"
-          data-variant="secondary"
-          data-size="sm"
-          data-testid="env-add"
-          onClick={() => setRows((rs) => [...rs, { name: "", value: "" }])}
-        >
-          {t("env.add")}
-        </button>
         <input
           ref={fileRef}
           type="file"
@@ -238,13 +152,7 @@ export function EnvVarsModal({
         >
           {t("env.cancel")}
         </button>
-        <button
-          type="button"
-          className="btn"
-          data-size="sm"
-          data-testid="env-save"
-          onClick={save}
-        >
+        <button type="button" className="btn" data-size="sm" data-testid="env-save" onClick={() => void onSave(parseEnvText(text))}>
           {t("env.save")}
         </button>
       </div>

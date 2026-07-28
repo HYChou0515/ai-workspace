@@ -1083,17 +1083,8 @@ export const messages = {
   "env.title": { "zh-TW": "工具用的環境變數", en: "Environment variables for tools" },
   "env.desc": {
     "zh-TW":
-      "這些變數會交給這個工作區的工具使用,常見用途是 API 金鑰。只影響這個工作區。",
-    en: "Handed to the tools this workspace runs — API keys and the like. This workspace only.",
-  },
-  "env.name": { "zh-TW": "名稱", en: "Name" },
-  "env.value": { "zh-TW": "值", en: "Value" },
-  "env.add": { "zh-TW": "新增變數", en: "Add variable" },
-  "env.delete": { "zh-TW": "刪除 {name}", en: "Delete {name}" },
-  "env.empty": { "zh-TW": "還沒有設定任何變數。", en: "No variables set yet." },
-  "env.duplicate": {
-    "zh-TW": "「{name}」重複了。同一個名稱只能有一個值。",
-    en: "“{name}” appears twice. A name can only have one value.",
+      "一行一個,`名稱=值`。這些會交給這個工作區的工具使用,常見用途是 API 金鑰。只影響這個工作區。",
+    en: "One per line, `NAME=value`. Handed to the tools this workspace runs — API keys and the like. This workspace only.",
   },
   "env.import": { "zh-TW": "載入 .env", en: "Import .env" },
   "env.export": { "zh-TW": "匯出 .env", en: "Export .env" },

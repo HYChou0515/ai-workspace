@@ -747,15 +747,14 @@ describe("AgentPanel env vars", () => {
   it("shows the item's current variables when opened", () => {
     renderWithEnv({ API_KEY: "sk-1" });
     fireEvent.click(screen.getByTestId("env-button"));
-    expect(screen.getByDisplayValue("API_KEY")).toBeInTheDocument();
-    expect(screen.getByDisplayValue("sk-1")).toBeInTheDocument();
+    expect((screen.getByTestId("env-text") as HTMLTextAreaElement).value).toBe("API_KEY=sk-1\n");
   });
 
   it("hands an edit back to the parent to persist", () => {
     const onSave = renderWithEnv({ API_KEY: "sk-1" });
 
     fireEvent.click(screen.getByTestId("env-button"));
-    fireEvent.change(screen.getByDisplayValue("sk-1"), { target: { value: "sk-2" } });
+    fireEvent.change(screen.getByTestId("env-text"), { target: { value: "API_KEY=sk-2\n" } });
     fireEvent.click(screen.getByTestId("env-save"));
 
     expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" });
