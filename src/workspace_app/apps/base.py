@@ -66,9 +66,13 @@ class WorkItemBase(Struct):
     in every respect: per-item configuration, declared once here so an App does
     not opt in (any App can run tools, and any tool may want a key).
 
-    A ``dict`` rather than a list of pairs, for the same reasons as
-    ``attached_tool_prefs``: a name cannot appear twice, and insertion order is
-    preserved for display.
+    A ``dict`` rather than a list of pairs, for the same reason as
+    ``attached_tool_prefs``: a name cannot appear twice, so the shape itself
+    rules out the collision. Order is NOT part of the value — the store
+    canonicalises key order (its content hash needs a stable one), so the panel
+    reads them back sorted rather than in the order they were typed. That is
+    fine here and worth knowing: nothing may depend on the order, and a UI that
+    promised to preserve it would be promising something the store undoes.
 
     This is the SOURCE OF TRUTH. The copy the tools actually read is a file in
     the sandbox's infra area, rewritten once per turn — it cannot be the storage

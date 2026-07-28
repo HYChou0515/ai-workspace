@@ -86,6 +86,26 @@ def test_editing_another_field_leaves_env_vars_alone():
     assert data["env_vars"] == {"API_KEY": "sk-1"}
 
 
+def test_the_store_canonicalises_key_order():
+    # Observed, and worth a test so nobody builds on the opposite: what comes
+    # back is sorted, not the order it was written in. The store needs a stable
+    # key order for its content hash. Nothing may depend on the typed order —
+    # a UI that promised to keep it would be promising something undone here.
+    client = _client()
+    rid = client.post("/a/rca/items", json={"title": "t"}).json()["resource_id"]
+    client.patch(
+        f"/rca-investigation/{rid}",
+        json=[
+            {"op": "replace", "path": "/env_vars", "value": {"FOO": "1", "BAZ": "2", "AAA": "3"}}
+        ],
+    )
+
+    data = client.get(f"/rca-investigation/{rid}").json()
+    data = data.get("data", data)
+    assert list(data["env_vars"]) == sorted(data["env_vars"])
+    assert data["env_vars"] == {"AAA": "3", "BAZ": "2", "FOO": "1"}
+
+
 def test_a_value_may_carry_the_characters_a_key_actually_contains():
     # Keys are not identifiers: base64 padding (`=`), URLs, and JSON blobs all
     # turn up. Storage must not be the layer that mangles them.
