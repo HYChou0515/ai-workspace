@@ -31,10 +31,18 @@ export type EntityFileEditorProps = {
    * instead of a raw number box when its target records are loaded. */
   refOptionsFor?: (name: string) => RefOption[] | undefined;
   onSave: (patch: Record<string, unknown>, body: string) => void;
+  /** Leave the form without saving. Present when the caller has somewhere to go
+   * back to (the record's reading view); absent → no Cancel (the board's inline
+   * editor has no other state). */
+  onCancel?: () => void;
 };
 
 function settableFields(type: EntityType) {
-  return type.fields.filter((f) => widgetForRole(f.role) !== "readonly");
+  // `rank` is the manual drag order — a fractional position the user sets by
+  // dragging a row, never by typing. The schema calls it hidden infrastructure
+  // and the table excludes it from its columns; it was reaching this form only
+  // because "settable" was read as "not compute-on-read".
+  return type.fields.filter((f) => widgetForRole(f.role) !== "readonly" && f.role !== "rank");
 }
 
 function pickSettable(fields: Record<string, unknown>, type: EntityType): Record<string, unknown> {
@@ -43,7 +51,7 @@ function pickSettable(fields: Record<string, unknown>, type: EntityType): Record
   return out;
 }
 
-export function EntityFileEditor({ type, record, users, canWrite = true, busy, refOptionsFor, onSave }: EntityFileEditorProps) {
+export function EntityFileEditor({ type, record, users, canWrite = true, busy, refOptionsFor, onSave, onCancel }: EntityFileEditorProps) {
   const settable = settableFields(type);
   const [fields, setFields] = useState<Record<string, unknown>>(() => pickSettable(record.fields, type));
   const [body, setBody] = useState<string>(record.body ?? "");
@@ -100,6 +108,11 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, r
           >
             {mode === "form" ? "Raw YAML" : "Form"}
           </button>
+          {onCancel && (
+            <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={onCancel}>
+              Cancel
+            </button>
+          )}
           <button type="button" className="btn" data-variant="primary" data-size="sm" disabled={blocked} onClick={save}>
             Save
           </button>

@@ -26,6 +26,7 @@ _WIDGET: dict[Role, str] = {
     Role.ACTOR: "actor",
     Role.DATE: "date",
     Role.DATERANGE: "daterange",
+    Role.NUMBER: "number",
     Role.PROGRESS: "progress",
     Role.REF: "ref",
 }

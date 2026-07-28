@@ -15,6 +15,7 @@ import {
   sliderToPpd,
   spanToDates,
   visibleDaysFor,
+  barColumns,
   columnOf,
   dateAtColumn,
   formatWeekLabel,
@@ -279,6 +280,44 @@ describe("working-day columns (skip weekends)", () => {
     expect(isWeekend("2026-07-04")).toBe(true); // Sat
     expect(isWeekend("2026-07-05")).toBe(true); // Sun
     expect(isWeekend("2026-07-03")).toBe(false); // Fri
+  });
+});
+
+describe("half-open spans", () => {
+  // A range you can only fill on one side is a range you cannot use to say
+  // "this starts here, the end is not settled yet" — which is exactly what a
+  // milestone whose end comes from its issues needs to say.
+  it("reads a start with no end as the day it starts", () => {
+    expect(spanToDates("2026-07-13/")).toEqual({ start: "2026-07-13", end: "2026-07-13" });
+  });
+  it("reads an end with no start as the day it ends", () => {
+    expect(spanToDates("/2026-07-15")).toEqual({ start: "2026-07-15", end: "2026-07-15" });
+  });
+  it("still rejects a range with nothing in it", () => {
+    expect(spanToDates("/")).toBeNull();
+    expect(spanToDates("nonsense/")).toBeNull();
+  });
+});
+
+describe("barColumns", () => {
+  // A span is INCLUSIVE of both ends — "2026-07-13/2026-07-15" is a three-day
+  // task, not a two-day one — and the chart's own width already counts that way
+  // (`columnOf(min, max) + 1`). The bar has to agree, or the end date silently
+  // loses its colour and reads as "not part of the range".
+  it("counts both ends: Mon→Wed is three columns", () => {
+    expect(barColumns({ start: "2026-07-13", end: "2026-07-15" }, false)).toBe(3);
+  });
+  it("a single-day span occupies exactly one column", () => {
+    expect(barColumns({ start: "2026-07-16", end: "2026-07-16" }, false)).toBe(1);
+  });
+  it("counts working days when weekends are skipped — Mon→Fri is five", () => {
+    expect(barColumns({ start: "2026-07-20", end: "2026-07-24" }, true)).toBe(5);
+  });
+  it("a span that starts on a weekend still reaches its end day", () => {
+    // Sat 07-11 collapses onto the next working column (Mon 07-13), so the bar
+    // is the one working day it actually covers.
+    expect(barColumns({ start: "2026-07-11", end: "2026-07-13" }, true)).toBe(1);
+    expect(barColumns({ start: "2026-07-11", end: "2026-07-13" }, false)).toBe(3);
   });
 });
 

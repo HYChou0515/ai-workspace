@@ -1263,3 +1263,51 @@ button.ev-finding:hover {
   text-transform: uppercase;
   color: var(--text-paper-d);
 }
+
+/* Record reading view (#PM issue-3) — the at-rest state of a record file. The
+   fields are a compact property strip, not a stack of full-width rows: they are
+   here to be glanced at, and the body below them is what you came to read. */
+.ev-record__fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-8) var(--space-16);
+  margin: 0 0 var(--space-16);
+  padding: var(--space-12) var(--space-16);
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+}
+.ev-record__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.ev-record__value {
+  margin: 0;
+  font-size: var(--text-body);
+  color: var(--text-paper);
+  overflow-wrap: anywhere;
+}
+
+/* A bar the schedule had to invent a length for (#PM auto-schedule): the record
+   carries no estimate, so this is a placeholder to drag into shape, not a plan.
+   Hollow and dashed — legible, obviously unfinished, and never mistaken for the
+   solid bars around it. */
+.ev-gantt__bar[data-provisional] {
+  background: transparent;
+  border: 1px dashed var(--info);
+  color: var(--text-paper);
+}
+.ev-gantt__schedule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
+  flex-wrap: wrap;
+}
+.ev-gantt__schedule-report {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  color: var(--text-paper-d);
+}

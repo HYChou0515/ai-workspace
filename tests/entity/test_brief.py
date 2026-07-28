@@ -100,3 +100,18 @@ def test_omits_the_rank_field_agent_never_sets_manual_order() -> None:
 
 def test_empty_catalog_injects_nothing() -> None:
     assert entity_schema_brief(_catalog()) == ""
+
+
+def test_number_field_tells_the_agent_it_is_a_number() -> None:
+    """Without this the agent is told "text" and writes `exp_days: "three"`."""
+    catalog = EntityCatalog(
+        {
+            "issue": EntityType(
+                name="issue",
+                records_path="issues",
+                schema=EntitySchema(fields=[FieldSpec(name="exp_days", role=Role.NUMBER)]),
+                skeleton="---\nexp_days: {{arg.exp_days?}}\n---\n",
+            )
+        }
+    )
+    assert "number" in entity_schema_brief(catalog)

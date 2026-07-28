@@ -93,3 +93,47 @@ describe("RoleField", () => {
     expect(input.tagName).toBe("INPUT");
   });
 });
+
+describe("number role (#PM auto-schedule P1)", () => {
+  it("authors as a number box, so a duration keeps its arithmetic", () => {
+    // `progress` is a percent and `rank` is drag order — without a plain number
+    // a quantity like "how many days" could only masquerade as text.
+    expect(widgetForRole("number")).toBe("number");
+  });
+
+  it("commits a typed quantity as a number, not the string the input hands back", () => {
+    const onCommit = vi.fn();
+    render(<RoleField widget="number" name="exp_days" value={null} onCommit={onCommit} />);
+    // The field commits on blur (uncontrolled input, keyed by the committed
+    // value) — same contract as every other scalar widget here.
+    fireEvent.blur(screen.getByLabelText("exp_days"), { target: { value: "3" } });
+    expect(onCommit).toHaveBeenCalledWith(3);
+  });
+});
+
+describe("half-filled date range (#PM issue-12)", () => {
+  it("saves a start with no end instead of silently dropping it", () => {
+    // It used to commit only when BOTH ends were set: you picked a start date,
+    // the box showed it, and nothing was ever sent — the value was gone on the
+    // next load, with no error to explain it.
+    const onCommit = vi.fn();
+    render(<RoleField widget="daterange" name="span" value={null} onCommit={onCommit} />);
+    fireEvent.change(screen.getByLabelText("span start"), { target: { value: "2026-07-13" } });
+    expect(onCommit).toHaveBeenCalledWith("2026-07-13/");
+  });
+
+  it("saves an end with no start too", () => {
+    const onCommit = vi.fn();
+    render(<RoleField widget="daterange" name="span" value={null} onCommit={onCommit} />);
+    fireEvent.change(screen.getByLabelText("span end"), { target: { value: "2026-07-15" } });
+    expect(onCommit).toHaveBeenCalledWith("/2026-07-15");
+  });
+
+  it("clearing both ends still clears the field", () => {
+    const onCommit = vi.fn();
+    render(<RoleField widget="daterange" name="span" value="2026-07-13/2026-07-15" onCommit={onCommit} />);
+    fireEvent.change(screen.getByLabelText("span start"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("span end"), { target: { value: "" } });
+    expect(onCommit).toHaveBeenLastCalledWith(null);
+  });
+});

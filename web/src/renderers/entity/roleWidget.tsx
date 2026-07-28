@@ -4,7 +4,7 @@
  * editor) resolves its control here, so a role always looks + behaves the same:
  *
  *   text → text · status → dropdown (closed `values`) · actor → directory select
- *   date → date · daterange → start/end · progress/rank → number · ref → number
+ *   date → date · daterange → start/end · number/progress/rank → number · ref → number
  *   (a proper #N-picker lands in P4) · backref/rollup → read-only (compute-on-read)
  *
  * `RoleField` is the inline editor (uncontrolled scalars commit on blur; discrete
@@ -26,6 +26,7 @@ export type WidgetKind =
   | "actor"
   | "date"
   | "daterange"
+  | "number"
   | "progress"
   | "rank"
   | "ref"
@@ -37,6 +38,7 @@ const ROLE_WIDGET: Record<EntityRole, WidgetKind> = {
   actor: "actor",
   date: "date",
   daterange: "daterange",
+  number: "number",
   progress: "progress",
   rank: "rank",
   ref: "ref",
@@ -49,7 +51,7 @@ export function widgetForRole(role: EntityRole): WidgetKind {
   return ROLE_WIDGET[role];
 }
 
-const NUMERIC: ReadonlySet<WidgetKind> = new Set<WidgetKind>(["progress", "rank", "ref"]);
+const NUMERIC: ReadonlySet<WidgetKind> = new Set<WidgetKind>(["number", "progress", "rank", "ref"]);
 
 // ── shared discrete widgets (used by both create + edit) ─────────────────────
 
@@ -168,10 +170,15 @@ function DateRangeInput({
   const init = splitRange(value);
   const [start, setStart] = useState(init.start);
   const [end, setEnd] = useState(init.end);
-  // Only write a whole range; a half-filled range holds locally (no partial patch).
+  // One end is a legitimate value: "starts here, the end isn't settled yet" is
+  // a thing people need to record, and a milestone whose end comes from its
+  // issues has nothing else to say. This used to commit ONLY a whole range, so
+  // a half-filled one was dropped without a word — the date sat in the box,
+  // never reached the server, and was gone on the next load. Empty on BOTH
+  // sides still means "no range", which is how you clear it.
   const emit = (s: string, e: string) => {
-    if (s && e) onCommit(`${s}/${e}`);
-    else if (!s && !e) onCommit(null);
+    if (!s && !e) onCommit(null);
+    else onCommit(`${s}/${e}`);
   };
   return (
     <span className="ev-field--range">
@@ -343,7 +350,7 @@ export function RoleCreateInput({ widget, name, value, values, users, refOptions
       />
     );
 
-  const type = widget === "date" ? "date" : widget === "progress" || widget === "rank" || widget === "ref" ? "number" : "text";
+  const type = widget === "date" ? "date" : NUMERIC.has(widget) ? "number" : "text";
   const placeholder = widget === "ref" ? "#" : "";
   return (
     <input

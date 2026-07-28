@@ -21,7 +21,6 @@ export function MarkdownRenderer({ path }: { path: string }) {
   // toggle lives in the group tab strip (VSCode-style) via useEditMode.
   const { entry, setText, readOnly } = useFileBuffer(path);
   const { isEditing } = useEditMode();
-  const svc = useFileService();
 
   if (entry.status === "loading") return <Status>Loading {relPath(path)}…</Status>;
   if (entry.status === "error") {
@@ -41,6 +40,19 @@ export function MarkdownRenderer({ path }: { path: string }) {
       <MonacoEditor value={text} onChange={setText} language="markdown" readOnly={readOnly} minHeight={0} />
     </div>
   ) : (
+    <MarkdownBody text={text} path={path} />
+  );
+}
+
+/** Render markdown TEXT (not a file) with the workspace's own conventions: GFM
+ * tables/task-lists, math, and relative image/link paths resolved against the
+ * file they were written in. Split out of the file renderer so anything holding
+ * markdown in memory — an entity record's body, say — reads exactly like the
+ * same prose would in a `.md` file, instead of growing a second, poorer
+ * markdown pipeline beside this one. `path` is the resolution base. */
+export function MarkdownBody({ text, path }: { text: string; path: string }) {
+  const svc = useFileService();
+  return (
     <article className="md-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
