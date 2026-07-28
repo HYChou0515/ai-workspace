@@ -195,13 +195,6 @@ class WorkspaceFiles:
         # the workspace under-counts for the rest of the window by however many
         # writes raced (a `gather` over several artifacts, say).
         self._walk_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        # workspace → (handle id, when it last answered a liveness probe). Every
-        # op used to ask "are you still there?" before doing anything, and in
-        # production that question measured 1421ms across 35 calls — 49.7s, the
-        # largest single line in the trace — while a single user action issues a
-        # dozen ops. Memoised for `usage_window`, the same granularity the rest
-        # of this class reconciles at.
-        self._alive_at: dict[str, tuple[str, float]] = {}
 
     async def _warm(self, workspace_id: str) -> tuple[Sandbox, SandboxHandle] | None:
         """The item's ONE live sandbox, or None when it is globally cold (so the
@@ -228,24 +221,20 @@ class WorkspaceFiles:
         handle = await self._handle_for(workspace_id)
         if handle is None:
             return None
-        # The probe answers for an instant only — the sandbox can be reaped
-        # between it and the op it guards, which is why `resolve_io_handle` says
-        # liveness is discovered by RUNNING the op. So a burst of ops asking the
-        # same question a dozen times buys nothing but latency: hold the answer
-        # for `usage_window`. This widens an existing race rather than opening a
-        # new one, and bounds it — past the window the facade asks again, so a
-        # vanished sandbox is still found without waiting for a failure.
-        cached = self._alive_at.get(workspace_id)
-        if cached is not None and cached[0] == handle.id and self._now() - cached[1] < self._window:
-            return (self._sb, handle)
+        # Probed on EVERY op, deliberately. Caching the answer looks free — a
+        # user action issues several ops and they all ask the same question —
+        # but this probe is also the RECOVERY trigger: `SandboxNotFound` here is
+        # what rebuilds a sandbox the host reaped or lost to a pod restart, and
+        # the ops themselves do not catch it. Serving a remembered "alive" turns
+        # that recovery into a 500 for as long as the memory lasts. Measured, the
+        # memo saved two probes per file save once the surrounding operation
+        # counts came down — not a trade worth a live error path.
         try:
             await self._sb.exists(handle, "/")  # SandboxNotFound = gone; SandboxBusy propagates
         except SandboxNotFound:
-            self._alive_at.pop(workspace_id, None)
             if self._rebuild is None:
                 return None  # local shared-vol cold dir → durable snapshot (#345)
             handle = await self._rebuild(workspace_id)  # http: reaped but warm → rebuild
-        self._alive_at[workspace_id] = (handle.id, self._now())
         return (self._sb, handle)
 
     async def read(self, workspace_id: str, path: str) -> bytes:

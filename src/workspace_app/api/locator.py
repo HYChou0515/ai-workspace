@@ -132,7 +132,13 @@ class ItemLocator:
         cached = self._access.get(item_id)
         if cached is None or now - cached[1] >= self._access_window:
             facts = load_access_facts(self._spec, item_id)
-            self._access[item_id] = (facts, now)
+            # Cache the POSITIVE answer only. "No such item" is the one result
+            # that goes stale in the direction that breaks things: an id looked
+            # up moments before it exists — a workflow addressing the item it
+            # just created — would keep 404-ing for the rest of the window. A
+            # permission is a fact about a thing that exists; absence is not.
+            if facts is not None:
+                self._access[item_id] = (facts, now)
         else:
             facts = cached[0]
         groups = self._groups_for(user, now)

@@ -451,64 +451,6 @@ async def test_move_resolves_the_backing_store_once_for_the_whole_operation():
     assert calls == 1, f"liveness resolved {calls}× in one move — read and delete can diverge"
 
 
-async def test_a_burst_of_operations_probes_the_sandbox_once() -> None:
-    """Every file op asked the sandbox "are you still there?" before doing
-    anything. In production that probe measured 1421ms on average across 35
-    calls — 49.7s, the single largest line in the trace — for a question that
-    does nothing but confirm the handle.
-
-    A burst pays it once. The answer was only ever true for an instant anyway:
-    the sandbox could be reaped between the probe and the operation it guards,
-    so a short memo widens a race that already existed rather than creating one,
-    and `SandboxNotFound` from the probe still rebuilds exactly as before.
-    """
-    probes = {"n": 0}
-
-    class _CountingProbe(MockSandbox):
-        async def exists(self, handle: SandboxHandle, path: str) -> bool:
-            if path == "/":
-                probes["n"] += 1
-            return await super().exists(handle, path)
-
-    sb = _CountingProbe()
-    handle = await sb.create(SandboxSpec(), sandbox_id=WS)
-    files = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
-    await files.write(WS, "/a.md", b"a")
-    for _ in range(5):
-        await files.read(WS, "/a.md")
-
-    assert probes["n"] == 1, probes
-
-
-async def test_the_liveness_memo_expires() -> None:
-    """Bounded staleness: past the window the facade asks again, so a sandbox
-    that went away is still discovered without waiting for an operation to fail."""
-    probes = {"n": 0}
-
-    class _CountingProbe(MockSandbox):
-        async def exists(self, handle: SandboxHandle, path: str) -> bool:
-            if path == "/":
-                probes["n"] += 1
-            return await super().exists(handle, path)
-
-    clock = {"t": 1000.0}
-    sb = _CountingProbe()
-    handle = await sb.create(SandboxSpec(), sandbox_id=WS)
-    files = WorkspaceFiles(
-        MemoryFileStore(),
-        sandbox=sb,
-        handle_for=_resolver(lambda _ws: handle),
-        now=lambda: clock["t"],
-    )
-    await files.read(WS, "/missing") if False else None
-    await files.write(WS, "/a.md", b"a")
-    await files.read(WS, "/a.md")
-    assert probes["n"] == 1
-    clock["t"] += 3600
-    await files.read(WS, "/a.md")
-    assert probes["n"] == 2
-
-
 async def test_tree_walks_the_workspace_once_for_both_halves() -> None:
     """Files and folders come out of the SAME traversal. Two endpoints each
     walking the whole workspace was two stats of every file to answer one
@@ -522,9 +464,7 @@ async def test_tree_walks_the_workspace_once_for_both_halves() -> None:
 
     sb = _CountingWalk()
     handle = await sb.create(SandboxSpec(), sandbox_id=WS)
-    files = WorkspaceFiles(
-        MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle)
-    )
+    files = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
     await files.write(WS, "/dir/a.md", b"a")
 
     entries, dirs = await files.tree(WS)
