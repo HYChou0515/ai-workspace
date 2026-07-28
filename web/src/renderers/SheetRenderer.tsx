@@ -25,6 +25,7 @@ import { useWorkspaceSlug } from "../hooks/useWorkspaceSlug";
 import { parseCsv, serializeCsv } from "./csv";
 import { SheetGrid } from "./SheetGrid";
 import { TextRenderer } from "./TextRenderer";
+import { relPath } from "../lib/relPath";
 
 /** `.tsv` is tab-separated; everything else routed here (`.csv`) is comma-separated.
  * Same rule as `CsvRenderer` and the backend parser (`kb/parsers/tabular.py`). */
@@ -86,7 +87,7 @@ export function SheetRenderer({ path }: { path: string }) {
   if (isEditing(path)) return <TextRenderer path={path} />;
 
   if (entry.status === "loading") {
-    return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
+    return <div style={{ color: "var(--text-paper-d)" }}>Loading {relPath(path)}…</div>;
   }
   if (entry.status === "error") {
     return <div style={{ color: "var(--err)" }}>{entry.error ?? "load failed"}</div>;

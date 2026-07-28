@@ -48,7 +48,8 @@ describe("ImageRenderer", () => {
 
   it("renders the image from a blob URL inside a pan/zoom transform", async () => {
     await renderLoaded(storeWith(IMG_TEXT));
-    const img = (await screen.findByAltText(IMG_PATH)) as HTMLImageElement;
+    // alt is the relative form (#549), like every other path the UI shows.
+    const img = (await screen.findByAltText("photos/bridge.png")) as HTMLImageElement;
     expect(img.tagName).toBe("IMG");
     expect(img).toHaveAttribute("src", "blob:img-mock");
     // The image is transformed (the pan/zoom seam), not laid out statically.
@@ -66,7 +67,7 @@ describe("ImageRenderer", () => {
       const SVG_PATH = "/diagrams/flow.svg";
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 500"></svg>`;
       await renderLoaded(storeWith(svg, SVG_PATH), SVG_PATH);
-      const img = (await screen.findByAltText(SVG_PATH)) as HTMLImageElement;
+      const img = (await screen.findByAltText("diagrams/flow.svg")) as HTMLImageElement;
       // contain 1000×500 into 400×400 with upscale allowed → 400×200, so the
       // diagram spans the full pane width instead of sitting tiny in the middle.
       expect(img.style.width).toBe("400px");

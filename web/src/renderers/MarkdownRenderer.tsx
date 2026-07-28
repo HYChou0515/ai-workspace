@@ -13,6 +13,7 @@ import { useFileService } from "../api/fileService";
 import { MonacoEditor } from "../components/MonacoEditor";
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
+import { relPath } from "../lib/relPath";
 
 export function MarkdownRenderer({ path }: { path: string }) {
   // Content + edits live in the shared per-path buffer, so this file
@@ -22,7 +23,7 @@ export function MarkdownRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
   const svc = useFileService();
 
-  if (entry.status === "loading") return <Status>Loading {path}…</Status>;
+  if (entry.status === "loading") return <Status>Loading {relPath(path)}…</Status>;
   if (entry.status === "error") {
     return <Status tone="err">{entry.error ?? "load failed"}</Status>;
   }

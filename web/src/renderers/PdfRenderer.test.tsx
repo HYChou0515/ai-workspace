@@ -54,7 +54,7 @@ describe("PdfRenderer", () => {
   it("renders the PDF bytes in an iframe via an application/pdf blob URL", async () => {
     await renderLoaded(storeWith(PDF_TEXT));
 
-    const frame = await screen.findByTitle(PDF_PATH);
+    const frame = await screen.findByTitle("docs/manual.pdf");
     expect(frame.tagName).toBe("IFRAME");
     expect(frame).toHaveAttribute("src", "blob:pdf-mock");
 
@@ -68,7 +68,7 @@ describe("PdfRenderer", () => {
 
   it("does NOT show the raw PDF bytes as text", async () => {
     await renderLoaded(storeWith(PDF_TEXT));
-    await screen.findByTitle(PDF_PATH);
+    await screen.findByTitle("docs/manual.pdf");
     // The mojibake the catch-all text editor used to show must be absent.
     expect(screen.queryByText(/%PDF/)).toBeNull();
   });

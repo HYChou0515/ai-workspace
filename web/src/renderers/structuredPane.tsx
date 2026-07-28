@@ -11,6 +11,7 @@ import type { ReactNode } from "react";
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { TextRenderer } from "./TextRenderer";
+import { relPath } from "../lib/relPath";
 
 export function StructuredPane({ path, render }: { path: string; render: (text: string) => ReactNode }) {
   const { isEditing } = useEditMode();
@@ -18,7 +19,7 @@ export function StructuredPane({ path, render }: { path: string; render: (text: 
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
-    return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
+    return <div style={{ color: "var(--text-paper-d)" }}>Loading {relPath(path)}…</div>;
   }
   if (entry.status === "error") {
     return <div style={{ color: "var(--err)" }}>{entry.error ?? "load failed"}</div>;
