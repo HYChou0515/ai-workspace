@@ -19,7 +19,7 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 from starlette.datastructures import UploadFile
 
-from ..files import WorkspaceFiles
+from ..files import WorkspaceFiles, rel_path
 from ..resources import Conversation
 from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
 from ..workflow.event_dispatch import EventTriggerDispatcher
@@ -307,7 +307,7 @@ def register_workflow_routes(
             await files.write(investigation_id, norm, data)
             activity.record(
                 "file_written",
-                f"Wrote {norm}",
+                f"Wrote {rel_path(norm)}",
                 {"investigation_id": investigation_id, "path": norm},
             )
             logger.debug("workflow_routes: staged upload %s to item %s", norm, investigation_id)

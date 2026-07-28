@@ -191,6 +191,7 @@ export const mockKbApi: KbApi = {
       wiki_reader_guidance: "",
       is_global: false,
       auto_digest: false,
+      use_graph: false,
     };
     collections.set(c.resource_id, c);
     return c;
@@ -332,6 +333,7 @@ export const mockKbApi: KbApi = {
       wiki_reader_guidance: "",
       is_global: false,
       auto_digest: false,
+      use_graph: false,
     };
     collections.set(c.resource_id, c);
     return { collection_id: c.resource_id, document_ids: [], status: "indexing" };
@@ -548,6 +550,12 @@ export const mockKbApi: KbApi = {
   },
   async deleteWikiPage(collectionId, path) {
     wikiPages.get(collectionId)?.delete(path);
+  },
+  async rebuildGraph(collectionId) {
+    // #534: the real route queues one `split` job; the mock just reports what a
+    // run would cover so the settings panel can be exercised.
+    const docs = documents.get(collectionId) ?? [];
+    return { queued: docs.length, status: "rebuilding" };
   },
   async rebuildWiki(collectionId) {
     // Synthesize a tiny wiki from the collection's docs so the browser has

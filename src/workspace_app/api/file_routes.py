@@ -20,7 +20,7 @@ from typing import Literal
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 
-from ..files import WorkspaceFiles
+from ..files import WorkspaceFiles, rel_path
 from ..files.zip_download import (
     DownloadPrepared,
     prepare_zip,
@@ -349,7 +349,7 @@ def register_file_routes(
         )
         activity.record(
             "file_written",
-            f"Wrote {norm}",
+            f"Wrote {rel_path(norm)}",
             {"investigation_id": investigation_id, "path": norm},
         )
         logger.info("file_routes: wrote %s to item %s", norm, investigation_id)
@@ -373,10 +373,10 @@ def register_file_routes(
         try:
             await files.mkdir(investigation_id, norm)
         except FileExists as exc:
-            raise HTTPException(status_code=409, detail=f"file exists at {norm}") from exc
+            raise HTTPException(status_code=409, detail=f"file exists at {rel_path(norm)}") from exc
         activity.record(
             "dir_created",
-            f"Created folder {norm}",
+            f"Created folder {rel_path(norm)}",
             {"investigation_id": investigation_id, "path": norm},
         )
         logger.info("file_routes: created folder %s in item %s", norm, investigation_id)
@@ -395,7 +395,7 @@ def register_file_routes(
                 investigation_id, dst
             )
             if occupied:
-                raise HTTPException(status_code=409, detail=f"target exists: {dst}")
+                raise HTTPException(status_code=409, detail=f"target exists: {rel_path(dst)}")
             under = src + "/"
             # #538: a COPY grows the workspace by the whole subtree, so it is
             # checked once up front — per-write gating alone could only fail
@@ -425,7 +425,7 @@ def register_file_routes(
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if await files.exists(investigation_id, dst) or await files.is_dir(investigation_id, dst):
-            raise HTTPException(status_code=409, detail=f"target exists: {dst}")
+            raise HTTPException(status_code=409, detail=f"target exists: {rel_path(dst)}")
         if copy:
             await files.write(investigation_id, dst, data)
         else:
@@ -442,7 +442,7 @@ def register_file_routes(
         await _transfer(investigation_id, src, dst, copy=False)
         activity.record(
             "file_moved",
-            f"Moved {src} → {dst}",
+            f"Moved {rel_path(src)} → {rel_path(dst)}",
             {"investigation_id": investigation_id, "path": dst},
         )
         logger.info("file_routes: moved %s to %s in item %s", src, dst, investigation_id)
@@ -460,7 +460,7 @@ def register_file_routes(
         await _transfer(investigation_id, src, dst, copy=True)
         activity.record(
             "file_copied",
-            f"Copied {src} → {dst}",
+            f"Copied {rel_path(src)} → {rel_path(dst)}",
             {"investigation_id": investigation_id, "path": dst},
         )
         logger.info("file_routes: copied %s to %s in item %s", src, dst, investigation_id)
@@ -538,7 +538,7 @@ def register_file_routes(
             replaced += n
             activity.record(
                 "file_written",
-                f"Replaced {n} in {p}",
+                f"Replaced {n} in {rel_path(p)}",
                 {"investigation_id": investigation_id, "path": p},
             )
         logger.info(
@@ -559,7 +559,7 @@ def register_file_routes(
             await files.rmdir(investigation_id, norm)
             activity.record(
                 "dir_deleted",
-                f"Deleted folder {norm}",
+                f"Deleted folder {rel_path(norm)}",
                 {"investigation_id": investigation_id, "path": norm},
             )
             logger.info("file_routes: deleted folder %s in item %s", norm, investigation_id)
@@ -573,7 +573,7 @@ def register_file_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         activity.record(
             "file_deleted",
-            f"Deleted {norm}",
+            f"Deleted {rel_path(norm)}",
             {"investigation_id": investigation_id, "path": norm},
         )
         logger.info("file_routes: deleted %s in item %s", norm, investigation_id)

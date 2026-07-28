@@ -6,6 +6,7 @@
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { TextRenderer } from "./TextRenderer";
+import { relPath } from "../lib/relPath";
 
 export function HtmlRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
@@ -13,14 +14,14 @@ export function HtmlRenderer({ path }: { path: string }) {
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
-    return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
+    return <div style={{ color: "var(--text-paper-d)" }}>Loading {relPath(path)}…</div>;
   }
   if (entry.status === "error") {
     return <div style={{ color: "var(--err)" }}>{entry.error ?? "load failed"}</div>;
   }
   return (
     <iframe
-      title={path}
+      title={relPath(path)}
       // Empty sandbox: no scripts, no same-origin, no forms/popups — a safe
       // static preview of untrusted HTML.
       sandbox=""

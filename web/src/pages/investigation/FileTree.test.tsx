@@ -172,6 +172,47 @@ describe("<FileTree /> context menu position (#99)", () => {
   });
 });
 
+describe("<FileTree /> copy path", () => {
+  /** The clipboard is the one place a workspace path leaves the app in a form the
+   * user pastes somewhere else — a chat message, a script, the shell. The tree's
+   * node key is the store's `/a.md`, which `exec` reads as the SYSTEM root, so what
+   * lands on the clipboard has to be the relative form. */
+  function clipboardSpy() {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    return writeText;
+  }
+
+  it("copies a file's path relative to the workspace, not the store's rooted key", async () => {
+    const user = userEvent.setup();
+    const writeText = clipboardSpy();
+    renderTree(vi.fn(), { files: [{ path: "/data/x.csv", size: 1 }] });
+    fireEvent.contextMenu(screen.getByText("x.csv"));
+    await user.click(within(screen.getByTestId("tree-context-menu")).getByRole("button", { name: /copy path/i }));
+    expect(writeText).toHaveBeenCalledWith("data/x.csv");
+  });
+
+  it("copies a folder's path relative too", async () => {
+    const user = userEvent.setup();
+    const writeText = clipboardSpy();
+    renderTree(vi.fn(), { files: [], dirs: ["/data"] });
+    fireEvent.contextMenu(screen.getByText("data"));
+    await user.click(within(screen.getByTestId("tree-context-menu")).getByRole("button", { name: /copy path/i }));
+    expect(writeText).toHaveBeenCalledWith("data");
+  });
+});
+
+describe("<FileTree /> toolbar tooltips name the target folder relatively (#549)", () => {
+  it("says 'New file in mydir/', not '/mydir/'", async () => {
+    const user = userEvent.setup();
+    renderTree(vi.fn(), { files: [{ path: "/mydir/a.md", size: 1 }] });
+    await user.click(screen.getByText("mydir")); // anchors the folder
+    expect(screen.getByTitle("New file in mydir/")).toBeInTheDocument();
+    expect(screen.getByTitle("New folder in mydir/")).toBeInTheDocument();
+    expect(screen.getByTitle("Upload to mydir/")).toBeInTheDocument();
+  });
+});
+
 describe("<FileTree /> download (#247)", () => {
   function spyService(over: Partial<FileService>): FileService {
     return { ...investigationFileService("rca", "inv"), ...over };

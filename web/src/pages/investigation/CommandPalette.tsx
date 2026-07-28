@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileInfo } from "../../api/types";
 import { Icon } from "../../components/Icon";
 import { fuzzyFilter } from "../../lib/fuzzy";
+import { relPath } from "../../lib/relPath";
 import { basename } from "./renderer";
 import { pxToRem } from "../../lib/pxToRem";
 
@@ -176,7 +177,9 @@ export function CommandPalette({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {f.path}
+                  {/* Shown relative (#549); the fuzzy match above still runs on the
+                      store's own key, so typing a leading `/` keeps working. */}
+                  {relPath(f.path)}
                 </span>
               </button>
             );

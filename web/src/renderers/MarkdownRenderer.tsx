@@ -14,6 +14,7 @@ import { useFileService } from "../api/fileService";
 import { MonacoEditor } from "../components/MonacoEditor";
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
+import { relPath } from "../lib/relPath";
 import { MarpDeck } from "./marp/MarpDeck";
 import { isMarpDoc } from "./marp/marpDeck";
 
@@ -28,7 +29,7 @@ export function MarkdownRenderer({ path }: { path: string }) {
   // (a fresh closure per render re-parsed the deck and wiped present-mode state).
   const resolveAsset = useCallback((src: string) => svc.fileUrl(src, path), [svc, path]);
 
-  if (entry.status === "loading") return <Status>Loading {path}…</Status>;
+  if (entry.status === "loading") return <Status>Loading {relPath(path)}…</Status>;
   if (entry.status === "error") {
     return <Status tone="err">{entry.error ?? "load failed"}</Status>;
   }

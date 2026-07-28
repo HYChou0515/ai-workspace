@@ -25,6 +25,7 @@ import {
 } from "./panZoom";
 import { svgNaturalSize } from "./svgSize";
 import { TextRenderer } from "./TextRenderer";
+import { relPath } from "../lib/relPath";
 
 // Wheel-delta → zoom-factor sensitivity. `exp(-dy * k)`: a standard ~100px
 // notch lands near a 1.16× step, smooth across mice and trackpads alike.
@@ -139,7 +140,7 @@ export function ImageRenderer({ path }: { path: string }) {
 
   if (editing) return <TextRenderer path={path} />;
   if (entry.status === "loading" || !url) {
-    return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
+    return <div style={{ color: "var(--text-paper-d)" }}>Loading {relPath(path)}…</div>;
   }
   return (
     <div
@@ -161,7 +162,7 @@ export function ImageRenderer({ path }: { path: string }) {
     >
       <img
         src={url}
-        alt={path}
+        alt={relPath(path)}
         draggable={false}
         onLoad={(e) =>
           setNatural({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })

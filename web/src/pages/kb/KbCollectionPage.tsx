@@ -50,6 +50,7 @@ import { CollectionReviewTab } from "./CollectionReviewTab";
 import { ContextCardsTab } from "./ContextCardsTab";
 import { CardGenToggle } from "./CardGenToggle";
 import { GlobalToggle } from "./GlobalToggle";
+import { GraphToggle } from "./GraphToggle";
 import { KbDocIde } from "./KbDocIde";
 import { useCollectionDocs } from "./useCollectionDocs";
 import { useKbOutlet } from "./KbHome";
@@ -910,6 +911,11 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
           <div style={{ height: 1, background: "var(--paper-3)", margin: "12px 0" }} />
           {/* #377: auto-generate cards per indexed doc (user-owned setting). */}
           <CardGenToggle collection={selected} client={client} />
+          {/* #534: knowledge-graph extraction opt-in + the manual "extract now"
+              button — the dispatch cronjob is weekly. */}
+          <div style={{ marginTop: 10 }}>
+            <GraphToggle collection={selected} client={client} />
+          </div>
           {/* Global collection = part of every AI chat's baseline retrieval
               scope, so it belongs with "how answers are found". Superuser-only —
               renders nothing for others (tucked in settings, not the bare header). */}

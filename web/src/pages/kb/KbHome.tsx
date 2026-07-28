@@ -43,7 +43,14 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
   const docId = searchParams.get("doc");
   const snippet = searchParams.get("hl") ?? undefined;
 
-  const onChats = pathname.startsWith("/kb/chats");
+  // Three surfaces now, so the active state is which one we are on rather than
+  // a chats/not-chats flip (#636 put the graph browser outside the shell; it is
+  // a surface of the knowledge base, not somewhere you leave it for).
+  const surface = pathname.startsWith("/kb/chats")
+    ? "chats"
+    : pathname.startsWith("/kb/graph")
+      ? "graph"
+      : "collections";
   // Set/clear the overlay params, preserving the rest of the URL (e.g. the
   // grid's ?view=). URLSearchParams percent-encodes the opaque id for us.
   const setDoc = (id: string | null, hl?: string) =>
@@ -68,14 +75,21 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
         <div className="kb-nav__brand">{t("kb.brand")}</div>
         <button
           type="button"
-          className={`kb-nav__item${onChats ? "" : " is-active"}`}
+          className={`kb-nav__item${surface === "collections" ? " is-active" : ""}`}
           onClick={() => navigate("/kb/collections")}
         >
           <Icon name="layers" size={15} /> {t("kb.collections")}
         </button>
         <button
           type="button"
-          className={`kb-nav__item${onChats ? " is-active" : ""}`}
+          className={`kb-nav__item${surface === "graph" ? " is-active" : ""}`}
+          onClick={() => navigate("/kb/graph")}
+        >
+          <Icon name="branch" size={15} /> {t("kb.graph")}
+        </button>
+        <button
+          type="button"
+          className={`kb-nav__item${surface === "chats" ? " is-active" : ""}`}
           onClick={() => navigate("/kb/chats")}
         >
           <Icon name="chat" size={15} /> {t("kb.chats")}
@@ -84,7 +98,11 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
 
       <main className="kb-main">
         <header className="kb-topbar">
-          <span className="kb-topbar__title">{onChats ? t("kb.conversations") : t("kb.collections")}</span>
+          <span className="kb-topbar__title">{surface === "chats"
+              ? t("kb.conversations")
+              : surface === "graph"
+                ? t("kb.graph")
+                : t("kb.collections")}</span>
           {/* Same component Home uses — routes our own surface on
               manage/history and reuses our viewer for citations. */}
           <AskAgentLauncher

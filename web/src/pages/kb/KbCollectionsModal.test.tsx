@@ -25,6 +25,7 @@ const coll = (over: Partial<KbCollection>): KbCollection => ({
   wiki_reader_guidance: "",
   is_global: false,
   auto_digest: false,
+  use_graph: false,
   ...over,
 });
 

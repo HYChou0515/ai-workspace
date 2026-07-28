@@ -12,6 +12,7 @@ import type { SearchOptions, SearchResult } from "../../api/types";
 import { Icon } from "../../components/Icon";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { basename, dirname } from "./renderer";
+import { relPath } from "../../lib/relPath";
 import { pxToRem } from "../../lib/pxToRem";
 
 type SearchClient = {
@@ -214,7 +215,8 @@ export function SearchPanel({
                 type="button"
                 onClick={() => toggleFile(r.path)}
                 style={fileHeader}
-                title={r.path}
+                // Relative (#549), matching the `dirname()` label in the same row.
+                title={relPath(r.path)}
               >
                 <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={12} />
                 <span style={{ fontWeight: 600 }}>{basename(r.path)}</span>
@@ -231,7 +233,7 @@ export function SearchPanel({
                     type="button"
                     onClick={() => onOpenFile(r.path, { preview: true })}
                     style={matchRow}
-                    title={`${r.path}:${m.line}:${m.col}`}
+                    title={`${relPath(r.path)}:${m.line}:${m.col}`}
                   >
                     <span style={lineNo}>{m.line}</span>
                     <span style={lineText}>{highlight(m.text, hlRe)}</span>

@@ -120,6 +120,50 @@ describe("AskUserCard", () => {
     expect(content).toContain("No");
   });
 
+  it("takes ONLY the 送出 button away once it has been pressed", () => {
+    // The button's whole job is ahead of the send. Left standing afterwards it
+    // says nothing happened, and the only thing it can still do is send a
+    // second answer. Everything else stays exactly where it was — the question
+    // and the chosen option are the record of what was just sent.
+    const onAnswer = vi.fn();
+    render(<AskUserCard call={oneQuestion} onAnswer={onAnswer} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
+    send();
+
+    expect(screen.queryByRole("button", { name: /送出/ })).toBeNull();
+    expect(screen.getByText("Which storage backend?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /SQLite/ })).toHaveAttribute("aria-pressed", "true");
+    expect(onAnswer).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not wait for the answer to come back before hiding 送出", () => {
+    // `answered` arrives from the persisted transcript a round trip later. If
+    // the button waited for it, the whole gap between press and echo is time
+    // the card spends inviting a second press.
+    render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
+    send();
+
+    // No `answered` prop was ever passed — the card knows on its own.
+    expect(screen.queryByRole("button", { name: /送出/ })).toBeNull();
+  });
+
+  it("stops taking a different answer once it has been sent", () => {
+    // With no 送出 left, a click that still moved the highlight would leave the
+    // card showing a choice that was never sent.
+    render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
+    send();
+    fireEvent.click(screen.getByRole("button", { name: /Postgres/ }));
+
+    expect(screen.getByRole("button", { name: /Postgres/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /SQLite/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("補充:SQLite")).toHaveAttribute("readonly");
+  });
+
   it("stops offering the buttons once the question is answered", () => {
     render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} answered="SQLite" />);
     expect(screen.queryByRole("button", { name: /Postgres/ })).toBeNull();

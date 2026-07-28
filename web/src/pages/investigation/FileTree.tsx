@@ -19,6 +19,7 @@ import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSele
 import { folderState, toggleSubtree } from "./treeCheckbox";
 import { extractClipboardFiles, readTransferEntries } from "./transfer";
 import { pxToRem } from "../../lib/pxToRem";
+import { relPath } from "../../lib/relPath";
 
 // #364: a drag carrying OS files/folders (not one of our internal reorder payloads).
 const isExternalDrag = (e: React.DragEvent): boolean =>
@@ -179,6 +180,9 @@ export function FileTree({
     const isFolder = dirs.includes(anchor) || files.some((f) => f.path.startsWith(anchor + "/"));
     return isFolder ? anchor : anchor.split("/").slice(0, -1).join("/");
   })();
+  // What the toolbar tooltips CALL that folder — relative (#549), since the tree
+  // is where the user learns what a path here looks like.
+  const createDirLabel = relPath(createDir);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Click on a row: update the selection; a plain (unmodified) click also
@@ -517,7 +521,7 @@ export function FileTree({
         {caps.create && (
           <button
             type="button"
-            title={createDir ? `New file in ${createDir}/` : "New file"}
+            title={createDir ? `New file in ${createDirLabel}/` : "New file"}
             onClick={() => {
               if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
               setCreating({ kind: "file", dir: createDir });
@@ -530,7 +534,7 @@ export function FileTree({
         {caps.folders && (
           <button
             type="button"
-            title={createDir ? `New folder in ${createDir}/` : "New folder"}
+            title={createDir ? `New folder in ${createDirLabel}/` : "New folder"}
             onClick={() => {
               if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
               setCreating({ kind: "folder", dir: createDir });
@@ -544,7 +548,7 @@ export function FileTree({
         <div style={{ position: "relative" }}>
           <button
             type="button"
-            title={createDir ? `Upload to ${createDir}/` : "Upload files or a folder"}
+            title={createDir ? `Upload to ${createDirLabel}/` : "Upload files or a folder"}
             onClick={() => setUploadMenu((v) => !v)}
             style={{ color: "var(--text-paper-d)", padding: 2 }}
           >
@@ -753,7 +757,9 @@ export function FileTree({
           onRename={(n) => setRenaming(n.path)}
           onDelete={(n) => void deletePaths(targetsFor(n.path))}
           onReindex={onReindex ? (n) => onReindex(targetsFor(n.path)) : undefined}
-          onCopyPath={(p) => void navigator.clipboard?.writeText(p)}
+          // Relative (#549): the clipboard is where a path leaves the app for a
+          // shell or a chat message, and there a leading slash is the system root.
+          onCopyPath={(p) => void navigator.clipboard?.writeText(relPath(p))}
           onDownload={(n) => void downloadNode(n)}
           onOpenInSplit={onOpenInSplit}
         />

@@ -60,6 +60,24 @@ describe("KbHome shell", () => {
     expect(screen.queryByRole("button", { name: /new collection/i })).not.toBeInTheDocument();
   });
 
+  // #636 put the graph browser at /kb/graph — "the only entry that does not
+  // require already knowing an entity's id" — but the only way in was a link
+  // buried in one collection's Review tab, and the route sat outside the KB
+  // shell, so reaching it dropped the sidebar too.
+  it("reaches the knowledge graph from the KB sidebar", async () => {
+    renderShell();
+    await userEvent.click(screen.getByRole("button", { name: /^知識圖譜$/ }));
+    expect(await screen.findByPlaceholderText(/搜尋|search/i)).toBeInTheDocument();
+  });
+
+  it("keeps the KB sidebar on the graph surface", async () => {
+    renderShell("/kb/graph");
+    // The shell's own nav is still there — the graph is a third surface, not a
+    // page you fall out of the knowledge base into.
+    expect(await screen.findByRole("button", { name: /^知識集$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^對話$/ })).toBeInTheDocument();
+  });
+
   it("opens the Ask-agent drawer from the top bar", async () => {
     renderShell();
     await userEvent.click(await screen.findByRole("button", { name: /ask agent/i }));

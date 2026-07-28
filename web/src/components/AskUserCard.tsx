@@ -23,6 +23,13 @@
  * box that could mean any option. Options are numbered, and a pick highlights
  * rather than sending on the click — with a note to type, firing on the first
  * click would send before the person finished.
+ *
+ * Pressing 送出 takes ONLY the button away. Its whole job was ahead of the send;
+ * afterwards it says nothing happened, and the one thing it can still do is send
+ * a second answer. The question and the chosen option stay exactly where they
+ * are — they are the record of what was just sent — but stop taking input, so a
+ * highlight can never show a choice that was never sent. `answered` (from the
+ * persisted transcript) is a round trip away, so the card knows on its own.
  */
 import { useState } from "react";
 
@@ -144,6 +151,9 @@ export function AskUserCard({
   const [picked, setPicked] = useState<Record<number, string>>({});
   const [optNote, setOptNote] = useState<Record<string, string>>({});
   const [freeText, setFreeText] = useState<Record<number, string>>({});
+  // Pressed. Not "answered" — that word belongs to the transcript, which is a
+  // round trip away; this is just the card knowing it already sent.
+  const [sent, setSent] = useState(false);
 
   if (!questions) return null;
 
@@ -163,6 +173,7 @@ export function AskUserCard({
       const note = choice ? (optNote[noteKey(i, choice)] ?? "") : (freeText[i] ?? "");
       return answerLine(q.question, choice, note);
     });
+    setSent(true);
     onAnswer({ content: lines.join("\n"), answers: call.call_id });
   };
 
@@ -180,6 +191,7 @@ export function AskUserCard({
                     <button
                       type="button"
                       aria-pressed={active}
+                      disabled={sent}
                       onClick={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
                       title={opt.description || undefined}
                       style={{
@@ -192,7 +204,9 @@ export function AskUserCard({
                         border: "none",
                         padding: 0,
                         textAlign: "left",
-                        cursor: "pointer",
+                        // Still legible once sent — it is the record of the
+                        // choice, not a control any more.
+                        cursor: sent ? "default" : "pointer",
                         color: "var(--text-paper)",
                       }}
                     >
@@ -221,6 +235,9 @@ export function AskUserCard({
                       aria-label={`補充:${opt.label}`}
                       value={optNote[noteKey(i, opt.label)] ?? ""}
                       placeholder="補充(選填)"
+                      // `readOnly`, not `disabled`: a note that was sent has to
+                      // stay readable, and a disabled input greys its own text.
+                      readOnly={sent}
                       onChange={(e) =>
                         setOptNote((n) => ({ ...n, [noteKey(i, opt.label)]: e.target.value }))
                       }
@@ -239,9 +256,11 @@ export function AskUserCard({
             <button
               type="button"
               aria-pressed={picked[i] === DONT_UNDERSTAND}
+              disabled={sent}
               onClick={() => setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }))}
               style={{
                 ...plainBtn,
+                cursor: sent ? "default" : "pointer",
                 borderColor: picked[i] === DONT_UNDERSTAND ? "var(--accent)" : "var(--paper-3)",
               }}
             >
@@ -252,6 +271,7 @@ export function AskUserCard({
               aria-label="自己回答"
               value={freeText[i] ?? ""}
               placeholder="以上皆非,自己回答"
+              readOnly={sent}
               onChange={(e) => {
                 const v = e.target.value;
                 setFreeText((n) => ({ ...n, [i]: v }));
@@ -265,22 +285,25 @@ export function AskUserCard({
         </div>
       ))}
 
-      <button
-        type="button"
-        onClick={send}
-        style={{
-          alignSelf: "flex-start",
-          padding: "6px 16px",
-          fontWeight: 600,
-          border: "1px solid var(--accent)",
-          background: "var(--accent)",
-          color: "var(--white)",
-          borderRadius: 6,
-          cursor: "pointer",
-        }}
-      >
-        送出
-      </button>
+      {/* Gone the moment it is pressed — nothing else moves. */}
+      {!sent && (
+        <button
+          type="button"
+          onClick={send}
+          style={{
+            alignSelf: "flex-start",
+            padding: "6px 16px",
+            fontWeight: 600,
+            border: "1px solid var(--accent)",
+            background: "var(--accent)",
+            color: "var(--white)",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          送出
+        </button>
+      )}
     </div>
   );
 }

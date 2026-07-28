@@ -128,6 +128,22 @@ def test_run_accepts_uploaded_input_file_then_runs():
     assert data["result"] == {"status": "done", "n": 9}
 
 
+def test_a_staged_upload_names_the_file_relatively_in_the_activity_feed():
+    """The headless trigger records the same "Wrote …" activity row the file
+    routes do, and that row is prose the user reads — relative (#549), while its
+    `ref` keeps the store key the row opens."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.post(
+            f"{_base(item_id)}/run",
+            files={"file": ("uploads/input.json", b'{"n": 9}', "application/json")},
+        )
+        assert r.status_code == 202
+        written = next(e for e in client.get("/activity").json() if e["kind"] == "file_written")
+        assert written["text"] == "Wrote uploads/input.json"
+        assert written["ref"]["path"] == "/uploads/input.json"
+
+
 def test_run_rejects_an_upload_that_escapes_the_workspace():
     """#197: an uploaded path that escapes the workspace root is rejected (400) and NO
     run starts — the whole trigger aborts before anything is written."""

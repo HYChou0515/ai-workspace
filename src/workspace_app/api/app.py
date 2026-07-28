@@ -847,6 +847,7 @@ def create_app(
         spec,
         ingestor,
         wiki_coordinator,
+        graph_coordinator=coordinators.graph,
         index_coordinator=index_coordinator,
         retriever=kb_retriever,
         get_user_id=get_user_id,

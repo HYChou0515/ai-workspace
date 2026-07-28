@@ -792,3 +792,36 @@ def test_a_tool_with_no_optional_args_is_left_alone():
     become boilerplate stapled to every tool."""
     desc = _tool_named("link_entity").description or ""
     assert "null" not in desc.lower()
+
+
+async def test_tool_confirmations_never_hand_a_rooted_path_back(
+    ctx: RunContextWrapper[AgentToolContext],
+):
+    """A tool's own confirmation is the agent's second-strongest evidence about
+    what a path here looks like, after `list_files` — and it used to echo the
+    argument verbatim. So a model that guessed `/notes.md` got that guess
+    CONFIRMED by a successful write ("wrote 2 bytes to /notes.md"), carried it to
+    `exec`, and hit the system root. Input stays permissive (#549); what we hand
+    BACK is the one form that works everywhere."""
+    assert await write_file_impl(ctx, "/notes.md", "hi") == "wrote 2 bytes to notes.md"
+    assert await edit_file_impl(ctx, "/notes.md", "hi", "yo") == "edited notes.md"
+
+    # the rejection paths name the file too — a retry is built from this text
+    clash = await write_file_impl(ctx, "/notes.md", "again")
+    assert clash.startswith("error: notes.md already exists")
+    stale = await edit_file_impl(ctx, "/notes.md", "nothing like this", "x")
+    assert stale.startswith("error: could not apply the edit to notes.md")
+
+    assert await delete_file_impl(ctx, "/notes.md") == "deleted notes.md"
+    assert await read_file_impl(ctx, "/gone.md") == "error: file not found: gone.md"
+    assert await delete_file_impl(ctx, "/gone.md") == "error: file not found: gone.md"
+
+
+async def test_tool_confirmations_leave_a_relative_path_unchanged(
+    ctx: RunContextWrapper[AgentToolContext],
+):
+    """The same messages when the agent already speaks the right dialect — the
+    normalisation is idempotent, so nothing gains or loses a `./`."""
+    assert await write_file_impl(ctx, "data/x.csv", "hi") == "wrote 2 bytes to data/x.csv"
+    assert await edit_file_impl(ctx, "data/x.csv", "hi", "yo") == "edited data/x.csv"
+    assert await delete_file_impl(ctx, "data/x.csv") == "deleted data/x.csv"

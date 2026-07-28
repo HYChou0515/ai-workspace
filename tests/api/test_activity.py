@@ -36,7 +36,7 @@ def test_put_file_records_activity(harness: Harness):
     harness.client.put(harness.wpath("/files/notes.txt"), content=b"hi")
     feed = harness.client.get("/activity").json()
     assert feed[0]["kind"] == "file_written"
-    assert "/notes.txt" in feed[0]["text"]
+    assert "notes.txt" in feed[0]["text"]
     assert feed[0]["ref"]["path"] == "/notes.txt"
 
 
@@ -63,3 +63,26 @@ def test_activity_is_newest_first(harness: Harness):
     feed = harness.client.get("/activity").json()
     assert feed[0]["ref"]["path"] == "/two.txt"
     assert feed[1]["ref"]["path"] == "/one.txt"
+
+
+def test_activity_text_names_files_relatively_but_ref_keeps_the_key(harness: Harness):
+    """Two different jobs in one row: `text` is prose the user READS (and may
+    retype into a script or a chat message), `ref` is what the row OPENS. Only
+    the prose changes dialect (#549) — the ref stays the store's key, which is
+    what the file tree and the editor resolve against."""
+    harness.client.put(harness.wpath("/files/notes.txt"), content=b"hi")
+    written = harness.client.get("/activity").json()[0]
+    assert written["text"] == "Wrote notes.txt"
+    assert written["ref"]["path"] == "/notes.txt"
+
+    harness.client.post(harness.wpath("/files/mkdir"), json={"path": "/data"})
+    assert harness.client.get("/activity").json()[0]["text"] == "Created folder data"
+
+    harness.client.post(harness.wpath("/files/move"), json={"from": "/notes.txt", "to": "/n2.txt"})
+    assert harness.client.get("/activity").json()[0]["text"] == "Moved notes.txt → n2.txt"
+
+    harness.client.post(harness.wpath("/files/copy"), json={"from": "/n2.txt", "to": "/n3.txt"})
+    assert harness.client.get("/activity").json()[0]["text"] == "Copied n2.txt → n3.txt"
+
+    harness.client.delete(harness.wpath("/files/n3.txt"))
+    assert harness.client.get("/activity").json()[0]["text"] == "Deleted n3.txt"

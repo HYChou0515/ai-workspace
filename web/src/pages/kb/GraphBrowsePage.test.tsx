@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -15,14 +15,14 @@ afterEach(() => {
 
 const PAGE1 = {
   items: [
-    { id: "e:1", name: "回焊爐", kind: "機台", aliases: ["reflow oven"] },
-    { id: "e:2", name: "PPOOIXUX", kind: "recipe", aliases: [] },
+    { id: "e:1", name: "回焊爐", kind: "機台", aliases: ["reflow oven"], collection_ids: ["c1"] },
+    { id: "e:2", name: "PPOOIXUX", kind: "recipe", aliases: [], collection_ids: [] },
   ],
   has_more: true,
   next_offset: 2,
 };
 const PAGE2 = {
-  items: [{ id: "e:3", name: "錫膏", kind: "材料", aliases: [] }],
+  items: [{ id: "e:3", name: "錫膏", kind: "材料", aliases: [], collection_ids: ["c1"] }],
   has_more: false,
   next_offset: 4,
 };
@@ -50,6 +50,74 @@ const show = () =>
     </MemoryRouter>,
     { wrapper: QueryWrap },
   );
+
+const COLLECTIONS = JSON.stringify([
+  { resource_id: "c1", name: "製程週報" },
+  { resource_id: "c2", name: "良率檢討" },
+]);
+
+/** Like `stub`, but the collections endpoint answers with real rows so the
+ *  "found in" column has names to resolve against. */
+function stubWithCollections(page: unknown) {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) => {
+      if (String(url).includes("/kb/collections")) {
+        return new Response(COLLECTIONS, { status: 200 });
+      }
+      return new Response(JSON.stringify(page), { status: 200 });
+    }),
+  );
+}
+
+describe("GraphBrowsePage — which collections vouch for a row", () => {
+  it("names the collections the reader can open", async () => {
+    stubWithCollections({
+      items: [{ id: "e:1", name: "回焊爐", kind: "機台", aliases: [], collection_ids: ["c1"] }],
+      has_more: false,
+      next_offset: 1,
+    });
+    show();
+    const list = await screen.findByTestId("graph-browse-list");
+    expect(within(list).getByText("製程週報")).toBeInTheDocument();
+  });
+
+  it("counts the ones it cannot, instead of dropping them silently", async () => {
+    // An identity is visible when ANY of its collections is readable, so a row
+    // can carry evidence from one this reader may not open. Saying "+1" tells
+    // them the thing is broader than what they see; hiding it would misreport
+    // the corpus as smaller than it is.
+    stubWithCollections({
+      items: [
+        {
+          id: "e:1",
+          name: "回焊爐",
+          kind: "機台",
+          aliases: [],
+          collection_ids: ["c1", "locked-1", "locked-2"],
+        },
+      ],
+      has_more: false,
+      next_offset: 1,
+    });
+    show();
+    const list = await screen.findByTestId("graph-browse-list");
+    expect(within(list).getByText("製程週報")).toBeInTheDocument();
+    expect(within(list).getByText(/\+2/)).toBeInTheDocument();
+  });
+
+  it("says nothing when the row names no collection it can resolve", async () => {
+    stubWithCollections({
+      items: [{ id: "e:1", name: "回焊爐", kind: "機台", aliases: [], collection_ids: [] }],
+      has_more: false,
+      next_offset: 1,
+    });
+    show();
+    const list = await screen.findByTestId("graph-browse-list");
+    expect(within(list).getByText("回焊爐")).toBeInTheDocument();
+    expect(within(list).queryByText(/\+\d/)).not.toBeInTheDocument();
+  });
+});
 
 describe("GraphBrowsePage (#636)", () => {
   it("lists what the graph built, each row opening its page", async () => {

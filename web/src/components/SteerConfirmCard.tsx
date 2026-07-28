@@ -14,6 +14,7 @@
 import type { SteerPlan } from "../api/workflows";
 import { Icon } from "./Icon";
 import { pxToRem } from "../lib/pxToRem";
+import { relPath } from "../lib/relPath";
 
 export function SteerConfirmCard({
   plan,
@@ -73,7 +74,8 @@ export function SteerConfirmCard({
           <ul style={{ margin: 0, paddingLeft: 18 }}>
             {plan.input_edits.map((e) => (
               <li key={e.path}>
-                <code>{e.path}</code>
+                {/* Relative (#549) — the plan is model text and may arrive rooted. */}
+                <code>{relPath(e.path)}</code>
               </li>
             ))}
           </ul>

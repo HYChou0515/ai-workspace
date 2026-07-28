@@ -1,0 +1,114 @@
+// @vitest-environment happy-dom
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { KbApi, KbCollection } from "../../api/kb";
+import { mockKbApi } from "../../api/kbMock";
+import { QueryWrap } from "../../test/queryWrapper";
+import { GraphToggle } from "./GraphToggle";
+
+const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: QueryWrap });
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+const coll = (over: Partial<KbCollection>): KbCollection => ({
+  resource_id: "c1",
+  name: "C1",
+  description: "",
+  icon: "layers",
+  cited: 0,
+  doc_count: 0,
+  size: 0,
+  tokens: 0,
+  updated_at: 0,
+  owner: "u",
+  use_rag: true,
+  use_wiki: false,
+  wiki_maintainer_guidance: "",
+  wiki_reader_guidance: "",
+  is_global: false,
+  auto_digest: false,
+  use_graph: false,
+  ...over,
+});
+
+function client(over: Partial<KbApi> = {}): KbApi {
+  return { ...mockKbApi, ...over };
+}
+
+describe("GraphToggle", () => {
+  it("reflects the collection's use_graph state", () => {
+    render(<GraphToggle collection={coll({ use_graph: true })} client={client()} />);
+    expect(screen.getByTestId("kb-usegraph-toggle")).toBeChecked();
+  });
+
+  it("is unchecked when use_graph is off", () => {
+    render(<GraphToggle collection={coll({ use_graph: false })} client={client()} />);
+    expect(screen.getByTestId("kb-usegraph-toggle")).not.toBeChecked();
+  });
+
+  it("persists the choice via updateCollection on change", async () => {
+    const updateCollection = vi.fn(async () => {});
+    render(
+      <GraphToggle
+        collection={coll({ resource_id: "c9", use_graph: false })}
+        client={client({ updateCollection })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("kb-usegraph-toggle"));
+    await waitFor(() => expect(updateCollection).toHaveBeenCalledWith("c9", { use_graph: true }));
+  });
+
+  // Flipping the switch must not start a corpus-wide VLM pass on its own — that
+  // is what the explicit button is for.
+  it("does not start an extraction just because the toggle was flipped", async () => {
+    const updateCollection = vi.fn(async () => {});
+    const rebuildGraph = vi.fn(async () => ({ queued: 0, status: "rebuilding" }));
+    render(
+      <GraphToggle
+        collection={coll({ use_graph: false })}
+        client={client({ updateCollection, rebuildGraph })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("kb-usegraph-toggle"));
+    await waitFor(() => expect(updateCollection).toHaveBeenCalled());
+    expect(rebuildGraph).not.toHaveBeenCalled();
+  });
+
+  describe("extract now", () => {
+    it("queues an extraction for this collection", async () => {
+      const rebuildGraph = vi.fn(async () => ({ queued: 3, status: "rebuilding" }));
+      render(
+        <GraphToggle
+          collection={coll({ resource_id: "c9", use_graph: true })}
+          client={client({ rebuildGraph })}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("kb-usegraph-rebuild"));
+      await waitFor(() => expect(rebuildGraph).toHaveBeenCalledWith("c9"));
+    });
+
+    // The route answers `disabled` for an opted-out collection, so offering the
+    // button there would promise work that never happens.
+    it("is disabled while the collection has not opted in", () => {
+      render(<GraphToggle collection={coll({ use_graph: false })} client={client()} />);
+      expect(screen.getByTestId("kb-usegraph-rebuild")).toBeDisabled();
+    });
+
+    it("reports how many documents the run covers", async () => {
+      const rebuildGraph = vi.fn(async () => ({ queued: 7, status: "rebuilding" }));
+      render(<GraphToggle collection={coll({ use_graph: true })} client={client({ rebuildGraph })} />);
+      fireEvent.click(screen.getByTestId("kb-usegraph-rebuild"));
+      await waitFor(() => expect(screen.getByTestId("kb-usegraph-result")).toHaveTextContent("7"));
+    });
+
+    it("stays quiet until it is pressed", () => {
+      render(<GraphToggle collection={coll({ use_graph: true })} client={client()} />);
+      expect(screen.queryByTestId("kb-usegraph-result")).not.toBeInTheDocument();
+    });
+  });
+});

@@ -9,6 +9,7 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { isReadOnlyPath } from "../lib/readonly";
+import { relPath } from "../lib/relPath";
 import type {
   ApiClient,
   AppItem,
@@ -354,7 +355,7 @@ function transferMock(ws: string, from: string, to: string, copy: boolean): void
   const fs = ensureFiles(ws);
   const ds = ensureDirs(ws);
   if (ds.has(from)) {
-    if (fs.has(to) || ds.has(to)) throw new Error(`target exists: ${to}`);
+    if (fs.has(to) || ds.has(to)) throw new Error(`target exists: ${relPath(to)}`);
     const under = from + "/";
     for (const p of [...fs.keys()]) {
       if (p.startsWith(under)) {
@@ -375,7 +376,7 @@ function transferMock(ws: string, from: string, to: string, copy: boolean): void
   }
   const f = fs.get(from);
   if (!f) throw new Error(`not found: ${from}`);
-  if (fs.has(to) || ds.has(to)) throw new Error(`target exists: ${to}`);
+  if (fs.has(to) || ds.has(to)) throw new Error(`target exists: ${relPath(to)}`);
   fs.set(to, { ...f });
   for (const d of dirAncestors(to)) ds.add(d);
   if (!copy) fs.delete(from);
@@ -927,7 +928,7 @@ export const mockApi: ApiClient = {
 
   async mkdir(_slug: string, investigationId: string, path: string) {
     await delay(10);
-    if (ensureFiles(investigationId).has(path)) throw new Error(`file exists at ${path}`);
+    if (ensureFiles(investigationId).has(path)) throw new Error(`file exists at ${relPath(path)}`);
     const ds = ensureDirs(investigationId);
     ds.add(path);
     for (const d of dirAncestors(path)) ds.add(d);
