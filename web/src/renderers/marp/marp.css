@@ -1,0 +1,26 @@
+/* Marp deck renderer — the app-side chrome around the shadow-rooted slides.
+   Colours/sizes use design tokens; the marp theme itself lives inside the
+   shadow root and is deliberately not styled from here. */
+.ev-marp {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ev-marp__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+}
+
+.ev-marp__host {
+  display: block;
+}
+
+.ev-marp__error {
+  color: var(--err);
+  font-size: var(--text-body);
+  padding: 1rem;
+}
