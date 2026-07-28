@@ -94,6 +94,15 @@ class ItemLocator:
         found = find_work_item(self._spec, item_id)
         return dict(found[1].attached_skill_prefs) if found is not None else {}
 
+    def env_vars_of(self, item_id: str) -> dict[str, str]:
+        """The item's user-set environment variables (``WorkItemBase.env_vars``)
+        — rendered into the sandbox's infra area each turn so the tool launchers
+        can export them. Empty when the id maps to no registered App's item (the
+        delivery file is then written empty, which is also how a user's last
+        deleted variable stops reaching the tools)."""
+        found = find_work_item(self._spec, item_id)
+        return dict(found[1].env_vars) if found is not None else {}
+
     def slug_of(self, item_id: str) -> str | None:
         """The App slug owning an item — pairs with `profile_of` so the
         runner can read the profile's `.skill/` dir. None for an unknown id."""

@@ -427,6 +427,12 @@ class LocalProcessSandbox:
             # evaporation. This is not persistence — nothing outlives the sandbox
             # — it is the jail catching up to the unjailed path.
             env["SANDBOX_HOME"] = f"/{_HOME}"
+            # The user-env file, in its chroot-relative spelling — the SAME file
+            # the unjailed branch names below, a sibling of the `/root`
+            # workspace. Set unconditionally: the launcher guards with `-f`, and
+            # one assignment cannot disagree with the launcher about when the
+            # file exists the way a condition here could.
+            env["SANDBOX_USER_ENV"] = f"/{_USER_ENV}"
         else:
             # No chroot: run directly in the workspace subdir. cwd is the
             # workspace (the user's files); HOME is the per-sandbox `.home`.
@@ -447,6 +453,9 @@ class LocalProcessSandbox:
             # `export HOME="${SANDBOX_HOME:-…}"` (#393). Survives the `setpriv`
             # wrap (no `--reset-env`) so the dropped uid's launcher reads it.
             env["SANDBOX_HOME"] = str(root / _HOME)
+            # The user-env file the tool launchers export from (same file, same
+            # infra area as `.home`). Unconditional — see the jail branch.
+            env["SANDBOX_USER_ENV"] = str(root / _USER_ENV)
             # (Re)build + prepend the `python` shim so `python`/`python3*` route
             # to the python-stack carrier (or /usr/bin/python3), never the host's
             # own venv that heads the inherited PATH (#350). The jail path does

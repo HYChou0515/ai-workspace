@@ -36,9 +36,8 @@ class TestMock:
         assert sandbox.user_env(h) == "API_KEY=sk-1\n"
 
     async def test_a_fresh_sandbox_has_none(self):
-        # Not "" by accident — a sandbox nobody wrote to must be distinguishable
-        # from one whose variables were all deleted, so the exec path can skip
-        # setting SANDBOX_USER_ENV rather than point it at a phantom.
+        # `None`, not `""` — "nobody wrote one" and "every variable was deleted"
+        # are different states, and only the second should reach the launchers.
         sandbox = MockSandbox()
         h = await sandbox.create(SandboxSpec())
         assert sandbox.user_env(h) is None
@@ -122,6 +121,38 @@ class TestLocalProcess:
         await sandbox.write_user_env(h, "API_KEY=sk-1\n")
         mode = (tmp_path / h.id / USER_ENV_FILE).stat().st_mode
         assert stat.S_IMODE(mode) == 0o600
+
+
+class TestExecNamesTheFile:
+    """`SANDBOX_USER_ENV` is how the launcher finds the file, and it is set the
+    same way `SANDBOX_HOME` is (#393): the chroot-relative spelling inside the
+    jail, the absolute path outside it. Both branches, because they are separate
+    code and only one of them is exercised by any given deployment."""
+
+    async def test_unjailed_names_the_absolute_path(self, tmp_path):
+        sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+        h = await sb.create(SandboxSpec())
+        _argv, _cwd, env = sb._exec_argv(h, ["true"])
+        assert env["SANDBOX_USER_ENV"] == str(tmp_path / h.id / USER_ENV_FILE)
+
+    async def test_the_jail_names_the_same_file_chroot_relative(self, tmp_path):
+        sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
+        h = await sb.create(SandboxSpec())
+        _argv, cwd, env = sb._exec_argv(h, ["true"])
+        # `/.userenv` is the in-chroot spelling of `<root>/.userenv` — a sibling
+        # of the `/root` workspace, exactly like `/.home`.
+        assert env["SANDBOX_USER_ENV"] == f"/{USER_ENV_FILE}"
+        assert Path(cwd) == tmp_path / h.id
+
+    async def test_it_is_set_even_before_anything_was_written(self, tmp_path):
+        # The launcher guards with `-f`, so naming a not-yet-written file is
+        # harmless — and one unconditional assignment beats a branch that can
+        # disagree with the launcher about when the variable exists.
+        sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+        h = await sb.create(SandboxSpec())
+        _argv, _cwd, env = sb._exec_argv(h, ["true"])
+        assert "SANDBOX_USER_ENV" in env
+        assert not (tmp_path / h.id / USER_ENV_FILE).exists()
 
 
 class TestIsolated:
