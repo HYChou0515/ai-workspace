@@ -454,3 +454,18 @@ def test_the_file_tree_arrives_in_one_request(harness: Harness) -> None:
 
     assert any(f["path"] == "/a.md" for f in body["files"]), body
     assert "/empty" in body["dirs"], body
+
+
+async def test_conflict_details_name_the_file_the_way_the_ui_does(harness: Harness):
+    """These 409 bodies are not machine-only: the file tree alerts them verbatim
+    ("Create failed: file exists at …"), so the path in them is a path the user
+    reads and may retype into a script or a chat message. Relative (#549), like
+    every other path the product shows."""
+    harness.client.put(harness.wpath("/files/a.md"), content=b"a")
+    harness.client.put(harness.wpath("/files/b.md"), content=b"b")
+
+    clash = harness.client.post(harness.wpath("/files/copy"), json={"from": "/a.md", "to": "/b.md"})
+    assert clash.json()["detail"] == "target exists: b.md"
+
+    moved = harness.client.post(harness.wpath("/files/move"), json={"from": "/a.md", "to": "/b.md"})
+    assert moved.json()["detail"] == "target exists: b.md"
