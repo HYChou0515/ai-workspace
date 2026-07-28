@@ -10,8 +10,8 @@ they live next to ``create_app``; these routes only address chats and delegate.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from collections.abc import Callable
+from typing import Any, Protocol, cast
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
@@ -19,6 +19,7 @@ from specstar import SpecStar
 
 from ..kb.ingest import Ingestor
 from ..resources import Conversation
+from ..tokens import CallLane
 from ..workflow.orchestrator import WorkflowOrchestrator
 from .activity import ActivityLog
 from .chat_info import chat_info_from_resource, item_run_status
@@ -44,10 +45,24 @@ from .schemas import (
 from .timeutil import now_ms
 from .turns import ChatTurnEngine
 
-# `send_into(investigation_id, rid, conv, engine_key, body)` — append the user message,
-# build the RCA turn ctx, enqueue the turn. `record_mention(investigation_id, title,
-# user_ids, note, *, actor, author)` — append a mention entry + notify each user.
-SendInto = Callable[[str, str, Conversation, str, _MessageBody], Awaitable[None]]
+
+# `send_into(investigation_id, rid, conv, engine_key, body, *, author, lane)` — append
+# the user message, build the RCA turn ctx, enqueue the turn. `record_mention(
+# investigation_id, title, user_ids, note, *, actor, author)` — append a mention entry
+# + notify each user.
+class SendInto(Protocol):
+    async def __call__(
+        self,
+        investigation_id: str,
+        rid: str,
+        conv: Conversation,
+        engine_key: str,
+        body: _MessageBody,
+        author: str | None = None,
+        lane: CallLane = "background",
+    ) -> None: ...
+
+
 RecordMention = Callable[..., None]
 
 
@@ -80,7 +95,9 @@ def register_chat_routes(
         # Item-level (no chat_id) → the implicit default chat, keyed on item_id so the
         # workflow drive path + file-change broadcasts share its stream (manual §3).
         rid, conv = locator.conversation_for(investigation_id)
-        await send_into(investigation_id, rid, conv, investigation_id, body)
+        # A person is on the other end of this request — the one lane that is not
+        # the default (see `AgentToolContext.call_lane`).
+        await send_into(investigation_id, rid, conv, investigation_id, body, lane="interactive")
         return Response(status_code=status.HTTP_202_ACCEPTED)
 
     @app.get("/a/{slug}/items/{item_id}/stream")
@@ -241,7 +258,12 @@ def register_chat_routes(
         investigation_id = locator.require_access(slug, item_id, "converse")
         rid, conv = locator.require_chat(slug, item_id, chat_id)
         await send_into(
-            investigation_id, rid, conv, locator.engine_key(investigation_id, rid), body
+            investigation_id,
+            rid,
+            conv,
+            locator.engine_key(investigation_id, rid),
+            body,
+            lane="interactive",
         )
         return Response(status_code=status.HTTP_202_ACCEPTED)
 

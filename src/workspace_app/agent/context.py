@@ -9,6 +9,7 @@ from ..files import WorkspaceFiles
 from ..filestore.protocol import FileStore
 from ..sandbox.protocol import OutputSink, Sandbox, SandboxHandle, SandboxSpec
 from ..sync import SandboxSync
+from ..tokens import CallLane
 
 if TYPE_CHECKING:
     from specstar import SpecStar
@@ -291,7 +292,18 @@ class AgentToolContext:
     # The acting user for agent-driven specstar writes (#111: create/update
     # context cards stamp `created_by`/`updated_by` as this user). Set per-turn
     # from the message author; empty for contexts with no card-write tools.
+    # It doubles as WHOSE BEHALF this turn runs on when there is no `speaker` —
+    # a background turn still has a user for the credential seam to resolve.
     acting_user: str = ""
+    # Whether a person is waiting on this turn. The external LLM gateway rate-limits
+    # the two lanes differently (a batch job must not spend the quota a person is
+    # waiting on), and the lane reaches it as whatever header the credential source
+    # chooses — we only carry it. `background` is the default ON PURPOSE: an
+    # unmarked turn getting the tighter quota is a slower answer, while the reverse
+    # is a job quietly eating the interactive allowance. Only a turn a human just
+    # triggered says otherwise (the chat send routes, the KB chat send), and a
+    # sub-agent inherits its caller's lane the same way it inherits output ceilings.
+    call_lane: CallLane = "background"
     # #624: how many history messages this turn had to leave out because they
     # would not fit the endpoint's context window. 0 = nothing was cut (the
     # normal case, and the default when no ceiling is known — we send it all
