@@ -406,6 +406,39 @@ failover:
 
 ---
 
+## 11.5 每個使用者的 LLM 憑證與呼叫 lane
+
+對外的 LLM gateway 若不是用 bearer token 認證（例如吃 session cookie），或要對「背景工作」收更緊的
+rate limit，兩者都靠**同一個縫**：`ITokenService`（`src/workspace_app/tokens/`）。
+
+```python
+async def get_credential(user_id: str, current_key: str | None, lane: CallLane) -> LlmCredential
+#                                                                                  ^ api_key + headers
+```
+
+- `headers` 原樣變成該次請求的 HTTP header（litellm 對 `openai/*`、`ollama*` 三條路都照送）。
+  **這個縫不決定 header 叫什麼**——cookie 名稱、lane 要用哪個 header 表示、值長怎樣，全由 impl 決定。
+- `lane` 只有兩個值：`interactive`（有人在等）與 `background`（系統自己在跑）。
+  我方**不做限流**，只負責把 lane 送到 wire 上；配額由 gateway 執行。
+- 換 impl：改 `factories.get_agent_runner` 的 `token_service=`（或自己組 `LitellmAgentRunner`
+  傳進 `create_app`）。預設的 `PassthroughTokenService` 回傳 endpoint 原本的 key、零 header，
+  所以沒接 impl 的部署跟以前一字不差。過期會刷新的憑證可包一層 `CachingTokenService`
+  （TTL 快取，key 含 lane）。
+
+lane 由**建 turn 的地方**決定，預設一律 `background`（漏標只會讓那次比較慢；反過來讓批次吃掉互動配額
+才是這功能要防的事）：
+
+| 誰 | lane |
+| --- | --- |
+| 聊天送出（item / chat 兩個路由）、KB chat 送出 | `interactive` |
+| goal 自動續跑、workflow node、card generation、wiki 維護 | `background` |
+| sub-agent（`ask_knowledge_base`） | 繼承呼叫它的 turn |
+
+**目前不在這條線上的**：`kb/llm.py`（multi-query / HyDE / rerank）、`kb/embedder.py`、`kb/vlm/`、
+health check 的 replay —— 它們直接呼叫 `litellm`，且沒有 user 可解析，所以維持用設定檔裡的 key。
+
+---
+
 ## 12. 觀測（observability）
 
 ```yaml
