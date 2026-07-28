@@ -93,3 +93,20 @@ describe("RoleField", () => {
     expect(input.tagName).toBe("INPUT");
   });
 });
+
+describe("number role (#PM auto-schedule P1)", () => {
+  it("authors as a number box, so a duration keeps its arithmetic", () => {
+    // `progress` is a percent and `rank` is drag order — without a plain number
+    // a quantity like "how many days" could only masquerade as text.
+    expect(widgetForRole("number")).toBe("number");
+  });
+
+  it("commits a typed quantity as a number, not the string the input hands back", () => {
+    const onCommit = vi.fn();
+    render(<RoleField widget="number" name="exp_days" value={null} onCommit={onCommit} />);
+    // The field commits on blur (uncontrolled input, keyed by the committed
+    // value) — same contract as every other scalar widget here.
+    fireEvent.blur(screen.getByLabelText("exp_days"), { target: { value: "3" } });
+    expect(onCommit).toHaveBeenCalledWith(3);
+  });
+});

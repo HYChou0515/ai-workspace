@@ -4,7 +4,7 @@
  * editor) resolves its control here, so a role always looks + behaves the same:
  *
  *   text → text · status → dropdown (closed `values`) · actor → directory select
- *   date → date · daterange → start/end · progress/rank → number · ref → number
+ *   date → date · daterange → start/end · number/progress/rank → number · ref → number
  *   (a proper #N-picker lands in P4) · backref/rollup → read-only (compute-on-read)
  *
  * `RoleField` is the inline editor (uncontrolled scalars commit on blur; discrete
@@ -26,6 +26,7 @@ export type WidgetKind =
   | "actor"
   | "date"
   | "daterange"
+  | "number"
   | "progress"
   | "rank"
   | "ref"
@@ -37,6 +38,7 @@ const ROLE_WIDGET: Record<EntityRole, WidgetKind> = {
   actor: "actor",
   date: "date",
   daterange: "daterange",
+  number: "number",
   progress: "progress",
   rank: "rank",
   ref: "ref",
@@ -49,7 +51,7 @@ export function widgetForRole(role: EntityRole): WidgetKind {
   return ROLE_WIDGET[role];
 }
 
-const NUMERIC: ReadonlySet<WidgetKind> = new Set<WidgetKind>(["progress", "rank", "ref"]);
+const NUMERIC: ReadonlySet<WidgetKind> = new Set<WidgetKind>(["number", "progress", "rank", "ref"]);
 
 // ── shared discrete widgets (used by both create + edit) ─────────────────────
 
@@ -343,7 +345,7 @@ export function RoleCreateInput({ widget, name, value, values, users, refOptions
       />
     );
 
-  const type = widget === "date" ? "date" : widget === "progress" || widget === "rank" || widget === "ref" ? "number" : "text";
+  const type = widget === "date" ? "date" : NUMERIC.has(widget) ? "number" : "text";
   const placeholder = widget === "ref" ? "#" : "";
   return (
     <input

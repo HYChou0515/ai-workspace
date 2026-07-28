@@ -39,6 +39,7 @@ export type EntityRole =
   | "actor"
   | "date"
   | "daterange"
+  | "number"
   | "progress"
   | "rank"
   | "ref"

@@ -38,6 +38,8 @@ def _role_detail(f: FieldSpec) -> str:
             'a date range "YYYY-MM-DD/YYYY-MM-DD" — set this so the record '
             "shows on the timeline / gantt"
         )
+    if f.role is Role.NUMBER:
+        return "a number"
     if f.role is Role.PROGRESS:
         return "a percent, 0-100"
     if f.role is Role.RANK:
