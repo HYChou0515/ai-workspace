@@ -202,6 +202,17 @@ describe("<FileTree /> copy path", () => {
   });
 });
 
+describe("<FileTree /> toolbar tooltips name the target folder relatively (#549)", () => {
+  it("says 'New file in mydir/', not '/mydir/'", async () => {
+    const user = userEvent.setup();
+    renderTree(vi.fn(), { files: [{ path: "/mydir/a.md", size: 1 }] });
+    await user.click(screen.getByText("mydir")); // anchors the folder
+    expect(screen.getByTitle("New file in mydir/")).toBeInTheDocument();
+    expect(screen.getByTitle("New folder in mydir/")).toBeInTheDocument();
+    expect(screen.getByTitle("Upload to mydir/")).toBeInTheDocument();
+  });
+});
+
 describe("<FileTree /> download (#247)", () => {
   function spyService(over: Partial<FileService>): FileService {
     return { ...investigationFileService("rca", "inv"), ...over };

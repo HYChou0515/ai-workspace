@@ -180,6 +180,9 @@ export function FileTree({
     const isFolder = dirs.includes(anchor) || files.some((f) => f.path.startsWith(anchor + "/"));
     return isFolder ? anchor : anchor.split("/").slice(0, -1).join("/");
   })();
+  // What the toolbar tooltips CALL that folder — relative (#549), since the tree
+  // is where the user learns what a path here looks like.
+  const createDirLabel = relPath(createDir);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   // Click on a row: update the selection; a plain (unmodified) click also
@@ -518,7 +521,7 @@ export function FileTree({
         {caps.create && (
           <button
             type="button"
-            title={createDir ? `New file in ${createDir}/` : "New file"}
+            title={createDir ? `New file in ${createDirLabel}/` : "New file"}
             onClick={() => {
               if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
               setCreating({ kind: "file", dir: createDir });
@@ -531,7 +534,7 @@ export function FileTree({
         {caps.folders && (
           <button
             type="button"
-            title={createDir ? `New folder in ${createDir}/` : "New folder"}
+            title={createDir ? `New folder in ${createDirLabel}/` : "New folder"}
             onClick={() => {
               if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
               setCreating({ kind: "folder", dir: createDir });
@@ -545,7 +548,7 @@ export function FileTree({
         <div style={{ position: "relative" }}>
           <button
             type="button"
-            title={createDir ? `Upload to ${createDir}/` : "Upload files or a folder"}
+            title={createDir ? `Upload to ${createDirLabel}/` : "Upload files or a folder"}
             onClick={() => setUploadMenu((v) => !v)}
             style={{ color: "var(--text-paper-d)", padding: 2 }}
           >
