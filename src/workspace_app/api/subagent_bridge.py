@@ -32,6 +32,7 @@ from ..resources import AgentConfig
 from ..resources.groups import groups_of
 from ..resources.kb import Citation, Collection
 from ..sandbox.protocol import OutputSink
+from ..tokens import CallLane
 from .events import AgentEvent
 from .kb_chat_routes import answer_question, kb_progress
 from .runner import AgentRunner
@@ -99,6 +100,9 @@ class SubagentBridge:
         # default (the constructor switch); False ⇒ skip the probe this call;
         # True cannot re-enable a globally-off deploy.
         disclosure: bool | None = None,
+        # The calling turn's lane — the sub-agent runs on it too (see
+        # `AgentToolContext.call_lane`).
+        lane: CallLane = "background",
     ) -> tuple[str, list[Citation]]:
         """Generic sub-agent bridge — runs the sub-agent for `purpose`
         over every collection and returns its synthesized answer + the
@@ -230,6 +234,7 @@ class SubagentBridge:
             payload,
             agent_config=cfg,
             spec=self._spec,
+            lane=lane,
             enhancements=enhancements,
             reasoning_effort=reasoning_effort,
             on_event=relay,

@@ -35,6 +35,7 @@ from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
+from ..tokens import CallLane
 from .turns import history_items
 
 if TYPE_CHECKING:
@@ -387,10 +388,16 @@ class TurnContextBuilder:
         collection_tiers: list[list[str]],
         acting_user: str,
         speaker: User | None,
+        call_lane: CallLane = "background",
         apply_skills: list[str] | None = None,
         conversation_id: str | None = None,
     ) -> AgentToolContext:
-        """The full interactive RCA/workspace-chat turn context (`_send_into`)."""
+        """The full RCA/workspace-chat turn context (`_send_into`).
+
+        ``call_lane`` comes from the CALLER, not from this builder: the same send
+        path serves a person hitting send and the goal driver continuing a chat by
+        itself, and only the caller knows which it is. It defaults to the tighter
+        lane so a new caller that forgets cannot spend a person's quota."""
         session = await self._registry.session(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
         return AgentToolContext(
@@ -422,6 +429,9 @@ class TurnContextBuilder:
             acting_user=acting_user,
             # #242: the resolved speaker for the per-turn "who am I replying to" note.
             speaker=speaker,
+            # Is a person waiting on this turn? Decides which rate limit the
+            # gateway applies to its LLM calls.
+            call_lane=call_lane,
             # #275: the directory the `lookup_user` tool resolves a handle through.
             users=self._users,
             # #380: skills applied this turn — read_skill exempts them from the
