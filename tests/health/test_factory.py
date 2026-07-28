@@ -21,6 +21,7 @@ _FIXED_IDS = [
     "insight-extraction",
     "retrieval-expand",
     "vlm-describe",
+    "sandbox-host-capabilities",
     "agent-kb-chat",
     "agent-infer-modules",
     "agent-wiki-reader",
