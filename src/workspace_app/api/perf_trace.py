@@ -24,8 +24,7 @@ The loop-lag watchdog is the independent witness — it only ever sleeps, so a
 delay beyond its own sleep is time the loop could not run anything, reported
 without trusting any request's self-accounting.
 
-**On by default here**, because this module exists to be deployed once and read.
-Set ``WORKSPACE_PERF_TRACE=0`` to silence it. Per-call detail is logged only for
+Off unless ``WORKSPACE_PERF_TRACE=1``. Per-call detail is logged only for
 requests slower than ``WORKSPACE_PERF_TRACE_SLOW_MS`` (default 500) so a quiet
 endpoint stays one line while a slow one explains itself without a second deploy.
 
@@ -67,9 +66,11 @@ _DEFAULT_SLOW_MS = 500.0
 
 
 def enabled() -> bool:
-    """On unless explicitly switched off. A diagnostic that has to be remembered
-    is a diagnostic that gets deployed without being enabled."""
-    return os.environ.get(_ENV, "1") != "0"
+    """Off unless switched on. It patches methods on two hot classes and logs a
+    line per request — fine while it is answering a question, not something to
+    leave running by default. The knob lives in the configmap, so turning it on
+    costs an edit rather than an image."""
+    return os.environ.get(_ENV, "0") == "1"
 
 
 def _slow_ms() -> float:

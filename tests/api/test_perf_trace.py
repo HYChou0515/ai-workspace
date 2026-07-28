@@ -22,7 +22,8 @@ from ._client import TestClient as ApiTestClient
 
 
 @pytest.fixture
-def traced() -> ApiTestClient:
+def traced(monkeypatch: pytest.MonkeyPatch) -> ApiTestClient:
+    monkeypatch.setenv("WORKSPACE_PERF_TRACE", "1")
     app = create_app(
         spec=make_spec(default_user="u"),
         sandbox=MockSandbox(),
@@ -62,15 +63,15 @@ def _field(line: str, name: str) -> int:
     return int(match.group(1))
 
 
-def test_traces_without_being_asked_but_can_be_silenced(
-    monkeypatch: pytest.MonkeyPatch, perf_log: list[str]
-) -> None:
-    """On by default, opt-OUT. This module exists to be deployed once and read;
-    a diagnostic that must be remembered is one that ships switched off and
-    costs a second deploy to turn on."""
-    assert perf_trace.enabled()
-    monkeypatch.setenv("WORKSPACE_PERF_TRACE", "0")
+def test_stays_off_until_switched_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Opt-IN. It patches methods on two hot classes and logs a line per request,
+    which is the right trade only while someone is reading the output — so the
+    default must be silence, and the knob is a configmap edit rather than a
+    rebuild."""
+    monkeypatch.delenv("WORKSPACE_PERF_TRACE", raising=False)
     assert not perf_trace.enabled()
+    monkeypatch.setenv("WORKSPACE_PERF_TRACE", "1")
+    assert perf_trace.enabled()
 
 
 def test_request_line_counts_the_database_round_trips_it_made(
@@ -161,7 +162,7 @@ async def test_watchdog_reports_a_loop_that_could_not_run(
 
 
 def test_emits_even_though_the_app_configures_no_logging(
-    perf_log: list[str], capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, perf_log: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
     """The failure that cost a deploy.
 
@@ -174,6 +175,7 @@ def test_emits_even_though_the_app_configures_no_logging(
     So perf_trace owns its handler. Pinning it here means the next person to
     change the log level cannot silently take the instrument away again.
     """
+    monkeypatch.setenv("WORKSPACE_PERF_TRACE", "1")
     for handler in [h for h in perf_trace.logger.handlers if getattr(h, "_perf_trace", False)]:
         perf_trace.logger.removeHandler(handler)  # rebind to this test's stdout
     logging.getLogger().setLevel(logging.WARNING)  # what production actually has
