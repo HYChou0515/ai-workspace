@@ -121,3 +121,83 @@ def test_search_results_respect_permission_too():
     _seed(spec, private=True)
     who["id"] = "alice"
     assert client.get("/kb/graph/entities?limit=50&q=ppooi").json()["items"] == []
+
+
+def test_a_row_says_which_collections_it_was_found_in():
+    """A reader deciding whether to open an entity wants to know whose corpus it
+    came from — a collection is a boundary of responsibility. The row already
+    carries `collection_ids` (it is what the access scope reads), so saying it
+    costs no extra query."""
+    who = {"id": "bob"}
+    client, spec = _client(who)
+    cid = _seed(spec)
+    body = client.get("/kb/graph/entities?limit=5").json()
+    assert body["items"], "seeded entities are listed"
+    for row in body["items"]:
+        assert row["collection_ids"] == [cid]
+
+
+def _seed_many(spec, n: int) -> str:
+    """One collection, `n` entities of kind 機台 — more than a page holds."""
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(Collection(name="c")).resource_id
+    mrm = spec.get_resource_manager(GraphMention)
+    for i in range(n):
+        surface = f"機台{i:03d}"
+        with mrm.using("bob"):
+            mrm.create(
+                GraphMention(
+                    collection_id=cid,
+                    source_doc_id="deck-A",
+                    surface=surface,
+                    norm_surface=norm_surface(surface),
+                    kind="機台",
+                    norm_kind=norm_surface("機台"),
+                    occurrences=1,
+                    chunk_ids=["deck-A#0"],
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                    doc_visibility="public",
+                ),
+                resource_id=mention_id("deck-A", surface),
+            )
+    link_identical_mentions(spec)
+    return cid
+
+
+def test_a_kind_filter_is_not_truncated_by_the_page_it_scanned():
+    """Narrowing by kind must search the whole table, not the first page of it.
+
+    The filter used to run in Python over the rows already fetched, so it could
+    only ever see `limit + offset + 1` of them: asking for one kind returned a
+    fraction of the matches AND reported `has_more: false`, which reads as "that
+    is all of them". More data made it worse, not better.
+    """
+    who = {"id": "bob"}
+    client, spec = _client(who)
+    _seed_many(spec, 40)
+
+    body = client.get("/kb/graph/entities?kind=%E6%A9%9F%E5%8F%B0&limit=10").json()
+
+    assert len(body["items"]) == 10, "a full page of matches, not the leftovers of a scan"
+    assert all(r["kind"] == "機台" for r in body["items"])
+    assert body["has_more"] is True, "40 matches do not fit in a page of 10"
+
+
+def test_a_kind_filter_pages_through_every_match():
+    who = {"id": "bob"}
+    client, spec = _client(who)
+    _seed_many(spec, 25)
+
+    seen: set[str] = set()
+    offset = 0
+    for _ in range(10):  # generous bound; the loop breaks when the pages run out
+        body = client.get(
+            f"/kb/graph/entities?kind=%E6%A9%9F%E5%8F%B0&limit=10&offset={offset}"
+        ).json()
+        seen |= {r["id"] for r in body["items"]}
+        if not body["has_more"]:
+            break
+        offset = body["next_offset"]
+    assert len(seen) == 25, f"every 機台 is reachable by paging, saw {len(seen)}"

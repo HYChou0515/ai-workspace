@@ -70,6 +70,7 @@ from .permission_body import PermissionOut, build_permission
 from .permission_body import granted_user_ids as _granted_user_ids
 
 if TYPE_CHECKING:
+    from ..kb.graph.coordinator import GraphCoordinator
     from ..kb.index_coordinator import IndexCoordinator
     from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
 
@@ -150,6 +151,10 @@ class CollectionOut(BaseModel):
     # #377: auto-generate context cards (+ raise clarification questions) for every
     # doc as it finishes indexing. User-owned; the settings panel toggles it.
     auto_digest: bool = False
+    # #534: knowledge-graph metric extraction opt-in. The graph dispatch only ever
+    # visits collections where this is True, so the settings panel has to be able
+    # to read it back — without it the toggle can be written but never reflected.
+    use_graph: bool = False
     # Issue #90: per-collection wiki guidance, so the editor can prefill the
     # current values. Blank ⇒ the bundled wiki prompt is used verbatim.
     wiki_maintainer_guidance: str = ""
@@ -214,6 +219,16 @@ class WikiPageDeletedOut(BaseModel):
 class WikiRebuildOut(BaseModel):
     """Result of POST /kb/collections/:id/wiki/rebuild — how many sources were
     queued for re-folding into the wiki."""
+
+    queued: int
+    status: str = "rebuilding"
+
+
+class GraphRebuildOut(BaseModel):
+    """Result of POST /kb/collections/:id/graph/rebuild — how many documents the
+    queued extraction pass covers. ``status`` is ``disabled`` when the collection
+    has not opted in (``use_graph``), so the UI can say why nothing happened
+    instead of claiming a run that isn't happening."""
 
     queued: int
     status: str = "rebuilding"
@@ -484,6 +499,12 @@ class GraphEntityRowOut(BaseModel):
     name: str
     kind: str
     aliases: list[str]  # the other spellings, so a search hit explains itself
+    # Which corpora vouch for it. Already on the row — it is what the access
+    # scope reads to decide visibility — so saying it costs no extra query.
+    # Sent as ids: the caller resolves names from the collection list it already
+    # holds, which is permission-filtered, rather than this route growing a
+    # second copy of the rule (see review.entity_page).
+    collection_ids: list[str]
 
 
 class GraphEntityPageOut(BaseModel):
@@ -732,6 +753,23 @@ def _browse_entities(
     rows: list[tuple[str, GraphEntity]] = []
     want = limit + offset + 1
     with erm.using(as_user, apply_access_scope=True):  # ty: ignore[unknown-argument]
+        # A kind is an entity, so the word the reader typed resolves through the
+        # same name index as anything else — and `kind_id` is indexed, so the
+        # narrowing belongs in the query. It used to run in Python over the rows
+        # already fetched, which meant a kind filter could only ever see the
+        # first `want` rows of the table: it returned a fraction of the matches
+        # and then reported `has_more: false`, i.e. "that is all of them". More
+        # data made it worse. Pushing it down also makes the query far more
+        # selective, which is the opposite of what the old shape did.
+        kind_ids: list[str] = []
+        if kind:
+            wanted_kind = norm_surface(kind)
+            for r in erm.list_resources(QB["norm_keys"].contains(wanted_kind).build()):
+                kind_ids.append(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+            if not kind_ids:
+                # Nothing is called that, so nothing can be of that kind. Saying
+                # so beats scanning the table to discover it.
+                return GraphEntityPageOut(items=[], has_more=False, next_offset=offset)
         if q:
             seen: set[str] = set()
             for _name, hit_ids in graph_name_index(spec).get().search(q, limit=want):
@@ -749,11 +787,15 @@ def _browse_entities(
                         continue
                     if collection and collection not in data.collection_ids:
                         continue
+                    if kind_ids and data.kind_id not in kind_ids:
+                        continue
                     rows.append((rid, data))
         else:
             cond = QB.all() if include_merged else (QB["merged_into"] == "")
             if collection:
                 cond = cond & QB["collection_ids"].contains(collection)
+            if kind_ids:
+                cond = cond & QB["kind_id"].in_(kind_ids)
             for r in erm.list_resources(cond.limit(want).build()):
                 data = r.data
                 if isinstance(data, GraphEntity) and data.collection_ids:
@@ -771,14 +813,6 @@ def _browse_entities(
                         continue
                     if isinstance(krow, GraphEntity):
                         kinds[data.kind_id] = krow.canonical_name
-    if kind:
-        wanted = norm_surface(kind)
-        rows = [
-            (rid, d)
-            for rid, d in rows
-            if d.kind_id and norm_surface(kinds.get(d.kind_id, "")) == wanted
-        ]
-
     window = rows[offset : offset + limit + 1]
     return GraphEntityPageOut(
         items=[
@@ -787,6 +821,7 @@ def _browse_entities(
                 name=data.canonical_name,
                 kind=kinds.get(data.kind_id, ""),
                 aliases=sorted(k for k in data.norm_keys if k != norm_surface(data.canonical_name)),
+                collection_ids=data.collection_ids,
             )
             for rid, data in window[:limit]
         ],
@@ -801,6 +836,7 @@ def register_kb_routes(
     ingestor: Ingestor,
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     *,
+    graph_coordinator: GraphCoordinator | None = None,
     index_coordinator: IndexCoordinator,
     retriever: Retriever,
     get_user_id: Callable[[], str],
@@ -842,6 +878,7 @@ def register_kb_routes(
             use_wiki=data.use_wiki,
             is_global=data.is_global,
             auto_digest=data.auto_digest,
+            use_graph=data.use_graph,
             wiki_maintainer_guidance=data.wiki_maintainer_guidance,
             wiki_reader_guidance=data.wiki_reader_guidance,
             quality_rubric=data.quality_rubric,
@@ -1831,6 +1868,33 @@ def register_kb_routes(
         return WikiRebuildOut(
             queued=queued, status="rebuilding" if started else "already_rebuilding"
         )
+
+    @app.post("/kb/collections/{collection_id}/graph/rebuild")
+    async def rebuild_graph(collection_id: str) -> GraphRebuildOut:
+        # #534: manual "extract now" for one collection. The dispatch cronjob runs
+        # WEEKLY (0 3 * * 6, Asia/Taipei), so a collection that was just opted in
+        # would otherwise sit untouched for up to seven days — the toggle would
+        # look broken. Accept-and-return, same shape as the wiki rebuild (#571):
+        # queue the one `split` the dispatch would have queued and answer. The
+        # per-doc extraction is an idempotent wipe+rewrite, so re-running is safe.
+        _authorize_collection(collection_id, "edit_content")  # #607
+        coll_rm = spec.get_resource_manager(Collection)
+        try:
+            coll = coll_rm.get(collection_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Extraction is expensive VLM/LLM work. A collection that never opted in
+        # must not get it because someone found the button.
+        if graph_coordinator is None or not (isinstance(coll, Collection) and coll.use_graph):
+            return GraphRebuildOut(queued=0, status="disabled")
+        # `queued` counts what the run covers — still-indexing docs carry no chunks
+        # yet, so extraction would find nothing to read. An indexed count push-down;
+        # counted BEFORE the enqueue so a worker claiming the job immediately can't
+        # race the number as it flips docs.
+        ready = (QB["collection_id"] == collection_id) & (QB["status"] == "ready")
+        queued = spec.get_resource_manager(SourceDoc).count_resources(ready.build())
+        graph_coordinator.enqueue_collection_rebuild(collection_id)
+        return GraphRebuildOut(queued=queued)
 
     @app.post("/kb/collections/{collection_id}/wiki/reflect")
     async def reflect_wiki(collection_id: str) -> WikiReflectOut:

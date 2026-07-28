@@ -11,6 +11,8 @@ import { kbApi, type KbApi } from "../../api/kb";
 import { CardsTab, DocumentsTab, KbCollectionPage, ReviewTab, WikiTab } from "./KbCollectionPage";
 import { KbChatsSurface } from "./KbChatsSurface";
 import { KbCollectionsGrid } from "./KbCollectionsGrid";
+import { GraphBrowsePage } from "./GraphBrowsePage";
+import { GraphEntityPage } from "./GraphEntityPage";
 import { KbHome } from "./KbHome";
 
 /** /kb is not a page of its own — land on the collections grid. Honours the
@@ -40,6 +42,11 @@ export function kbRoutes(client: KbApi = kbApi) {
       {/* The open conversation is the URL too (#93). `:chatId === "new"` is the
           unsaved composer; both paths render the same surface so the new→real-id
           transition is a param change (no remount, keeps the live stream). */}
+      {/* #636: the graph browser needs no collection, so it is a surface of the
+          knowledge base itself — inside the shell, beside collections and chats,
+          rather than a page you fall out of the KB into. */}
+      <Route path="graph" element={<GraphBrowsePage />} />
+      <Route path="graph/entities/:entityId" element={<GraphEntityPage />} />
       <Route path="chats" element={<KbChatsSurface client={client} />} />
       <Route path="chats/:chatId" element={<KbChatsSurface client={client} />} />
     </Route>

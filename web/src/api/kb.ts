@@ -95,6 +95,10 @@ export type KbCollection = {
    * every document as it finishes indexing. User-owned; toggled from the
    * collection settings panel. Default off. */
   auto_digest: boolean;
+  /** #534: opt in to knowledge-graph metric extraction. Expensive VLM/LLM work
+   * that only pays off on metric-bearing collections, so the owner turns it on
+   * per collection. Default off. */
+  use_graph: boolean;
 };
 
 /** #328 findability probe: where a doc's content ranks for a question, and how
@@ -161,6 +165,11 @@ export type ReindexQueued = { queued: boolean; documents: number; status: string
 
 /** Result of triggering a wiki rebuild — how many sources were queued. */
 export type WikiRebuild = { queued: number; status: string };
+
+/** #534: result of triggering a knowledge-graph extraction for one collection.
+ * `status` is `disabled` when the collection has not opted in, so the UI can say
+ * why nothing happened rather than confirm a run that isn't happening. */
+export type GraphRebuild = { queued: number; status: string };
 
 /** #479: result of triggering a wiki daily reflection (consolidation) — the
  * single reflect job that was queued. */
@@ -658,6 +667,8 @@ export interface KbApi {
       use_wiki?: boolean;
       /** #377: auto-generate cards for every doc as it finishes indexing. */
       auto_digest?: boolean;
+      /** #534: opt in to knowledge-graph metric extraction. */
+      use_graph?: boolean;
       wiki_maintainer_guidance?: string;
       wiki_reader_guidance?: string;
       /** #105: the per-collection quality rubric (what makes a doc a good/bad
@@ -812,6 +823,9 @@ export interface KbApi {
   deleteWikiPage(collectionId: string, path: string): Promise<void>;
   /** Re-fold every source into the wiki (the manual "rebuild" button). */
   rebuildWiki(collectionId: string): Promise<WikiRebuild>;
+  /** #534: extract this collection's knowledge graph now. The dispatch cronjob
+   * runs weekly, so a freshly opted-in collection would otherwise wait days. */
+  rebuildGraph(collectionId: string): Promise<GraphRebuild>;
   /** #479: run a daily-reflection pass now — consolidate the prose wiki (lift
    * concepts, merge duplicates, split bloated pages). Enqueues a single reflect
    * job; progress surfaces via `getWikiStatus` (surveying/planning/applying). */
@@ -1194,6 +1208,10 @@ export const realKbApi: KbApi = {
   async rebuildWiki(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/rebuild`;
     return (await ok(await apiFetch(url, { method: "POST" }), "rebuild wiki")).json();
+  },
+  async rebuildGraph(collectionId) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/graph/rebuild`;
+    return (await ok(await apiFetch(url, { method: "POST" }), "rebuild graph")).json();
   },
   async reflectWiki(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/reflect`;

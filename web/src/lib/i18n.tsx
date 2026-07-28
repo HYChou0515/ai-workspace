@@ -139,6 +139,14 @@ export const messages = {
   "graph.browse.collectionLabel": { "zh-TW": "知識庫", en: "Knowledge base" },
   "graph.browse.allCollections": { "zh-TW": "全部知識庫", en: "All knowledge bases" },
   "graph.browse.alsoWritten": { "zh-TW": "也寫作 ", en: "also written " },
+  "graph.browse.colName": { "zh-TW": "名稱", en: "Name" },
+  "graph.browse.colKind": { "zh-TW": "類別", en: "Kind" },
+  "graph.browse.colAliases": { "zh-TW": "也寫作", en: "Also written" },
+  "graph.browse.colFoundIn": { "zh-TW": "收錄於", en: "Found in" },
+  "graph.browse.foundInHidden": {
+    "zh-TW": "另有你無權開啟的知識庫也收錄了它",
+    en: "also found in knowledge bases you cannot open",
+  },
   "graph.browse.empty": { "zh-TW": "沒有符合的東西。", en: "Nothing matches." },
   "graph.browse.next": { "zh-TW": "下一頁", en: "Next" },
   "graph.browse.prev": { "zh-TW": "上一頁", en: "Previous" },
@@ -297,6 +305,7 @@ export const messages = {
   "kb.brand": { "zh-TW": "知識庫", en: "Knowledge base" },
   "kb.collections": { "zh-TW": "知識集", en: "Collections" },
   "kb.chats": { "zh-TW": "對話", en: "Chats" },
+  "kb.graph": { "zh-TW": "知識圖譜", en: "Knowledge graph" },
   "kb.conversations": { "zh-TW": "對話", en: "Conversations" },
   "kb.empty": {
     "zh-TW": "選擇一個對話，或開始新的對話。",
@@ -747,6 +756,20 @@ export const messages = {
   "kb.cards.funnel.skipped": {
     "zh-TW": "（另有 {n} 份仍在索引，完成後再生成）",
     en: "({n} still indexing — generate again once ready)",
+  },
+  "kb.useGraph.label": { "zh-TW": "知識圖譜", en: "Knowledge graph" },
+  "kb.useGraph.help": {
+    "zh-TW": "從文件抽取指標與實體,建成可交叉查詢的圖譜。抽取會用到視覺/語言模型,建議只對含指標的文件庫開啟。",
+    en: "Extract metrics and entities from documents into a cross-referenced graph. Extraction spends VLM/LLM work, so turn it on for metric-bearing collections.",
+  },
+  "kb.useGraph.rebuild": { "zh-TW": "立即抽取", en: "Extract now" },
+  "kb.useGraph.rebuildQueued": {
+    "zh-TW": "已排入 {n} 份文件",
+    en: "Queued {n} documents",
+  },
+  "kb.useGraph.rebuildDisabled": {
+    "zh-TW": "尚未開啟知識圖譜",
+    en: "Knowledge graph is off",
   },
   "kb.autoDigest.label": { "zh-TW": "自動生成卡片", en: "Auto-generate cards" },
   "kb.autoDigest.help": {
