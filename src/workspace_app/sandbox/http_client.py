@@ -318,6 +318,12 @@ class HttpSandbox:
         resp = await self._io_request(handle, "GET", "/ready")
         return bool(resp.json()["ready"])
 
+    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
+        # Raw body, not JSON: these are arbitrary user values and every encoding
+        # hop is a chance to mangle one. Idempotent (a whole-file replace), so it
+        # rides `_io_request`'s retry like the other file ops.
+        await self._io_request(handle, "POST", "/user-env", content=content.encode("utf-8"))
+
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
         resp = await self._io_request(handle, "GET", "/walk", params={"root": root})
         return [

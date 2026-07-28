@@ -26,6 +26,9 @@ class MockSandbox:
         self._fs: dict[str, dict[str, bytes]] = {}
         # #366: readiness kept outside the file store so it never shows in walk.
         self._ready: set[str] = set()
+        # Kept outside the file store like `_ready`: on a real backend the
+        # user-env file sits beside the workspace, never inside it.
+        self._user_env: dict[str, str] = {}
         # #504: records handle ids the controller asked to reown (post-restore),
         # so wiring tests can assert the chown-the-restored-tree step ran.
         self.reowned: list[str] = []
@@ -50,6 +53,7 @@ class MockSandbox:
         self._require(handle)
         del self._fs[handle.id]
         self._ready.discard(handle.id)
+        self._user_env.pop(handle.id, None)
 
     async def reown(self, handle: SandboxHandle) -> None:
         # #504: no real ownership in-memory; just record that it was requested.
@@ -63,6 +67,15 @@ class MockSandbox:
     async def is_ready(self, handle: SandboxHandle) -> bool:
         self._require(handle)
         return handle.id in self._ready
+
+    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
+        self._require(handle)
+        self._user_env[handle.id] = content
+
+    def user_env(self, handle: SandboxHandle) -> str | None:
+        """Test-facing: what `write_user_env` last wrote, or None if it never
+        ran."""
+        return self._user_env.get(handle.id)
 
     async def exec(
         self,

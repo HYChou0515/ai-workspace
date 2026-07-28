@@ -185,6 +185,11 @@ _JAILBIN = ".jailbin"
 # as SANDBOX_HOME; this replaces the launcher's old shared-/tmp HOME that leaked
 # a user's `pip install --break-system-packages` across sandboxes on a pod.
 _HOME = ".home"
+# The item's user-set environment variables, as `KEY=VALUE` lines, for the tool
+# launchers to export. A sibling of the workspace, OUTSIDE it — never walked,
+# never carried by the NFS archive (which rsyncs only the workspace), reaped with
+# the sandbox. `_exec_argv` names it to the launchers as SANDBOX_USER_ENV.
+_USER_ENV = ".userenv"
 # Shim every flavour name the agent or a tool launcher might spell — matching
 # the jail bootstrap. A bare `python` shim alone would let `python3` fall
 # through to the host interpreter.
@@ -338,6 +343,21 @@ class LocalProcessSandbox:
         """#366: True once `mark_ready` ran (and the sandbox still exists)."""
         marker = self._require(handle) / _READY_MARKER
         return await asyncio.to_thread(marker.is_file)
+
+    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
+        """Write the item's user env for the tool launchers, at the SANDBOX ROOT
+        (a sibling of the workspace), so walk/the archive never see it."""
+        path = self._require(handle) / _USER_ENV
+        await asyncio.to_thread(self._write_user_env, path, content)
+
+    def _write_user_env(self, path: Path, content: str) -> None:
+        """The blocking half, and the seam `IsolatedProcessSandbox` extends to
+        hand the file to the uid its `exec` drops to. 0600 from creation (the
+        mode goes to `os.open`, not a chmod afterwards), so the values are never
+        briefly readable by a co-tenant."""
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]

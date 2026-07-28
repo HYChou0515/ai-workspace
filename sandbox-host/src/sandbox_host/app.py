@@ -363,6 +363,14 @@ def make_host_app(
         ok = await sandbox.is_ready(SandboxHandle(id=rid))
         return _ReadyReply(ready=ok)
 
+    @app.post("/sandboxes/{rid}/user-env", status_code=204)
+    async def write_user_env(rid: str, request: Request) -> None:
+        # The body is the file, raw — not JSON. These are `KEY=VALUE` lines whose
+        # values are arbitrary user text, and every encoding hop is a chance to
+        # mangle one; `upload` posts its bytes the same way.
+        content = (await request.body()).decode("utf-8")
+        await sandbox.write_user_env(SandboxHandle(id=rid), content)
+
     @app.get("/sandboxes/{rid}/walk")
     async def walk(rid: str, root: str) -> _WalkReply:
         entries = await sandbox.walk(SandboxHandle(id=rid), root)

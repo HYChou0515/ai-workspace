@@ -199,6 +199,13 @@ _JAILBIN = ".jailbin"
 # as SANDBOX_HOME; this replaces the launcher's old shared-/tmp HOME that leaked
 # a user's `pip install --break-system-packages` across sandboxes.
 _HOME = ".home"
+# The item's user-set environment variables, as `KEY=VALUE` lines, for the tool
+# launchers to export. A sibling of the workspace, OUTSIDE it — so walk/sync/the
+# file tree never see it, the quota never charges for it, and it is reaped with
+# the sandbox. `_exec_argv` names it to the launchers as SANDBOX_USER_ENV.
+# Delivery only: the item record is the source of truth, because `kill` rmtrees
+# this whole dir and the durable archive carries only the workspace.
+_USER_ENV = ".userenv"
 # Shim every flavour name the agent or a tool launcher might spell — matching
 # the jail bootstrap. A bare `python` shim alone would let `python3` fall
 # through to the host interpreter.
@@ -368,6 +375,24 @@ class LocalProcessSandbox:
         """#366: True once `mark_ready` ran (and the sandbox dir still exists)."""
         marker = self._require(handle) / _READY_MARKER
         return await asyncio.to_thread(marker.is_file)
+
+    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
+        """Write the item's user env for the tool launchers, at the SANDBOX ROOT
+        (`$root/id/.userenv`) — a sibling of the workspace, so walk/sync/the file
+        tree never see it. `write_text` truncates, which is the contract: the
+        file is rebuilt whole each turn so a deleted variable really goes."""
+        path = self._require(handle) / _USER_ENV
+        await asyncio.to_thread(self._write_user_env, path, content)
+        logger.info("local_process: wrote user env for sandbox %s", handle.id)
+
+    def _write_user_env(self, path: Path, content: str) -> None:
+        """The blocking half, and the seam `IsolatedProcessSandbox` extends to
+        hand the file to the uid its `exec` drops to. Written 0600 BEFORE the
+        content lands (`os.open` with the mode, not a chmod afterwards), so the
+        values are never briefly world-readable on a shared host."""
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
