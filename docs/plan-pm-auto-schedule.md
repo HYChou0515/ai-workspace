@@ -84,6 +84,23 @@ Flat integers, one commit each, TDD.
 - **P9 — creation defaults** (#11).
 - **P10 — verification in the running app**, not only in tests.
 
+## Status
+
+All phases landed except P2, which was dropped for the reason above. Verified
+end to end in a running PM project: two milestones (`2026-07-01/` and
+`2026-08-01/`, both ends open) and five issues.
+
+| issue | scheduled | why |
+| --- | --- | --- |
+| a1 — Alice, 30 working days, M1 | 07-01 → 08-11 | from M1's start |
+| a2 — Alice, 3 days, M2 | 08-12 → 08-14 | Alice is still busy, so **M2 slips** rather than clone her |
+| b1 — Bob, 4 days, M1 | 07-01 → 07-06 | his own queue, in parallel with Alice |
+| unowned, 2 days | 07-01 → 07-02 | the shared unassigned queue |
+| Bob, no estimate | 07-07, one day, **dashed** | a placeholder to drag into shape |
+
+The milestones' own spans followed their issues (`2026-07-01/2026-08-11` and
+`2026-08-12/2026-08-14`), and every date survived a reload.
+
 ## Open
 
 Settled while building:
