@@ -33,6 +33,7 @@ import {
   axisFor,
   canvasWidthFor,
   clampPpd,
+  barColumns,
   columnOf,
   deltaDays,
   type DragMode,
@@ -302,7 +303,10 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
                 {lane.rows.map((row) => {
                   const ps = previewSpan(row);
                   const left = xOf(ps.start);
-                  const width = Math.max(columnOf(ps.start, ps.end, skip), 1) * ppd;
+                  // Both ends of the range are coloured (barColumns) — the clamp
+                  // this replaces was hiding the off-by-one: it made a same-day
+                  // span look right while every longer bar stopped a day short.
+                  const width = barColumns(ps, skip) * ppd;
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div

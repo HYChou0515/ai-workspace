@@ -303,6 +303,16 @@ export function columnOf(from: string, date: string, skip: boolean): number {
   return sign * wd;
 }
 
+/** How many columns a span COVERS — both ends included, because a `daterange`
+ * is inclusive: 7/13–7/15 is a three-day task, not a two-day one. This is the
+ * same counting the chart's own width uses (`columnOf(min, max) + 1`); a bar
+ * measured with the bare `columnOf` stopped at the START of its end date, so
+ * that day never got coloured and the range read a day short. Never below 1 —
+ * `spanToDates` rejects a reversed range, so start ≤ end always. */
+export function barColumns(span: Span, skip: boolean): number {
+  return columnOf(span.start, span.end, skip) + 1;
+}
+
 /** The calendar date at working-day column `col` from `minDate` (inverse of
  * {@link columnOf}); plain `shiftDate` when not skipping. */
 export function dateAtColumn(minDate: string, col: number, skip: boolean): string {
