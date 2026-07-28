@@ -8,6 +8,7 @@
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
 import type { WeekRule } from "./ganttScale";
+import type { ScheduleFields } from "./schedule";
 import type { RefIndex } from "./refTraversal";
 
 export type ViewKind = "table" | "board" | "gantt" | "health";
@@ -43,6 +44,11 @@ export type ViewSpec = {
   /** gantt only — collapse Saturdays/Sundays so the timeline shows only working
    * days (bars, axis, drag all count Mon–Fri). Default off. */
   skip_weekends?: boolean;
+  /** gantt only — which fields carry the schedule, so the Timeline can lay the
+   * work out on demand. Present ⇒ the chart offers Recalculate; absent ⇒ it is
+   * a plain drawing of dates, as before. Named here rather than assumed because
+   * this renderer serves every app's entity types. */
+  schedule?: ScheduleFields;
   card?: { title?: string; badges?: string[] };
 };
 
@@ -93,6 +99,10 @@ export type EntityViewProps = {
   canWrite?: boolean;
   onCreate: (args: Record<string, unknown>) => void;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
+  /** Patch a record of the type the schedule's `anchor` ref points at — a
+   * milestone whose own span the schedule works out. Absent ⇒ that type is not
+   * writable from here and its span is left alone. */
+  onPatchAnchor?: (number: number, patch: Record<string, unknown>) => void;
   /** #4 — save a record's frontmatter patch + markdown body (the file-editor
    * path). Powers the board card's ⋯ → Edit modal. Omitted ≡ no edit modal. */
   onSave?: (number: number, patch: Record<string, unknown>, body: string) => void;

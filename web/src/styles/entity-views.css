@@ -1289,3 +1289,25 @@ button.ev-finding:hover {
   color: var(--text-paper);
   overflow-wrap: anywhere;
 }
+
+/* A bar the schedule had to invent a length for (#PM auto-schedule): the record
+   carries no estimate, so this is a placeholder to drag into shape, not a plan.
+   Hollow and dashed — legible, obviously unfinished, and never mistaken for the
+   solid bars around it. */
+.ev-gantt__bar[data-provisional] {
+  background: transparent;
+  border: 1px dashed var(--info);
+  color: var(--text-paper);
+}
+.ev-gantt__schedule {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  margin-bottom: var(--space-8);
+  flex-wrap: wrap;
+}
+.ev-gantt__schedule-report {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  color: var(--text-paper-d);
+}

@@ -29,6 +29,7 @@ import { useEffect, useRef, useState } from "react";
 import type { EntityInstance } from "../../api/entities";
 import type { User } from "../../api/types";
 import { rowDropResult } from "./ganttOps";
+import { type ScheduleReport, scheduleRows } from "./schedule";
 import {
   applyDrag,
   axisFor,
@@ -51,6 +52,16 @@ import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
 import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
+
+/** What the run did, in one line. The surprise worth naming is the third one:
+ * an automatic record you had dragged somewhere by hand comes back to the
+ * chain, and silently moving someone's work is how a button loses their trust. */
+function reportText(r: ScheduleReport): string {
+  const parts = [`Scheduled ${r.scheduled}`];
+  if (r.movedBack > 0) parts.push(`${r.movedBack} moved back onto the chain`);
+  if (r.untouched > 0) parts.push(`${r.untouched} left alone (manual)`);
+  return `${parts.join(" · ")}.`;
+}
 
 const GUTTER = 150;
 const COARSE_H = 18; // top context band (month / year)
@@ -107,7 +118,7 @@ function groupLanes(
   return order.map((k) => byKey.get(k)!);
 }
 
-export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy }: EntityViewProps) {
+export function GanttView({ spec, type, entities, users, refIndex, onPatch, onPatchAnchor, canWrite = true, busy }: EntityViewProps) {
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
   const assigneeField = spec.assignee;
@@ -116,6 +127,9 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
   const [manualPpd, setManualPpd] = useState<number | null>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [report, setReport] = useState<ScheduleReport | null>(null);
+  // Injected into the pure scheduler; also the chart's "today" marker.
+  const today = new Date().toISOString().slice(0, 10);
   // Measure the scroll pane so a short project can FILL its width (max(pane,
   // content)) instead of hugging a half-empty card; a long one still scrolls.
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -133,12 +147,59 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
 
   // #GH-projects — order rows by the view's sort tiers, or (with none) the manual
   // `rank`, exactly like the table/board, so the Timeline reads in the SAME order.
-  const rows: Row[] = sortRows(entities, spec.sort, type ?? null, refIndex, users)
+  // Every record in Timeline order. `rows` is the subset that can be DRAWN; the
+  // scheduler works from `ordered`, because a record with no dates yet is
+  // exactly the one most in need of being given some.
+  const ordered = sortRows(entities, spec.sort, type ?? null, refIndex, users);
+  const rows: Row[] = ordered
     .map((e) => ({ e, span: spanToDates(e.fields[spanField]) }))
     .filter((r): r is Row => r.span !== null);
 
+  // #PM auto-schedule — present only when the view names the fields that carry
+  // the schedule, so a plain gantt stays a plain drawing of dates.
+  const sched = spec.schedule;
+  const isAutoRow = (e: EntityInstance) => (fieldText(e.fields[sched!.flag]) || "auto") !== "manual";
+  // A length nobody chose: the record is scheduled but carries no estimate, so
+  // the bar is a placeholder the run had to invent. Drawn differently, because
+  // a guess that looks like a plan is the one thing worse than no bar at all.
+  const isProvisional = (e: EntityInstance) =>
+    !!sched && isAutoRow(e) && !(Number(e.fields[sched.duration]) > 0);
+  const anchorTo = sched?.anchor ? (roleOf(type, sched.anchor)?.to ?? undefined) : undefined;
+  const anchorRecords = anchorTo ? [...(refIndex?.get(anchorTo)?.values() ?? [])] : [];
+  const recalculate = () => {
+    if (!sched || busy) return;
+    const result = scheduleRows({ issues: ordered, milestones: anchorRecords, today, fields: sched });
+    for (const p of result.issues) if (p.changed) onPatch(p.number, { [sched.span]: p.span });
+    for (const m of result.milestones) if (m.changed) onPatchAnchor?.(m.number, { [sched.span]: m.span });
+    setReport(result.report);
+  };
+  const scheduleBar = sched ? (
+    <div className="ev-gantt__schedule">
+      <button
+        type="button"
+        className="btn"
+        data-variant="secondary"
+        data-size="sm"
+        disabled={busy || !canWrite}
+        onClick={recalculate}
+      >
+        Recalculate
+      </button>
+      {report && (
+        <span role="status" className="ev-gantt__schedule-report">
+          {reportText(report)}
+        </span>
+      )}
+    </div>
+  ) : null;
+
   if (rows.length === 0) {
-    return <div style={{ color: "var(--text-paper-d)" }}>No records with a date range to chart yet.</div>;
+    return (
+      <div>
+        {scheduleBar}
+        <div style={{ color: "var(--text-paper-d)" }}>No records with a date range to chart yet.</div>
+      </div>
+    );
   }
 
   // #648: `skip_weekends` collapses Sat/Sun — every position is a COLUMN offset
@@ -195,7 +256,19 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
       window.removeEventListener("pointerup", onUp);
       setDrag(null);
       const days = deltaDays(ev.clientX - downX, dragPpd);
-      if (days !== 0) onPatch(number, { [spanField]: spanValue(applyDrag(row.span, mode, days, skip)) });
+      if (days === 0) return;
+      const next = applyDrag(row.span, mode, days, skip);
+      // For a record the schedule owns, the bar's LENGTH is the duration it was
+      // given and its POSITION is what the run worked out. So stretching the
+      // right edge means "this takes longer", which survives the next run —
+      // writing an end date here would just be overwritten by it. Moving the
+      // bar still writes dates, and still does NOT touch the flag: a gesture
+      // never decides that the schedule may no longer move your work.
+      if (mode === "end" && sched && isAutoRow(row.e)) {
+        onPatch(number, { [sched.duration]: barColumns(next, skip) });
+        return;
+      }
+      onPatch(number, { [spanField]: spanValue(next) });
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -208,7 +281,6 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   // `today` also feeds the week axis's `by_today` cross-year boundary, so it is
   // computed before the axis. The clock is read here (the view shell) and
   // injected into the pure scale math — never read inside it.
-  const today = new Date().toISOString().slice(0, 10);
   const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip);
 
   const todayOffset = columnOf(minDate, today, skip);
@@ -217,7 +289,8 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
   return (
     <DndContext sensors={sensors} onDragEnd={onRowDragEnd}>
       <div>
-        <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
+        {scheduleBar}
+      <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
         <div className="ev-gantt__zoom">
           <input
             type="range"
@@ -314,6 +387,7 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, busy
                         data-testid={`bar-${row.e.number}`}
                         title={spanValue(ps)}
                         className="ev-gantt__bar"
+                        data-provisional={isProvisional(row.e) ? "true" : undefined}
                         data-busy={busy ? "1" : undefined}
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
                         style={{ left, width }}

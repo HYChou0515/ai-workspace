@@ -60,9 +60,13 @@ Flat integers, one commit each, TDD.
 
 - **P1 — a `number` role.** The generic primitive the duration needs: schema,
   frontmatter parsing, the generated tool's arg type, form widget, table cell.
-- **P2 — `rollup` reads dates and range ends.** `min`/`max` over a `date`, and
-  over the `start` / `end` of a `daterange`, so a milestone's span can be
-  derived from its issues (#10).
+- **P2 — dropped.** The plan was to teach `rollup` to read dates, so a
+  milestone's span could be derived from its issues as a compute-on-read field.
+  That contradicts the decisions it was meant to serve: a rollup re-derives
+  itself continuously, and #5 says nothing reschedules on its own, while #6 says
+  `auto` is stored and changed by the button. So a milestone's span is computed
+  by the scheduler and written, exactly like an issue's — one fewer framework
+  change, and the same rule for both kinds of record. Folded into P5.
 - **P3 — a span may be set on one side only** (#12): storage, the widget that
   currently drops it, and the chart, which draws a start-only span as an
   open-ended bar rather than nothing at all.
@@ -82,8 +86,11 @@ Flat integers, one commit each, TDD.
 
 ## Open
 
-- The field names in P4 are the user-facing contract (they are typed into YAML
-  by hand and by the agent). Proposed: `exp_days` + `exp_days_unit`
-  (`working` | `calendar`) + `auto` on `issue`; `start` + `auto` on `milestone`.
-- Whether `auto` should be one flag per record or per field. One flag per record
-  is proposed: the only field either type wants scheduled is its span.
+Settled while building:
+
+- The flag is `schedule: auto | manual`, one per record — the only field either
+  kind wants scheduled is its span, and `schedule: auto` says in YAML what it
+  means without a second word for it.
+- A milestone needs no separate anchor field. Its anchor is its span's START,
+  which half-open ranges (P3) now make expressible on its own: `span:
+  2026-07-01/` reads as "starts here, the end comes from my issues".

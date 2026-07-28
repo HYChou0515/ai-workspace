@@ -10,6 +10,7 @@ import {
   HealthView,
   parseSpan,
   parseViewSpec,
+  QuickCreate,
   type ViewSpec,
 } from "./EntityViews";
 import { buildRefIndex } from "./refTraversal";
@@ -719,5 +720,23 @@ describe("fault-tolerant degradation (§D)", () => {
     const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title"] };
     render(<EntityViewBody spec={spec} type={null} entities={[issue(1, { title: "A" })]} schemaMissing onCreate={vi.fn()} onPatch={vi.fn()} />);
     expect(screen.getByText(/no schema/i)).toBeInTheDocument();
+  });
+});
+
+describe("QuickCreate defaults (#PM auto-schedule P9)", () => {
+  it("opens with today already in the date range, and its end left open", () => {
+    const today = new Date().toISOString().slice(0, 10);
+    render(
+      <QuickCreate
+        form={[
+          { name: "title", widget: "text", required: true },
+          { name: "span", widget: "daterange", required: false },
+        ]}
+        onCreate={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    expect(screen.getByLabelText("span start")).toHaveValue(today);
+    expect(screen.getByLabelText("span end")).toHaveValue("");
   });
 });

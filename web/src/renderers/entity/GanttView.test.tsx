@@ -240,4 +240,146 @@ describe("GanttView", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2020-01-01/2035-01-01" })] })} />);
     expect(screen.getByTestId("gantt-today")).toBeInTheDocument();
   });
+
+  it("offers Recalculate only when the view says which fields carry the schedule", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-07-01/2026-07-02" })] })} />);
+    expect(screen.queryByRole("button", { name: "Recalculate" })).not.toBeInTheDocument();
+  });
+
+  it("lays the work out and writes the dates it worked out", () => {
+    const onPatch = vi.fn();
+    const onPatchAnchor = vi.fn();
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: {
+        span: "span",
+        duration: "exp_days",
+        unit: "exp_days_unit",
+        flag: "schedule",
+        anchor: "milestone",
+        assignee: "assignee",
+      },
+    };
+    const refIndex = buildRefIndex({
+      milestone: [
+        { number: 1, type_name: "milestone", fields: { title: "M1", span: "2026-07-01/" }, body: "", diagnostics: [] },
+      ],
+    });
+    render(
+      <GanttView
+        {...props({
+          spec,
+          refIndex,
+          onPatch,
+          onPatchAnchor,
+          entities: [
+            // No dates yet — the record most in need of being scheduled, and the
+            // one a chart that only reads dated rows would never see.
+            rec(1, { title: "A", assignee: "alice", exp_days: 3, milestone: 1, schedule: "auto" }),
+            rec(2, { title: "B", assignee: "alice", exp_days: 2, milestone: 1, schedule: "auto" }),
+          ],
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Recalculate" }));
+    expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-07-01/2026-07-03" });
+    expect(onPatch).toHaveBeenCalledWith(2, { span: "2026-07-06/2026-07-07" });
+    // The milestone reaches across its issues.
+    expect(onPatchAnchor).toHaveBeenCalledWith(1, { span: "2026-07-01/2026-07-07" });
+    expect(screen.getByRole("status")).toHaveTextContent("Scheduled 2");
+  });
+
+  it("marks a bar whose length nobody chose, so a placeholder never reads as a plan", () => {
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({
+          spec,
+          entities: [
+            rec(1, { title: "estimated", span: "2026-07-01/2026-07-03", exp_days: 3 }),
+            rec(2, { title: "guessed", span: "2026-07-06/2026-07-06" }),
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
+    expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
+  });
+
+  it("dragging the right edge of an automatic bar changes its DURATION, not its dates", () => {
+    // Length is the scheduler's input, position its output. Writing a span here
+    // would be overwritten by the next run — and the point of dragging is that
+    // what you dragged survives it.
+    const onPatch = vi.fn();
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({ spec, onPatch, entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-07", exp_days: 3, schedule: "auto" })] })}
+      />,
+    );
+    const ppd = pxPerDay("week");
+    fireEvent.pointerDown(screen.getByTestId("bar-1-end"), { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: ppd * 2 });
+    fireEvent.pointerUp(window, { clientX: ppd * 2 });
+    expect(onPatch).toHaveBeenCalledWith(1, { exp_days: 5 });
+  });
+
+  it("dragging a MANUAL bar's right edge still writes dates — its length is its dates", () => {
+    const onPatch = vi.fn();
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({ spec, onPatch, entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-07", schedule: "manual" })] })}
+      />,
+    );
+    const ppd = pxPerDay("week");
+    fireEvent.pointerDown(screen.getByTestId("bar-1-end"), { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: ppd * 2 });
+    fireEvent.pointerUp(window, { clientX: ppd * 2 });
+    expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-05/2026-01-09" });
+  });
+
+  it("moving an automatic bar writes the dates and leaves the flag alone", () => {
+    // A gesture never flips a flag: your placement holds until the next run,
+    // and turning the schedule off stays something you say on purpose.
+    const onPatch = vi.fn();
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({ spec, onPatch, entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-07", exp_days: 3, schedule: "auto" })] })}
+      />,
+    );
+    const ppd = pxPerDay("week");
+    fireEvent.pointerDown(screen.getByTestId("bar-1"), { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: ppd * 3 });
+    fireEvent.pointerUp(window, { clientX: ppd * 3 });
+    expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-08/2026-01-10" });
+  });
 });
