@@ -147,6 +147,28 @@ scroll-stack of slides   (+ "Present" → Fullscreen API overlay)
   (`dompurify` already present); `pnpm install`; `pnpm run typecheck` + full
   vitest green; run the real app and **web-demo** a `deck.md` rendering as slides
   + Present mode (GIF, per the running-worktree recipe used for the Gantt work).
+  (In practice the dep was pulled forward to P2, since the component imports it.)
+
+## As-built notes (things the demo / real engine forced)
+
+- **`inlineSVG: false`, not just `script: false`.** marp-core's default wraps
+  each slide in `<svg><foreignObject>`; DOMPurify strips `foreignObject`, which
+  dropped slides. Emitting plain `<section>` slides fixed it and suits our own
+  CSS scaling. (`renderMarp.ts`.)
+- **Never move slides out of `.marpit`.** The theme selector is `div.marpit >
+  section`; an early version wrapped each `<section>` in a fit box, which moved
+  it out of `.marpit` and silently stripped the whole theme. Final: scale in
+  place (transform on `div.marpit > section`, injected after the theme; negative
+  bottom margin collapses the height; the scroll container clips the width).
+- **Present fits the ACTUAL surface, not `window`.** Present shows only the
+  active slide, centred, scaled by a `--present-scale` measured from the present
+  container (ResizeObserver), so it's correct whether or not the fullscreen
+  request actually grew the element. (Headless video can't capture OS
+  fullscreen; the fullscreen present is evidenced by screenshots, and the
+  scroll-stack by the GIF.)
+- **Stable `resolveAsset`.** `MarkdownRenderer` memoises the resolver with
+  `useCallback`, else a fresh closure each parent render churned the memo and
+  re-injected the shadow every frame (wiping present state). Guarded by a test.
 
 ## Files touched (anticipated)
 
