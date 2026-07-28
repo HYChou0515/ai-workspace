@@ -737,3 +737,33 @@ async def test_kill_unlinks_ready_marker_before_rmtree_366(sandbox, tmp_path, mo
     monkeypatch.setattr(lp.shutil, "rmtree", spy_rmtree)
     await sandbox.kill(h)
     assert ready_gone_at_rmtree["v"] is True  # marker unlinked BEFORE rmtree
+
+
+async def test_the_host_names_the_user_env_file_to_the_launchers(tmp_path):
+    """`SANDBOX_USER_ENV` points the tool launchers at the item's variables.
+
+    The host carries its OWN copy of `_exec_argv` — two of them, jailed and
+    unjailed — and in production this is the copy that runs. A change applied
+    only to the app-side copies would leave production without the variables
+    while every app-side test stayed green, which is the exact shape of #350
+    and #581."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec())
+
+    _argv, cwd, env = sb._exec_argv(h, ["true"])
+
+    named = Path(env["SANDBOX_USER_ENV"])
+    assert named == Path(cwd).parent / ".userenv"  # a workspace SIBLING
+    await sb.write_user_env(h, "API_KEY=sk-1\n")
+    assert named.read_text() == "API_KEY=sk-1\n"  # and it is the file we write
+    await sb.upload(h, b"x", "/note.md")
+    assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # invisible
+
+
+async def test_the_hosts_jail_names_the_same_file_chroot_relative(tmp_path):
+    """`/.userenv` is the in-chroot spelling of the same workspace sibling, the
+    way `/.home` is (#393). Separate branch, separate code, separate test."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
+    h = await sb.create(SandboxSpec())
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+    assert env["SANDBOX_USER_ENV"] == "/.userenv"

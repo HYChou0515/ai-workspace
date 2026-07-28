@@ -114,6 +114,15 @@ class TestLocalProcess:
         await sandbox.kill(h)
         assert not (tmp_path / h.id).exists()
 
+    async def test_the_quota_does_not_charge_for_it(self, sandbox: LocalProcessSandbox, tmp_path):
+        # The workspace quota measures the WORKSPACE. Charging a user for a file
+        # we put there, that they cannot see and cannot delete, is the shape of
+        # #538 — and `_ensure_headroom` would then refuse writes over it.
+        h = await sandbox.create(SandboxSpec())
+        before = await sandbox.disk_usage(h)
+        await sandbox.write_user_env(h, "A=" + ("x" * 5000) + "\n")
+        assert await sandbox.disk_usage(h) == before
+
     async def test_it_is_not_world_readable(self, sandbox: LocalProcessSandbox, tmp_path):
         # API keys on a shared host. 0600 from the moment it exists — created
         # with the mode rather than chmod'ed afterwards, so there is no window.
