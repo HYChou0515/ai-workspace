@@ -5,7 +5,11 @@ fields:
     role: status
     values: [planned, active, done]
     colors: { planned: blue, active: amber, done: green }
+  # Its START is the lower bound for its issues — nothing in this milestone is
+  # scheduled before that day. Its END is what the schedule works out, so
+  # `2026-07-01/` is a complete and normal thing to write here.
   span: { role: daterange }
+  schedule: { role: status, values: [auto, manual] }
   issues: { role: backref, from: issue.milestone }
   progress: { role: rollup, over: issues, agg: avg, field: progress }
   open_count: { role: rollup, over: issues, agg: count, where: { status: open } }
