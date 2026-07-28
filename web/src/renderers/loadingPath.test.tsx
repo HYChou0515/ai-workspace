@@ -8,6 +8,10 @@ import type { FileContent } from "../api/types";
 import { EditModeProvider } from "../hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../hooks/fileBuffer";
 import { QueryWrap } from "../test/queryWrapper";
+
+// The sheet pane asks whether the member may write, which the real hook resolves
+// through the resource queries — irrelevant here, and a live fetch in a unit test.
+vi.mock("../hooks/useItemCanWrite", () => ({ useItemCanWrite: () => true }));
 import { HtmlRenderer } from "./HtmlRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { PdfRenderer } from "./PdfRenderer";
