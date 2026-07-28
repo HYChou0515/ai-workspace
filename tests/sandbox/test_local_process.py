@@ -454,17 +454,20 @@ def test_userns_unsupported_when_unshare_unavailable(monkeypatch):
 
 
 @_needs_userns
-async def test_isolated_exec_workspace_is_cwd_and_home(tmp_path):
-    """The workspace is the agent's cwd and $HOME (~): a file uploaded at
-    /data.csv is read via a cwd-relative path and via ~ — not via the jail's
-    `/` (which is now the infra root, not the workspace)."""
+async def test_isolated_exec_has_the_workspace_as_cwd_but_not_as_home(tmp_path):
+    """cwd is the workspace; `~` is deliberately NOT. #600 moved $HOME to the
+    infra-area `/.home` so a tool's profile (LibreOffice's user installation)
+    never lands on the mirrored, persisted workspace — this asserted the old
+    arrangement, and only ever ran where unprivileged userns exists, so CI
+    skipped it and the drift went unnoticed."""
     sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
     h = await sb.create(SandboxSpec())
     await sb.upload(h, b"voids=42\n", "/data.csv")
     rel = await sb.exec(h, ["cat", "data.csv"])  # cwd = workspace
     assert rel.exit_code == 0 and "voids=42" in rel.stdout.decode()
-    home = await sb.exec(h, ["sh", "-c", "cat ~/data.csv"])  # ~ = workspace
-    assert home.exit_code == 0 and "voids=42" in home.stdout.decode()
+    home = await sb.exec(h, ["sh", "-c", "cd ~ && pwd"])
+    assert home.exit_code == 0, home.stderr
+    assert home.stdout.decode().strip() == "/.home"  # not the workspace
 
 
 @_needs_userns
