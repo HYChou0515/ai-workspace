@@ -127,7 +127,7 @@ async def test_read_image_reports_a_missing_file():
     vlm = FakeVlm([("x", False)])
     ctx, _ = await _ctx_with(vlm)
     out = await read_image_impl(ctx, "/nope.png", question="q")
-    assert out == "error: file not found: /nope.png"
+    assert out == "error: file not found: nope.png"  # relative (#549)
     assert vlm.calls == []
 
 

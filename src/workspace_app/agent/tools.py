@@ -138,7 +138,7 @@ async def read_file_impl(
     try:
         data = await fs.read(inv, path)
     except FileNotFound:
-        return f"error: file not found: {path}"
+        return f"error: file not found: {rel_path(path)}"
 
     lines = data.decode("utf-8", errors="replace").split("\n")
     total = len(lines)
@@ -190,11 +190,11 @@ async def read_image_impl(
     try:
         data = await fs.read(inv, path)
     except FileNotFound:
-        return f"error: file not found: {path}"
+        return f"error: file not found: {rel_path(path)}"
 
     mime = magic.from_buffer(data, mime=True)
     if not mime.startswith("image/"):
-        return f"error: not an image file: {path} (detected {mime})"
+        return f"error: not an image file: {rel_path(path)} (detected {mime})"
 
     if vision:
         # Hand the raw image straight to the vision-capable main model: it sees
@@ -403,10 +403,15 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
         return denied
     fs, inv = _workspace(ctx)
     current = await fs.create(inv, path, content.encode("utf-8"))
+    # Every confirmation and every rejection below names the file RELATIVELY
+    # (#549), like `list_files` does. Echoing the argument verbatim taught the
+    # opposite: an agent that guessed `/notes.md` had that guess confirmed by a
+    # successful write, then took it to `exec`, where `/` is the system root.
+    # Input stays permissive — this is about what the tools teach.
     if current is None:
-        return f"wrote {len(content)} bytes to {path}"
+        return f"wrote {len(content)} bytes to {rel_path(path)}"
     return (
-        f"error: {path} already exists — use edit_file to modify it (or delete "
+        f"error: {rel_path(path)} already exists — use edit_file to modify it (or delete "
         f"it first). Current content:\n"
         f"{_conflict_echo(ctx, path, current.decode('utf-8', errors='replace'))}"
     )
@@ -427,9 +432,9 @@ async def edit_file_impl(
     fs, inv = _workspace(ctx)
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
-        return f"edited {path}"
+        return f"edited {rel_path(path)}"
     return (
-        f"error: could not apply the edit to {path} — `old_string` was not found "
+        f"error: could not apply the edit to {rel_path(path)} — `old_string` was not found "
         f"exactly once (the file may have changed). Current content:\n"
         f"{_conflict_echo(ctx, path, current)}"
     )
@@ -522,8 +527,8 @@ async def delete_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
     try:
         await fs.delete(inv, path)
     except FileNotFound:
-        return f"error: file not found: {path}"
-    return f"deleted {path}"
+        return f"error: file not found: {rel_path(path)}"
+    return f"deleted {rel_path(path)}"
 
 
 # ── wiki agent tools (#50) ───────────────────────────────────────────
@@ -1294,10 +1299,10 @@ async def infer_modules_impl(
     try:
         data = await fs.read(inv, path)
     except FileNotFound:
-        return f"error: file not found: {path}"
+        return f"error: file not found: {rel_path(path)}"
     steps = _read_step_names(data.decode("utf-8", errors="replace"), column)
     if not steps:
-        return f"error: no step names found in {path} (looked for column {column!r})"
+        return f"error: no step names found in {rel_path(path)} (looked for column {column!r})"
 
     run = ctx.context.run_subagent
     assert run is not None  # the API layer wires this for RCA runs

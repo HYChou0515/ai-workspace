@@ -76,7 +76,7 @@ async def test_an_edit_that_frees_space_still_goes_through_when_full():
 
     out = await edit_file(ctx, "/notes.md", "z" * 996, "")
 
-    assert out == "edited /notes.md"
+    assert out == "edited notes.md"
     assert await files.read(iid, "/notes.md") == b"keep"
 
 
