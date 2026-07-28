@@ -196,3 +196,29 @@ describe("TodoPanel", () => {
     expect(api.puts[0]).toEqual([{ text: "b", status: "pending" }]);
   });
 });
+
+/**
+ * Measured in a real browser at 768x1024: the "Set goal" button sat at x=796
+ * on a 768px-wide page and was clipped away entirely by `page-item`'s
+ * `overflow: hidden` — visible as a half-cut "Set g" with no way to click it.
+ *
+ * Cause is the classic flex/`<input>` trap: an `<input>` has an intrinsic
+ * min-content width (~170px from its default `size`), and `min-width: auto`
+ * on a flex item refuses to shrink past it. `flex: 1` therefore could not
+ * actually give width back, so the row stayed wider than its container and
+ * pushed the trailing button out of the clipped panel. Both rows in this panel
+ * are built the same way, so both need the same escape hatch.
+ */
+describe("TodoPanel rows shrink instead of pushing their button off-screen (#fe-responsive)", () => {
+  it("lets the goal input shrink so 'Set goal' stays inside the panel", async () => {
+    mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
+    const input = (await screen.findByTestId("goal-input")) as HTMLInputElement;
+    expect(input.style.minWidth).toBe("0");
+  });
+
+  it("lets the add-todo input shrink so its Add button stays inside the panel", async () => {
+    mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
+    const input = (await screen.findByTestId("todo-add-input")) as HTMLInputElement;
+    expect(input.style.minWidth).toBe("0");
+  });
+});
