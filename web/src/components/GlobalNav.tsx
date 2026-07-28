@@ -229,7 +229,6 @@ function Brand() {
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
-        flexShrink: 0,
         fontWeight: 800,
         color: "var(--text-paper)",
         textDecoration: hover ? "underline" : "none",
@@ -251,12 +250,15 @@ function ReviewLink() {
   const count = useReviewBadgeCount();
   // Narrow drops the word (see Brand) — the icon, the badge and the tooltip
   // still say what this is, and the accessible name comes from that tooltip.
+  // Deliberately NO `aria-label`: it would win over `title` in the accessible
+  // name computation and flatten the count-bearing tooltip ("3 件待審") back to
+  // a bare "審核". The badge itself is aria-hidden, so the tooltip is the only
+  // place the count is exposed to assistive tech.
   const isNarrow = useIsNarrow();
   return (
     <Link
       to="/review"
       title={count > 0 ? t("review.badge.tip", { n: count }) : t("review.title")}
-      aria-label={t("review.title")}
       style={{
         position: "relative",
         display: "inline-flex",

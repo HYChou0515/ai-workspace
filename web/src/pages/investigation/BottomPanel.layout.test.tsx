@@ -45,6 +45,10 @@ describe("BottomPanel tab row survives a narrow panel (#fe-responsive)", () => {
     const strip = screen.getByTestId("bottom-tabs") as HTMLElement;
     expect(strip.style.overflowX).toBe("auto");
     expect(strip.style.minWidth).toBe("0");
+    // Must NOT pin its own height while a scrollbar may claim part of it — that
+    // crops the tabs, and the 2px active underline lives in the cropped band.
+    expect(strip.style.height).toBe("");
+    expect(strip.style.overflowY).toBe("");
   });
 
   it("keeps every tab label on one line so it cannot wrap inside the 32px row", () => {

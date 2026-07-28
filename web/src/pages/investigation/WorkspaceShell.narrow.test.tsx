@@ -17,6 +17,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AppItem, AppManifest } from "../../api/types";
+import { BREAKPOINTS } from "../../lib/breakpoints";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { WorkspaceShell } from "./WorkspaceShell";
 
@@ -132,6 +133,24 @@ describe("WorkspaceShell layout mode follows its own width", () => {
     open();
     await waitFor(() => expect(screen.getByTestId("page-item")).toBeInTheDocument());
     act(() => emit(1280));
+    await waitFor(() =>
+      expect(screen.getByTestId("page-item")).toHaveAttribute("data-narrow", "false"),
+    );
+  });
+
+  it("goes narrow in the band between the app-wide breakpoint and the shell's own", async () => {
+    // 768-950 is where the four columns need more room than the app-wide
+    // `narrow` (768) admits. An IDE-first App here trades its side-by-side chat
+    // for a usable editor: before, the editor was ~190px with markdown wrapping
+    // at two glyphs a line. This is the band the first cut of these tests
+    // skipped entirely — 528 and 1280 both sit outside it.
+    open();
+    await waitFor(() => expect(screen.getByTestId("page-item")).toBeInTheDocument());
+    act(() => emit(800));
+    await waitFor(() =>
+      expect(screen.getByTestId("page-item")).toHaveAttribute("data-narrow", "true"),
+    );
+    act(() => emit(BREAKPOINTS.shell));
     await waitFor(() =>
       expect(screen.getByTestId("page-item")).toHaveAttribute("data-narrow", "false"),
     );

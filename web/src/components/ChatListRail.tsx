@@ -17,8 +17,9 @@ import type { AppItem } from "../api/types";
 import { useChatActions } from "../hooks/useChatActions";
 import { useCreateChat } from "../hooks/useCreateChat";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { useIsNarrow } from "../hooks/useMediaQuery";
+import { useMinWidth } from "../hooks/useMediaQuery";
 import { useAppItems, useApps } from "../hooks/useResources";
+import { BREAKPOINTS } from "../lib/breakpoints";
 import { ShareChatDialog } from "./ShareChatDialog";
 
 // Platform destinations that live behind the menu (App-agnostic — the App
@@ -47,15 +48,23 @@ export function ChatListRail({
   const [menuOpen, setMenuOpen] = useState(false);
   // #chat-private #3: the rail can be collapsed to a thin bar (not persisted —
   // like the IDE state, a new tab opens with it shown).
-  // #fe-responsive: 240px of a 390px viewport left 150px for the whole chat
-  // surface, so narrow starts it tucked. Tracked symmetrically (both ways
-  // across the breakpoint) for the same reason the shell's sidebar is: a
-  // one-way rule strands the user on the far side of a resize.
-  const isNarrow = useIsNarrow();
-  const [collapsed, setCollapsed] = useState(isNarrow);
+  //
+  // #fe-responsive: the rail is not a passenger, it sits BESIDE the workspace
+  // shell and takes 240px off it. 240 of a 390px viewport left 150px for the
+  // whole chat surface; and between `shell` and `shell + rail` the OPEN rail is
+  // the very thing that pushes the shell into its single-column layout, which
+  // reads as "the app lost its file tree because a chat list is open". So the
+  // rail tucks itself first, and only above `shell + rail` does it stay open.
+  //
+  // Tracked both ways across that threshold, like the shell's own sidebar, so a
+  // resize doesn't strand it — the difference from the sidebar is that the 40px
+  // `»` bar is always on screen, so this resets a preference rather than
+  // rescuing an unreachable panel.
+  const railFits = useMinWidth(BREAKPOINTS.shell + BREAKPOINTS.chatRail);
+  const [collapsed, setCollapsed] = useState(!railFits);
   useEffect(() => {
-    setCollapsed(isNarrow);
-  }, [isNarrow]);
+    setCollapsed(!railFits);
+  }, [railFits]);
   // #chat-private: split my chats from ones shared with me (owner !== me).
   const [tab, setTab] = useState<"mine" | "shared">("mine");
   const mine = items.filter((it) => it.owner === me);

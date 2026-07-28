@@ -241,10 +241,17 @@ function ShellBody({
   const [sidebarW, setSidebarW] = usePersistentNumber("rca:layout:sidebar", 260, 180, 560);
   // #108: the chat panel must be draggable to (near) full width. The editor area
   // is `minWidth: 0`, so it yields, and the divider physically stops at the row's
-  // left edge — making the viewport width the only real ceiling. The old hard 680
-  // cap stopped the drag long before that. (Server-render guard: jsdom defines
-  // window, so tests get its default width; SSR — which we don't use — falls back.)
-  const agentMaxW = typeof window === "undefined" ? 2000 : window.innerWidth;
+  // left edge — making the row's own width the only real ceiling. The old hard 680
+  // cap stopped the drag long before that.
+  //
+  // #fe-responsive: this is the STORAGE bound (`usePersistentNumber` clamps on
+  // set); the live layout cap is `maxChatW` below. It reads the shell's measured
+  // box for the same reason everything else here does — `window.innerWidth`
+  // over-reports by the width of a chat-first App's rail. The divider only
+  // exists on a wide shell, so the clamp only ever bites there. (Server-render
+  // guard: SSR — which we don't use — falls back.)
+  const agentMaxW =
+    shellWidth || (typeof window === "undefined" ? 2000 : window.innerWidth);
   const [agentW, setAgentW] = usePersistentNumber("rca:layout:agent", 380, 280, agentMaxW);
   const [bottomH, setBottomH] = usePersistentNumber("rca:layout:bottom", 200, 80, 600);
   // Snapshot panel sizes at drag start so each pointermove computes
@@ -285,7 +292,7 @@ function ShellBody({
   // the shell (so the window over-reports by 240), and the read happened during
   // render with nothing subscribed to `resize`, so the cap went stale the
   // moment the window changed without crossing the 767px media boundary.
-  const shellW = shellWidth || (typeof window === "undefined" ? 1440 : window.innerWidth);
+  const shellW = agentMaxW;
   const chromeW = ACTIVITY_BAR_W + (sidebarOpen ? sidebarW : 0);
   const maxChatW = Math.max(280, shellW - chromeW - EDITOR_MIN_W);
   const effectiveAgentW = Math.min(agentW, maxChatW);
@@ -911,7 +918,6 @@ export function TopBar({
             // convenience with a keyboard equivalent (⌘P); the item's own name
             // is the page's subject. The palette shrinks first, down to a floor
             // where the icon + shortcut still read.
-            width: isNarrow ? "auto" : undefined,
             flexGrow: isNarrow ? 1 : 0,
             flexShrink: 1,
             flexBasis: isNarrow ? "100%" : 320,
@@ -2402,15 +2408,21 @@ export function BottomPanel({
         <div
           data-testid="bottom-tabs"
           className="scrollable"
+          // No `height` and no `overflow-y: hidden` here, matching the editor's
+          // tab strip exactly. Pinning the height while a horizontal scrollbar
+          // may claim part of it is how a strip crops its own tabs — and the
+          // 2px active-tab underline sits in precisely the cropped band. It does
+          // not reproduce in this Chromium (overlay scrollbars: offsetHeight ===
+          // clientHeight === 32 even while scrolling at 320px), but it would on
+          // any platform with classic scrollbars, and letting the row size
+          // itself costs nothing.
           style={{
             flex: 1,
             minWidth: 0,
             display: "flex",
-            alignItems: "center",
+            alignItems: "stretch",
             gap: 4,
-            height: 32,
             overflowX: "auto",
-            overflowY: "hidden",
           }}
         >
           {tabs.map((t) => {

@@ -13,9 +13,11 @@ import { BREAKPOINTS } from "../lib/breakpoints";
  * chat for "wide" into 528px is exactly how the columns ended up clipped.
  *
  * Returns a ref callback to attach to the element, plus its current width in
- * px. The width is `0` until the element is attached and the observer fires
- * (and stays `0` where `ResizeObserver` is unavailable), which callers read as
- * "not measured — fall back to the viewport" via `shellIsNarrow`.
+ * px, rounded. The element is measured synchronously when the ref attaches, so
+ * the first paint is already correct; `ResizeObserver` keeps it current after
+ * that (where the API is missing, the one-shot measurement still lands). A
+ * width of `0` means unmeasured OR hidden (`display: none` measures 0), which
+ * callers read as "fall back to the viewport" via `shellIsNarrow`.
  */
 export function useContainerWidth<T extends HTMLElement>(): [
   (node: T | null) => void,
@@ -27,10 +29,19 @@ export function useContainerWidth<T extends HTMLElement>(): [
   const ref = useCallback((node: T | null) => {
     observer.current?.disconnect();
     observer.current = null;
-    if (!node || typeof ResizeObserver === "undefined") return;
+    if (!node) return;
+    // Measure NOW, in the commit phase, before the browser paints. Waiting for
+    // the observer's first callback means one frame of the wrong layout — and
+    // for a chat-first App that frame is the four-column layout the rail has no
+    // room for, followed by a visible reflow on every mount.
+    setWidth(Math.round(node.getBoundingClientRect().width));
+    if (typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver((entries) => {
       const entry = entries[0];
-      if (entry) setWidth(entry.contentRect.width);
+      // Rounded: `contentRect.width` is a fractional double, so an unrounded
+      // value re-renders the whole shell on every frame of a window drag. The
+      // two consumers are a boolean and a clamp; sub-pixel is noise to both.
+      if (entry) setWidth(Math.round(entry.contentRect.width));
     });
     ro.observe(node);
     observer.current = ro;
@@ -47,13 +58,10 @@ export function useContainerWidth<T extends HTMLElement>(): [
  *
  * The threshold is `BREAKPOINTS.shell`, the width this shell's four columns
  * actually need — NOT the app-wide `narrow`, which sizes two-column grids
- * elsewhere and left a 768-870px band where the shell claimed to be wide with
- * no room to prove it.
+ * elsewhere and left a band where the shell claimed to be wide with no room to
+ * prove it.
  */
-export function shellIsNarrow(
-  containerWidth: number | null,
-  viewportNarrow: boolean,
-): boolean {
+export function shellIsNarrow(containerWidth: number, viewportNarrow: boolean): boolean {
   if (!containerWidth) return viewportNarrow;
   return containerWidth < BREAKPOINTS.shell;
 }

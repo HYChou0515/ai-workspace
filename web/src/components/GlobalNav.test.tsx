@@ -180,6 +180,17 @@ describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
     expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute("href", "/help");
   });
 
+  it("does not use aria-label on Review — that would hide the pending count", () => {
+    // The badge is aria-hidden and the word is dropped on narrow, so `title` is
+    // the ONLY place the count reaches assistive tech. An `aria-label` wins over
+    // `title` in the accessible name computation and would flatten "3 件待審"
+    // back to a bare "審核" — subtracting information in the one mode it would
+    // have been added for.
+    stubViewport(true);
+    renderNav("/a/rca");
+    expect(screen.getByRole("link", { name: "審核" })).not.toHaveAttribute("aria-label");
+  });
+
   it("keeps the words on a wide viewport", () => {
     stubViewport(false);
     renderNav("/a/rca");

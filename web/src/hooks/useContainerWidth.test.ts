@@ -19,7 +19,6 @@ describe("shellIsNarrow", () => {
   it("falls back to the viewport verdict before the container has been measured", () => {
     expect(shellIsNarrow(0, true)).toBe(true);
     expect(shellIsNarrow(0, false)).toBe(false);
-    expect(shellIsNarrow(null, true)).toBe(true);
   });
 
   it("calls a shell narrow when its own box is narrow, even on a wide viewport", () => {

@@ -29,3 +29,11 @@ export function useMediaQuery(query: string): boolean {
 export function useIsNarrow(): boolean {
   return useMediaQuery(NARROW_QUERY);
 }
+
+/** True while the viewport is at least `px` wide. For components that need a
+ * threshold of their own rather than the app-wide `narrow` one — e.g. the
+ * chat-first rail, which has to account for the workspace shell standing
+ * beside it (#fe-responsive). */
+export function useMinWidth(px: number): boolean {
+  return useMediaQuery(`(min-width: ${px}px)`);
+}
