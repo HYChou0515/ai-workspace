@@ -1,0 +1,83 @@
+/* Marp deck renderer — the app-side chrome around the shadow-rooted slides.
+   Colours/sizes use design tokens; the marp theme itself lives inside the
+   shadow root and is deliberately not styled from here. */
+.ev-marp {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.ev-marp__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-16);
+  border-bottom: 1px solid color-mix(in srgb, var(--text-paper-d) 15%, transparent);
+}
+
+.ev-marp__present-btn {
+  padding: var(--space-4) var(--space-12);
+  border: 1px solid color-mix(in srgb, var(--text-paper-d) 30%, transparent);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+
+.ev-marp__present-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ev-marp__counter {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
+.ev-marp__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* each slide keeps its unscaled 1280px layout width; clip it rather than
+     letting the fit-to-width transform leave a horizontal scrollbar. */
+  overflow-x: hidden;
+  padding: 1rem;
+}
+
+/* Presenting: dark backdrop; the shadow root centres the single active slide,
+   which is scaled to fit the whole (fullscreen) viewport. */
+.ev-marp--present {
+  position: relative;
+  background: var(--text-paper);
+}
+.ev-marp--present .ev-marp__toolbar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  border-bottom: 0;
+  z-index: 1;
+}
+.ev-marp--present .ev-marp__counter {
+  color: var(--white);
+}
+.ev-marp--present .ev-marp__scroll {
+  display: flex;
+  overflow: hidden;
+  padding: 0;
+}
+.ev-marp--present .ev-marp__host {
+  flex: 1;
+  min-width: 0;
+}
+
+.ev-marp__host {
+  display: block;
+}
+
+.ev-marp__error {
+  color: var(--err);
+  font-size: var(--text-body);
+  padding: 1rem;
+}

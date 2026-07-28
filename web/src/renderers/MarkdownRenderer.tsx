@@ -4,6 +4,7 @@
  * swaps to a textarea editor with debounced autosave.
  */
 
+import { useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -14,6 +15,8 @@ import { MonacoEditor } from "../components/MonacoEditor";
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { relPath } from "../lib/relPath";
+import { MarpDeck } from "./marp/MarpDeck";
+import { isMarpDoc } from "./marp/marpDeck";
 
 export function MarkdownRenderer({ path }: { path: string }) {
   // Content + edits live in the shared per-path buffer, so this file
@@ -21,6 +24,10 @@ export function MarkdownRenderer({ path }: { path: string }) {
   // toggle lives in the group tab strip (VSCode-style) via useEditMode.
   const { entry, setText, readOnly } = useFileBuffer(path);
   const { isEditing } = useEditMode();
+  const svc = useFileService();
+  // Stable across re-renders so <MarpDeck> memoises its render+shadow injection
+  // (a fresh closure per render re-parsed the deck and wiped present-mode state).
+  const resolveAsset = useCallback((src: string) => svc.fileUrl(src, path), [svc, path]);
 
   if (entry.status === "loading") return <Status>Loading {relPath(path)}…</Status>;
   if (entry.status === "error") {
@@ -35,13 +42,21 @@ export function MarkdownRenderer({ path }: { path: string }) {
 
   // Editing fills the pane (Monaco scrolls internally); preview flows and
   // the pane scrolls. The path lives in the breadcrumb, not here.
-  return editing ? (
-    <div style={{ height: "100%", minHeight: 0 }}>
-      <MonacoEditor value={text} onChange={setText} language="markdown" readOnly={readOnly} minHeight={0} />
-    </div>
-  ) : (
-    <MarkdownBody text={text} path={path} />
-  );
+  if (editing) {
+    return (
+      <div style={{ height: "100%", minHeight: 0 }}>
+        <MonacoEditor value={text} onChange={setText} language="markdown" readOnly={readOnly} minHeight={0} />
+      </div>
+    );
+  }
+
+  // A Marp deck (frontmatter `marp: true`) renders as slides, not prose;
+  // its workspace-relative images resolve through the same file API.
+  if (isMarpDoc(text)) {
+    return <MarpDeck text={text} resolveAsset={resolveAsset} />;
+  }
+
+  return <MarkdownBody text={text} path={path} />;
 }
 
 /** Render markdown TEXT (not a file) with the workspace's own conventions: GFM

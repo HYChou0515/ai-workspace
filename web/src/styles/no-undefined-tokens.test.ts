@@ -22,6 +22,10 @@ const TOKENS_PATH = resolve(HERE, "tokens.css");
 const RUNTIME_ASSIGNED = new Set([
   // set inline per-surface (see kb.css / FileTree) rather than in tokens.css
   "--filetree-header-bg",
+  // fit-to-width scale for marp slides, set on the deck host from JS (MarpDeck)
+  "--marp-scale",
+  // fit-to-surface scale for the single slide shown in marp present mode (MarpDeck)
+  "--present-scale",
 ]);
 
 /** Third-party custom-property namespaces we don't own (Mantine admin UI). */
