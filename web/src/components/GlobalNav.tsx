@@ -16,6 +16,7 @@ import { qk } from "../api/queryKeys";
 import { useT } from "../lib/i18n";
 import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
+import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useReviewBadgeCount } from "../hooks/useReviewInbox";
 import { useApps } from "../hooks/useResources";
 import { AppIcon } from "./AppIcon";
@@ -213,6 +214,11 @@ function Breadcrumbs() {
 function Brand() {
   const t = useT();
   const [hover, setHover] = useState(false);
+  // #fe-responsive: the bar's fixed children needed 417px at a 390px viewport,
+  // which put a horizontal scrollbar on the whole document. The word beside the
+  // icon is what does not fit; the icon plus the existing tooltip still names
+  // the destination, so narrow drops the word rather than the link.
+  const isNarrow = useIsNarrow();
   return (
     <Link
       to="/"
@@ -229,7 +235,7 @@ function Brand() {
       }}
     >
       <Icon name="home" size={15} color="var(--text-paper-d)" />
-      Workspace
+      {!isNarrow && "Workspace"}
     </Link>
   );
 }
@@ -242,6 +248,13 @@ function ReviewLink() {
   const { pathname } = useLocation();
   const active = isActive(pathname, "/review");
   const count = useReviewBadgeCount();
+  // Narrow drops the word (see Brand) — the icon, the badge and the tooltip
+  // still say what this is, and the accessible name comes from that tooltip.
+  // Deliberately NO `aria-label`: it would win over `title` in the accessible
+  // name computation and flatten the count-bearing tooltip ("3 件待審") back to
+  // a bare "審核". The badge itself is aria-hidden, so the tooltip is the only
+  // place the count is exposed to assistive tech.
+  const isNarrow = useIsNarrow();
   return (
     <Link
       to="/review"
@@ -264,7 +277,7 @@ function ReviewLink() {
       }}
     >
       <Icon name="check" size={14} color="var(--text-paper-d)" />
-      <span>{t("review.title")}</span>
+      {!isNarrow && <span>{t("review.title")}</span>}
       {count > 0 && (
         <span
           aria-hidden

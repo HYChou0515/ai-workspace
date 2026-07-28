@@ -1120,8 +1120,18 @@ export function AgentHeader({
         />
       )}
       {appIcon ? <AppIcon icon={appIcon} color={appColor} size={20} /> : null}
-      <div style={{ flex: 1, minWidth: 0 }}>
+      <div
+        data-testid="agent-header-identity"
+        // `flex: 1` (basis 0%) let this block collapse to ~21px while the action
+        // buttons kept their intrinsic width, so the title read "R…" at EVERY
+        // viewport — and the #456 wrap never engaged, because a zero-basis item
+        // always "fits" and the row therefore never has to break. A real basis
+        // makes the buttons drop to a second row before the title is crushed;
+        // shrink stays on so a genuinely tiny panel still degrades gracefully.
+        style={{ flexGrow: 1, flexShrink: 1, flexBasis: 160, minWidth: 0 }}
+      >
         <div
+          title={appTitle}
           style={{
             fontWeight: 600,
             fontSize: "var(--text-body-sm)",

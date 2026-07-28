@@ -113,6 +113,7 @@ function renderTopBar(over: {
   workspace?: boolean;
   ideCollapsed?: boolean;
   onToggleIde?: () => void;
+  isNarrow?: boolean;
 }) {
   return render(
     <MemoryRouter>
@@ -120,6 +121,7 @@ function renderTopBar(over: {
         item={item}
         manifest={manifest({ workspace: over.workspace })}
         onEditField={vi.fn()}
+        isNarrow={over.isNarrow ?? false}
         ideCollapsed={over.ideCollapsed ?? false}
         onToggleIde={over.onToggleIde ?? vi.fn()}
         onCommandPalette={vi.fn()}
@@ -174,5 +176,72 @@ describe("TopBar Workspace toggle (#159)", () => {
     expect(screen.getByRole("button", { name: /workspace/i }).getAttribute("title")).toMatch(
       /chat/i,
     );
+  });
+});
+
+describe("TopBar item title stays on one line (#fe-responsive)", () => {
+  // Measured in a real browser at 1024x768 with a long title: the title wrapped
+  // to three lines inside a bar whose height is pinned to 52px on wide
+  // viewports, and `page-item` (overflow: hidden) sliced the extra lines off —
+  // the first line vanished above the bar and the last below it, leaving the
+  // middle fragment overlapping the row's controls. A fixed-height bar has to
+  // ellipsize, not wrap.
+  it("ellipsizes on one line instead of wrapping out of the fixed-height bar", () => {
+    renderTopBar({ workspace: true });
+    const title = screen.getByTestId("topbar-title") as HTMLElement;
+    expect(title.style.whiteSpace).toBe("nowrap");
+    expect(title.style.overflow).toBe("hidden");
+    expect(title.style.textOverflow).toBe("ellipsis");
+    expect(title.style.minWidth).toBe("0");
+  });
+
+  it("keeps the full title reachable as a tooltip once it ellipsizes", () => {
+    renderTopBar({ workspace: true });
+    expect(screen.getByTestId("topbar-title")).toHaveAttribute("title", "Oven drift");
+  });
+});
+
+describe("TopBar takes its layout mode from the shell, not the viewport (#fe-responsive)", () => {
+  // The bar used to call `useIsNarrow()` itself, i.e. ask the WINDOW. But the
+  // bar lives inside the shell, and the shell does not own the window: a
+  // chat-first App puts a 240px rail beside it. Measured in a real browser at
+  // 768px, the shell had 528px and the bar still laid its controls out in one
+  // nowrap row — which `page-item` then clipped. The shell measures itself and
+  // tells the bar; the bar must honour what it is told.
+  it("wraps its controls when the SHELL says narrow, regardless of the viewport", () => {
+    renderTopBar({ workspace: true, isNarrow: true });
+    const row = screen.getByTestId("topbar");
+    expect(row.style.flexWrap).toBe("wrap");
+    expect(row.style.height).toBe("auto");
+  });
+
+  it("keeps one nowrap row when the shell says wide", () => {
+    renderTopBar({ workspace: true, isNarrow: false });
+    const row = screen.getByTestId("topbar");
+    expect(row.style.flexWrap).toBe("nowrap");
+    expect(row.style.height).toBe("52px");
+  });
+});
+
+describe("TopBar command palette yields width before the title does (#fe-responsive)", () => {
+  // Once the title ellipsizes instead of wrapping (see above), the question
+  // becomes what it ellipsizes DOWN TO. Measured at 1024x768 it got 17px — a
+  // bare "…" — because the palette button was `flex: 0 0 auto` at a hard 320px
+  // and simply refused to give anything back, so every pixel of shrink landed
+  // on the one element that could take it. The palette is a convenience with a
+  // keyboard equivalent; the item's own name is the page's subject. The
+  // palette shrinks first.
+  it("makes the palette shrinkable on a wide row instead of pinning it at 320px", () => {
+    renderTopBar({ workspace: true, ideCollapsed: false, isNarrow: false });
+    const palette = screen.getByRole("button", { name: /go to file/i });
+    expect(palette.style.flexShrink).toBe("1");
+    expect(palette.style.flexBasis).toBe("320px");
+    expect(palette.style.minWidth).toBe("140px");
+  });
+
+  it("still gives the palette its own full-width row on narrow", () => {
+    renderTopBar({ workspace: true, ideCollapsed: false, isNarrow: true });
+    const palette = screen.getByRole("button", { name: /go to file/i });
+    expect(palette.style.flexBasis).toBe("100%");
   });
 });

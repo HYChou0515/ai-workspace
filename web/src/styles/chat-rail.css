@@ -6,6 +6,8 @@
   display: flex;
   height: 100%;
   min-height: 0;
+  /* Positioning context for the narrow overlay rail below. */
+  position: relative;
 }
 .chat-workspace__main {
   flex: 1 1 0;
@@ -339,4 +341,31 @@
   display: flex;
   justify-content: flex-end;
   gap: var(--space-8);
+}
+
+/* ── narrow viewports (#fe-responsive) ─────────────────────────────────────
+ * The rail is a fixed 240px column. On a 390px viewport that left 150px for
+ * the whole chat surface — composer, model picker, todo panel and agent header
+ * all ran off the right edge with no scrollbar to reach them.
+ *
+ * ChatListRail tucks itself by default below this breakpoint; this covers the
+ * other half, when the user opens it anyway: the open rail floats OVER the
+ * chat rather than taking a bite out of it, so the chat keeps its full width
+ * either way. Same treatment the shell's file-tree sidebar already gets. The
+ * tucked 40px bar stays in flow — it is the affordance for reopening, and it
+ * must not sit on top of the chat's own left edge. */
+@media (max-width: 767px) {
+  .chat-rail {
+    position: absolute;
+    z-index: 42;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    height: auto;
+    box-shadow: 0 6px 20px rgb(0 0 0 / 18%);
+  }
+  .chat-rail--collapsed {
+    position: relative;
+    box-shadow: none;
+  }
 }
