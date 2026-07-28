@@ -903,8 +903,19 @@ export function TopBar({
           style={{
             // 320px fixed would overflow a 360px viewport; on narrow give it its
             // own full-width row (flex-basis 100%) so it fits and stays usable.
-            width: isNarrow ? "auto" : 320,
-            flex: isNarrow ? "1 1 100%" : "0 0 auto",
+            //
+            // On a wide row it used to be `0 0 auto` at a hard 320px, which
+            // refused to give anything back — so every pixel of shrink landed on
+            // the item title, the one element that could take it, and at 1024px
+            // the title was down to a bare 17px "…". The palette is a
+            // convenience with a keyboard equivalent (⌘P); the item's own name
+            // is the page's subject. The palette shrinks first, down to a floor
+            // where the icon + shortcut still read.
+            width: isNarrow ? "auto" : undefined,
+            flexGrow: isNarrow ? 1 : 0,
+            flexShrink: 1,
+            flexBasis: isNarrow ? "100%" : 320,
+            minWidth: isNarrow ? undefined : 140,
             height: 28,
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",
@@ -918,7 +929,9 @@ export function TopBar({
           }}
         >
           <Icon name="search" size={13} />
-          <span>Go to file, symbol, command…</span>
+          <span style={{ minWidth: 0, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis" }}>
+            Go to file, symbol, command…
+          </span>
           <span style={{ flex: 1 }} />
           <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11) }}>{modCombo("P")}</span>
         </button>

@@ -222,3 +222,26 @@ describe("TopBar takes its layout mode from the shell, not the viewport (#fe-res
     expect(row.style.height).toBe("52px");
   });
 });
+
+describe("TopBar command palette yields width before the title does (#fe-responsive)", () => {
+  // Once the title ellipsizes instead of wrapping (see above), the question
+  // becomes what it ellipsizes DOWN TO. Measured at 1024x768 it got 17px — a
+  // bare "…" — because the palette button was `flex: 0 0 auto` at a hard 320px
+  // and simply refused to give anything back, so every pixel of shrink landed
+  // on the one element that could take it. The palette is a convenience with a
+  // keyboard equivalent; the item's own name is the page's subject. The
+  // palette shrinks first.
+  it("makes the palette shrinkable on a wide row instead of pinning it at 320px", () => {
+    renderTopBar({ workspace: true, ideCollapsed: false, isNarrow: false });
+    const palette = screen.getByRole("button", { name: /go to file/i });
+    expect(palette.style.flexShrink).toBe("1");
+    expect(palette.style.flexBasis).toBe("320px");
+    expect(palette.style.minWidth).toBe("140px");
+  });
+
+  it("still gives the palette its own full-width row on narrow", () => {
+    renderTopBar({ workspace: true, ideCollapsed: false, isNarrow: true });
+    const palette = screen.getByRole("button", { name: /go to file/i });
+    expect(palette.style.flexBasis).toBe("100%");
+  });
+});
