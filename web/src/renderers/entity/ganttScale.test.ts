@@ -283,6 +283,22 @@ describe("working-day columns (skip weekends)", () => {
   });
 });
 
+describe("half-open spans", () => {
+  // A range you can only fill on one side is a range you cannot use to say
+  // "this starts here, the end is not settled yet" — which is exactly what a
+  // milestone whose end comes from its issues needs to say.
+  it("reads a start with no end as the day it starts", () => {
+    expect(spanToDates("2026-07-13/")).toEqual({ start: "2026-07-13", end: "2026-07-13" });
+  });
+  it("reads an end with no start as the day it ends", () => {
+    expect(spanToDates("/2026-07-15")).toEqual({ start: "2026-07-15", end: "2026-07-15" });
+  });
+  it("still rejects a range with nothing in it", () => {
+    expect(spanToDates("/")).toBeNull();
+    expect(spanToDates("nonsense/")).toBeNull();
+  });
+});
+
 describe("barColumns", () => {
   // A span is INCLUSIVE of both ends — "2026-07-13/2026-07-15" is a three-day
   // task, not a two-day one — and the chart's own width already counts that way

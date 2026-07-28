@@ -85,7 +85,14 @@ export function deltaDays(dx: number, ppd: number): number {
 
 /** Parse a `daterange` value (`"start/end"` string, `[start, end]`, or
  * `{start,end}` / `{from,to}`) into `YYYY-MM-DD` strings, or `null` for junk /
- * a reversed range. */
+ * a reversed range.
+ *
+ * ONE end is enough. "Starts here, the end isn't settled yet" is a thing people
+ * need to say — it is what a milestone whose end comes from its issues says —
+ * and refusing to read it meant such a record simply had no bar, with nothing
+ * on screen to explain the absence. A half-open range reads as the single day
+ * it does know; what fills the other end is a scheduling decision, not a
+ * parsing one. */
 export function spanToDates(value: unknown): Span | null {
   let a: unknown;
   let b: unknown;
@@ -100,9 +107,12 @@ export function spanToDates(value: unknown): Span | null {
   } else {
     return null;
   }
-  const sa = Date.parse(String(a));
-  const sb = Date.parse(String(b));
-  if (Number.isNaN(sa) || Number.isNaN(sb) || sb < sa) return null;
+  let sa = Date.parse(String(a));
+  let sb = Date.parse(String(b));
+  if (Number.isNaN(sa) && Number.isNaN(sb)) return null;
+  if (Number.isNaN(sa)) sa = sb;
+  if (Number.isNaN(sb)) sb = sa;
+  if (sb < sa) return null;
   return { start: toISODate(sa), end: toISODate(sb) };
 }
 

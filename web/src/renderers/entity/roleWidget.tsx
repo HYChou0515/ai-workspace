@@ -170,10 +170,15 @@ function DateRangeInput({
   const init = splitRange(value);
   const [start, setStart] = useState(init.start);
   const [end, setEnd] = useState(init.end);
-  // Only write a whole range; a half-filled range holds locally (no partial patch).
+  // One end is a legitimate value: "starts here, the end isn't settled yet" is
+  // a thing people need to record, and a milestone whose end comes from its
+  // issues has nothing else to say. This used to commit ONLY a whole range, so
+  // a half-filled one was dropped without a word — the date sat in the box,
+  // never reached the server, and was gone on the next load. Empty on BOTH
+  // sides still means "no range", which is how you clear it.
   const emit = (s: string, e: string) => {
-    if (s && e) onCommit(`${s}/${e}`);
-    else if (!s && !e) onCommit(null);
+    if (!s && !e) onCommit(null);
+    else onCommit(`${s}/${e}`);
   };
   return (
     <span className="ev-field--range">

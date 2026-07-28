@@ -110,3 +110,30 @@ describe("number role (#PM auto-schedule P1)", () => {
     expect(onCommit).toHaveBeenCalledWith(3);
   });
 });
+
+describe("half-filled date range (#PM issue-12)", () => {
+  it("saves a start with no end instead of silently dropping it", () => {
+    // It used to commit only when BOTH ends were set: you picked a start date,
+    // the box showed it, and nothing was ever sent — the value was gone on the
+    // next load, with no error to explain it.
+    const onCommit = vi.fn();
+    render(<RoleField widget="daterange" name="span" value={null} onCommit={onCommit} />);
+    fireEvent.change(screen.getByLabelText("span start"), { target: { value: "2026-07-13" } });
+    expect(onCommit).toHaveBeenCalledWith("2026-07-13/");
+  });
+
+  it("saves an end with no start too", () => {
+    const onCommit = vi.fn();
+    render(<RoleField widget="daterange" name="span" value={null} onCommit={onCommit} />);
+    fireEvent.change(screen.getByLabelText("span end"), { target: { value: "2026-07-15" } });
+    expect(onCommit).toHaveBeenCalledWith("/2026-07-15");
+  });
+
+  it("clearing both ends still clears the field", () => {
+    const onCommit = vi.fn();
+    render(<RoleField widget="daterange" name="span" value="2026-07-13/2026-07-15" onCommit={onCommit} />);
+    fireEvent.change(screen.getByLabelText("span start"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("span end"), { target: { value: "" } });
+    expect(onCommit).toHaveBeenLastCalledWith(null);
+  });
+});
