@@ -181,3 +181,70 @@ class TestIsolated:
 
         uid = os.getuid()  # uid_range=1 collapses the derived uid to our own
         assert (tmp_path / "sb" / h.id / USER_ENV_FILE, uid) in isolated.chown_calls
+
+
+def _stub_tool_bundle(root: Path, tool: str = "demo") -> Path:
+    """A bundle shaped exactly like a prebuilt one, with a stand-in for the two
+    executables. `_LAUNCH` execs `<loader> <interpreter> <bundle>/.venv/bin/<tool>`,
+    so the interpreter has to stay a real ELF (`/usr/bin/env`) and the "tool" is
+    what reports the environment it was handed."""
+    from workspace_app.tooling.prebuild import _LAUNCH
+
+    (root / "python" / "bin").mkdir(parents=True)
+    (root / "python" / "bin" / "python3.12").symlink_to("/usr/bin/env")
+    (root / ".venv" / "bin").mkdir(parents=True)
+    exe = root / ".venv" / "bin" / tool
+    exe.write_text("#!/bin/sh\nexec env\n")
+    exe.chmod(0o755)
+    launch = root / "launch"
+    launch.write_text(_LAUNCH.format(ver="3.12", tool=tool))
+    launch.chmod(0o755)
+    return launch
+
+
+@pytest.mark.integration
+class TestTheWholeChain:
+    """File → `SANDBOX_USER_ENV` → launcher → the tool's `os.environ`, with real
+    processes and no LLM.
+
+    Each half is unit-tested on its own, and each would keep passing if the
+    HALVES stopped agreeing: the sandbox could write `.userenv` while the exec
+    path named something else, or the launcher could read a variable nothing
+    ever set. This is the seam, and the seam is where "modified only one of the
+    four `_exec_argv` copies" would show up.
+    """
+
+    async def test_a_tool_launched_in_the_sandbox_sees_the_users_variables(self, tmp_path):
+        sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+        h = await sb.create(SandboxSpec())
+        launch = _stub_tool_bundle(tmp_path / h.id / "root" / "bundle")
+
+        await sb.write_user_env(h, "API_KEY=sk-1\nREGION=tw\n")
+        result = await sb.exec(h, [str(launch)])
+
+        out = result.stdout.decode()
+        assert "API_KEY=sk-1" in out
+        assert "REGION=tw" in out
+
+    async def test_a_deleted_variable_stops_reaching_the_tool(self, tmp_path):
+        sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+        h = await sb.create(SandboxSpec())
+        launch = _stub_tool_bundle(tmp_path / h.id / "root" / "bundle")
+
+        await sb.write_user_env(h, "API_KEY=sk-1\nGONE=yes\n")
+        await sb.write_user_env(h, "API_KEY=sk-1\n")  # the next turn, one deleted
+        out = (await sb.exec(h, [str(launch)])).stdout.decode()
+
+        assert "API_KEY=sk-1" in out
+        assert "GONE" not in out
+
+    async def test_a_value_carrying_shell_syntax_arrives_intact(self, tmp_path):
+        sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+        h = await sb.create(SandboxSpec())
+        launch = _stub_tool_bundle(tmp_path / h.id / "root" / "bundle")
+
+        tricky = "a=b c#d$e`f'g\"h$(echo no)"
+        await sb.write_user_env(h, f"TOKEN={tricky}\n")
+        out = (await sb.exec(h, [str(launch)])).stdout.decode()
+
+        assert f"TOKEN={tricky}" in out
