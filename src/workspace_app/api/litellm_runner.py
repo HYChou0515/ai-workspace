@@ -41,6 +41,7 @@ from ..agent.args_recovery import (
     NonObjectToolArgsError,
 )
 from ..agent.context import AgentToolContext
+from ..agent.header_model import HeaderModel
 from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
 from ..context_budget import (
@@ -57,7 +58,7 @@ from ..context_budget import (
 )
 from ..context_probe import probe_context_limit
 from ..resources import AgentConfig
-from ..tokens import ITokenService
+from ..tokens import ITokenService, LlmCredential
 from ..tooling.registry import PackageInfo, build_function_tools
 from ..users.labels import speaker_note
 from .events import (
@@ -298,7 +299,7 @@ def _agent_for(
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
     on_failover_switch: Callable[[str, str], None] | None = None,
-    resolve_key: Callable[[str | None], str | None] = lambda key: key,
+    resolve_credential: Callable[[str | None], LlmCredential] = LlmCredential,
     stream_deadlines: tuple[float, float] | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
@@ -458,18 +459,28 @@ def _agent_for(
     # over the runner's constructor default — empty strings mean
     # "inherit from runner" so a single-endpoint deploy still works.
     eff_base_url = config.llm_base_url or base_url
-    # Per-user token seam: resolve the endpoint key on the speaker's behalf
-    # (identity when no user / no service — see LitellmAgentRunner._key_resolver).
-    eff_api_key = resolve_key(config.llm_api_key or api_key)
+    # Per-user credential seam: resolve this endpoint's api_key + headers on the
+    # acting user's behalf (identity when no user / no service — see
+    # LitellmAgentRunner._credential_resolver).
+    eff_credential = resolve_credential(config.llm_api_key or api_key)
 
     def _build_model(
-        model_id: str, b_url: str | None, a_key: str | None, timeout: float | None = None
+        model_id: str,
+        b_url: str | None,
+        credential: LlmCredential,
+        timeout: float | None = None,
     ) -> Model:
         """Build one inner SDK model for one endpoint — the #76 repairing
         backstop over the raw LiteLLM model. Shared by the
         single-endpoint case and each entry of a busy-aware FallbackModel
         (``timeout`` bounds a non-streaming decide/args call so it can fail over)."""
-        m: Model = LitellmModel(model=model_id, base_url=b_url, api_key=a_key)
+        m: Model = LitellmModel(model=model_id, base_url=b_url, api_key=credential.api_key)
+        # The credential's headers are PER ENDPOINT, so they are applied here rather
+        # than on the turn's ModelSettings: a FallbackModel hands the same settings
+        # to whichever endpoint it switches to, which would send one gateway's
+        # session cookie to another host.
+        if credential.headers:
+            m = HeaderModel(m, credential.headers)
         # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
         # boundary so a probabilistic small model can't crash/poison/abort the turn.
         # Leave this line on. To toggle the *self-repair* layer (recovering the
@@ -500,12 +511,12 @@ def _agent_for(
             chain,
             cooldown_registry,
             make_model=lambda e: _build_model(
-                e.model, e.base_url, resolve_key(e.api_key), e.idle_s
+                e.model, e.base_url, resolve_credential(e.api_key), e.idle_s
             ),
             on_switch=on_switch,
         )
     else:
-        model = _build_model(config.model, eff_base_url, eff_api_key)
+        model = _build_model(config.model, eff_base_url, eff_credential)
         # #493: a turn must always end. FallbackModel carries deadlines, but it
         # is only built for a chain of two or more endpoints — so the DEFAULT
         # single-endpoint deploy had no bound at all, and a provider that
@@ -957,30 +968,41 @@ class LitellmAgentRunner:
         # bound (what every deploy without `fallbacks:` used to get).
         self._stream_deadlines = stream_deadlines
 
-    async def _key_resolver(self, ctx: AgentToolContext) -> Callable[[str | None], str | None]:
-        """A SYNC ``key -> key`` mapping for THIS turn's endpoints, resolved through
-        the token service on the speaker's behalf.
+    async def _credential_resolver(
+        self, ctx: AgentToolContext
+    ) -> Callable[[str | None], LlmCredential]:
+        """A SYNC ``key -> LlmCredential`` mapping for THIS turn's endpoints, resolved
+        through the token service on the acting user's behalf.
 
         The token service is async but the models are built synchronously (a
         fallback endpoint's model is built deep inside the SDK), so we pre-resolve
         every key the turn can use — the primary ``config.llm_api_key or
         self._api_key`` plus each fallback endpoint's ``e.api_key`` — into a map,
-        and hand ``_agent_for`` a sync lookup. No speaker or no service → identity
-        (every key unchanged), so a user-less turn is byte-for-byte as before."""
+        and hand ``_agent_for`` a sync lookup.
+
+        Whose behalf: the ``speaker`` when a person is in the room, else
+        ``acting_user`` — a background turn (a workflow step, a card-gen pass) has
+        no speaker but still runs for someone, and the gateway still has to know
+        whose quota to charge. Neither, or no service → identity (every key
+        unchanged, no headers), so an unattributed turn is byte-for-byte as before.
+
+        ``ctx.call_lane`` rides along so the source can hand back a lane-appropriate
+        credential — that is the whole mechanism by which a background job gets the
+        tighter rate limit."""
         ts = self._token_service
-        speaker = ctx.speaker
         config = ctx.agent_config
-        if ts is None or speaker is None or config is None:
-            return lambda key: key
+        user_id = ctx.speaker.id if ctx.speaker is not None else (ctx.acting_user or None)
+        if ts is None or user_id is None or config is None:
+            return lambda key: LlmCredential(key)
         eff_base_url = config.llm_base_url or self._base_url
         raw_keys = {config.llm_api_key or self._api_key}
         chain = (self._fallback_chains or {}).get((config.model, eff_base_url))
         if chain is not None:
             raw_keys.update(e.api_key for e in chain)
-        resolved: dict[str | None, str | None] = {}
+        resolved: dict[str | None, LlmCredential] = {}
         for key in raw_keys:
-            resolved[key] = await ts.get_token(speaker.id, key)
-        return lambda key: resolved.get(key, key)
+            resolved[key] = await ts.get_credential(user_id, key, ctx.call_lane)
+        return lambda key: resolved.get(key, LlmCredential(key))
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         # #94: no silent fallback. Every turn must arrive with a resolved
@@ -1223,7 +1245,7 @@ class LitellmAgentRunner:
         # #613: the update_todos tool streams its freshly-written checklist here so
         # the FE's pinned panel updates live mid-turn.
         ctx.on_todos_updated = _todos_emitter(queue)
-        resolve_key = await self._key_resolver(ctx)
+        resolve_credential = await self._credential_resolver(ctx)
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
@@ -1237,7 +1259,7 @@ class LitellmAgentRunner:
             fallback_chains=self._fallback_chains,
             cooldown_registry=self._cooldown_registry,
             on_failover_switch=_failover_emitter(queue),
-            resolve_key=resolve_key,
+            resolve_credential=resolve_credential,
             stream_deadlines=self._stream_deadlines,
         )
         t0 = time.monotonic()
@@ -1383,7 +1405,7 @@ class LitellmAgentRunner:
         recovery errors) straight up to ``run()`` which maps them as usual. The
         RepairingModel + args_recovery backstops still apply (``_agent_for``)."""
         assert ctx.agent_config is not None
-        resolve_key = await self._key_resolver(ctx)
+        resolve_credential = await self._credential_resolver(ctx)
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
@@ -1396,7 +1418,7 @@ class LitellmAgentRunner:
             template_profile=ctx.template_profile,
             fallback_chains=self._fallback_chains,
             cooldown_registry=self._cooldown_registry,
-            resolve_key=resolve_key,
+            resolve_credential=resolve_credential,
             stream_deadlines=self._stream_deadlines,
         )
         t0 = time.monotonic()
