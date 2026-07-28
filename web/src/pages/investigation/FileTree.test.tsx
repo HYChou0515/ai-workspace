@@ -634,3 +634,36 @@ describe("<FileTree /> sticky header (#346)", () => {
     expect(header.style.top).toMatch(/^0(px)?$/);
   });
 });
+
+/**
+ * #fe-responsive — the tree column is a resizable 180-560px, so long names
+ * ellipsize by design. Measured in a real browser at 1440x900, an
+ * "an-extremely-long-evidence-file-name-for-layout-testing.md" row needed
+ * 347px and had 168px: the visible text was "an-extremely-long-evidenc…".
+ * That is fine ONLY if the full name is still readable somehow, and it was
+ * not — the row's `title` is the drag hint, so hovering explained dragging
+ * rather than naming the file.
+ */
+describe("<FileTree /> truncated names stay readable (#fe-responsive)", () => {
+  it("puts the full name on the label itself, not just the row's drag hint", () => {
+    renderTree(vi.fn(), {
+      files: [{ path: "/an-extremely-long-evidence-file-name-for-layout-testing.md", size: 1 }],
+    });
+    const label = screen.getByText("an-extremely-long-evidence-file-name-for-layout-testing.md");
+    expect(label).toHaveAttribute(
+      "title",
+      "an-extremely-long-evidence-file-name-for-layout-testing.md",
+    );
+  });
+
+  it("does the same for a folder row", () => {
+    renderTree(vi.fn(), {
+      files: [{ path: "/a-very-long-directory-name-indeed/x.md", size: 1 }],
+      dirs: ["/a-very-long-directory-name-indeed"],
+    });
+    expect(screen.getByText("a-very-long-directory-name-indeed")).toHaveAttribute(
+      "title",
+      "a-very-long-directory-name-indeed",
+    );
+  });
+});
