@@ -2304,7 +2304,7 @@ function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
   );
 }
 
-function BottomPanel({
+export function BottomPanel({
   tab,
   onTab,
   investigationId,
@@ -2354,34 +2354,57 @@ function BottomPanel({
           borderBottom: "1px solid var(--paper-3)",
         }}
       >
-        {tabs.map((t) => {
-          const active = t.key === tab;
-          return (
-            <button
-              key={t.key}
-              type="button"
-              onClick={() => onTab(t.key)}
-              style={{
-                padding: "0 10px",
-                height: 32,
-                borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
-                color: active ? "var(--text-paper)" : "var(--text-paper-d)",
-                fontSize: pxToRem(12),
-                fontWeight: active ? 600 : 500,
-                marginBottom: -1,
-              }}
-            >
-              {t.label}
-            </button>
-          );
-        })}
-        <span style={{ flex: 1 }} />
+        {/* The five labels don't fit a narrow panel. Left alone they wrapped to
+            a second line INSIDE the 32px row (clipped mid-glyph) and pushed the
+            collapse chevron past the viewport edge, which is what put a
+            horizontal scrollbar on the whole document at 390px. A tab strip
+            that can't fit scrolls — same as the editor's own tab strip. */}
+        <div
+          data-testid="bottom-tabs"
+          className="scrollable"
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            height: 32,
+            overflowX: "auto",
+            overflowY: "hidden",
+          }}
+        >
+          {tabs.map((t) => {
+            const active = t.key === tab;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => onTab(t.key)}
+                style={{
+                  padding: "0 10px",
+                  height: 32,
+                  flexShrink: 0,
+                  whiteSpace: "nowrap",
+                  borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
+                  color: active ? "var(--text-paper)" : "var(--text-paper-d)",
+                  fontSize: pxToRem(12),
+                  fontWeight: active ? 600 : 500,
+                  marginBottom: -1,
+                }}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+        {/* Outside the scroll area: collapsing the panel must never require
+            scrolling the tabs to find the control. */}
         <button
           type="button"
           onClick={onToggle}
           title={`${open ? "Collapse" : "Expand"} panel (${modCombo("J")})`}
           aria-label="toggle bottom panel"
-          style={{ color: "var(--text-paper-d)", padding: 4 }}
+          style={{ color: "var(--text-paper-d)", padding: 4, flexShrink: 0 }}
         >
           <Icon name={open ? "chev_d" : "chev_r"} size={14} />
         </button>
