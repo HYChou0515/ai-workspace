@@ -60,6 +60,29 @@ class WorkItemBase(Struct):
     → every skill follows its default. Resolved by
     ``AppCatalog.resolve(skill_prefs=...)``; edited in the web skills picker."""
 
+    env_vars: dict[str, str] = field(default_factory=dict)
+    """Tier 1 — environment variables the user sets for THIS item, handed to the
+    tools its agent runs. Sibling of ``attached_tool_prefs`` / ``attached_skill_prefs``
+    in every respect: per-item configuration, declared once here so an App does
+    not opt in (any App can run tools, and any tool may want a key).
+
+    A ``dict`` rather than a list of pairs, for the same reasons as
+    ``attached_tool_prefs``: a name cannot appear twice, and insertion order is
+    preserved for display.
+
+    This is the SOURCE OF TRUTH. The copy the tools actually read is a file in
+    the sandbox's infra area, rewritten once per turn — it cannot be the storage
+    because ``Sandbox.kill`` rmtrees the whole sandbox root (the idle reaper
+    fires it) and ``NfsArchive.persist``/``restore`` carry only the *workspace*,
+    so a sandbox-only file loses the user's keys the moment the item goes idle.
+    Deliberately NOT kept in the workspace either: ``read_file`` is
+    workspace-confined, and that confinement is the only thing standing between
+    the agent and a trivial read.
+
+    Reading and writing ride the item's own ``permission`` (``write_meta``);
+    injection does not go through the UI, so a member who may not edit still
+    gets the variables in their turns."""
+
     permission: Permission | None = None
     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
     governs collections / KbChat: ``visibility`` decides whether the per-verb grant
