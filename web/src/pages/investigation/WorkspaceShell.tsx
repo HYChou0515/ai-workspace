@@ -19,6 +19,7 @@ import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
 import { modCombo } from "../../lib/platform";
+import { relPath } from "../../lib/relPath";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PresenceBar } from "../../components/PresenceBar";
 import { Icon, type IconName } from "../../components/Icon";
@@ -1810,7 +1811,7 @@ function DropZoneOverlay({ edge }: { edge: Edge }) {
   return <div style={{ ...base, ...region }} />;
 }
 
-function TabContextMenu({
+export function TabContextMenu({
   path,
   x,
   y,
@@ -1880,7 +1881,8 @@ function TabContextMenu({
         {item("Split down", () => onSplit("down", path))}
         <div style={{ height: 1, background: "var(--paper-3)", margin: "4px 0" }} />
         {item(pinned ? "Unpin" : "Pin", () => onTogglePin(path))}
-        {item("Copy path", () => void navigator.clipboard?.writeText(path))}
+        {/* Relative (#549) — same reason as the file tree's own Copy path. */}
+        {item("Copy path", () => void navigator.clipboard?.writeText(relPath(path)))}
         <div style={{ height: 1, background: "var(--paper-3)", margin: "4px 0" }} />
         {item("Close", () => onCloseTab(path))}
         {item("Close others", () => onCloseOthers(path))}

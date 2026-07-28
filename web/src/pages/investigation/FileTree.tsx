@@ -19,6 +19,7 @@ import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSele
 import { folderState, toggleSubtree } from "./treeCheckbox";
 import { extractClipboardFiles, readTransferEntries } from "./transfer";
 import { pxToRem } from "../../lib/pxToRem";
+import { relPath } from "../../lib/relPath";
 
 // #364: a drag carrying OS files/folders (not one of our internal reorder payloads).
 const isExternalDrag = (e: React.DragEvent): boolean =>
@@ -753,7 +754,9 @@ export function FileTree({
           onRename={(n) => setRenaming(n.path)}
           onDelete={(n) => void deletePaths(targetsFor(n.path))}
           onReindex={onReindex ? (n) => onReindex(targetsFor(n.path)) : undefined}
-          onCopyPath={(p) => void navigator.clipboard?.writeText(p)}
+          // Relative (#549): the clipboard is where a path leaves the app for a
+          // shell or a chat message, and there a leading slash is the system root.
+          onCopyPath={(p) => void navigator.clipboard?.writeText(relPath(p))}
           onDownload={(n) => void downloadNode(n)}
           onOpenInSplit={onOpenInSplit}
         />
