@@ -107,3 +107,52 @@ describe("ChatListRail", () => {
     expect(screen.getByRole("menuitem", { name: "Product" })).toHaveAttribute("href", "/a/pm");
   });
 });
+
+/**
+ * #fe-responsive — the rail is a hard 240px column with no responsive rule of
+ * its own. Measured in a real browser at 390x844 it still took 240px, leaving
+ * 150px for the entire chat surface: the composer, model picker, todo panel
+ * and agent header were all cut off at the right edge with no scrollbar.
+ *
+ * Narrow starts it tucked, and an expanded rail overlays the chat rather than
+ * taking a bite out of it — the same treatment the shell's file-tree sidebar
+ * already gets below the breakpoint.
+ */
+describe("ChatListRail on a narrow viewport (#fe-responsive)", () => {
+  const realMM = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = realMM;
+  });
+  function stubViewport(narrow: boolean) {
+    window.matchMedia = ((q: string) => ({
+      matches: narrow,
+      media: q,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent: () => true,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  it("starts tucked on a narrow viewport so the chat keeps the width", () => {
+    stubViewport(true);
+    renderRail();
+    expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show chats/i })).toBeInTheDocument();
+  });
+
+  it("still starts open on a wide viewport", () => {
+    stubViewport(false);
+    renderRail();
+    expect(screen.getByText("Oven drift")).toBeInTheDocument();
+  });
+
+  it("can still be opened on narrow — tucked is a default, not a lockout", () => {
+    stubViewport(true);
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /show chats/i }));
+    expect(screen.getByText("Oven drift")).toBeInTheDocument();
+  });
+});

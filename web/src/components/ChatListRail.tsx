@@ -10,13 +10,14 @@
  * Help) behind one press, so the chat surface stays clean.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import type { AppItem } from "../api/types";
 import { useChatActions } from "../hooks/useChatActions";
 import { useCreateChat } from "../hooks/useCreateChat";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useAppItems, useApps } from "../hooks/useResources";
 import { ShareChatDialog } from "./ShareChatDialog";
 
@@ -46,7 +47,15 @@ export function ChatListRail({
   const [menuOpen, setMenuOpen] = useState(false);
   // #chat-private #3: the rail can be collapsed to a thin bar (not persisted —
   // like the IDE state, a new tab opens with it shown).
-  const [collapsed, setCollapsed] = useState(false);
+  // #fe-responsive: 240px of a 390px viewport left 150px for the whole chat
+  // surface, so narrow starts it tucked. Tracked symmetrically (both ways
+  // across the breakpoint) for the same reason the shell's sidebar is: a
+  // one-way rule strands the user on the far side of a resize.
+  const isNarrow = useIsNarrow();
+  const [collapsed, setCollapsed] = useState(isNarrow);
+  useEffect(() => {
+    setCollapsed(isNarrow);
+  }, [isNarrow]);
   // #chat-private: split my chats from ones shared with me (owner !== me).
   const [tab, setTab] = useState<"mine" | "shared">("mine");
   const mine = items.filter((it) => it.owner === me);
