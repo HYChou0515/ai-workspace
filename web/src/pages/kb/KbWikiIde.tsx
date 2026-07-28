@@ -35,6 +35,7 @@ import { FileTree } from "../investigation/FileTree";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 import { fetchAllDocs } from "./useCollectionDocs";
 import { stem, WikiPageBody } from "./WikiPageBody";
+import { relPath } from "../../lib/relPath";
 
 export function KbWikiIde({
   collectionId,
@@ -220,7 +221,7 @@ function WikiEditorPane({
   return (
     <div className="kb-ide__editor">
       <header className="kb-ide__bar">
-        <span className="kb-ide__crumb mono">{path}</span>
+        <span className="kb-ide__crumb mono">{relPath(path)}</span>
         <span className="kb-ide__spacer" />
         <button type="button" className="kb-btn" onClick={() => toggle(path)}>
           {editing ? "Preview" : "Edit"}
@@ -236,7 +237,7 @@ function WikiEditorPane({
       </header>
       <div className="kb-ide__body">
         {entry.status === "loading" ? (
-          <p className="kb-cols__empty">Loading {path}…</p>
+          <p className="kb-cols__empty">Loading {relPath(path)}…</p>
         ) : editing ? (
           <div style={{ height: "100%", minHeight: 0 }}>
             <MonacoEditor value={entry.text} onChange={setText} language="markdown" minHeight={0} />

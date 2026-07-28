@@ -50,6 +50,7 @@ import { QualityDetails } from "./QualityDetails";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 import { pxToRem } from "../../lib/pxToRem";
 import { useCollectionDocs } from "./useCollectionDocs";
+import { relPath } from "../../lib/relPath";
 
 /** The empty-collection greeting (#172): a drop-zone-styled call to action so
  * uploading is obvious from the first screen. The actual drop is handled by the
@@ -513,7 +514,7 @@ function KbStatusBar({
   ].filter(Boolean);
   return (
     <div className={`kb-ide__status kb-ide__status--${doc.status}`} data-testid="kb-ide-status">
-      <span className="kb-ide__status-path mono">{doc.path}</span>
+      <span className="kb-ide__status-path mono">{relPath(doc.path)}</span>
       <span className="kb-ide__status-spacer" />
       {doc.status === "indexing" && (doc.units_total ?? 0) > 0 ? (
         // #248: a REAL done/total bar from the fan-out aggregate — only ever
@@ -641,7 +642,7 @@ function KbEditorPane({
   return (
     <div className="kb-ide__editor">
       <header className="kb-ide__bar">
-        <span className="kb-ide__crumb mono">{path}</span>
+        <span className="kb-ide__crumb mono">{relPath(path)}</span>
         {doc && doc.status !== "ready" && (
           <span className={`kb-status kb-status--${doc.status}`}>
             {doc.status === "indexing" ? t("kb.doc.processing") : t("kb.doc.failed")}
