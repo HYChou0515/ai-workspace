@@ -1866,7 +1866,7 @@ async def request_wiki_update_impl(
 
     `instruction` (required): the correction in plain language — what the wiki
     currently gets wrong and what it should say. `target_page` (optional): the
-    wiki page path at fault (e.g. `/entities/foo.md`) if you know it; leave blank
+    wiki page path at fault (e.g. `entities/foo.md`) if you know it; leave blank
     to let the maintainer locate it. `reference` (optional): a short reference
     document or passage to follow for the fix — its text is used for THIS
     correction only. `collection` (optional): the collection to correct, by name

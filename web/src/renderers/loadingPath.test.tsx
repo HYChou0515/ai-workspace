@@ -4,6 +4,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { FileServiceProvider, investigationFileService } from "../api/fileService";
+import type { FileContent } from "../api/types";
 import { EditModeProvider } from "../hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../hooks/fileBuffer";
 import { QueryWrap } from "../test/queryWrapper";
@@ -21,7 +22,7 @@ const PATH = "/data/x.csv";
 /** A store whose read never settles, so every renderer stays in its loading state. */
 function pendingStore(): FileBufferStore {
   return new FileBufferStore({
-    readFile: vi.fn(() => new Promise(() => {})),
+    readFile: vi.fn(() => new Promise<FileContent>(() => {})),
     writeFile: vi.fn(async () => {}),
   });
 }

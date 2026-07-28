@@ -29,12 +29,12 @@
 Agent 跑完一輪後 workspace 大致長這樣(按 SOP 6 步分子資料夾,不會把幾十個檔案散落根目錄):
 
 ```
-/step1-brief/brief.md
-/step2-data/{defects,wafer-history,measurements}.csv
-/step2-data/{module-map,wafer-history-with-module,qtime-pairs,qtimes}.csv  ← infer_modules + qtime-data
-/step2-data/scripts/{join_modules,select_qtime_pairs}.py
-/step3-analysis/{rank-factors-*.csv, *.png, scripts/*.py}
-/step6-report/report.v{N}.md
+./step1-brief/brief.md
+./step2-data/{defects,wafer-history,measurements}.csv
+./step2-data/{module-map,wafer-history-with-module,qtime-pairs,qtimes}.csv  ← infer_modules + qtime-data
+./step2-data/scripts/{join_modules,select_qtime_pairs}.py
+./step3-analysis/{rank-factors-*.csv, *.png, scripts/*.py}
+./step6-report/report.v{N}.md
 ```
 
 跨 variant 比較(如 threshold=6 vs =9)agent 會在 CSV / PNG 加 suffix 並存,例如 `rank-factors-categorical-th6.csv`,你可以 A/B 對照。
