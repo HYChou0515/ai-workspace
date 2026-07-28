@@ -16,6 +16,7 @@ import { qk } from "../api/queryKeys";
 import { useT } from "../lib/i18n";
 import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
+import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useReviewBadgeCount } from "../hooks/useReviewInbox";
 import { useApps } from "../hooks/useResources";
 import { AppIcon } from "./AppIcon";
@@ -213,6 +214,11 @@ function Breadcrumbs() {
 function Brand() {
   const t = useT();
   const [hover, setHover] = useState(false);
+  // #fe-responsive: the bar's fixed children needed 417px at a 390px viewport,
+  // which put a horizontal scrollbar on the whole document. The word beside the
+  // icon is what does not fit; the icon plus the existing tooltip still names
+  // the destination, so narrow drops the word rather than the link.
+  const isNarrow = useIsNarrow();
   return (
     <Link
       to="/"
@@ -223,13 +229,14 @@ function Brand() {
         display: "inline-flex",
         alignItems: "center",
         gap: 6,
+        flexShrink: 0,
         fontWeight: 800,
         color: "var(--text-paper)",
         textDecoration: hover ? "underline" : "none",
       }}
     >
       <Icon name="home" size={15} color="var(--text-paper-d)" />
-      Workspace
+      {!isNarrow && "Workspace"}
     </Link>
   );
 }
@@ -242,10 +249,14 @@ function ReviewLink() {
   const { pathname } = useLocation();
   const active = isActive(pathname, "/review");
   const count = useReviewBadgeCount();
+  // Narrow drops the word (see Brand) — the icon, the badge and the tooltip
+  // still say what this is, and the accessible name comes from that tooltip.
+  const isNarrow = useIsNarrow();
   return (
     <Link
       to="/review"
       title={count > 0 ? t("review.badge.tip", { n: count }) : t("review.title")}
+      aria-label={t("review.title")}
       style={{
         position: "relative",
         display: "inline-flex",
@@ -264,7 +275,7 @@ function ReviewLink() {
       }}
     >
       <Icon name="check" size={14} color="var(--text-paper-d)" />
-      <span>{t("review.title")}</span>
+      {!isNarrow && <span>{t("review.title")}</span>}
       {count > 0 && (
         <span
           aria-hidden

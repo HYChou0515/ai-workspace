@@ -138,3 +138,52 @@ describe("GlobalNav", () => {
     expect(screen.getByRole("button", { name: "設定" })).toBeInTheDocument();
   });
 });
+
+/**
+ * #fe-responsive — measured in a real browser at 390x844: the bar's own
+ * children needed 417px (brand 97 + switcher 76 + Review 86 + Help 26 + health
+ * + settings, plus gaps and padding). The two shrinkable regions — the
+ * separator and the breadcrumb trail — were already squeezed to 0, so the
+ * trailing settings button was pushed to x=406 and the whole DOCUMENT grew a
+ * horizontal scrollbar. Nothing on this page is meant to scroll sideways.
+ *
+ * The word next to each icon is what does not fit; the icon plus its existing
+ * `title` still names the destination, so narrow drops the words.
+ */
+describe("GlobalNav fits a narrow viewport (#fe-responsive)", () => {
+  const realMM = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = realMM;
+  });
+  function stubViewport(narrow: boolean) {
+    window.matchMedia = ((q: string) => ({
+      matches: narrow,
+      media: q,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent: () => true,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  it("drops the word labels on narrow, keeping every destination reachable", () => {
+    stubViewport(true);
+    renderNav("/a/rca");
+    // The words are gone…
+    expect(screen.queryByText("Workspace")).not.toBeInTheDocument();
+    expect(screen.queryByText("審核")).not.toBeInTheDocument();
+    // …but the links, and their accessible names, are not.
+    expect(screen.getByRole("link", { name: "回首頁" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "審核" })).toHaveAttribute("href", "/review");
+    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute("href", "/help");
+  });
+
+  it("keeps the words on a wide viewport", () => {
+    stubViewport(false);
+    renderNav("/a/rca");
+    expect(screen.getByText("Workspace")).toBeInTheDocument();
+    expect(screen.getByText("審核")).toBeInTheDocument();
+  });
+});
