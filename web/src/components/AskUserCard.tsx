@@ -20,9 +20,21 @@
  *
  * Layout: one option per row, each with its own supplement. A note about
  * "Postgres" is about Postgres, so it sits on that row rather than in one shared
- * box that could mean any option. Options are numbered, and a pick highlights
- * rather than sending on the click — with a note to type, firing on the first
- * click would send before the person finished.
+ * box that could mean any option. Options are numbered so they can be referred
+ * to as 1, 2, 3.
+ *
+ * There is no 送出 button: every question is single-choice (nothing in the tool
+ * schema or here expresses multi-select), so the pick IS the answer and a second
+ * click decided nothing. A DECISION sends — clicking an option, clicking 看不懂,
+ * or pressing Enter in one of the text boxes. Merely reaching for a box does not:
+ * focus marks which option the note belongs to, and typing is mid-sentence, so
+ * neither may fire. That is what the button used to buy, kept without the button.
+ *
+ * A card may carry up to five questions (`_MAX_QUESTIONS`), so the decision that
+ * sends is the one COMPLETING the set — earlier picks stay editable drafts until
+ * then, and all questions go in one message. Once sent the card latches, because
+ * a mis-click now costs a turn and the persisted answer takes a round trip to
+ * come back.
  */
 import { useState } from "react";
 
@@ -144,27 +156,49 @@ export function AskUserCard({
   const [picked, setPicked] = useState<Record<number, string>>({});
   const [optNote, setOptNote] = useState<Record<string, string>>({});
   const [freeText, setFreeText] = useState<Record<number, string>>({});
+  // What this card already sent. `answered` arrives from the persisted
+  // transcript, which takes a round trip; without a local latch the options stay
+  // clickable in the meantime, and one more click is one more turn.
+  const [sent, setSent] = useState<string | null>(null);
 
   if (!questions) return null;
 
-  if (answered) {
+  const settled = answered ?? sent;
+  if (settled) {
     return (
       <div data-testid="ask-user-answered" style={{ opacity: 0.8 }}>
-        {answered}
+        {settled}
       </div>
     );
   }
 
   const noteKey = (qi: number, label: string) => `${qi} ${label}`;
-  const send = () => {
+
+  /** Record a decision and send once EVERY question has an answer. Callers pass
+   * the state they are about to write rather than setting it first: a `useState`
+   * write is not visible until the next render, so reading it back here would
+   * send the answer the user gave one click ago. */
+  const decide = (nextPicked: Record<number, string>, nextFree: Record<number, string>) => {
+    setPicked(nextPicked);
+    setFreeText(nextFree);
+    const answerFor = (i: number) => nextPicked[i] || "";
+    const complete = questions.every((_, i) => answerFor(i) || (nextFree[i] ?? "").trim());
+    if (!complete) return;
     const lines = questions.map((q, i) => {
-      const choice = picked[i];
+      const choice = answerFor(i);
       if (choice === DONT_UNDERSTAND) return answerLine(q.question, choice, "");
-      const note = choice ? (optNote[noteKey(i, choice)] ?? "") : (freeText[i] ?? "");
+      const note = choice ? (optNote[noteKey(i, choice)] ?? "") : (nextFree[i] ?? "");
       return answerLine(q.question, choice, note);
     });
-    onAnswer({ content: lines.join("\n"), answers: call.call_id });
+    const content = lines.join("\n");
+    setSent(content);
+    onAnswer({ content, answers: call.call_id });
   };
+
+  /** Picking an option drops any free text for that question — the pick IS the
+   * answer now, so a half-typed alternative must not ride along as its note. */
+  const choose = (qi: number, label: string) =>
+    decide({ ...picked, [qi]: label }, { ...freeText, [qi]: "" });
 
   return (
     <div data-testid="ask-user" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -180,7 +214,7 @@ export function AskUserCard({
                     <button
                       type="button"
                       aria-pressed={active}
-                      onClick={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
+                      onClick={() => choose(i, opt.label)}
                       title={opt.description || undefined}
                       style={{
                         display: "flex",
@@ -224,7 +258,15 @@ export function AskUserCard({
                       onChange={(e) =>
                         setOptNote((n) => ({ ...n, [noteKey(i, opt.label)]: e.target.value }))
                       }
+                      // Focus only marks WHICH option this note is about — it is
+                      // not a decision, so it must not send the empty box it was
+                      // just opened to write. Enter is the decision.
                       onFocus={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter") return;
+                        e.preventDefault();
+                        choose(i, opt.label);
+                      }}
                       style={noteInput}
                     />
                   </div>
@@ -239,7 +281,7 @@ export function AskUserCard({
             <button
               type="button"
               aria-pressed={picked[i] === DONT_UNDERSTAND}
-              onClick={() => setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }))}
+              onClick={() => choose(i, DONT_UNDERSTAND)}
               style={{
                 ...plainBtn,
                 borderColor: picked[i] === DONT_UNDERSTAND ? "var(--accent)" : "var(--paper-3)",
@@ -259,28 +301,21 @@ export function AskUserCard({
                 // so a leftover pick must not ride along with it.
                 if (v) setPicked((p) => (p[i] ? { ...p, [i]: "" } : p));
               }}
+              // Typing is mid-sentence; Enter is the decision. The pick is
+              // cleared only when there IS a free answer to replace it — Enter
+              // in an empty box is a stray keystroke, and erasing a choice
+              // already made is not what it should cost.
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                const own = (freeText[i] ?? "").trim();
+                decide(own ? { ...picked, [i]: "" } : picked, freeText);
+              }}
               style={noteInput}
             />
           </div>
         </div>
       ))}
-
-      <button
-        type="button"
-        onClick={send}
-        style={{
-          alignSelf: "flex-start",
-          padding: "6px 16px",
-          fontWeight: 600,
-          border: "1px solid var(--accent)",
-          background: "var(--accent)",
-          color: "var(--white)",
-          borderRadius: 6,
-          cursor: "pointer",
-        }}
-      >
-        送出
-      </button>
     </div>
   );
 }

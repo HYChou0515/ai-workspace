@@ -619,9 +619,10 @@ describe("AgentPanel ask_user (grill-me)", () => {
   function renderWithEntries(
     entries: unknown[],
     send = vi.fn(async (_content: string, _opts?: Record<string, unknown>) => {}),
+    streaming = false,
   ) {
     const agent = { ...stubAgent(), send };
-    agent.log = { entries, streaming: false } as unknown as AgentState["log"];
+    agent.log = { entries, streaming } as unknown as AgentState["log"];
     renderWithQuery(
       <DialogProvider>
         <AgentPanel
@@ -670,17 +671,28 @@ describe("AgentPanel ask_user (grill-me)", () => {
   it("sends the answer with the question it answers", () => {
     const send = renderWithEntries([question]);
 
-    // A pick highlights; 送出 commits it — so a per-option note has time to be
-    // typed rather than the first click firing before the person finished.
+    // The pick IS the answer — one click, no 送出 to hunt for afterwards. Exact
+    // "送出" below because the composer's own Send button matches a loose regex,
+    // and the card must not have left one of its own behind.
     fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
-    expect(send).not.toHaveBeenCalled();
-    // Exact "送出" — the composer's own "Send" button also matches a loose regex.
-    fireEvent.click(screen.getByRole("button", { name: "送出" }));
 
+    expect(screen.queryByRole("button", { name: "送出" })).toBeNull();
     expect(send).toHaveBeenCalledTimes(1);
     const [content, opts] = send.mock.calls[0];
     expect(content).toContain("SQLite");
     expect(opts).toMatchObject({ answers: "call_1" });
+  });
+
+  it("stops offering the options while a turn is running", () => {
+    /* The composer is disabled for the duration of a turn, and this panel drops
+     * an answer that arrives during one. Now that the click itself SENDS, a card
+     * left clickable would latch on a send that never happened — the answer would
+     * vanish. So the option is withdrawn while streaming, the same way it is on a
+     * read-only surface. */
+    const send = renderWithEntries([question], undefined, true);
+
+    expect(screen.queryByRole("button", { name: /Postgres/ })).toBeNull();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it("shows the answer instead of the buttons once answered", () => {
