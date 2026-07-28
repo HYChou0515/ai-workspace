@@ -215,6 +215,12 @@ def register_item_routes(
         rm = spec.get_resource_manager(model)
         with rm.using(created_by):
             rm.update(item_id, msgspec.structs.replace(item, permission=new_perm))
+        # The access gate holds an item's permission facts for a few seconds so
+        # every request of a user action doesn't re-derive them. A revocation is
+        # the one change that must not wait: drop it here so the very next
+        # request re-reads. (The window bounds every OTHER path's staleness, so
+        # this is about latency of intent, not correctness.)
+        locator.forget_access(item_id)
         # #306 PR3: the item's read-visibility is denormalized onto its chats so the
         # Conversation auto-CRUD (which the item scope never covers) inherits the
         # change. Re-push ONLY when the fields the chat scope reads (visibility /
