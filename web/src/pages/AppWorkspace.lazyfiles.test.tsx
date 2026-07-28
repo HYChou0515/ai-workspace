@@ -11,13 +11,13 @@ import { AppWorkspace } from "./AppWorkspace";
 // item actually hits the file endpoints — the coupling we're removing. The
 // file-tree fetch is what warms the sandbox on the backend, so a chat-first
 // item must open without touching it.
-const listFiles = vi.fn((..._a: unknown[]) => Promise.resolve([] as unknown[]));
-const listDirs = vi.fn((..._a: unknown[]) => Promise.resolve([] as unknown[]));
+// One endpoint now: files and folders come from a single workspace traversal,
+// so "did opening the item touch the file endpoints" is one spy, not two.
+const getTree = vi.fn((..._a: unknown[]) =>
+  Promise.resolve({ files: [] as unknown[], dirs: [] as unknown[] }),
+);
 vi.mock("../api", () => ({
-  api: {
-    listFiles: (...a: unknown[]) => listFiles(...a),
-    listDirs: (...a: unknown[]) => listDirs(...a),
-  },
+  api: { getTree: (...a: unknown[]) => getTree(...a) },
 }));
 
 const manifestRef: { current: Record<string, unknown> } = { current: {} };
@@ -56,8 +56,7 @@ function renderWorkspace() {
 afterEach(() => {
   cleanup();
   localStorage.clear();
-  listFiles.mockClear();
-  listDirs.mockClear();
+  getTree.mockClear();
 });
 
 describe("AppWorkspace — file loading is decoupled from opening the chat", () => {
@@ -65,14 +64,13 @@ describe("AppWorkspace — file loading is decoupled from opening the chat", () 
     manifestRef.current = manifest("chat");
     renderWorkspace();
     expect(await screen.findByTestId("shell")).toBeInTheDocument();
-    expect(listFiles).not.toHaveBeenCalled();
-    expect(listDirs).not.toHaveBeenCalled();
+    expect(getTree).not.toHaveBeenCalled();
   });
 
   it("still fetches files for an IDE-first item (its editor opens on entry)", async () => {
     manifestRef.current = manifest("ide");
     renderWorkspace();
-    await waitFor(() => expect(listFiles).toHaveBeenCalled());
+    await waitFor(() => expect(getTree).toHaveBeenCalled());
   });
 
   it("ignores a persisted expanded-IDE value — a new tab opens with the workspace tucked", async () => {
@@ -80,6 +78,6 @@ describe("AppWorkspace — file loading is decoupled from opening the chat", () 
     localStorage.setItem("layout:ide-collapsed:rca", "false"); // a prior session left it expanded
     renderWorkspace();
     expect(await screen.findByTestId("shell")).toBeInTheDocument();
-    expect(listFiles).not.toHaveBeenCalled(); // still collapsed → no file fetch, no warm
+    expect(getTree).not.toHaveBeenCalled(); // still collapsed → no file fetch, no warm
   });
 });

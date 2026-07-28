@@ -73,6 +73,16 @@ class _FileEntry(BaseModel):
     read_only: bool
 
 
+class _WorkspaceTree(BaseModel):
+    """The file tree in one response (#657 perf). The two halves used to be two
+    endpoints that each walked the whole workspace, though nothing ever wanted
+    one without the other. `dirs` carries the EMPTY directories too, which no
+    file path implies — the only thing the second call ever added."""
+
+    files: list[_FileEntry]
+    dirs: list[str]
+
+
 class _ItemSkillState(BaseModel):
     """One available skill's per-item state in the skills picker (#380), the skill
     sibling of ``ItemToolState``. ``source`` is where it comes from (``shared`` /

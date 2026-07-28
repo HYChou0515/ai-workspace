@@ -138,6 +138,16 @@ def _split_level(entries: list[str], prefix: str) -> tuple[list[str], list[str]]
     return sorted(files), sorted(dirs)
 
 
+def _dirs_of(paths) -> list[str]:
+    """Every ancestor directory implied by a set of file paths, sorted."""
+    dirs: set[str] = set()
+    for path in paths:
+        parts = path.strip("/").split("/")
+        for i in range(1, len(parts)):
+            dirs.add("/" + "/".join(parts[:i]))
+    return sorted(dirs)
+
+
 class WorkspaceFiles:
     def __init__(
         self,
@@ -734,6 +744,9 @@ class WorkspaceFiles:
         if warm is not None:
             sb, h = warm
             return [(e.path, e.size) for e in await sb.walk(h, prefix or "/")]
+        return await self._stat_all_cold(workspace_id, prefix)
+
+    async def _stat_all_cold(self, workspace_id: str, prefix: str) -> list[tuple[str, int]]:
         batch = getattr(self._fs, "stat_all", None)
         if batch is not None:
             return await batch(workspace_id, prefix)
@@ -771,6 +784,30 @@ class WorkspaceFiles:
             base = path.rstrip("/") + "/"
             return any(e.path.startswith(base) for e in await sb.walk(h, "/"))
         return await self._fs.is_dir(workspace_id, path)
+
+    async def tree(
+        self, workspace_id: str, prefix: str = ""
+    ) -> tuple[list[tuple[str, int]], list[str]]:
+        """Files (with sizes) and directories from ONE traversal.
+
+        `stat_all` and `listdir` each walked the whole workspace, and the file
+        tree needs both, so drawing it stat-ed every file twice to answer two
+        halves of one question. Warm, that traversal crosses the network behind a
+        liveness probe; cold it is a durable listing. Either way, asking once and
+        splitting the result costs nothing extra.
+
+        Directories are derived from the file paths PLUS whatever the store
+        reports separately, because an empty directory appears in no file path —
+        that is the only thing the second call ever contributed."""
+        prefix = abs_path(prefix) if prefix else prefix
+        warm = await self._warm(workspace_id)
+        if warm is not None:
+            sb, h = warm
+            entries = await sb.walk(h, prefix or "/")
+            files = [(e.path, e.size) for e in entries]
+            return files, _dirs_of(p for p, _ in files)
+        files = await self._stat_all_cold(workspace_id, prefix)
+        return files, await self._fs.listdir(workspace_id, prefix)
 
     async def listdir(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = abs_path(prefix) if prefix else prefix

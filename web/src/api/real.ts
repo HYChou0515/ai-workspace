@@ -453,17 +453,15 @@ export const realApi: ApiClient = {
   },
 
   async listDirs(slug: string, investigationId: string) {
-    try {
-      return await json<string[]>(
-        await apiFetch(`/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/dirs`),
-      );
-    } catch (err) {
-      // BE older than the dirs endpoint — degrade to inferred-only dirs.
-      if (err instanceof HttpError && (err.status === 404 || err.status === 405)) return [];
-      throw err;
-    }
+    return (await this.getTree(slug, investigationId)).dirs;
   },
-
+  async getTree(slug: string, investigationId: string) {
+    return await json<{ files: FileInfo[]; dirs: string[] }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/tree`,
+      ),
+    );
+  },
   async moveFile(slug: string, investigationId: string, from: string, to: string) {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/move`,
