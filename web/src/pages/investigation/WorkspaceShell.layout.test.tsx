@@ -176,3 +176,25 @@ describe("TopBar Workspace toggle (#159)", () => {
     );
   });
 });
+
+describe("TopBar item title stays on one line (#fe-responsive)", () => {
+  // Measured in a real browser at 1024x768 with a long title: the title wrapped
+  // to three lines inside a bar whose height is pinned to 52px on wide
+  // viewports, and `page-item` (overflow: hidden) sliced the extra lines off —
+  // the first line vanished above the bar and the last below it, leaving the
+  // middle fragment overlapping the row's controls. A fixed-height bar has to
+  // ellipsize, not wrap.
+  it("ellipsizes on one line instead of wrapping out of the fixed-height bar", () => {
+    renderTopBar({ workspace: true });
+    const title = screen.getByTestId("topbar-title") as HTMLElement;
+    expect(title.style.whiteSpace).toBe("nowrap");
+    expect(title.style.overflow).toBe("hidden");
+    expect(title.style.textOverflow).toBe("ellipsis");
+    expect(title.style.minWidth).toBe("0");
+  });
+
+  it("keeps the full title reachable as a tooltip once it ellipsizes", () => {
+    renderTopBar({ workspace: true });
+    expect(screen.getByTestId("topbar-title")).toHaveAttribute("title", "Oven drift");
+  });
+});

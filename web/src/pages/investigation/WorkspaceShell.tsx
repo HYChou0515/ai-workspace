@@ -790,7 +790,23 @@ export function TopBar({
             the page-local header; the global bar owns Home › App › item (#158). */}
         <ItemCrumbChips item={item} manifest={manifest} />
         <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
-        <span style={{ color: "var(--text-paper)", fontWeight: 600 }}>
+        {/* One line, always. The bar's height is pinned to 52px on wide
+            viewports, and `page-item` clips overflow with no scrollbar — so a
+            title long enough to wrap used to have its first and last lines
+            sliced off, leaving a middle fragment sitting over the row's
+            controls. Ellipsize instead, and keep the full text in a tooltip. */}
+        <span
+          data-testid="topbar-title"
+          title={item.title}
+          style={{
+            color: "var(--text-paper)",
+            fontWeight: 600,
+            minWidth: 0,
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+            textOverflow: "ellipsis",
+          }}
+        >
           {item.title}
         </span>
         {/* Domain fields (severity/status) are manifest/layout-driven + inline-
