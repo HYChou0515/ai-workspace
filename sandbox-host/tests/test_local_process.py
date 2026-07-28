@@ -678,6 +678,25 @@ async def test_a_plain_exec_gets_home_off_the_synced_workspace(tmp_path):
     assert home.is_dir()
 
 
+async def test_an_exec_rebuilds_a_home_the_sandbox_never_got(tmp_path):
+    """`.home` is made by `create` but USED by every exec, and a live sandbox
+    never goes back through `create` — the app re-acquires only when its liveness
+    probe says the sandbox is GONE. So one that predates this dir, or that an
+    older image of this service built, runs for the rest of its life without it
+    while every exec still points HOME there, and `soffice` aborts "User
+    installation could not be completed" against a HOME that isn't a directory
+    at all. Guaranteed at the point of use instead. Mirrors the app-side change."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec())
+    home = sb._require(h) / ".home"
+    home.rmdir()  # the state every sandbox built before the dir existed is in
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert Path(env["HOME"]) == home
+    assert home.is_dir()
+
+
 async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback(tmp_path):
     """A carrier provisioned AFTER the first exec (the `provision_tools` path)
     must be picked up: the per-exec shim re-points `python` from the

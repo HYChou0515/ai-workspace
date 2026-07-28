@@ -339,6 +339,23 @@ class LocalProcessSandbox:
         marker = self._require(handle) / _READY_MARKER
         return await asyncio.to_thread(marker.is_file)
 
+    def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
+        """The per-sandbox `$HOME` (#393/#600), guaranteed where it is USED.
+
+        `create` makes this dir, but a live sandbox never goes back through
+        `create` — the app re-acquires only when its liveness probe reports the
+        sandbox GONE. So one that predates the dir, or that an older image of
+        this service built, runs for the rest of its life without it while every
+        exec below points HOME at it regardless; `soffice` then aborts "User
+        installation could not be completed" against a HOME that is not a
+        directory at all. The jail bootstrap has always `mkdir -p`'d it per exec;
+        this is the unjailed path — the one production runs — catching up.
+
+        `IsolatedProcessSandbox` extends this to own the dir to the sandbox uid."""
+        home = root / _HOME
+        home.mkdir(exist_ok=True)
+        return home
+
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
     ) -> tuple[list[str], Path, dict[str, str]]:
@@ -348,6 +365,7 @@ class LocalProcessSandbox:
         stays shared. Validates the handle (raises `SandboxNotFound`)."""
         root = self._require(handle)
         ws = root / _WORKSPACE
+        self._ensure_home(handle, root)
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         if self._isolate:
             # chroot onto the sandbox root; the bootstrap cds into /root + sets
