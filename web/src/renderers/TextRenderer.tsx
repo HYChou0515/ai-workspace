@@ -6,11 +6,12 @@
 
 import { MonacoEditor, monacoLanguage } from "../components/MonacoEditor";
 import { useFileBuffer } from "../hooks/fileBuffer";
+import { relPath } from "../lib/relPath";
 
 export function TextRenderer({ path }: { path: string }) {
   const { entry, setText, readOnly } = useFileBuffer(path);
 
-  if (entry.status === "loading") return <Status>Loading {path}…</Status>;
+  if (entry.status === "loading") return <Status>Loading {relPath(path)}…</Status>;
   if (entry.status === "error") {
     return <Status tone="err">{entry.error ?? "load failed"}</Status>;
   }

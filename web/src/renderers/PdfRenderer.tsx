@@ -11,6 +11,7 @@ import { encodeText } from "../api/encoding";
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { TextRenderer } from "./TextRenderer";
+import { relPath } from "../lib/relPath";
 
 export function PdfRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
@@ -29,11 +30,11 @@ export function PdfRenderer({ path }: { path: string }) {
 
   if (editing) return <TextRenderer path={path} />;
   if (entry.status === "loading" || !url) {
-    return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
+    return <div style={{ color: "var(--text-paper-d)" }}>Loading {relPath(path)}…</div>;
   }
   return (
     <iframe
-      title={path}
+      title={relPath(path)}
       src={url}
       style={{ width: "100%", height: "100%", minHeight: 0, border: 0, background: "#fff" }}
     />

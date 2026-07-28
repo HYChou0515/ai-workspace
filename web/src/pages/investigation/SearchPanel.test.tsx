@@ -56,7 +56,7 @@ describe("<SearchPanel />", () => {
       <SearchPanel investigationId="inv1" onOpenFile={onOpenFile} client={stubClient(SAMPLE)} />,
     );
     await user.type(screen.getByPlaceholderText(/search/i), "void");
-    const row = await screen.findByTitle("/a.md:1:1");
+    const row = await screen.findByTitle("a.md:1:1");
     await user.click(row);
     expect(onOpenFile).toHaveBeenCalledWith("/a.md", expect.anything());
   });
@@ -127,5 +127,23 @@ describe("<SearchPanel />", () => {
       const lastCall = client.searchFiles.mock.calls.at(-1);
       expect(lastCall?.[3]).toMatchObject({ include: "*.md", exclude: "data/**" });
     });
+  });
+});
+
+describe("<SearchPanel /> path dialect (#549)", () => {
+  /** The panel already dims the folder with `dirname()`, which strips the leading
+   * slash — so the hover labels were the only place it still spoke the rooted
+   * dialect, in the same row. One file, one form. */
+  it("labels a file and its match lines with the workspace-relative path", async () => {
+    const user = userEvent.setup();
+    render(
+      <SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={stubClient(SAMPLE)} />,
+    );
+    await user.type(screen.getByPlaceholderText(/search/i), "void");
+
+    expect(await screen.findByTitle("data/x.csv")).toBeInTheDocument();
+    expect(screen.getByTitle("a.md:1:1")).toBeInTheDocument();
+    expect(screen.queryByTitle("/data/x.csv")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("/a.md:1:1")).not.toBeInTheDocument();
   });
 });

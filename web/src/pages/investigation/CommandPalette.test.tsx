@@ -29,7 +29,7 @@ describe("CommandPalette — fuzzy file matching", () => {
     const { input } = open(files);
     fireEvent.change(input, { target: { value: "wafmap" } }); // not a substring of any path
     const out = rows();
-    expect(out.some((r) => r.includes("/docs/wafer_map.csv"))).toBe(true);
+    expect(out.some((r) => r.includes("docs/wafer_map.csv"))).toBe(true);
     expect(out.some((r) => r.includes("readme"))).toBe(false);
   });
 
@@ -37,7 +37,7 @@ describe("CommandPalette — fuzzy file matching", () => {
     const { input } = open(files);
     fireEvent.change(input, { target: { value: "map" } });
     const out = rows();
-    expect(out[0]).toContain("/map.csv");
+    expect(out[0]).toContain("map.csv");
     expect(out[0]).not.toContain("wafer");
   });
 
@@ -46,6 +46,22 @@ describe("CommandPalette — fuzzy file matching", () => {
   it("matches a typed / against the U+2215 slash look-alike in a path", () => {
     const { input } = open([{ path: "col-1∕me∕guide.md", size: 1 }]);
     fireEvent.change(input, { target: { value: "me/guide" } });
+    expect(rows().length).toBe(1);
+  });
+});
+
+describe("CommandPalette — path dialect (#549)", () => {
+  it("shows each hit at its workspace-relative path, not the store's rooted key", () => {
+    const { input } = open(files);
+    fireEvent.change(input, { target: { value: "wafer" } });
+    const out = rows();
+    expect(out.some((r) => r.includes("docs/wafer_map.csv"))).toBe(true);
+    expect(out.some((r) => r.includes("/docs/wafer_map.csv"))).toBe(false);
+  });
+
+  it("still matches what the user types against the rooted key, so a typed / works", () => {
+    const { input } = open(files);
+    fireEvent.change(input, { target: { value: "/docs" } });
     expect(rows().length).toBe(1);
   });
 });

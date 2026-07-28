@@ -52,4 +52,15 @@ describe("SteerConfirmCard", () => {
     expect(screen.queryByTestId("wf-steer-edits")).not.toBeInTheDocument();
     expect(screen.getByTestId("wf-steer-invalidate")).toBeInTheDocument();
   });
+
+  /** The steerer's plan is model-authored text, so nothing stops it from naming
+   * the file `/collections.json` even though the file listing it was given is
+   * relative. The card is what the user reads before approving, and it names the
+   * same file the rest of the UI does (#549). */
+  it("shows an input edit relatively even when the plan came back rooted", () => {
+    const rooted: SteerPlan = { ...PLAN, input_edits: [{ path: "/collections.json", content: "[]" }] };
+    render(<SteerConfirmCard plan={rooted} onConfirm={vi.fn()} />);
+    expect(screen.getByText("collections.json")).toBeInTheDocument();
+    expect(screen.queryByText("/collections.json")).not.toBeInTheDocument();
+  });
 });

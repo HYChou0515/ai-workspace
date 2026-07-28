@@ -30,8 +30,9 @@ describe("KbWikiIde (#D editable wiki)", () => {
     _seedWikiMock("c1", { "/index.md": "# Wiki\n", "/entities/reflow.md": "# Reflow\n" });
     renderWithQuery(<KbWikiIde collectionId="c1" client={mockKbApi} />);
 
-    // the file tree shows the page + its folder …
-    expect(await screen.findByText("index.md")).toBeInTheDocument();
+    // the file tree shows the page + its folder … (the auto-opened page also
+    // names itself in the header crumb, so the name appears more than once)
+    expect(await screen.findAllByText("index.md")).not.toHaveLength(0);
     expect(screen.getByText("entities")).toBeInTheDocument();
     // … editing affordances are present (create) …
     expect(screen.getByTitle(/new file/i)).toBeInTheDocument();
@@ -64,6 +65,20 @@ describe("KbWikiIde (#D editable wiki)", () => {
     );
     // the page named by the URL opens directly, not the index fallback
     expect(await screen.findByText(/Zone 3 at 245C/)).toBeInTheDocument();
+  });
+
+  /** The wiki's page keys are rooted (`/entities/reflow.md`) the same way the
+   * workspace store's are, and the header crumb printed the key verbatim. The
+   * agent that maintains this wiki is shown relative paths (`rel_path`, #549), so
+   * a page the user quotes back from this bar has to be the same string. */
+  it("names the open page relatively in the header crumb", async () => {
+    _seedWikiMock("c5", { "/entities/reflow.md": "# Reflow\n" });
+    renderWithQuery(
+      <KbWikiIde collectionId="c5" client={mockKbApi} />,
+      "/kb/collections/c5/wiki/entities/reflow.md",
+    );
+    expect(await screen.findByText("entities/reflow.md")).toBeInTheDocument();
+    expect(screen.queryByText("/entities/reflow.md")).not.toBeInTheDocument();
   });
 
   it("creates a new page in a folder via the tree (write, no upload route)", async () => {

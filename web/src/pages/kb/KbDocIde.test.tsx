@@ -128,6 +128,18 @@ describe("KbDocIde", () => {
     expect(screen.getByText(/select a document/i)).toBeInTheDocument();
   });
 
+  /** The doc IDE's crumb and status bar are read next to the workspace's own file
+   * tree, and the KB agent is shown relative paths (#549) — so both name a doc the
+   * same way the rest of the product does. */
+  it("names the open document relatively in the crumb and the status bar", async () => {
+    renderWithQuery(
+      <KbDocIde collectionId="c1" client={stubClient([doc({ path: "/notes/a.md" })])} />,
+      "/kb/collections/c1/documents/notes/a.md",
+    );
+    expect(await screen.findAllByText("notes/a.md")).not.toHaveLength(0);
+    expect(screen.queryByText("/notes/a.md")).not.toBeInTheDocument();
+  });
+
   it("hides attachments from the path tree (#513 P8)", async () => {
     // An attachment (parent_doc_id set) lives under the reserved `.att/`
     // namespace; it must NOT appear in the file tree — it's shown as a card
@@ -348,7 +360,7 @@ describe("KbDocIde", () => {
     );
     await user.click(await screen.findByText("hello.md"));
     const bar = await screen.findByTestId("kb-ide-status");
-    expect(bar).toHaveTextContent("/hello.md");
+    expect(bar).toHaveTextContent("hello.md");
     expect(bar).toHaveTextContent("就緒"); // #171: "ready" → 就緒
     expect(bar).toHaveTextContent("4 chunks");
     expect(bar).toHaveTextContent("cited 2×");
@@ -589,7 +601,7 @@ describe("KbDocIde", () => {
     // the doc opens straight from the URL (its bytes render + the status bar
     // shows the decoded canonical path)
     expect(await screen.findByRole("heading", { name: "Hello KB" })).toBeInTheDocument();
-    expect(await screen.findByTestId("kb-ide-status")).toHaveTextContent("/a dir/b.md");
+    expect(await screen.findByTestId("kb-ide-status")).toHaveTextContent("a dir/b.md");
   });
 
   // #308 — per-doc read override dialog, opened from the editor header.
@@ -650,7 +662,7 @@ describe("KbDocIde", () => {
   it("#308 hides the Permissions action from a non-owner", async () => {
     await openDoc("someone-else");
     // the editor header renders (the doc opened) but no Permissions button
-    expect(await screen.findByTestId("kb-ide-status")).toHaveTextContent("/notes.md");
+    expect(await screen.findByTestId("kb-ide-status")).toHaveTextContent("notes.md");
     expect(screen.queryByTestId("doc-permissions")).not.toBeInTheDocument();
   });
 
