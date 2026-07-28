@@ -1079,6 +1079,24 @@ export const messages = {
     "zh-TW": "選擇這個工作區的助理能用哪些工具",
     en: "Choose which tools the assistant can use in this workspace",
   },
+  "env.button": { "zh-TW": "環境變數", en: "Env" },
+  "env.title": { "zh-TW": "工具用的環境變數", en: "Environment variables for tools" },
+  "env.desc": {
+    "zh-TW":
+      "這些變數會交給這個工作區的工具使用,常見用途是 API 金鑰。只影響這個工作區。",
+    en: "Handed to the tools this workspace runs — API keys and the like. This workspace only.",
+  },
+  "env.name": { "zh-TW": "名稱", en: "Name" },
+  "env.value": { "zh-TW": "值", en: "Value" },
+  "env.add": { "zh-TW": "新增變數", en: "Add variable" },
+  "env.delete": { "zh-TW": "刪除 {name}", en: "Delete {name}" },
+  "env.empty": { "zh-TW": "還沒有設定任何變數。", en: "No variables set yet." },
+  "env.duplicate": {
+    "zh-TW": "「{name}」重複了。同一個名稱只能有一個值。",
+    en: "“{name}” appears twice. A name can only have one value.",
+  },
+  "env.save": { "zh-TW": "儲存", en: "Save" },
+  "env.cancel": { "zh-TW": "取消", en: "Cancel" },
   "tools.title": { "zh-TW": "助理可用的工具", en: "Tools the assistant can use" },
   "tools.desc": {
     "zh-TW": "預設沿用範本設定。把任一工具改成「開啟」或「關閉」只會影響這個工作區；其餘維持「預設」會跟著範本變動。",
