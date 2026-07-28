@@ -5,7 +5,7 @@ skeleton's `{{arg}}` placeholders rendered as widgets — a field with no `{{arg
 from __future__ import annotations
 
 from workspace_app.entity.catalog import EntityType
-from workspace_app.entity.forms import form_spec
+from workspace_app.entity.forms import FormField, form_spec
 from workspace_app.entity.schema import EntitySchema, FieldSpec, Role
 
 
@@ -74,3 +74,17 @@ def test_duplicate_arg_placeholder_is_deduped() -> None:
     )
 
     assert [f.name for f in form_spec(entity_type)] == ["x"]
+
+
+def test_number_role_authors_as_a_number_box() -> None:
+    """A plain quantity — "how many days will this take" — has no home in the
+    vocabulary otherwise: `progress` is a percent and `rank` is drag order, so
+    a duration would have had to masquerade as text and lose arithmetic."""
+    schema = EntitySchema(fields=[FieldSpec(name="exp_days", role=Role.NUMBER)])
+    entity_type = EntityType(
+        name="issue",
+        records_path="issues",
+        schema=schema,
+        skeleton="---\nexp_days: {{arg.exp_days?}}\n---\n",
+    )
+    assert form_spec(entity_type) == [FormField(name="exp_days", widget="number", required=False)]

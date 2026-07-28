@@ -15,9 +15,11 @@
  *   - the raw byte-edit escape hatch (the tab-strip Edit toggle).
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
+import type { EntityInstance, EntityType } from "../../api/entities";
 import { useFileService } from "../../api/fileService";
+import type { User } from "../../api/types";
 import { useEditMode } from "../../hooks/editMode";
 import { useEntities, useEntityCatalog, useReferencedRecords } from "../../hooks/useEntities";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
@@ -27,7 +29,8 @@ import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { pxToRem } from "../../lib/pxToRem";
 import { MarkdownRenderer } from "../MarkdownRenderer";
 import { EntityFileEditor } from "./EntityFileEditor";
-import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
+import { EntityRecordView } from "./EntityRecordView";
+import { buildRefIndex, type RefOption, referencedTypes, refOptionsForField } from "./refTraversal";
 
 /** `{records_path}/{N}.md` → its folder + number, or null if the basename isn't a
  * bare integer `.md`. The folder is normalised (no leading slash) to compare with
@@ -116,14 +119,16 @@ export function RecordFileRenderer({ path }: { path: string }) {
           </button>
         </div>
       )}
-      <EntityFileEditor
+      <RecordPane
         // The whole IDE mounts ONE <FileView>, so switching tabs only swaps the
-        // `path` prop and this editor is reused in place. Its form seeds from
-        // `record` via useState (run once on mount), so without a per-record key
-        // the reused instance keeps the previous record's field values — opening
-        // issues/2.md after editing issues/1.md showed #1's title/date. Key it to
-        // the path so a different record file remounts + re-seeds the form.
+        // `path` prop and this pane is reused in place. Both the form (seeded
+        // from `record` via useState, run once on mount) and the view/edit mode
+        // would otherwise follow you across tabs — opening issues/2.md after
+        // editing issues/1.md showed #1's title/date, and #1's edit mode. Key it
+        // to the path so a different record file remounts, re-seeds, and opens
+        // in its own reading state.
         key={path}
+        path={path}
         type={type}
         record={record}
         users={users}
@@ -133,5 +138,61 @@ export function RecordFileRenderer({ path }: { path: string }) {
         onSave={(patch, body) => write.save(record.number, patch, body)}
       />
     </div>
+  );
+}
+
+/** The two states of a record file: read it, or edit it. Split from the
+ * container so the mode is keyed to the path along with the form's seed — see
+ * the key comment above. (The third state, the tab strip's raw whole-file
+ * toggle, is handled by the container and outranks both.) */
+function RecordPane({
+  path,
+  type,
+  record,
+  users,
+  canWrite,
+  busy,
+  refOptionsFor,
+  onSave,
+}: {
+  path: string;
+  type: EntityType;
+  record: EntityInstance;
+  users?: User[];
+  canWrite?: boolean;
+  busy?: boolean;
+  refOptionsFor?: (name: string) => RefOption[] | undefined;
+  onSave: (patch: Record<string, unknown>, body: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  if (!editing) {
+    return (
+      <EntityRecordView
+        type={type}
+        record={record}
+        users={users}
+        path={path}
+        canWrite={canWrite}
+        refOptionsFor={refOptionsFor}
+        onEdit={() => setEditing(true)}
+      />
+    );
+  }
+  return (
+    <EntityFileEditor
+      type={type}
+      record={record}
+      users={users}
+      canWrite={canWrite}
+      busy={busy}
+      refOptionsFor={refOptionsFor}
+      onSave={(patch, body) => {
+        onSave(patch, body);
+        // Back to reading — the write is optimistic, so the view shows the new
+        // values immediately, and a 409 arrives as the banner above it.
+        setEditing(false);
+      }}
+      onCancel={() => setEditing(false)}
+    />
   );
 }

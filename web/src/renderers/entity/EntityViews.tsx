@@ -54,7 +54,24 @@ export function QuickCreate({
 
   if (!open) {
     return (
-      <button type="button" className="btn" data-variant="secondary" data-size="sm" onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className="btn"
+        data-variant="secondary"
+        data-size="sm"
+        onClick={() => {
+          // A new record starts TODAY, with its end left open. Nothing else can
+          // be a better guess, an empty range is the one value that puts the
+          // record nowhere at all, and the date is visible in the form, so it
+          // is a default you can see and change rather than one applied behind
+          // your back.
+          const today = new Date().toISOString().slice(0, 10);
+          const seed: Record<string, string> = {};
+          for (const f of form) if (f.widget === "daterange") seed[f.name] = `${today}/`;
+          setDraft(seed);
+          setOpen(true);
+        }}
+      >
         + New
       </button>
     );

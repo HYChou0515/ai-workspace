@@ -10,6 +10,11 @@ import { buildRefIndex } from "./refTraversal";
 import type { EntityViewProps } from "./types";
 
 afterEach(cleanup);
+// A stubbed ResizeObserver must be torn down even when the test that installed
+// it FAILS — an inline unstub is skipped by the throwing assertion, and the fake
+// then leaks into every later test (they suddenly see a measured pane), turning
+// one real failure into a cascade of false ones.
+afterEach(() => vi.unstubAllGlobals());
 
 const type: EntityType = {
   name: "issue",
@@ -176,12 +181,32 @@ describe("GanttView", () => {
       disconnect() {}
     }
     vi.stubGlobal("ResizeObserver", FakeRO);
-    // an 11-day project (daysBetween 10) in a 900px pane (750 after the gutter)
-    // auto-fits toward the pane: the ideal ~68px/day is capped at the extended
-    // max zoom (56px/day, past the `day` anchor), so the 10-day bar is 560px.
+    // an 11-day project (both ends counted) in a 900px pane (750 after the
+    // gutter) auto-fits toward the pane: the ideal ~68px/day is capped at the
+    // extended max zoom (56px/day, past the `day` anchor), so the bar covering
+    // all 11 days is 616px.
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-15" })] })} />);
-    expect(screen.getByTestId("bar-1").style.width).toBe("560px");
-    vi.unstubAllGlobals();
+    expect(screen.getByTestId("bar-1").style.width).toBe("616px");
+  });
+
+  it("colours the end date: an inclusive Mon→Wed span is three days wide", () => {
+    // A `daterange` includes both ends — 7/13–7/15 is a three-day task — and the
+    // chart width already counts it that way. A bar that stopped at the START of
+    // its end date left that day blank, so the range looked a day short.
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-07-13/2026-07-15" })] })} />);
+    expect(screen.getByTestId("bar-1").style.width).toBe(`${3 * pxPerDay("week")}px`);
+  });
+
+  it("draws a single-day span one day wide, not a clamped minimum", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-07-16/2026-07-16" })] })} />);
+    expect(screen.getByTestId("bar-1").style.width).toBe(`${pxPerDay("week")}px`);
+  });
+
+  it("with skip_weekends, the last WORKING day is coloured too", () => {
+    const spec = { view: "gantt" as const, entity: "issue", span: "span", label: "title", skip_weekends: true };
+    // Mon 07-20 → Fri 07-24 = five working days, both ends included.
+    render(<GanttView {...props({ spec, entities: [rec(1, { title: "A", span: "2026-07-20/2026-07-24" })] })} />);
+    expect(screen.getByTestId("bar-1").style.width).toBe(`${5 * pxPerDay("week")}px`);
   });
 
   it("labels the axis with custom week codes when the view carries a week rule", () => {
@@ -202,17 +227,159 @@ describe("GanttView", () => {
     const base = { view: "gantt" as const, entity: "issue", span: "span", label: "title" };
     const ent = [rec(1, { title: "A", span: "2026-07-03/2026-07-13" })]; // Fri → Mon, over a weekend
     const r1 = render(<GanttView {...props({ spec: base, entities: ent })} />);
-    const calWidth = screen.getByTestId("bar-1").style.width; // 10 calendar days @ 10px = 100px
+    const calWidth = screen.getByTestId("bar-1").style.width; // 11 calendar days @ 10px = 110px
     r1.unmount();
     render(<GanttView {...props({ spec: { ...base, skip_weekends: true }, entities: ent })} />);
-    const wdWidth = screen.getByTestId("bar-1").style.width; // 6 working days @ 10px = 60px
+    const wdWidth = screen.getByTestId("bar-1").style.width; // 7 working days @ 10px = 70px
     expect(Number.parseInt(wdWidth, 10)).toBeLessThan(Number.parseInt(calWidth, 10));
-    expect(calWidth).toBe("100px");
-    expect(wdWidth).toBe("60px");
+    expect(calWidth).toBe("110px");
+    expect(wdWidth).toBe("70px");
   });
 
   it("marks today when it falls within the chart range", () => {
     render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2020-01-01/2035-01-01" })] })} />);
     expect(screen.getByTestId("gantt-today")).toBeInTheDocument();
+  });
+
+  it("offers Recalculate only when the view says which fields carry the schedule", () => {
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-07-01/2026-07-02" })] })} />);
+    expect(screen.queryByRole("button", { name: "Recalculate" })).not.toBeInTheDocument();
+  });
+
+  it("lays the work out and writes the dates it worked out", () => {
+    const onPatch = vi.fn();
+    const onPatchAnchor = vi.fn();
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: {
+        span: "span",
+        duration: "exp_days",
+        unit: "exp_days_unit",
+        flag: "schedule",
+        anchor: "milestone",
+        assignee: "assignee",
+      },
+    };
+    const refIndex = buildRefIndex({
+      milestone: [
+        { number: 1, type_name: "milestone", fields: { title: "M1", span: "2026-07-01/" }, body: "", diagnostics: [] },
+      ],
+    });
+    render(
+      <GanttView
+        {...props({
+          spec,
+          refIndex,
+          onPatch,
+          onPatchAnchor,
+          entities: [
+            // No dates yet — the record most in need of being scheduled, and the
+            // one a chart that only reads dated rows would never see.
+            rec(1, { title: "A", assignee: "alice", exp_days: 3, milestone: 1, schedule: "auto" }),
+            rec(2, { title: "B", assignee: "alice", exp_days: 2, milestone: 1, schedule: "auto" }),
+          ],
+        })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Recalculate" }));
+    expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-07-01/2026-07-03" });
+    expect(onPatch).toHaveBeenCalledWith(2, { span: "2026-07-06/2026-07-07" });
+    // The milestone reaches across its issues.
+    expect(onPatchAnchor).toHaveBeenCalledWith(1, { span: "2026-07-01/2026-07-07" });
+    expect(screen.getByRole("status")).toHaveTextContent("Scheduled 2");
+  });
+
+  it("marks a bar whose length nobody chose, so a placeholder never reads as a plan", () => {
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({
+          spec,
+          entities: [
+            rec(1, { title: "estimated", span: "2026-07-01/2026-07-03", exp_days: 3 }),
+            rec(2, { title: "guessed", span: "2026-07-06/2026-07-06" }),
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByTestId("bar-1")).not.toHaveAttribute("data-provisional");
+    expect(screen.getByTestId("bar-2")).toHaveAttribute("data-provisional", "true");
+  });
+
+  it("dragging the right edge of an automatic bar changes its DURATION, not its dates", () => {
+    // Length is the scheduler's input, position its output. Writing a span here
+    // would be overwritten by the next run — and the point of dragging is that
+    // what you dragged survives it.
+    const onPatch = vi.fn();
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({ spec, onPatch, entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-07", exp_days: 3, schedule: "auto" })] })}
+      />,
+    );
+    const ppd = pxPerDay("week");
+    fireEvent.pointerDown(screen.getByTestId("bar-1-end"), { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: ppd * 2 });
+    fireEvent.pointerUp(window, { clientX: ppd * 2 });
+    expect(onPatch).toHaveBeenCalledWith(1, { exp_days: 5 });
+  });
+
+  it("dragging a MANUAL bar's right edge still writes dates — its length is its dates", () => {
+    const onPatch = vi.fn();
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({ spec, onPatch, entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-07", schedule: "manual" })] })}
+      />,
+    );
+    const ppd = pxPerDay("week");
+    fireEvent.pointerDown(screen.getByTestId("bar-1-end"), { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: ppd * 2 });
+    fireEvent.pointerUp(window, { clientX: ppd * 2 });
+    expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-05/2026-01-09" });
+  });
+
+  it("moving an automatic bar writes the dates and leaves the flag alone", () => {
+    // A gesture never flips a flag: your placement holds until the next run,
+    // and turning the schedule off stays something you say on purpose.
+    const onPatch = vi.fn();
+    const spec = {
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      schedule: { span: "span", duration: "exp_days", flag: "schedule" },
+    };
+    render(
+      <GanttView
+        {...props({ spec, onPatch, entities: [rec(1, { title: "A", span: "2026-01-05/2026-01-07", exp_days: 3, schedule: "auto" })] })}
+      />,
+    );
+    const ppd = pxPerDay("week");
+    fireEvent.pointerDown(screen.getByTestId("bar-1"), { clientX: 0 });
+    fireEvent.pointerMove(window, { clientX: ppd * 3 });
+    fireEvent.pointerUp(window, { clientX: ppd * 3 });
+    expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-08/2026-01-10" });
   });
 });

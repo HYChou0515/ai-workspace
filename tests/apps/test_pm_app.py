@@ -96,3 +96,41 @@ def test_date_and_daterange_fields_serialize_as_strings_for_the_frontend():
     ).json()
     assert created["fields"]["due"] == "2026-02-01"
     assert created["fields"]["span"] == "2026-01-01/2026-02-01"
+
+
+def test_a_new_issue_is_schedulable_out_of_the_box():
+    """The scheduler needs three things from an issue that the schema had no way
+    to say: how long the work takes, whether those days are working days, and
+    whether the system is allowed to move it. A new issue is `auto` from birth —
+    otherwise every issue has to be opted in by hand before the Timeline can lay
+    anything out at all."""
+    c = _client()
+    item = c.post("/api/a/pm/items", json={"title": "P"}).json()["resource_id"]
+    made = c.post(
+        f"/api/a/pm/items/{item}/entities/issue",
+        json={"args": {"title": "Cut the release", "exp_days": 3, "exp_days_unit": "working"}},
+    ).json()
+    assert made["fields"]["exp_days"] == 3
+    assert made["fields"]["exp_days_unit"] == "working"
+    assert made["fields"]["schedule"] == "auto"
+
+
+def test_a_new_milestone_is_auto_too_so_its_span_follows_its_issues():
+    c = _client()
+    item = c.post("/api/a/pm/items", json={"title": "P"}).json()["resource_id"]
+    made = c.post(
+        f"/api/a/pm/items/{item}/entities/milestone", json={"args": {"title": "M1"}}
+    ).json()
+    assert made["fields"]["schedule"] == "auto"
+
+
+def test_a_milestone_may_state_only_when_it_starts():
+    """Its start is the lower bound for its issues; its end is what the schedule
+    works out. A range that must be filled on both ends cannot say that."""
+    c = _client()
+    item = c.post("/api/a/pm/items", json={"title": "P"}).json()["resource_id"]
+    made = c.post(
+        f"/api/a/pm/items/{item}/entities/milestone",
+        json={"args": {"title": "M1", "span": "2026-07-01/"}},
+    ).json()
+    assert made["fields"]["span"] == "2026-07-01/"

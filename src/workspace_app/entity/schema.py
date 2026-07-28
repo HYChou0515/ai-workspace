@@ -25,6 +25,7 @@ class Role(StrEnum):
     ACTOR = "actor"
     DATE = "date"
     DATERANGE = "daterange"
+    NUMBER = "number"
     PROGRESS = "progress"
     RANK = "rank"
     # Relational roles — resolved at render time from other records.
