@@ -13,6 +13,8 @@ import { useFileService } from "../api/fileService";
 import { MonacoEditor } from "../components/MonacoEditor";
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
+import { MarpDeck } from "./marp/MarpDeck";
+import { isMarpDoc } from "./marp/marpDeck";
 
 export function MarkdownRenderer({ path }: { path: string }) {
   // Content + edits live in the shared per-path buffer, so this file
@@ -35,11 +37,21 @@ export function MarkdownRenderer({ path }: { path: string }) {
 
   // Editing fills the pane (Monaco scrolls internally); preview flows and
   // the pane scrolls. The path lives in the breadcrumb, not here.
-  return editing ? (
-    <div style={{ height: "100%", minHeight: 0 }}>
-      <MonacoEditor value={text} onChange={setText} language="markdown" readOnly={readOnly} minHeight={0} />
-    </div>
-  ) : (
+  if (editing) {
+    return (
+      <div style={{ height: "100%", minHeight: 0 }}>
+        <MonacoEditor value={text} onChange={setText} language="markdown" readOnly={readOnly} minHeight={0} />
+      </div>
+    );
+  }
+
+  // A Marp deck (frontmatter `marp: true`) renders as slides, not prose;
+  // its workspace-relative images resolve through the same file API.
+  if (isMarpDoc(text)) {
+    return <MarpDeck text={text} resolveAsset={(src) => svc.fileUrl(src, path)} />;
+  }
+
+  return (
     <article className="md-body">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}

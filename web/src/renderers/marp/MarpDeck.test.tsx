@@ -12,8 +12,10 @@ afterEach(cleanup);
 // engine — the wiring under test is rewrite → sanitize → shadow-root inject.
 const fakeRender = () => ({
   html:
-    `<div id="marp-1" class="marpit-slide"><section><h1>One</h1><img src="./pic.png"></section></div>` +
-    `<div id="marp-2" class="marpit-slide"><section><h1>Two</h1><img src="https://cdn.example/x.png"></section></div>`,
+    `<div class="marpit">` +
+    `<section id="1"><h1>One</h1><img src="./pic.png"></section>` +
+    `<section id="2"><h1>Two</h1><img src="https://cdn.example/x.png"></section>` +
+    `</div>`,
   css: `section{width:1280px}.marp-test-marker{color:red}`,
 });
 const resolveAsset = (src: string) => `/api/files?p=${src}`;
@@ -29,6 +31,13 @@ describe("MarpDeck", () => {
       <MarpDeck text="---\nmarp: true\n---\n# One\n\n---\n\n# Two" resolveAsset={resolveAsset} render={fakeRender} />,
     );
     expect(shadowOf(container).querySelectorAll("section")).toHaveLength(2);
+  });
+
+  it("wraps each slide in a fit box so it can scale to the pane width", () => {
+    const { container } = render(<MarpDeck text="" resolveAsset={resolveAsset} render={fakeRender} />);
+    const shadow = shadowOf(container);
+    expect(shadow.querySelectorAll(".marp-slide-box")).toHaveLength(2);
+    expect(shadow.querySelectorAll(".marp-slide-box > section")).toHaveLength(2);
   });
 
   it("injects the marp theme css into the shadow root (isolated from the app)", () => {

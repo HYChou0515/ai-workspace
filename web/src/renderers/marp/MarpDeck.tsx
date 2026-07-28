@@ -12,20 +12,21 @@ import { rewriteMarpAssets, slideScale } from "./marpDeck";
 import "./marp.css";
 import { renderMarp } from "./renderMarp";
 
-// Injected into the shadow root (after marp's own css, so it wins ties): turn
-// each fixed 1280×720 `.marpit-slide` into a responsive 16:9 box whose inner
-// <section> is absolutely positioned and CSS-scaled by `--marp-scale`
-// (= paneWidth / 1280, inherited from the light-DOM host).
+// Injected into the shadow root (after marp's own css, so it wins ties): each
+// fixed 1280×720 slide `<section>` is wrapped (below) in a `.marp-slide-box`
+// that becomes a responsive 16:9 box; the section is absolutely positioned and
+// CSS-scaled by `--marp-scale` (= paneWidth / 1280, inherited from the
+// light-DOM host).
 const SCALE_CSS = `
 .marp-slides { display: block; }
-.marpit-slide {
+.marp-slide-box {
   position: relative;
   width: 100%;
   aspect-ratio: 1280 / 720;
   overflow: hidden;
   margin: 0 0 1rem;
 }
-.marpit-slide > section {
+.marp-slide-box > section {
   position: absolute;
   top: 0;
   left: 0;
@@ -65,6 +66,14 @@ export function MarpDeck({ text, resolveAsset, render = renderMarp }: MarpDeckPr
     if (!host) return;
     const shadow = host.shadowRoot ?? host.attachShadow({ mode: "open" });
     shadow.innerHTML = `<style>${result.css}</style><style>${SCALE_CSS}</style><div class="marp-slides">${result.html}</div>`;
+    // Wrap each slide <section> in a fit box so the fixed 1280×720 slide can be
+    // scaled to the pane width without leaving 1280px-wide layout gaps.
+    for (const section of shadow.querySelectorAll(".marpit > section")) {
+      const box = document.createElement("div");
+      box.className = "marp-slide-box";
+      section.parentNode?.insertBefore(box, section);
+      box.appendChild(section);
+    }
   }, [result]);
 
   // Measure the pane and derive the fit-to-width scale.
