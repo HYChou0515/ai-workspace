@@ -114,6 +114,11 @@ export function kbFileService(
     listFiles: async (): Promise<FileInfo[]> =>
       docs.map((d) => ({ path: normPath(d.path), size: d.size ?? 0 })),
     listDirs: async (): Promise<string[]> => [],
+    // A KB collection is flat — no folders, and nothing to traverse twice.
+    listTree: async () => ({
+      items: docs.map((d) => ({ path: normPath(d.path), size: d.size ?? 0 })),
+      dirs: [] as string[],
+    }),
 
     async readFile(path: string): Promise<FileContent> {
       const doc = docFor(path);

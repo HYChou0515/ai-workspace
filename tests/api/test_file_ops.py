@@ -437,3 +437,20 @@ def test_a_file_layer_miss_is_a_404_not_a_500():
     # …and the failed move left the workspace exactly as it was.
     paths = {e["path"] for e in client.get(f"/a/rca/items/{iid}/files").json()}
     assert paths == {"/folder/a.txt"}
+
+
+def test_the_file_tree_arrives_in_one_request(harness: Harness) -> None:
+    """`/files` and `/dirs` were always fetched together — one query key, one
+    `Promise.all` — and each walked the WHOLE workspace, so drawing the tree cost
+    two full traversals of the same directory for two halves of one answer.
+
+    Empty directories are the only thing the second call ever added, which is why
+    it cannot simply be dropped in favour of deriving folders from file paths.
+    """
+    harness.client.put(harness.wpath("/files/a.md"), content=b"a")
+    harness.client.post(harness.wpath("/files/mkdir"), json={"path": "empty"})
+
+    body = harness.client.get(harness.wpath("/tree")).json()
+
+    assert any(f["path"] == "/a.md" for f in body["files"]), body
+    assert "/empty" in body["dirs"], body

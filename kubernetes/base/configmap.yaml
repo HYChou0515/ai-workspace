@@ -80,3 +80,17 @@ data:
   KB_EMBED_MODEL: "ollama/bge-m3"
   KB_EMBED_DIM: "1024"
   KB_LLM_MODEL: "ollama_chat/qwen3:14b"
+
+  # Per-request cost accounting (api/perf_trace.py). One `perf:` line per
+  # request — total, blocking specstar time, sandbox time, and the residual that
+  # exposes queueing on the event loop — plus a loop-lag watchdog. It patches
+  # methods on two hot classes and logs a line per request, so it is a
+  # diagnostic, not steady-state telemetry: turn it off once a question is
+  # answered.
+  #   "1" = on, "0"/absent = silent (the default — it patches hot classes, so it
+  #         stays off until someone is actually reading the output).
+  # SLOW_MS gates the per-call breakdown: a request under this stays one line,
+  # one over it arrives already itemised — which is what keeps a slow endpoint
+  # from costing a second deploy to investigate.
+  WORKSPACE_PERF_TRACE: "0"
+  WORKSPACE_PERF_TRACE_SLOW_MS: "500"

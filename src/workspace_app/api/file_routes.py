@@ -49,6 +49,7 @@ from .schemas import (
     _SearchBody,
     _SkillRefreshRequest,
     _SkillRefreshResult,
+    _WorkspaceTree,
     _WorkspaceUsage,
 )
 from .search import InvalidQuery, compile_query, path_selected, search_text
@@ -241,11 +242,26 @@ def register_file_routes(
             quota=workspace_quota,
         )
 
-    @app.get("/a/{slug}/items/{item_id}/dirs")
-    async def list_dirs(slug: str, item_id: str) -> list[str]:
-        """Directory paths (incl. empty ones) for the file tree."""
+    @app.get("/a/{slug}/items/{item_id}/tree")
+    async def list_tree(slug: str, item_id: str, prefix: str = "") -> _WorkspaceTree:
+        """Files and folders from ONE traversal.
+
+        They were `/files` and `/dirs`, always fetched together (one query key,
+        one `Promise.all`) and each walking the whole workspace — two stats of
+        every file to answer two halves of one question. Warm, that traversal
+        crosses the network behind a liveness probe.
+
+        `dirs` still comes back separately rather than being derived client-side,
+        because an EMPTY directory appears in no file path."""
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        return sorted(await files.listdir(investigation_id))
+        entries, dirs = await files.tree(investigation_id, prefix)
+        return _WorkspaceTree(
+            files=[
+                _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
+                for p, size in sorted(entries)
+            ],
+            dirs=sorted(dirs),
+        )
 
     @app.post("/a/{slug}/items/{item_id}/files/refresh")
     async def refresh_files(slug: str, item_id: str) -> dict:

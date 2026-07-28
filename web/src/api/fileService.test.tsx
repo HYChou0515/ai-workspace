@@ -127,6 +127,7 @@ describe("useFileList", () => {
       ...investigationFileService("rca", "col-1"),
       listFiles: vi.fn(async () => [{ path: "/a.md", size: 1 }]),
       listDirs: vi.fn(async () => ["/sub"]),
+      listTree: vi.fn(async () => ({ items: [{ path: "/a.md", size: 1 }], dirs: ["/sub"] })),
       ...over,
     };
   }
@@ -190,5 +191,34 @@ describe("investigationFileService.writeFile — one definition of success", () 
       investigationFileService("rca", "inv").writeFile("/uploads/a.txt", "x"),
     ).rejects.toMatchObject({ status: 413 });
     expect(list).not.toHaveBeenCalled();
+  });
+});
+
+describe("useFileList — one traversal", () => {
+  function fakeService(over: Partial<FileService> = {}): FileService {
+    return { ...investigationFileService("rca", "col-1"), ...over };
+  }
+
+  it("asks for the tree once instead of listing files and folders separately", async () => {
+    // Two hooks share `qk.files(scopeId)`: the shell's listing and this one.
+    // While they had DIFFERENT query functions — one fetching a combined tree,
+    // this one `Promise.all([listFiles, listDirs])` — opening an item fetched
+    // the same workspace twice over, and each half walked the whole tree.
+    const listFiles = vi.fn(async () => []);
+    const listDirs = vi.fn(async () => []);
+    const listTree = vi.fn(async () => ({ items: [], dirs: [] }));
+    const svc = fakeService({ listFiles, listDirs, listTree });
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryWrap>
+        <FileServiceProvider value={svc}>{children}</FileServiceProvider>
+      </QueryWrap>
+    );
+
+    const { result } = renderHook(() => useFileList(), { wrapper });
+    await waitFor(() => expect(result.current.kind).toBe("ready"));
+
+    expect(listTree).toHaveBeenCalledTimes(1);
+    expect(listFiles).not.toHaveBeenCalled();
+    expect(listDirs).not.toHaveBeenCalled();
   });
 });

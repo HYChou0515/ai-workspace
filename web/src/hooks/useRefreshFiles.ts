@@ -14,7 +14,8 @@ import { useWorkspaceSlug } from "./useWorkspaceSlug";
  *      out-of-band sandbox mutation, slow disk. We POST `/files/refresh`
  *      first so the snapshot the FE reads is the truth.
  *   2. **The FE has two independent caches that BOTH need busting.**
- *        - TanStack Query: `qk.files`, `qk.dirs`, and every `qk.file(id, *)`
+ *        - TanStack Query: `qk.files` (files AND folders — one key since the
+ *          two listings became one traversal) and every `qk.file(id, *)`
  *          opened from the read-only viewer. Invalidating the list alone
  *          (the old refresh path) leaves open files showing old content.
  *        - `FileBufferStore`: the editor's per-path `Map<path, BufferEntry>`.
@@ -39,8 +40,9 @@ export function useRefreshFiles(investigationId: string): () => Promise<void> {
     //    content. Prefix invalidation on `["file", id]` covers every
     //    `qk.file(id, *)` query — opened-file readers refetch on next render.
     await Promise.all([
+      // Files AND folders live under `qk.files` now — one traversal, one key.
+      // The separate `qk.dirs` bust had nothing left to invalidate.
       queryClient.invalidateQueries({ queryKey: qk.files(investigationId) }),
-      queryClient.invalidateQueries({ queryKey: qk.dirs(investigationId) }),
       queryClient.invalidateQueries({ queryKey: ["file", investigationId] }),
     ]);
     // 3. Reload the editor's per-path buffers. Skip dirty ones — `reload()`

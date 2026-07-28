@@ -61,6 +61,7 @@ const NO_SERVICE: FileService = {
   caps: NO_CAPS,
   listFiles: async () => [],
   listDirs: async () => [],
+  listTree: async () => ({ items: [], dirs: [] }),
   readFile: async () => {
     throw new Error("no file service");
   },

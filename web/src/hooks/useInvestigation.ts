@@ -23,11 +23,11 @@ export function useFiles(investigationId: string, opts?: { enabled?: boolean }):
   const q = useQuery({
     queryKey: qk.files(investigationId),
     queryFn: async () => {
-      const [items, dirs] = await Promise.all([
-        api.listFiles(slug, investigationId),
-        api.listDirs(slug, investigationId),
-      ]);
-      return { items, dirs };
+      // One request, one workspace traversal. These were two endpoints fetched
+      // in parallel, and each walked the whole workspace to answer half of the
+      // same question — expensive warm, where the walk crosses the network.
+      const { files, dirs } = await api.getTree(slug, investigationId);
+      return { items: files, dirs };
     },
     enabled,
   });

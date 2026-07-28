@@ -232,3 +232,41 @@ def test_clearing_or_unknown_assignee_notifies_nobody(harness: Harness) -> None:
 
     assert _notifications_for(harness, "nobody") == []
     assert _notifications_for(harness, "") == []
+
+
+def test_creating_one_kind_of_record_does_not_read_the_others(harness: Harness) -> None:
+    """Creating an issue rebuilt the item's WHOLE entity catalog first — every
+    declared type's schema AND skeleton, plus a listing to discover the type
+    names. A PM item ships `issue` and `milestone`, so half of that work was for
+    a type the request never mentions.
+
+    It matters far more than the file count suggests: in production every one of
+    these goes through the sandbox, and each is preceded by a liveness probe
+    averaging 1.4s. The route only ever uses `type_name` — the full catalog
+    belongs to the endpoint that lists types, which builds its own.
+    """
+    _ship_issue_schema(harness)
+    ok = harness.client.put(
+        harness.wpath("/files/.entity/milestone/schema.yaml"),
+        content=b"path: milestones\nfields: {}\n",
+    )
+    assert ok.status_code in (200, 201, 204), ok.text
+
+    seen: list[str] = []
+    store = harness.filestore
+    original = type(store).read
+
+    async def recording_read(self, workspace_id: str, path: str) -> bytes:
+        seen.append(path)
+        return await original(self, workspace_id, path)
+
+    type(store).read = recording_read  # ty: ignore[invalid-assignment]
+    try:
+        created = harness.client.post(
+            harness.wpath("/entities/issue"), json={"args": {"title": "t"}}
+        )
+    finally:
+        type(store).read = original
+
+    assert created.status_code == 200, created.text
+    assert not [p for p in seen if "milestone" in p], seen

@@ -937,6 +937,13 @@ export const mockApi: ApiClient = {
     await delay(10);
     return [...ensureDirs(investigationId)].sort();
   },
+  async getTree(slug: string, investigationId: string) {
+    await delay(10);
+    return {
+      files: await this.listFiles(slug, investigationId),
+      dirs: [...ensureDirs(investigationId)].sort(),
+    };
+  },
 
   async deleteFile(_slug: string, investigationId: string, path: string) {
     await delay(15);

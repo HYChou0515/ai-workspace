@@ -8,9 +8,11 @@ from .conftest import Harness
 
 
 def _dirs(h: Harness) -> list[str]:
-    resp = h.client.get(h.wpath("/dirs"))
+    """Folders come from the combined tree now — `/files` and `/dirs` each walked
+    the whole workspace for half of one answer, so they became one endpoint."""
+    resp = h.client.get(h.wpath("/tree"))
     assert resp.status_code == 200, resp.text
-    return resp.json()
+    return resp.json()["dirs"]
 
 
 def _files(h: Harness) -> list[str]:

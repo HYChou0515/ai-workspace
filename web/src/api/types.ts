@@ -547,7 +547,15 @@ export interface ApiClient {
   /** POST /a/{slug}/items/{id}/files/mkdir — create an empty folder (real
    * directory; no .keep placeholder). 409 if a file occupies the path. */
   mkdir(slug: string, investigationId: string, path: string): Promise<void>;
-  /** GET /a/{slug}/items/{id}/dirs — directory paths incl. empty ones. */
+  /** GET /a/{slug}/items/{id}/tree — files AND folders from ONE traversal.
+   * They used to be two endpoints fetched together, each walking the whole
+   * workspace. `dirs` still comes back explicitly because an EMPTY folder
+   * appears in no file path. */
+  getTree(
+    slug: string,
+    investigationId: string,
+  ): Promise<{ files: FileInfo[]; dirs: string[] }>;
+  /** Just the folders — the file-tree service adapter's half of `getTree`. */
   listDirs(slug: string, investigationId: string): Promise<string[]>;
   /** DELETE /a/{slug}/items/{id}/files/{path} → 204. Removes a file, or a
    * folder and its whole subtree when the path is a directory. */

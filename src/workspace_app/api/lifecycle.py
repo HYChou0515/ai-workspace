@@ -33,6 +33,7 @@ from ..filestore.blob_gc import register_gc_lease, run_blob_gc
 from ..health.service import HealthService
 from ..kernels import KernelService
 from ..observability.boot import boot_step
+from . import perf_trace
 from .registry import InvestigationRegistry
 from .sandbox_activity import register_sandbox_activity
 from .sandbox_address import register_sandbox_address
@@ -376,6 +377,11 @@ def build_lifespan(
         register_conversation_todos(spec)
         register_conversation_goal(spec)
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
+        if perf_trace.enabled():
+            # Only ever sleeps, so any delay it observes beyond its own sleep is
+            # time the loop could not run anything — evidence for blocking work
+            # on an async route, independent of any request's self-reporting.
+            bg.append(perf_trace.start_loop_watchdog())
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
         # NOTE: the full capability round is deliberately NOT scheduled here

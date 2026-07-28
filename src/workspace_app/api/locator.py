@@ -15,6 +15,7 @@ item's default chat.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 from fastapi import HTTPException
@@ -26,9 +27,19 @@ from ..apps.manifest import load_app_manifest
 from ..apps.resolve import find_work_item, resolve_item_agent_config
 from ..perm import Verb
 from ..resources import AgentConfig, Conversation
+from ..resources.groups import groups_of
 from .chats import find_default_conversation, resolve_default_conversation
-from .item_authz import require_item_access
+from .item_authz import (
+    ItemAccessFacts,
+    check_access,
+    load_access_facts,
+)
 from .item_conversation_perm import item_conversation_mirror
+
+# Permission facts change on an administrative timescale, requests arrive on a
+# human one. Matches the other windows in this codebase (usage_window, the
+# facade's liveness memo) so there is one granularity to reason about.
+_ACCESS_WINDOW_S = 5.0
 
 
 class ItemLocator:
@@ -43,9 +54,16 @@ class ItemLocator:
         *,
         get_user_id: Callable[[], str] = lambda: "",
         superusers: frozenset[str] = frozenset(),
+        access_window: float = _ACCESS_WINDOW_S,
+        now: Callable[[], float] = time.monotonic,
     ) -> None:
         self._spec = spec
         self._app_catalog = app_catalog
+        # item -> (facts, at) and user -> (groups, at). See `require_access`.
+        self._access: dict[str, tuple[ItemAccessFacts | None, float]] = {}
+        self._groups: dict[str, tuple[frozenset[str], float]] = {}
+        self._access_window = access_window
+        self._now = now
         self._conv_rm = spec.get_resource_manager(Conversation)
         # #306 PR3: the current-request user + superuser set, so a workspace
         # sub-route can gate itself (`require_access`) against the item's live
@@ -98,16 +116,52 @@ class ItemLocator:
         """#306 PR3 — the authorizing sibling of ``require_item``: validate slug↔item,
         then gate the current user for ``verb`` against the item's live Permission
         (``read_meta`` first → 404 no existence leak, then ``verb`` → 403). Returns
-        the ``item_id`` so a handler drops it in where it used ``require_item``."""
-        require_item_access(
-            self._spec,
-            slug,
-            item_id,
-            verb,
-            user=self._get_user_id(),
-            superusers=self._superusers,
+        the ``item_id`` so a handler drops it in where it used ``require_item``.
+
+        The two lookups behind the answer — the item row and its meta — are the
+        ENTIRE database cost of a read request; the handlers themselves make
+        none. They are also CPU-bound Python rather than SQL (a cached, zero-SQL
+        `get` measured 28ms in production), so threads cannot parallelise them
+        away and the only saving is not doing them. The FACTS are held for
+        `access_window`; the DECISION never is, so a verb the caller has not
+        asked for before is still evaluated properly, and a permission change
+        calls `forget_access` rather than waiting the window out.
+        """
+        user = self._get_user_id()
+        now = self._now()
+        cached = self._access.get(item_id)
+        if cached is None or now - cached[1] >= self._access_window:
+            facts = load_access_facts(self._spec, item_id)
+            # Cache the POSITIVE answer only. "No such item" is the one result
+            # that goes stale in the direction that breaks things: an id looked
+            # up moments before it exists — a workflow addressing the item it
+            # just created — would keep 404-ing for the rest of the window. A
+            # permission is a fact about a thing that exists; absence is not.
+            if facts is not None:
+                self._access[item_id] = (facts, now)
+        else:
+            facts = cached[0]
+        groups = self._groups_for(user, now)
+        check_access(
+            facts, slug, item_id, verb, user=user, groups=groups, superusers=self._superusers
         )
         return item_id
+
+    def _groups_for(self, user: str, now: float) -> frozenset[str]:
+        """The caller's groups, held for the same window. Group membership is an
+        administrative act, not a per-request one."""
+        cached = self._groups.get(user)
+        if cached is None or now - cached[1] >= self._access_window:
+            cached = (groups_of(self._spec, user), now)
+            self._groups[user] = cached
+        return cached[0]
+
+    def forget_access(self, item_id: str) -> None:
+        """Drop the cached facts for an item — called by whatever changes its
+        permission, so a revocation lands on the very next request instead of
+        being hidden for up to a window. A cache that outlives a revocation is a
+        security bug, not a slow one."""
+        self._access.pop(item_id, None)
 
     def resolve_agent_config(self, item_id: str) -> AgentConfig | None:
         """#89: a per-App WorkItem (RcaInvestigation, …) resolves its turn's

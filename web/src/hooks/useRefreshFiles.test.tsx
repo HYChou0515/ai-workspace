@@ -23,14 +23,13 @@ function wrapper(client: QueryClient, store: FileBufferStore) {
 }
 
 describe("useRefreshFiles", () => {
-  it("server-flushes, invalidates list+dirs+content, reloads clean buffers", async () => {
+  it("server-flushes, invalidates the listing + content, reloads clean buffers", async () => {
     const id = "inv-x";
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
     // Pre-populate the caches so we can verify they were invalidated.
     client.setQueryData(qk.files(id), { items: [], dirs: [] });
-    client.setQueryData(qk.dirs(id), []);
     client.setQueryData(qk.file(id, "/a.md"), { text: "old" });
     client.setQueryData(qk.file(id, "/b.md"), { text: "old-b" });
     // Pre-populate the editor buffer for one path so reload should fire.
@@ -60,9 +59,10 @@ describe("useRefreshFiles", () => {
 
     // 1. Server flush called.
     expect(refreshSpy).toHaveBeenCalledWith("rca", id);
-    // 2. All three cache families invalidated (state stale).
+    // 2. Both cache families invalidated (state stale). Folders live under
+    //    `qk.files` now — files and dirs come from one traversal, so there is no
+    //    separate dirs key left to bust.
     expect(client.getQueryState(qk.files(id))?.isInvalidated).toBe(true);
-    expect(client.getQueryState(qk.dirs(id))?.isInvalidated).toBe(true);
     expect(client.getQueryState(qk.file(id, "/a.md"))?.isInvalidated).toBe(true);
     expect(client.getQueryState(qk.file(id, "/b.md"))?.isInvalidated).toBe(true);
     // 3. Editor buffer was reloaded.

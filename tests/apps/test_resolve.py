@@ -1,6 +1,6 @@
 from workspace_app.apps.catalog import AppCatalog
 from workspace_app.apps.rca.model import RcaInvestigation
-from workspace_app.apps.resolve import resolve_item_agent_config
+from workspace_app.apps.resolve import find_work_item, resolve_item_agent_config
 from workspace_app.config.schema import Settings
 from workspace_app.resources import make_spec
 
@@ -129,3 +129,40 @@ def test_resolve_unknown_item_returns_none():
     spec = make_spec(default_user="u")
     cfg = resolve_item_agent_config(spec, AppCatalog(presets={}), "absent-id")
     assert cfg is None
+
+
+def test_find_work_item_goes_straight_to_the_table_the_id_names():
+    """A specstar id is `{resource_name}:{uuid}` — it names its own table. The
+    scan asked every registered App in turn, and a miss is not free: it costs a
+    `get` AND a `get_meta`. With `playground` ahead of `pm`, every request
+    touching a pm item paid for a playground lookup first, and this runs in front
+    of every hand-written route, several times per user action.
+
+    That is only worth removing because each of those round-trips is expensive
+    in production (~219ms measured), so the count IS the latency.
+    """
+    from workspace_app.apps.pm.model import PmProject
+    from workspace_app.apps.registry import registered_apps
+    from workspace_app.resources import make_spec
+
+    spec = make_spec(default_user="u")
+    rm_cls = type(spec.get_resource_manager(next(iter(registered_apps().values()))))
+    pm_rm = spec.get_resource_manager(PmProject)
+    item_id = pm_rm.create(PmProject(title="t", owner="u")).resource_id
+
+    looked_up: list[str] = []
+    original = rm_cls.get
+
+    def counting_get(self, *args, **kwargs):
+        looked_up.append(self.resource_name)
+        return original(self, *args, **kwargs)
+
+    rm_cls.get = counting_get  # ty: ignore[invalid-assignment]
+    try:
+        found = find_work_item(spec, item_id)
+    finally:
+        rm_cls.get = original
+
+    assert found is not None
+    assert found[0] == "pm"
+    assert looked_up == ["pm-project"], looked_up  # no other App was asked

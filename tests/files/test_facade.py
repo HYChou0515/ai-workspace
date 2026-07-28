@@ -449,3 +449,26 @@ async def test_move_resolves_the_backing_store_once_for_the_whole_operation():
     await f.move(WS, "/folder/a.txt", "/a.txt")
 
     assert calls == 1, f"liveness resolved {calls}× in one move — read and delete can diverge"
+
+
+async def test_tree_walks_the_workspace_once_for_both_halves() -> None:
+    """Files and folders come out of the SAME traversal. Two endpoints each
+    walking the whole workspace was two stats of every file to answer one
+    question, and in the hosted setup each traversal crosses the network."""
+    walks = {"n": 0}
+
+    class _CountingWalk(MockSandbox):
+        async def walk(self, handle: SandboxHandle, root: str):  # noqa: ANN202
+            walks["n"] += 1
+            return await super().walk(handle, root)
+
+    sb = _CountingWalk()
+    handle = await sb.create(SandboxSpec(), sandbox_id=WS)
+    files = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
+    await files.write(WS, "/dir/a.md", b"a")
+
+    entries, dirs = await files.tree(WS)
+
+    assert [p for p, _ in entries] == ["/dir/a.md"]
+    assert dirs == ["/dir"]
+    assert walks["n"] == 1, walks

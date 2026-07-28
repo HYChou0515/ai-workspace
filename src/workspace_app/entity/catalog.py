@@ -8,10 +8,12 @@ scanning `.entity/<type>/`, or constructed directly in tests. An App with no
 
 from __future__ import annotations
 
+import contextlib
+
 import msgspec
 import yaml
 
-from ..filestore.protocol import FileStore
+from ..filestore.protocol import FileNotFound, FileStore
 from .diagnostics import Diagnostic
 from .schema import EntitySchema, FieldSpec, Role
 
@@ -94,6 +96,35 @@ def _load_type(
         name=name, schema=EntitySchema(fields=fields), skeleton=skeleton, records_path=records_path
     )
     return entity_type, diagnostics
+
+
+async def load_entity_type(
+    store: FileStore, workspace_id: str, name: str
+) -> tuple[EntityCatalog, list[Diagnostic]]:
+    """One named type's entry, without discovering the item's other types.
+
+    A request that names its type — create, update, query — never looks at the
+    others, but rebuilding the whole catalog read every declared type's schema
+    AND skeleton first. On a PM item that is half the work spent on a type the
+    request does not mention.
+
+    It also drops the ``exists`` before each ``read``: the read itself reports
+    absence. In production these go through the sandbox, and each one is preceded
+    by a liveness probe averaging 1.4s, so a redundant existence check is not
+    free the way it looks.
+
+    An absent schema yields an EMPTY catalog rather than an error, exactly as the
+    full scan does — the route then answers "unknown entity type" as before."""
+    try:
+        raw = await store.read(workspace_id, f"{_ENTITY_ROOT}{name}/schema.yaml")
+    except FileNotFound:
+        return EntityCatalog({}), []
+    skeleton = ""
+    with contextlib.suppress(FileNotFound):
+        skeleton_bytes = await store.read(workspace_id, f"{_ENTITY_ROOT}{name}/skeleton.md")
+        skeleton = skeleton_bytes.decode("utf-8", "replace")
+    entity_type, diagnostics = _load_type(name, raw, skeleton)
+    return EntityCatalog({name: entity_type} if entity_type is not None else {}), diagnostics
 
 
 async def discover_catalog(

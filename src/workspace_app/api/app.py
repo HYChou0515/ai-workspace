@@ -45,6 +45,7 @@ from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
     WorkflowOrchestrator,
 )
+from . import perf_trace
 from .activity import ActivityLog
 from .capability_routes import register_capability_routes
 from .card_gen_routes import register_card_gen_routes
@@ -601,6 +602,14 @@ def create_app(
     except PackageNotFoundError:  # editable/odd envs — the FE treats "" as "no skew"
         _app_version = ""
     app.add_middleware(VersionHeaderMiddleware, version=_app_version)
+
+    # Opt-in cost accounting for a slow request (WORKSPACE_PERF_TRACE=1). Added
+    # LAST so it wraps OUTERMOST and its wall clock covers the whole request,
+    # middleware included — otherwise the residual it reports would exclude the
+    # very queueing we are trying to see.
+    if perf_trace.enabled():
+        perf_trace.install(spec, sandbox)
+        app.add_middleware(perf_trace.PerfTraceMiddleware)
 
     @app.exception_handler(WorkspaceFull)
     async def _workspace_full(_request: Request, exc: WorkspaceFull) -> JSONResponse:

@@ -38,6 +38,11 @@ export type FileService = {
   readonly caps: FileCaps;
   listFiles(prefix?: string): Promise<FileInfo[]>;
   listDirs(): Promise<string[]>;
+  /** Files AND folders from ONE backend traversal. `listFiles` + `listDirs` in
+   * parallel walked the whole workspace twice for two halves of one answer, and
+   * this hook shares a cache key with the shell's listing — so two hooks with
+   * two different query functions were fetching the same thing. */
+  listTree(): Promise<{ items: FileInfo[]; dirs: string[] }>;
   readFile(path: string): Promise<FileContent>;
   writeFile(path: string, body: string | Blob | ArrayBuffer): Promise<void>;
   deleteFile(path: string): Promise<void>;
@@ -81,6 +86,10 @@ export function investigationFileService(slug: string, investigationId: string):
     },
     listFiles: (prefix) => api.listFiles(slug, investigationId, prefix),
     listDirs: () => api.listDirs(slug, investigationId),
+    listTree: async () => {
+      const { files, dirs } = await api.getTree(slug, investigationId);
+      return { items: files, dirs };
+    },
     readFile: (path) => api.readFile(slug, investigationId, path),
     // #493: "did the response come back OK" and "are the bytes there" differ
     // exactly when the connection is cut AFTER the body was sent — and the
@@ -158,8 +167,7 @@ export function useFileList(): FileListState {
   const q = useQuery({
     queryKey: qk.files(svc.scopeId),
     queryFn: async () => {
-      const [items, dirs] = await Promise.all([svc.listFiles(), svc.listDirs()]);
-      return { items, dirs };
+      return await svc.listTree();
     },
   });
   const refresh = () => void q.refetch();
