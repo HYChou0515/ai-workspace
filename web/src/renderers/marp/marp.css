@@ -8,11 +8,45 @@
   flex-direction: column;
 }
 
+.ev-marp__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-16);
+  border-bottom: 1px solid color-mix(in srgb, var(--text-paper-d) 15%, transparent);
+}
+
+.ev-marp__present-btn {
+  padding: var(--space-4) var(--space-12);
+  border: 1px solid color-mix(in srgb, var(--text-paper-d) 30%, transparent);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+
+.ev-marp__present-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ev-marp__counter {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
 .ev-marp__scroll {
   flex: 1;
   min-height: 0;
   overflow: auto;
   padding: 1rem;
+}
+
+/* Presenting: snap each slide to the viewport as the arrow keys scroll it in. */
+.ev-marp--present .ev-marp__scroll {
+  scroll-snap-type: y mandatory;
+  padding: 0;
 }
 
 .ev-marp__host {

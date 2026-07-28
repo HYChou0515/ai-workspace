@@ -25,6 +25,7 @@ const SCALE_CSS = `
   aspect-ratio: 1280 / 720;
   overflow: hidden;
   margin: 0 0 1rem;
+  scroll-snap-align: start;
 }
 .marp-slide-box > section {
   position: absolute;
@@ -44,19 +45,25 @@ export type MarpDeckProps = {
 };
 
 export function MarpDeck({ text, resolveAsset, render = renderMarp }: MarpDeckProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
+  const [present, setPresent] = useState(false);
+  const [active, setActive] = useState(0);
 
   const result = useMemo(() => {
     try {
       const { html, css } = render(text);
       const rw = rewriteMarpAssets(html, css, resolveAsset);
-      return { ok: true as const, html: DOMPurify.sanitize(rw.html), css: rw.css };
+      const clean = DOMPurify.sanitize(rw.html);
+      const count = (clean.match(/<section\b/gi) ?? []).length;
+      return { ok: true as const, html: clean, css: rw.css, count };
     } catch (e) {
       return { ok: false as const, error: e instanceof Error ? e.message : String(e) };
     }
   }, [text, resolveAsset, render]);
+  const count = result.ok ? result.count : 0;
 
   // Inject the (trusted, marp-generated) css + sanitized html into the shadow
   // root. The css is not re-sanitized — it is injected as its own <style>.
@@ -93,11 +100,62 @@ export function MarpDeck({ text, resolveAsset, render = renderMarp }: MarpDeckPr
     hostRef.current?.style.setProperty("--marp-scale", String(scale));
   }, [scale, result]);
 
+  const startPresent = () => {
+    setActive(0);
+    setPresent(true);
+    const el = containerRef.current;
+    if (el?.requestFullscreen) void el.requestFullscreen().catch(() => {});
+  };
+
+  // While presenting, the arrow keys step through slides (clamped at the ends).
+  useEffect(() => {
+    if (!present) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (["ArrowRight", "ArrowDown", "PageDown", " "].includes(e.key)) {
+        e.preventDefault();
+        setActive((i) => Math.min(i + 1, Math.max(0, count - 1)));
+      } else if (["ArrowLeft", "ArrowUp", "PageUp"].includes(e.key)) {
+        e.preventDefault();
+        setActive((i) => Math.max(i - 1, 0));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [present, count]);
+
+  // Leaving fullscreen (Esc, or the browser's own exit) ends present mode.
+  useEffect(() => {
+    const onFs = () => {
+      if (!document.fullscreenElement) setPresent(false);
+    };
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  // Bring the active slide into view as it changes while presenting.
+  useEffect(() => {
+    if (!present) return;
+    const boxes = hostRef.current?.shadowRoot?.querySelectorAll<HTMLElement>(".marp-slide-box");
+    boxes?.[active]?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [present, active]);
+
   if (!result.ok) {
     return <div className="ev-marp__error">Couldn’t render this Marp deck: {result.error}</div>;
   }
   return (
-    <div className="ev-marp">
+    <div ref={containerRef} className={present ? "ev-marp ev-marp--present" : "ev-marp"}>
+      <div className="ev-marp__toolbar">
+        {count > 0 && (
+          <button type="button" className="ev-marp__present-btn" onClick={startPresent}>
+            Present
+          </button>
+        )}
+        {present && (
+          <span data-testid="marp-present-counter" className="ev-marp__counter" aria-live="polite">
+            {active + 1} / {count}
+          </span>
+        )}
+      </div>
       <div ref={scrollRef} className="ev-marp__scroll">
         <div ref={hostRef} data-testid="marp-host" className="ev-marp__host" />
       </div>

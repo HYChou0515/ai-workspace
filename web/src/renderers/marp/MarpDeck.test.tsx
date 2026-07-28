@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MarpDeck } from "./MarpDeck";
 
@@ -58,5 +58,50 @@ describe("MarpDeck", () => {
     };
     const { container } = render(<MarpDeck text="" resolveAsset={resolveAsset} render={boom} />);
     expect(container.textContent).toMatch(/render this Marp deck/i);
+  });
+});
+
+describe("MarpDeck — present mode", () => {
+  afterEach(() => {
+    // biome-ignore lint: test cleanup of the fullscreen stub
+    delete (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen;
+  });
+
+  function stubFullscreen() {
+    const req = vi.fn().mockResolvedValue(undefined);
+    (HTMLElement.prototype as { requestFullscreen?: unknown }).requestFullscreen = req;
+    return req;
+  }
+
+  it("enters fullscreen when Present is clicked", () => {
+    const req = stubFullscreen();
+    render(<MarpDeck text="" resolveAsset={resolveAsset} render={fakeRender} />);
+    fireEvent.click(screen.getByRole("button", { name: /present/i }));
+    expect(req).toHaveBeenCalled();
+  });
+
+  it("steps slides with the arrow keys, clamped at both ends", () => {
+    stubFullscreen();
+    render(<MarpDeck text="" resolveAsset={resolveAsset} render={fakeRender} />);
+    fireEvent.click(screen.getByRole("button", { name: /present/i }));
+    const counter = () => screen.getByTestId("marp-present-counter").textContent;
+    expect(counter()).toBe("1 / 2");
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(counter()).toBe("2 / 2");
+    fireEvent.keyDown(window, { key: "ArrowRight" }); // clamp at the last slide
+    expect(counter()).toBe("2 / 2");
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(counter()).toBe("1 / 2");
+    fireEvent.keyDown(window, { key: "ArrowLeft" }); // clamp at the first slide
+    expect(counter()).toBe("1 / 2");
+  });
+
+  it("leaves present mode when fullscreen ends (Esc)", () => {
+    stubFullscreen();
+    render(<MarpDeck text="" resolveAsset={resolveAsset} render={fakeRender} />);
+    fireEvent.click(screen.getByRole("button", { name: /present/i }));
+    expect(screen.queryByTestId("marp-present-counter")).toBeInTheDocument();
+    fireEvent(document, new Event("fullscreenchange"));
+    expect(screen.queryByTestId("marp-present-counter")).toBeNull();
   });
 });
