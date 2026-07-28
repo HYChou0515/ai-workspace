@@ -13,6 +13,18 @@ export const BREAKPOINTS = {
   narrow: 768,
   /** Above `narrow`, below this = tablet-ish (single side panel is fine). */
   wide: 1024,
+  /**
+   * The width the WORKSPACE SHELL specifically needs before its four columns
+   * can coexist: activity bar 50 + file tree min 180 + editor min 360 + chat
+   * min 280 = 870. `narrow` (768) sizes the KB/dashboard grids, which stack
+   * two columns; borrowing it here left a 768-870px band where the shell
+   * called itself wide and squeezed the editor to ~190px — markdown wrapping
+   * at two glyphs a line — while the top bar's item title got 6px.
+   *
+   * Change a column minimum (EDITOR_MIN_W / ACTIVITY_BAR_W / the sidebar
+   * clamp in WorkspaceShell) and this number should move with it.
+   */
+  shell: 870,
 } as const;
 
 /** Matches phones / slim viewports (< 768px). Mirrors the CSS `@media

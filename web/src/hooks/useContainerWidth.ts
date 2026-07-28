@@ -45,13 +45,15 @@ export function useContainerWidth<T extends HTMLElement>(): [
  * first observation there is nothing better than the viewport's own verdict,
  * and starting from the viewport keeps the first paint stable.
  *
- * The comparison mirrors the CSS `@media (max-width: 767px)` rules: the
- * breakpoint value itself is wide.
+ * The threshold is `BREAKPOINTS.shell`, the width this shell's four columns
+ * actually need — NOT the app-wide `narrow`, which sizes two-column grids
+ * elsewhere and left a 768-870px band where the shell claimed to be wide with
+ * no room to prove it.
  */
 export function shellIsNarrow(
   containerWidth: number | null,
   viewportNarrow: boolean,
 ): boolean {
   if (!containerWidth) return viewportNarrow;
-  return containerWidth < BREAKPOINTS.narrow;
+  return containerWidth < BREAKPOINTS.shell;
 }

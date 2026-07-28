@@ -31,9 +31,21 @@ describe("shellIsNarrow", () => {
     expect(shellIsNarrow(1200, true)).toBe(false);
   });
 
-  it("treats the breakpoint itself as wide, matching the CSS max-width: 767px rules", () => {
-    expect(shellIsNarrow(BREAKPOINTS.narrow, false)).toBe(false);
-    expect(shellIsNarrow(BREAKPOINTS.narrow - 1, false)).toBe(true);
+  // The shell's threshold is NOT the app-wide `narrow` (768). That number sizes
+  // the KB/dashboard grids; this shell has to fit four columns side by side —
+  // activity bar 50 + file tree min 180 + editor min 360 + chat min 280 = 870.
+  // Measured in a real browser at exactly 768, the shell still called itself
+  // wide and squeezed the editor to ~190px (markdown wrapping at two glyphs a
+  // line) while the item title in the top bar was down to 6px.
+  it("uses the width its own columns need, not the app-wide narrow breakpoint", () => {
+    expect(BREAKPOINTS.shell).toBeGreaterThan(BREAKPOINTS.narrow);
+    expect(shellIsNarrow(BREAKPOINTS.narrow, false)).toBe(true);
+    expect(shellIsNarrow(820, false)).toBe(true);
+  });
+
+  it("treats its own breakpoint as wide, one px below as narrow", () => {
+    expect(shellIsNarrow(BREAKPOINTS.shell, false)).toBe(false);
+    expect(shellIsNarrow(BREAKPOINTS.shell - 1, false)).toBe(true);
   });
 });
 
