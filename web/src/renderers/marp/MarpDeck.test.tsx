@@ -33,11 +33,14 @@ describe("MarpDeck", () => {
     expect(shadowOf(container).querySelectorAll("section")).toHaveLength(2);
   });
 
-  it("wraps each slide in a fit box so it can scale to the pane width", () => {
+  it("keeps slides as direct children of .marpit (theme selector intact) and sets the fit scale", () => {
     const { container } = render(<MarpDeck text="" resolveAsset={resolveAsset} render={fakeRender} />);
-    const shadow = shadowOf(container);
-    expect(shadow.querySelectorAll(".marp-slide-box")).toHaveLength(2);
-    expect(shadow.querySelectorAll(".marp-slide-box > section")).toHaveLength(2);
+    // Marp's theme styles `div.marpit > section`; the slides must stay there or
+    // the whole theme silently drops (regression guard).
+    expect(shadowOf(container).querySelectorAll(".marpit > section")).toHaveLength(2);
+    const host = container.querySelector(".ev-marp__host") as HTMLElement;
+    // ResizeObserver measured a zero-width pane in happy-dom → the 1280 fallback → scale 1.
+    expect(host.style.getPropertyValue("--marp-scale")).toBe("1");
   });
 
   it("injects the marp theme css into the shadow root (isolated from the app)", () => {

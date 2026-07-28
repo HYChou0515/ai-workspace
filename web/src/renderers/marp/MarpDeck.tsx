@@ -12,27 +12,22 @@ import { rewriteMarpAssets, slideScale } from "./marpDeck";
 import "./marp.css";
 import { renderMarp } from "./renderMarp";
 
-// Injected into the shadow root (after marp's own css, so it wins ties): each
-// fixed 1280×720 slide `<section>` is wrapped (below) in a `.marp-slide-box`
-// that becomes a responsive 16:9 box; the section is absolutely positioned and
-// CSS-scaled by `--marp-scale` (= paneWidth / 1280, inherited from the
-// light-DOM host).
+// Injected into the shadow root AFTER marp's own css (so it wins ties on the
+// same `div.marpit > section` specificity). Marp's theme keeps sizing each slide
+// at a fixed 1280×720 and styling it; we only CSS-scale it to the pane width via
+// `--marp-scale` (= paneWidth / 1280, inherited from the light-DOM host) and
+// collapse the leftover layout box: the negative bottom margin claws back the
+// unscaled height, and the host's overflow-x:hidden clips the unscaled width.
+// The slides stay direct children of `.marpit` so the theme selector still
+// matches — wrapping them elsewhere silently strips the whole theme.
 const SCALE_CSS = `
 .marp-slides { display: block; }
-.marp-slide-box {
-  position: relative;
-  width: 100%;
-  aspect-ratio: 1280 / 720;
-  overflow: hidden;
-  margin: 0 0 1rem;
-  scroll-snap-align: start;
-}
-.marp-slide-box > section {
-  position: absolute;
-  top: 0;
-  left: 0;
+div.marpit { display: block; }
+div.marpit > section {
   transform: scale(var(--marp-scale, 1));
   transform-origin: top left;
+  margin: 0 0 calc(720px * (var(--marp-scale, 1) - 1) + 1rem) 0;
+  scroll-snap-align: start;
 }
 `;
 
@@ -73,14 +68,6 @@ export function MarpDeck({ text, resolveAsset, render = renderMarp }: MarpDeckPr
     if (!host) return;
     const shadow = host.shadowRoot ?? host.attachShadow({ mode: "open" });
     shadow.innerHTML = `<style>${result.css}</style><style>${SCALE_CSS}</style><div class="marp-slides">${result.html}</div>`;
-    // Wrap each slide <section> in a fit box so the fixed 1280×720 slide can be
-    // scaled to the pane width without leaving 1280px-wide layout gaps.
-    for (const section of shadow.querySelectorAll(".marpit > section")) {
-      const box = document.createElement("div");
-      box.className = "marp-slide-box";
-      section.parentNode?.insertBefore(box, section);
-      box.appendChild(section);
-    }
   }, [result]);
 
   // Measure the pane and derive the fit-to-width scale.
@@ -135,8 +122,8 @@ export function MarpDeck({ text, resolveAsset, render = renderMarp }: MarpDeckPr
   // Bring the active slide into view as it changes while presenting.
   useEffect(() => {
     if (!present) return;
-    const boxes = hostRef.current?.shadowRoot?.querySelectorAll<HTMLElement>(".marp-slide-box");
-    boxes?.[active]?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const slides = hostRef.current?.shadowRoot?.querySelectorAll<HTMLElement>(".marpit > section");
+    slides?.[active]?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [present, active]);
 
   if (!result.ok) {

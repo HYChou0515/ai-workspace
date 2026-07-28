@@ -39,7 +39,10 @@
 .ev-marp__scroll {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  /* each slide keeps its unscaled 1280px layout width; clip it rather than
+     letting the fit-to-width transform leave a horizontal scrollbar. */
+  overflow-x: hidden;
   padding: 1rem;
 }
 
