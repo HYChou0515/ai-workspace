@@ -517,15 +517,6 @@ class GraphEntityPageOut(BaseModel):
     next_offset: int
 
 
-class GraphNeighborLinkOut(BaseModel):
-    """An edge between two of this entity's neighbours — what turns the picture
-    from a star into a network."""
-
-    from_entity_id: str
-    to_entity_id: str
-    predicate: str
-
-
 class GraphEntityOut(BaseModel):
     """One identity and everything the corpus said about it that the caller may
     read. Assembled from the links, so nothing is stored twice."""
@@ -537,9 +528,6 @@ class GraphEntityOut(BaseModel):
     occurrences: int
     mentions: list[GraphMentionOut]
     related: list[GraphRelatedOut]
-    # The edges AMONG `related`, so the reader can see that two neighbours are
-    # themselves connected — invisible when only the centre's spokes are drawn.
-    neighbor_links: list[GraphNeighborLinkOut]
     claims: list[GraphClaimOut]
     # #630 P5: the same statements read from the far end — what OTHER things
     # hold this identity as a value ("which machines run this recipe").
@@ -2247,14 +2235,6 @@ def register_kb_routes(
                     chunk_id=r.chunk_id,
                 )
                 for r in page.related
-            ],
-            neighbor_links=[
-                GraphNeighborLinkOut(
-                    from_entity_id=n.from_entity_id,
-                    to_entity_id=n.to_entity_id,
-                    predicate=n.predicate,
-                )
-                for n in page.neighbor_links
             ],
             mentions=[
                 GraphMentionOut(

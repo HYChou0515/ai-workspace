@@ -20,11 +20,6 @@ export type GraphRel = {
   other_entity_id: string;
 };
 
-/** An edge between two of the neighbours — what makes this a network rather
- *  than a star. Both ends must be nodes on this page or there is nothing to
- *  attach the line to. */
-export type GraphLink = { from_entity_id: string; to_entity_id: string; predicate: string };
-
 type Node = { x: number; y: number };
 
 /** Spread `n` points over an arc (degrees), centred vertically. */
@@ -43,13 +38,11 @@ export function EntityGraph({
   kind,
   docs,
   rels,
-  links = [],
 }: {
   name: string;
   kind: string;
   docs: GraphDoc[];
   rels: GraphRel[];
-  links?: GraphLink[];
 }) {
   const t = useT();
   // Documents on the left arc, relations on the right — the page reads
@@ -70,37 +63,6 @@ export function EntityGraph({
     />
   );
   const mid = (p: Node): Node => ({ x: (p.x + 50) / 2, y: (p.y + 50) / 2 });
-
-  // Neighbour-to-neighbour edges. Both ends are already on the right arc, so a
-  // straight line between them would cut across the centre node; the curve
-  // bulges outward instead, which also keeps it visually subordinate to the
-  // spokes — these are context, not the subject of the page.
-  const relIndex = new Map(rels.map((r, i) => [r.other_entity_id, i]));
-  const chords = links
-    .map((l) => ({ a: relIndex.get(l.from_entity_id), b: relIndex.get(l.to_entity_id), l }))
-    .filter((c) => c.a !== undefined && c.b !== undefined && c.a !== c.b)
-    .map(({ a, b, l }) => {
-      const p = relPos[a as number];
-      const q = relPos[b as number];
-      const mx = (p.x + q.x) / 2;
-      const my = (p.y + q.y) / 2;
-      // The viewBox is stretched non-uniformly (preserveAspectRatio="none"), so
-      // a control point offset the same amount in x and y comes out several
-      // times wider than it is tall. Bulge gently and clamp inside the box: the
-      // first attempt used 0.55 and the curves flew off the right edge as loose
-      // red squiggles.
-      // Inward, into the fan between the centre and the ring: the nodes are
-      // boxes sitting ON the ring and the edge layer is behind them, so a curve
-      // that hugs the ring is simply invisible. Bulging outward instead threw
-      // the curves off the right edge, because preserveAspectRatio="none"
-      // stretches x far more than y.
-      const cx = mx - (mx - 50) * 0.42;
-      const cy = my - (my - 50) * 0.18;
-      return {
-        key: `${l.from_entity_id}->${l.to_entity_id}:${l.predicate}`,
-        d: `M ${p.x} ${p.y} Q ${cx} ${cy} ${q.x} ${q.y}`,
-      };
-    });
 
   // Height follows the busier side: a thing with one document and no relations
   // was drawing a single node inside a 430px box, which reads as "something
@@ -126,21 +88,6 @@ export function EntityGraph({
         {rels.map((r, i) => (
           <g key={`r:${r.predicate}:${r.other_name}:${i}`}>{edge(relPos[i], false)}</g>
         ))}
-        {chords.length > 0 && (
-          <g data-testid="entity-graph-neighbor-edges">
-            {chords.map((c) => (
-              <path
-                key={c.key}
-                d={c.d}
-                fill="none"
-                stroke="var(--accent)"
-                strokeOpacity={0.45}
-                strokeWidth={1}
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-          </g>
-        )}
       </svg>
 
       {/* edge labels — the words ON the connections */}

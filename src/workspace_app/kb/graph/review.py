@@ -77,21 +77,6 @@ class Related:
 
 
 @dataclass(frozen=True)
-class NeighborLink:
-    """A connection between two of the centre's neighbours.
-
-    The centre's own spokes say what it touches; these are what make the picture
-    a network rather than a star — that 回焊爐 reaches 良率 both directly and
-    through 空洞率 is exactly the shape a reader is looking for, and it is
-    invisible when only the spokes are drawn.
-    """
-
-    from_entity_id: str
-    to_entity_id: str
-    predicate: str
-
-
-@dataclass(frozen=True)
 class EntityPage:
     """One identity and every piece of evidence for it, across documents."""
 
@@ -100,8 +85,6 @@ class EntityPage:
     links: list[GraphEntityLink]
     occurrences: int
     related: list[Related]
-    # The edges among `related` — see NeighborLink.
-    neighbor_links: list[NeighborLink]
     # #534/#630: what documents STATED about this identity — attribute
     # statements whose subject resolves here. This is the join that puts DATA on
     # the graph instead of only names and arrows.
@@ -316,7 +299,6 @@ def entity_page(spec: SpecStar, entity_id: str, *, as_user: str) -> EntityPage:
             links.append(link)
             mentions.append(mention)
         related = _related(spec, entity, as_user=as_user)
-        neighbor_links = _neighbor_links(spec, entity, related, as_user=as_user)
         claims = _claims_about(spec, entity, as_user=as_user)
         value_of = _claims_valuing(spec, entity, as_user=as_user)
     return EntityPage(
@@ -325,7 +307,6 @@ def entity_page(spec: SpecStar, entity_id: str, *, as_user: str) -> EntityPage:
         links=links,
         occurrences=sum(m.occurrences for m in mentions),
         related=related,
-        neighbor_links=neighbor_links,
         claims=claims,
         value_of=value_of,
     )
@@ -383,63 +364,6 @@ def _claims_keyed(
                 seen.add(rid)
                 out.append(claim)
     out.sort(key=lambda c: (c.norm_attribute, c.norm_period, c.source_doc_id))
-    return out
-
-
-def _neighbor_links(
-    spec: SpecStar, entity: GraphEntity, related: list[Related], *, as_user: str
-) -> list[NeighborLink]:
-    """The connections BETWEEN the centre's neighbours.
-
-    One indexed query, bounded by the neighbourhood rather than by depth: pull
-    the relationships whose subject is one of the neighbours, keep the ones
-    whose object is another. No traversal, so no hop budget and no node cap to
-    choose — the set is whatever the centre already reaches.
-
-    The centre's own spokes are excluded; `related` already carries those, and
-    including them here would draw each of them twice.
-
-    Reads run in the caller's scope like everything else on this page, so a
-    connection stated in a document they cannot open never arrives.
-    """
-    ids = {r.other_entity_id for r in related if r.other_entity_id}
-    if len(ids) < 2:
-        return []  # you need two neighbours before there can be an edge between them
-    rrm = spec.get_resource_manager(GraphRelationship)
-    erm = spec.get_resource_manager(GraphEntity)
-    centre_keys = set(entity.norm_keys)
-    key_to_id: dict[str, str] = {}
-    out: list[NeighborLink] = []
-    seen: set[tuple[str, str, str]] = set()
-    with (
-        rrm.using(as_user, apply_access_scope=True),  # ty: ignore[unknown-argument]
-        erm.using(as_user, apply_access_scope=True),  # ty: ignore[unknown-argument]
-    ):
-        for eid in ids:
-            try:
-                data = erm.get(eid).data
-            except ResourceIDNotFoundError:
-                continue
-            if isinstance(data, GraphEntity):
-                for k in data.norm_keys:
-                    key_to_id[k] = eid
-        if not key_to_id:
-            return []
-        for r in rrm.list_resources((QB["norm_subject"].in_(list(key_to_id))).build()):
-            rel = r.data
-            assert isinstance(rel, GraphRelationship)
-            if rel.norm_subject in centre_keys or rel.norm_object in centre_keys:
-                continue  # a spoke, already drawn
-            src = key_to_id.get(rel.norm_subject)
-            dst = key_to_id.get(rel.norm_object)
-            if not src or not dst or src == dst:
-                continue
-            _, predicate = _identity_of(erm, rel.norm_predicate, rel.predicate)
-            key = (src, dst, predicate)
-            if key in seen:
-                continue  # several documents stating the same connection is one edge
-            seen.add(key)
-            out.append(NeighborLink(from_entity_id=src, to_entity_id=dst, predicate=predicate))
     return out
 
 
