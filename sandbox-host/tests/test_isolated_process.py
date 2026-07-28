@@ -314,3 +314,18 @@ async def test_exec_reprovisions_a_home_it_had_to_rebuild(isolated):
     st = home.stat()
     assert st.st_uid == os.getuid()
     assert st.st_mode & 0o777 == 0o700
+
+
+async def test_exec_takes_back_a_home_that_stopped_belonging_to_the_uid(isolated):
+    """Present but not owned by the sandbox uid is as unusable as absent — and it
+    is the state a host-managed restore / rsync leaves behind, outside `create`
+    entirely. Ownership is therefore reasserted on every exec."""
+    h = await isolated.create(SandboxSpec())
+    home = isolated._require(h) / ".home"
+    home.chmod(0o755)
+
+    isolated._exec_argv(h, ["true"])
+
+    st = home.stat()
+    assert st.st_uid == os.getuid()
+    assert st.st_mode & 0o777 == 0o700

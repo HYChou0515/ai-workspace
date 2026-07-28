@@ -260,6 +260,25 @@ async def test_exec_reprovisions_a_home_it_had_to_rebuild(isolated):
     assert st.st_mode & 0o777 == 0o700
 
 
+async def test_exec_takes_back_a_home_that_stopped_belonging_to_the_uid(isolated):
+    """The dir can be THERE and still be unusable. Anything that recreates an
+    item's tree outside `create` — a host-managed restore, an rsync, a hand fix —
+    leaves `.home` owned by whoever ran it, typically root, while the command
+    still drops to the sandbox uid. `soffice` then reports the very same "User
+    installation could not be completed" as when the dir was missing, which is
+    why ownership is reasserted at exec rather than only at create."""
+    h = await isolated.create(SandboxSpec(), sandbox_id="item-1")
+    home = isolated._require(h) / ".home"
+    home.chmod(0o755)  # stand-in for "provisioned by someone else" (uid is the
+    # test's own, so a real chown can't be staged without root)
+
+    isolated._exec_argv(h, ["true"])
+
+    st = home.stat()
+    assert st.st_uid == os.getuid()
+    assert st.st_mode & 0o777 == 0o700
+
+
 async def test_create_is_idempotent_for_a_shared_item(isolated):
     # Re-creating the same item id re-attaches (no raise) — the shared-dir model.
     h1 = await isolated.create(SandboxSpec(), sandbox_id="item-1")
