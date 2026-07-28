@@ -1095,6 +1095,8 @@ export const messages = {
     "zh-TW": "「{name}」重複了。同一個名稱只能有一個值。",
     en: "“{name}” appears twice. A name can only have one value.",
   },
+  "env.import": { "zh-TW": "載入 .env", en: "Import .env" },
+  "env.export": { "zh-TW": "匯出 .env", en: "Export .env" },
   "env.save": { "zh-TW": "儲存", en: "Save" },
   "env.cancel": { "zh-TW": "取消", en: "Cancel" },
   "tools.title": { "zh-TW": "助理可用的工具", en: "Tools the assistant can use" },

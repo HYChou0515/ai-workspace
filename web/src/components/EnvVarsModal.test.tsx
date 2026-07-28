@@ -121,3 +121,48 @@ describe("EnvVarsModal", () => {
     expect(screen.getByTestId("env-error")).toHaveTextContent("API_KEY");
   });
 });
+
+describe("EnvVarsModal import / export", () => {
+  it("merges an imported file into what is already there", async () => {
+    // Import MERGES: a name the file mentions is overwritten, one it does not
+    // is left alone. Replace-all would silently delete variables the file
+    // happens not to carry — and delete already has its own button.
+    const { onSave } = open({ API_KEY: "old", REGION: "tw" });
+
+    const input = screen.getByTestId("env-import") as HTMLInputElement;
+    const file = new File(["API_KEY=new\nEXTRA=1\n"], ".env", { type: "text/plain" });
+    Object.defineProperty(file, "text", { value: () => Promise.resolve("API_KEY=new\nEXTRA=1\n") });
+    fireEvent.change(input, { target: { files: [file] } });
+    await screen.findByDisplayValue("new");
+
+    save();
+
+    expect(onSave).toHaveBeenCalledWith({ API_KEY: "new", REGION: "tw", EXTRA: "1" });
+  });
+
+  it("exports what is on screen, including unsaved edits", async () => {
+    // What you are looking at is what you get — exporting the last SAVED state
+    // instead would hand back a file that silently disagrees with the panel.
+    const created: string[] = [];
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: (b: Blob) => {
+        void b.text().then((t) => created.push(t));
+        return "blob:x";
+      },
+    });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: () => {} });
+
+    open({ API_KEY: "sk-1" });
+    fireEvent.change(valueBoxes()[0], { target: { value: "sk-2" } });
+    fireEvent.click(screen.getByTestId("env-export"));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(created).toEqual(["API_KEY=sk-2\n"]);
+
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: origCreate });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: origRevoke });
+  });
+});

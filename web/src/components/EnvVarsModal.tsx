@@ -14,8 +14,9 @@
  * cannot hold two rows with the same name, so a duplicate is refused up front
  * rather than silently dropping one of them at save time.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 
+import { mergeEnv, parseEnvText, toEnvText } from "../lib/envFile";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
@@ -70,6 +71,34 @@ export function EnvVarsModal({
     Object.entries(envVars).map(([name, value]) => ({ name, value })),
   );
   const [error, setError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const rowsOf = (vars: Record<string, string>) =>
+    Object.entries(vars).map(([name, value]) => ({ name, value }));
+
+  /** Import MERGES into what is on screen (not into the last SAVED state):
+   * the panel is what the user is looking at, and importing on top of
+   * something they cannot see would be a different operation than it appears. */
+  const importFile = async (file: File) => {
+    const merged = mergeEnv(toEnvVars(rows), parseEnvText(await file.text()));
+    setRows(rowsOf(merged));
+    setError("");
+  };
+
+  /** Export what is ON SCREEN, unsaved edits included — a download that
+   * silently disagreed with the panel would be worse than no download. Straight
+   * to the browser, never into the workspace: a file there is one the agent can
+   * simply read. */
+  const exportFile = () => {
+    const url = URL.createObjectURL(new Blob([toEnvText(toEnvVars(rows))], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = ".env";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   const edit = (i: number, patch: Partial<Row>) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -162,10 +191,42 @@ export function EnvVarsModal({
           data-variant="secondary"
           data-size="sm"
           data-testid="env-add"
-          style={{ marginRight: "auto" }}
           onClick={() => setRows((rs) => [...rs, { name: "", value: "" }])}
         >
           {t("env.add")}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".env,text/plain"
+          data-testid="env-import"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void importFile(f);
+            e.target.value = ""; // so re-picking the same file fires again
+          }}
+        />
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          data-testid="env-import-button"
+          onClick={() => fileRef.current?.click()}
+        >
+          {t("env.import")}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          data-testid="env-export"
+          style={{ marginRight: "auto" }}
+          onClick={exportFile}
+        >
+          {t("env.export")}
         </button>
         <button
           type="button"
