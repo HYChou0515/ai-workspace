@@ -139,7 +139,10 @@ export function AskUserCard({
   answered,
 }: {
   call: ToolCallView;
-  onAnswer: (answer: AskUserAnswer) => void;
+  /** Send the answer. Return `false` to REFUSE it — the card then keeps 送出
+   * and its options exactly as they were, so nothing is lost to a send that
+   * did not happen. Anything else counts as taken. */
+  onAnswer: (answer: AskUserAnswer) => boolean | void;
   /** Set once this question has been answered — the buttons are replaced by
    * the answer so it cannot be answered twice (two tabs, or a scroll back). */
   answered?: string;
@@ -159,8 +162,11 @@ export function AskUserCard({
 
   const settled = answered ?? sent;
   if (settled) {
+    // `pre-wrap`: one line per question, as `answerLine` wrote them. Without it
+    // a two-question answer collapses into one run-on sentence — and this is
+    // now the FIRST thing seen after pressing 送出, not a rarely-hit echo.
     return (
-      <div data-testid="ask-user-answered" style={{ opacity: 0.8 }}>
+      <div data-testid="ask-user-answered" style={{ opacity: 0.8, whiteSpace: "pre-wrap" }}>
         {settled}
       </div>
     );
@@ -175,10 +181,12 @@ export function AskUserCard({
       return answerLine(q.question, choice, note);
     });
     const content = lines.join("\n");
-    // Latch BEFORE handing off: this is what takes 送出 off the card, and it
-    // must not depend on the answer coming back to do it.
+    // Latch only on an answer that was TAKEN. It must not wait for the answer
+    // to come back — that is the whole point — but a surface that refuses the
+    // send (a turn already running) says so, and a card that latched anyway
+    // would show a sent answer that never went, with no 送出 left to retry.
+    if (onAnswer({ content, answers: call.call_id }) === false) return;
     setSent(content);
-    onAnswer({ content, answers: call.call_id });
   };
 
   return (

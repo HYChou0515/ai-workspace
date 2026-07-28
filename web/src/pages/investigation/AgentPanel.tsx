@@ -512,21 +512,18 @@ export function AgentPanel({
             key={i}
             entry={e}
             // grill-me: answering an `ask_user` question is an ordinary send
-            // that records which question it answers. While a turn is running
-            // the callback is WITHHELD rather than handed over and then ignored
-            // — the card now takes 送出 away as soon as it is pressed, so an
-            // answer dropped here would look sent and be gone, with no button
-            // left to try again with. Withholding renders it as a plain tool
-            // card, which is how this surface already says "not answerable
-            // here" (replay, read-only), and matches the composer being
-            // disabled for the same stretch.
-            onAnswerQuestion={
-              log.streaming
-                ? undefined
-                : (a) => {
-                    void send(a.content, { answers: a.answers });
-                  }
-            }
+            // that records which question it answers. A turn already running
+            // (someone else's, in a shared thread) is refused OUT LOUD rather
+            // than swallowed: the card takes 送出 away as soon as it sends, so
+            // an answer quietly dropped here would look sent, be gone, and
+            // leave no button to try again with. Saying `false` keeps the
+            // question exactly as it was — the same no-op as before, minus the
+            // data loss.
+            onAnswerQuestion={(a) => {
+              if (log.streaming) return false;
+              void send(a.content, { answers: a.answers });
+              return true;
+            }}
             answeredQuestions={answeredQuestions}
             // #583: who is reading, so their own messages align right.
             currentUser={me}

@@ -184,7 +184,7 @@ export function EntryView({
   /** grill-me: send the user's answer to an `ask_user` question. Absent ⇒ the
    * question renders as an ordinary tool card (replay / read-only surfaces),
    * so it is never a dead end. */
-  onAnswerQuestion?: (answer: AskUserAnswer) => void;
+  onAnswerQuestion?: (answer: AskUserAnswer) => boolean | void;
   /** Answers already given, by question call id — an answered question shows
    * its answer instead of offering the buttons again. */
   answeredQuestions?: Record<string, string>;

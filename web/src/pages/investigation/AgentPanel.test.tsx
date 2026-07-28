@@ -684,17 +684,21 @@ describe("AgentPanel ask_user (grill-me)", () => {
     expect(opts).toMatchObject({ answers: "call_1" });
   });
 
-  it("does not offer 送出 while a turn is running", () => {
-    /* The composer is disabled for the duration of a turn, and this panel drops
-     * an answer that arrives during one. Now that pressing 送出 takes the button
-     * away, a card left answerable would swallow the answer AND remove the way
-     * to try again. So the option is withdrawn while streaming, the same way it
-     * is on a read-only surface. */
+  it("keeps the question intact when a running turn refuses the answer", () => {
+    /* This panel does not send during a turn. Pressing 送出 must therefore leave
+     * the question exactly as it was — if the card latched on a send that never
+     * happened, the answer would look sent, be gone, and have no button left to
+     * retry with. The refusal is reported, not swallowed. */
     const send = renderWithEntries([question], undefined, true);
 
-    expect(screen.queryByRole("button", { name: /Postgres/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: "送出" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
+    fireEvent.click(within(screen.getByTestId("ask-user")).getByRole("button", { name: "送出" }));
+
     expect(send).not.toHaveBeenCalled();
+    // Still answerable: the options and 送出 are both still there.
+    expect(screen.getByRole("button", { name: /Postgres/ })).toBeTruthy();
+    expect(within(screen.getByTestId("ask-user")).getByRole("button", { name: "送出" })).toBeTruthy();
+    expect(screen.queryByTestId("ask-user-answered")).toBeNull();
   });
 
   it("shows the answer instead of the buttons once answered", () => {

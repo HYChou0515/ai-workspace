@@ -135,6 +135,15 @@ describe("AskUserCard", () => {
     expect(onAnswer).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps one line per question in what it shows back", () => {
+    // `answerLine` writes one line per question and they are joined with "\n".
+    // Rendered without `pre-wrap` a two-question answer collapses into a single
+    // run-on sentence — and this is the first thing seen after pressing 送出.
+    render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} answered={"格式 → PDF\n圖表 → 要"} />);
+
+    expect(screen.getByTestId("ask-user-answered")).toHaveStyle({ whiteSpace: "pre-wrap" });
+  });
+
   it("shows what it sent, so the press is visibly what did it", () => {
     // Removing the button is only half the message — something has to say the
     // answer went, and it must be the answer itself rather than a blank space.
