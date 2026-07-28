@@ -78,3 +78,42 @@ async def test_a_plain_exec_gets_home_off_the_synced_workspace(tmp_path) -> None
     assert home == Path(cwd).parent / ".home"  # the infra-area sibling
     assert home != Path(cwd)  # NOT the mirrored workspace
     assert home.is_dir()  # provisioned + writable by the exec
+
+
+async def test_an_exec_rebuilds_a_home_the_sandbox_never_got(tmp_path) -> None:
+    """`.home` was made by `create`, but it is USED by every exec — and nothing
+    guarantees a sandbox goes through a current `create` before its next command.
+    The registry caches a live handle (create-once on a shared vol; for http it
+    re-acquires only when the liveness probe says the sandbox is GONE), so a
+    sandbox that predates this dir — or one built by an older image — keeps
+    running for the rest of its life without it, while every exec points HOME at
+    it anyway. `soffice` then aborts "User installation could not be completed"
+    against a HOME that does not exist, which is worse than the workspace-HOME it
+    replaced: that one at least was a directory.
+
+    So the dir is guaranteed where it is consumed, next to the python shim the
+    same method already rebuilds per-exec for the same reason."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec())
+    home = sb._require(h) / ".home"
+    home.rmdir()  # the state every pre-existing sandbox is in
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert Path(env["HOME"]) == home
+    assert Path(env["SANDBOX_HOME"]) == home
+    assert home.is_dir()
+
+
+async def test_the_jail_rebuilds_a_missing_home_too(tmp_path) -> None:
+    """Same dir, chroot-relative spelling — and the jail bootstrap `export
+    HOME=/.home`s into it without checking either."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True)
+    h = await sb.create(SandboxSpec())
+    home = sb._require(h) / ".home"
+    home.rmdir()
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert env["SANDBOX_HOME"] == "/.home"
+    assert home.is_dir()
