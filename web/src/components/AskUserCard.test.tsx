@@ -120,10 +120,11 @@ describe("AskUserCard", () => {
     expect(content).toContain("No");
   });
 
-  it("takes 送出 away the moment it is pressed", () => {
+  it("takes ONLY the 送出 button away once it has been pressed", () => {
     // The button's whole job is ahead of the send. Left standing afterwards it
     // says nothing happened, and the only thing it can still do is send a
-    // second answer to a question already answered.
+    // second answer. Everything else stays exactly where it was — the question
+    // and the chosen option are the record of what was just sent.
     const onAnswer = vi.fn();
     render(<AskUserCard call={oneQuestion} onAnswer={onAnswer} />);
 
@@ -131,29 +132,9 @@ describe("AskUserCard", () => {
     send();
 
     expect(screen.queryByRole("button", { name: /送出/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Postgres/ })).toBeNull();
+    expect(screen.getByText("Which storage backend?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /SQLite/ })).toHaveAttribute("aria-pressed", "true");
     expect(onAnswer).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps one line per question in what it shows back", () => {
-    // `answerLine` writes one line per question and they are joined with "\n".
-    // Rendered without `pre-wrap` a two-question answer collapses into a single
-    // run-on sentence — and this is the first thing seen after pressing 送出.
-    render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} answered={"格式 → PDF\n圖表 → 要"} />);
-
-    expect(screen.getByTestId("ask-user-answered")).toHaveStyle({ whiteSpace: "pre-wrap" });
-  });
-
-  it("shows what it sent, so the press is visibly what did it", () => {
-    // Removing the button is only half the message — something has to say the
-    // answer went, and it must be the answer itself rather than a blank space.
-    const onAnswer = vi.fn();
-    render(<AskUserCard call={oneQuestion} onAnswer={onAnswer} />);
-
-    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
-    send();
-
-    expect(screen.getByTestId("ask-user-answered")).toHaveTextContent("SQLite");
   });
 
   it("does not wait for the answer to come back before hiding 送出", () => {
@@ -167,6 +148,20 @@ describe("AskUserCard", () => {
 
     // No `answered` prop was ever passed — the card knows on its own.
     expect(screen.queryByRole("button", { name: /送出/ })).toBeNull();
+  });
+
+  it("stops taking a different answer once it has been sent", () => {
+    // With no 送出 left, a click that still moved the highlight would leave the
+    // card showing a choice that was never sent.
+    render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
+    send();
+    fireEvent.click(screen.getByRole("button", { name: /Postgres/ }));
+
+    expect(screen.getByRole("button", { name: /Postgres/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /SQLite/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByLabelText("補充:SQLite")).toHaveAttribute("readonly");
   });
 
   it("stops offering the buttons once the question is answered", () => {

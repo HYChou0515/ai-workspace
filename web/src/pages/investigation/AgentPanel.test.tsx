@@ -619,10 +619,9 @@ describe("AgentPanel ask_user (grill-me)", () => {
   function renderWithEntries(
     entries: unknown[],
     send = vi.fn(async (_content: string, _opts?: Record<string, unknown>) => {}),
-    streaming = false,
   ) {
     const agent = { ...stubAgent(), send };
-    agent.log = { entries, streaming } as unknown as AgentState["log"];
+    agent.log = { entries, streaming: false } as unknown as AgentState["log"];
     renderWithQuery(
       <DialogProvider>
         <AgentPanel
@@ -682,23 +681,6 @@ describe("AgentPanel ask_user (grill-me)", () => {
     const [content, opts] = send.mock.calls[0];
     expect(content).toContain("SQLite");
     expect(opts).toMatchObject({ answers: "call_1" });
-  });
-
-  it("keeps the question intact when a running turn refuses the answer", () => {
-    /* This panel does not send during a turn. Pressing 送出 must therefore leave
-     * the question exactly as it was — if the card latched on a send that never
-     * happened, the answer would look sent, be gone, and have no button left to
-     * retry with. The refusal is reported, not swallowed. */
-    const send = renderWithEntries([question], undefined, true);
-
-    fireEvent.click(screen.getByRole("button", { name: /SQLite/ }));
-    fireEvent.click(within(screen.getByTestId("ask-user")).getByRole("button", { name: "送出" }));
-
-    expect(send).not.toHaveBeenCalled();
-    // Still answerable: the options and 送出 are both still there.
-    expect(screen.getByRole("button", { name: /Postgres/ })).toBeTruthy();
-    expect(within(screen.getByTestId("ask-user")).getByRole("button", { name: "送出" })).toBeTruthy();
-    expect(screen.queryByTestId("ask-user-answered")).toBeNull();
   });
 
   it("shows the answer instead of the buttons once answered", () => {

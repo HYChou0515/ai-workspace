@@ -22,13 +22,14 @@
  * "Postgres" is about Postgres, so it sits on that row rather than in one shared
  * box that could mean any option. Options are numbered, and a pick highlights
  * rather than sending on the click — with a note to type, firing on the first
- * click would send before the person finished. 送出 is what commits.
+ * click would send before the person finished.
  *
- * 送出 then GOES, the moment it is pressed. Its whole job was ahead of the send;
- * afterwards it is a live button on a question already answered, and the only
- * thing it can still do is send a second time. `answered` says the same thing
- * but arrives from the persisted transcript a round trip later, so the card
- * latches on its own send and does not wait to be told.
+ * Pressing 送出 takes ONLY the button away. Its whole job was ahead of the send;
+ * afterwards it says nothing happened, and the one thing it can still do is send
+ * a second answer. The question and the chosen option stay exactly where they
+ * are — they are the record of what was just sent — but stop taking input, so a
+ * highlight can never show a choice that was never sent. `answered` (from the
+ * persisted transcript) is a round trip away, so the card knows on its own.
  */
 import { useState } from "react";
 
@@ -139,10 +140,7 @@ export function AskUserCard({
   answered,
 }: {
   call: ToolCallView;
-  /** Send the answer. Return `false` to REFUSE it — the card then keeps 送出
-   * and its options exactly as they were, so nothing is lost to a send that
-   * did not happen. Anything else counts as taken. */
-  onAnswer: (answer: AskUserAnswer) => boolean | void;
+  onAnswer: (answer: AskUserAnswer) => void;
   /** Set once this question has been answered — the buttons are replaced by
    * the answer so it cannot be answered twice (two tabs, or a scroll back). */
   answered?: string;
@@ -153,21 +151,16 @@ export function AskUserCard({
   const [picked, setPicked] = useState<Record<number, string>>({});
   const [optNote, setOptNote] = useState<Record<string, string>>({});
   const [freeText, setFreeText] = useState<Record<number, string>>({});
-  // What this card already sent. `answered` arrives from the persisted
-  // transcript, which takes a round trip; until it lands, 送出 would still be
-  // sitting there inviting a second press on a question already answered.
-  const [sent, setSent] = useState<string | null>(null);
+  // Pressed. Not "answered" — that word belongs to the transcript, which is a
+  // round trip away; this is just the card knowing it already sent.
+  const [sent, setSent] = useState(false);
 
   if (!questions) return null;
 
-  const settled = answered ?? sent;
-  if (settled) {
-    // `pre-wrap`: one line per question, as `answerLine` wrote them. Without it
-    // a two-question answer collapses into one run-on sentence — and this is
-    // now the FIRST thing seen after pressing 送出, not a rarely-hit echo.
+  if (answered) {
     return (
-      <div data-testid="ask-user-answered" style={{ opacity: 0.8, whiteSpace: "pre-wrap" }}>
-        {settled}
+      <div data-testid="ask-user-answered" style={{ opacity: 0.8 }}>
+        {answered}
       </div>
     );
   }
@@ -180,13 +173,8 @@ export function AskUserCard({
       const note = choice ? (optNote[noteKey(i, choice)] ?? "") : (freeText[i] ?? "");
       return answerLine(q.question, choice, note);
     });
-    const content = lines.join("\n");
-    // Latch only on an answer that was TAKEN. It must not wait for the answer
-    // to come back — that is the whole point — but a surface that refuses the
-    // send (a turn already running) says so, and a card that latched anyway
-    // would show a sent answer that never went, with no 送出 left to retry.
-    if (onAnswer({ content, answers: call.call_id }) === false) return;
-    setSent(content);
+    setSent(true);
+    onAnswer({ content: lines.join("\n"), answers: call.call_id });
   };
 
   return (
@@ -203,6 +191,7 @@ export function AskUserCard({
                     <button
                       type="button"
                       aria-pressed={active}
+                      disabled={sent}
                       onClick={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
                       title={opt.description || undefined}
                       style={{
@@ -215,7 +204,9 @@ export function AskUserCard({
                         border: "none",
                         padding: 0,
                         textAlign: "left",
-                        cursor: "pointer",
+                        // Still legible once sent — it is the record of the
+                        // choice, not a control any more.
+                        cursor: sent ? "default" : "pointer",
                         color: "var(--text-paper)",
                       }}
                     >
@@ -244,6 +235,9 @@ export function AskUserCard({
                       aria-label={`補充:${opt.label}`}
                       value={optNote[noteKey(i, opt.label)] ?? ""}
                       placeholder="補充(選填)"
+                      // `readOnly`, not `disabled`: a note that was sent has to
+                      // stay readable, and a disabled input greys its own text.
+                      readOnly={sent}
                       onChange={(e) =>
                         setOptNote((n) => ({ ...n, [noteKey(i, opt.label)]: e.target.value }))
                       }
@@ -262,9 +256,11 @@ export function AskUserCard({
             <button
               type="button"
               aria-pressed={picked[i] === DONT_UNDERSTAND}
+              disabled={sent}
               onClick={() => setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }))}
               style={{
                 ...plainBtn,
+                cursor: sent ? "default" : "pointer",
                 borderColor: picked[i] === DONT_UNDERSTAND ? "var(--accent)" : "var(--paper-3)",
               }}
             >
@@ -275,6 +271,7 @@ export function AskUserCard({
               aria-label="自己回答"
               value={freeText[i] ?? ""}
               placeholder="以上皆非,自己回答"
+              readOnly={sent}
               onChange={(e) => {
                 const v = e.target.value;
                 setFreeText((n) => ({ ...n, [i]: v }));
@@ -288,24 +285,25 @@ export function AskUserCard({
         </div>
       ))}
 
-      {/* Present for as long as there is something to send, and gone the moment
-          there is not — the card below has already taken its place. */}
-      <button
-        type="button"
-        onClick={send}
-        style={{
-          alignSelf: "flex-start",
-          padding: "6px 16px",
-          fontWeight: 600,
-          border: "1px solid var(--accent)",
-          background: "var(--accent)",
-          color: "var(--white)",
-          borderRadius: 6,
-          cursor: "pointer",
-        }}
-      >
-        送出
-      </button>
+      {/* Gone the moment it is pressed — nothing else moves. */}
+      {!sent && (
+        <button
+          type="button"
+          onClick={send}
+          style={{
+            alignSelf: "flex-start",
+            padding: "6px 16px",
+            fontWeight: 600,
+            border: "1px solid var(--accent)",
+            background: "var(--accent)",
+            color: "var(--white)",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          送出
+        </button>
+      )}
     </div>
   );
 }

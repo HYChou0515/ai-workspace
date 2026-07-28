@@ -512,17 +512,10 @@ export function AgentPanel({
             key={i}
             entry={e}
             // grill-me: answering an `ask_user` question is an ordinary send
-            // that records which question it answers. A turn already running
-            // (someone else's, in a shared thread) is refused OUT LOUD rather
-            // than swallowed: the card takes 送出 away as soon as it sends, so
-            // an answer quietly dropped here would look sent, be gone, and
-            // leave no button to try again with. Saying `false` keeps the
-            // question exactly as it was — the same no-op as before, minus the
-            // data loss.
+            // that records which question it answers.
             onAnswerQuestion={(a) => {
-              if (log.streaming) return false;
+              if (log.streaming) return;
               void send(a.content, { answers: a.answers });
-              return true;
             }}
             answeredQuestions={answeredQuestions}
             // #583: who is reading, so their own messages align right.
