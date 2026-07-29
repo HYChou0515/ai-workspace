@@ -372,6 +372,7 @@ class TurnContextBuilder:
             # from this turn's resolve. The model cannot tell them apart, which
             # is the point — they are the same kind of thing.
             packages=[*(self._packages or []), *external.packages],
+            unavailable_tools=external.refused,
             prebuilt_dir=self._prebuilt_dir,
             app_slug=self._locator.slug_of(item_id),
             template_profile=self._locator.profile_of(item_id),

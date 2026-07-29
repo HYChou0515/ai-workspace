@@ -1077,3 +1077,30 @@ def test_item_event_adapts_run_items_for_map_event_reuse():
     end = _map_event(_ItemEvent("tool_output", out))
     assert isinstance(end, ToolEnd)
     assert end.call_id == "c1" and "ok" in end.output
+
+
+def test_agent_for_tells_the_model_which_tools_could_not_be_loaded():
+    """#674: a declared third-party tool that failed to resolve is named in the
+    prompt with its reason. Left silent, the agent either invents a workaround
+    for a capability the workspace advertises elsewhere, or tells the user the
+    tool does not exist — both of which hide a fixable publishing problem."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(
+        AgentConfig(name="ws", system_prompt="You are helpful."),
+        None,
+        {"wafer-history": "404 — the artifact expired"},
+    )
+
+    assert isinstance(agent.instructions, str)
+    assert "wafer-history" in agent.instructions
+    assert "the artifact expired" in agent.instructions
+
+
+def test_agent_for_says_nothing_when_every_tool_loaded():
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(AgentConfig(name="ws", system_prompt="You are helpful."), None, {})
+
+    assert isinstance(agent.instructions, str)
+    assert "unavailable right now" not in agent.instructions

@@ -175,6 +175,11 @@ class AgentToolContext:
     # installed into it from prebuilt_dir; the runner also exposes their
     # commands as function tools. Set by the API layer from create_app config.
     packages: list[PackageInfo] = field(default_factory=list)
+    unavailable_tools: dict[str, str] = field(default_factory=dict)
+    """#674: third-party tools this turn could not obtain, `{name: reason}`.
+    Disclosed in the system prompt rather than left absent — an agent that
+    is simply missing a capability it was told about elsewhere invents a
+    workaround, or tells the user the tool does not exist."""
     # Host path to the prebuilt-packages root. ``provision_tools`` reads
     # ``prebuilt_dir / pkg.name`` and tars it into the sandbox. Required when
     # ``packages`` is non-empty.
