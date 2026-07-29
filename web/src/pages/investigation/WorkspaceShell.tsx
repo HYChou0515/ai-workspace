@@ -530,6 +530,8 @@ function ShellBody({
           isNarrow={isNarrow}
           ideCollapsed={ideCollapsed}
           onToggleIde={() => setIdeCollapsed((v) => !v)}
+          bottomState={bottomState}
+          onPanelBottom={dispatchBottom}
           onCommandPalette={() => setPaletteOpen(true)}
           onEdit={() => setEditOpen(true)}
         />
@@ -643,11 +645,6 @@ function ShellBody({
                 agentStart.current = effectiveAgentW;
               }}
               onResize={(d) => setAgentW(Math.min(maxChatW, agentStart.current - d))}
-              collapse={{
-                label: "Collapse workspace",
-                icon: "chev_l",
-                onToggle: () => setIdeCollapsed(true),
-              }}
             />
           )}
             </>
@@ -816,6 +813,46 @@ export function EditItemModal({
 
 /* ------------------------------ Top bar ------------------------------ */
 
+/** One row of the View menu: a panel, and whether it is showing. A checkbox,
+ * not a coloured pill — on/off is then STATED rather than inferred from a hue,
+ * which is how the old control ended up wearing the severity red for "open". */
+function PanelToggle({
+  label,
+  title,
+  checked,
+  onChange,
+}: {
+  label: string;
+  title: string;
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <label
+      title={title}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 12px",
+        fontSize: pxToRem(12),
+        color: "var(--text-paper)",
+        cursor: "pointer",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        // Left alone this renders in the platform blue, which is nowhere in
+        // this palette. Same treatment as the font-size slider.
+        style={{ accentColor: "var(--accent)" }}
+      />
+      {label}
+    </label>
+  );
+}
+
 export function TopBar({
   item,
   manifest,
@@ -823,6 +860,8 @@ export function TopBar({
   isNarrow,
   ideCollapsed,
   onToggleIde,
+  bottomState,
+  onPanelBottom,
   onCommandPalette,
   onEdit,
 }: {
@@ -833,11 +872,14 @@ export function TopBar({
    * bar used to ask the viewport itself, which over-reports by the width of
    * whatever sits beside the shell (a chat-first App's 240px rail). */
   isNarrow: boolean;
-  /** #159: whether the file IDE is currently folded away (chat is the main
-   * stage). Drives the `Workspace` toggle's pressed state + hides IDE-only
-   * chrome (the command palette) while collapsed. */
+  /** Whether the file IDE is currently folded away (chat is the main stage).
+   * Drives the View menu's Workspace row + hides IDE-only chrome (the command
+   * palette) while collapsed. */
   ideCollapsed: boolean;
   onToggleIde: () => void;
+  /** The bottom log strip, so the View menu can report and flip it too. */
+  bottomState: PanelState;
+  onPanelBottom: (action: PanelAction) => void;
   onCommandPalette: () => void;
   onEdit: () => void;
 }) {
@@ -930,39 +972,66 @@ export function TopBar({
       </div>
       <span style={{ flex: 1 }} />
 
-      {/* #159: chat is the main stage; the file IDE (tree + editor + terminal)
-          folds behind this discoverable toggle. Only shown when the App has an
-          IDE at all (`function.workspace`); pressed = the workspace is open. */}
+      {/* Every panel this shell can fold lives behind ONE menu. The old lone
+          "Workspace" pill sat here shaped exactly like the P1 / triaging /
+          Public status chips, wore the severity accent when ON, and repeated
+          the global nav's own "Workspace" word — so it read as a label, in a
+          warning colour, about something else. Layout settings go here now,
+          and so does the next one. */}
       {manifest.function.workspace && (
-        <button
-          type="button"
-          onClick={onToggleIde}
-          aria-pressed={!ideCollapsed}
-          title={
-            ideCollapsed
-              ? "Show the file workspace"
-              : "Hide the file workspace — the chat expands to fill"
-          }
-          style={{
-            height: 28,
-            // Pressed (workspace open) = the accent-soft active fill used across
-            // the app's toggles, so the on/off direction is unmistakable rather
-            // than a faint bg swap read only via the title/aria (#466 ④).
-            border: `1px solid ${ideCollapsed ? "var(--paper-3)" : "var(--accent)"}`,
-            borderRadius: "var(--radius-btn)",
-            background: ideCollapsed ? "transparent" : "var(--accent-soft)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "0 10px",
-            color: ideCollapsed ? "var(--text-paper-d)" : "var(--accent-h)",
-            fontSize: pxToRem(12),
-            cursor: "pointer",
-          }}
+        <Popover
+          align="end"
+          trigger={({ onClick, open }) => (
+            <button
+              type="button"
+              onClick={onClick}
+              title="Panels and layout"
+              style={{
+                height: 28,
+                border: "1px solid var(--paper-3)",
+                borderRadius: "var(--radius-btn)",
+                background: open ? "var(--paper-2)" : "transparent",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "0 10px",
+                color: "var(--text-paper-d)",
+                fontSize: pxToRem(12),
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              {/* NOT the gear — the item-details button beside it is already
+                  a gear, and two of them mean different things. */}
+              <Icon name="panel_left" size={13} />
+              <span>View</span>
+            </button>
+          )}
         >
-          <Icon name="panel_left" size={13} />
-          <span>Workspace</span>
-        </button>
+          {() => (
+            <div style={{ minWidth: 240, padding: "6px 0" }}>
+              <div className="caps" style={{ padding: "4px 12px" }}>
+                Panels
+              </div>
+              <PanelToggle
+                label="Workspace"
+                title={
+                  ideCollapsed
+                    ? "Show the file workspace — the chat makes room for it"
+                    : "Hide the file workspace — the chat expands to fill"
+                }
+                checked={!ideCollapsed}
+                onChange={onToggleIde}
+              />
+              <PanelToggle
+                label="Log panel"
+                title={`Problems, Output, Terminal and the agent log (${modCombo("J")})`}
+                checked={bottomState !== "closed"}
+                onChange={() => onPanelBottom({ type: "toggle" })}
+              />
+            </div>
+          )}
+        </Popover>
       )}
 
       {/* #159: the command palette jumps to files/symbols — IDE-only chrome.
