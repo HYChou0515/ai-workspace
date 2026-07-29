@@ -45,6 +45,9 @@
 | Q8 | `/opt/tools` 的 layout | **content-addressed**（`ext/<sha>/`）。`.tools` 那層把 sha **還原成 tool name**，工具端零改動 |
 | Q9 | app 怎麼拿到 schema？ | **問 host**（新的 resolve 端點）。GitLab 憑證只在 host 一處 |
 | Q10 | 工具的名字誰說了算？ | **我們**：`app.json` 的 key 是本地名；manifest 的 `name` 只當校驗 |
+| Q11 | 新增一支工具時 name+url 填哪一層？ | **`app.json`**（改 repo + 發版）。不是部署設定、也不是線上 UI |
+| Q12 | 第三方支不支援 `pkg:cmd` 只授權單一 command？ | **支援，且零成本**——第三方一旦成為 `PackageInfo`，`build_function_tools` 的展開邏輯與來源無關 |
+| Q13 | private GitLab 的 token 怎麼給？ | **先一個全域 token**（host env）。per-project token 留待有需求再說 |
 
 ### Q2 為什麼一定要 builder image，不能是裸腳本
 
@@ -80,15 +83,94 @@ manifest 的 `name` 若是權威，兩個作者都叫 `data-fetch` 就無解，�
 
 ---
 
-## 3. 目標形狀
+## 3. 作者面：一個 tool provider 實際拿到什麼
 
-### 3.1 一次 turn 的資料流
+**這是本案的主產出**——平台那半（§4）是為了讓這半成立。
+
+### 3.1 作者的 repo 長什麼樣
+
+跟今天的 `sample-tools/*` **一模一樣**，作者不用學新結構：
+
+```
+my-wafer-tools/
+  pyproject.toml          # [project.scripts] wafer-history = "wafer_tools.cli:main"
+  uv.lock                 # 依賴釘死 —— bundle 可重現的前提
+  src/wafer_tools/
+    cli.py                # 3-stage 契約
+    commands/…
+  .gitlab-ci.yml          # ← 我們提供的範本，貼上就好
+```
+
+3-stage 契約（既有，`docs/extending-the-platform.md` §Tool 已有完整說明）：
+
+| 呼叫 | 印出 |
+|---|---|
+| `launch` | `[{name, description}, …]` —— 這個 package 有哪些 command |
+| `launch <cmd>` | `{name, description, params_json_schema}` —— 該 command 的 metadata |
+| `launch <cmd> '<json>'` | 真正執行，結果吐 stdout |
+
+**作者不用手寫 JSON schema**：builder 直接跑他的 CLI 把 schema 抽出來，跟今天
+`prebuild` 固化 `commands.json` / `schemas/<cmd>.json` 是同一段程式。
+
+### 3.2 `.gitlab-ci.yml`（我們提供的範本）
+
+```yaml
+build-tool:
+  image: registry.example/ai-workspace/tool-builder:2026.07
+  script:
+    - build-tool /src dist          # builder image 內建的唯一指令
+  artifacts:
+    paths: [dist/]
+    expire_in: never                # ← 必須。預設會過期，過期後 URL 直接 404
+```
+
+產出兩個檔：
+
+```
+dist/tool.tar.zst        # 會跑的整包：.venv/ + python/ + launch + commands.json + schemas/
+dist/tool.manifest.json  # name / commands(含 schema) / builder / python+arch / bundle.sha256 / source
+```
+
+### 3.3 作者不推 CI 也能先自測
+
+```sh
+docker run --rm -v "$PWD:/src"   tool-builder:2026.07 build-tool /src dist
+docker run --rm -v "$PWD/dist:/d" tool-builder:2026.07 smoke /d
+```
+
+`smoke` 在**真正的 sandbox base image** 裡把 bundle 解開、跑一遍 3-stage 契約，
+所以「我這邊會動」跟「平台上會動」是同一件事，不是碰運氣。
+
+### 3.4 作者交給我們的，就一串 URL
+
+GitLab 的 latest-artifact 端點——**作者推一版，這串就自動指到新的**：
+
+```
+https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.manifest.json?job=build-tool
+```
+
+平台把 `tool.manifest.json` 換成 `tool.tar.zst` 就是 bundle 的位址，所以**只需要一串**。
+
+### 3.5 `docs/tool-authoring.md`（新增）
+
+就是把 3.1–3.4 寫清楚，外加：
+
+- manifest 每個欄位的意思，以及**什麼會讓平台拒絕你的 artifact**（`format_version` 不認得 /
+  `builder` 對不上 / `arch` 不符 / sha 不符 / manifest 的 `name` 跟平台登記的對不上）
+- 工具能拿到哪些環境變數（接 #669）
+- 「不要把 secret 寫進 bundle」——bundle 對同一台 host 上所有 sandbox 是共用的
+
+---
+
+## 4. 平台面
+
+### 4.1 一次 turn 的資料流
 
 ```
 turn 開始
   ├─ app 讀 app.json:  tools: [...第一方...],  external_tools: { 本地名 → artifact url }
   ├─ app → host   POST /tools/resolve  { tools: { name: url } }
-  │     host 對每支：抓 manifest → 相容性閘門(format_version / builder / arch)
+  │     host 對每支：抓 manifest → 相容性閘門(format_version / builder / arch / name)
   │                 → cache 命中(by sha)就跳過下載
   │                 → 否則抓 tar → 驗 sha → 安全解壓進 /opt/tools/ext/<sha> (root:root 755)
   │     host ← 回  { name: { sha, commands, schemas, stale? } }
@@ -101,7 +183,7 @@ turn 開始
 
 **釘住是重點**：app 看到的 schema 與 sandbox 裡跑的 bundle，來自同一次 resolve 的同一個 sha。
 
-### 3.2 磁碟 layout
+### 4.2 磁碟 layout
 
 ```
 /opt/tools/
@@ -122,109 +204,132 @@ turn 開始
 **副作用（正面）**：今天 jailed 是把**整個** tools 目錄掛進去，這個 app 沒授權的工具也看得到；
 改成逐支掛之後，sandbox 只看得到這次授權的那幾支——**比今天更嚴**。
 
-### 3.3 `app.json` 宣告
+### 4.3 `app.json` 宣告（Q11 = a）
 
 ```json
 "agent": {
-  "tools": ["csv-column-summary", "sci-plot", "wafer-history"],
+  "tools": ["csv-column-summary", "sci-plot", "wafer-history", "wafer-history:trend"],
   "external_tools": {
-    "wafer-history": "https://gitlab.example/api/v4/projects/123/jobs/artifacts/main/raw/dist?job=build"
+    "wafer-history": "https://gitlab.example/api/v4/projects/123/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build-tool"
   }
 }
 ```
 
-`tools` 完全照舊（授權、colon 語法挑 command 都不變）；`external_tools` 只回答「這個名字的
-bytes 去哪拿」。**換版本不用改 repo**（url 不變，作者推就生效）；只有**新增/移除一支工具**
-要改 repo——那本來就是部署層的決定。
+`tools` 完全照舊（授權、colon 語法挑 command 都不變 —— Q12）；`external_tools` 只回答
+「這個名字的 bytes 去哪拿」。**換版本不用改 repo**（url 不變，作者推就生效）；只有**新增/移除
+一支工具**要改 repo + 發版。
+
+### 4.4 運維：怎麼回滾
+
+url 指的是「latest」，所以平時會跟著作者走。要**釘回舊版**時，把 `external_tools` 那串換成
+指定 job 的 artifact URL（GitLab 支援 `/jobs/<job_id>/artifacts/…`），下一個 turn 的 resolve
+就會抓到那個 sha。若該 sha 還在 host cache 裡是**秒回**（content-address，P9 的 GC 沒收走就還在）；
+被回收了就重抓一次，同一條路。
+
+換句話說：**「跟著最新」和「釘死某版」是同一個欄位的兩種寫法**，不需要第二套機制。
 
 ---
 
-## 4. 明確不做
+## 5. 明確不做
 
-- **不做 runtime registry / admin UI**（那是被否決的另一案）。
+- **不做 runtime registry / admin UI**（Q11 選 a）。
 - **不在平台上 build 陌生碼**。
 - **不把 sha 釘在 `app.json`**——釘了就等於作者每次發版都要改我們 repo，自動更新就沒了。
+  （要釘特定版本時改的是 **url**，見 4.4。）
 - **不讓 app 直連 GitLab**：憑證只在 host 一處。
 - **不開放 user 自建 tool**：仍是 deploy-time 的動作，只是「dev」現在可以是外部作者。
 - **第一方工具維持烤在 image 裡**：它跟平台同版本發布是對的，不硬要統一。
 
 ---
 
-## 5. 已知風險（誠實列，非阻擋）
+## 6. 已知風險（誠實列，非阻擋）
 
 | | 風險 | 處置 |
 |---|---|---|
 | R1 | **sha 驗證退化成完整性檢查**。manifest 與 bundle 同源，能推 artifact 的人可以同時改掉 sha。擋得住傳輸截斷／cache 壞掉／只改一個檔的粗糙竄改；擋不住有 push 權限的人 | **信任邊界 = 誰能推那個 GitLab project**。該 project 的權限要當**部署權限**管。已知並接受 |
 | R2 | GitLab 進了開 sandbox 的關鍵路徑 | host-local cache + **last-known-good**：抓不到就用上次成功那份並標 `stale`，不讓 sandbox 開不起來 |
-| R3 | host 新增對外憑證面（今天 `sandbox-host/src` 完全沒有任何 httpx/token，只有測試用） | 只此一處；token 走既有的 secret 機制 |
-| R4 | 作者改 command 名／schema 會即時影響所有新 sandbox，沒有版本閘 | 以 P6 的「記錄每次用的 sha」+ 相容性閘門的清楚錯誤緩解 |
-| R5 | 舊 sha 的 cache 會堆積 | P7 的 refcount GC |
+| R3 | host 新增對外憑證面（今天 `sandbox-host/src` 完全沒有任何 httpx/token，只有測試用） | 只此一處，先一個全域 token（Q13） |
+| R4 | 作者改 command 名／schema 會即時影響所有新 sandbox，沒有版本閘 | 以 P8 的「記錄每次用的 sha」+ 相容性閘門的清楚錯誤緩解；真要凍版就用 4.4 釘 job URL |
+| R5 | **GitLab CI artifact 預設會過期**（`expire_in` 不設約 30 天）。過期後 URL 404 —— 已 cache 的 host 靠 last-known-good 撐著，但**新 pod 一起來就抓不到** | CI 範本強制 `expire_in: never`，並在 `tool-authoring.md` 講明；resolve 失敗訊息要能一眼看出「artifact 過期了」 |
+| R6 | 磁碟：每支 bundle 約 150MB，× N 支 × 每台 host（而且新舊 sha 會並存） | P9 的 GC 加一個 cache 上限；容量估算寫進 `deployment.md` |
+| R7 | 舊 sha 的 cache 會堆積 | P9 的 refcount GC |
 
 ---
 
-## 6. Phases
+## 7. Phases
 
 > 一個 phase 一個 commit，flat integer。每個 phase 都要有**會紅的新測試**。
+> **P1–P3 先做完，作者就能開始寫工具了**（即使平台端還沒接完）。
 
 ### P1 · artifact 格式 + 驗證器（純函數，無 I/O）
 
 `tooling/artifact.py`：`Manifest` struct、`parse_manifest(bytes)`、
 `check_compatible(manifest, host_builder, arch)`、`verify_bundle(bytes, expected_sha)`。
-測試涵蓋：欄位缺漏、`format_version` 不認得、builder 對不上、arch 不符、sha 不符。
+builder 與 host 共用這一份契約。
+測試涵蓋：欄位缺漏、`format_version` 不認得、builder 對不上、arch 不符、sha 不符、name 不符。
 
-### P2 · content-addressed cache + 安全解壓（host 本機，先不連網）
+### P2 · builder image + `build-tool` / `smoke`
+
+`tool-builder/Dockerfile`，base 對齊 `sandbox-host/Dockerfile` **stage 2**；
+`build-tool <src> <out>` = 既有 `prebuild.build_package` + 抽 `commands.json`/`schemas/` 進 manifest
++ 打包 `tool.tar.zst`；`smoke <dist>` 解開跑一遍 3-stage 契約。
+`BUILDER_ID` 同時烤進 builder 與 host image，供 P6 的閘門比對。
+驗收：拿 `sample-tools/csv-column-summary` 走一遍，產出的 manifest 通過 P1 的驗證器。
+
+### P3 · 作者面文件 + CI 範本
+
+`docs/tool-authoring.md`（§3 全文）+ `.gitlab-ci.yml` 範本（含 `expire_in: never`）。
+**做完這裡，工具作者就可以開始寫、開始發版了**，不必等平台端。
+
+### P4 · content-addressed cache + 安全解壓（host 本機，先不連網）
 
 `sandbox_host/tool_cache.py`：`ensure(sha, tar_bytes) -> Path`。
 解到 tmp → **atomic rename**；擋 **zip-slip**（`../` 路徑穿越）、symlink 逃逸、hardlink；
 完成後 `chown root:root` + `chmod 755`（特權動作 seam 化，非 root 也能單元測）。
 已存在同 sha 就 no-op。
 
-### P3 · host fetch + `POST /tools/resolve`
+### P5 · 第一方工具搬進 `builtin/`
+
+tools 目錄形狀從「一堆 `<name>/`」變成 `builtin/<name>/` + `ext/<sha>/`。
+**這是 breaking change**（`sandbox-host/Dockerfile`、`SANDBOX_HOST_TOOLS_DIR`、
+`discover_packages` 的路徑、既有測試都會動），所以獨立一個 phase，先把第一方搬完並全綠，
+再讓第三方加進來。
+
+### P6 · host fetch + `POST /tools/resolve`
 
 抓 manifest（httpx，token 由 env 來）→ P1 的閘門 → cache 命中就跳過下載 → 否則抓 tar →
 驗 sha → `tool_cache.ensure` → 回 `{name: {sha, commands, schemas, stale?}}`。
 本機留一份 `url → 最後成功 sha` 的小索引以支撐 last-known-good。
+錯誤訊息要能分辨「artifact 過期／404」「ABI 不合」「sha 不符」（R5）。
 更新 `docs/sandbox-host-wire.md` 的端點表。
 
-### P4 · per-sandbox tools 視圖（unjailed symlink ／ jailed per-tool ro bind-mount）
+### P7 · per-sandbox tools 視圖（unjailed symlink ／ jailed per-tool ro bind-mount）
 
 `SandboxSpec` 加 `tools: dict[str, str]`（本地名 → sha）。`create` 依此組 `.tools-view`；
-jailed bootstrap 改成逐支 bind-mount（只掛這次授權的）。第一方繼續從 `builtin/` 來。
+jailed bootstrap 改成逐支 bind-mount（只掛這次授權的）。
 
-### P5 · app 端：`external_tools` 宣告 + turn 起點 resolve
+### P8 · app 端：`external_tools` 宣告 + turn 起點 resolve + 記錄 sha
 
 `app.json` schema 加 `agent.external_tools`；`turn_context` 在組 context 時打 host resolve，
 把回來的 commands/schemas 轉成 `PackageInfo` 併進 `ctx.packages`
 （該欄位已存在：`agent/context.py:177`，由 `api/turn_context.py:355` 餵）；
 把 `{name: sha}` 一起帶進 `ensure_sandbox` 的 spec。**同一 turn 內 sha 釘住。**
+同時落一筆記錄（item / turn / name → sha / stale）——這是「使用者說工具怪怪的」唯一查得回去的線索。
 resolve 失敗且無 last-known-good → **該工具缺席但 turn 繼續**，並讓 agent 與使用者都看得到原因
 （沿用 #480 的「停用工具也要揭露」形狀）。
 
-### P6 · 記錄每次實際用到的 sha
+### P9 · cache GC + 容量上限
 
-每次 resolve 落一筆（item / turn / name → sha / stale）。這是「使用者說工具怪怪的」
-唯一查得回去的線索，也是回滾時「要回到哪一版」的依據。
+refcount sweep：沒有任何 live sandbox 引用的 `ext/<sha>` 才回收（與 idle-killer / blob-gc 同形狀），
+加一個 cache 上限（R6）。content-address ⇒ 回滾到還在 cache 的舊 sha 是秒回。
 
-### P7 · cache GC
+### P10 · 改寫 `extending-the-platform.md` 的立場 + 運維文件
 
-refcount sweep：沒有任何 live sandbox 引用的 `ext/<sha>` 才回收（與 idle-killer / blob-gc 同形狀）。
-content-address ⇒ 回滾到還在 cache 的舊 sha 是秒回，被 GC 了就重抓，同一條路。
+該頁 §Tool 目前寫「只有 dev 自建」、流程是「改 `PACKAGES` → prebuild → 重啟」，
+要變成兩條路：第一方（vendor 進 repo）與第三方（作者 CI + artifact url）。
+`deployment.md` 補：全域 token 怎麼給、磁碟估算、**怎麼回滾**（4.4）。
 
-### P8 · builder image + 作者端 CI 範本
-
-`tool-builder/Dockerfile`（從 host runtime base 長出來）+ `.gitlab-ci.yml` 範本；
-`BUILDER_ID` 烤進 host image，供 P3 的閘門比對。
-作者的 CI 只要：`docker run --rm -v $PWD:/src <builder>` → `dist/tool.tar.zst` + `dist/tool.manifest.json`。
-
-### P9 · docs（作者面 + 改寫現有立場）
-
-新增 `docs/tool-authoring.md`：3-stage CLI 契約、builder image 用法、CI 範本、manifest 欄位、
-ABI 規則、可用的環境變數（接 #669）。
-改寫 `docs/extending-the-platform.md` §Tool——它目前寫「只有 dev 自建」、
-流程是「改 `PACKAGES` → prebuild → 重啟」，要變成兩條路：第一方（vendor 進 repo）
-與第三方（作者 CI + artifact url）。
-
-### P10 · 權限不變量 + 端到端整合測試
+### P11 · 權限不變量 + 端到端整合測試
 
 root-gated integration：解壓後 `owner=0` / other 無 `w`；降權 uid 寫不進；
 jail 內只看得到這次授權的工具；換 sha 後**下一個** sandbox 拿到新版而**既有** sandbox 不變。
@@ -234,8 +339,10 @@ jail 內只看得到這次授權的工具；換 sha 後**下一個** sandbox 拿
 
 ---
 
-## 7. 這輪之外
+## 8. 這輪之外
 
 - **多租戶／跨 app 的工具共享**：現在 scope 在 app.json，夠用。
-- **非 GitLab 的來源**（S3 / OCI artifact）：manifest 與 cache 都是 URL-agnostic，之後要加只動 P3。
+- **非 GitLab 的來源**（S3 / OCI artifact / GitLab package registry）：manifest 與 cache 都是
+  URL-agnostic，之後要加只動 P6。若 R5 的 `expire_in` 在實務上治不住，package registry 是下一步。
+- **per-project token**（Q13 先做全域）。
 - **工具內部呼叫 LLM**：另一條線（2026-07-24 同場討論），與本案無耦合。
