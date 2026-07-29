@@ -279,6 +279,7 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         home = super()._ensure_home(handle, root)
         self._own_home(home, self._identities[handle.id].uid)
         return home
+
     async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
         # The host process writes it; `exec` reads it as the item uid. The
         # inherited write is 0600 owned by US, which that uid cannot read — so

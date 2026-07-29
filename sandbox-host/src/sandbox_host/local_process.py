@@ -360,6 +360,7 @@ class LocalProcessSandbox:
         home = root / _HOME
         home.mkdir(exist_ok=True)
         return home
+
     async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
         """Write the item's user env for the tool launchers, at the SANDBOX ROOT
         (a sibling of the workspace), so walk/the archive never see it."""
