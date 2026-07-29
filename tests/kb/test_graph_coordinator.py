@@ -69,7 +69,7 @@ async def test_graph_fan_out_extracts_only_opted_in_collections():
     on = _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "Q3 revenue 1.2M")])
     off = _mk_collection(spec, "photos", use_graph=False, docs=[("photo-1", "a cat")])
 
-    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
     coord.enqueue_dispatch()
     coord.start_consuming()
     await coord.aclose()
@@ -122,7 +122,7 @@ async def test_split_reconciles_the_permission_mirror_before_extracting():
             )
         ).resource_id
 
-    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
     coord.reconcile_mirrors(cid)
 
     got = grm.get(legacy).data
@@ -157,7 +157,7 @@ async def test_the_split_job_runs_the_reconcile_before_fanning_out_batches():
         ).resource_id
     assert _mirror_of(spec, legacy).collection_visibility == ""
 
-    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
     coord._handle(
         SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="split", collection_id=cid)))
     )
@@ -217,7 +217,7 @@ async def test_the_reconcile_never_publishes_a_tightened_deck():
         return grm_patch(query, patch, **kw)
 
     grm.patch_many = spy  # ty: ignore[invalid-assignment]
-    GraphCoordinator(spec, _FakeLlm(), batch_size=10).reconcile_mirrors(cid)
+    GraphCoordinator(spec, _FakeLlm(), chunk_budget=10).reconcile_mirrors(cid)
     assert seen == ["reset"]
     assert _mirror_of(spec, tightened).doc_visibility == "private"
 
@@ -240,7 +240,7 @@ async def test_the_batch_job_records_mentions_alongside_claims():
 
     spec = make_spec(default_user=lambda: "bob")
     cid = _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "回焊爐 溫度 250C")])
-    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
     coord._handle(
         SimpleNamespace(
             data=GraphJob(
@@ -263,7 +263,7 @@ async def test_a_reconcile_job_builds_the_vocabulary():
 
     spec = make_spec(default_user=lambda: "bob")
     cid = _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "回焊爐 250C")])
-    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
     coord._handle(
         SimpleNamespace(
             data=GraphJob(
@@ -285,7 +285,7 @@ async def test_a_dispatch_ends_by_queueing_a_reconcile():
     corpus extracts every week and never gets an entity page."""
     spec = make_spec(default_user=lambda: "bob")
     _mk_collection(spec, "reports", use_graph=True, docs=[("deck-A", "x")])
-    coord = GraphCoordinator(spec, _FakeLlm(), batch_size=10)
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
     coord._handle(SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="dispatch"))))
     jrm = spec.get_resource_manager(GraphJob)
     kinds = []
@@ -294,3 +294,59 @@ async def test_a_dispatch_ends_by_queueing_a_reconcile():
         assert isinstance(r.data.payload, GraphJobPayload)
         kinds.append(r.data.payload.kind)
     assert "reconcile" in kinds
+
+
+async def test_split_sizes_jobs_by_chunk_count_not_document_count():
+    """The fan-out has to bound the work a job DOES, not how many documents it
+    names. One extraction runs per chunk, and chunks-per-doc follows document
+    length, so batching by doc count let a single job be 20 model calls or
+    2000 — and the tail ran past the 30-minute ceiling, where the job is
+    redelivered instead of finished and never converges.
+
+    Three docs carrying 1 / 4 / 1 chunks against a budget of 4 must not land in
+    one job just because three is under any doc-count limit."""
+    spec = make_spec()
+    cid = _mk_collection(spec, "c", use_graph=True, docs=[("small-A", "t")])
+    crm = spec.get_resource_manager(DocChunk)
+    drm = spec.get_resource_manager(SourceDoc)
+    for doc_id, n_chunks in (("fat-B", 4), ("small-C", 1)):
+        with drm.using("bob"):
+            drm.create(
+                SourceDoc(
+                    collection_id=cid,
+                    path=f"{doc_id}.pptx",
+                    content=Binary(data=b"x"),
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                ),
+                resource_id=doc_id,
+            )
+        for seq in range(n_chunks):
+            crm.create(
+                DocChunk(
+                    collection_id=cid,
+                    source_doc_id=doc_id,
+                    seq=seq,
+                    start=0,
+                    end=1,
+                    text=f"chunk {seq}",
+                )
+            )
+
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=4)
+    coord._handle(
+        SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="split", collection_id=cid)))
+    )
+
+    chunks_of = {"small-A": 1, "fat-B": 4, "small-C": 1}
+    jrm = spec.get_resource_manager(GraphJob)
+    batches = [
+        r.data.payload.doc_ids
+        for r in jrm.list_resources(QB.all().build())
+        if isinstance(r.data, GraphJob) and r.data.payload.kind == "batch"
+    ]
+    assert batches, "the split enqueued no batch jobs"
+    for docs in batches:
+        cost = sum(chunks_of[d] for d in docs)
+        assert cost <= 4, f"batch {docs} costs {cost} extractions, over the budget of 4"
+    assert sorted(d for b in batches for d in b) == ["fat-B", "small-A", "small-C"]

@@ -41,6 +41,7 @@ from .schema import (
     FilestoreSettings,
     GitSettings,
     GoalSettings,
+    GraphSettings,
     HealthSettings,
     HistorySettings,
     HttpSandboxSettings,
@@ -415,6 +416,8 @@ _TOP_SCHEMA: dict[str, Any] = {
     "kb": {
         "embedder": _dataclass_keys(EmbedderSettings),
         "chunker": _dataclass_keys(ChunkerSettings),
+        # #534: metric-extraction job sizing — one leaf, `chunk_budget`.
+        "graph": _dataclass_keys(GraphSettings),
         "retrieval_llm": "__retrieval_llm__",
         # #175: the card-drafting LLM follows the same usage-entry shape.
         "card_drafter": "__retrieval_llm__",

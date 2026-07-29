@@ -286,6 +286,7 @@ def main() -> None:
             goal_max_rounds=settings.goal.max_rounds,
             # #506: reconcile / cluster-sweeper thresholds (dedup dup proposals + Qs).
             kb_cluster_tau=settings.kb.cluster.cluster_tau,
+            kb_graph_chunk_budget=settings.kb.graph.chunk_budget,
             kb_cluster_suppress_tau=settings.kb.cluster.suppress_tau,
             kb_cluster_update_tau=settings.kb.cluster.update_tau,
             kb_cluster_merge_tau=settings.kb.cluster.merge_tau,
