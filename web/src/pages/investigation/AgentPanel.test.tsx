@@ -695,3 +695,69 @@ describe("AgentPanel ask_user (grill-me)", () => {
     expect(screen.queryByRole("button", { name: /Postgres/ })).toBeNull();
   });
 });
+
+describe("AgentPanel env vars", () => {
+  /* The panel is only real if something MOUNTS it. A component test passes
+   * whether or not anything ever renders the modal — which is exactly how the
+   * `ask_user` card shipped dead (#591), so the button and the round trip are
+   * asserted here, at the surface a user actually reaches. */
+
+  function renderWithEnv(envVars: Record<string, string> | undefined, onSave = vi.fn()) {
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={stubAgent()}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+          envVars={envVars}
+          onSaveEnvVars={onSave}
+        />
+      </DialogProvider>,
+    );
+    return onSave;
+  }
+
+  it("offers the env panel from the header", () => {
+    renderWithEnv({});
+    expect(screen.getByTestId("env-button")).toBeInTheDocument();
+  });
+
+  it("withholds it on a surface that cannot persist onto an item", () => {
+    // Same rule as the Tools picker: no way to save ⇒ do not offer the button.
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={stubAgent()}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+        />
+      </DialogProvider>,
+    );
+    expect(screen.queryByTestId("env-button")).toBeNull();
+  });
+
+  it("shows the item's current variables when opened", () => {
+    renderWithEnv({ API_KEY: "sk-1" });
+    fireEvent.click(screen.getByTestId("env-button"));
+    expect((screen.getByTestId("env-text") as HTMLTextAreaElement).value).toBe("API_KEY=sk-1\n");
+  });
+
+  it("hands an edit back to the parent to persist", () => {
+    const onSave = renderWithEnv({ API_KEY: "sk-1" });
+
+    fireEvent.click(screen.getByTestId("env-button"));
+    fireEvent.change(screen.getByTestId("env-text"), { target: { value: "API_KEY=sk-2\n" } });
+    fireEvent.click(screen.getByTestId("env-save"));
+
+    expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" });
+    expect(screen.queryByTestId("env-modal")).toBeNull(); // and it closes
+  });
+});

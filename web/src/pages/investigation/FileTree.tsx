@@ -1003,7 +1003,14 @@ function TreeRow({
           {/* A folder is just a chevron twistie, sized like a file icon, so
               folders and files at the same depth line up (VSCode). */}
           <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={13} />
-          <span>{node.name}</span>
+          {/* Same as the file row: the button's title is the drag hint, so the
+              folder's own name lives on the label that actually truncates. */}
+          <span
+            title={node.name}
+            style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {node.name}
+          </span>
         </button>
         )}
         {!isCollapsed && (
@@ -1125,9 +1132,13 @@ function TreeRow({
       }}
     >
       <Icon name="file" size={13} color="var(--text-paper-d)" />
+      {/* The name goes on the LABEL, not just the row: the row's own title is
+          the drag hint, so a truncated name had no way to be read in full. */}
       <span
+        title={basename(node.path)}
         style={{
           flex: 1,
+          minWidth: 0,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",

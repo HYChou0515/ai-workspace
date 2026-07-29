@@ -197,7 +197,12 @@ export function TodoPanel({
                 setGoalDraft("");
               }
             }}
-            style={{ flex: 1, fontSize: pxToRem(12) }}
+            // `minWidth: 0` is what makes `flex: 1` actually able to give width
+            // back: an <input> carries an intrinsic min-content width from its
+            // default `size`, and `min-width: auto` refuses to shrink past it,
+            // so the row stayed wider than the panel and pushed "Set goal" out
+            // past the clipped edge on anything under ~870px.
+            style={{ flex: 1, minWidth: 0, fontSize: pxToRem(12) }}
           />
           <button
             type="button"
@@ -279,7 +284,8 @@ export function TodoPanel({
             onKeyDown={(e) => {
               if (e.key === "Enter") add();
             }}
-            style={{ flex: 1, fontSize: pxToRem(12) }}
+            // Same flex/<input> trap as the goal row above.
+            style={{ flex: 1, minWidth: 0, fontSize: pxToRem(12) }}
           />
           <button
             type="button"

@@ -100,6 +100,12 @@ class Sandbox(Protocol):
     # deletions while `is_ready` holds. Never appears in walk (not a workspace file).
     async def mark_ready(self, handle: SandboxHandle) -> None: ...
     async def is_ready(self, handle: SandboxHandle) -> bool: ...
+    # The item's user-set environment variables, as `KEY=VALUE` lines, placed
+    # beside the workspace for the tool launchers to export. Outside the walk
+    # scope like `.ready`, so it never reaches the file tree or the archive.
+    # Replaces the previous content — the app rebuilds it whole each turn, so a
+    # deleted variable has to actually go.
+    async def write_user_env(self, handle: SandboxHandle, content: str) -> None: ...
     # #504: recursively re-own the workspace to the sandbox uid after a bulk
     # rsync restore (which writes as root, bypassing per-write chown). No-op for
     # non-isolating backends.

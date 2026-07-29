@@ -76,7 +76,13 @@ export function OnboardingModal({
           </ol>
         )}
 
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 4 }}>
+        {/* #fe-responsive: at a narrow modal width these three labels wrapped
+            to a second line INSIDE their fixed 32px height and were clipped
+            mid-glyph. Each label stays on one line and the row wraps instead. */}
+        <div
+          data-testid="onboarding-actions"
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 4 }}
+        >
           <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
             <button
               type="button"
@@ -90,6 +96,8 @@ export function OnboardingModal({
                 border: "none",
                 background: "transparent",
                 color: "var(--text-paper-d)",
+                whiteSpace: "nowrap",
+                flexShrink: 0,
               }}
             >
               Don't show again
@@ -108,6 +116,8 @@ export function OnboardingModal({
                   background: "transparent",
                   color: "var(--accent)",
                   fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  flexShrink: 0,
                 }}
               >
                 See the full guide →
@@ -128,6 +138,8 @@ export function OnboardingModal({
               background: "var(--accent)",
               color: "var(--white)",
               fontWeight: 600,
+              whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             Got it

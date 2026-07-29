@@ -64,6 +64,7 @@ from ..perm.model import Verb, user_subject
 from ..resources import AgentConfig
 from ..resources.groups import groups_of
 from ..resources.kb import Citation, KbChat, KbMessage
+from ..tokens import CallLane
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
 from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolLog, ToolStart
@@ -118,6 +119,11 @@ async def answer_question(
     discoverable_collection_ids: list[str] | None = None,
     on_withheld: Callable[[list[str]], None] | None = None,
     wiki_consultant_factory: Callable[[list[str]], WikiConsultant | None] | None = None,
+    # Which lane the CALLER is on. A sub-agent inherits it for the same reason it
+    # inherits the ceilings below: a person waiting on the parent answer is waiting
+    # on this one too, and a background job's delegated searches are still batch
+    # work. Default tighter, so an un-updated caller cannot promote itself.
+    lane: CallLane = "background",
     # The turn's output ceilings. A sub-agent INHERITS its caller's, so an
     # operator who lowers them doesn't find the KB sub-agent — the biggest
     # producer of tool output on the path — still running at the default.
@@ -191,6 +197,7 @@ async def answer_question(
         retriever=retriever,
         collection_ids=collection_ids,
         agent_config=agent_config,
+        call_lane=lane,
         tool_output_max_chars=tool_output_max_chars,
         exec_output_max_chars=exec_output_max_chars,
         # #537: how this sub-agent reaches the wiki — a reader that navigates it in
@@ -939,6 +946,9 @@ def register_kb_chat_routes(
             # #111/#397: the acting user tools stamp on writes (context cards,
             # wiki corrections).
             acting_user=get_user_id(),
+            # A person is waiting on this reply — the KB chat send is the other
+            # interactive surface (see `AgentToolContext.call_lane`).
+            call_lane="interactive",
             # #397: the request_wiki_update tool submits a wiki correction through
             # this (None ⇒ the tool reports it's unavailable).
             submit_wiki_correction=(

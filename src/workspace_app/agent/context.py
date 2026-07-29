@@ -9,6 +9,7 @@ from ..files import WorkspaceFiles
 from ..filestore.protocol import FileStore
 from ..sandbox.protocol import OutputSink, Sandbox, SandboxHandle, SandboxSpec
 from ..sync import SandboxSync
+from ..tokens import CallLane
 
 if TYPE_CHECKING:
     from specstar import SpecStar
@@ -113,6 +114,14 @@ class AgentToolContext:
     files: WorkspaceFiles | None = None
     sync: SandboxSync | None = None
     sandbox_spec: SandboxSpec = field(default_factory=SandboxSpec)
+    # The item's user-set environment variables (`WorkItemBase.env_vars`), handed
+    # to the tools this turn runs. `ensure_sandbox` renders them into the
+    # sandbox's infra area; the launchers export them. Empty ⇒ an empty file,
+    # which still has to be written so a deleted variable actually disappears.
+    # NOT part of `sandbox_spec`: that is create-time infra env, set once and
+    # then overwritten by the launcher's own exports — the wrong layer and the
+    # wrong ordering for values the user owns.
+    user_env: dict[str, str] = field(default_factory=dict)
     handle: SandboxHandle | None = None
     # #492 P11: the wake hook receives the turn's restore-progress sink so a cold
     # wake's snapshot restore can stream (done, total) back to the turn. Callers
@@ -291,7 +300,18 @@ class AgentToolContext:
     # The acting user for agent-driven specstar writes (#111: create/update
     # context cards stamp `created_by`/`updated_by` as this user). Set per-turn
     # from the message author; empty for contexts with no card-write tools.
+    # It doubles as WHOSE BEHALF this turn runs on when there is no `speaker` —
+    # a background turn still has a user for the credential seam to resolve.
     acting_user: str = ""
+    # Whether a person is waiting on this turn. The external LLM gateway rate-limits
+    # the two lanes differently (a batch job must not spend the quota a person is
+    # waiting on), and the lane reaches it as whatever header the credential source
+    # chooses — we only carry it. `background` is the default ON PURPOSE: an
+    # unmarked turn getting the tighter quota is a slower answer, while the reverse
+    # is a job quietly eating the interactive allowance. Only a turn a human just
+    # triggered says otherwise (the chat send routes, the KB chat send), and a
+    # sub-agent inherits its caller's lane the same way it inherits output ceilings.
+    call_lane: CallLane = "background"
     # #624: how many history messages this turn had to leave out because they
     # would not fit the endpoint's context window. 0 = nothing was cut (the
     # normal case, and the default when no ceiling is known — we send it all
@@ -467,4 +487,18 @@ class AgentToolContext:
                     await provision_tools(
                         self.sandbox, self.handle, todo, prebuilt_dir=self.prebuilt_dir
                     )
+            # The item's user env, delivered where the tool launchers read it.
+            # Here rather than at the exec sites because this is the ONE place
+            # every sandbox user funnels through — the exec tool, the tool
+            # dispatch in `tooling/registry`, and the turn's eager wake — so it
+            # cannot be half-wired the way a seven-call-site change would be.
+            #
+            # Written UNCONDITIONALLY, including when there are none: a warm
+            # sandbox may still hold last turn's file, and a user who deleted
+            # their last variable must not leave the tools reading it. The
+            # handle is re-resolved per turn, so this is a per-turn rebuild —
+            # which is also how an edit between turns takes effect.
+            from .user_env import render_user_env
+
+            await self.sandbox.write_user_env(self.handle, render_user_env(self.user_env))
         return self.handle

@@ -83,6 +83,24 @@ async def test_mark_ready_then_ready_roundtrip_366(client):
     assert (await client.get(f"/sandboxes/{rid}/ready")).json() == {"ready": True}
 
 
+async def test_user_env_is_accepted_as_a_raw_body_and_stays_out_of_the_workspace(client):
+    # The body is the file, not JSON: these are `KEY=VALUE` lines whose values
+    # are arbitrary user text (`=`, `#`, quotes, `$` all turn up in real keys),
+    # and every encoding hop is a chance to mangle one. It also must not become
+    # a workspace file — that is the entire reason it goes beside the workspace.
+    rid = await _create(client)
+    body = b"TOKEN=a=b c#d$e`f'g\"h\nREGION=tw\n"
+
+    r = await client.post(f"/sandboxes/{rid}/user-env", content=body)
+
+    assert r.status_code == 204
+    entries = (await client.get(f"/sandboxes/{rid}/walk", params={"root": "/"})).json()["entries"]
+    assert entries == []
+    assert (await client.get(f"/sandboxes/{rid}/exists", params={"path": "/.userenv"})).json() == {
+        "exists": False
+    }
+
+
 async def test_walk_lists_files_with_versions(client):
     rid = await _create(client)
     await client.put(f"/sandboxes/{rid}/file", params={"path": "/dir/a.txt"}, content=b"aaa")

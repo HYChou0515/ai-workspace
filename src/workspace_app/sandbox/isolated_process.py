@@ -31,7 +31,7 @@ from pathlib import Path
 
 import xxhash
 
-from .local_process import _HOME, LocalProcessSandbox, _validate_sandbox_id
+from .local_process import _HOME, _USER_ENV, LocalProcessSandbox, _validate_sandbox_id
 from .protocol import SandboxHandle, SandboxSpec
 
 logger = logging.getLogger(__name__)
@@ -311,6 +311,16 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         home = super()._ensure_home(handle, root)
         self._own_home(home, self._uid_for(handle.id))
         return home
+
+    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
+        # The app process writes the file; `exec` reads it as the item uid. The
+        # inherited write is 0600 and owned by US, which the dropped uid cannot
+        # read — so hand it over, exactly as `_provision` does for `.home`
+        # (#393). Chowning to the derived uid is idempotent across pods, and
+        # non-root it is a no-op when the uid is already our own.
+        await super().write_user_env(handle, content)
+        path = self._require(handle) / _USER_ENV
+        await asyncio.to_thread(self._chown_runner, path, self._uid_for(handle.id))
 
     async def kill(self, handle: SandboxHandle) -> None:
         # The cgroup path is DERIVED from the id (no per-pod identity map), so a

@@ -69,6 +69,11 @@ class _Recording:
     async def upload(self, handle, data, remote_path) -> None:
         self.uploads.append((remote_path, len(data)))
 
+    async def write_user_env(self, handle, content: str) -> None:
+        # `ensure_sandbox` delivers the item's user env alongside provisioning,
+        # so a stand-in for the whole sandbox has to answer this too.
+        self.user_env = content
+
     async def kill(self, handle) -> None:  # pragma: no cover
         return None
 

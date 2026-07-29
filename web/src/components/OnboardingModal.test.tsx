@@ -81,3 +81,27 @@ describe("OnboardingModal", () => {
     expect(screen.queryByText(/See the full guide/)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * #fe-responsive — measured in a real browser at 390x844: the three action
+ * buttons sit in one `space-between` row, each pinned to `height: 32` with no
+ * wrap control. On a narrow modal the labels wrapped to a second line inside
+ * that fixed height and were clipped mid-glyph — "Got it" lost its lower half.
+ * Same defect family as the workspace's bottom-panel tab row.
+ */
+describe("OnboardingModal actions survive a narrow modal (#fe-responsive)", () => {
+  it("keeps each action label on one line", () => {
+    setup();
+    for (const label of ["Don't show again", "Got it"]) {
+      const btn = screen.getByRole("button", { name: label });
+      expect(btn.style.whiteSpace).toBe("nowrap");
+      expect(btn.style.flexShrink).toBe("0");
+    }
+  });
+
+  it("lets the action row wrap so the buttons keep their full height", () => {
+    setup();
+    const row = screen.getByTestId("onboarding-actions");
+    expect(row.style.flexWrap).toBe("wrap");
+  });
+});

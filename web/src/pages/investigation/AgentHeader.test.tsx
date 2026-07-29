@@ -161,3 +161,36 @@ describe("AgentHeader status copy (#159)", () => {
     expect(screen.queryByText("running")).not.toBeInTheDocument();
   });
 });
+
+describe("AgentHeader identity block keeps a readable width (#fe-responsive)", () => {
+  afterEach(cleanup);
+
+  // Measured in a real browser at 1440x900: the header's identity block was
+  // 21px wide, so "Root Cause Analysis" rendered as "R…" and the status cue as
+  // "Y…" — at EVERY viewport, because `flex: 1` (basis 0%) lets the block
+  // collapse to nothing while the action buttons hold their intrinsic width.
+  // The `flexWrap: "wrap"` added in #456 never engaged for the same reason:
+  // a zero-basis item always "fits", so the row never has to break.
+  // A non-zero basis is what makes the buttons drop to row two instead.
+  it("gives the title/status block a non-zero flex basis so the buttons wrap first", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-1" slug="rca" appTitle="Root Cause Analysis" />
+      </MemoryRouter>,
+    );
+    const block = screen.getByTestId("agent-header-identity") as HTMLElement;
+    expect(block.style.flexBasis).toBe("160px");
+    expect(block.style.flexGrow).toBe("1");
+    expect(block.style.flexShrink).toBe("1");
+    expect(block.style.minWidth).toBe("0");
+  });
+
+  it("still exposes the full App title as a tooltip once it ellipsizes", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-1" slug="rca" appTitle="Root Cause Analysis" />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("Root Cause Analysis")).toHaveAttribute("title", "Root Cause Analysis");
+  });
+});

@@ -36,6 +36,7 @@ from ..kb.collections import (
 )
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink
+from ..tokens import CallLane
 from .events import GoalUpdated, UserMessage
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .rca_messages import bubble_kb_citations, to_rca_message
@@ -160,6 +161,7 @@ class ChatSendService:
         engine_key: str,
         body: _MessageBody,
         author: str | None = None,
+        lane: CallLane = "background",
     ) -> None:
         """Append the user message, build the turn ctx and enqueue it — see
         :meth:`_send` — but do it in a task this request only WATCHES.
@@ -187,7 +189,7 @@ class ChatSendService:
         from the file tree is never quota-gated."""
         await self._files.ensure_room_for(investigation_id, 1)
         task = asyncio.create_task(
-            self._send(investigation_id, rid, conv, engine_key, body, author=author)
+            self._send(investigation_id, rid, conv, engine_key, body, author=author, lane=lane)
         )
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
@@ -333,6 +335,7 @@ class ChatSendService:
         engine_key: str,
         body: _MessageBody,
         author: str | None = None,
+        lane: CallLane = "background",
     ) -> None:
         """Append the user message to conversation ``rid``, build the RCA turn ctx
         from ITS history, and enqueue the turn on ``engine_key`` (item_id for the
@@ -454,6 +457,8 @@ class ChatSendService:
                 excluded_collection_ids=hub_excluded if purpose == "kb_chat" else None,
                 # #605: the composer's per-chat disclosure toggle rides the body.
                 disclosure=body.disclosure if purpose == "kb_chat" else None,
+                # The sub-agent runs on the lane of the turn that spawned it.
+                lane=lane,
             )
 
         # ONE bridge for every sub-agent the RCA tools may invoke
@@ -472,6 +477,9 @@ class ChatSendService:
             collection_tiers=hub_collection_tiers,
             acting_user=author,
             speaker=self._users.get(author),
+            # Interactive only when the caller says a person is waiting — the goal
+            # driver re-enters this same path with nobody watching.
+            call_lane=lane,
             # #380: skills applied THIS turn — so read_skill exempts them from the
             # disable gate (their bodies are already preloaded into the prompt).
             apply_skills=body.apply_skills or [],

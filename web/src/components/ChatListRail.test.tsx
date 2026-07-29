@@ -2,8 +2,9 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { BREAKPOINTS } from "../lib/breakpoints";
 import { ChatListRail } from "./ChatListRail";
 
 const items = [
@@ -26,6 +27,36 @@ vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "me" }));
 vi.mock("./ShareChatDialog", () => ({ ShareChatDialog: () => <div data-testid="share-dialog" /> }));
 
 afterEach(cleanup);
+
+// The rail tucks itself when the viewport can't hold it AND the workspace shell
+// beside it (#fe-responsive). happy-dom's matchMedia does not read
+// `window.innerWidth`, so stand in for it — the same stub shape AppDashboard's
+// responsive tests use, extended to answer a `(min-width: Npx)` query.
+const realMatchMedia = window.matchMedia;
+function stubViewport(width: number) {
+  window.matchMedia = ((q: string) => {
+    const min = /\(min-width:\s*(\d+)px\)/.exec(q);
+    const max = /\(max-width:\s*(\d+)px\)/.exec(q);
+    const matches = min ? width >= Number(min[1]) : max ? width <= Number(max[1]) : false;
+    return {
+      matches,
+      media: q,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent: () => true,
+    };
+  }) as unknown as typeof window.matchMedia;
+}
+
+// Default to a desktop width so the base tests exercise the OPEN rail; the
+// responsive describe below sets its own widths.
+beforeEach(() => stubViewport(BREAKPOINTS.shell + BREAKPOINTS.chatRail + 200));
+afterEach(() => {
+  window.matchMedia = realMatchMedia;
+});
 
 function renderRail() {
   return render(
@@ -105,5 +136,48 @@ describe("ChatListRail", () => {
     fireEvent.click(screen.getByRole("button", { name: /platform menu/i }));
     expect(screen.getByRole("menuitem", { name: "Knowledge base" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Product" })).toHaveAttribute("href", "/a/pm");
+  });
+});
+
+/**
+ * #fe-responsive — the rail is a hard 240px column with no responsive rule of
+ * its own. Measured in a real browser at 390x844 it still took 240px, leaving
+ * 150px for the entire chat surface: the composer, model picker, todo panel
+ * and agent header were all cut off at the right edge with no scrollbar.
+ *
+ * Narrow starts it tucked, and an expanded rail overlays the chat rather than
+ * taking a bite out of it — the same treatment the shell's file-tree sidebar
+ * already gets below the breakpoint.
+ */
+describe("ChatListRail on a narrow viewport (#fe-responsive)", () => {
+  const setViewport = stubViewport;
+
+  it("starts tucked when the rail would leave the shell too little room", () => {
+    // The rail is not a passenger: it sits BESIDE the shell, so below
+    // shell + rail the open rail is the very thing that would force the shell
+    // into its single-column layout. It tucks itself instead.
+    setViewport(BREAKPOINTS.shell + BREAKPOINTS.chatRail - 1);
+    renderRail();
+    expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show chats/i })).toBeInTheDocument();
+  });
+
+  it("stays tucked on a phone", () => {
+    setViewport(390);
+    renderRail();
+    expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
+  });
+
+  it("starts open once there is room for the rail AND the shell's columns", () => {
+    setViewport(BREAKPOINTS.shell + BREAKPOINTS.chatRail);
+    renderRail();
+    expect(screen.getByText("Oven drift")).toBeInTheDocument();
+  });
+
+  it("can still be opened when tucked — tucked is a default, not a lockout", () => {
+    setViewport(390);
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /show chats/i }));
+    expect(screen.getByText("Oven drift")).toBeInTheDocument();
   });
 });
