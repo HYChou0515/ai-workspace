@@ -134,7 +134,11 @@ class ToolResolver:
         Raises `ArtifactError` when the tool cannot be made available at all."""
         try:
             manifest = parse_manifest(self._fetch(manifest_url))
-        except FetchError as exc:
+        except (FetchError, OSError) as exc:
+            # OSError too: the fetcher is any callable that does IO, and a
+            # socket error escaping it un-wrapped is precisely the outage the
+            # fallback exists for. Being strict here would fail the turn in
+            # the one case we built a last-known-good copy to survive.
             return self._fall_back(name, manifest_url, exc)
 
         check_compatible(manifest, expected_name=name, builder=self._builder_id, arch=self._arch)
@@ -153,7 +157,7 @@ class ToolResolver:
             stale=False,
         )
 
-    def _fall_back(self, name: str, url: str, cause: FetchError) -> ResolvedTool:
+    def _fall_back(self, name: str, url: str, cause: Exception) -> ResolvedTool:
         """Serve the last version that resolved, rather than failing the turn.
 
         An artifact store outage should not take every workspace with it — but

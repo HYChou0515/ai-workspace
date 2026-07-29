@@ -68,3 +68,51 @@ async def test_sandbox_can_modify_root_uploaded_file_via_default_acl(isolated):
     result = await isolated.exec(h, ["sh", "-c", "echo more >> f.txt && cat f.txt"])
     assert result.exit_code == 0
     assert b"more" in result.stdout
+
+
+@requires_isolation
+async def test_an_installed_bundle_is_root_owned_and_a_sandbox_cannot_write_it(tmp_path):
+    """#674 L3: the protection the whole third-party design rests on.
+
+    A bundle is shared by every sandbox on this host, so if one of them could
+    write into it, it could rewrite a tool the others run. The unit tests
+    assert the two syscalls; this proves the resulting permissions actually
+    stop the uid a sandbox executes as."""
+    import io
+    import subprocess
+    import tarfile
+
+    from sandbox_host.tool_cache import ToolCache
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        body = b"#!/bin/sh\necho ok\n"
+        info = tarfile.TarInfo("launch")
+        info.size = len(body)
+        info.mode = 0o777  # as hostile as a tarball can ask for
+        tar.addfile(info, io.BytesIO(body))
+
+    installed = ToolCache(tmp_path / "ext").ensure("a" * 64, buf.getvalue())
+
+    stat = (installed / "launch").stat()
+    assert stat.st_uid == 0 and stat.st_gid == 0
+    assert stat.st_mode & 0o022 == 0, "group/other must not be able to write a shared tool"
+
+    # And the uid a sandbox actually runs as cannot write there.
+    probe = subprocess.run(
+        [
+            "setpriv",
+            "--reuid",
+            "100000",
+            "--regid",
+            "100000",
+            "--clear-groups",
+            "sh",
+            "-c",
+            f"touch {installed}/planted 2>/dev/null && echo WROTE || echo BLOCKED",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert "BLOCKED" in probe.stdout

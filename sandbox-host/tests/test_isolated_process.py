@@ -329,3 +329,38 @@ async def test_exec_takes_back_a_home_that_stopped_belonging_to_the_uid(isolated
     st = home.stat()
     assert st.st_uid == os.getuid()
     assert st.st_mode & 0o777 == 0o700
+
+
+async def test_the_tool_view_is_never_handed_to_the_sandboxs_own_uid(tmp_path):
+    """#674: `.tools-view` is a directory of symlinks the host assembles, and
+    it decides which bundle each tool name resolves to. If the sandbox's uid
+    owned it, the agent could repoint `python-stack` at something it wrote and
+    capture every `python` afterwards. `_own`/`reown` must stay inside the
+    workspace, exactly as they already do for `.home` and `.ready`."""
+    tools = tmp_path / "toolsroot"
+    (tools / "builtin" / "mytool").mkdir(parents=True)
+    (tools / "ext" / ("a" * 64)).mkdir(parents=True)
+    chowns: list[tuple[Path, int]] = []
+    sb = IsolatedProcessSandbox(
+        root_dir=tmp_path / "sb",
+        cgroup_root=tmp_path / "cg",
+        uid_min=os.getuid(),
+        uid_max=os.getuid(),
+        memory_max="64M",
+        cpu_cores=0.5,
+        pids_max=64,
+        acl_runner=lambda _argv: None,
+        chown_runner=lambda p, u: chowns.append((p, u)),
+        tools_dir=tools,
+    )
+
+    handle = await sb.create(SandboxSpec(tools={"wafer-history": "a" * 64}))
+    view = sb._require(handle) / ".tools-view"
+    assert view.is_dir(), "the view exists, so this test has something to protect"
+
+    await sb.upload(handle, b"hello", "/note.md")
+    await sb.reown(handle)
+
+    chowned = {p for p, _uid in chowns}
+    assert chowned, "the workspace itself is still chowned"
+    assert not any(str(view) in str(p) for p in chowned)
