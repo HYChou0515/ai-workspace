@@ -38,7 +38,7 @@
 | Q1 | 作者交出來的是原始碼還是產物？ | **build 好的產物**。作者自己在 CI/CD 跑我們提供的 build，平台不 build 陌生碼 |
 | Q2 | 我們提供給作者的是什麼？ | 一個 **builder image**（= sandbox runtime base + build 腳本），不是裸腳本 |
 | Q3 | artifact 長什麼樣？ | 兩個檔：`tool.tar.zst`（bundle）+ `tool.manifest.json`。放 GitLab CI artifact |
-| Q4 | manifest 欄位 | `format_version` / `name` / `commands`（含 schema）/ `builder`（ABI 錨）/ `python`+`arch` / `bundle.sha256` / `source`（git+sha，純溯源） |
+| Q4 | manifest 欄位 | `format_version` / `name` / `version`（人類可讀，純顯示）/ `commands`（含 schema）/ `builder`（ABI 錨）/ `python`+`arch` / `bundle.sha256` / `source`（git+sha，純溯源） |
 | Q5 | 「能跑的目錄」放哪？ | **host 本機磁碟**。共享 NFS 放 `/opt/tools` 已被否決——NFS 不能設權限，`root:root 755` 守不住 |
 | Q6 | 註冊表放哪一層？ | **app.json**。不做 runtime registry、不做 admin UI |
 | Q7 | 什麼時候查 GitLab？ | **開 sandbox 時**（實作上再往前一格到 turn 起點，見 Q9） |
@@ -48,6 +48,10 @@
 | Q11 | 新增一支工具時 name+url 填哪一層？ | **`app.json`**（改 repo + 發版）。不是部署設定、也不是線上 UI |
 | Q12 | 第三方支不支援 `pkg:cmd` 只授權單一 command？ | **支援，且零成本**——第三方一旦成為 `PackageInfo`，`build_function_tools` 的展開邏輯與來源無關 |
 | Q13 | private GitLab 的 token 怎麼給？ | **先一個全域 token**（host env）。per-project token 留待有需求再說 |
+| Q14 | 要不要人類可讀的版本號？ | **要**：manifest 帶 `version`（取自作者的 `pyproject`）。**不參與信任**（信任錨仍是 sha），純粹讓「他跑的是 1.4.2」比一串 sha 好溝通 |
+| Q15 | 要不要規定作者附測試？ | **不強制他們的單元測試**（我們管不到、也不該管），但 **`smoke` 是 build 的一部分：不過就不產出 artifact**。這是唯一有牙齒的那條 |
+| Q16 | 上架前平台要不要先驗一次？ | **要，但是人工執行的指令**（`python -m workspace_app.tooling verify <manifest-url>`），不是自動閘。貼進 `app.json` 之前跑它 |
+| Q17 | app 開機要不要 resolve 第三方、當 readiness 條件？ | **不要**。開機只做 best-effort 預熱；GitLab 掛掉不能讓 app 起不來（跟第一方 `discover_packages` 的 fail-loud 刻意不同，`__main__.py:149`） |
 
 ### Q2 為什麼一定要 builder image，不能是裸腳本
 
@@ -158,7 +162,46 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 - manifest 每個欄位的意思，以及**什麼會讓平台拒絕你的 artifact**（`format_version` 不認得 /
   `builder` 對不上 / `arch` 不符 / sha 不符 / manifest 的 `name` 跟平台登記的對不上）
 - 工具能拿到哪些環境變數（接 #669）
-- 「不要把 secret 寫進 bundle」——bundle 對同一台 host 上所有 sandbox 是共用的
+- §3.6 的「強制 vs 建議」兩張表，以及 §3.7 的上架流程
+
+### 3.6 平台**強制**什麼、只是**建議**什麼
+
+分清楚這兩欄很重要：強制的那些要有程式擋，建議的那些只能寫進文件——把建議寫成「規定」
+而沒有東西擋，等於沒說。
+
+**強制（不符就拒絕，或就是會發生）**
+
+| | 怎麼擋 |
+|---|---|
+| 3-stage CLI 契約 | `build-tool` 抽不出 `commands.json` / `schemas/` 就 build 失敗 |
+| `uv.lock` 存在 | 沒有就沒有可重現的 bundle，build 失敗 |
+| **smoke 通過** | build 的最後一步；不過就**不產出 artifact**（Q15） |
+| manifest 欄位齊、`name` 與平台登記的一致、`builder`/`arch` 相容 | resolve 的閘門（P1 驗證器） |
+| **工具輸出會被截斷** | 不是拒絕，是既成事實：每個 FunctionTool 都過 `cap_tool_outputs`（`tooling/registry.py:178`） |
+| **執行有時間上限** | host 預設 total 60s、idle 60s（`sandbox-host/.../local_process.py:223-224`） |
+
+**建議（我們不擋，但作者不知道會踩雷）**
+
+- **command 與參數的 description 要寫好**——agent 用不用得對、會不會亂填參數，幾乎只取決於這個。
+  它們會被原樣 render 進 system prompt。
+- **改 command 名、或加一個必填參數 = breaking**，而且對**所有新 sandbox 立即生效**（R4）。
+  要改就發一個新 name，或先跟我們講。
+- **不要把 secret 寫進 bundle**：同一台 host 上多個 sandbox 共用同一份。
+
+### 3.7 上架 / 更新的流程（誰做什麼）
+
+| 場合 | 誰 | 做什麼 |
+|---|---|---|
+| **新增一支工具** | 作者 | 寫工具 → CI → 給我們一串 manifest URL |
+| | 我們 | `verify <url>` 跑過 → 貼進 `app.json` → 發版 |
+| **作者發新版** | 作者 | push 就好 |
+| | 我們 | **什麼都不用做**（url 不變，下一個 sandbox 自動帶上） |
+| **出事要退回** | 我們 | `app.json` 的 url 換成 job-pinned（§4.4），或請作者回退 |
+| **移除一支工具** | 我們 | 從 `app.json` 拿掉 → 發版；host cache 由 GC 回收 |
+
+`verify` 做的事：跑 P1 的閘門 → 抓 bundle → 驗 sha → **在一個丟棄式 sandbox 裡跑一遍 smoke** →
+回報「這支能不能上、哪裡不合」。它是**人工指令不是自動閘**（Q16）——目的是讓「貼進 app.json
+再發版」之前就知道會不會爛，而不是部署完才發現。
 
 ---
 
@@ -223,7 +266,7 @@ turn 開始
 
 url 指的是「latest」，所以平時會跟著作者走。要**釘回舊版**時，把 `external_tools` 那串換成
 指定 job 的 artifact URL（GitLab 支援 `/jobs/<job_id>/artifacts/…`），下一個 turn 的 resolve
-就會抓到那個 sha。若該 sha 還在 host cache 裡是**秒回**（content-address，P9 的 GC 沒收走就還在）；
+就會抓到那個 sha。若該 sha 還在 host cache 裡是**秒回**（content-address，P10 的 GC 沒收走就還在）；
 被回收了就重抓一次，同一條路。
 
 換句話說：**「跟著最新」和「釘死某版」是同一個欄位的兩種寫法**，不需要第二套機制。
@@ -251,8 +294,9 @@ url 指的是「latest」，所以平時會跟著作者走。要**釘回舊版**
 | R3 | host 新增對外憑證面（今天 `sandbox-host/src` 完全沒有任何 httpx/token，只有測試用） | 只此一處，先一個全域 token（Q13） |
 | R4 | 作者改 command 名／schema 會即時影響所有新 sandbox，沒有版本閘 | 以 P8 的「記錄每次用的 sha」+ 相容性閘門的清楚錯誤緩解；真要凍版就用 4.4 釘 job URL |
 | R5 | **GitLab CI artifact 預設會過期**（`expire_in` 不設約 30 天）。過期後 URL 404 —— 已 cache 的 host 靠 last-known-good 撐著，但**新 pod 一起來就抓不到** | CI 範本強制 `expire_in: never`，並在 `tool-authoring.md` 講明；resolve 失敗訊息要能一眼看出「artifact 過期了」 |
-| R6 | 磁碟：每支 bundle 約 150MB，× N 支 × 每台 host（而且新舊 sha 會並存） | P9 的 GC 加一個 cache 上限；容量估算寫進 `deployment.md` |
-| R7 | 舊 sha 的 cache 會堆積 | P9 的 refcount GC |
+| R6 | 磁碟：每支 bundle 約 150MB，× N 支 × 每台 host（而且新舊 sha 會並存） | P10 的 GC 加一個 cache 上限；容量估算寫進 `deployment.md` |
+| R7 | 舊 sha 的 cache 會堆積 | P10 的 refcount GC |
+| R8 | **作者的 breaking change 沒有事前通知管道**。改了 command 名或必填參數，我們是「使用者踩到」才知道 | 事前只有 `verify`（人工，且只在新增時跑）；事後靠 P8 記錄的 `name → sha + version` 查得回去。**接受**，並在 `tool-authoring.md` 把「這是 breaking」講白（§3.6） |
 
 ---
 
@@ -274,7 +318,11 @@ builder 與 host 共用這一份契約。
 `build-tool <src> <out>` = 既有 `prebuild.build_package` + 抽 `commands.json`/`schemas/` 進 manifest
 + 打包 `tool.tar.zst`；`smoke <dist>` 解開跑一遍 3-stage 契約。
 `BUILDER_ID` 同時烤進 builder 與 host image，供 P6 的閘門比對。
-驗收：拿 `sample-tools/csv-column-summary` 走一遍，產出的 manifest 通過 P1 的驗證器。
+`version` 取自作者的 `pyproject`（Q14）。
+**smoke 是 build 的最後一步，不過就不產出 artifact**（Q15）——這是唯一擋得住「作者沒測過就發版」
+的地方，所以它必須在 build 之內，不能是另一個可略過的 job。
+驗收：拿 `sample-tools/csv-column-summary` 走一遍，產出的 manifest 通過 P1 的驗證器；
+故意弄壞 CLI 契約時 build 要失敗、且**不留下 artifact**。
 
 ### P3 · 作者面文件 + CI 範本
 
@@ -308,28 +356,41 @@ tools 目錄形狀從「一堆 `<name>/`」變成 `builtin/<name>/` + `ext/<sha>
 `SandboxSpec` 加 `tools: dict[str, str]`（本地名 → sha）。`create` 依此組 `.tools-view`；
 jailed bootstrap 改成逐支 bind-mount（只掛這次授權的）。
 
-### P8 · app 端：`external_tools` 宣告 + turn 起點 resolve + 記錄 sha
+### P8 · app 端：`external_tools` 宣告 + turn 起點 resolve + 記錄 sha/version
 
 `app.json` schema 加 `agent.external_tools`；`turn_context` 在組 context 時打 host resolve，
 把回來的 commands/schemas 轉成 `PackageInfo` 併進 `ctx.packages`
 （該欄位已存在：`agent/context.py:177`，由 `api/turn_context.py:355` 餵）；
 把 `{name: sha}` 一起帶進 `ensure_sandbox` 的 spec。**同一 turn 內 sha 釘住。**
-同時落一筆記錄（item / turn / name → sha / stale）——這是「使用者說工具怪怪的」唯一查得回去的線索。
+同時落一筆記錄（item / turn / name → **sha + version** / stale）——這是「使用者說工具怪怪的」
+唯一查得回去的線索，也是 R8 的事後補償。
 resolve 失敗且無 last-known-good → **該工具缺席但 turn 繼續**，並讓 agent 與使用者都看得到原因
 （沿用 #480 的「停用工具也要揭露」形狀）。
 
-### P9 · cache GC + 容量上限
+### P9 · `verify` 指令（上架前驗收）+ 開機 best-effort 預熱
+
+`python -m workspace_app.tooling verify <manifest-url>`：跑 P1 的閘門 → 抓 bundle → 驗 sha →
+**在一個丟棄式 sandbox 裡跑一遍 smoke** → 回報能不能上、哪裡不合（Q16）。
+人工指令，不是自動閘——目的是「貼進 `app.json` 再發版」之前就知道會不會爛。
+
+同一個 phase 加開機**預熱**：啟動時對 `app.json` 裡的 `external_tools` 做 best-effort resolve
+把 cache 灌熱，但**不 gate readiness**（Q17）——GitLab 掛掉不能讓 app 起不來。
+這跟第一方 `discover_packages` 的 fail-loud（`__main__.py:149`）是刻意不同的取捨，
+要在 code 註解裡寫清楚為什麼，否則下一個人會「順手統一」。
+
+### P10 · cache GC + 容量上限
 
 refcount sweep：沒有任何 live sandbox 引用的 `ext/<sha>` 才回收（與 idle-killer / blob-gc 同形狀），
 加一個 cache 上限（R6）。content-address ⇒ 回滾到還在 cache 的舊 sha 是秒回。
 
-### P10 · 改寫 `extending-the-platform.md` 的立場 + 運維文件
+### P11 · 改寫 `extending-the-platform.md` 的立場 + 運維文件
 
 該頁 §Tool 目前寫「只有 dev 自建」、流程是「改 `PACKAGES` → prebuild → 重啟」，
 要變成兩條路：第一方（vendor 進 repo）與第三方（作者 CI + artifact url）。
-`deployment.md` 補：全域 token 怎麼給、磁碟估算、**怎麼回滾**（4.4）。
+`deployment.md` 補：全域 token 怎麼給、磁碟估算、**怎麼回滾**（§4.4）、
+以及 §3.7 那張「誰做什麼」表。
 
-### P11 · 權限不變量 + 端到端整合測試
+### P12 · 權限不變量 + 端到端整合測試
 
 root-gated integration：解壓後 `owner=0` / other 無 `w`；降權 uid 寫不進；
 jail 內只看得到這次授權的工具；換 sha 後**下一個** sandbox 拿到新版而**既有** sandbox 不變。
