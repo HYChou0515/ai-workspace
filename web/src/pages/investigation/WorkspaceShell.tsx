@@ -20,6 +20,7 @@ import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
 import { modCombo } from "../../lib/platform";
 import { type PanelAction, type PanelState, panelPeek } from "../../lib/panelPeek";
+import { toggleShellPanel } from "../../lib/shellPanels";
 import { relPath } from "../../lib/relPath";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PresenceBar } from "../../components/PresenceBar";
@@ -329,6 +330,28 @@ function ShellBody({
   // Nullish (not `||`) so an explicit `false` from the parent is honoured.
   const ideCollapsed = propIdeCollapsed ?? ideCollapsedInternal;
   const setIdeCollapsed = propOnIdeCollapsedChange ?? setIdeCollapsedInternal;
+  // The chat folds too, but plainly — open or closed, no peek. There is no
+  // strip or rail to click a third state out of, and unlike the log it is a
+  // place you work rather than glance at.
+  const [chatCollapsed, setChatCollapsed] = useState(false);
+  // Both stages folded would leave a top bar over a blank rectangle, so the
+  // rule lives in one place and both entry points (the View menu, the edge)
+  // go through it — see lib/shellPanels.
+  const applyPanels = useCallback(
+    (which: "ide" | "chat") => {
+      const next = toggleShellPanel(
+        { ideCollapsed, chatCollapsed },
+        which,
+        manifest.function.workspace,
+      );
+      setIdeCollapsed(next.ideCollapsed);
+      setChatCollapsed(next.chatCollapsed);
+    },
+    [ideCollapsed, chatCollapsed, manifest.function.workspace, setIdeCollapsed],
+  );
+  const toggleChat = useCallback(() => applyPanels("chat"), [applyPanels]);
+  const toggleIde = useCallback(() => applyPanels("ide"), [applyPanels]);
+
   // Cap the chat width so the editor always keeps a usable minimum. The chat is
   // fixed-width (flexShrink:0), so an over-wide agentW would otherwise squeeze
   // the editor into a broken sliver (the #108 regression). Dragging stops at
@@ -529,9 +552,11 @@ function ShellBody({
           onEditField={setField}
           isNarrow={isNarrow}
           ideCollapsed={ideCollapsed}
-          onToggleIde={() => setIdeCollapsed((v) => !v)}
+          onToggleIde={toggleIde}
           bottomState={bottomState}
           onPanelBottom={dispatchBottom}
+          chatCollapsed={chatCollapsed}
+          onToggleChat={toggleChat}
           onCommandPalette={() => setPaletteOpen(true)}
           onEdit={() => setEditOpen(true)}
         />
@@ -649,17 +674,56 @@ function ShellBody({
           )}
             </>
           )}
-          {/* #159: the old 16px collapsed-edge handle is gone — the discoverable
-              TopBar `Workspace` button is now the canonical way to bring the IDE
-              back, so a near-invisible edge sliver is just noise. */}
+          {/* The chat is the one panel someone could fold and then not know how
+              to bring back, so folding it leaves a labelled edge to click. The
+              View menu is the formal entry; this is the one under your hand. */}
+          {chatCollapsed && agentVisible && (
+            <button
+              type="button"
+              aria-label="Show chat"
+              title="Show chat"
+              onClick={() => toggleChat()}
+              style={{
+                width: 26,
+                flexShrink: 0,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                borderLeft: "1px solid var(--paper-3)",
+                // Tinted, not the page colour: at the window's edge an
+                // untinted strip reads as the border rather than a control.
+                background: "var(--paper-2)",
+                color: "var(--text-paper-d)",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <Icon name="chev_l" size={12} />
+              {/* The collapsed panel names itself, the way a collapsed tool
+                  window does in an IDE. An arrow alone leaves you to guess. */}
+              <span
+                style={{
+                  writingMode: "vertical-rl",
+                  fontSize: pxToRem(11),
+                  letterSpacing: "0.04em",
+                }}
+              >
+                Chat
+              </span>
+            </button>
+          )}
           <div
+            data-testid="chat-pane"
             style={{
               // #464: on a narrow viewport the agent hides while the IDE is up
-              // (mutually exclusive, toggled via `Workspace`) so the fixed agent
-              // width can't force overflow. Hidden, not unmounted — the chat and
-              // its live stream survive the toggle. `display:none` also drops it
-              // from the flex row so it consumes no width.
-              display: agentVisible ? "flex" : "none",
+              // (mutually exclusive) so the fixed agent width can't force
+              // overflow. Hidden, not unmounted — the chat and its live stream
+              // survive the toggle, which is also why FOLDING it hides rather
+              // than unmounts. `display:none` drops it from the flex row so it
+              // consumes no width.
+              display: agentVisible && !chatCollapsed ? "flex" : "none",
               flexDirection: "column",
               height: "100%",
               minHeight: 0,
@@ -862,6 +926,8 @@ export function TopBar({
   onToggleIde,
   bottomState,
   onPanelBottom,
+  chatCollapsed,
+  onToggleChat,
   onCommandPalette,
   onEdit,
 }: {
@@ -880,6 +946,8 @@ export function TopBar({
   /** The bottom log strip, so the View menu can report and flip it too. */
   bottomState: PanelState;
   onPanelBottom: (action: PanelAction) => void;
+  chatCollapsed: boolean;
+  onToggleChat: () => void;
   onCommandPalette: () => void;
   onEdit: () => void;
 }) {
@@ -1028,6 +1096,16 @@ export function TopBar({
                 title={`Problems, Output, Terminal and the agent log (${modCombo("J")})`}
                 checked={bottomState !== "closed"}
                 onChange={() => onPanelBottom({ type: "toggle" })}
+              />
+              <PanelToggle
+                label="Chat"
+                title={
+                  chatCollapsed
+                    ? "Show the chat — the workspace makes room for it"
+                    : "Hide the chat — the workspace expands to fill"
+                }
+                checked={!chatCollapsed}
+                onChange={onToggleChat}
               />
             </div>
           )}

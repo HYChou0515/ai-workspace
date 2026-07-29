@@ -243,6 +243,79 @@ describe("the file sidebar answers to the activity rail", () => {
   });
 });
 
+/**
+ * The chat folds away like the other panels — but it is the one panel a user
+ * could plausibly fold and then not know how to get back, so it keeps a visible
+ * edge to click as well as its row in the View menu.
+ */
+describe("the chat folds away without becoming unreachable", () => {
+  const openView = () => fireEvent.click(screen.getByRole("button", { name: "View" }));
+  const chatRow = () => screen.getByRole("checkbox", { name: /chat/i });
+
+  it("offers a Chat row in the View menu", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    openView();
+    expect(chatRow()).toBeChecked();
+  });
+
+  it("hides the chat when that row is unchecked", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    openView();
+    fireEvent.click(chatRow());
+    await waitFor(() => expect(screen.getByTestId("chat")).not.toBeVisible());
+  });
+
+  it("leaves a labelled edge to click, so folding it is never a dead end", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    openView();
+    fireEvent.click(chatRow());
+    const stub = await screen.findByRole("button", { name: /show chat/i });
+    expect(stub).toBeVisible();
+  });
+
+  // Seen in a real browser: a bare 14px strip with one small chevron sits at
+  // the very edge of the window and reads as the window border, not a control.
+  // The collapsed panel says what it is, the way a collapsed tool window does
+  // in an IDE — an arrow alone leaves the user to guess what is behind it.
+  it("says the word Chat on that edge rather than showing a bare arrow", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    openView();
+    fireEvent.click(chatRow());
+    const stub = await screen.findByRole("button", { name: /show chat/i });
+    expect(stub.textContent).toMatch(/chat/i);
+  });
+
+  it("brings the chat back when that edge is clicked", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    openView();
+    fireEvent.click(chatRow());
+    fireEvent.click(await screen.findByRole("button", { name: /show chat/i }));
+    await waitFor(() => expect(screen.getByTestId("chat")).toBeVisible());
+  });
+
+  // The never-blank rule, end to end: fold the workspace so the chat fills the
+  // row, then fold the chat too — the workspace comes back rather than leaving
+  // a top bar over nothing.
+  it("brings the workspace back rather than emptying the screen", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    openView();
+    fireEvent.click(screen.getByRole("checkbox", { name: /workspace/i })); // fold workspace
+    await waitFor(() => expect(screen.queryByTitle("Files")).not.toBeInTheDocument());
+
+    // The menu stays open across toggles — flipping one panel should not cost
+    // you the menu you are flipping panels in.
+    fireEvent.click(chatRow()); // fold the chat as well
+    await waitFor(() => expect(screen.getByTitle("Files")).toBeInTheDocument());
+    expect(screen.getByTestId("chat")).not.toBeVisible();
+  });
+});
+
 describe("the chevron stays a one-click toggle", () => {
   it("opens the panel to a state that outlives clicking away", async () => {
     openShell();

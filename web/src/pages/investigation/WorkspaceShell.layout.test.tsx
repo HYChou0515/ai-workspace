@@ -116,6 +116,8 @@ function renderTopBar(over: {
   isNarrow?: boolean;
   bottomState?: "closed" | "peeked" | "pinned";
   onPanelBottom?: (a: unknown) => void;
+  chatCollapsed?: boolean;
+  onToggleChat?: () => void;
 }) {
   return render(
     <MemoryRouter>
@@ -128,6 +130,8 @@ function renderTopBar(over: {
         onToggleIde={over.onToggleIde ?? vi.fn()}
         bottomState={over.bottomState ?? "closed"}
         onPanelBottom={(over.onPanelBottom ?? vi.fn()) as never}
+        chatCollapsed={over.chatCollapsed ?? false}
+        onToggleChat={over.onToggleChat ?? vi.fn()}
         onCommandPalette={vi.fn()}
         onEdit={vi.fn()}
       />
