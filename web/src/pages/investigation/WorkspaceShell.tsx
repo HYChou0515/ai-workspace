@@ -61,6 +61,7 @@ import { formatMetrics } from "./agentLog";
 import { shellIsNarrow, useContainerWidth } from "../../hooks/useContainerWidth";
 import { useIsNarrow } from "../../hooks/useMediaQuery";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
+import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { useOnTurnEnd } from "../../hooks/useOnTurnEnd";
@@ -293,10 +294,26 @@ function ShellBody({
   // to the agent, not to watch a log, and a panel that shows up uninvited on
   // every single item is chrome the user has to dismiss before starting work.
   // Its tab row stays visible, so it is one click away rather than hidden.
-  const [bottomState, setBottomState] = useState<PanelState>("closed");
+  const [bottomPinned, setBottomPinned] = usePersistentBoolean(
+    "rca:layout:bottom-pinned",
+    false,
+  );
+  const [bottomState, setBottomState] = useState<PanelState>(
+    bottomPinned ? "pinned" : "closed",
+  );
   const dispatchBottom = useCallback(
-    (action: PanelAction) => setBottomState((s) => panelPeek(s, action)),
-    [],
+    (action: PanelAction) => {
+      setBottomState((s) => {
+        const next = panelPeek(s, action);
+        // Only the deliberate states are remembered. A peek is the state that
+        // means "just for a moment" — storing it would turn a glance into a
+        // preference, and every later visit would open the panel uninvited,
+        // which is the behaviour this whole change set out to remove.
+        if (next !== "peeked") setBottomPinned(next === "pinned");
+        return next;
+      });
+    },
+    [setBottomPinned],
   );
   // A peek lasts until you go and do something else: any pointer press outside
   // the panel retracts it. A pin ignores this (the reducer's rule), so pinning
@@ -333,7 +350,10 @@ function ShellBody({
   // The chat folds too, but plainly — open or closed, no peek. There is no
   // strip or rail to click a third state out of, and unlike the log it is a
   // place you work rather than glance at.
-  const [chatCollapsed, setChatCollapsed] = useState(false);
+  const [chatCollapsed, setChatCollapsed] = usePersistentBoolean(
+    "rca:layout:chat-collapsed",
+    false,
+  );
   // Both stages folded would leave a top bar over a blank rectangle, so the
   // rule lives in one place and both entry points (the View menu, the edge)
   // go through it — see lib/shellPanels.

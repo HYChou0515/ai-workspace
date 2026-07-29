@@ -76,7 +76,10 @@ function doubleClick(el: HTMLElement) {
   fireEvent.doubleClick(el, { detail: 2 });
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 describe("the bottom log strip does not open itself", () => {
   it("opens the item with the log body collapsed, tab row still in reach", async () => {
@@ -313,6 +316,65 @@ describe("the chat folds away without becoming unreachable", () => {
     fireEvent.click(chatRow()); // fold the chat as well
     await waitFor(() => expect(screen.getByTitle("Files")).toBeInTheDocument());
     expect(screen.getByTestId("chat")).not.toBeVisible();
+  });
+});
+
+/**
+ * A pin that evaporates on reload is barely a pin, so the two panels the user
+ * pins or folds deliberately are remembered. The workspace deliberately is NOT:
+ * its default belongs to the App's manifest (`layout.primary_surface`), and
+ * #chat-private turns on a new tab opening tucked rather than however the last
+ * session left it. A peek is never remembered — it is the state that means
+ * "just for a moment".
+ */
+describe("what the shell remembers between visits", () => {
+  const openView = () => fireEvent.click(screen.getByRole("button", { name: "View" }));
+
+  it("re-opens with the log panel still pinned", async () => {
+    openShell();
+    doubleClick(await screen.findByRole("button", { name: "Agent log" }));
+    await screen.findByTestId("bottom-body");
+
+    cleanup();
+    openShell();
+    expect(await screen.findByTestId("bottom-body")).toBeInTheDocument();
+  });
+
+  it("does not remember a mere peek", async () => {
+    openShell();
+    fireEvent.click(await screen.findByRole("button", { name: "Agent log" }), { detail: 1 });
+    await screen.findByTestId("bottom-body");
+
+    cleanup();
+    openShell();
+    await screen.findByRole("button", { name: "Agent log" });
+    expect(screen.queryByTestId("bottom-body")).not.toBeInTheDocument();
+  });
+
+  it("re-opens with the chat still folded", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    openView();
+    fireEvent.click(screen.getByRole("checkbox", { name: /chat/i }));
+    await waitFor(() => expect(screen.getByTestId("chat")).not.toBeVisible());
+
+    cleanup();
+    openShell();
+    await screen.findByTitle("Files");
+    expect(screen.getByTestId("chat")).not.toBeVisible();
+  });
+
+  it("does NOT remember the workspace fold — that belongs to the manifest", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    openView();
+    fireEvent.click(screen.getByRole("checkbox", { name: /workspace/i }));
+    await waitFor(() => expect(screen.queryByTitle("Files")).not.toBeInTheDocument());
+
+    cleanup();
+    openShell();
+    // This App is ide-first, so it comes back open regardless of last time.
+    expect(await screen.findByTitle("Files")).toBeInTheDocument();
   });
 });
 

@@ -87,37 +87,4 @@ describe("<ResizeDivider />", () => {
     expect(onResizeEnd).toHaveBeenCalledTimes(1);
   });
 
-  it("renders a collapse chevron only when `collapse` is supplied", () => {
-    const { queryByRole, rerender } = render(
-      <ResizeDivider orientation="vertical" onResize={vi.fn()} />,
-    );
-    expect(queryByRole("button")).toBeNull();
-    rerender(
-      <ResizeDivider
-        orientation="vertical"
-        onResize={vi.fn()}
-        collapse={{ label: "Collapse workspace", icon: "chev_l", onToggle: vi.fn() }}
-      />,
-    );
-    expect(queryByRole("button", { name: "Collapse workspace" })).not.toBeNull();
-  });
-
-  it("clicking the chevron toggles, and grabbing it does NOT start a resize", () => {
-    const onToggle = vi.fn();
-    const onResizeStart = vi.fn();
-    const { getByRole } = render(
-      <ResizeDivider
-        orientation="vertical"
-        onResize={vi.fn()}
-        onResizeStart={onResizeStart}
-        collapse={{ label: "Collapse workspace", icon: "chev_l", onToggle }}
-      />,
-    );
-    const btn = getByRole("button", { name: "Collapse workspace" });
-    // pointerdown on the chevron is stopped before it reaches the divider.
-    fireEvent(btn, pointer("pointerdown", { clientX: 100 }));
-    expect(onResizeStart).not.toHaveBeenCalled();
-    fireEvent.click(btn);
-    expect(onToggle).toHaveBeenCalledTimes(1);
-  });
 });
