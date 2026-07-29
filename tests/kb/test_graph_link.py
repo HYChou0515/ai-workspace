@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from specstar import QB, SpecStar
 
-from workspace_app.kb.graph.link import link_identical_mentions
+from workspace_app.kb.graph.link import link_identical_mentions, reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_surface
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphEntity, GraphEntityLink, GraphMention, mention_id
@@ -231,3 +231,27 @@ def test_an_absorbed_identity_says_where_it_went():
     assert len(host) == 1 and len(ghost) == 1
     assert ghost[0].merged_into
     assert ghost[0].norm_keys == []
+
+
+def test_the_vocabulary_pass_reports_what_it_did(caplog):
+    """A stage that never ran has to look different from one that ran and found
+    nothing.
+
+    Every basis already returns a count and every one of them was discarded, and
+    `link.py` logged nothing at all — so in production the vocabulary pass was
+    indistinguishable whether it had executed, executed and produced nothing, or
+    never been queued. The only way to tell was to open the database and find
+    the entity tables empty, which is how a corpus can extract for weeks with no
+    entity page and nothing anywhere saying so.
+    """
+    import logging
+
+    spec = make_spec(default_user=lambda: "bob")
+    with caplog.at_level(logging.INFO, logger="workspace_app.kb.graph.link"):
+        reconcile_vocabulary(spec)
+
+    text = "\n".join(r.getMessage() for r in caplog.records)
+    assert "reconcile" in text.lower(), f"the vocabulary pass logged nothing: {text!r}"
+    assert "entit" in text.lower() or "link" in text.lower(), (
+        f"the log says the pass ran but not what it produced: {text!r}"
+    )
