@@ -299,3 +299,33 @@ def test_constructs_default_acl_runner(tmp_path):
         uid_max=100000,
     )
     assert sb._acl_runner is _run_setfacl
+
+
+async def test_exec_reprovisions_a_home_it_had_to_rebuild(isolated):
+    """A dir the exec path has to create belongs to THIS service's process; the
+    command that follows drops to the sandbox uid via `setpriv`. Without the
+    chown that `create` does, the rebuilt HOME is one the command cannot write."""
+    h = await isolated.create(SandboxSpec())
+    home = isolated._require(h) / ".home"
+    home.rmdir()  # the state a sandbox from an older image is in
+
+    isolated._exec_argv(h, ["true"])
+
+    st = home.stat()
+    assert st.st_uid == os.getuid()
+    assert st.st_mode & 0o777 == 0o700
+
+
+async def test_exec_takes_back_a_home_that_stopped_belonging_to_the_uid(isolated):
+    """Present but not owned by the sandbox uid is as unusable as absent — and it
+    is the state a host-managed restore / rsync leaves behind, outside `create`
+    entirely. Ownership is therefore reasserted on every exec."""
+    h = await isolated.create(SandboxSpec())
+    home = isolated._require(h) / ".home"
+    home.chmod(0o755)
+
+    isolated._exec_argv(h, ["true"])
+
+    st = home.stat()
+    assert st.st_uid == os.getuid()
+    assert st.st_mode & 0o777 == 0o700

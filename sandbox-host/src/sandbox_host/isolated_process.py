@@ -261,9 +261,24 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # #393: the per-sandbox HOME (a workspace sibling) must be writable by
         # the dropped uid so the carrier launcher's HOME/caches + a user's `pip
         # --user` install land there. No default ACL — only the uid writes here.
-        home = workspace.parent / _HOME
+        self._own_home(workspace.parent / _HOME, uid)
+
+    def _own_home(self, home: Path, uid: int) -> None:
+        """Hand `.home` to the sandbox uid, 0700. Idempotent — chowning to the
+        same uid is a no-op, which is what lets the exec path redo it."""
         os.chown(home, uid, -1)
         os.chmod(home, 0o700)
+
+    def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
+        """The base makes the dir; here it also has to be OWNED correctly.
+
+        A dir the exec path has to create belongs to this service's process,
+        while the command that follows drops to the sandbox uid via `setpriv` —
+        a plain `mkdir` would hand it a HOME it cannot write, which is the same
+        failure from the permission side."""
+        home = super()._ensure_home(handle, root)
+        self._own_home(home, self._identities[handle.id].uid)
+        return home
 
     async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
         # The host process writes it; `exec` reads it as the item uid. The
@@ -271,7 +286,8 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         # hand it over, exactly as `_provision` does for `.home` (#393).
         await super().write_user_env(handle, content)
         path = self._require(handle) / _USER_ENV
-        await asyncio.to_thread(self._chown_runner, path, self._uid_for(handle.id))
+        uid = self._identities[handle.id].uid
+        await asyncio.to_thread(self._chown_runner, path, uid)
 
     async def kill(self, handle: SandboxHandle) -> None:
         ident = self._identities.pop(handle.id, None)

@@ -1088,6 +1088,7 @@ def get_check_registry(settings: Settings):  # -> health.CheckRegistry
         EmbedderDimCheck,
         InsightExtractionCheck,
         RetrievalExpandCheck,
+        SandboxHostCapabilityCheck,
         ToolCallCheck,
         VlmDescribeCheck,
     )
@@ -1109,6 +1110,14 @@ def get_check_registry(settings: Settings):  # -> health.CheckRegistry
         InsightExtractionCheck(kb_llm),
         RetrievalExpandCheck(kb_llm),
         VlmDescribeCheck(get_kb_vlm(settings)),
+        # The sandbox host is a separate image on a separate deploy, so it can
+        # lag this app silently — see the check's own docstring. Empty base_url
+        # (any non-http backend) makes it skip.
+        SandboxHostCapabilityCheck(
+            base_url=(settings.sandbox.http.base_url if settings.sandbox.http else "")
+            if settings.sandbox.kind == "http"
+            else ""
+        ),
         ToolCallCheck(
             check_id="agent-kb-chat",
             description="KB chat agent model can call tools",

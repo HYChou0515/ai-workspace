@@ -376,6 +376,26 @@ class LocalProcessSandbox:
         marker = self._require(handle) / _READY_MARKER
         return await asyncio.to_thread(marker.is_file)
 
+    def _ensure_home(self, handle: SandboxHandle, root: Path) -> Path:
+        """The per-sandbox `$HOME` (#393/#600), guaranteed at the point it is USED.
+
+        `create` makes this dir, but nothing puts a sandbox through a current
+        `create` before its next command: the registry caches a live handle
+        (create-once on a shared vol; for http it re-acquires only when the
+        liveness probe reports the sandbox GONE). So a sandbox that predates the
+        dir — or one built by an older image — runs for the rest of its life
+        without it, while every exec below points HOME at it regardless. The
+        failure is LibreOffice's "User installation could not be completed",
+        because a HOME that does not exist is worse than the workspace HOME this
+        replaced: that one was at least a directory.
+
+        Per-exec for the same reason `_install_python_shim` is — what `create`
+        did once is not what the next exec can rely on. `IsolatedProcessSandbox`
+        extends this to chown the dir to the exec uid."""
+        home = root / _HOME
+        home.mkdir(exist_ok=True)
+        return home
+
     async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
         """Write the item's user env for the tool launchers, at the SANDBOX ROOT
         (`$root/id/.userenv`) — a sibling of the workspace, so walk/sync/the file
@@ -403,6 +423,7 @@ class LocalProcessSandbox:
         stays shared. Validates the handle (raises `SandboxNotFound`)."""
         root = self._require(handle)
         ws = root / _WORKSPACE
+        self._ensure_home(handle, root)
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
         if self._isolate:
             # chroot onto the sandbox root; the bootstrap cds into /root + sets

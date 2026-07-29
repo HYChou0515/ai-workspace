@@ -4,12 +4,14 @@ LLM-backed feature. Wired by ``factories.get_check_registry``."""
 from .agents import ToolCallCheck
 from .embedders import EmbedderDimCheck
 from .kb_llm import InsightExtractionCheck, RetrievalExpandCheck
+from .sandbox_host import SandboxHostCapabilityCheck
 from .vlm import VlmDescribeCheck
 
 __all__ = [
     "EmbedderDimCheck",
     "InsightExtractionCheck",
     "RetrievalExpandCheck",
+    "SandboxHostCapabilityCheck",
     "ToolCallCheck",
     "VlmDescribeCheck",
 ]

@@ -405,17 +405,20 @@ def test_userns_unsupported_when_unshare_unavailable(monkeypatch):
 
 
 @_needs_userns
-async def test_isolated_exec_workspace_is_cwd_and_home(tmp_path):
-    """The workspace is the agent's cwd and $HOME (~): a file uploaded at
-    /data.csv is read via a cwd-relative path and via ~ — not via the jail's
-    `/` (which is now the infra root, not the workspace)."""
+async def test_isolated_exec_has_the_workspace_as_cwd_but_not_as_home(tmp_path):
+    """cwd is the workspace; `~` is deliberately NOT. #600 moved $HOME to the
+    infra-area `/.home` so a tool's profile (LibreOffice's user installation)
+    never lands on the mirrored, persisted workspace — this asserted the old
+    arrangement, and only ever ran where unprivileged userns exists, so CI
+    skipped it and the drift went unnoticed."""
     sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
     h = await sb.create(SandboxSpec())
     await sb.upload(h, b"voids=42\n", "/data.csv")
     rel = await sb.exec(h, ["cat", "data.csv"])  # cwd = workspace
     assert rel.exit_code == 0 and "voids=42" in rel.stdout.decode()
-    home = await sb.exec(h, ["sh", "-c", "cat ~/data.csv"])  # ~ = workspace
-    assert home.exit_code == 0 and "voids=42" in home.stdout.decode()
+    home = await sb.exec(h, ["sh", "-c", "cd ~ && pwd"])
+    assert home.exit_code == 0, home.stderr
+    assert home.stdout.decode().strip() == "/.home"  # not the workspace
 
 
 @_needs_userns
@@ -675,6 +678,25 @@ async def test_a_plain_exec_gets_home_off_the_synced_workspace(tmp_path):
     home = Path(env["HOME"])
     assert home == Path(cwd).parent / ".home"  # infra-area sibling, never synced
     assert home != Path(cwd)  # NOT the mirrored workspace
+    assert home.is_dir()
+
+
+async def test_an_exec_rebuilds_a_home_the_sandbox_never_got(tmp_path):
+    """`.home` is made by `create` but USED by every exec, and a live sandbox
+    never goes back through `create` — the app re-acquires only when its liveness
+    probe says the sandbox is GONE. So one that predates this dir, or that an
+    older image of this service built, runs for the rest of its life without it
+    while every exec still points HOME there, and `soffice` aborts "User
+    installation could not be completed" against a HOME that isn't a directory
+    at all. Guaranteed at the point of use instead. Mirrors the app-side change."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec())
+    home = sb._require(h) / ".home"
+    home.rmdir()  # the state every sandbox built before the dir existed is in
+
+    _argv, _cwd, env = sb._exec_argv(h, ["true"])
+
+    assert Path(env["HOME"]) == home
     assert home.is_dir()
 
 

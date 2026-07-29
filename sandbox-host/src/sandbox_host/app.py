@@ -31,6 +31,44 @@ from pydantic import BaseModel
 from .nfs_archive import NfsArchive
 from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
 
+# What THIS build does, advertised on /healthz. Which code a running host
+# carries is otherwise invisible — `image: sandbox-host:latest` reads the same
+# before and after a rebuild, and an old host answers every request perfectly
+# well; it just behaves like the old code. Diagnosing that from the app side
+# meant three layers of guessing once already (a sandbox whose `$HOME` was never
+# set is indistinguishable, over the wire, from one where it was set right).
+#
+# Capabilities rather than a version number: they are what a caller actually
+# wants to know, and they live in the same commit as the behaviour they name, so
+# they cannot drift the way a hand-maintained compatibility table does. Add one
+# when you add a behaviour the app (or a human triaging a sandbox) would
+# otherwise have to infer; never remove one without removing the behaviour.
+_CAPABILITIES = frozenset(
+    {
+        # Every exec gets HOME pointed at the sandbox's own `.home`, created and
+        # owned to the exec uid at that moment (#393/#600, and the per-exec
+        # guarantee that followed). Its absence means `soffice` and anything else
+        # that writes a profile to $HOME will fail on this host.
+        "per-exec-home",
+        # `create` restores the item's durable archive and marks readiness before
+        # returning; `persist` is gated on that marker (#492).
+        "host-managed-archive",
+    }
+)
+
+
+def _version() -> str:
+    """This build's version — the installed package's, `unknown` when it cannot
+    be read (a source checkout without an install)."""
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
+
+    try:
+        return _pkg_version("sandbox-host")
+    except PackageNotFoundError:  # pragma: no cover - only in an odd checkout
+        return "unknown"
+
+
 # A readiness probe: raises with a reason when the host can't safely serve.
 ReadinessCheck = Callable[[], None]
 
@@ -280,8 +318,8 @@ def make_host_app(
         return await call_next(request)
 
     @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}
+    async def healthz() -> dict[str, object]:
+        return {"status": "ok", "version": _version(), "capabilities": sorted(_CAPABILITIES)}
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:

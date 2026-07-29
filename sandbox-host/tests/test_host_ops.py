@@ -122,3 +122,25 @@ def test_check_cgroup_ready_raises_when_not_writable(tmp_path):
             check_cgroup_ready(root, controllers_marker=marker)
     finally:
         os.chmod(root, 0o700)
+
+
+async def test_healthz_names_the_behaviours_this_build_has():
+    """Which code a running host carries is otherwise invisible: `image:
+    sandbox-host:latest` is the same string before and after a rebuild, and a
+    host that is merely OLD answers every request perfectly well — it just
+    behaves like the older code. That cost a full diagnosis once already: a
+    sandbox whose `$HOME` was never set looked, from the app side, exactly like
+    a sandbox whose HOME was set correctly.
+
+    Capabilities rather than a version number, because they are what the caller
+    actually wants to know and they cannot drift from the code that declares
+    them — no build-time stamping to remember, no compatibility table to keep
+    in sync."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")
+    async with _client(app) as c:
+        body = (await c.get("/healthz")).json()
+    assert body["status"] == "ok"
+    # `per-exec-home` is the one this was built for: it says every exec gets
+    # HOME pointed at the sandbox's own `.home`, created and owned on the spot.
+    assert "per-exec-home" in body["capabilities"]
+    assert isinstance(body["version"], str)
