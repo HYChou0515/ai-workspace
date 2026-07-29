@@ -54,6 +54,7 @@ class _Recording:
 
     def __init__(self, results: dict[tuple[str, ...], ExecResult] | None = None) -> None:
         self.calls: list[list[str]] = []
+        self.envs: list[dict[str, str]] = []
         self.uploads: list[tuple[str, int]] = []
         self._results = results or {}
 
@@ -62,17 +63,14 @@ class _Recording:
     ) -> SandboxHandle:  # pragma: no cover
         return SandboxHandle(id="s1")
 
-    async def exec(self, handle, cmd, on_output=None) -> ExecResult:
+    async def exec(self, handle, cmd, on_output=None, env=None) -> ExecResult:
         self.calls.append(cmd)
+        # Recorded so a caller cannot pass an env this stand-in silently drops.
+        self.envs.append(dict(env) if env else {})
         return self._results.get(tuple(cmd), ExecResult(exit_code=0, stdout=b"ok"))
 
     async def upload(self, handle, data, remote_path) -> None:
         self.uploads.append((remote_path, len(data)))
-
-    async def write_user_env(self, handle, content: str) -> None:
-        # `ensure_sandbox` delivers the item's user env alongside provisioning,
-        # so a stand-in for the whole sandbox has to answer this too.
-        self.user_env = content
 
     async def kill(self, handle) -> None:  # pragma: no cover
         return None

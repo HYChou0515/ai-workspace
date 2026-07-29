@@ -256,13 +256,22 @@ class HttpSandbox:
         await self._request(handle, "DELETE", "")
 
     async def exec(
-        self, handle: SandboxHandle, cmd: list[str], on_output: OutputSink | None = None
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         pod_url, remote_id = _decode_handle(handle)
         url = f"{pod_url}/sandboxes/{remote_id}/exec"
         logger.debug("sandbox-http: exec sandbox %s cmd=%s", handle.id, cmd)
+        body: dict[str, object] = {"cmd": cmd}
+        if env:
+            # Omitted when empty so the host sees the same request it always
+            # has — an older host ignores the key, a newer one applies it.
+            body["env"] = dict(env)
         try:
-            async with self._client.stream("POST", url, json={"cmd": cmd}) as resp:
+            async with self._client.stream("POST", url, json=body) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line:
@@ -342,12 +351,6 @@ class HttpSandbox:
     async def is_ready(self, handle: SandboxHandle) -> bool:
         resp = await self._io_request(handle, "GET", "/ready")
         return bool(resp.json()["ready"])
-
-    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
-        # Raw body, not JSON: these are arbitrary user values and every encoding
-        # hop is a chance to mangle one. Idempotent (a whole-file replace), so it
-        # rides `_io_request`'s retry like the other file ops.
-        await self._io_request(handle, "POST", "/user-env", content=content.encode("utf-8"))
 
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
         resp = await self._io_request(handle, "GET", "/walk", params={"root": root})

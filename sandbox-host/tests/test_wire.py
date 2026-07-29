@@ -83,24 +83,6 @@ async def test_mark_ready_then_ready_roundtrip_366(client):
     assert (await client.get(f"/sandboxes/{rid}/ready")).json() == {"ready": True}
 
 
-async def test_user_env_is_accepted_as_a_raw_body_and_stays_out_of_the_workspace(client):
-    # The body is the file, not JSON: these are `KEY=VALUE` lines whose values
-    # are arbitrary user text (`=`, `#`, quotes, `$` all turn up in real keys),
-    # and every encoding hop is a chance to mangle one. It also must not become
-    # a workspace file — that is the entire reason it goes beside the workspace.
-    rid = await _create(client)
-    body = b"TOKEN=a=b c#d$e`f'g\"h\nREGION=tw\n"
-
-    r = await client.post(f"/sandboxes/{rid}/user-env", content=body)
-
-    assert r.status_code == 204
-    entries = (await client.get(f"/sandboxes/{rid}/walk", params={"root": "/"})).json()["entries"]
-    assert entries == []
-    assert (await client.get(f"/sandboxes/{rid}/exists", params={"path": "/.userenv"})).json() == {
-        "exists": False
-    }
-
-
 async def test_walk_lists_files_with_versions(client):
     rid = await _create(client)
     await client.put(f"/sandboxes/{rid}/file", params={"path": "/dir/a.txt"}, content=b"aaa")
@@ -185,3 +167,23 @@ async def test_exec_on_unknown_handle_emits_in_band_error_frame(client):
     last = _frames(body)[-1]
     assert last["error"] == "SandboxNotFound"
     assert last["detail"]
+
+
+async def test_exec_applies_the_env_the_body_carries():
+    """The item's user-set variables ride this hop. The app names them per call
+    (it holds the truth); the host is what actually hands them to the process,
+    so a host that ignored the key would leave every hosted deployment with the
+    feature silently off — which is exactly how the file-based delivery failed."""
+    backend = MockSandbox()
+    app = make_host_app(backend, advertise_url=_ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h") as client:
+        rid = await _create(client)
+        async with client.stream(
+            "POST",
+            f"/sandboxes/{rid}/exec",
+            json={"cmd": ["true"], "env": {"API_KEY": "sk-1"}},
+        ) as resp:
+            assert resp.status_code == 200
+            async for _ in resp.aiter_lines():
+                pass
+    assert backend.exec_envs[-1] == {"API_KEY": "sk-1"}

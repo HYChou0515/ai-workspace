@@ -24,7 +24,7 @@ contracts; nothing else in the app needs to change (it's injected via
 `create_app(sandbox=...)`).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -161,7 +161,11 @@ class Sandbox(Protocol):
         ...
 
     async def exec(
-        self, handle: SandboxHandle, cmd: list[str], on_output: OutputSink | None = None
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         """Run `cmd` (an argv list — NOT a shell string; use
         `["sh", "-c", "..."]` if you need shell features) with the workspace
@@ -175,7 +179,11 @@ class Sandbox(Protocol):
           arrive (live streaming); the complete stdout is still in the result.
         - Implementations SHOULD bound runtime with a wall-clock timeout; on
           timeout, kill the process and return `exit_code=124` while preserving
-          whatever stdout was captured before the kill (don't discard it)."""
+          whatever stdout was captured before the kill (don't discard it).
+        - `env` is added to the command's environment and WINS over anything the
+          backend sets itself. It is per-call on purpose: the item's user-set
+          variables reach the tools this way, and nothing else the sandbox runs
+          — the agent's own `exec` included — has anything to inherit."""
         ...
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
@@ -262,29 +270,6 @@ class Sandbox(Protocol):
         """#366: True once `mark_ready` ran and the sandbox still lives; False
         for a fresh/rebuilt-but-not-yet-restored sandbox. A vanished sandbox
         raises `SandboxNotFound` like every other op."""
-        ...
-
-    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
-        """Place the item's user-set environment variables where the tool
-        launchers can read them, as `KEY=VALUE` lines.
-
-        Like `.ready`, this lands OUTSIDE the workspace — beside it, in the
-        infra area — and that placement is the whole point: it never appears in
-        `walk`/`exists`/the file tree, the mirror never carries it to durable
-        storage, it is not charged against the workspace quota, and it dies with
-        the sandbox. It is a first-class op rather than an `upload` because
-        `upload`/`upload_file`/`download` are workspace-root-relative and cannot
-        address the infra area at all.
-
-        REPLACES the previous content — the file is rebuilt whole from the item
-        each turn, so a variable the user deleted has to actually disappear.
-        A backend that isolates by uid must leave it readable by the uid its
-        `exec` drops to, or the launcher cannot read what it just wrote.
-
-        The values are secrets by nature. This is delivery, not storage: the
-        item record is the source of truth (`WorkItemBase.env_vars`), because
-        `kill` rmtrees this whole area and the durable archive carries only the
-        workspace."""
         ...
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:

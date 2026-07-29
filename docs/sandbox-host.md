@@ -9,6 +9,10 @@ app 只用一個輕量的 `HttpSandbox` client;真正執行指令的是自架的
 相依套件**。它與 app 唯一的耦合是 HTTP **wire contract**(`docs/sandbox-host-wire.md`),
 由 app 定義、host 各自獨立實作。原始設計見 `docs/plan-http-sandbox.md`。
 
+> 本頁講 **host 這個服務本身**(組成、設定、部署、限制)。想知道**執行時**誰在什麼時機打
+> host、以及 tool / skill / workflow 各自怎麼落到 sandbox 裡,見
+> [Hosted Sandbox 執行時架構](hosted-sandbox.md)。
+
 ## 組成
 
 - **`HttpSandbox`**(app:`src/workspace_app/sandbox/http_client.py`)——第 4 種

@@ -116,6 +116,7 @@ nav:
       - Workflow 視覺手冊（全語法 + 動畫）: workflows-syntax.html
       - Workflow 參考模型（#428 釘死決策）: workflow-reference-model.md
       - Topic Hub: topic-hub.md
+      - Hosted Sandbox 執行時架構: hosted-sandbox.md
       - Sandbox Host: sandbox-host.md
       - Sandbox Host 線上契約: sandbox-host-wire.md
       - sci-plot 科學繪圖: sci-plot.md
