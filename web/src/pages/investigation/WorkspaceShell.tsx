@@ -1117,16 +1117,23 @@ export function TopBar({
                 checked={bottomState !== "closed"}
                 onChange={() => onPanelBottom({ type: "toggle" })}
               />
-              <PanelToggle
-                label="Chat"
-                title={
-                  chatCollapsed
-                    ? "Show the chat — the workspace makes room for it"
-                    : "Hide the chat — the workspace expands to fill"
-                }
-                checked={!chatCollapsed}
-                onChange={onToggleChat}
-              />
+              {/* Wide only. On a narrow shell #464 already makes the two
+                  mutually exclusive — whichever the Workspace row is not
+                  showing — so a second toggle would govern nothing and would
+                  report "Chat ✓" over an empty column. One control per
+                  decision; the Workspace row's own tooltip names the effect. */}
+              {!isNarrow && (
+                <PanelToggle
+                  label="Chat"
+                  title={
+                    chatCollapsed
+                      ? "Show the chat — the workspace makes room for it"
+                      : "Hide the chat — the workspace expands to fill"
+                  }
+                  checked={!chatCollapsed}
+                  onChange={onToggleChat}
+                />
+              )}
             </div>
           )}
         </Popover>

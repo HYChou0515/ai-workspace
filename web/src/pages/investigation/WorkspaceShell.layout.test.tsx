@@ -225,6 +225,29 @@ describe("TopBar View menu", () => {
     expect(glyph(view)).not.toBe(glyph(edit));
   });
 
+  /**
+   * Measured in a real browser at 700px: the Chat row was inert AND wrong. On a
+   * narrow shell #464 already makes the workspace and the chat mutually
+   * exclusive — whichever the Workspace toggle is not showing — so a separate
+   * chat toggle governs nothing. Ticking it changed no pixels, and the row
+   * reported "Chat ✓" while no chat was on screen.
+   *
+   * One control per decision: on narrow the Workspace row IS the switch, and
+   * its tooltip already says the chat expands to fill.
+   */
+  it("drops the Chat row on a narrow shell, where the workspace row is the switch", () => {
+    renderTopBar({ workspace: true, isNarrow: true });
+    openView();
+    expect(screen.queryByRole("checkbox", { name: /chat/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /workspace/i })).toBeInTheDocument();
+  });
+
+  it("keeps the Chat row on a wide shell, where the two sit side by side", () => {
+    renderTopBar({ workspace: true, isNarrow: false });
+    openView();
+    expect(screen.getByRole("checkbox", { name: /chat/i })).toBeInTheDocument();
+  });
+
   it("hides the menu for a chat-only App — there are no panels to arrange", () => {
     renderTopBar({ workspace: false });
     expect(screen.queryByRole("button", { name: /view/i })).not.toBeInTheDocument();
