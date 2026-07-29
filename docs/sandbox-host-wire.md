@@ -15,6 +15,9 @@ API。app 在這裡**定義**它;host 則獨立**實作**它(#251)。
 
 當你改動下面任何一處,**兩側都要一起更新**。
 
+> 這裡只定義**線上格式**。哪一個 endpoint 在什麼時機被誰呼叫,見
+> [Hosted Sandbox 執行時架構](hosted-sandbox.md)。
+
 ## Routing
 
 `POST /sandboxes` 打到 host 的 ClusterIP Service(會做負載平衡)。回應裡帶著被選中那個 pod
@@ -28,22 +31,38 @@ sandbox。
 
 | Method & path | Body / params | Success | Purpose |
 |---|---|---|---|
-| `POST /sandboxes` | `{image?, env?, exposed_ports?}` | `200 {pod_url, remote_id}` | 建立 |
+| `POST /sandboxes` | `{image?, env?, exposed_ports?, item_id?}` | `200 {pod_url, remote_id}` | 建立 |
 | `DELETE /sandboxes/{rid}` | — | `204` | 終止 |
 | `POST /sandboxes/{rid}/exec` | `{cmd: [str]}` | `200` NDJSON stream | exec(見下) |
+| `POST /sandboxes/{rid}/persist` | `{delete: bool}` | `204` | rsync 工作目錄 → NFS 封存(#492) |
 | `PUT /sandboxes/{rid}/file?path=` | raw octet-stream body | `204` | 上傳 |
 | `GET /sandboxes/{rid}/file?path=` | — | `200` octet-stream | 下載 |
 | `GET /sandboxes/{rid}/exists?path=` | — | `200 {exists: bool}` | 存在性檢查 |
+| `GET /sandboxes/{rid}/disk-usage` | — | `200 {bytes: int}` | workspace 總用量(配額) |
+| `GET /sandboxes/{rid}/size?path=` | — | `200 {size: int\|null}` | 單檔大小(配額;不存在回 `null`) |
 | `POST /sandboxes/{rid}/mark-ready` | — | `204` | 標記沙盒「已完整還原、可信」(#366) |
 | `GET /sandboxes/{rid}/ready` | — | `200 {ready: bool}` | 讀 ready 狀態(#366) |
+| `POST /sandboxes/{rid}/user-env` | raw octet-stream body(`KEY=VALUE` 行) | `204` | 遞送 item 的使用者環境變數 |
 | `GET /sandboxes/{rid}/walk?root=` | — | `200 {entries: [{path,size,version}]}` | walk |
 | `DELETE /sandboxes/{rid}/file?path=` | — | `204` | 刪除 |
 | `POST /sandboxes/{rid}/mkdir` | `{path}` | `204` | mkdir |
 | `DELETE /sandboxes/{rid}/dir?path=` | — | `204` | rmdir |
 | `POST /sandboxes/{rid}/rename` | `{src, dst}` | `204` | rename |
 
-維運用(不屬於 sandbox 表面)：`GET /healthz`、`GET /readyz`、
-`POST /drain`。
+維運用(不屬於 sandbox 表面)：`GET /healthz`(回
+`{status, version, capabilities: [str]}`——能力名與行為同 commit,不會像手維護的相容性表那樣
+漂移)、`GET /readyz`、`POST /drain`。
+
+**`item_id` + `persist`(#492)**:host 設了 `SANDBOX_HOST_NFS_ROOT` 時,帶 `item_id` 的
+`create` 會**先**把 `{nfs_root}/{item_id}` rsync 還原進新沙盒、`reown` 成沙盒 uid、最後才
+`mark-ready`(所以 `create` 一回來,目錄就是完整且可信的);`persist` 再把它 rsync 回去——
+`delete: true` 是靜止點的**對帳**,`false` 是回合中的**純追加** checkpoint,且**只在 ready 為真
+時**執行(半還原的目錄絕不能覆蓋封存)。沒有 archive 或沒帶 `item_id` ⇒ 兩者都是 no-op,舊
+client 因此照舊可用。
+
+**`user-env`**:body 是原始檔案內容(不是 JSON——值是任意使用者文字,每多一層編碼就多一次
+被弄壞的機會)。落點在 workspace **外**的 infra 區,所以不出現在 `walk`/`exists`/檔案樹、不被
+同步、不計配額、隨沙盒消滅;它是**整份取代**(使用者刪掉的變數必須真的消失)。
 
 檔案以 **raw `application/octet-stream`** 的 body 傳遞(不是 base64-in-JSON)。
 路徑都是相對於 workspace root;開頭的 `/` 代表 workspace root。
@@ -80,6 +99,12 @@ sandbox。
 - `FileNotFoundError` —— 下載 / 刪除 / rmdir / rename 時檔案不存在。
 
 指令的非零 exit **不是**錯誤——它搭著 exec 的 `exit` frame 一起回來。
+
+**傳輸層的兩種壞法必須分開(#492)**:**逾時**代表 pod 可達但**慢**(過載 / 大檔傳輸中)
+⇒ client 映成 `SandboxBusy`,沙盒**還活著**,冪等的檔案/探測操作會以**遞增的讀取期限 + 遞增
+退避**(皆有上限)重試,超過次數就大聲失敗;把「只是忙」誤判成死會再開一個沙盒 = split-brain。
+其他傳輸失敗(連線被拒/重設)才是 `SandboxNotFound`。`create`(不冪等)、`persist`(長時間
+rsync)、`exec`(有自己的期限)**一律不重試**。
 
 ## Auth
 

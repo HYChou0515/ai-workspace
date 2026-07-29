@@ -2,7 +2,7 @@
 
 把 agent 的工具拆成兩半：**工具定義（schema / registry）留在 app 端**，**工具執行（jail + uid/cgroup 隔離）放在 host 端**，兩者之間唯一的交接物是一個不透明的 `/.tools` bundle 目錄。
 
-> **看這篇之前**：先讀 [架構總覽](../architecture.md) 抓全貌。Sandbox 與檔案同步的上層脈絡見 [Sandbox、FileStore 與同步](sandbox-and-filestore.md)；HTTP 線上契約的完整細節見 [sandbox-host-wire.md](../sandbox-host-wire.md)。
+> **看這篇之前**：先讀 [架構總覽](../architecture.md) 抓全貌。Sandbox 與檔案同步的上層脈絡見 [Sandbox、FileStore 與同步](sandbox-and-filestore.md)；HTTP 線上契約的完整細節見 [sandbox-host-wire.md](../sandbox-host-wire.md);執行時「誰在何時打 host」的時間軸見 [Hosted Sandbox 執行時架構](../hosted-sandbox.md)。
 
 ## 職責與邊界
 
