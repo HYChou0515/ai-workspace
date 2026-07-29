@@ -22,8 +22,8 @@ function renderPanel() {
       investigationId="inv-1"
       showTerminal={true}
       height={200}
-      open={true}
-      onToggle={vi.fn()}
+      state="pinned"
+      onPanel={vi.fn()}
     />,
   );
 }

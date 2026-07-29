@@ -19,6 +19,7 @@ import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
 import { modCombo } from "../../lib/platform";
+import { type PanelAction, type PanelState, panelPeek } from "../../lib/panelPeek";
 import { relPath } from "../../lib/relPath";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PresenceBar } from "../../components/PresenceBar";
@@ -260,7 +261,27 @@ function ShellBody({
   const agentStart = useRef(agentW);
   const bottomStart = useRef(bottomH);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [bottomOpen, setBottomOpen] = useState(true);
+  // The bottom strip opens CLOSED: an item is opened to read its files and talk
+  // to the agent, not to watch a log, and a panel that shows up uninvited on
+  // every single item is chrome the user has to dismiss before starting work.
+  // Its tab row stays visible, so it is one click away rather than hidden.
+  const [bottomState, setBottomState] = useState<PanelState>("closed");
+  const dispatchBottom = useCallback(
+    (action: PanelAction) => setBottomState((s) => panelPeek(s, action)),
+    [],
+  );
+  // A peek lasts until you go and do something else: any pointer press outside
+  // the panel retracts it. A pin ignores this (the reducer's rule), so pinning
+  // is what makes the panel yours to keep.
+  const bottomRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (bottomState !== "peeked") return;
+    const onDown = (e: MouseEvent) => {
+      if (!bottomRef.current?.contains(e.target as Node)) dispatchBottom({ type: "outside" });
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [bottomState, dispatchBottom]);
   // #159: chat is the main stage. When the IDE is collapsed, the whole
   // workspace (activity bar + tree + editor + bottom panel) folds away so the
   // chat fills the row — toggled by the TopBar `Workspace` button (and the
@@ -421,7 +442,7 @@ function ShellBody({
         setSidebarOpen((v) => !v);
       } else if (k === "j") {
         e.preventDefault();
-        setBottomOpen((v) => !v);
+        dispatchBottom({ type: "toggle" });
       } else if (k === "s") {
         const active = g.activeGroup?.activePath;
         if (active) {
@@ -564,12 +585,17 @@ function ShellBody({
             groups={groups}
             files={files}
             bottomHeight={bottomH}
-            bottomOpen={bottomOpen}
+            bottomState={bottomState}
+            bottomRef={bottomRef}
             onResizeBottomStart={() => {
               bottomStart.current = bottomH;
+              // Dragging a peeked panel taller is as clear a "I want to keep
+              // this" as a double click — without this it would vanish the
+              // moment the drag started, since the divider is outside it.
+              dispatchBottom({ type: "pin", sameTarget: false });
             }}
             onResizeBottom={(d) => setBottomH(bottomStart.current - d)}
-            onToggleBottom={() => setBottomOpen((v) => !v)}
+            onPanelBottom={dispatchBottom}
           />
           {!isNarrow && (
             <ResizeDivider
@@ -1528,20 +1554,22 @@ function EditorArea({
   groups,
   files,
   bottomHeight,
-  bottomOpen,
+  bottomState,
+  bottomRef,
   onResizeBottom,
   onResizeBottomStart,
-  onToggleBottom,
+  onPanelBottom,
 }: {
   investigationId: string;
   showTerminal: boolean;
   groups: Groups;
   files: FileInfo[];
   bottomHeight: number;
-  bottomOpen: boolean;
+  bottomState: PanelState;
+  bottomRef: React.Ref<HTMLDivElement>;
   onResizeBottom: (deltaFromStart: number) => void;
   onResizeBottomStart: () => void;
-  onToggleBottom: () => void;
+  onPanelBottom: (action: PanelAction) => void;
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
 
@@ -1556,7 +1584,7 @@ function EditorArea({
         />
       </div>
 
-      {bottomOpen && (
+      {bottomState !== "closed" && (
         <ResizeDivider
           orientation="horizontal"
           ariaLabel="resize bottom panel"
@@ -1570,8 +1598,9 @@ function EditorArea({
         investigationId={investigationId}
         showTerminal={showTerminal}
         height={bottomHeight}
-        open={bottomOpen}
-        onToggle={onToggleBottom}
+        state={bottomState}
+        onPanel={onPanelBottom}
+        panelRef={bottomRef}
       />
       <StatusBar activeTab={groups.activeFile} investigationId={investigationId} />
     </section>
@@ -2352,14 +2381,34 @@ function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
   );
 }
 
+/** Where the bottom panel's body sits: docked in the flex column when pinned,
+ * floating directly above the (never-moving) tab strip when peeked. */
+function bodyBox(state: PanelState, height: number): React.CSSProperties {
+  if (state === "pinned") return { flex: 1, minHeight: 0 };
+  return {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    // The strip is the panel's only laid-out row, so its top edge is the
+    // panel's top edge — `bottom: 100%` lands the body exactly on top of it.
+    bottom: "100%",
+    height: height - 32,
+    background: "var(--white)",
+    borderTop: "1px solid var(--paper-3)",
+    boxShadow: "0 -6px 24px rgba(20,22,28,0.16)",
+    zIndex: 12,
+  };
+}
+
 export function BottomPanel({
   tab,
   onTab,
   investigationId,
   showTerminal,
   height,
-  open,
-  onToggle,
+  state,
+  onPanel,
+  panelRef,
 }: {
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
   onTab: (t: "problems" | "output" | "terminal" | "agent_log" | "run_history") => void;
@@ -2368,11 +2417,22 @@ export function BottomPanel({
    * (`function.terminal`). The backend already hard-errors incoherent toggles. */
   showTerminal: boolean;
   height: number;
-  open: boolean;
-  onToggle: () => void;
+  /** Three states, not two: the strip is always there, and the BODY is what
+   * `peeked` (temporary) or `pinned` (stays) reveals. The shell owns the state
+   * so ⌘J and the never-all-collapsed rule have a single source of truth. */
+  state: PanelState;
+  onPanel: (action: PanelAction) => void;
+  /** The shell watches for interaction OUTSIDE this node to retract a peek. */
+  panelRef?: React.Ref<HTMLDivElement>;
 }) {
   const { log } = useAgent();
   const bodyScrollRef = useStickToBottom<HTMLDivElement>(log);
+  const open = state !== "closed";
+  // Which tab the panel was showing when the CURRENT click gesture began. A
+  // double click delivers two clicks first, and the first one has already
+  // switched `tab` — so judging "did you double-click the tab you were already
+  // reading?" against the live prop would read every switch as a collapse.
+  const gestureFrom = useRef(tab);
   const tabs = [
     { key: "problems" as const, label: "Problems" },
     { key: "output" as const, label: "Output" },
@@ -2383,9 +2443,15 @@ export function BottomPanel({
 
   return (
     <div
+      ref={panelRef}
       style={{
-        height: open ? height : 32,
+        // Only a PIN claims height. A peek leaves the panel at strip height and
+        // floats its body over the editor instead — see the docked-growth bug
+        // in BottomPanel.peek.test.tsx: growing upward moved the tab row out
+        // from under the pointer mid-gesture and killed the double click.
+        height: state === "pinned" ? height : 32,
         flexShrink: 0,
+        position: "relative",
         borderTop: "1px solid var(--paper-3)",
         background: "var(--white)",
         display: "flex",
@@ -2433,7 +2499,17 @@ export function BottomPanel({
               <button
                 key={t.key}
                 type="button"
-                onClick={() => onTab(t.key)}
+                // Single click: switch to this tab and reveal it temporarily.
+                // Double click: pin it — or collapse, when it was already the
+                // tab on show (see `gestureFrom`).
+                onClick={(e) => {
+                  if (e.detail <= 1) gestureFrom.current = tab;
+                  onTab(t.key);
+                  onPanel({ type: "peek" });
+                }}
+                onDoubleClick={() =>
+                  onPanel({ type: "pin", sameTarget: gestureFrom.current === t.key })
+                }
                 style={{
                   padding: "0 10px",
                   height: 32,
@@ -2455,7 +2531,7 @@ export function BottomPanel({
             scrolling the tabs to find the control. */}
         <button
           type="button"
-          onClick={onToggle}
+          onClick={() => onPanel({ type: "toggle" })}
           title={`${open ? "Collapse" : "Expand"} panel (${modCombo("J")})`}
           aria-label="toggle bottom panel"
           style={{ color: "var(--text-paper-d)", padding: 4, flexShrink: 0 }}
@@ -2466,9 +2542,9 @@ export function BottomPanel({
       {open &&
         (tab === "terminal" ? (
           <div
+            data-testid="bottom-body"
             style={{
-              flex: 1,
-              minHeight: 0,
+              ...bodyBox(state, height),
               padding: "8px 14px",
               display: "flex",
               flexDirection: "column",
@@ -2479,10 +2555,10 @@ export function BottomPanel({
         ) : (
           <div
             ref={bodyScrollRef}
+            data-testid="bottom-body"
             className="scrollable"
             style={{
-              flex: 1,
-              minHeight: 0,
+              ...bodyBox(state, height),
               overflow: "auto",
               padding: "8px 14px",
               fontFamily: "var(--font-mono)",
