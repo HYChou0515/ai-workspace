@@ -186,11 +186,6 @@ _JAILBIN = ".jailbin"
 # as SANDBOX_HOME; this replaces the launcher's old shared-/tmp HOME that leaked
 # a user's `pip install --break-system-packages` across sandboxes on a pod.
 _HOME = ".home"
-# The item's user-set environment variables, as `KEY=VALUE` lines, for the tool
-# launchers to export. A sibling of the workspace, OUTSIDE it — never walked,
-# never carried by the NFS archive (which rsyncs only the workspace), reaped with
-# the sandbox. `_exec_argv` names it to the launchers as SANDBOX_USER_ENV.
-_USER_ENV = ".userenv"
 # Shim every flavour name the agent or a tool launcher might spell — matching
 # the jail bootstrap. A bare `python` shim alone would let `python3` fall
 # through to the host interpreter.
@@ -362,21 +357,6 @@ class LocalProcessSandbox:
         home.mkdir(exist_ok=True)
         return home
 
-    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
-        """Write the item's user env for the tool launchers, at the SANDBOX ROOT
-        (a sibling of the workspace), so walk/the archive never see it."""
-        path = self._require(handle) / _USER_ENV
-        await asyncio.to_thread(self._write_user_env, path, content)
-
-    def _write_user_env(self, path: Path, content: str) -> None:
-        """The blocking half, and the seam `IsolatedProcessSandbox` extends to
-        hand the file to the uid its `exec` drops to. 0600 from creation (the
-        mode goes to `os.open`, not a chmod afterwards), so the values are never
-        briefly readable by a co-tenant."""
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(content)
-
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
     ) -> tuple[list[str], Path, dict[str, str]]:
@@ -415,8 +395,6 @@ class LocalProcessSandbox:
             # the unjailed branch names below, a sibling of the `/root`
             # workspace. Set unconditionally: the launcher guards with `-f`, and
             # one assignment cannot disagree with the launcher about when the
-            # file exists the way a condition here could.
-            env["SANDBOX_USER_ENV"] = f"/{_USER_ENV}"
         else:
             # No chroot: run directly in the workspace subdir. cwd is the
             # workspace (the user's files); HOME is the per-sandbox `.home`.
@@ -438,8 +416,6 @@ class LocalProcessSandbox:
             # wrap (no `--reset-env`) so the dropped uid's launcher reads it.
             env["SANDBOX_HOME"] = str(root / _HOME)
             # The user-env file the tool launchers export from (same file, same
-            # infra area as `.home`). Unconditional — see the jail branch.
-            env["SANDBOX_USER_ENV"] = str(root / _USER_ENV)
             # (Re)build + prepend the `python` shim so `python`/`python3*` route
             # to the python-stack carrier (or /usr/bin/python3), never the host's
             # own service venv that heads the inherited PATH (#350). The jail path

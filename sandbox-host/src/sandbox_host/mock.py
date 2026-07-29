@@ -71,15 +71,6 @@ class MockSandbox:
         self._require(handle)
         return handle.id in self._ready
 
-    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
-        self._require(handle)
-        self._user_env[handle.id] = content
-
-    def user_env(self, handle: SandboxHandle) -> str | None:
-        """Test-facing: what `write_user_env` last wrote, or None if it never
-        ran."""
-        return self._user_env.get(handle.id)
-
     async def exec(
         self,
         handle: SandboxHandle,

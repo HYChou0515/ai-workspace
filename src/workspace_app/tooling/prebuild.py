@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 _LAUNCH = """\
 #!/bin/sh
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Snapshot the item's variables BEFORE this script sets anything of its own.
+# They arrive in our environment (the app names them on the exec that dispatches
+# the tool), and the exports below would overwrite the reserved ones — so keep
+# them here and put them back as the last thing before exec. Reading them at the
+# bottom instead reads OUR value, not the user's.
+for ue_name in ${{SANDBOX_USER_ENV_KEYS:-}}; do
+  eval "ue_keep_$ue_name=\${{$ue_name-}}"
+done
 # HOME (caches + any `pip --user` fallback) goes to a per-sandbox dir the exec
 # path passes as SANDBOX_HOME — NOT a shared /tmp. The unset fallback is a
 # fresh PRIVATE `mktemp -d`, never the shared pod /tmp: forgetting to set it
@@ -67,8 +75,10 @@ export PIP_USER=1
 mine="$HOME/.local/lib/python{ver}/site-packages"
 bundled="$here/.venv/lib/python{ver}/site-packages"
 export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
-# The item's user-set environment variables, delivered by the app into the
-# sandbox's infra area as `KEY=VALUE` lines and named here by SANDBOX_USER_ENV.
+# The item's user-set environment variables. They are already IN this script's
+# environment — the app names them on the exec that dispatches the tool — so
+# nothing is read from disk here; SANDBOX_USER_ENV_KEYS just lists which of them
+# the user set.
 #
 # LAST, immediately before the exec: the decision (recorded with the feature) is
 # that reserved names are allowed THROUGH — a user may override PYTHONPATH/HOME/
@@ -82,14 +92,9 @@ export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
 # failing inside the tool with nothing pointing back here. `|| :` because a line
 # whose name is not a valid identifier must not take the whole command down —
 # `export` is a special builtin, so an unguarded failure exits the shell.
-if [ -f "${{SANDBOX_USER_ENV:-}}" ]; then
-  while IFS= read -r ue_line; do
-    case "$ue_line" in
-      ''|'#'*) continue ;;
-      *=*) export "$ue_line" 2>/dev/null || : ;;
-    esac
-  done < "$SANDBOX_USER_ENV"
-fi
+for ue_name in ${{SANDBOX_USER_ENV_KEYS:-}}; do
+  eval "export \"$ue_name=\${{ue_keep_$ue_name-}}\"" 2>/dev/null || :
+done
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 """
@@ -126,6 +131,14 @@ here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
 case "$called" in
   pip|pip[0-9]*) set -- -m pip "$@" ;;
 esac
+# Snapshot the item's variables BEFORE this script sets anything of its own.
+# They arrive in our environment (the app names them on the exec that dispatches
+# the tool), and the exports below would overwrite the reserved ones — so keep
+# them here and put them back as the last thing before exec. Reading them at the
+# bottom instead reads OUR value, not the user's.
+for ue_name in ${{SANDBOX_USER_ENV_KEYS:-}}; do
+  eval "ue_keep_$ue_name=\${{$ue_name-}}"
+done
 # HOME (caches + any `pip --user` install fallback) → a per-sandbox dir the exec
 # path passes as SANDBOX_HOME. A user's `pip install --break-system-packages X`
 # can't write the root-owned carrier venv, so pip defaults to `--user` = $HOME/
@@ -156,8 +169,10 @@ export PIP_USER=1
 mine="$HOME/.local/lib/python{ver}/site-packages"
 bundled="$here/.venv/lib/python{ver}/site-packages"
 export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
-# The item's user-set environment variables, delivered by the app into the
-# sandbox's infra area as `KEY=VALUE` lines and named here by SANDBOX_USER_ENV.
+# The item's user-set environment variables. They are already IN this script's
+# environment — the app names them on the exec that dispatches the tool — so
+# nothing is read from disk here; SANDBOX_USER_ENV_KEYS just lists which of them
+# the user set.
 #
 # LAST, immediately before the exec: the decision (recorded with the feature) is
 # that reserved names are allowed THROUGH — a user may override PYTHONPATH/HOME/
@@ -171,14 +186,9 @@ export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
 # failing inside the tool with nothing pointing back here. `|| :` because a line
 # whose name is not a valid identifier must not take the whole command down —
 # `export` is a special builtin, so an unguarded failure exits the shell.
-if [ -f "${{SANDBOX_USER_ENV:-}}" ]; then
-  while IFS= read -r ue_line; do
-    case "$ue_line" in
-      ''|'#'*) continue ;;
-      *=*) export "$ue_line" 2>/dev/null || : ;;
-    esac
-  done < "$SANDBOX_USER_ENV"
-fi
+for ue_name in ${{SANDBOX_USER_ENV_KEYS:-}}; do
+  eval "export \"$ue_name=\${{ue_keep_$ue_name-}}\"" 2>/dev/null || :
+done
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$@"
 """

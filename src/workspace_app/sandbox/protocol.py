@@ -265,29 +265,6 @@ class Sandbox(Protocol):
         raises `SandboxNotFound` like every other op."""
         ...
 
-    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
-        """Place the item's user-set environment variables where the tool
-        launchers can read them, as `KEY=VALUE` lines.
-
-        Like `.ready`, this lands OUTSIDE the workspace — beside it, in the
-        infra area — and that placement is the whole point: it never appears in
-        `walk`/`exists`/the file tree, the mirror never carries it to durable
-        storage, it is not charged against the workspace quota, and it dies with
-        the sandbox. It is a first-class op rather than an `upload` because
-        `upload`/`upload_file`/`download` are workspace-root-relative and cannot
-        address the infra area at all.
-
-        REPLACES the previous content — the file is rebuilt whole from the item
-        each turn, so a variable the user deleted has to actually disappear.
-        A backend that isolates by uid must leave it readable by the uid its
-        `exec` drops to, or the launcher cannot read what it just wrote.
-
-        The values are secrets by nature. This is delivery, not storage: the
-        item record is the source of truth (`WorkItemBase.env_vars`), because
-        `kill` rmtrees this whole area and the durable archive carries only the
-        workspace."""
-        ...
-
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         """Delete the regular file at `path`. Raise `FileNotFoundError` if it
         does not exist. Parent directories are left intact."""

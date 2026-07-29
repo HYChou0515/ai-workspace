@@ -1153,32 +1153,15 @@ def test_a_package_the_user_installed_wins_over_the_bundled_one(tmp_path: Path, 
 
 # ---- user env: the item's variables, exported for the tool ----------------
 #
-# `SANDBOX_USER_ENV` names a file of `KEY=VALUE` lines sitting in the sandbox's
-# infra area. The launchers export it as the LAST thing before exec, so a user
-# value wins over the carrier's own settings — the reserved-name policy is
-# "allowed through, user's own risk", and applying it earlier would quietly mean
-# the opposite.
-#
-# BOTH templates: `_PYTHON_LAUNCH` serves `exec(["python", …])`, while every
-# registered tool (`data-fetch`, `sci-plot`, …) carries its own bundle built
-# from `_LAUNCH`. A change to only one covers only half the ask.
-
-
-def _env_seen_by(launch: Path, tmp_path: Path, content: str | None) -> dict[str, str]:
-    """Run the launcher with `/usr/bin/env` as the interpreter and read back the
-    environment it handed over. `content=None` writes no file at all."""
+def _env_seen_with_inherited(launch: Path, inherited: dict[str, str]) -> dict[str, str]:
+    """Run the launcher with the variables already in its environment — the way
+    an exec-delivered value arrives — and read back what it handed over."""
     import os
     import subprocess
 
-    env = dict(os.environ)
-    if content is not None:
-        f = tmp_path / "userenv"
-        f.write_text(content)
-        env["SANDBOX_USER_ENV"] = str(f)
-    else:
-        env["SANDBOX_USER_ENV"] = str(tmp_path / "absent")
+    env = {**os.environ, **inherited}
     r = subprocess.run([str(launch)], capture_output=True, text=True, check=True, env=env)
-    out = {}
+    out: dict[str, str] = {}
     for line in r.stdout.splitlines():
         if "=" in line:
             k, v = line.split("=", 1)
@@ -1186,65 +1169,31 @@ def _env_seen_by(launch: Path, tmp_path: Path, content: str | None) -> dict[str,
     return out
 
 
-def test_the_carrier_launcher_exports_the_users_variables(tmp_path: Path):
+def test_a_named_variable_still_wins_over_the_carriers_own_setting(tmp_path: Path):
+    """The launcher sets `PIP_USER=1` itself. A user who set `0` must still get
+    `0` — the decision is that reserved names pass through, and the failure this
+    guards is the one where they are stored, listed, and quietly ignored."""
     launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
-    seen = _env_seen_by(launch, tmp_path, "API_KEY=sk-1\nREGION=tw\n")
-    assert seen["API_KEY"] == "sk-1"
-    assert seen["REGION"] == "tw"
-
-
-def test_a_value_reaches_the_tool_exactly_as_typed(tmp_path: Path):
-    """The line is exported as ONE word, never sourced. A key holding `$`, a
-    backtick or `$(…)` would otherwise be rewritten by the shell into something
-    that fails inside the tool with nothing pointing back at us."""
-    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
-    tricky = "a=b c#d$e`f'g\"h$(echo no)"
-    seen = _env_seen_by(launch, tmp_path, f"TOKEN={tricky}\n")
-    assert seen["TOKEN"] == tricky
-
-
-def test_a_missing_file_is_simply_no_variables(tmp_path: Path):
-    """SANDBOX_USER_ENV is set unconditionally by the exec path, so the launcher
-    has to tolerate it naming a file nobody wrote."""
-    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
-    seen = _env_seen_by(launch, tmp_path, None)
-    assert "API_KEY" not in seen
-
-
-def test_blank_and_commented_lines_are_ignored(tmp_path: Path):
-    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
-    seen = _env_seen_by(launch, tmp_path, "\n# a note\nAPI_KEY=sk-1\n\n")
-    assert seen["API_KEY"] == "sk-1"
-
-
-def test_the_user_wins_over_the_carriers_own_settings(tmp_path: Path):
-    """The decision was to let reserved names through — the user carries the
-    risk of breaking their own carrier. That only means anything if the export
-    runs AFTER the launcher's own; earlier and it is silently a no-op, which is
-    the failure the whole ordering discussion was about."""
-    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
-    seen = _env_seen_by(launch, tmp_path, "PIP_USER=0\n")
+    seen = _env_seen_with_inherited(launch, {"PIP_USER": "0", "SANDBOX_USER_ENV_KEYS": "PIP_USER"})
     assert seen["PIP_USER"] == "0"
 
 
-def test_the_command_dispatcher_launcher_exports_them_too(tmp_path: Path):
-    """`data-fetch` and friends never touch the python-stack carrier — each
-    carries its own bundle built from `_LAUNCH`. Injecting into only the carrier
-    would leave every registered tool without the user's keys."""
-    bundle = tmp_path / "data-fetch"
-    (bundle / "python" / "bin").mkdir(parents=True)
-    # `_LAUNCH` execs the dynamic loader with the interpreter, so the
-    # interpreter has to stay a real ELF binary — `/usr/bin/env`, which then
-    # runs the "tool". The tool is the stand-in that dumps the environment.
-    (bundle / "python" / "bin" / "python3.12").symlink_to("/usr/bin/env")
-    (bundle / ".venv" / "bin").mkdir(parents=True)
-    tool = bundle / ".venv" / "bin" / "data-fetch"
-    tool.write_text("#!/bin/sh\nexec env\n")
-    tool.chmod(0o755)
-    launch = bundle / "launch"
-    launch.write_text(prebuild_module()._LAUNCH.format(ver="3.12", tool="data-fetch"))
-    launch.chmod(0o755)
+def test_an_unnamed_variable_is_left_where_it_landed(tmp_path: Path):
+    """Only the names the app declares are re-exported. Everything else keeps
+    whatever the launcher decided — re-exporting the whole environment would
+    make the carrier's own settings unfixable."""
+    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
+    seen = _env_seen_with_inherited(launch, {"PIP_USER": "0", "SANDBOX_USER_ENV_KEYS": ""})
+    assert seen["PIP_USER"] == "1"
 
-    seen = _env_seen_by(launch, tmp_path, "API_KEY=sk-1\n")
 
-    assert seen["API_KEY"] == "sk-1"
+def test_a_value_reaches_the_tool_exactly_as_typed(tmp_path: Path):
+    """A key holding `$`, a backtick or `$(…)` must arrive byte-for-byte. The
+    old delivery parsed a file and had to promise this by hand; the value now
+    rides the exec environment, where the shell never gets a chance to expand
+    it — but the launcher re-exports the named ones, so assert the promise
+    still holds through that step."""
+    launch = _echo_carrier(tmp_path, interpreter="/usr/bin/env")
+    tricky = "p@ss$word `id` $(whoami)"
+    seen = _env_seen_with_inherited(launch, {"TOKEN": tricky, "SANDBOX_USER_ENV_KEYS": "TOKEN"})
+    assert seen["TOKEN"] == tricky

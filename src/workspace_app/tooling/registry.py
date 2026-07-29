@@ -266,12 +266,27 @@ async def _exec_tool(
     inherit and no file to open.
     """
     assert actx.sandbox is not None  # a provisioned tool implies a sandbox
+    env = _tool_env(actx.user_env)
     return await actx.sandbox.exec(
         handle,
         [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"],
         on_output=actx.on_exec_output,
-        env=actx.user_env or None,
+        env=env or None,
     )
+
+
+def _tool_env(user_env: dict[str, str]) -> dict[str, str]:
+    """The item's variables, plus the list of which names they are.
+
+    The launcher sets `HOME` / `PYTHONPATH` / `PIP_USER` for itself, and those
+    run after we hand the process its environment — so a reserved name the user
+    set would be overwritten, which is "stored, listed, no effect". The list
+    lets the launcher snapshot exactly these on entry and put them back as the
+    last thing before exec, keeping the decision that the user wins.
+    """
+    if not user_env:
+        return {}
+    return {**user_env, "SANDBOX_USER_ENV_KEYS": " ".join(user_env)}
 
 
 async def _review_chart(

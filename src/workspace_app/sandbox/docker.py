@@ -47,9 +47,6 @@ _WORKDIR = "/workspace"
 # #366: readiness marker OUTSIDE the workspace (container root), so walk never
 # sees it. Deprecated backend — kept only to satisfy the Sandbox protocol.
 _READY_MARKER = "/.ready"
-# The user-env delivery file, likewise at the container root and OUTSIDE the
-# workspace — never walked, never mirrored, gone with the container.
-_USER_ENV = ".userenv"
 
 logger = logging.getLogger(__name__)
 
@@ -227,17 +224,6 @@ class DockerSandbox:
         container = self._require(handle)
         r = await asyncio.to_thread(container.exec_run, ["test", "-f", _READY_MARKER])
         return r.exit_code == 0
-
-    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
-        # At the container root, OUTSIDE the `/workspace` walk scope — the same
-        # placement as `.ready`, for the same reason. `put_archive` carries the
-        # bytes verbatim; a `sh -c 'echo …'` would hand the values to a shell,
-        # and these are exactly the strings that must not be re-interpreted.
-        container = self._require(handle)
-        tar_bytes = _make_single_file_tar(_USER_ENV, content.encode("utf-8"), mode=0o600)
-        ok = await asyncio.to_thread(container.put_archive, "/", tar_bytes)
-        if not ok:  # pragma: no cover — docker SDK edge case, no reliable trigger
-            raise RuntimeError("docker put_archive failed for the user env file")
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         if not await self.exists(handle, path):

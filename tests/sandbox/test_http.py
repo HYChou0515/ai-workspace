@@ -41,10 +41,6 @@ from workspace_app.sandbox.protocol import (
 _ADVERTISE = "http://sandbox-host-pod:8000"
 
 
-def _err(exc: Exception) -> JSONResponse:
-    return JSONResponse(status_code=404, content={"error": type(exc).__name__, "detail": str(exc)})
-
-
 def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     """A minimal ASGI mirror of the sandbox-host wire contract, backed by an
     in-memory `MockSandbox`. Independent of the real host package — it exists so
@@ -93,11 +89,6 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     @app.post("/sandboxes/{rid}/mark-ready", status_code=204)
     async def mark_ready(rid: str) -> None:
         await backend.mark_ready(SandboxHandle(id=rid))
-
-    @app.post("/sandboxes/{rid}/user-env", status_code=204)
-    async def write_user_env(rid: str, request: Request) -> None:
-        content = (await request.body()).decode("utf-8")
-        await backend.write_user_env(SandboxHandle(id=rid), content)
 
     @app.get("/sandboxes/{rid}/ready")
     async def is_ready(rid: str) -> dict[str, bool]:
@@ -160,6 +151,10 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
         return StreamingResponse(gen(), media_type="application/x-ndjson")
 
     return app
+
+
+def _err(exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"error": type(exc).__name__, "detail": str(exc)})
 
 
 def _closed_port() -> int:
@@ -286,25 +281,6 @@ async def test_mark_ready_then_is_ready_roundtrip_366(http_sandbox: HttpSandbox)
     assert await http_sandbox.is_ready(h) is False
     await http_sandbox.mark_ready(h)
     assert await http_sandbox.is_ready(h) is True
-
-
-async def test_user_env_crosses_the_wire_byte_for_byte(sandbox_and_backend):
-    # The body is the file, raw. A key with `=`, `#`, quotes or a `$` must arrive
-    # exactly as typed — every encoding hop is a chance to mangle one, and a
-    # mangled key fails in a way nobody can trace back to here.
-    http_sandbox, backend = sandbox_and_backend
-    h = await http_sandbox.create(SandboxSpec())
-    content = "TOKEN=a=b c#d$e`f'g\"h\nREGION=tw\n"
-    await http_sandbox.write_user_env(h, content)
-    _pod, remote_id = _decode_handle(h)  # the wire handle wraps the host's own id
-    assert backend.user_env(SandboxHandle(id=remote_id)) == content
-
-
-async def test_user_env_never_reaches_the_workspace_over_the_wire(http_sandbox: HttpSandbox):
-    h = await http_sandbox.create(SandboxSpec())
-    await http_sandbox.write_user_env(h, "A=1\n")
-    assert await http_sandbox.walk(h, "/") == []
-    assert await http_sandbox.exists(h, "/.userenv") is False
 
 
 async def test_walk_lists_files_with_versions(http_sandbox: HttpSandbox):

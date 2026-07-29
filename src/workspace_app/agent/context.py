@@ -487,18 +487,4 @@ class AgentToolContext:
                     await provision_tools(
                         self.sandbox, self.handle, todo, prebuilt_dir=self.prebuilt_dir
                     )
-            # The item's user env, delivered where the tool launchers read it.
-            # Here rather than at the exec sites because this is the ONE place
-            # every sandbox user funnels through — the exec tool, the tool
-            # dispatch in `tooling/registry`, and the turn's eager wake — so it
-            # cannot be half-wired the way a seven-call-site change would be.
-            #
-            # Written UNCONDITIONALLY, including when there are none: a warm
-            # sandbox may still hold last turn's file, and a user who deleted
-            # their last variable must not leave the tools reading it. The
-            # handle is re-resolved per turn, so this is a per-turn rebuild —
-            # which is also how an edit between turns takes effect.
-            from .user_env import render_user_env
-
-            await self.sandbox.write_user_env(self.handle, render_user_env(self.user_env))
         return self.handle

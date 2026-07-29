@@ -47,7 +47,7 @@ async def _dispatch(env_vars: dict[str, str]) -> MockSandbox:
 @pytest.mark.asyncio
 async def test_a_dispatched_tool_receives_the_items_variables():
     sandbox = await _dispatch({"API_KEY": "sk-1"})
-    assert sandbox.exec_envs[-1] == {"API_KEY": "sk-1"}
+    assert sandbox.exec_envs[-1]["API_KEY"] == "sk-1"
 
 
 @pytest.mark.asyncio
@@ -72,4 +72,21 @@ async def test_the_chart_re_render_gets_them_too():
         investigation_id="inv", sandbox=sandbox, handle=handle, user_env={"API_KEY": "sk-1"}
     )
     await registry._exec_tool(actx, handle, _PKG, "chart", "{}")
-    assert sandbox.exec_envs[-1] == {"API_KEY": "sk-1"}
+    assert sandbox.exec_envs[-1]["API_KEY"] == "sk-1"
+
+
+@pytest.mark.asyncio
+async def test_the_dispatch_names_which_keys_the_user_set():
+    """The launcher restores exactly these names last, so a user still wins on
+    `PYTHONPATH` / `HOME` / `PIP_USER`. Without the list the launcher has
+    nothing to put back and the carrier silently wins instead — "stored,
+    listed, no effect"."""
+    sandbox = await _dispatch({"API_KEY": "sk-1", "REGION": "tw"})
+    sent = sandbox.exec_envs[-1]
+    assert set(sent["SANDBOX_USER_ENV_KEYS"].split()) == {"API_KEY", "REGION"}
+
+
+@pytest.mark.asyncio
+async def test_nothing_set_names_nothing():
+    sandbox = await _dispatch({})
+    assert "SANDBOX_USER_ENV_KEYS" not in sandbox.exec_envs[-1]
