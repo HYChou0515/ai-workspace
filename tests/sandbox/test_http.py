@@ -586,6 +586,7 @@ async def test_the_hosted_backend_advertises_that_it_can_resolve_tools(http_sand
     # from one without, so local dev reports "unavailable" instead of silence.
     assert http_sandbox.resolves_tools is True
 
+
 async def test_exec_carries_the_callers_env_across_the_hop():
     """The client names the item's variables per call; they have to survive the
     HTTP hop or a hosted deployment gets the feature with nothing in it. This is
