@@ -260,7 +260,34 @@ function ShellBody({
   const sidebarStart = useRef(sidebarW);
   const agentStart = useRef(agentW);
   const bottomStart = useRef(bottomH);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // The file sidebar shares the log strip's three states, driven from the
+  // activity rail: click an icon to glance, double-click to keep it. The rail
+  // stays put whatever the sidebar does, so a collapsed tree is never lost.
+  const [sidebarState, setSidebarState] = useState<PanelState>("pinned");
+  const sidebarOpen = sidebarState !== "closed";
+  const dispatchSidebar = useCallback(
+    (action: PanelAction) => setSidebarState((s) => panelPeek(s, action)),
+    [],
+  );
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (sidebarState !== "peeked") return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      // The rail counts as inside. Not for the end state — a rail click would
+      // retract on mousedown and peek straight back open on click, landing in
+      // the same place — but for what that costs on the way: the pane would be
+      // unmounted and remounted mid-switch, i.e. a visible flash every time you
+      // move between panes. No test asserts this; it is not observable as
+      // state, only as a flicker.
+      if (!sidebarRef.current?.contains(t) && !railRef.current?.contains(t)) {
+        dispatchSidebar({ type: "outside" });
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [sidebarState, dispatchSidebar]);
   // The bottom strip opens CLOSED: an item is opened to read its files and talk
   // to the agent, not to watch a log, and a panel that shows up uninvited on
   // every single item is chrome the user has to dismiss before starting work.
@@ -314,7 +341,9 @@ function ShellBody({
   // render with nothing subscribed to `resize`, so the cap went stale the
   // moment the window changed without crossing the 767px media boundary.
   const shellW = agentMaxW;
-  const chromeW = ACTIVITY_BAR_W + (sidebarOpen ? sidebarW : 0);
+  // A peeked sidebar floats over the editor, so it costs the row no width —
+  // only a docked (pinned) one narrows what the chat may take.
+  const chromeW = ACTIVITY_BAR_W + (sidebarState === "pinned" ? sidebarW : 0);
   const maxChatW = Math.max(280, shellW - chromeW - EDITOR_MIN_W);
   const effectiveAgentW = Math.min(agentW, maxChatW);
   // #200: the chat fills the whole row when there's no IDE beside it — a
@@ -340,7 +369,7 @@ function ShellBody({
     // (only closing on narrow) would strand a pointer-only user with the desktop
     // sidebar collapsed after a wide→narrow→wide resize, since the only wide reopen
     // is ⌘B and the ActivityBar reopen is gated to narrow (#464).
-    setSidebarOpen(!isNarrow);
+    setSidebarState(isNarrow ? "closed" : "pinned");
   }, [isNarrow]);
   const agentVisible = showAgentPanel(isNarrow, chatFills);
 
@@ -357,8 +386,13 @@ function ShellBody({
     (path, opts) => {
       groups.openInActive(path, opts);
       recentFiles.push(path);
+      // Glancing at the tree is a means to this end: the file is now on screen,
+      // so the peek has done its job and retracts. Same rule as pressing
+      // outside — the "something else" simply started inside the panel. A
+      // pinned tree is unaffected (the reducer ignores `outside` when pinned).
+      dispatchSidebar({ type: "outside" });
     },
-    [groups, recentFiles],
+    [groups, recentFiles, dispatchSidebar],
   );
   // Is the file pane actually on screen? Same condition the IDE column renders
   // under — anything else would have the chat believe in a pane that isn't there.
@@ -439,7 +473,7 @@ function ShellBody({
         setPaletteOpen(true);
       } else if (k === "b") {
         e.preventDefault();
-        setSidebarOpen((v) => !v);
+        dispatchSidebar({ type: "toggle" });
       } else if (k === "j") {
         e.preventDefault();
         dispatchBottom({ type: "toggle" });
@@ -523,12 +557,9 @@ function ShellBody({
           <ActivityBar
             mode={activityMode}
             membersLabel={manifest.labels?.members ?? "Members"}
-            onMode={(m) => {
-              setActivityMode(m);
-              // On narrow the sidebar is a closed overlay; tapping an activity
-              // icon opens it (there's no persistent tree column to reveal).
-              if (isNarrow) setSidebarOpen(true);
-            }}
+            onMode={setActivityMode}
+            onPanel={dispatchSidebar}
+            railRef={railRef}
           />
           {isNarrow && sidebarOpen && (
             // Backdrop behind the overlay sidebar — tap to dismiss (starts after
@@ -536,16 +567,21 @@ function ShellBody({
             <button
               type="button"
               aria-label="Close file panel"
-              onClick={() => setSidebarOpen(false)}
+              onClick={() => dispatchSidebar({ type: "toggle" })}
               style={{ position: "absolute", inset: "0 0 0 50px", zIndex: 15, background: "rgba(20,22,28,0.28)", border: "none", cursor: "pointer" }}
             />
           )}
           {sidebarOpen && (
             <>
               <div
+                ref={sidebarRef}
+                data-testid="sidebar-pane"
                 style={
-                  isNarrow
-                    ? { position: "absolute", left: 50, top: 0, bottom: 0, zIndex: 20, width: "min(280px, 78vw)", display: "flex", minWidth: 0, background: "var(--paper)", borderRight: "1px solid var(--paper-3)", boxShadow: "6px 0 24px rgba(20,22,28,0.18)" }
+                  // Narrow has always been an overlay. Wide now overlays too
+                  // while PEEKED — same rule as the log strip: a temporary
+                  // glance floats over the editor, only a pin takes a column.
+                  isNarrow || sidebarState === "peeked"
+                    ? { position: "absolute", left: 50, top: 0, bottom: 0, zIndex: 20, width: isNarrow ? "min(280px, 78vw)" : sidebarW, display: "flex", minWidth: 0, background: "var(--paper)", borderRight: "1px solid var(--paper-3)", boxShadow: "6px 0 24px rgba(20,22,28,0.18)" }
                     : { width: sidebarW, flexShrink: 0, display: "flex", minWidth: 0 }
                 }
               >
@@ -567,7 +603,9 @@ function ShellBody({
                   }}
                 />
               </div>
-              {!isNarrow && (
+              {/* Only a docked sidebar has an edge to drag — a floating peek
+                  sits on top of the editor, so there is no boundary to move. */}
+              {!isNarrow && sidebarState === "pinned" && (
                 <ResizeDivider
                   orientation="vertical"
                   ariaLabel="resize sidebar"
@@ -1235,29 +1273,35 @@ const iconBtn: React.CSSProperties = {
 function ActivityBar({
   mode,
   onMode,
+  onPanel,
+  railRef,
   membersLabel,
 }: {
   mode: ActivityMode;
   onMode: (m: ActivityMode) => void;
+  /** Click an icon to glance at its pane, double-click to keep it — the same
+   * three-state rule the bottom strip uses (`lib/panelPeek`). */
+  onPanel: (action: PanelAction) => void;
+  railRef?: React.Ref<HTMLDivElement>;
   /** The App's word for the roster — the same label the panel and the top bar
    * popover use, so the icon's tooltip can't say "Reviewers" while the panel it
    * opens says "Members". */
   membersLabel: string;
 }) {
-  const items: {
-    name: IconName;
-    label: string;
-    onClick: () => void;
-    active: boolean;
-  }[] = [
-    { name: "folder", label: "Files", onClick: () => onMode("evidence"), active: mode === "evidence" },
-    { name: "search", label: "Search files", onClick: () => onMode("search"), active: mode === "search" },
-    { name: "clock", label: "History", onClick: () => onMode("history"), active: mode === "history" },
-    { name: "users", label: membersLabel, onClick: () => onMode("members"), active: mode === "members" },
-    { name: "bell", label: "Activity", onClick: () => onMode("activity"), active: mode === "activity" },
+  // Which pane was on show when the current gesture began — the first click of
+  // a double click has already switched `mode`, so "did you double-click the
+  // icon you were already looking at?" cannot be asked of the live value.
+  const gestureFrom = useRef(mode);
+  const items: { name: IconName; label: string; to: ActivityMode }[] = [
+    { name: "folder", label: "Files", to: "evidence" },
+    { name: "search", label: "Search files", to: "search" },
+    { name: "clock", label: "History", to: "history" },
+    { name: "users", label: membersLabel, to: "members" },
+    { name: "bell", label: "Activity", to: "activity" },
   ];
   return (
     <div
+      ref={railRef}
       style={{
         width: 50,
         flexShrink: 0,
@@ -1269,26 +1313,36 @@ function ActivityBar({
         padding: "8px 0",
       }}
     >
-      {items.map((it) => (
-        <button
-          key={it.label}
-          type="button"
-          title={it.label}
-          onClick={it.onClick}
-          style={{
-            width: 50,
-            height: 44,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: it.active ? "var(--accent)" : "var(--text-paper-d)",
-            borderLeft: it.active ? "2px solid var(--accent)" : "2px solid transparent",
-            background: it.active ? "var(--accent-soft)" : "transparent",
-          }}
-        >
-          <Icon name={it.name} size={18} />
-        </button>
-      ))}
+      {items.map((it) => {
+        const active = mode === it.to;
+        return (
+          <button
+            key={it.label}
+            type="button"
+            title={it.label}
+            onClick={(e) => {
+              if (e.detail <= 1) gestureFrom.current = mode;
+              onMode(it.to);
+              onPanel({ type: "peek" });
+            }}
+            onDoubleClick={() =>
+              onPanel({ type: "pin", sameTarget: gestureFrom.current === it.to })
+            }
+            style={{
+              width: 50,
+              height: 44,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: active ? "var(--accent)" : "var(--text-paper-d)",
+              borderLeft: active ? "2px solid var(--accent)" : "2px solid transparent",
+              background: active ? "var(--accent-soft)" : "transparent",
+            }}
+          >
+            <Icon name={it.name} size={18} />
+          </button>
+        );
+      })}
     </div>
   );
 }

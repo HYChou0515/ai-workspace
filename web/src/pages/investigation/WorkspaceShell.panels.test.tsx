@@ -61,10 +61,10 @@ const item = {
   permission: { visibility: "private" },
 } as unknown as AppItem;
 
-function openShell() {
+function openShell(files: { path: string; size: number }[] = []) {
   return renderWithQuery(
     <MemoryRouter>
-      <WorkspaceShell manifest={manifest} item={item} files={[]} />
+      <WorkspaceShell manifest={manifest} item={item} files={files as never} />
     </MemoryRouter>,
   );
 }
@@ -135,6 +135,111 @@ describe("double-clicking a log tab pins it", () => {
     doubleClick(screen.getByRole("button", { name: "Terminal" }));
     // Still open, now showing Terminal.
     expect(screen.getByTestId("bottom-body")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The file sidebar gets the same three states as the log strip, driven from the
+ * activity rail. The rail is 50px of always-there icons, so a collapsed sidebar
+ * is never a dead end — and unlike the bottom strip the icons do not move when
+ * the sidebar opens beside them, so the double click is safe by construction.
+ */
+describe("the file sidebar answers to the activity rail", () => {
+  const rail = (title: string) => screen.getByTitle(title);
+  const pane = () => screen.queryByTestId("sidebar-pane");
+
+  it("opens docked for an ide-first App", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    expect(pane()).toBeInTheDocument();
+  });
+
+  it("collapses when the icon already on show is double-clicked, rail still there", async () => {
+    openShell();
+    doubleClick(await screen.findByTitle("Files"));
+    await waitFor(() => expect(pane()).not.toBeInTheDocument());
+    expect(rail("Files")).toBeVisible();
+    expect(rail("Search files")).toBeVisible();
+  });
+
+  it("re-opens temporarily on a single click, and retracts on a press outside", async () => {
+    openShell();
+    doubleClick(await screen.findByTitle("Files")); // collapse
+    await waitFor(() => expect(pane()).not.toBeInTheDocument());
+
+    fireEvent.click(rail("Search files"), { detail: 1 });
+    await waitFor(() => expect(pane()).toBeInTheDocument());
+
+    fireEvent.mouseDown(screen.getByTestId("page-item"));
+    await waitFor(() => expect(pane()).not.toBeInTheDocument());
+  });
+
+  it("stays put once pinned by a double click", async () => {
+    openShell();
+    doubleClick(await screen.findByTitle("Files")); // collapse
+    await waitFor(() => expect(pane()).not.toBeInTheDocument());
+
+    doubleClick(rail("Search files")); // pin
+    await waitFor(() => expect(pane()).toBeInTheDocument());
+
+    fireEvent.mouseDown(screen.getByTestId("page-item"));
+    expect(pane()).toBeInTheDocument();
+  });
+
+  it("switches content without closing when another icon is clicked while pinned", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    fireEvent.click(rail("Search files"), { detail: 1 });
+    expect(pane()).toBeInTheDocument();
+    fireEvent.click(rail("Files"), { detail: 1 });
+    expect(pane()).toBeInTheDocument();
+  });
+
+  // Same gesture-ordering trap as the log strip's tabs: the clicks inside the
+  // double click have already moved `mode` to the new pane, so judging
+  // "same target?" against the live value turns every double-click switch
+  // into a collapse.
+  it("switches rather than collapsing when a DIFFERENT icon is double-clicked while pinned", async () => {
+    openShell();
+    await screen.findByTitle("Files"); // pinned, showing Files
+    doubleClick(rail("Search files"));
+    expect(pane()).toBeInTheDocument();
+  });
+
+  // The point of glancing at the tree is to open something. Once the file is
+  // on screen the tree has served its purpose and gets out of the way — the
+  // "go and do something else" rule, where the something else started inside
+  // the panel. A PINNED tree of course stays.
+  it("retracts a peeked tree once a file is opened from it", async () => {
+    openShell([{ path: "brief.md", size: 10 }]);
+    doubleClick(await screen.findByTitle("Files")); // collapse
+    await waitFor(() => expect(pane()).not.toBeInTheDocument());
+    fireEvent.click(rail("Files"), { detail: 1 }); // peek
+    await waitFor(() => expect(pane()).toBeInTheDocument());
+
+    fireEvent.click(await screen.findByText("brief.md"));
+    await waitFor(() => expect(pane()).not.toBeInTheDocument());
+  });
+
+  it("keeps a pinned tree open when a file is opened from it", async () => {
+    openShell([{ path: "brief.md", size: 10 }]);
+    await screen.findByTitle("Files"); // starts pinned
+    fireEvent.click(await screen.findByText("brief.md"));
+    expect(pane()).toBeInTheDocument();
+  });
+
+  // Same rule as the log strip: a temporary glance floats over the editor
+  // rather than reflowing it; only a pin takes its own column.
+  it("floats a peeked sidebar and docks a pinned one", async () => {
+    openShell();
+    await screen.findByTitle("Files");
+    expect((pane() as HTMLElement).style.position).toBe(""); // docked by default
+
+    doubleClick(rail("Files")); // collapse
+    await waitFor(() => expect(pane()).not.toBeInTheDocument());
+    fireEvent.click(rail("Files"), { detail: 1 }); // peek
+    await waitFor(() => expect(pane()).toBeInTheDocument());
+    expect((pane() as HTMLElement).style.position).toBe("absolute");
   });
 });
 
