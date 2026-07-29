@@ -45,6 +45,12 @@ class SandboxSpec:
     env: dict[str, str] | None = None
     exposed_ports: tuple[int, ...] = ()
 
+    tools: dict[str, str] | None = None
+    """#674: third-party tools to make available, as `{local name: sha}`.
+    The sha names a bundle already installed in the host's content-addressed
+    cache; the NAME is what the sandbox sees at `/.tools/<name>`, because the
+    local name belongs to the deployment, not to the tool's author."""
+
 
 @dataclass(frozen=True)
 class ExecResult:

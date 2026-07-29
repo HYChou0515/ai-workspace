@@ -812,3 +812,110 @@ async def test_the_sandbox_sees_the_builtin_tools_not_the_layout_around_them(tmp
     names = listed.stdout.decode().split()
     assert "mytool" in names
     assert "builtin" not in names and "ext" not in names
+
+
+def _tools_root_with(tmp_path, *, ext: dict[str, str]):
+    """A tools layout: one first-party tool plus third-party bundles by sha."""
+    root = tmp_path / "toolsroot"
+    builtin = root / "builtin" / "mytool"
+    builtin.mkdir(parents=True)
+    (builtin / "run").write_text("#!/bin/sh\necho BUILTIN-OK\n")
+    (builtin / "run").chmod(0o755)
+    for sha, marker in ext.items():
+        d = root / "ext" / sha
+        d.mkdir(parents=True)
+        (d / "launch").write_text(f"#!/bin/sh\necho {marker}\n")
+        (d / "launch").chmod(0o755)
+    return root
+
+
+async def test_unjailed_a_third_party_bundle_appears_under_the_name_we_gave_it(tmp_path):
+    """#674: the sandbox is handed `name -> sha`; what it SEES is the name.
+    The sha is how the host stores it, and no tool path ever mentions it."""
+    sha = "c" * 64
+    root = _tools_root_with(tmp_path, ext={sha: "THIRD-PARTY-OK"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    h = await sb.create(SandboxSpec(tools={"wafer-history": sha}))
+
+    third = await sb.exec(h, ["../.tools/wafer-history/launch"])
+    first = await sb.exec(h, ["../.tools/mytool/run"])
+    assert "THIRD-PARTY-OK" in third.stdout.decode()
+    assert "BUILTIN-OK" in first.stdout.decode()  # first-party still there
+    listed = await sb.exec(h, ["ls", "../.tools"])
+    assert sorted(listed.stdout.decode().split()) == ["mytool", "wafer-history"]
+
+
+@_needs_userns
+async def test_jailed_a_third_party_bundle_is_mounted_read_only_under_its_name(tmp_path):
+    sha = "c" * 64
+    root = _tools_root_with(tmp_path, ext={sha: "THIRD-PARTY-OK"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=root)
+
+    h = await sb.create(SandboxSpec(tools={"wafer-history": sha}))
+
+    third = await sb.exec(h, ["/.tools/wafer-history/launch"])
+    assert third.exit_code == 0 and "THIRD-PARTY-OK" in third.stdout.decode()
+    first = await sb.exec(h, ["/.tools/mytool/run"])
+    assert first.exit_code == 0 and "BUILTIN-OK" in first.stdout.decode()
+    # Read-only, like the first-party tools beside it.
+    ro = await sb.exec(h, ["sh", "-c", "echo x > /.tools/wafer-history/hack; echo rc=$?"])
+    assert "rc=0" not in ro.stdout.decode()
+
+
+@_needs_userns
+async def test_jailed_the_sandbox_cannot_add_a_tool_of_its_own(tmp_path):
+    """The view is assembled by the host and then sealed. If the sandbox could
+    write into /.tools it could plant a `python-stack/launch` and capture every
+    later `python` the agent runs."""
+    root = _tools_root_with(tmp_path, ext={})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=root)
+    h = await sb.create(SandboxSpec())
+
+    r = await sb.exec(h, ["sh", "-c", "mkdir -p /.tools/evil 2>&1; echo rc=$?"])
+
+    assert "rc=0" not in r.stdout.decode()
+
+
+async def test_a_declared_third_party_tool_wins_a_name_it_shares_with_a_builtin(tmp_path):
+    """Registering that name was a deliberate act by an operator; shipping a
+    tool under it was ours. The operator is the later authority — and silently
+    ignoring their declaration would be the worse surprise."""
+    sha = "d" * 64
+    root = _tools_root_with(tmp_path, ext={sha: "OVERRIDDEN"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    h = await sb.create(SandboxSpec(tools={"mytool": sha}))
+
+    r = await sb.exec(h, ["../.tools/mytool/launch"])
+    assert "OVERRIDDEN" in r.stdout.decode()
+
+
+async def test_stray_files_beside_the_builtin_tools_are_not_offered_as_tools(tmp_path):
+    # A build stamp or a README next to the bundles is not a tool; linking it
+    # would put a name in the sandbox that resolves to nothing runnable.
+    root = _tools_root_with(tmp_path, ext={})
+    (root / "builtin" / "README").write_text("not a tool\n")
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    h = await sb.create(SandboxSpec())
+
+    listed = await sb.exec(h, ["ls", "../.tools"])
+    assert listed.stdout.decode().split() == ["mytool"]
+
+
+async def test_a_deployment_with_no_first_party_tools_still_gets_its_own(tmp_path):
+    # `builtin/` is absent on a host that ships no bundled tools. That is a
+    # configuration, not a fault: the third-party tools must still appear.
+    sha = "e" * 64
+    root = tmp_path / "toolsroot"
+    ext = root / "ext" / sha
+    ext.mkdir(parents=True)
+    (ext / "launch").write_text("#!/bin/sh\necho ONLY-THIRD-PARTY\n")
+    (ext / "launch").chmod(0o755)
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    h = await sb.create(SandboxSpec(tools={"wafer-history": sha}))
+
+    r = await sb.exec(h, ["../.tools/wafer-history/launch"])
+    assert "ONLY-THIRD-PARTY" in r.stdout.decode()

@@ -41,7 +41,7 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
 )
-from .tool_cache import BUILTIN_DIR
+from .tool_cache import BUILTIN_DIR, EXT_DIR
 
 # Bootstrap run (as namespace-root) before chroot: overlay the host's system
 # dirs read-only onto the sandbox root, wire up a usable /dev + ephemeral
@@ -54,11 +54,27 @@ ROOT="$1"; shift
 mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp" "$ROOT/root" "$ROOT/.home"
 mount --bind /usr "$ROOT/usr"; mount -o remount,bind,ro "$ROOT/usr"
 mount --bind /etc "$ROOT/etc"; mount -o remount,bind,ro "$ROOT/etc"
-# Provisioned tools: a shared host dir bind-mounted read-only at /.tools (a
-# sibling of /root, so it's outside the workspace and never walked/synced).
-if [ -n "$SANDBOX_TOOLS_DIR" ]; then
+# Provisioned tools (#674). The host has already assembled a VIEW — one
+# symlink per tool, named as this sandbox should see it, mixing first-party
+# tools with whichever third-party bundles this app declared. Each link
+# becomes its own read-only bind mount, so the sandbox sees the tools and
+# never the layout (no `builtin/`, no shas, no bundles it was not granted).
+# /.tools is a sibling of /root: outside the workspace, never walked/synced.
+if [ -d "$SANDBOX_TOOLS_VIEW" ]; then
   mkdir -p "$ROOT/.tools"
-  mount --bind "$SANDBOX_TOOLS_DIR" "$ROOT/.tools"; mount -o remount,bind,ro "$ROOT/.tools"
+  mount -t tmpfs tmpfs "$ROOT/.tools"
+  for l in "$SANDBOX_TOOLS_VIEW"/*; do
+    [ -e "$l" ] || continue
+    n=$(basename "$l"); t=$(readlink -f "$l")
+    mkdir -p "$ROOT/.tools/$n"
+    mount --bind "$t" "$ROOT/.tools/$n"; mount -o remount,bind,ro "$ROOT/.tools/$n"
+  done
+  # Seal it. A writable /.tools would let the sandbox plant its own
+  # `python-stack/launch` and capture every `python` the agent runs after.
+  # The type and source must be repeated: inside a user namespace
+  # util-linux cannot infer them, and a bare `-o remount,ro` fails with
+  # "mount point not mounted or bad option".
+  mount -o remount,ro -t tmpfs tmpfs "$ROOT/.tools"
 fi
 for l in bin sbin lib lib64; do
   [ -L "$ROOT/$l" ] || [ -e "$ROOT/$l" ] || ln -s "usr/$l" "$ROOT/$l"
@@ -164,6 +180,11 @@ _WORKSPACE = "root"
 # Provisioned tools are made available here (a sibling of the workspace, so
 # they're outside what walk/sync see). MUST match the jail bootstrap's mount.
 _TOOLS = ".tools"
+# #674: the per-sandbox tool VIEW — one symlink per tool, named as the
+# sandbox will see it. It is the single source of truth for both modes:
+# unjailed points `.tools` at it, and the jail bootstrap turns each link
+# into a read-only bind mount. Also in the infra area, so never walked.
+_TOOLS_VIEW = ".tools-view"
 # #366: readiness marker written (via mark_ready) once a restore completes; the
 # app's mirror only propagates DELETIONS while `is_ready` holds. It lives at the
 # SANDBOX ROOT — a sibling of the workspace, OUTSIDE it — so walk/sync/the file
@@ -276,12 +297,40 @@ class LocalProcessSandbox:
         # #393: the per-sandbox HOME dir (a workspace sibling, in the infra area).
         # IsolatedProcessSandbox._provision chowns it to the sandbox uid.
         (path / _HOME).mkdir(exist_ok=True)
-        # Unjailed: expose the shared tools dir via a symlink (jailed uses a
-        # read-only bind-mount, set up per-exec in the bootstrap instead).
-        if self._tools_dir is not None and not self._isolate:
-            (path / _TOOLS).symlink_to(self._builtin_tools)
+        if self._tools_dir is not None:
+            self._build_tools_view(path, spec)
+            # Unjailed: point `.tools` straight at the view (no chroot, so the
+            # links' absolute targets resolve). Jailed builds its own mounts
+            # from the same view, per exec, in the bootstrap.
+            if not self._isolate:
+                (path / _TOOLS).symlink_to(path / _TOOLS_VIEW)
         self._dirs[handle.id] = path
         return handle
+
+    def _build_tools_view(self, path: Path, spec: SandboxSpec) -> None:
+        """Assemble what THIS sandbox may see, as one symlink per tool.
+
+        First-party tools come from the image; third-party ones are named by
+        the deployment and stored by sha, so the link is where those two facts
+        meet — `<name> -> ext/<sha>`. Nothing downstream ever sees a sha: not
+        the mount, not the launcher, not a path in a prompt.
+
+        A declared third-party tool wins a name clash with a first-party one.
+        Registering that name was a deliberate act by an operator; shipping a
+        tool with it was ours, and the operator is the later authority."""
+        assert self._tools_dir is not None
+        view = path / _TOOLS_VIEW
+        view.mkdir(exist_ok=True)
+        builtin = self._tools_dir / BUILTIN_DIR
+        if builtin.is_dir():
+            for tool in sorted(builtin.iterdir()):
+                if tool.is_dir():
+                    (view / tool.name).symlink_to(tool)
+        for name, sha in (spec.tools or {}).items():
+            link = view / name
+            if link.is_symlink() or link.exists():
+                link.unlink()
+            link.symlink_to(self._tools_dir / EXT_DIR / sha)
 
     def _install_python_shim(self, root: Path) -> None:
         """Unjailed analogue of the jail bootstrap's two-tier `python` shim
@@ -400,7 +449,7 @@ class LocalProcessSandbox:
             # The bootstrap read-only bind-mounts this at /.tools (outside the
             # workspace) when set.
             if self._tools_dir is not None:
-                env["SANDBOX_TOOLS_DIR"] = str(self._builtin_tools)
+                env["SANDBOX_TOOLS_VIEW"] = str(self._require(handle) / _TOOLS_VIEW)
             # #393: the launcher's HOME is the sandbox's own `.home` — here in
             # its chroot-relative spelling, but the SAME dir the unjailed branch
             # names below: a sibling of the `/root` workspace, in the infra area,
