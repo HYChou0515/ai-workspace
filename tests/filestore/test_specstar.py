@@ -275,3 +275,150 @@ async def test_disk_backend_streams_write_and_read(disk_store, tmp_path):
     out = tmp_path / "out.bin"
     await disk_store.read_to_file("ws1", "/big.bin", out)
     assert out.read_bytes() == b"disk-streamed-payload" * 1000
+
+
+async def test_ls_with_a_prefix_does_not_materialise_the_whole_workspace(store):
+    """`ls(prefix=…)` must scope the QUERY, not fetch every file and filter in
+    Python. The entity paths call it ~10 times per interaction
+    (`discover_catalog` once per request, `_parse_type` once per type,
+    `_corpus` again per type), so an O(whole workspace) listing multiplies
+    straight into the request: measured on a disk backend, one `ls` cost 95ms
+    at 300 files and 796ms at 3000, while reading a record cost 0.9ms.
+
+    Asserting on rows materialised rather than wall time — the row count IS
+    the cost, and a timing assertion would be flaky in CI."""
+    for i in range(30):
+        await store.write("ws1", f"/notes/n{i}.txt", b"x")
+    for i in range(3):
+        await store.write("ws1", f"/.entity/issue/records/{i}.md", b"y")
+
+    seen: list[int] = []
+    inner = store._files.list_resources
+
+    def counting(*args, **kwargs):
+        rows = list(inner(*args, **kwargs))
+        seen.append(len(rows))
+        return rows
+
+    store._files.list_resources = counting  # type: ignore[assignment]
+    try:
+        paths = await store.ls("ws1", prefix="/.entity/")
+    finally:
+        store._files.list_resources = inner  # type: ignore[assignment]
+
+    assert sorted(paths) == [f"/.entity/issue/records/{i}.md" for i in range(3)]
+    assert seen == [3], f"fetched {seen} rows to return 3 — the prefix is not in the query"
+
+
+async def test_ls_prefix_matches_the_same_paths_as_a_python_startswith(store):
+    """The pushed-down predicate keeps `startswith` semantics exactly, including
+    a prefix that is not a directory boundary — both treat it as a plain string
+    prefix, so `/a` matches `/ab`."""
+    for path in ("/a", "/ab", "/a/c", "/b"):
+        await store.write("ws1", path, b"x")
+    everything = await store.ls("ws1")
+    assert sorted(await store.ls("ws1", prefix="/a")) == sorted(
+        p for p in everything if p.startswith("/a")
+    )
+
+
+def _disk_backend(root) -> BackendConfig:
+    return BackendConfig(
+        connections={"local": ConnectionProfile(type="disk", options={"rootdir": str(root)})},
+        meta=BackendBinding(use="local"),
+        resource=BackendBinding(use="local"),
+        blob=BackendBinding(use="local"),
+    )
+
+
+async def test_prefix_index_ready_is_false_over_rows_written_before_path_was_indexed(tmp_path):
+    """The guard that keeps a pod from serving an empty-looking workspace.
+
+    specstar extracts indexed_data at WRITE time, so rows written before `path`
+    joined `indexed_fields` do not answer a `path` predicate — `ls(prefix=…)`
+    returns nothing for them until `migrate/execute` persists the
+    re-extraction. Serving then would show an empty file tree over intact data,
+    and a 3-replica RollingUpdate would make it flicker between old and new
+    pods, which reads as data loss.
+
+    Writes through a spec registered the OLD way, then opens the SAME on-disk
+    store through today's registration — the deploy, in one test."""
+    from specstar import Schema
+    from specstar.types import IndexableField
+
+    from workspace_app.filestore.specstar_impl import WorkspaceFile, _reindex_only
+
+    old = make_spec(default_user="u", backend=_disk_backend(tmp_path))
+    old.add_model(
+        Schema(WorkspaceFile, "v2").step(None, _reindex_only, source_type=WorkspaceFile),
+        indexed_fields=[
+            "workspace_id",
+            IndexableField("content.size", index_key="content_size"),
+        ],
+    )
+    old_store = SpecstarFileStore(old)
+    for i in range(3):
+        await old_store.write("ws1", f"/.entity/issue/records/{i}.md", b"legacy")
+
+    new_store = SpecstarFileStore(make_spec(default_user="u", backend=_disk_backend(tmp_path)))
+
+    # The symptom the guard exists to prevent — intact rows, empty listing.
+    assert len(await new_store.ls("ws1")) == 3
+    assert await new_store.ls("ws1", prefix="/.entity/") == []
+    assert await new_store.prefix_index_ready() is False
+
+
+async def test_prefix_index_ready_is_true_once_rows_carry_the_path_index(disk_store):
+    """Rows written by today's code are extracted at write time, so a deploy
+    onto a store with no legacy rows is ready immediately."""
+    await disk_store.write("ws1", "/.entity/issue/records/1.md", b"x")
+    assert await disk_store.prefix_index_ready() is True
+
+
+async def test_prefix_index_ready_is_true_on_an_empty_store(disk_store):
+    """Nothing to backfill — a fresh deploy must not wedge itself unready."""
+    assert await disk_store.prefix_index_ready() is True
+
+
+async def test_readyz_is_503_until_the_path_index_is_backfilled(tmp_path):
+    """The endpoint k8s gates the rollout on. A pod whose store still holds
+    rows written before `path` was indexed must NOT accept traffic: it would
+    serve empty file trees over intact data, and across a 3-replica
+    RollingUpdate the mixed fleet flickers, which reads as data loss."""
+    from fastapi.testclient import TestClient
+    from specstar import Schema
+    from specstar.types import IndexableField
+
+    from workspace_app.api import ScriptedAgentRunner, create_app
+    from workspace_app.filestore.specstar_impl import WorkspaceFile, _reindex_only
+    from workspace_app.sandbox.mock import MockSandbox
+
+    old = make_spec(default_user="u", backend=_disk_backend(tmp_path))
+    old.add_model(
+        Schema(WorkspaceFile, "v2").step(None, _reindex_only, source_type=WorkspaceFile),
+        indexed_fields=[
+            "workspace_id",
+            IndexableField("content.size", index_key="content_size"),
+        ],
+    )
+    await SpecstarFileStore(old).write("ws1", "/a.txt", b"legacy")
+
+    spec = make_spec(default_user="u", backend=_disk_backend(tmp_path))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+    )
+    with TestClient(app) as client:
+        assert client.get("/api/readyz").status_code == 503
+
+    fresh = make_spec(default_user="u")
+    app2 = create_app(
+        spec=fresh,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(fresh),
+        runner=ScriptedAgentRunner([]),
+    )
+    with TestClient(app2) as client:
+        assert client.get("/api/readyz").status_code == 200

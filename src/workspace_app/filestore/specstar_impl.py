@@ -94,10 +94,24 @@ class SpecstarFileStore:
             # usage is one Sum aggregate (#245). The Binary keeps `size` inline in
             # the record (only bytes are offloaded), so this needs no extra field;
             # old rows backfill via the migrate route (`rm.migrate` re-extracts it).
+            # `path` is indexed so `ls(prefix=…)` can push the prefix INTO the
+            # query. Without it the only scoped predicate is `workspace_id`, so
+            # listing one directory costs the whole workspace — and the entity
+            # paths call `ls` about ten times per interaction, which is what
+            # made a PM board drag take seconds.
+            #
+            # v3 exists only to re-extract indexed_data for that new key: a row
+            # already at v2 keeps its old index and is INVISIBLE to a `path`
+            # predicate until `migrate/execute` persists the re-extraction.
+            # `prefix_index_ready` below is the guard that keeps a pod from
+            # serving in that state.
             spec.add_model(
-                Schema(WorkspaceFile, "v2").step(None, _reindex_only, source_type=WorkspaceFile),
+                Schema(WorkspaceFile, "v3")
+                .step(None, _reindex_only, source_type=WorkspaceFile)
+                .step("v2", _reindex_only, source_type=WorkspaceFile),
                 indexed_fields=[
                     "workspace_id",
+                    "path",
                     IndexableField("content.size", index_key="content_size"),
                 ],
             )
@@ -308,12 +322,48 @@ class SpecstarFileStore:
         return size
 
     def _ls_sync(self, workspace_id: str, prefix: str) -> list[str]:
-        rows = self._files.list_resources((QB["workspace_id"] == workspace_id).build())
-        return [
-            r.data.path
-            for r in rows
-            if isinstance(r.data, WorkspaceFile) and r.data.path.startswith(prefix)
-        ]
+        # The prefix goes INTO the query. Fetching the workspace and filtering
+        # in Python made this O(every file in the workspace) however narrow the
+        # prefix — 796ms on a 3000-file workspace, against 0.9ms to read one
+        # record — and `discover_catalog` + `_parse_type` + `_corpus` between
+        # them call it ~10 times per entity interaction. `starts_with` is the
+        # same string-prefix test `str.startswith` did, so the result set is
+        # unchanged; only the number of records materialised is.
+        query = QB["workspace_id"] == workspace_id
+        if prefix:
+            query = query & QB["path"].starts_with(prefix)
+        rows = self._files.list_resources(query.build())
+        return [r.data.path for r in rows if isinstance(r.data, WorkspaceFile)]
+
+    async def prefix_index_ready(self) -> bool:
+        """Has every row's `path` been extracted into indexed_data yet?
+
+        specstar extracts indexed_data at WRITE time, so rows written before
+        `path` was indexed do not answer a `path` predicate — `ls(prefix=…)`
+        returns nothing for them until an operator POSTs
+        `/workspace-file/migrate/execute`. Serving in that window would show an
+        empty file tree and empty entity lists over data that is perfectly
+        intact, and with a 3-replica RollingUpdate the mixed fleet makes it
+        FLICKER, which reads as data loss.
+
+        Every stored path is absolute, so on a fully extracted index the count
+        matching `starts_with("/")` equals the total. Two aggregates, no rows
+        materialised — cheap enough for a readiness probe."""
+        return await asyncio.to_thread(self._prefix_index_ready_sync)
+
+    def _prefix_index_ready_sync(self) -> bool:
+        def _count(query: Any) -> int:
+            rows = self._files.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
+                by=QB["workspace_id"],
+                aggregates={"n": Count()},
+                query=query,
+            )
+            return sum(int(r["n"]) for r in rows)
+
+        total = _count(QB.all().build())
+        if total == 0:
+            return True  # nothing to backfill — a fresh deploy is ready
+        return _count(QB["path"].starts_with("/").build()) >= total
 
     def _stat_all_sync(self, workspace_id: str, prefix: str) -> list[tuple[str, int]]:
         # #362: `partial` projects ONLY path + the record's inline content.size,
