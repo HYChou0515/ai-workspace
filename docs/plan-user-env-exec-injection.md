@@ -1,5 +1,7 @@
 # Plan：使用者環境變數改由 exec 注入（取代 `.userenv` 檔案）
 
+> **狀態:已實作(PR #673),P1–P5 全數完成。** 實作時發現本文一處錯誤,見文末〈實作偏差〉。
+
 接續 #664。這份計畫要修的是**一個回報的 bug** 和**一個設計缺口**,而它們有**同一個根因**。
 
 ## 現況與問題
@@ -149,3 +151,27 @@ launcher 模板裡的讀檔迴圈、`agent/context.py` 的呼叫,以及
   「item.env_vars → exec env → launcher → 工具的 `os.environ`」整條鏈。
   兩半各自的單元測試就算互相不同意也會全綠,那條縫才是 bug 會出現的地方。
 - 回歸判準是**與 master 的失敗清單差集**,不是絕對數字。
+
+
+## 實作偏差（寫回計畫，因為它會再被踩一次）
+
+⚠️ **〈保留字順序〉那節的解法不夠。** 本文寫「launcher 在 `exec` 前把這些名字從自己的環境裡
+重新 export 一次」——**做不到**。到了那一行,launcher 自己的 `export PIP_USER=1`(模板第 20 行)
+**早就把使用者的值換掉了**,所以「從環境讀回來」讀到的是我們的值,不是使用者的。
+
+實際做法是**兩段**:模板**最前面**(自己的 export 之前)先把 `SANDBOX_USER_ENV_KEYS` 列出的名字
+快照進 `ue_keep_<name>`,`exec` **前**再還原。紅燈測試:使用者設 `PIP_USER=0` 時工具收到 `0`;
+拿掉還原那段,單元測試與端到端測試同時變紅。
+
+其餘按計畫完成:
+
+| Phase | 驗收 |
+|---|---|
+| P1 | `exec(…, env=)` 上協定;app 側 5 個 backend 全帶;`ty` 抓出 3 個不再符合協定的既有替身 |
+| P2 | host 側 5 檔 + exec route;**兩端各自對真 ASGI app 斷言**,互相突變不會誤綠 |
+| P3 | `_exec_tool` 一個收斂點,派送與 #285 重繪共用;同時帶 `SANDBOX_USER_ENV_KEYS` |
+| P4 | `grep -r "\.userenv\|write_user_env\|SANDBOX_USER_ENV\b"` 只剩 `_KEYS` |
+| P5 | 套用範圍表反轉並寫入 `extending-the-platform.md`;`mkdocs --strict` 綠 |
+
+端到端:`tests/tooling/test_tool_env_chain.py`——`item.env_vars` → 派送 → 真
+`LocalProcessSandbox.exec` → 真模板 launcher → 工具的 `os.environ`,中間零替身。
