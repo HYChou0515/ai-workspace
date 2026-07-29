@@ -182,6 +182,51 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
 `app.json` 是**上限**;profile 的 `_profile.json` 可再收窄成子集;per-item 的 `tool_prefs`
 再做三態覆寫(#322 的三層 resolve,見 `apps/catalog.py`)。
 
+### 讀使用者設的環境變數（#664）
+
+使用者可以在 item 的聊天標頭按「環境變數」設定 `KEY=VALUE`,tool 用 `os.environ` 就讀得到——
+這是**讓 dev 寫的 tool 拿到使用者自己的 credential / endpoint** 的機制,tool 端零額外 API:
+
+```python
+# sample-tools/<name>/src/<pkg>/commands/fetch.py
+import os
+
+def run(args: Args) -> str:
+    token = os.environ.get("MY_API_TOKEN")
+    if not token:
+        # 指名變數,使用者才知道要去設哪一個。
+        return "MY_API_TOKEN is not set — add it under the workspace's Env panel."
+    ...
+```
+
+**套用範圍(很重要,誤解會變成「設了沒作用」)**
+
+值是在**派送這個 tool 的那一次 `exec`** 上帶進去的,不是放在 sandbox 裡讓誰都能讀:
+
+| 執行路徑 | 拿得到？ | 為什麼 |
+|---|---|---|
+| 被 agent 呼叫的 tool（`data-fetch` / `sci-plot` / …） | ✅ | 派送時把值放進那次 exec 的環境 |
+| 同一個 tool 的圖表重繪（#285） | ✅ | 跟派送共用同一個 `_exec_tool` |
+| `exec` 裡的 `python` / `python3*` | ❌ | 那是 agent 自己的指令,不是 tool 派送 |
+| `exec` 裡的其他任何指令（`git` / `curl` / `bash -c 'echo $VAR'`） | ❌ | 同上 |
+
+⚠️ **skill 的 `scripts/` 拿不到**——它們是走 `exec python` 跑的。使用者想在自己的 skill 裡用
+自己的 key,這條路不通;需要 credential 的邏輯要升格成 tool-package。
+
+其他邊界:
+
+- **一個 item 一組。** 存在 item 記錄的 `env_vars` 欄位,不跨 item、不跨使用者,也**不會**進到
+  app backend 自己的行程。
+- **保留字放行。** 使用者設 `PYTHONPATH` / `HOME` / `PIP_USER` 會**蓋掉** carrier 的設定。
+  這需要一點機制:值在 launcher 啟動**前**就在環境裡,而 launcher 自己的 `export` 在後面,
+  所以派送時會多帶一個 `SANDBOX_USER_ENV_KEYS`,launcher 進場先把這些名字存起來、`exec` 前
+  再放回去。否則就變成「存了、列得出來、卻沒作用」。tool 作者的意思是:
+  **不要假設 carrier 的環境完好**,該用絕對路徑的地方用絕對路徑。
+- **值原封不動。** 走的是行程環境,shell 沒有機會展開,含 `$`、反引號、`$(…)` 的值照字面送達。
+- **AI 讀得到,擋不住。** tool 和 agent 跑在**同一個 uid**,所以 agent 可以在 tool 執行的當下
+  讀 `/proc/<pid>/environ`。這裡**不是 secret store**。比起把值放在 sandbox 裡的檔案(agent
+  隨時 `cat` 得到),窗口窄很多,但不是零——要真的隔開,得讓 tool 與 agent 用不同 uid。
+
 ### 為什麼沒有 user 自建 tool
 
 新增 tool 要跑**任意 Python** 並可能持有 credential——把它開放給執行期使用者不安全,所以這是
