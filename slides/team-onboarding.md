@@ -111,7 +111,7 @@ style: |
 | **App** 領域層 | 一個自成一格的儀表板：`app.json` + `model.py` + `prompts/` + `profiles/` | 給誰用、看到哪些欄位、**這個領域的 AI 能用哪些工具（硬上限）** | 平台團隊 + 領域負責人 |
 | **skill** 做法層 | 寫給 AI 讀的作法備忘錄，可帶 script 與範例檔一起走 | 像**交代一位老手**：他會看情況調整，但也可能跳步或漏掉 —— 彈性換來的是不保證 | 領域專家（`save_skill`） |
 | **workflow** 做法層 | **程式決定的流程**，不是給 AI 的指示：節點、輸入輸出、分支都寫在程式裡 | 像**一條生產線**：每一站由程式推進，AI 只是被叫上工的其中一站 —— **AI 再懶再誤判，流程也不會漏拍** | 領域專家（`save_workflow`） |
-| **tool** 能力層 | 一個具體能力：`read_file` `exec` `ask_knowledge_base` `sci-plot` …，分**內建**與**外掛**兩種（見附錄 ③） | **AI 對外的唯一出入口**，所以閘門都掛在這一層：**權限、網路、限流、大小上限**。既擋住 AI 弄壞別人的東西，也擋住它**看到不該看的東西** | 平台團隊 / 工具作者 |
+| **tool** 能力層 | 一個具體能力：`read_file` `exec` `ask_knowledge_base` `sci-plot` …，分**內建**與**外掛**兩種（見附錄 ④） | **AI 對外的唯一出入口**，所以閘門都掛在這一層：**權限、網路、限流、大小上限**。既擋住 AI 弄壞別人的東西，也擋住它**看到不該看的東西** | 平台團隊 / 工具作者 |
 | **sandbox** 執行層 | 每個項目一個隔離環境 | 指令**真正跑起來的地方**：要跑才建、閒置回收、OS 使用者 + cgroup 隔離、磁碟配額 | 平台團隊 |
 
 ---
@@ -180,7 +180,7 @@ style: |
 
 # 附錄
 
-## 給要動手的人 —— 回合怎麼跑、檔案怎麼搬、知識怎麼進出、我們怎麼守品質
+## 給要動手的人 —— 回合怎麼跑、東西怎麼固化、檔案怎麼搬、知識怎麼進出、我們怎麼守品質
 
 以下不必在會議上講完，是留給接手某一塊時回來查的。
 
@@ -190,7 +190,7 @@ style: |
 
 ![w:760](diagrams/team-onboarding-turn-sequence.svg)
 
-**工具不是終點**：內建工具可以再叫一個 agent —— `read_image` 叫 VLM 看圖、`ask_knowledge_base` 開一個 KB 子代理。所以一個回合裡面**可能還有回合**（哪些工具做得到，見附錄 ③）。
+**工具不是終點**：內建工具可以再叫一個 agent —— `read_image` 叫 VLM 看圖、`ask_knowledge_base` 開一個 KB 子代理。所以一個回合裡面**可能還有回合**（哪些工具做得到，見附錄 ④）。
 
 ---
 
@@ -216,7 +216,24 @@ Agents SDK 的工具是 **request → response**：工具執行期間，SDK **�
 
 ---
 
-# 附錄 ③ · 兩種 tool：**內建工具** 與 **外掛工具**
+# 附錄 ③ · 固化的階梯
+
+![w:1120](diagrams/team-onboarding-ladder.svg)
+
+#### 這條軸線是什麼
+
+**越往右，越少靠 AI 臨場發揮，越多由程式保證。** 所以 skill 與 workflow **不是同一階**：
+skill 把做法留下來、但每次仍由 AI 拿捏（漏拍是有可能的）；workflow 把步驟交給程式推進，
+**AI 只是被叫上工的其中一站**，跑法每次一致。**先寫 skill 探路、穩定了再固化成 workflow**，
+是常見且正確的順序 —— 不是二選一。
+
+每一階都有現成的載體（`save_skill` / `save_workflow` / tool bundle / `app.json`），
+往上爬不必打掉重練。**但目前每一階之間都還要人工搬**，而且「長成獨立系統」還沒有走通過的
+案例 —— 把這條路走順，是支柱四真正的工作。
+
+---
+
+# 附錄 ④ · 兩種 tool：**內建工具** 與 **外掛工具**
 
 | | **內建工具** built-in —— `read_image` · `read_file` · `exec` · `ask_knowledge_base` | **外掛工具** provider —— `sci-plot` · `python-stack` · `rca-tools` |
 |---|---|---|
@@ -233,7 +250,7 @@ Agents SDK 的工具是 **request → response**：工具執行期間，SDK **�
 
 ---
 
-# 附錄 ④ · 四者的取捨
+# 附錄 ⑤ · 四者的取捨
 ## 注意：這是**兩條不同的軸**，不是四選一
 
 > **skill / workflow** 決定「**怎麼做**」；**內建 / 外掛工具** 決定「**用什麼能力做**」。
@@ -249,7 +266,7 @@ Agents SDK 的工具是 **request → response**：工具執行期間，SDK **�
 
 ---
 
-# 附錄 ⑤ · Sandbox 與 FileStore 的分工
+# 附錄 ⑥ · Sandbox 與 FileStore 的分工
 
 ![w:620](diagrams/team-onboarding-sandbox-filestore.svg)
 
@@ -266,7 +283,7 @@ App 的 workspace chat 與 KB chat 跑**同一個** `ChatTurnEngine`：每個對
 
 ---
 
-# 附錄 ⑥ · 知識庫：文件怎麼進來
+# 附錄 ⑦ · 知識庫：文件怎麼進來
 
 ![w:1080](diagrams/team-onboarding-kb-ingest.svg)
 
@@ -278,7 +295,7 @@ App 的 workspace chat 與 KB chat 跑**同一個** `ChatTurnEngine`：每個對
 
 ---
 
-# 附錄 ⑦ · 知識庫：問題怎麼被回答
+# 附錄 ⑧ · 知識庫：問題怎麼被回答
 
 ![w:1120](diagrams/team-onboarding-kb-retrieval.svg)
 
@@ -295,7 +312,7 @@ App 的 workspace chat 與 KB chat 跑**同一個** `ChatTurnEngine`：每個對
 
 ---
 
-# 附錄 ⑧ · 怎麼把 AI 框住：四道閘
+# 附錄 ⑨ · 怎麼把 AI 框住：四道閘
 
 安全不是靠提示詞，是靠**結構**：
 
@@ -312,7 +329,7 @@ App 的 workspace chat 與 KB chat 跑**同一個** `ChatTurnEngine`：每個對
 
 ---
 
-# 附錄 ⑨ · 可靠與可擴展
+# 附錄 ⑩ · 可靠與可擴展
 
 #### 多 pod 一致性（踩過最多坑的地方）
 
@@ -328,23 +345,6 @@ App 的 workspace chat 與 KB chat 跑**同一個** `ChatTurnEngine`：每個對
 #### 跨 pod 串流
 
 agent 回合的即時事件走訊息佇列廣播，所以**連到哪個 pod 都看得到同一場對話**。
-
----
-
-# 附錄 ⑩ · 固化的階梯
-
-![w:1120](diagrams/team-onboarding-ladder.svg)
-
-#### 這條軸線是什麼
-
-**越往右，越少靠 AI 臨場發揮，越多由程式保證。** 所以 skill 與 workflow **不是同一階**：
-skill 把做法留下來、但每次仍由 AI 拿捏（漏拍是有可能的）；workflow 把步驟交給程式推進，
-**AI 只是被叫上工的其中一站**，跑法每次一致。**先寫 skill 探路、穩定了再固化成 workflow**，
-是常見且正確的順序 —— 不是二選一。
-
-每一階都有現成的載體（`save_skill` / `save_workflow` / tool bundle / `app.json`），
-往上爬不必打掉重練。**但目前每一階之間都還要人工搬**，而且「長成獨立系統」還沒有走通過的
-案例 —— 把這條路走順，是支柱四真正的工作。
 
 ---
 

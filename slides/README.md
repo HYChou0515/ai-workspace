@@ -4,7 +4,7 @@ Marp 投影片。md 就是簡報本體 —— 改 md 等於改投影片，不需
 
 | 檔案 | 內容 |
 |---|---|
-| `team-onboarding.md` | 給小組成員的平台導覽。**主檔 6 頁**（使命 / 架構 ①②③ / 未來 / 下一步）＋ **附錄 11 頁**（回合資料流、fan-in queue、兩種 tool、四者的取捨、Sandbox×FileStore、KB 進出、四道安全閘、可靠性、固化階梯、品質關卡） |
+| `team-onboarding.md` | 給小組成員的平台導覽。**主檔 6 頁**（使命 / 架構 ①②③ / 未來 / 下一步）＋ **附錄 11 頁**（回合資料流、fan-in queue、**固化階梯 → 兩種 tool → 四者的取捨** 三頁連著讀、Sandbox×FileStore、KB 進出、四道安全閘、可靠性、品質關卡） |
 | `diagrams/*.mmd` | 圖的**來源**（mermaid） |
 | `diagrams/*.svg` | 由 `.mmd` 產生、**deck 實際引用**的圖 |
 
