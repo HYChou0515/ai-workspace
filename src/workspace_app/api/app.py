@@ -360,6 +360,9 @@ def create_app(
     # questions). __main__ threads `settings.kb.cluster.*`; defaults here match
     # ClusterSettings so tests that don't pass them keep the shipped behaviour.
     kb_cluster_tau: float = 0.9,
+    # #534: chunks per metric-extraction job — what keeps a pass inside the
+    # 30-minute job ceiling (a batch costs one model call per chunk).
+    kb_graph_chunk_budget: int = 20,
     kb_cluster_suppress_tau: float = 0.92,
     kb_cluster_update_tau: float = 0.8,
     kb_cluster_merge_tau: float = 0.95,
@@ -784,6 +787,7 @@ def create_app(
         # #535: retrieval-eval question generation runs on the KB llm.
         eval_llm=kb_llm,
         graph_llm=kb_llm,
+        graph_chunk_budget=kb_graph_chunk_budget,
         # #506 P6: the same KB text embedder the ingestor/retriever use, so the
         # card-gen reconcile compares candidates + cards in one vector space.
         embedder=embedder,

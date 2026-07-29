@@ -144,6 +144,10 @@ def build_coordinators(
     sanity_judge_llm: ILlm | None,
     eval_llm: ILlm | None = None,
     graph_llm: ILlm | None = None,
+    # #534: chunks per extraction job. A batch costs one model call per
+    # chunk, so this — not a document count — is what keeps a job inside
+    # the 30-minute ceiling. See GraphSettings.
+    graph_chunk_budget: int = 20,
     embedder: Embedder | None = None,
     cluster_tau: float = 0.9,
     suppress_tau: float = 0.92,
@@ -273,7 +277,10 @@ def build_coordinators(
         from .kb.graph.coordinator import GraphCoordinator
 
         graph_coordinator = GraphCoordinator(
-            spec, graph_llm, message_queue_factory=message_queue_factory
+            spec,
+            graph_llm,
+            chunk_budget=graph_chunk_budget,
+            message_queue_factory=message_queue_factory,
         )
         logger.info("coordinators: metric-extraction (graph) coordinator wired")
     logger.info("coordinators: built wiki/index/card_gen coordinators")

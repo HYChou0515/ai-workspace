@@ -537,6 +537,25 @@ class GitSettings:
 
 
 @dataclass(frozen=True)
+class GraphSettings:
+    """#534 metric extraction — how a pass is cut into jobs.
+
+    A batch does one model call per CHUNK, and chunks-per-doc follows document
+    length, so the old doc-count batching bounded nothing: the same 20-doc job
+    was 20 calls over short notes and 2000 over long decks, and the tail ran
+    past the 30-minute ceiling the job policy allows — where the work is
+    redelivered rather than finished, so it never completes.
+
+    `chunk_budget` bounds a job by the work it will actually do. Lower it if
+    the model is slow or the ceiling is tighter; the only cost of a small
+    budget is more (cheaper, parallel) jobs. A single document larger than the
+    budget still travels alone — `write_doc_graph` wipes and rewrites per doc,
+    so a document cannot be split across jobs."""
+
+    chunk_budget: int = 20
+
+
+@dataclass(frozen=True)
 class KbSettings:
     embedder: EmbedderSettings = field(default_factory=EmbedderSettings)
     chunker: ChunkerSettings = field(default_factory=ChunkerSettings)
@@ -577,6 +596,8 @@ class KbSettings:
     # (0 = "don't search this reply"). Independent of the default so an operator
     # can keep a low default while still allowing the user to dial searches up.
     max_searches_ceiling: int = 10
+    # #534: metric-extraction job sizing (see GraphSettings).
+    graph: GraphSettings = field(default_factory=GraphSettings)
     code_embedder: CodeEmbedderSettings = field(default_factory=CodeEmbedderSettings)
     # #513 P6: fetch an HTML/MD upload's externally-linked images off an internal
     # image server (SSRF-allowlisted) into their own image SourceDocs. Empty

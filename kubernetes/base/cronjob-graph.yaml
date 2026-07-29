@@ -6,7 +6,16 @@
 #
 # Runs weekly on Saturday (the "idle-GPU weekend"): extraction re-does every
 # opted-in doc (idempotent wipe+rewrite), which is expensive VLM/LLM work — a
-# nightly full re-extract would be wasteful. Requirements: a KB LLM wired, and
+# nightly full re-extract would be wasteful.
+#
+# Job SIZE is bounded by `kb.graph.chunk_budget`, not by a document count: a
+# batch costs one model call per chunk and chunks-per-doc follows document
+# length, so a fixed doc count let the same job be 20 calls or 2000 — and the
+# tail ran past the 30-minute ceiling, where a job is redelivered rather than
+# finished and so never converges. Lower the budget if the model is slower or
+# the ceiling is tighter; smaller jobs are also more parallel across the fleet.
+# One document whose own chunks exceed the budget still travels alone —
+# `write_doc_graph` wipes and rewrites per doc, so a doc cannot be split. Requirements: a KB LLM wired, and
 # the graph worker (or an all-in-one API with RUN_CONSUMERS=true) consuming the
 # `graph` JobType.
 #

@@ -33,8 +33,8 @@ from ..doc_permission import (
     push_mirror_to_claims,
     reset_doc_override_on_claims,
 )
-from ..eval.sample import into_batches
 from ..llm import ILlm
+from .batching import into_chunk_budget_batches
 from .doc_write import write_doc_graph
 from .jobs import GraphJob, GraphJobPayload
 from .link import reconcile_vocabulary
@@ -50,12 +50,12 @@ class GraphCoordinator:
         spec: SpecStar,
         llm: ILlm,
         *,
-        batch_size: int = 20,
+        chunk_budget: int = 20,
         message_queue_factory: object | None = None,
     ) -> None:
         self._spec = spec
         self._llm = llm
-        self._batch_size = batch_size
+        self._chunk_budget = chunk_budget
         self._collection_rm = spec.get_resource_manager(Collection)
         self._chunk_rm = spec.get_resource_manager(DocChunk)
         self._doc_rm = spec.get_resource_manager(SourceDoc)
@@ -191,7 +191,13 @@ class GraphCoordinator:
     def _split(self, payload: GraphJobPayload) -> None:
         cid = payload.collection_id
         self.reconcile_mirrors(cid)
-        for batch in into_batches(self._collection_doc_ids(cid), self._batch_size):
+        # Budget CHUNKS, not documents: a batch's cost is one model call per
+        # chunk, and chunks-per-doc follows document length, so a fixed doc
+        # count bounded nothing — the long tail ran past the 30-minute job
+        # ceiling, where the work is redelivered instead of finished.
+        for batch in into_chunk_budget_batches(
+            self._collection_doc_chunk_counts(cid), self._chunk_budget
+        ):
             self._job_rm.create(
                 GraphJob(
                     payload=GraphJobPayload(kind="batch", collection_id=cid, doc_ids=batch),
@@ -221,15 +227,19 @@ class GraphCoordinator:
             for m in self._collection_rm.search_resources(QB["use_graph"].eq(True).build())
         ]
 
-    def _collection_doc_ids(self, collection_id: str) -> list[str]:
-        """Distinct docs with chunks in the collection — a native group-by on the
-        chunks' ``source_doc_id`` (no per-chunk load)."""
+    def _collection_doc_chunk_counts(self, collection_id: str) -> list[tuple[str, int]]:
+        """Distinct docs with chunks in the collection, each with HOW MANY — a
+        native group-by on the chunks' ``source_doc_id`` (no per-chunk load).
+
+        The count was already being computed here and thrown away; it is what
+        lets `_split` size a job by the work it will do rather than by how many
+        documents it names."""
         rows = self._chunk_rm.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
             QB["source_doc_id"],
             {"n": Count()},
             query=(QB["collection_id"] == collection_id).build(),
         )
-        return [r.key for r in rows if r.key]
+        return [(r.key, int(r.n)) for r in rows if r.key]
 
     def _doc_chunks(self, doc_id: str) -> list[tuple[str, str]]:
         out: list[tuple[str, str]] = []

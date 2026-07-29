@@ -76,6 +76,7 @@ def build_bundle(
         cluster_tau=settings.kb.cluster.cluster_tau,
         suppress_tau=settings.kb.cluster.suppress_tau,
         update_tau=settings.kb.cluster.update_tau,
+        graph_chunk_budget=settings.kb.graph.chunk_budget,
         wiki_maintainer_max_turns=settings.kb.wiki.maintainer_max_turns,
         wiki_model=wiki_model or "",
         wiki_llm_base_url=wiki_base or "",
