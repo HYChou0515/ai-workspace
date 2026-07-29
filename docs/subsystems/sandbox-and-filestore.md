@@ -2,7 +2,7 @@
 
 一個 item 的工作檔案有兩個協作的命名空間:**Sandbox**（活著的執行環境,熱機時的真實來源）與 **FileStore**（持久的虛擬根快照,冷機時的真實來源)。`SandboxSync` 在兩者之間搬檔,sandbox 在第一次 `exec` 時才惰性建立、閒置/關閉時拆除——「活著看 sandbox、死了看快照」徹底消除了舊的雙來源漂移。
 
-> **看這篇之前**：先讀 [架構總覽](../architecture.md) 抓全貌。
+> **看這篇之前**：先讀 [架構總覽](../architecture.md) 抓全貌。線上部署（`sandbox.kind: http`）下這些同步時機各自對應哪一次 HTTP，見 [Hosted Sandbox 執行時架構](../hosted-sandbox.md)。
 
 ## 職責與邊界
 
