@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from agents.tracing import set_trace_processors
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from specstar import SpecStar
 
@@ -677,6 +677,37 @@ def create_app(
 
     register_notification_routes(api, spec, get_user_id)
     register_health_routes(api, health_service)
+
+    @api.get("/readyz")
+    async def readyz() -> Response:
+        """k8s readiness. 503 while this pod would serve an EMPTY-looking
+        workspace over intact data.
+
+        `ls(prefix=…)` scopes its query on `path`, and specstar extracts
+        indexed_data at write time — so rows written before `path` was indexed
+        answer no `path` predicate until an operator POSTs
+        `/workspace-file/migrate/execute`. A pod that served in that window
+        would show empty file trees and empty entity lists, and with a
+        3-replica RollingUpdate the mixed fleet makes it FLICKER between pods,
+        which reads as data loss.
+
+        Failing readiness instead makes the rollout stall with the OLD pods
+        still serving correctly: the operator runs the backfill, and the new
+        pods go ready on their own. Backends without the probe (memory, tests)
+        are ready by definition.
+
+        Deliberately NOT the diagnostics registry above — that is an
+        operator-facing report; this answers one question, cheaply (two
+        aggregates, no rows materialised), on every probe interval."""
+        probe = getattr(filestore, "prefix_index_ready", None)
+        if probe is not None and not await probe():
+            return Response(
+                status_code=503,
+                content="workspace-file path index not backfilled — "
+                "POST /workspace-file/migrate/execute",
+                media_type="text/plain",
+            )
+        return Response(status_code=200, content="ok", media_type="text/plain")
 
     register_meta_routes(
         api,

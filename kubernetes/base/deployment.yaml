@@ -69,12 +69,25 @@ spec:
           # (a delegated sub-tree of the pod's own slice). With enabled=true on a
           # host that lacks these, the app fails loud at boot (it won't silently
           # downgrade to no isolation).
+          # Readiness answers "should this pod take traffic", which is more
+          # than "is the process up": a pod whose WorkspaceFile rows have not
+          # been backfilled for the `path` index serves EMPTY file trees and
+          # empty entity lists over intact data (`ls(prefix=…)` scopes on
+          # `path`, and specstar extracts indexed_data at write time). With 3
+          # replicas rolling, a mixed fleet makes that flicker between pods,
+          # which reads as data loss. /api/readyz answers 503 in that state, so
+          # the rollout stalls with the OLD pods still serving correctly until
+          # an operator POSTs /workspace-file/migrate/execute.
           readinessProbe:
             httpGet:
-              path: /openapi.json
+              path: /api/readyz
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
+          # Liveness stays on a static route ON PURPOSE. Pointing it at the
+          # readiness check would restart a pod that is merely waiting for a
+          # backfill — a crashloop instead of a stalled rollout, and the
+          # operator loses the running pods they need to run the backfill from.
           livenessProbe:
             httpGet:
               path: /openapi.json
