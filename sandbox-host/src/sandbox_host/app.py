@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from .artifact import ArtifactError
 from .nfs_archive import NfsArchive
 from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+from .tool_cache import ToolCache
 from .tool_resolve import ToolResolver
 
 # What THIS build does, advertised on /healthz. Which code a running host
@@ -230,11 +231,13 @@ class _HostController:
         sandbox: Sandbox,
         *,
         idle_ttl: float,
+        tool_cache: ToolCache | None = None,
         clock: Callable[[], float],
         archive: NfsArchive | None = None,
     ) -> None:
         self.sandbox = sandbox
         self.idle_ttl = idle_ttl
+        self._tool_cache = tool_cache
         self.clock = clock
         self.draining = False
         self._last_active: dict[str, float] = {}
@@ -291,6 +294,18 @@ class _HostController:
         self._item_of.pop(rid, None)
         await self.sandbox.kill(SandboxHandle(id=rid))
 
+    async def sweep_tool_cache(self, *, max_bytes: int | None = None) -> list[str]:
+        """#674: reclaim third-party bundles nothing is running any more.
+
+        Runs beside the idle reaper because that is when bundles stop being
+        referenced — a sandbox ending is what frees one. The in-use set is read
+        from the live sandboxes' own views, so a bundle a turn is using now can
+        never be evicted, however full the cache."""
+        cache, in_use = self._tool_cache, getattr(self.sandbox, "tools_in_use", None)
+        if cache is None or in_use is None:
+            return []
+        return await asyncio.to_thread(cache.sweep, in_use=in_use(), max_bytes=max_bytes)
+
     async def reap_idle(self) -> list[str]:
         """Kill sandboxes with no activity for `idle_ttl` — the backstop for an
         app pod that crashed without calling kill (`idle_ttl <= 0` disables it).
@@ -315,7 +330,13 @@ def make_host_app(
     tool_resolver: ToolResolver | None = None,
 ) -> FastAPI:
     app = FastAPI()
-    controller = _HostController(sandbox, idle_ttl=idle_ttl, clock=clock, archive=archive)
+    controller = _HostController(
+        sandbox,
+        idle_ttl=idle_ttl,
+        clock=clock,
+        archive=archive,
+        tool_cache=tool_resolver.cache if tool_resolver is not None else None,
+    )
     app.state.controller = controller
 
     @app.middleware("http")

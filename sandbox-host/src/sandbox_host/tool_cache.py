@@ -19,6 +19,7 @@ the tarball is hostile, because one day it will be.
 from __future__ import annotations
 
 import io
+import logging
 import os
 import re
 import shutil
@@ -44,6 +45,8 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 # of the behaviour is exercised unprivileged. Mirrors `ChownRunner` in
 # isolated_process.py.
 Hardener = Callable[[Path], None]
+
+logger = logging.getLogger(__name__)
 
 
 class ToolCacheError(Exception):
@@ -112,3 +115,54 @@ class ToolCache:
             shutil.rmtree(staging, ignore_errors=True)
             raise
         return installed
+
+    def _size_of(self, path: Path) -> int:
+        return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+    def sweep(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
+        """Bring the cache under `max_bytes`, evicting unreferenced bundles
+        oldest-first. Returns the shas removed.
+
+        An unreferenced bundle is NOT rubbish — it is the version somebody may
+        roll back to, and keeping it is what makes that a remount instead of a
+        150MB download. So it stays until the disk actually needs the room.
+
+        `in_use` is absolute. A bundle a sandbox has mounted is never evicted,
+        however full the cache: an over-full cache is a capacity problem, and
+        deleting a tool out from under a running turn is a correctness one. If
+        everything left is in use and the cache is still over, that is a host
+        that needs more disk, and it says so rather than breaking something.
+
+        With no ceiling there is nothing to bound growth, so nothing
+        unreferenced is kept."""
+        if not self._root.is_dir():
+            return []
+        installed = [p for p in self._root.iterdir() if p.is_dir() and _SHA256.match(p.name)]
+        # Oldest first: whatever has to go, goes in the order it stopped being
+        # the version anyone was on.
+        installed.sort(key=lambda p: p.stat().st_mtime)
+
+        if max_bytes is None:
+            removed = [p.name for p in installed if p.name not in in_use]
+            for path in installed:
+                if path.name not in in_use:
+                    shutil.rmtree(path, ignore_errors=True)
+            return removed
+
+        total = sum(self._size_of(p) for p in installed)
+        removed: list[str] = []
+        for path in installed:
+            if total <= max_bytes:
+                break
+            if path.name in in_use:
+                continue
+            total -= self._size_of(path)
+            shutil.rmtree(path, ignore_errors=True)
+            removed.append(path.name)
+        if total > max_bytes:
+            logger.warning(
+                "tool cache is %d bytes over its ceiling and every bundle left is in "
+                "use — this host needs more disk, not a smaller cache",
+                total - max_bytes,
+            )
+        return removed

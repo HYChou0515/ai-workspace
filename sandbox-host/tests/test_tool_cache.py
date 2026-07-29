@@ -169,3 +169,102 @@ def test_the_default_cache_hardens_for_real(tmp_path: Path) -> None:
     # Nothing injected: the production wiring must reach `_harden`, not a
     # no-op that happens to make tests pass.
     assert ToolCache(tmp_path)._harden is _harden
+
+
+def _install(cache: ToolCache, sha: str, body: bytes = b"x") -> Path:
+    return cache.ensure(sha, _tar({"launch": body}))
+
+
+def test_with_no_ceiling_nothing_unreferenced_is_kept(tmp_path: Path) -> None:
+    # Nothing bounds growth without a ceiling, so the cache cannot also serve
+    # as a rollback shelf.
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    keep, drop = "a" * 64, "b" * 64
+    _install(cache, keep)
+    _install(cache, drop)
+
+    removed = cache.sweep(in_use={keep})
+
+    assert removed == [drop]
+    assert cache.has(keep) and not cache.has(drop)
+
+
+def test_an_unreferenced_bundle_is_kept_while_there_is_room(tmp_path: Path) -> None:
+    """It is the version somebody may roll back to. Keeping it is what makes a
+    rollback a remount instead of a 150MB download — which is the whole reason
+    this cache is addressed by content."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    previous, current = "a" * 64, "b" * 64
+    _install(cache, previous)
+    _install(cache, current)
+
+    assert cache.sweep(in_use={current}, max_bytes=10_000_000) == []
+    assert cache.has(previous)
+
+
+def test_sweep_never_touches_a_bundle_a_live_sandbox_has_mounted(tmp_path: Path) -> None:
+    # Content-addressed, so "in use" is the only thing that makes a directory
+    # unsafe to delete — pulling one out from under a running sandbox would
+    # break a tool mid-turn.
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    sha = "a" * 64
+    _install(cache, sha)
+
+    assert cache.sweep(in_use={sha}) == []
+    assert cache.has(sha)
+
+
+def test_sweep_evicts_the_oldest_first_when_the_cache_is_over_its_ceiling(
+    tmp_path: Path,
+) -> None:
+    # Rollback stays cheap while there is room, so eviction is by age rather
+    # than by anything cleverer: the version someone might roll back to is
+    # usually the one they were on until recently.
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    old, mid, new = "a" * 64, "b" * 64, "c" * 64
+    for i, sha in enumerate((old, mid, new)):
+        path = _install(cache, sha, body=b"x" * 1000)
+        os.utime(path, (i, i))
+
+    removed = cache.sweep(in_use=set(), max_bytes=1)
+
+    assert removed == [old, mid, new]  # nothing referenced, so all of it goes
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_the_ceiling_cannot_evict_something_in_use(tmp_path: Path) -> None:
+    # A cache over its ceiling is a capacity problem; deleting a bundle a
+    # sandbox is running would be a correctness one.
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    live, dead = "a" * 64, "b" * 64
+    os.utime(_install(cache, live, body=b"x" * 1000), (1, 1))
+    os.utime(_install(cache, dead, body=b"x" * 1000), (2, 2))
+
+    removed = cache.sweep(in_use={live}, max_bytes=1)
+
+    assert removed == [dead]
+    assert cache.has(live)
+
+
+def test_a_cache_over_its_ceiling_with_everything_in_use_keeps_everything(
+    tmp_path: Path, caplog
+) -> None:
+    # There is nothing safe left to delete. Saying "this host needs more disk"
+    # is the honest answer; evicting a running tool would trade a capacity
+    # problem for a correctness one.
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    sha = "a" * 64
+    _install(cache, sha, body=b"x" * 5000)
+
+    with caplog.at_level("WARNING"):
+        removed = cache.sweep(in_use={sha}, max_bytes=1)
+
+    assert removed == []
+    assert cache.has(sha)
+    assert "needs more disk" in caplog.text
+
+
+def test_sweeping_a_host_that_has_never_installed_anything_is_a_no_op(tmp_path: Path) -> None:
+    # The reaper ticks from the moment a host starts, long before any app has
+    # asked for a third-party tool.
+    assert ToolCache(tmp_path / "never-created").sweep(in_use=set()) == []

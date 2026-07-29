@@ -296,7 +296,7 @@ url 指的是「latest」，所以平時會跟著作者走。要**釘回舊版**
 | R3 | host 新增對外憑證面（今天 `sandbox-host/src` 完全沒有任何 httpx/token，只有測試用） | 只此一處，先一個全域 token（Q13） |
 | R4 | 作者改 command 名／schema 會即時影響所有新 sandbox，沒有版本閘 | 以 P8 的「記錄每次用的 sha」+ 相容性閘門的清楚錯誤緩解；真要凍版就用 4.4 釘 job URL |
 | R5 | **GitLab CI artifact 預設會過期**（`expire_in` 不設約 30 天）。過期後 URL 404 —— 已 cache 的 host 靠 last-known-good 撐著，但**新 pod 一起來就抓不到** | CI 範本強制 `expire_in: never`，並在 `tool-authoring.md` 講明；resolve 失敗訊息要能一眼看出「artifact 過期了」 |
-| R6 | 磁碟：每支 bundle 約 150MB，× N 支 × 每台 host（而且新舊 sha 會並存） | P10 的 GC 加一個 cache 上限；容量估算寫進 `deployment.md` |
+| R6 | 磁碟：每支 bundle 約 150MB，× N 支 × 每台 host（而且新舊 sha 會並存） | P10 的 GC 加 `SANDBOX_HOST_TOOL_CACHE_MAX_BYTES` 上限；**沒被引用的 bundle 照留**（回滾才會是重掛而不是重抓），超過上限才由舊到新淘汰；沒設上限則不留 |
 | R7 | 舊 sha 的 cache 會堆積 | P10 的 refcount GC |
 | R8 | **作者的 breaking change 沒有事前通知管道**。改了 command 名或必填參數，我們是「使用者踩到」才知道 | 事前只有 `verify`（人工，且只在新增時跑）；事後靠 P8 記錄的 `name → sha + version` 查得回去。**接受**，並在 `tool-authoring.md` 把「這是 breaking」講白（§3.6） |
 

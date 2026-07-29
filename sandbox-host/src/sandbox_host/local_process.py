@@ -332,6 +332,27 @@ class LocalProcessSandbox:
                 link.unlink()
             link.symlink_to(self._tools_dir / EXT_DIR / sha)
 
+    def tools_in_use(self) -> set[str]:
+        """Which third-party bundles the live sandboxes have mounted.
+
+        Read from the views themselves rather than from a counter kept beside
+        them: a counter drifts the moment a sandbox dies in a way nobody
+        recorded, and the consequence of drifting the wrong way here is
+        deleting a bundle out from under a running turn."""
+        if self._tools_dir is None:
+            return set()
+        ext = (self._tools_dir / EXT_DIR).resolve()
+        in_use: set[str] = set()
+        for path in self._dirs.values():
+            view = path / _TOOLS_VIEW
+            if not view.is_dir():
+                continue
+            for link in view.iterdir():
+                target = link.resolve()
+                if target.parent == ext:
+                    in_use.add(target.name)
+        return in_use
+
     def _install_python_shim(self, root: Path) -> None:
         """Unjailed analogue of the jail bootstrap's two-tier `python` shim
         (#350), rebuilt per-exec like the bootstrap is. Build a `.jailbin` dir

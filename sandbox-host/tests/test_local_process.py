@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -919,3 +920,38 @@ async def test_a_deployment_with_no_first_party_tools_still_gets_its_own(tmp_pat
 
     r = await sb.exec(h, ["../.tools/wafer-history/launch"])
     assert "ONLY-THIRD-PARTY" in r.stdout.decode()
+
+
+async def test_the_host_can_say_which_third_party_bundles_are_in_use(tmp_path):
+    """What the cache sweep asks before it deletes anything. Read from the
+    live views, not from a counter kept alongside them: a counter drifts when
+    a sandbox dies unrecorded, and drifting the wrong way here means deleting
+    a bundle out from under a running turn."""
+    live, unused = "a" * 64, "b" * 64
+    root = _tools_root_with(tmp_path, ext={live: "L", unused: "U"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    await sb.create(SandboxSpec(tools={"wafer-history": live}))
+
+    assert sb.tools_in_use() == {live}
+
+
+async def test_a_host_with_no_tools_configured_holds_nothing_in_use(tmp_path):
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=None)
+    await sb.create(SandboxSpec())
+
+    assert sb.tools_in_use() == set()
+
+
+async def test_a_sandbox_from_before_the_upgrade_does_not_break_the_sweep(tmp_path):
+    # A rolling upgrade leaves sandboxes created by the previous version, which
+    # have no view directory. The sweep must skip them, not crash — a crashing
+    # sweeper means the cache grows forever and nobody notices until the disk
+    # fills.
+    sha = "a" * 64
+    root = _tools_root_with(tmp_path, ext={sha: "L"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+    h = await sb.create(SandboxSpec(tools={"wafer-history": sha}))
+    shutil.rmtree(sb._require(h) / ".tools-view")
+
+    assert sb.tools_in_use() == set()

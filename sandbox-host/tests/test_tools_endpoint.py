@@ -17,6 +17,10 @@ from sandbox_host.tool_resolve import FetchError, ResolvedTool
 
 
 class _Resolver:
+    #: The real resolver exposes its cache so the host can sweep it; a double
+    #: that omitted it would pass while production raised.
+    cache = None
+
     def __init__(self, **answers: object) -> None:
         self.answers = answers
         self.seen: list[tuple[str, str]] = []
@@ -100,3 +104,37 @@ async def test_a_stale_answer_is_reported_as_such(stale: bool) -> None:
         r = await c.post("/tools/resolve", json={"tools": {"t": "https://g/m"}})
 
     assert r.json()["tools"]["t"]["stale"] is stale
+
+
+class _Cache:
+    def __init__(self) -> None:
+        self.swept: list[tuple[set[str], int | None]] = []
+
+    def sweep(self, *, in_use: set[str], max_bytes: int | None = None) -> list[str]:
+        self.swept.append((in_use, max_bytes))
+        return ["b" * 64]
+
+
+async def test_the_sweeper_asks_the_live_sandboxes_what_they_are_running() -> None:
+    """A bundle stops being referenced when a sandbox ends, which is why this
+    runs beside the idle reaper. The in-use set comes from the live views, so
+    a bundle a turn is using now cannot be evicted however full the cache."""
+
+    class _Backend:
+        def tools_in_use(self) -> set[str]:
+            return {"a" * 64}
+
+    resolver = _Resolver()
+    resolver.cache = _Cache()
+    app = make_host_app(_Backend(), advertise_url="http://h", tool_resolver=resolver)
+
+    removed = await app.state.controller.sweep_tool_cache(max_bytes=999)
+
+    assert removed == ["b" * 64]
+    assert resolver.cache.swept == [({"a" * 64}, 999)]
+
+
+async def test_a_host_with_no_tool_store_sweeps_nothing() -> None:
+    app = make_host_app(object(), advertise_url="http://h", tool_resolver=None)
+
+    assert await app.state.controller.sweep_tool_cache() == []

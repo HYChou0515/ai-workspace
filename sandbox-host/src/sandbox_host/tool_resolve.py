@@ -121,6 +121,8 @@ class ToolResolver:
         state_dir: Path,
     ) -> None:
         self._cache = cache
+        #: Exposed so the host's sweeper can reclaim what nothing is running.
+        self.cache = cache
         self._builder_id = builder_id
         self._arch = arch
         self._fetch = fetch
