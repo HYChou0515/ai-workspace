@@ -1,6 +1,7 @@
 # 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上
 
-> Issue: [#674](https://github.com/HYChou0515/ai-workspace/issues/674)。狀態：**plan，未動工**。
+> Issue: [#674](https://github.com/HYChou0515/ai-workspace/issues/674)。
+> 狀態：**P1–P12 全部實作完成**（見 §7 每個 phase 的核對）。
 
 **一句話**：讓不在我們 repo 裡的工具作者，把工具推上自己的 GitLab、跑我們提供的 CI，
 **下一個開起來的 sandbox 就自動帶上新版**——我們這邊不改 code、不重新部署。
@@ -304,10 +305,15 @@ url 指的是「latest」，所以平時會跟著作者走。要**釘回舊版**
 
 ## 7. Phases
 
+> **逐條核對**：`python3 scripts/check_third_party_tools_674.py` —— 45 條可執行檢查，全過。
+> 那份腳本自己也做過變異測試（故意破壞受檢的性質，確認它會變紅）。
+
 > 一個 phase 一個 commit，flat integer。每個 phase 都要有**會紅的新測試**。
 > **P1–P3 先做完，作者就能開始寫工具了**（即使平台端還沒接完）。
 
 ### P1 · artifact 格式 + 驗證器（純函數，無 I/O）
+
+**✅ 完成**（`tooling/artifact.py`，16 測試、100%）。純 stdlib，所以 builder image 匯入得動；host 有逐位元組相同的複本，由測試釘住。
 
 `tooling/artifact.py`：`Manifest` struct、`parse_manifest(bytes)`、
 `check_compatible(manifest, host_builder, arch)`、`verify_bundle(bytes, expected_sha)`。
@@ -315,6 +321,8 @@ builder 與 host 共用這一份契約。
 測試涵蓋：欄位缺漏、`format_version` 不認得、builder 對不上、arch 不符、sha 不符、name 不符。
 
 ### P2 · builder image + `build-tool` / `smoke`
+
+**✅ 完成**（`tooling/builder.py` + `tool-builder/`，20 測試、100%）。smoke 在 build 之內，失敗**刪掉整個輸出目錄**；一條測試釘住 builder base 必須等於 sandbox runtime base。
 
 `tool-builder/Dockerfile`，base 對齊 `sandbox-host/Dockerfile` **stage 2**；
 `build-tool <src> <out>` = 既有 `prebuild.build_package` + 抽 `commands.json`/`schemas/` 進 manifest
@@ -328,10 +336,14 @@ builder 與 host 共用這一份契約。
 
 ### P3 · 作者面文件 + CI 範本
 
+**✅ 完成**（`docs/tool-authoring.md` + `tool-builder/gitlab-ci.example.yml`）。`expire_in: never` 與「會被截斷／有時間上限」都有測試防止被拿掉。
+
 `docs/tool-authoring.md`（§3 全文）+ `.gitlab-ci.yml` 範本（含 `expire_in: never`）。
 **做完這裡，工具作者就可以開始寫、開始發版了**，不必等平台端。
 
 ### P4 · content-addressed cache + 安全解壓（host 本機，先不連網）
+
+**✅ 完成**（`sandbox_host/tool_cache.py`，100%）。sha 格式閘門、`filter="data"`、先 staging 再 rename；兩道守衛都做過**變異測試**。
 
 `sandbox_host/tool_cache.py`：`ensure(sha, tar_bytes) -> Path`。
 解到 tmp → **atomic rename**；擋 **zip-slip**（`../` 路徑穿越）、symlink 逃逸、hardlink；
@@ -340,12 +352,16 @@ builder 與 host 共用這一份契約。
 
 ### P5 · 第一方工具搬進 `builtin/`
 
+**✅ 完成**。8 個既有測試按預期紅→綠；image 的 COPY 目標與程式的 `builtin/` 解析由測試綁在一起。
+
 tools 目錄形狀從「一堆 `<name>/`」變成 `builtin/<name>/` + `ext/<sha>/`。
 **這是 breaking change**（`sandbox-host/Dockerfile`、`SANDBOX_HOST_TOOLS_DIR`、
 `discover_packages` 的路徑、既有測試都會動），所以獨立一個 phase，先把第一方搬完並全綠，
 再讓第三方加進來。
 
 ### P6 · host fetch + `POST /tools/resolve`
+
+**✅ 完成**（`tool_resolve.py` + `POST /tools/resolve`，100%）。**部分成功**回應、last-known-good、404 直接說「artifact 過期」。
 
 抓 manifest（httpx，token 由 env 來）→ P1 的閘門 → cache 命中就跳過下載 → 否則抓 tar →
 驗 sha → `tool_cache.ensure` → 回 `{name: {sha, commands, schemas, stale?}}`。
@@ -355,10 +371,14 @@ tools 目錄形狀從「一堆 `<name>/`」變成 `builtin/<name>/` + `ext/<sha>
 
 ### P7 · per-sandbox tools 視圖（unjailed symlink ／ jailed per-tool ro bind-mount）
 
+**✅ 完成**。per-sandbox 視圖；jailed 逐支 ro bind + tmpfs 封死（jail 內實跑驗證）。副作用：sandbox 只看得到被授權的工具，比改動前更嚴。
+
 `SandboxSpec` 加 `tools: dict[str, str]`（本地名 → sha）。`create` 依此組 `.tools-view`；
 jailed bootstrap 改成逐支 bind-mount（只掛這次授權的）。
 
 ### P8 · app 端：`external_tools` 宣告 + turn 起點 resolve + 記錄 sha/version
+
+**✅ 完成**。`agent.external_tools` → turn 起點 resolve → sha 釘住整個 turn → `PackageInfo` 進 `ctx.packages`；拿不到的工具在 prompt 裡說明原因（不送去 tool picker，因為那裡沒有開關可按）。
 
 `app.json` schema 加 `agent.external_tools`；`turn_context` 在組 context 時打 host resolve，
 把回來的 commands/schemas 轉成 `PackageInfo` 併進 `ctx.packages`
@@ -371,6 +391,8 @@ resolve 失敗且無 last-known-good → **該工具缺席但 turn 繼續**，�
 
 ### P9 · `verify` 指令（上架前驗收）+ 開機 best-effort 預熱
 
+**✅ 完成**（`tooling/verify.py`，100%）。**不執行 bundle**（Q16b，plan 已改）；開機預熱**延後 readiness 但永不失敗**。
+
 `python -m workspace_app.tooling verify <manifest-url>`：跑 P1 的閘門 → 抓 bundle → 驗 sha →
 **在一個丟棄式 sandbox 裡跑一遍 smoke** → 回報能不能上、哪裡不合（Q16）。
 人工指令，不是自動閘——目的是「貼進 `app.json` 再發版」之前就知道會不會爛。
@@ -382,10 +404,14 @@ resolve 失敗且無 last-known-good → **該工具缺席但 turn 繼續**，�
 
 ### P10 · cache GC + 容量上限
 
+**✅ 完成**。沒被引用的 bundle **留著當回滾快取**，超過上限才由舊到新淘汰；正在使用的永遠不動。
+
 refcount sweep：沒有任何 live sandbox 引用的 `ext/<sha>` 才回收（與 idle-killer / blob-gc 同形狀），
 加一個 cache 上限（R6）。content-address ⇒ 回滾到還在 cache 的舊 sha 是秒回。
 
 ### P11 · 改寫 `extending-the-platform.md` 的立場 + 運維文件
+
+**✅ 完成**。`extending-the-platform.md` 的「只有 dev 自建」立場已改寫成兩條路；`deployment.md` 補上 token／磁碟／**怎麼退回**。
 
 該頁 §Tool 目前寫「只有 dev 自建」、流程是「改 `PACKAGES` → prebuild → 重啟」，
 要變成兩條路：第一方（vendor 進 repo）與第三方（作者 CI + artifact url）。
@@ -393,6 +419,8 @@ refcount sweep：沒有任何 live sandbox 引用的 `ext/<sha>` 才回收（與
 以及 §3.7 那張「誰做什麼」表。
 
 ### P12 · 權限不變量 + 端到端整合測試
+
+**✅ 完成**。端到端測試走完整條鏈並驗證版本隔離；`.tools-view` 不被 uid 擁有的不變量做過變異測試。root-gated 那條在這台機器**只寫了、沒跑過**（非 root）。
 
 root-gated integration：解壓後 `owner=0` / other 無 `w`；降權 uid 寫不進；
 jail 內只看得到這次授權的工具；換 sha 後**下一個** sandbox 拿到新版而**既有** sandbox 不變。
