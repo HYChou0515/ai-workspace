@@ -745,8 +745,11 @@ async def test_readiness_marker_lives_outside_workspace_and_is_invisible_366(san
     # physically at the sandbox root, NOT the user workspace
     assert (tmp_path / h.id / ".ready").exists()
     assert not (tmp_path / h.id / "root" / ".ready").exists()
-    # invisible to the workspace view
-    assert await sandbox.walk(h, "/") == []
+    # invisible to the workspace view — in BOTH halves of the traversal, so the
+    # marker cannot surface as a folder either now that dirs are reported
+    walked = await sandbox.walk(h, "/")
+    assert walked.files == []
+    assert walked.dirs == []
     assert await sandbox.exists(h, "/.ready") is False
 
 
