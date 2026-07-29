@@ -247,6 +247,33 @@ def _images_from_stdout(stdout: bytes) -> list[str]:
     return []
 
 
+async def _exec_tool(
+    actx: AgentToolContext,
+    handle: SandboxHandle,
+    pkg: PackageInfo,
+    cmd_name: str,
+    args_json: str,
+) -> ExecResult:
+    """Run one tool command, with the item's environment variables.
+
+    Both dispatch paths funnel through here — the agent's call and the #285
+    chart re-render — because "inject at the call site" is only one place until
+    it is two, and the second one is where it silently stops happening.
+
+    The variables are named PER CALL rather than left in the sandbox: the tool
+    and the agent share a uid, so anything on disk is readable by both or by
+    neither. Passing them here means the agent's own `exec` has nothing to
+    inherit and no file to open.
+    """
+    assert actx.sandbox is not None  # a provisioned tool implies a sandbox
+    return await actx.sandbox.exec(
+        handle,
+        [f"{pkg.install_dir}/launch", cmd_name, args_json or "{}"],
+        on_output=actx.on_exec_output,
+        env=actx.user_env or None,
+    )
+
+
 async def _review_chart(
     actx: AgentToolContext,
     pkg: PackageInfo,
@@ -282,11 +309,7 @@ async def _review_chart(
 
     async def render(style: dict[str, Any]) -> tuple[bytes, str]:
         merged = {**base_args, "style": style}
-        r = await sandbox.exec(
-            handle,
-            [f"{pkg.install_dir}/launch", cmd.name, json.dumps(merged)],
-            on_output=actx.on_exec_output,
-        )
+        r = await _exec_tool(actx, handle, pkg, cmd.name, json.dumps(merged))
         imgs = _images_from_stdout(r.stdout)
         path = imgs[0] if imgs else first
         png = await sandbox.download(handle, "/" + path.lstrip("/"))
@@ -355,11 +378,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
         # args_json is the raw JSON the LLM produced. We pass it through
         # verbatim — the tool's dispatcher pydantic-validates it; if it
         # fails, the tool prints a friendly error to stderr + exits 2.
-        result = await actx.sandbox.exec(
-            handle,
-            [f"{pkg.install_dir}/launch", cmd.name, args_json or "{}"],
-            on_output=actx.on_exec_output,
-        )
+        result = await _exec_tool(actx, handle, pkg, cmd.name, args_json)
         logger.info("registry: dispatch %s:%s exited %d", pkg.name, cmd.name, result.exit_code)
         text = _exec_result_text(actx, cmd.name, result)
         # #285: a chart command that emits image(s) gets a VLM visual self-review
