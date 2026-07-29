@@ -37,7 +37,8 @@
 |---|---|---|
 | Q1 | 作者交出來的是原始碼還是產物？ | **build 好的產物**。作者自己在 CI/CD 跑我們提供的 build，平台不 build 陌生碼 |
 | Q2 | 我們提供給作者的是什麼？ | 一個 **builder image**（= sandbox runtime base + build 腳本），不是裸腳本 |
-| Q3 | artifact 長什麼樣？ | 兩個檔：`tool.tar.zst`（bundle）+ `tool.manifest.json`。放 GitLab CI artifact |
+| Q3 | artifact 長什麼樣？ | 兩個檔：`tool.tar.gz`（bundle）+ `tool.manifest.json`。放 GitLab CI artifact |
+| Q3b | 為什麼是 gz 不是原訂的 zstd？ | **實作時改的**（P2）：要解壓的是 `sandbox-host`——它的 pyproject 明寫「deliberately minimal，安全敏感的 root 服務，與 app 零共用相依」。為了壓縮率塞一個 C extension 進去解**第三方的不可信 bytes**，換來的只是每個 (host, sha) 一次、幾秒的差別 |
 | Q4 | manifest 欄位 | `format_version` / `name` / `version`（人類可讀，純顯示）/ `commands`（含 schema）/ `builder`（ABI 錨）/ `python`+`arch` / `bundle.sha256` / `source`（git+sha，純溯源） |
 | Q5 | 「能跑的目錄」放哪？ | **host 本機磁碟**。共享 NFS 放 `/opt/tools` 已被否決——NFS 不能設權限，`root:root 755` 守不住 |
 | Q6 | 註冊表放哪一層？ | **app.json**。不做 runtime registry、不做 admin UI |
@@ -131,7 +132,7 @@ build-tool:
 產出兩個檔：
 
 ```
-dist/tool.tar.zst        # 會跑的整包：.venv/ + python/ + launch + commands.json + schemas/
+dist/tool.tar.gz         # 會跑的整包：.venv/ + python/ + launch + commands.json + schemas/
 dist/tool.manifest.json  # name / commands(含 schema) / builder / python+arch / bundle.sha256 / source
 ```
 
@@ -153,7 +154,7 @@ GitLab 的 latest-artifact 端點——**作者推一版，這串就自動指到
 https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.manifest.json?job=build-tool
 ```
 
-平台把 `tool.manifest.json` 換成 `tool.tar.zst` 就是 bundle 的位址，所以**只需要一串**。
+平台把 `tool.manifest.json` 換成 `tool.tar.gz` 就是 bundle 的位址，所以**只需要一串**。
 
 ### 3.5 `docs/tool-authoring.md`（新增）
 
@@ -316,7 +317,7 @@ builder 與 host 共用這一份契約。
 
 `tool-builder/Dockerfile`，base 對齊 `sandbox-host/Dockerfile` **stage 2**；
 `build-tool <src> <out>` = 既有 `prebuild.build_package` + 抽 `commands.json`/`schemas/` 進 manifest
-+ 打包 `tool.tar.zst`；`smoke <dist>` 解開跑一遍 3-stage 契約。
++ 打包 `tool.tar.gz`；`smoke <dist>` 解開跑一遍 3-stage 契約。
 `BUILDER_ID` 同時烤進 builder 與 host image，供 P6 的閘門比對。
 `version` 取自作者的 `pyproject`（Q14）。
 **smoke 是 build 的最後一步，不過就不產出 artifact**（Q15）——這是唯一擋得住「作者沒測過就發版」

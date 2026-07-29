@@ -1,0 +1,3 @@
+#!/bin/sh
+# Run a published dist against its own manifest, in the sandbox's real base.
+exec python -m workspace_app.tooling.builder smoke "$@"

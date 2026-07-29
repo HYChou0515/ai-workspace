@@ -1,0 +1,3 @@
+#!/bin/sh
+# Build an author's source tree into the artifact pair their CI publishes.
+exec python -m workspace_app.tooling.builder build "$@"
