@@ -1,6 +1,7 @@
 import hashlib
 import shlex
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 from .protocol import (
@@ -22,6 +23,9 @@ def _version(data: bytes) -> str:
 class MockSandbox:
     def __init__(self) -> None:
         self._fs: dict[str, dict[str, bytes]] = {}
+        # One entry per `exec`, in call order — what the caller asked to add to
+        # that command's environment.
+        self.exec_envs: list[dict[str, str]] = []
         self._exposed: dict[str, list[int]] = {}
         # #366: readiness is a first-class marker kept OUTSIDE the file store, so
         # it never appears in walk/exists (it lives outside the workspace on a
@@ -69,18 +73,6 @@ class MockSandbox:
         self._require(handle)
         return handle.id in self._ready
 
-    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
-        """The item's user env, delivered where the tool launchers read it.
-        Outside the file store, so it never shows up as a workspace file."""
-        self._require(handle)
-        self._user_env[handle.id] = content
-
-    def user_env(self, handle: SandboxHandle) -> str | None:
-        """Test-facing: what `write_user_env` last wrote, or None if it never
-        ran. `None` and `""` are deliberately different — nothing written at all
-        versus every variable deleted."""
-        return self._user_env.get(handle.id)
-
     async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
         self._require(handle)
         ports = self._exposed.setdefault(handle.id, [])
@@ -98,8 +90,13 @@ class MockSandbox:
         handle: SandboxHandle,
         cmd: list[str],
         on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         fs = self._require(handle)
+        # Recorded, not applied: there is no process to hand it to. A double
+        # that merely swallowed the argument would let a caller pass one and
+        # assert nothing — which is how a delivery half goes missing unnoticed.
+        self.exec_envs.append(dict(env) if env else {})
         result = self._exec_result(fs, cmd)
         # Stream the (whole) stdout to the sink in one shot — enough for tests
         # that assert live output is forwarded.

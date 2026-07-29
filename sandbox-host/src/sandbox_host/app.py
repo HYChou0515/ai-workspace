@@ -21,7 +21,7 @@ import base64
 import json
 import os
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
@@ -134,6 +134,9 @@ class _RenameBody(BaseModel):
 
 class _ExecBody(BaseModel):
     cmd: list[str]
+    # The item's user-set variables for THIS command. Absent on an older client;
+    # the backend treats absent and empty the same way.
+    env: dict[str, str] | None = None
 
 
 def _frame(obj: dict[str, object]) -> bytes:
@@ -141,7 +144,10 @@ def _frame(obj: dict[str, object]) -> bytes:
 
 
 async def _exec_ndjson(
-    sandbox: Sandbox, handle: SandboxHandle, cmd: list[str]
+    sandbox: Sandbox,
+    handle: SandboxHandle,
+    cmd: list[str],
+    env: Mapping[str, str] | None = None,
 ) -> AsyncIterator[bytes]:
     """Run `exec` and yield NDJSON frames as output arrives.
 
@@ -160,7 +166,7 @@ async def _exec_ndjson(
 
     async def run() -> None:
         try:
-            result = await sandbox.exec(handle, cmd, on_output=on_output)
+            result = await sandbox.exec(handle, cmd, on_output=on_output, env=env)
             queue.put_nowait(("done", result))
         except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
             queue.put_nowait(("error", exc))
@@ -401,14 +407,6 @@ def make_host_app(
         ok = await sandbox.is_ready(SandboxHandle(id=rid))
         return _ReadyReply(ready=ok)
 
-    @app.post("/sandboxes/{rid}/user-env", status_code=204)
-    async def write_user_env(rid: str, request: Request) -> None:
-        # The body is the file, raw — not JSON. These are `KEY=VALUE` lines whose
-        # values are arbitrary user text, and every encoding hop is a chance to
-        # mangle one; `upload` posts its bytes the same way.
-        content = (await request.body()).decode("utf-8")
-        await sandbox.write_user_env(SandboxHandle(id=rid), content)
-
     @app.get("/sandboxes/{rid}/walk")
     async def walk(rid: str, root: str) -> _WalkReply:
         entries = await sandbox.walk(SandboxHandle(id=rid), root)
@@ -435,7 +433,7 @@ def make_host_app(
     @app.post("/sandboxes/{rid}/exec")
     async def exec_(rid: str, body: _ExecBody) -> StreamingResponse:
         return StreamingResponse(
-            _exec_ndjson(sandbox, SandboxHandle(id=rid), body.cmd),
+            _exec_ndjson(sandbox, SandboxHandle(id=rid), body.cmd, body.env),
             media_type="application/x-ndjson",
         )
 
