@@ -512,6 +512,70 @@ RCA 的 system prompt 是純 markdown，存在
 
 ---
 
+## 15. 第三方工具（#674）：上架、換版、退回
+
+外部團隊寫的工具不進我們的 repo。他們在自己的 CI 用我們的 builder image build，
+把 artifact 網址交給我們；**新的 sandbox 啟動時自動帶上**。作者面的說明在
+[寫一支工具（外部作者）](tool-authoring.md)，這裡只講我們要做的事。
+
+### 15.1 兩個必要的環境變數
+
+| 變數 | 在哪 | 沒設會怎樣 |
+|---|---|---|
+| `TOOL_BUILDER_ID` | sandbox-host（image 已帶預設，發版時覆寫） | **整個第三方工具功能關閉**。沒有它就沒有 ABI 錨可比對，而不能比對就不該去抓——會掛上一個為別的底層 build 的 bundle，然後在使用者面前壞掉 |
+| `TOOL_ARTIFACT_TOKEN` | sandbox-host | private 的 GitLab project 抓不到（public 的仍可）。**只有 host 需要**，app 從不持有 |
+
+`TOOL_BUILDER_ID` 必須跟 build 那些 artifact 的 builder image 是**同一個值**。
+兩邊不同步正是那道閘門存在的理由——它會擋下來，而不是讓它在執行期壞掉。
+
+### 15.2 上架一支新工具
+
+```sh
+# 1. 先驗（不會執行對方的程式碼，只做抓取 + 閘門 + 結構比對）
+TOOL_BUILDER_ID=<這個部署的值> TOOL_ARTIFACT_TOKEN=<你的 token> \
+  uv run python -m workspace_app.tooling.verify \
+    'https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build-tool' \
+    --name wafer-history
+
+# 2. 過了就登記進 app.json，然後發版
+#    "agent": { "tools": [..., "wafer-history"],
+#               "external_tools": { "wafer-history": "<同一個網址>" } }
+```
+
+**名字是我們定的**（`external_tools` 的 key）。manifest 裡作者宣告的名字只拿來校驗
+「這個網址指的是不是我以為的那支」，所以兩個作者都叫 `data-fetch` 也不會互相蓋掉。
+
+### 15.3 換版本：不用做任何事
+
+網址指的是「最新的 artifact」，作者 push 完，**下一個開起來的 sandbox 就是新版**。
+不用改 repo、不用重新部署。
+
+### 15.4 退回某一版
+
+把 `external_tools` 的網址從「最新」改成**指定那次 build** 的 artifact
+（GitLab 的 `/jobs/<job_id>/artifacts/…`），然後發版。sha 若還在該 host 的快取裡是秒回，
+被回收了就重抓一次，同一條路。
+
+> 「跟著最新」和「釘死某版」是**同一個欄位的兩種寫法**，沒有第二套機制。
+
+### 15.5 磁碟
+
+每支 bundle 約 150MB，而且**新舊版本會並存**（舊的留著，回滾才會是重掛而不是重抓）。
+用 `SANDBOX_HOST_TOOL_CACHE_MAX_BYTES` 設上限：超過就由舊到新淘汰，
+但**正在被使用的永遠不會被淘汰**。粗估：`工具數 × 保留版本數 × 150MB × host 數`。
+沒設上限則不保留任何沒被引用的版本（回滾會重抓）。
+
+### 15.6 出事時怎麼查
+
+- **某支工具突然不見**：agent 的 prompt 裡會有一段「Tools that are unavailable right now」
+  寫著原因。最常見的是 GitLab artifact 過期（作者的 CI 沒設 `expire_in: never`）。
+- **工具在跑但行為怪怪的**：resolve 的紀錄有 `name → sha + version`，可以確認那個 turn
+  用的是哪一版。
+- **artifact store 連不上**：host 會用**上次成功**的版本繼續服務並標記 `stale`，
+  不會讓 workspace 開不起來。
+
+---
+
 ## 12. 開發指令速查
 
 ```bash

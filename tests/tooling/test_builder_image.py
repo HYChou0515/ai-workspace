@@ -96,3 +96,24 @@ def test_the_host_image_ships_first_party_tools_under_builtin() -> None:
     text = (_REPO / "sandbox-host" / "Dockerfile").read_text("utf-8")
 
     assert "/opt/tools/builtin" in text
+
+
+def test_the_platform_docs_no_longer_say_tools_can_only_come_from_our_repo() -> None:
+    # #674 changed the answer to "who can add a tool", and a doc still saying
+    # "dev only, in our repo" would send an external author to the wrong place
+    # — or stop them asking at all.
+    doc = (_REPO / "docs" / "extending-the-platform.md").read_text("utf-8")
+
+    assert "## Tool（只有 dev 自建）" not in doc
+    assert "tool-authoring.md" in doc
+    assert "external_tools" in doc
+
+
+def test_the_deployment_docs_say_how_to_roll_a_third_party_tool_back() -> None:
+    # The one operational question the design's "it updates itself" raises,
+    # and the one an operator will need answered under pressure.
+    doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+
+    assert "TOOL_BUILDER_ID" in doc
+    assert "SANDBOX_HOST_TOOL_CACHE_MAX_BYTES" in doc
+    assert "退回" in doc
