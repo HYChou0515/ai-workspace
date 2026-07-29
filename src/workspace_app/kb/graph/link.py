@@ -13,6 +13,8 @@ whole two-layer split rests on.
 
 from __future__ import annotations
 
+import logging
+
 import msgspec
 from specstar import QB, SpecStar
 
@@ -23,6 +25,8 @@ from ...resources.graph import (
     GraphRelationship,
 )
 from ..llm import ILlm
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _find_or_create_entity(spec: SpecStar, key: str, display: str) -> str:
@@ -437,6 +441,14 @@ def _propose(spec: SpecStar, host_id: str, other_id: str, *, why: str) -> int:
     return 1
 
 
+def _count_entities(spec: SpecStar) -> int:
+    """How many identities exist after the pass — the number a reader of the log
+    actually wants, since the per-basis counts are links created THIS run and
+    say nothing about the state that resulted."""
+    rm = spec.get_resource_manager(GraphEntity)
+    return sum(1 for _ in rm.list_resources(QB.all().build()))
+
+
 def reconcile_vocabulary(spec: SpecStar, llm: ILlm | None = None) -> None:
     """Bring the vocabulary up to date with the evidence.
 
@@ -445,8 +457,32 @@ def reconcile_vocabulary(spec: SpecStar, llm: ILlm | None = None) -> None:
     change. The model line is last and takes ``llm=None`` to mean "skip", so it
     can also be turned off by configuration rather than by editing.
     """
-    link_identical_mentions(spec)
-    name_predicates(spec)
-    link_declared_aliases(spec)
-    if llm is not None:
-        link_resembling_entities(spec, llm)  # ← comment out to stop proposing merges
+    # Every basis already returned a count and every one was discarded, so a pass
+    # that never ran looked exactly like one that ran and found nothing — the
+    # only way to tell them apart was to open the database and see the entity
+    # tables empty. A corpus can extract for weeks with no entity page and
+    # nothing anywhere saying so, which is what this reports.
+    _LOGGER.info("graph reconcile: starting the vocabulary pass over the whole corpus")
+    identical = link_identical_mentions(spec)
+    predicates = name_predicates(spec)
+    aliases = link_declared_aliases(spec)
+    proposed = link_resembling_entities(spec, llm) if llm is not None else 0
+    entities = _count_entities(spec)
+    _LOGGER.info(
+        "graph reconcile: done — %d entities now exist; links: %d identical, "
+        "%d predicate, %d declared-alias; %d merges proposed%s",
+        entities,
+        identical,
+        predicates,
+        aliases,
+        proposed,
+        "" if llm is not None else " (no llm wired: merge proposals skipped)",
+    )
+    if entities == 0:
+        # Not an error — a corpus with no mentions yet reconciles to nothing.
+        # Said out loud because "the entity page is empty" is otherwise
+        # indistinguishable from the pass never having been queued at all.
+        _LOGGER.warning(
+            "graph reconcile: finished with NO entities — either nothing has been "
+            "extracted yet, or every mention carries an empty norm_surface"
+        )
