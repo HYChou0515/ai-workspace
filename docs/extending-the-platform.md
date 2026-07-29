@@ -10,13 +10,17 @@ agent「某類任務怎麼做」的方法論）、**workflow**（把多個 step 
   live 讀取、可下載／匯入、可由 dev **升格**成內建。因為要在受信任的 API 邊界內保持安全,
   它是**受限**的。
 
+Tool 這一面還多一條路（#674）:**dev 不一定要是我們**。外部工具作者可以在自己的 repo 寫工具、
+在自己的 CI 用我們提供的 builder image build,把 artifact 的網址交給我們——不需要我們 repo 的
+權限,也不用等我們發版。細節見 [寫一支工具（外部作者）](tool-authoring.md)。
+
 這篇是把三個面向 × 兩種作者排成同一張表的**總覽**;每個面向的細節文件在各段末尾連出去。
 
 ## 一眼看懂：誰能建什麼
 
 | 擴充面 | dev 自建 | user 自建（執行期 + AI 共創） |
 |---|---|---|
-| **Tool** | ✅ Python tool-package（`sample-tools/`） | ❌ **無**——安全考量,見下 |
+| **Tool** | ✅ Python tool-package——**vendor 進 repo**（`sample-tools/`）**或外部作者自己的 repo + CI**（#674） | ❌ **無**——安全考量,見下 |
 | **Skill** | ✅ `sample-skills/` + `SHARED_SKILLS` 註冊 | ✅ `author-skill` + `save_skill` → `.skill/`（#298） |
 | **Workflow** | ✅ Python `run.py`（圖靈完備） | ✅ `workflow.json` **降階 DSL**（#323）——**最難的一塊** |
 
@@ -24,11 +28,12 @@ agent「某類任務怎麼做」的方法論）、**workflow**（把多個 step 
 workspace 的點開頭資料夾 → 側邊面板列出／下載／匯入 → dev 把它 commit 進 profile 就升格成
 內建**。差別只在**執行風險**:skill 是被動 markdown（零風險,放手讓使用者寫）;workflow
 會**執行**,所以 user 端被降階成一個受控的 JSON DSL;tool 需要跑任意 Python + 持有 credential,
-所以**沒有** user 自建路徑。
+所以**沒有** user 自建路徑（但 tool 的「dev」可以是**外部作者**——那不是執行期共創,是另一個團隊的
+deploy-time 動作,見 §Tool）。
 
 ---
 
-## Tool（只有 dev 自建）
+## Tool（dev 自建;dev 可以不是我們）
 
 一個 tool 是 agent 能呼叫的**動作**。實作是一個**自成一格的 Python package**,跑在 sandbox
 裡(不是 host app 進程),透過一個固定的 argv 契約被呼叫。
@@ -162,7 +167,26 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
   數不對、annotation 不是 BaseModel)在**註冊時**就 `TypeError`——fail-loud,不會拖到執行期。
 - Dispatcher 本身**零 domain 邏輯**、除 pydantic 外零依賴;不想用照樣手寫 `main()`,framework 不挑。
 
-### 註冊 + prebuild + 授權
+### 兩條路：vendor 進 repo，或外部作者自己發版
+
+同一個 tool package 的**寫法完全一樣**（三段式契約、`uv.lock`、pydantic Args）。差別只在
+**bytes 從哪來**：
+
+| | 第一方（vendor 進 repo） | 第三方（#674） |
+|---|---|---|
+| 原始碼在哪 | 我們的 `sample-tools/` | 作者自己的 repo |
+| 誰 build | 我們的 CI（烤進 sandbox-host image） | 作者的 CI（用我們的 builder image） |
+| 怎麼宣告 | `PACKAGES` + `agent.tools` | `agent.external_tools`（名字 → artifact 網址）+ `agent.tools` |
+| 換版本 | 改 repo → 重新發版 | **作者 push 就好**，我們什麼都不用做 |
+| 新增／移除 | 改 repo → 重新發版 | 改 `app.json` → 重新發版 |
+| 執行時在哪 | `/opt/tools/builtin/<name>` | `/opt/tools/ext/<sha>`，掛成 `/.tools/<本地名>` |
+
+第三方那條路的作者面文件是 [寫一支工具（外部作者）](tool-authoring.md)；
+我們這邊要做的事在 [部署與客製化](deployment.md) 的第三方工具一節。
+
+**兩條路都到不了「使用者自建」**——見下一節。
+
+### 註冊 + prebuild + 授權（第一方）
 
 1. **註冊來源**——在 `src/workspace_app/tooling/packages.py` 的 `PACKAGES` dict 加一行
    `"<name>": SOURCE_DIR / "<name>"`。
@@ -230,7 +254,9 @@ def run(args: Args) -> str:
 ### 為什麼沒有 user 自建 tool
 
 新增 tool 要跑**任意 Python** 並可能持有 credential——把它開放給執行期使用者不安全,所以這是
-**deploy-time 的 dev 動作**(plan §B.9 明列為非目標)。使用者需要臨時計算時,走 **skill 的
+**deploy-time 的動作**(plan §B.9 明列為非目標)。**「dev」不等於「我們」**:第三方作者走的也是
+deploy-time 這條路——他們的 bytes 由一個人審過、登記進 `app.json`、跟著發版生效,而不是在
+聊天室裡被生出來。使用者需要臨時計算時,走 **skill 的
 `scripts/`**:它們跑在 workspace 內建的 python-stack(pandas / numpy / scipy / matplotlib);缺
 的套件可以在 sandbox 裡 `pip install` 補上,但那是**這個 workspace 當下的狀態**——沒有鎖檔、
 不可重現、workspace 一被回收就沒了。當一段 script 穩定、需要自訂依賴、或值得被驗證後重用,

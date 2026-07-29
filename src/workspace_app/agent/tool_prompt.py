@@ -20,7 +20,7 @@ only tool inventory is composed in at runtime.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
 from agents import FunctionTool
@@ -86,3 +86,33 @@ def format_disabled_tools_for_prompt(metas: Sequence[ToolMeta]) -> str:
         desc = m.description.strip()
         lines.append(f"- `{m.name}`" + (f" — {desc}" if desc else ""))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def format_unavailable_tools_for_prompt(reasons: Mapping[str, str]) -> str:
+    """Render third-party tools this turn could not obtain (#674).
+
+    Deliberately not folded into `format_disabled_tools_for_prompt`: that
+    section tells the agent to ask the user to flip a switch, and here there is
+    no switch. The bytes could not be fetched — an expired artifact, an
+    unreachable store, a bundle built for the wrong base — and the fix belongs
+    to whoever publishes the tool, not to the person in the chat.
+
+    Saying so beats silence: without it the agent invents a workaround for a
+    capability it was told about elsewhere, or insists the tool does not exist.
+    Empty ``reasons`` → empty string (the usual case; a heading announcing that
+    nothing is broken would cost context on every turn)."""
+    if not reasons:
+        return ""
+    lines: list[str] = [
+        "## Tools that are unavailable right now",
+        "",
+        (
+            "These tools belong to this workspace but could not be loaded for this "
+            "turn, so they are not in your callable set. This is not something the "
+            "user can switch on — tell them what is missing and why, do what you "
+            "can without it, and say plainly if the task needs it."
+        ),
+        "",
+    ]
+    lines.extend(f"- **{name}** — {reason}" for name, reason in sorted(reasons.items()))
+    return "\n".join(lines) + "\n"

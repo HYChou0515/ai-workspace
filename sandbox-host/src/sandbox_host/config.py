@@ -32,6 +32,10 @@ class SandboxHostSettings:
     exec_timeout: float = 60.0
     log_timeout: float = 60.0
     tools_dir: str | None = None
+    tool_cache_max_bytes: int | None = None
+    """#674: how much disk third-party bundles may hold. None ⇒ no ceiling,
+    and then nothing unreferenced is kept at all — with no bound, the cache
+    cannot also serve as the shelf a rollback comes off."""
     idle_ttl: float = 1800.0
     # #492: the durable NFS archive root. When set, a sandbox restores its
     # working dir from `{nfs_root}/{item}` on cold create and the host persists
@@ -70,6 +74,9 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
         exec_timeout=f("SANDBOX_HOST_EXEC_TIMEOUT", 60.0),
         log_timeout=f("SANDBOX_HOST_LOG_TIMEOUT", 60.0),
         tools_dir=opt("SANDBOX_HOST_TOOLS_DIR"),
+        tool_cache_max_bytes=(
+            int(raw) if (raw := opt("SANDBOX_HOST_TOOL_CACHE_MAX_BYTES")) else None
+        ),
         idle_ttl=f("SANDBOX_HOST_IDLE_TTL", 1800.0),
         nfs_root=opt("SANDBOX_HOST_NFS_ROOT"),
     )

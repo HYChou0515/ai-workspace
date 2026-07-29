@@ -49,12 +49,20 @@ RUN apt-get update \
 # it — the host passes os.environ through `setpriv` (no --reset-env), so the env
 # survives into the jail (see isolated_process._exec_argv).
 RUN npm install -g pptxgenjs@^3.12
+# The ABI anchor (#674). A third-party bundle carries its own portable python
+# and native wheels, so it runs only on the base it was built against — this
+# records WHICH base this runtime is, and the resolve gate refuses any artifact
+# built by a different one. The release pipeline sets it to the same value it
+# gives tool-builder; leaving them out of step is exactly what the gate exists
+# to catch.
+ARG BUILDER_ID=tool-builder:dev
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PATH="/host/.venv/bin:$PATH" \
     NODE_PATH=/usr/local/lib/node_modules \
     SANDBOX_HOST_BIND=0.0.0.0:8000 \
-    SANDBOX_HOST_TOOLS_DIR=/opt/tools
+    SANDBOX_HOST_TOOLS_DIR=/opt/tools \
+    TOOL_BUILDER_ID=${BUILDER_ID}
 WORKDIR /host
 
 # Dependencies first (cached until the host's pyproject/lock change).
@@ -66,7 +74,11 @@ RUN uv sync --frozen --no-dev
 
 # The agent's prebuilt tools — an opaque bundle dir the host bind-mounts at
 # /.tools inside each sandbox (SANDBOX_HOST_TOOLS_DIR above points here).
-COPY --from=tools /build/.workspace-tools /opt/tools
+# #674: the tools root holds two trees. `builtin/` is what ships with this
+# image; `ext/` is filled at run time with third-party bundles keyed by sha.
+# A sandbox never sees this layout — it is shown the tools themselves at
+# /.tools/<name> — so no tool path anywhere has to know about the split.
+COPY --from=tools /build/.workspace-tools /opt/tools/builtin
 
 # Login-shell PATH guard. The hosted sandbox has no userns jail (uid + cgroup
 # only, #393), so `python`/`pip` reach the carrier through a per-sandbox

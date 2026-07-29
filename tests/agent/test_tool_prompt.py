@@ -11,6 +11,7 @@ from agents import FunctionTool
 from workspace_app.agent.tool_prompt import (
     format_disabled_tools_for_prompt,
     format_tools_for_prompt,
+    format_unavailable_tools_for_prompt,
 )
 from workspace_app.tooling.catalog import ToolMeta
 
@@ -168,3 +169,21 @@ def test_complex_schema_with_enum_and_nested_objects_round_trips():
     fence_start = out.index("```json") + len("```json")
     fence_end = out.index("```", fence_start)
     assert json.loads(out[fence_start:fence_end]) == schema
+
+
+def test_unavailable_tools_say_what_went_wrong_not_just_that_they_are_gone():
+    """#674: a third-party tool that could not be fetched is NOT the same as a
+    tool the user turned off. Nobody can enable it from the picker, so the
+    section says what happened and points at who can fix it."""
+    section = format_unavailable_tools_for_prompt({"wafer-history": "404 — the artifact expired"})
+
+    assert "wafer-history" in section
+    assert "404 — the artifact expired" in section
+    # Must not send the agent to the tool picker: toggling changes nothing here.
+    assert "picker" not in section.lower()
+
+
+def test_no_unavailable_tools_renders_nothing_at_all():
+    # The overwhelmingly common case. A heading saying "nothing is broken"
+    # would be spent context on every single turn.
+    assert format_unavailable_tools_for_prompt({}) == ""

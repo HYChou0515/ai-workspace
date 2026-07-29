@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 import pytest
@@ -435,7 +436,7 @@ async def test_isolated_exec_workspace_lists_user_files_and_hides_host(tmp_path)
 
 
 def _fake_tool_dir(base):
-    d = base / "prebuilt" / "mytool"
+    d = base / "prebuilt" / "builtin" / "mytool"
     d.mkdir(parents=True)
     (d / "run").write_text("#!/bin/sh\necho TOOL-OK\n")
     (d / "run").chmod(0o755)
@@ -506,7 +507,7 @@ async def test_isolated_python_shim_prefers_python_stack_when_provisioned(tmp_pa
     that sentinel.
     """
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -530,7 +531,7 @@ async def test_isolated_python_shim_survives_bash_login_shell(tmp_path):
     re-prepend the jailbin even under a login shell.
     """
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -552,9 +553,9 @@ async def test_isolated_python_shim_falls_back_to_host_python3_without_carrier(t
     work — it falls back to /usr/bin/python3. Regression lock so the
     new carrier-aware logic doesn't accidentally drop the fallback."""
     tools = tmp_path / "prebuilt"
-    tools.mkdir()
-    # tools_dir is non-empty but contains NO python-stack subdir.
-    (tools / "something-else").mkdir()
+    (tools / "builtin").mkdir(parents=True)
+    # the builtin tree is non-empty but contains NO python-stack subdir.
+    (tools / "builtin" / "something-else").mkdir()
 
     sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
     h = await sb.create(SandboxSpec())
@@ -588,7 +589,7 @@ async def test_unjailed_python_shim_routes_to_python_stack_when_provisioned(tmp_
     bundle's pandas / numpy / pptx, not the bare host python. Fake the carrier
     with a sentinel-printing launch."""
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -604,7 +605,7 @@ async def test_unjailed_python3_flavour_also_routes_to_carrier(tmp_path):
     """Not only `python`: `python3` must route too, or `python3 -c …` (which
     agents commonly type) would fall through to the host interpreter."""
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -625,8 +626,8 @@ async def test_unjailed_python_shim_falls_back_to_host_python3_without_carrier(t
     import sys
 
     tools = tmp_path / "prebuilt"
-    tools.mkdir()
-    (tools / "something-else").mkdir()  # tools dir present but NO python-stack
+    (tools / "builtin").mkdir(parents=True)
+    (tools / "builtin" / "something-else").mkdir()  # present but NO python-stack
 
     sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=tools)
     h = await sb.create(SandboxSpec())
@@ -759,3 +760,168 @@ async def test_kill_unlinks_ready_marker_before_rmtree_366(sandbox, tmp_path, mo
     monkeypatch.setattr(lp.shutil, "rmtree", spy_rmtree)
     await sandbox.kill(h)
     assert ready_gone_at_rmtree["v"] is True  # marker unlinked BEFORE rmtree
+
+
+async def test_the_sandbox_sees_the_builtin_tools_not_the_layout_around_them(tmp_path):
+    """#674: the tools root now holds `builtin/` (baked into this image) beside
+    `ext/` (third-party bundles, content-addressed). A sandbox must see the
+    TOOLS — `/.tools/mytool` — never the layout, or every tool path in every
+    prompt and every bundle would have to grow a `builtin/` in the middle."""
+    root = tmp_path / "toolsroot"
+    tool = root / "builtin" / "mytool"
+    tool.mkdir(parents=True)
+    (tool / "run").write_text("#!/bin/sh\necho TOOL-OK\n")
+    (tool / "run").chmod(0o755)
+    (root / "ext" / ("a" * 64)).mkdir(parents=True)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+    h = await sb.create(SandboxSpec())
+
+    run = await sb.exec(h, ["../.tools/mytool/run"])
+    assert run.exit_code == 0 and "TOOL-OK" in run.stdout.decode()
+    listed = await sb.exec(h, ["ls", "../.tools"])
+    names = listed.stdout.decode().split()
+    assert "mytool" in names
+    assert "builtin" not in names and "ext" not in names
+
+
+def _tools_root_with(tmp_path, *, ext: dict[str, str]):
+    """A tools layout: one first-party tool plus third-party bundles by sha."""
+    root = tmp_path / "toolsroot"
+    builtin = root / "builtin" / "mytool"
+    builtin.mkdir(parents=True)
+    (builtin / "run").write_text("#!/bin/sh\necho BUILTIN-OK\n")
+    (builtin / "run").chmod(0o755)
+    for sha, marker in ext.items():
+        d = root / "ext" / sha
+        d.mkdir(parents=True)
+        (d / "launch").write_text(f"#!/bin/sh\necho {marker}\n")
+        (d / "launch").chmod(0o755)
+    return root
+
+
+async def test_unjailed_a_third_party_bundle_appears_under_the_name_we_gave_it(tmp_path):
+    """#674: the sandbox is handed `name -> sha`; what it SEES is the name.
+    The sha is how the host stores it, and no tool path ever mentions it."""
+    sha = "c" * 64
+    root = _tools_root_with(tmp_path, ext={sha: "THIRD-PARTY-OK"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    h = await sb.create(SandboxSpec(tools={"wafer-history": sha}))
+
+    third = await sb.exec(h, ["../.tools/wafer-history/launch"])
+    first = await sb.exec(h, ["../.tools/mytool/run"])
+    assert "THIRD-PARTY-OK" in third.stdout.decode()
+    assert "BUILTIN-OK" in first.stdout.decode()  # first-party still there
+    listed = await sb.exec(h, ["ls", "../.tools"])
+    assert sorted(listed.stdout.decode().split()) == ["mytool", "wafer-history"]
+
+
+@_needs_userns
+async def test_jailed_a_third_party_bundle_is_mounted_read_only_under_its_name(tmp_path):
+    sha = "c" * 64
+    root = _tools_root_with(tmp_path, ext={sha: "THIRD-PARTY-OK"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=root)
+
+    h = await sb.create(SandboxSpec(tools={"wafer-history": sha}))
+
+    third = await sb.exec(h, ["/.tools/wafer-history/launch"])
+    assert third.exit_code == 0 and "THIRD-PARTY-OK" in third.stdout.decode()
+    first = await sb.exec(h, ["/.tools/mytool/run"])
+    assert first.exit_code == 0 and "BUILTIN-OK" in first.stdout.decode()
+    # Read-only, like the first-party tools beside it.
+    ro = await sb.exec(h, ["sh", "-c", "echo x > /.tools/wafer-history/hack; echo rc=$?"])
+    assert "rc=0" not in ro.stdout.decode()
+
+
+@_needs_userns
+async def test_jailed_the_sandbox_cannot_add_a_tool_of_its_own(tmp_path):
+    """The view is assembled by the host and then sealed. If the sandbox could
+    write into /.tools it could plant a `python-stack/launch` and capture every
+    later `python` the agent runs."""
+    root = _tools_root_with(tmp_path, ext={})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=root)
+    h = await sb.create(SandboxSpec())
+
+    r = await sb.exec(h, ["sh", "-c", "mkdir -p /.tools/evil 2>&1; echo rc=$?"])
+
+    assert "rc=0" not in r.stdout.decode()
+
+
+async def test_a_declared_third_party_tool_wins_a_name_it_shares_with_a_builtin(tmp_path):
+    """Registering that name was a deliberate act by an operator; shipping a
+    tool under it was ours. The operator is the later authority — and silently
+    ignoring their declaration would be the worse surprise."""
+    sha = "d" * 64
+    root = _tools_root_with(tmp_path, ext={sha: "OVERRIDDEN"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    h = await sb.create(SandboxSpec(tools={"mytool": sha}))
+
+    r = await sb.exec(h, ["../.tools/mytool/launch"])
+    assert "OVERRIDDEN" in r.stdout.decode()
+
+
+async def test_stray_files_beside_the_builtin_tools_are_not_offered_as_tools(tmp_path):
+    # A build stamp or a README next to the bundles is not a tool; linking it
+    # would put a name in the sandbox that resolves to nothing runnable.
+    root = _tools_root_with(tmp_path, ext={})
+    (root / "builtin" / "README").write_text("not a tool\n")
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    h = await sb.create(SandboxSpec())
+
+    listed = await sb.exec(h, ["ls", "../.tools"])
+    assert listed.stdout.decode().split() == ["mytool"]
+
+
+async def test_a_deployment_with_no_first_party_tools_still_gets_its_own(tmp_path):
+    # `builtin/` is absent on a host that ships no bundled tools. That is a
+    # configuration, not a fault: the third-party tools must still appear.
+    sha = "e" * 64
+    root = tmp_path / "toolsroot"
+    ext = root / "ext" / sha
+    ext.mkdir(parents=True)
+    (ext / "launch").write_text("#!/bin/sh\necho ONLY-THIRD-PARTY\n")
+    (ext / "launch").chmod(0o755)
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    h = await sb.create(SandboxSpec(tools={"wafer-history": sha}))
+
+    r = await sb.exec(h, ["../.tools/wafer-history/launch"])
+    assert "ONLY-THIRD-PARTY" in r.stdout.decode()
+
+
+async def test_the_host_can_say_which_third_party_bundles_are_in_use(tmp_path):
+    """What the cache sweep asks before it deletes anything. Read from the
+    live views, not from a counter kept alongside them: a counter drifts when
+    a sandbox dies unrecorded, and drifting the wrong way here means deleting
+    a bundle out from under a running turn."""
+    live, unused = "a" * 64, "b" * 64
+    root = _tools_root_with(tmp_path, ext={live: "L", unused: "U"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+
+    await sb.create(SandboxSpec(tools={"wafer-history": live}))
+
+    assert sb.tools_in_use() == {live}
+
+
+async def test_a_host_with_no_tools_configured_holds_nothing_in_use(tmp_path):
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=None)
+    await sb.create(SandboxSpec())
+
+    assert sb.tools_in_use() == set()
+
+
+async def test_a_sandbox_from_before_the_upgrade_does_not_break_the_sweep(tmp_path):
+    # A rolling upgrade leaves sandboxes created by the previous version, which
+    # have no view directory. The sweep must skip them, not crash — a crashing
+    # sweeper means the cache grows forever and nobody notices until the disk
+    # fills.
+    sha = "a" * 64
+    root = _tools_root_with(tmp_path, ext={sha: "L"})
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+    h = await sb.create(SandboxSpec(tools={"wafer-history": sha}))
+    shutil.rmtree(sb._require(h) / ".tools-view")
+
+    assert sb.tools_in_use() == set()

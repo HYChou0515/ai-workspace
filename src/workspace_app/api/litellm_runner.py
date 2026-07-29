@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -289,6 +289,7 @@ def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | Non
 def _agent_for(
     config: AgentConfig,
     packages: list[PackageInfo] | None = None,
+    unavailable_tools: Mapping[str, str] | None = None,
     extra_instructions: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
@@ -327,7 +328,11 @@ def _agent_for(
     # schema) to the system prompt so small local LLMs don't confuse
     # provisioned function tools with shell binaries (see plan §B.10 /
     # agent/tool_prompt.py).
-    from ..agent.tool_prompt import format_disabled_tools_for_prompt, format_tools_for_prompt
+    from ..agent.tool_prompt import (
+        format_disabled_tools_for_prompt,
+        format_tools_for_prompt,
+        format_unavailable_tools_for_prompt,
+    )
 
     tools_section = format_tools_for_prompt(tools)
     if tools_section:
@@ -346,6 +351,12 @@ def _agent_for(
             picker_units(config.disabled_tools, packages or [])
         )
         base = f"{base}\n\n{disabled_section}".strip() if base else disabled_section
+    # #674: and the third-party tools that could not be loaded at all. Kept
+    # separate from the section above: there is no switch for the user to
+    # flip here, so sending the agent to the tool picker would be a dead end.
+    unavailable_section = format_unavailable_tools_for_prompt(unavailable_tools or {})
+    if unavailable_section:
+        base = f"{base}\n\n{unavailable_section}".strip() if base else unavailable_section
     # Defend against the streaming-aggregator bug (small models emit two
     # parallel tool_calls; LiteLLM merges their `arguments` into one JSON-
     # concatenated mess the SDK can't parse). Each tool is wrapped to peel
@@ -1249,6 +1260,7 @@ class LitellmAgentRunner:
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
+            ctx.unavailable_tools,
             extra_instructions=_turn_instructions(ctx, feedback),
             base_url=self._base_url,
             api_key=self._api_key,
@@ -1409,6 +1421,7 @@ class LitellmAgentRunner:
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
+            ctx.unavailable_tools,
             extra_instructions=_turn_instructions(ctx, feedback),
             base_url=self._base_url,
             api_key=self._api_key,

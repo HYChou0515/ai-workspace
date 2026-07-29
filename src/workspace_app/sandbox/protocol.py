@@ -74,6 +74,15 @@ class SandboxSpec:
     env: dict[str, str] | None = None
     """Extra environment variables for commands run in the sandbox."""
 
+    tools: dict[str, str] | None = None
+    """#674: third-party tools to mount, as `{local name: bundle sha}`.
+    Empty and absent mean the same thing — no third-party tools — so callers
+    pass whatever they have rather than converting one into the other. The sha
+    comes from the resolve the app did at the start of this turn, so the bundle
+    mounted here is the one whose schema the model was given. The NAME is the
+    deployment's, not the author's — it is what the sandbox sees at
+    `/.tools/<name>`. Backends without an artifact store ignore it."""
+
     exposed_ports: tuple[int, ...] = ()
     """In-sandbox TCP ports that must be reachable from the backend, declared
     **up front** because some backends (Docker) can't publish a port on an

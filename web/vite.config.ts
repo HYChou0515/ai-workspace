@@ -40,6 +40,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    // Every test file gets the no-network guard. See src/test/setup.ts:
+    // happy-dom turns an unmocked relative fetch into a real socket, whose
+    // late rejection makes vitest exit 1 with all tests passing.
+    setupFiles: ["./src/test/setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     coverage: {
       provider: "v8",

@@ -19,22 +19,33 @@ from .config import load_settings
 from .service import build_host_app, resolve_cgroup_root
 
 
-async def _reaper_loop(controller) -> None:
+async def _reaper_loop(controller, *, tool_cache_max_bytes: int | None = None) -> None:
     interval = max(60.0, min(controller.idle_ttl, 300.0))
     while True:
         await asyncio.sleep(interval)
         reaped = await controller.reap_idle()
+        # #674: a sandbox ending is what frees a third-party bundle, so the
+        # cache sweep rides the same tick. Unreferenced bundles are KEPT
+        # while there is room — that is what makes a rollback a remount
+        # instead of a download — and evicted oldest-first over the ceiling.
+        await controller.sweep_tool_cache(max_bytes=tool_cache_max_bytes)
         if reaped:
             print(f"reaped idle sandboxes: {reaped}", flush=True)
 
 
-async def _serve(app, controller, bind_host: str, bind_port: int) -> None:
+async def _serve(
+    app, controller, bind_host: str, bind_port: int, *, tool_cache_max_bytes: int | None = None
+) -> None:
     loop = asyncio.get_running_loop()
     # SIGTERM (scale-down/rollout) → drain so no new sandboxes land while the
     # pod terminates; a PreStop hook hitting POST /drain is the primary path.
     with contextlib.suppress(NotImplementedError):
         loop.add_signal_handler(signal.SIGTERM, controller.start_draining)
-    reaper = asyncio.create_task(_reaper_loop(controller)) if controller.idle_ttl > 0 else None
+    reaper = (
+        asyncio.create_task(_reaper_loop(controller, tool_cache_max_bytes=tool_cache_max_bytes))
+        if controller.idle_ttl > 0
+        else None
+    )
     server = uvicorn.Server(uvicorn.Config(app, host=bind_host, port=bind_port))
     try:
         await server.serve()
@@ -69,7 +80,15 @@ def main() -> None:
     check_cgroup_ready(cgroup_root)  # fail loud: isolation needs cgroup v2
     app = build_host_app(settings, pod_ip=os.environ.get("POD_IP"))
     print("✓ sandbox host ready", flush=True)
-    asyncio.run(_serve(app, app.state.controller, bind_host, int(bind_port)))
+    asyncio.run(
+        _serve(
+            app,
+            app.state.controller,
+            bind_host,
+            int(bind_port),
+            tool_cache_max_bytes=settings.tool_cache_max_bytes,
+        )
+    )
 
 
 if __name__ == "__main__":

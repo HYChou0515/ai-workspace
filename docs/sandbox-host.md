@@ -68,7 +68,13 @@ sandbox **內部**,否則 `exec(["python", …])` 與工具指令都會失敗。
 
 `sandbox-host/Dockerfile` 把工具烤進去:一個用完即丟的 build stage 跑 app 的
 `scripts/prebuild_tools.py`(需要 `workspace_app` + `sample-tools`),而 runtime stage
-只把產出的自包含 bundle 複製到 `/opt/tools`,並預設帶上 `SANDBOX_HOST_TOOLS_DIR=/opt/tools`。
+只把產出的自包含 bundle 複製到 `/opt/tools/builtin`,並預設帶上
+`SANDBOX_HOST_TOOLS_DIR=/opt/tools`。
+
+**`SANDBOX_HOST_TOOLS_DIR` 指的是「佈局的根」,不是一堆工具**(#674):
+`builtin/` 是隨 image 出貨的第一方工具,`ext/` 則在執行期被填入第三方 bundle、
+以 sha 命名。sandbox **看不到這層佈局**——它看到的永遠是 `/.tools/<工具名>`,
+所以沒有任何 prompt 或 bundle 裡的路徑需要知道這件事。
 這樣 runtime image 保持精簡,工具則隨車一起到。app↔host 的工具集靠**慣例**保持同步
 (同一份預建產物)——沒有跨 import 的檢查;host 開機時會記錄 `tools_dir` 以利檢視。
 
