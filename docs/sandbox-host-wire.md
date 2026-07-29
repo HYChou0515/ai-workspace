@@ -33,7 +33,7 @@ sandbox。
 |---|---|---|---|
 | `POST /sandboxes` | `{image?, env?, exposed_ports?, item_id?}` | `200 {pod_url, remote_id}` | 建立 |
 | `DELETE /sandboxes/{rid}` | — | `204` | 終止 |
-| `POST /sandboxes/{rid}/exec` | `{cmd: [str]}` | `200` NDJSON stream | exec(見下) |
+| `POST /sandboxes/{rid}/exec` | `{cmd: [str], env?: {str: str}}` | `200` NDJSON stream | exec(見下) |
 | `POST /sandboxes/{rid}/persist` | `{delete: bool}` | `204` | rsync 工作目錄 → NFS 封存(#492) |
 | `PUT /sandboxes/{rid}/file?path=` | raw octet-stream body | `204` | 上傳 |
 | `GET /sandboxes/{rid}/file?path=` | — | `200` octet-stream | 下載 |
@@ -42,7 +42,6 @@ sandbox。
 | `GET /sandboxes/{rid}/size?path=` | — | `200 {size: int\|null}` | 單檔大小(配額;不存在回 `null`) |
 | `POST /sandboxes/{rid}/mark-ready` | — | `204` | 標記沙盒「已完整還原、可信」(#366) |
 | `GET /sandboxes/{rid}/ready` | — | `200 {ready: bool}` | 讀 ready 狀態(#366) |
-| `POST /sandboxes/{rid}/user-env` | raw octet-stream body(`KEY=VALUE` 行) | `204` | 遞送 item 的使用者環境變數 |
 | `GET /sandboxes/{rid}/walk?root=` | — | `200 {entries: [{path,size,version}]}` | walk |
 | `DELETE /sandboxes/{rid}/file?path=` | — | `204` | 刪除 |
 | `POST /sandboxes/{rid}/mkdir` | `{path}` | `204` | mkdir |
@@ -60,10 +59,6 @@ sandbox。
 `delete: true` 是靜止點的**對帳**,`false` 是回合中的**純追加** checkpoint,且**只在 ready 為真
 時**執行(半還原的目錄絕不能覆蓋封存)。沒有 archive 或沒帶 `item_id` ⇒ 兩者都是 no-op,舊
 client 因此照舊可用。
-
-**`user-env`**:body 是原始檔案內容(不是 JSON——值是任意使用者文字,每多一層編碼就多一次
-被弄壞的機會)。落點在 workspace **外**的 infra 區,所以不出現在 `walk`/`exists`/檔案樹、不被
-同步、不計配額、隨沙盒消滅;它是**整份取代**(使用者刪掉的變數必須真的消失)。
 
 ### `POST /tools/resolve` —— 為什麼回應是「部分成功」
 
@@ -89,6 +84,14 @@ app 收到後把失敗的那支拿掉、turn 照跑。若整個請求 500,一個
 這裡**沒有 `expose_port` endpoint**——v1 沒有 sandbox 內網路服務的路徑。client 的
 `expose_port` 會丟 `NotImplementedError`。`upload_file` /
 `download_to_file` 是 client 端對 `PUT`/`GET /file` 的便利封裝,不是獨立的 endpoint。
+
+**`exec` 的 `env`**:這個指令要看到的**額外**環境變數,由呼叫端逐次指名(#673)。
+呼叫端的值**最後套用**,所以蓋得過 exec 路徑自己設的東西。省略即可——舊 client 不送這個欄位,
+host 把「沒送」和「空的」視為同一件事。
+
+> 這取代了早期把變數寫成一個沙盒內檔案、再讓工具去讀的做法:同一個 sandbox 裡 agent 和工具
+> 共用 uid,落在磁碟上的東西**兩者都讀得到**。逐次指名之後,agent 自己的 `exec` 沒有東西可繼承、
+> 也沒有檔案可打開。
 
 ## `exec` —— NDJSON streaming
 
