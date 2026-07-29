@@ -18,6 +18,7 @@ import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { SkillsModal } from "../../components/SkillsModal";
 import { WorkflowsModal } from "../../components/WorkflowsModal";
+import { EnvVarsModal } from "../../components/EnvVarsModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
@@ -94,6 +95,8 @@ export function AgentPanel({
   onSteer,
   onSaveToolPrefs,
   onSaveSkillPrefs,
+  envVars,
+  onSaveEnvVars,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -140,6 +143,10 @@ export function AgentPanel({
    * to the header's Skills picker; absent → the picker still lists + applies skills
    * but its Save is a no-op (surfaces with no item to persist onto). */
   onSaveSkillPrefs?: (prefs: Record<string, boolean>) => void;
+  /** The item's environment variables + a way to persist them, forwarded to the
+   * header's Env panel. Absent → no Env button (surfaces with no item). */
+  envVars?: Record<string, string>;
+  onSaveEnvVars?: (envVars: Record<string, string>) => void;
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -478,6 +485,8 @@ export function AgentPanel({
         onNewChat={onNewChat}
         onSaveToolPrefs={onSaveToolPrefs}
         onSaveSkillPrefs={onSaveSkillPrefs}
+        envVars={envVars}
+        onSaveEnvVars={onSaveEnvVars}
         appliedSkills={appliedSkills}
         onToggleApplySkill={toggleApplySkill}
       />
@@ -1042,6 +1051,8 @@ export function AgentHeader({
   onNewChat,
   onSaveToolPrefs,
   onSaveSkillPrefs,
+  envVars,
+  onSaveEnvVars,
   appliedSkills = [],
   onToggleApplySkill,
 }: {
@@ -1065,6 +1076,11 @@ export function AgentHeader({
   /** #380: persist this item's per-skill override (`attached_skill_prefs`). Absent →
    * the Skills panel still lists + applies, but its Save is a no-op. */
   onSaveSkillPrefs?: (prefs: Record<string, boolean>) => void;
+  /** The item's environment variables, handed to the tools it runs. */
+  envVars?: Record<string, string>;
+  /** Persist them. Absent → no Env button, the same way the Tools picker is
+   * withheld on a surface that cannot persist onto an item. */
+  onSaveEnvVars?: (envVars: Record<string, string>) => void;
   /** #380: skills queued (composer-owned) to apply this turn — lit in the panel. */
   appliedSkills?: string[];
   /** #380: toggle a skill in this turn's apply set (composer state lives in AgentPanel). */
@@ -1075,6 +1091,7 @@ export function AgentHeader({
   const [showSkills, setShowSkills] = useState(false);
   const [showWorkflows, setShowWorkflows] = useState(false);
   const [showTools, setShowTools] = useState(false);
+  const [showEnv, setShowEnv] = useState(false);
   const fileService = useMemo(
     () => investigationFileService(slug, investigationId),
     [slug, investigationId],
@@ -1109,6 +1126,16 @@ export function AgentHeader({
           itemId={investigationId}
           fileService={fileService}
           onClose={() => setShowWorkflows(false)}
+        />
+      )}
+      {showEnv && onSaveEnvVars && (
+        <EnvVarsModal
+          envVars={envVars ?? {}}
+          onSave={(next) => {
+            onSaveEnvVars(next);
+            setShowEnv(false);
+          }}
+          onClose={() => setShowEnv(false)}
         />
       )}
       {showTools && onSaveToolPrefs && (
@@ -1186,6 +1213,20 @@ export function AgentHeader({
           style={hdrBtn}
         >
           <Icon name="settings" size={13} /> {t("tools.button")}
+        </button>
+      )}
+      {onSaveEnvVars && (
+        <button
+          type="button"
+          // The item's environment variables, for the tools this workspace runs.
+          // Shown only when the parent can persist onto an item, like Tools.
+          data-testid="env-button"
+          onClick={() => setShowEnv(true)}
+          title={t("env.title")}
+          aria-label={t("env.title")}
+          style={hdrBtn}
+        >
+          <Icon name="settings" size={13} /> {t("env.button")}
         </button>
       )}
       <button

@@ -67,6 +67,29 @@ export PIP_USER=1
 mine="$HOME/.local/lib/python{ver}/site-packages"
 bundled="$here/.venv/lib/python{ver}/site-packages"
 export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
+# The item's user-set environment variables, delivered by the app into the
+# sandbox's infra area as `KEY=VALUE` lines and named here by SANDBOX_USER_ENV.
+#
+# LAST, immediately before the exec: the decision (recorded with the feature) is
+# that reserved names are allowed THROUGH — a user may override PYTHONPATH/HOME/
+# PATH and carries the risk of breaking their own carrier. Exporting earlier
+# would mean the lines above silently win instead, i.e. "stored, listed, no
+# effect", which is the failure this ordering exists to avoid.
+#
+# Read line by line and exported as ONE word — never `.` / `source`. Sourcing
+# would make import/export symmetric for free, and then rewrite any value
+# holding `$`, a backtick or `$(...)`: an API key that arrives subtly wrong,
+# failing inside the tool with nothing pointing back here. `|| :` because a line
+# whose name is not a valid identifier must not take the whole command down —
+# `export` is a special builtin, so an unguarded failure exits the shell.
+if [ -f "${{SANDBOX_USER_ENV:-}}" ]; then
+  while IFS= read -r ue_line; do
+    case "$ue_line" in
+      ''|'#'*) continue ;;
+      *=*) export "$ue_line" 2>/dev/null || : ;;
+    esac
+  done < "$SANDBOX_USER_ENV"
+fi
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 """
@@ -133,6 +156,29 @@ export PIP_USER=1
 mine="$HOME/.local/lib/python{ver}/site-packages"
 bundled="$here/.venv/lib/python{ver}/site-packages"
 export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
+# The item's user-set environment variables, delivered by the app into the
+# sandbox's infra area as `KEY=VALUE` lines and named here by SANDBOX_USER_ENV.
+#
+# LAST, immediately before the exec: the decision (recorded with the feature) is
+# that reserved names are allowed THROUGH — a user may override PYTHONPATH/HOME/
+# PATH and carries the risk of breaking their own carrier. Exporting earlier
+# would mean the lines above silently win instead, i.e. "stored, listed, no
+# effect", which is the failure this ordering exists to avoid.
+#
+# Read line by line and exported as ONE word — never `.` / `source`. Sourcing
+# would make import/export symmetric for free, and then rewrite any value
+# holding `$`, a backtick or `$(...)`: an API key that arrives subtly wrong,
+# failing inside the tool with nothing pointing back here. `|| :` because a line
+# whose name is not a valid identifier must not take the whole command down —
+# `export` is a special builtin, so an unguarded failure exits the shell.
+if [ -f "${{SANDBOX_USER_ENV:-}}" ]; then
+  while IFS= read -r ue_line; do
+    case "$ue_line" in
+      ''|'#'*) continue ;;
+      *=*) export "$ue_line" 2>/dev/null || : ;;
+    esac
+  done < "$SANDBOX_USER_ENV"
+fi
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$@"
 """

@@ -114,6 +114,14 @@ class AgentToolContext:
     files: WorkspaceFiles | None = None
     sync: SandboxSync | None = None
     sandbox_spec: SandboxSpec = field(default_factory=SandboxSpec)
+    # The item's user-set environment variables (`WorkItemBase.env_vars`), handed
+    # to the tools this turn runs. `ensure_sandbox` renders them into the
+    # sandbox's infra area; the launchers export them. Empty ⇒ an empty file,
+    # which still has to be written so a deleted variable actually disappears.
+    # NOT part of `sandbox_spec`: that is create-time infra env, set once and
+    # then overwritten by the launcher's own exports — the wrong layer and the
+    # wrong ordering for values the user owns.
+    user_env: dict[str, str] = field(default_factory=dict)
     handle: SandboxHandle | None = None
     # #492 P11: the wake hook receives the turn's restore-progress sink so a cold
     # wake's snapshot restore can stream (done, total) back to the turn. Callers
@@ -479,4 +487,18 @@ class AgentToolContext:
                     await provision_tools(
                         self.sandbox, self.handle, todo, prebuilt_dir=self.prebuilt_dir
                     )
+            # The item's user env, delivered where the tool launchers read it.
+            # Here rather than at the exec sites because this is the ONE place
+            # every sandbox user funnels through — the exec tool, the tool
+            # dispatch in `tooling/registry`, and the turn's eager wake — so it
+            # cannot be half-wired the way a seven-call-site change would be.
+            #
+            # Written UNCONDITIONALLY, including when there are none: a warm
+            # sandbox may still hold last turn's file, and a user who deleted
+            # their last variable must not leave the tools reading it. The
+            # handle is re-resolved per turn, so this is a per-turn rebuild —
+            # which is also how an edit between turns takes effect.
+            from .user_env import render_user_env
+
+            await self.sandbox.write_user_env(self.handle, render_user_env(self.user_env))
         return self.handle

@@ -666,6 +666,8 @@ function ShellBody({
               onAttachPreset={(preset) => setField("attached_preset", preset)}
               onSaveToolPrefs={(prefs) => setField("attached_tool_prefs", prefs)}
               onSaveSkillPrefs={(prefs) => setField("attached_skill_prefs", prefs)}
+              envVars={(item as unknown as { env_vars?: Record<string, string> }).env_vars ?? {}}
+              onSaveEnvVars={(envVars) => setField("env_vars", envVars)}
             />
             )}
           </div>

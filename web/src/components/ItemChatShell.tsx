@@ -50,6 +50,10 @@ type AgentChrome = {
   /** #380: persist this item's per-skill override (`attached_skill_prefs`). Threaded
    * to the AgentPanel header's Skills picker; absent → its Save is a no-op. */
   onSaveSkillPrefs?: (prefs: Record<string, boolean>) => void;
+  /** The item's environment variables + a way to persist them, threaded to the
+   * AgentPanel header's Env panel; absent → no Env button. */
+  envVars?: Record<string, string>;
+  onSaveEnvVars?: (envVars: Record<string, string>) => void;
   /** #198: the folder the composer's attach stages files into (the item's profile's
    * upload_dir; default uploads/). Threaded straight through to the AgentPanel. */
   uploadDir: string;
@@ -81,6 +85,8 @@ export function ItemChatShell({
   attachedPreset,
   onAttachPreset,
   onSaveToolPrefs,
+  envVars,
+  onSaveEnvVars,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -287,6 +293,8 @@ export function ItemChatShell({
           attachedPreset={attachedPreset}
           onAttachPreset={onAttachPreset}
           onSaveToolPrefs={onSaveToolPrefs}
+          envVars={envVars}
+          onSaveEnvVars={onSaveEnvVars}
           onSaveSkillPrefs={onSaveSkillPrefs}
           uploadDir={uploadDir}
         />
@@ -340,6 +348,8 @@ function ItemChatPanel({
   attachedPreset,
   onAttachPreset,
   onSaveToolPrefs,
+  envVars,
+  onSaveEnvVars,
   onSaveSkillPrefs,
   uploadDir,
 }: {
@@ -499,6 +509,8 @@ function ItemChatPanel({
         attachedPreset={attachedPreset}
         onAttachPreset={onAttachPreset}
         onSaveToolPrefs={onSaveToolPrefs}
+        envVars={envVars}
+        onSaveEnvVars={onSaveEnvVars}
         onSaveSkillPrefs={onSaveSkillPrefs}
         appTitle={appTitle}
         appIcon={appIcon}

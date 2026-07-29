@@ -25,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .local_process import _HOME, LocalProcessSandbox
+from .local_process import _HOME, _USER_ENV, LocalProcessSandbox
 from .protocol import SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
@@ -264,6 +264,14 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         home = workspace.parent / _HOME
         os.chown(home, uid, -1)
         os.chmod(home, 0o700)
+
+    async def write_user_env(self, handle: SandboxHandle, content: str) -> None:
+        # The host process writes it; `exec` reads it as the item uid. The
+        # inherited write is 0600 owned by US, which that uid cannot read — so
+        # hand it over, exactly as `_provision` does for `.home` (#393).
+        await super().write_user_env(handle, content)
+        path = self._require(handle) / _USER_ENV
+        await asyncio.to_thread(self._chown_runner, path, self._uid_for(handle.id))
 
     async def kill(self, handle: SandboxHandle) -> None:
         ident = self._identities.pop(handle.id, None)

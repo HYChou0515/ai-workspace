@@ -324,6 +324,12 @@ class TurnContextBuilder:
             files=self._files,
             sync=self._sync,
             sandbox_spec=SandboxSpec(),
+            # The item's user env, read fresh per turn — which is what makes an
+            # edit between turns take effect. NOT folded into `sandbox_spec`:
+            # that is create-time infra env, and the launcher's own exports run
+            # after it, so a user value placed there would be silently
+            # overwritten for exactly the names that collide.
+            user_env=self._locator.env_vars_of(item_id),
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set
             # (so idle-kill/close_all can find it) and the restore-after-create
