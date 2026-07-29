@@ -86,3 +86,13 @@ def test_the_authoring_doc_states_the_limits_an_author_cannot_see() -> None:
     assert "截斷" in doc
     assert "時間上限" in doc
     assert "expire_in: never" in doc
+
+
+def test_the_host_image_ships_first_party_tools_under_builtin() -> None:
+    # #674 moved the tools root from "a directory of tools" to a layout:
+    # builtin/ (baked in) beside ext/ (fetched, sha-keyed). The image and the
+    # code that resolves `builtin/` have to agree, and nothing else would
+    # notice if they stopped — the sandbox would simply come up with no tools.
+    text = (_REPO / "sandbox-host" / "Dockerfile").read_text("utf-8")
+
+    assert "/opt/tools/builtin" in text

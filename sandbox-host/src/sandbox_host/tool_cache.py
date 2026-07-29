@@ -27,6 +27,13 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
+#: The tools root holds two trees side by side: `builtin/` is baked into this
+#: image and ships with the platform; `ext/` holds third-party bundles keyed by
+#: sha. A sandbox is never shown this layout — it sees `/.tools/<name>` and
+#: nothing else, so no tool path in any prompt or bundle has to know about it.
+BUILTIN_DIR = "builtin"
+EXT_DIR = "ext"
+
 #: A sha256 hex digest and nothing else. This is not a style check: the sha
 #: arrives inside a manifest published by whoever controls the artifact URL,
 #: and it is about to be used as a directory name.

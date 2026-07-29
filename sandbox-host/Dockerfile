@@ -74,7 +74,11 @@ RUN uv sync --frozen --no-dev
 
 # The agent's prebuilt tools — an opaque bundle dir the host bind-mounts at
 # /.tools inside each sandbox (SANDBOX_HOST_TOOLS_DIR above points here).
-COPY --from=tools /build/.workspace-tools /opt/tools
+# #674: the tools root holds two trees. `builtin/` is what ships with this
+# image; `ext/` is filled at run time with third-party bundles keyed by sha.
+# A sandbox never sees this layout — it is shown the tools themselves at
+# /.tools/<name> — so no tool path anywhere has to know about the split.
+COPY --from=tools /build/.workspace-tools /opt/tools/builtin
 
 # Login-shell PATH guard. The hosted sandbox has no userns jail (uid + cgroup
 # only, #393), so `python`/`pip` reach the carrier through a per-sandbox

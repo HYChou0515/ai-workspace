@@ -41,6 +41,7 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
 )
+from .tool_cache import BUILTIN_DIR
 
 # Bootstrap run (as namespace-root) before chroot: overlay the host's system
 # dirs read-only onto the sandbox root, wire up a usable /dev + ephemeral
@@ -231,6 +232,10 @@ class LocalProcessSandbox:
         # (outside the workspace): read-only bind-mount when jailed, symlink when
         # not. One shared dir for all sandboxes — no per-sandbox copy.
         self._tools_dir = tools_dir
+        # #674: `tools_dir` is the LAYOUT ROOT, not a directory of tools —
+        # `builtin/` beside `ext/`. What a sandbox is shown is the tools
+        # themselves, so every mount below points INSIDE the layout.
+        self._builtin_tools = None if tools_dir is None else tools_dir / BUILTIN_DIR
         self._dirs: dict[str, Path] = {}
         # Two peer timeouts, each a hard cap; 0 disables that one:
         #   exec_timeout — TOTAL wall-clock for the command (the original cap).
@@ -274,7 +279,7 @@ class LocalProcessSandbox:
         # Unjailed: expose the shared tools dir via a symlink (jailed uses a
         # read-only bind-mount, set up per-exec in the bootstrap instead).
         if self._tools_dir is not None and not self._isolate:
-            (path / _TOOLS).symlink_to(self._tools_dir)
+            (path / _TOOLS).symlink_to(self._builtin_tools)
         self._dirs[handle.id] = path
         return handle
 
@@ -395,7 +400,7 @@ class LocalProcessSandbox:
             # The bootstrap read-only bind-mounts this at /.tools (outside the
             # workspace) when set.
             if self._tools_dir is not None:
-                env["SANDBOX_TOOLS_DIR"] = str(self._tools_dir)
+                env["SANDBOX_TOOLS_DIR"] = str(self._builtin_tools)
             # #393: the launcher's HOME is the sandbox's own `.home` — here in
             # its chroot-relative spelling, but the SAME dir the unjailed branch
             # names below: a sibling of the `/root` workspace, in the infra area,

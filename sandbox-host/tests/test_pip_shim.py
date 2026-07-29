@@ -23,7 +23,7 @@ async def _shim_dir(tmp_path: Path, tools: Path | None) -> Path:
 
 async def test_pip_resolves_to_the_same_carrier_python_does(tmp_path: Path) -> None:
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)

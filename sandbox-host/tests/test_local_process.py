@@ -435,7 +435,7 @@ async def test_isolated_exec_workspace_lists_user_files_and_hides_host(tmp_path)
 
 
 def _fake_tool_dir(base):
-    d = base / "prebuilt" / "mytool"
+    d = base / "prebuilt" / "builtin" / "mytool"
     d.mkdir(parents=True)
     (d / "run").write_text("#!/bin/sh\necho TOOL-OK\n")
     (d / "run").chmod(0o755)
@@ -506,7 +506,7 @@ async def test_isolated_python_shim_prefers_python_stack_when_provisioned(tmp_pa
     that sentinel.
     """
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -530,7 +530,7 @@ async def test_isolated_python_shim_survives_bash_login_shell(tmp_path):
     re-prepend the jailbin even under a login shell.
     """
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -552,9 +552,9 @@ async def test_isolated_python_shim_falls_back_to_host_python3_without_carrier(t
     work — it falls back to /usr/bin/python3. Regression lock so the
     new carrier-aware logic doesn't accidentally drop the fallback."""
     tools = tmp_path / "prebuilt"
-    tools.mkdir()
-    # tools_dir is non-empty but contains NO python-stack subdir.
-    (tools / "something-else").mkdir()
+    (tools / "builtin").mkdir(parents=True)
+    # the builtin tree is non-empty but contains NO python-stack subdir.
+    (tools / "builtin" / "something-else").mkdir()
 
     sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
     h = await sb.create(SandboxSpec())
@@ -588,7 +588,7 @@ async def test_unjailed_python_shim_routes_to_python_stack_when_provisioned(tmp_
     bundle's pandas / numpy / pptx, not the bare host python. Fake the carrier
     with a sentinel-printing launch."""
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -604,7 +604,7 @@ async def test_unjailed_python3_flavour_also_routes_to_carrier(tmp_path):
     """Not only `python`: `python3` must route too, or `python3 -c …` (which
     agents commonly type) would fall through to the host interpreter."""
     tools = tmp_path / "prebuilt"
-    stack = tools / "python-stack"
+    stack = tools / "builtin" / "python-stack"
     stack.mkdir(parents=True)
     (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
     (stack / "launch").chmod(0o755)
@@ -625,8 +625,8 @@ async def test_unjailed_python_shim_falls_back_to_host_python3_without_carrier(t
     import sys
 
     tools = tmp_path / "prebuilt"
-    tools.mkdir()
-    (tools / "something-else").mkdir()  # tools dir present but NO python-stack
+    (tools / "builtin").mkdir(parents=True)
+    (tools / "builtin" / "something-else").mkdir()  # present but NO python-stack
 
     sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=tools)
     h = await sb.create(SandboxSpec())
@@ -789,3 +789,26 @@ async def test_the_hosts_jail_names_the_same_file_chroot_relative(tmp_path):
     h = await sb.create(SandboxSpec())
     _argv, _cwd, env = sb._exec_argv(h, ["true"])
     assert env["SANDBOX_USER_ENV"] == "/.userenv"
+
+
+async def test_the_sandbox_sees_the_builtin_tools_not_the_layout_around_them(tmp_path):
+    """#674: the tools root now holds `builtin/` (baked into this image) beside
+    `ext/` (third-party bundles, content-addressed). A sandbox must see the
+    TOOLS — `/.tools/mytool` — never the layout, or every tool path in every
+    prompt and every bundle would have to grow a `builtin/` in the middle."""
+    root = tmp_path / "toolsroot"
+    tool = root / "builtin" / "mytool"
+    tool.mkdir(parents=True)
+    (tool / "run").write_text("#!/bin/sh\necho TOOL-OK\n")
+    (tool / "run").chmod(0o755)
+    (root / "ext" / ("a" * 64)).mkdir(parents=True)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=root)
+    h = await sb.create(SandboxSpec())
+
+    run = await sb.exec(h, ["../.tools/mytool/run"])
+    assert run.exit_code == 0 and "TOOL-OK" in run.stdout.decode()
+    listed = await sb.exec(h, ["ls", "../.tools"])
+    names = listed.stdout.decode().split()
+    assert "mytool" in names
+    assert "builtin" not in names and "ext" not in names
