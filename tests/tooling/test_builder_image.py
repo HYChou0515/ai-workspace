@@ -65,3 +65,24 @@ def test_both_images_carry_the_same_abi_anchor_knob() -> None:
     for text in (builder, host):
         assert "ARG BUILDER_ID" in text
         assert "TOOL_BUILDER_ID=${BUILDER_ID}" in text
+
+
+def test_the_ci_template_pins_artifacts_against_expiry() -> None:
+    # R5. GitLab expires CI artifacts after ~30 days by default. Once the URL
+    # 404s, hosts that already cached the tool limp on their copy while every
+    # NEW host gets nothing — it presents as "it worked yesterday", which is
+    # the worst kind of failure to hand a tool author.
+    template = (_REPO / "tool-builder" / "gitlab-ci.example.yml").read_text("utf-8")
+
+    assert "expire_in: never" in template
+    assert "build-tool" in template
+
+
+def test_the_authoring_doc_states_the_limits_an_author_cannot_see() -> None:
+    # An author who does not know about these ships a tool that looks fine in
+    # their own testing and then truncates or times out in front of a user.
+    doc = (_REPO / "docs" / "tool-authoring.md").read_text("utf-8")
+
+    assert "截斷" in doc
+    assert "時間上限" in doc
+    assert "expire_in: never" in doc

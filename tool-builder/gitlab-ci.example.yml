@@ -1,0 +1,33 @@
+# Copy this into your tool repository as `.gitlab-ci.yml`.
+#
+# It runs one job inside the builder image and publishes two files. Everything
+# the platform needs is in those two files; nothing else about your repository
+# is read.
+#
+# See docs/tool-authoring.md for the full contract.
+
+build-tool:
+  # Build inside the image the platform's sandboxes actually run, or the
+  # bundle's native wheels will not load there. The platform refuses an
+  # artifact built anywhere else rather than let it fail in front of a user.
+  image: registry.example/ai-workspace/tool-builder:2026.07
+
+  script:
+    # Runs the build AND a smoke test of the result. A tool that does not
+    # start leaves no artifact behind, so a red build can never be published.
+    - build-tool "$CI_PROJECT_DIR" dist
+
+  artifacts:
+    paths:
+      - dist/
+    # REQUIRED. GitLab expires artifacts after ~30 days by default; once the
+    # URL 404s, machines that already cached your tool keep limping along on
+    # the last copy while every NEW machine gets nothing. It presents as "it
+    # worked yesterday" and is miserable to diagnose.
+    expire_in: never
+
+  rules:
+    # Publish from the default branch only: the URL the platform holds points
+    # at "the latest artifact of this ref", so a feature branch building over
+    # it would ship work in progress to everyone.
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
