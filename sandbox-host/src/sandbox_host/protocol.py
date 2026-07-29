@@ -12,7 +12,7 @@ backend (`IsolatedProcessSandbox` in production, `MockSandbox` in tests).
 network-service path in v1, and the wire API exposes no such endpoint.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -79,8 +79,17 @@ class Sandbox(Protocol):
     # for an unknown handle.
     def workspace_dir(self, handle: SandboxHandle) -> Path: ...
     async def exec(
-        self, handle: SandboxHandle, cmd: list[str], on_output: OutputSink | None = None
-    ) -> ExecResult: ...
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> ExecResult:
+        """`env` is added to the command's environment and WINS over anything
+        the backend sets itself — the app names the item's user-set variables
+        per call, and this hop is what actually hands them to the process."""
+        ...
+
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None: ...
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes: ...
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]: ...

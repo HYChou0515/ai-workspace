@@ -132,7 +132,12 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
             chunks: list[bytes] = []
             try:
                 result = await backend.exec(
-                    SandboxHandle(id=rid), body["cmd"], on_output=chunks.append
+                    SandboxHandle(id=rid),
+                    body["cmd"],
+                    on_output=chunks.append,
+                    # The real host reads this key too; a mirror that ignored it
+                    # would let the client "send" an env nothing ever applied.
+                    env=body.get("env"),
                 )
             except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
                 yield (
@@ -557,3 +562,36 @@ async def test_exec_transport_failure_is_still_a_missing_sandbox():
         sb = HttpSandbox(base_url=_ADVERTISE, client=client)
         with pytest.raises(SandboxNotFound):
             await sb.exec(_rid_handle(), ["echo", "hi"])
+
+
+async def test_exec_carries_the_callers_env_across_the_hop():
+    """The client names the item's variables per call; they have to survive the
+    HTTP hop or a hosted deployment gets the feature with nothing in it. This is
+    the app's half — `sandbox-host/tests/test_wire.py` asserts the host's."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await sb.create(SandboxSpec())
+        await sb.exec(h, ["true"], env={"API_KEY": "sk-1"})
+    assert backend.exec_envs[-1] == {"API_KEY": "sk-1"}
+
+
+async def test_no_env_sends_the_same_request_it_always_did():
+    """An older host must keep working: omit the key entirely rather than send
+    an empty object it would have to know to ignore."""
+    seen: list[dict] = []
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+
+    @app.middleware("http")
+    async def _capture(request, call_next):
+        if request.url.path.endswith("/exec"):
+            seen.append(json.loads(await request.body()))
+        return await call_next(request)
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        h = await sb.create(SandboxSpec())
+        await sb.exec(h, ["true"])
+    assert seen[-1] == {"cmd": ["true"]}

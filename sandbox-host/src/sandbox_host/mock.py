@@ -3,6 +3,7 @@ subprocess/uid/cgroup needed to exercise `app.py`'s routing + error mapping."""
 
 import hashlib
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 from .protocol import (
@@ -23,6 +24,8 @@ def _version(data: bytes) -> str:
 
 class MockSandbox:
     def __init__(self) -> None:
+        # One entry per `exec`, in call order — what the caller asked to add.
+        self.exec_envs: list[dict[str, str]] = []
         self._fs: dict[str, dict[str, bytes]] = {}
         # #366: readiness kept outside the file store so it never shows in walk.
         self._ready: set[str] = set()
@@ -82,8 +85,12 @@ class MockSandbox:
         handle: SandboxHandle,
         cmd: list[str],
         on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         fs = self._require(handle)
+        # Recorded, not applied: there is no process here. Swallowing it would
+        # let the wire test pass while the real hop dropped it.
+        self.exec_envs.append(dict(env) if env else {})
         result = self._exec_result(fs, cmd)
         # Stream the (whole) stdout to the sink in one shot — enough for tests
         # that assert live output is forwarded.

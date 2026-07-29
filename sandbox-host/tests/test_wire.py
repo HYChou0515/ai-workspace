@@ -185,3 +185,23 @@ async def test_exec_on_unknown_handle_emits_in_band_error_frame(client):
     last = _frames(body)[-1]
     assert last["error"] == "SandboxNotFound"
     assert last["detail"]
+
+
+async def test_exec_applies_the_env_the_body_carries():
+    """The item's user-set variables ride this hop. The app names them per call
+    (it holds the truth); the host is what actually hands them to the process,
+    so a host that ignored the key would leave every hosted deployment with the
+    feature silently off — which is exactly how the file-based delivery failed."""
+    backend = MockSandbox()
+    app = make_host_app(backend, advertise_url=_ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h") as client:
+        rid = await _create(client)
+        async with client.stream(
+            "POST",
+            f"/sandboxes/{rid}/exec",
+            json={"cmd": ["true"], "env": {"API_KEY": "sk-1"}},
+        ) as resp:
+            assert resp.status_code == 200
+            async for _ in resp.aiter_lines():
+                pass
+    assert backend.exec_envs[-1] == {"API_KEY": "sk-1"}
