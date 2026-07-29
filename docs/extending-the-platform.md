@@ -182,6 +182,47 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
 `app.json` 是**上限**;profile 的 `_profile.json` 可再收窄成子集;per-item 的 `tool_prefs`
 再做三態覆寫(#322 的三層 resolve,見 `apps/catalog.py`)。
 
+### 讀使用者設的環境變數（#664）
+
+使用者可以在 item 的聊天標頭按「環境變數」設定 `KEY=VALUE`,tool 用 `os.environ` 就讀得到——
+這是**讓 dev 寫的 tool 拿到使用者自己的 credential / endpoint** 的機制,tool 端零額外 API:
+
+```python
+# sample-tools/<name>/src/<pkg>/commands/fetch.py
+import os
+
+def run(args: Args) -> str:
+    token = os.environ.get("MY_API_TOKEN")
+    if not token:
+        # 指名變數,使用者才知道要去設哪一個。
+        return "MY_API_TOKEN is not set — add it under the workspace's Env panel."
+    ...
+```
+
+**套用範圍（很重要,誤解會變成「設了沒作用」）**
+
+| 執行路徑 | 拿得到？ | 為什麼 |
+|---|---|---|
+| 經 bundle `launch` 啟動的 tool（`data-fetch` / `sci-plot` / …） | ✅ | launcher 在 `exec` 前最後一行 export |
+| `exec` 裡的 `python` / `python3*` | ✅ | shim 路由到 python-stack carrier 的 `launch`(prod 一定有 carrier) |
+| `exec` 裡的其他任何指令（`git` / `curl` / `soffice` / `bash -c 'echo $VAR'`） | ❌ | 沒有經過 launcher;只看得到 `SANDBOX_USER_ENV`(**檔案路徑**,不是值) |
+
+其他邊界:
+
+- **一個 item 一組。** 存在 item 記錄的 `env_vars` 欄位,不跨 item、不跨使用者,也**不會**進到
+  app backend 自己的行程。
+- **保留字放行。** 使用者設 `PYTHONPATH` / `HOME` / `PATH` 會**蓋掉** carrier 的設定(這是刻意的:
+  蓋不掉就會變成「存了、列得出來、卻沒作用」)。所以 tool 作者**不要假設 carrier 的環境完好**——
+  該用絕對路徑的地方用絕對路徑。
+- **值原封不動。** 一行當一個 `KEY=VALUE` export,**絕不 `source`**;含 `$`、反引號、`$(…)` 的值
+  照字面送達,不會被 shell 展開。空行與 `#` 開頭略過。
+- **AI 讀得到,擋不住。** tool 和 agent 跑在**同一個 uid**,agent 可以讀那個檔、讀
+  `/proc/<pid>/environ`。這裡**不是 secret store**;放進來的東西等同於「這個 workspace 的人與
+  它的 agent 都看得到」。UI 因此刻意不遮罩——遮了只剩壞處。
+- **檔案是投遞不是儲存。** 值寫在 workspace **旁邊**的 infra area(`.userenv`,`.ready` / `.home`
+  的鄰居):不在檔案樹、不算配額、0600、sandbox 被回收就一起消失。**真相在 item 記錄**,每次
+  `ensure_sandbox()` 整份重寫(所以刪掉一個變數,下一個 turn 就真的不見,不會留著上一輪的)。
+
 ### 為什麼沒有 user 自建 tool
 
 新增 tool 要跑**任意 Python** 並可能持有 credential——把它開放給執行期使用者不安全,所以這是
