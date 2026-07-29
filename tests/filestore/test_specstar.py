@@ -275,3 +275,15 @@ async def test_disk_backend_streams_write_and_read(disk_store, tmp_path):
     out = tmp_path / "out.bin"
     await disk_store.read_to_file("ws1", "/big.bin", out)
     assert out.read_bytes() == b"disk-streamed-payload" * 1000
+
+
+async def test_ls_prefix_matches_the_same_paths_as_a_python_startswith(store):
+    """The pushed-down predicate has to keep `startswith` semantics exactly —
+    including a prefix that is not a directory boundary, which `starts_with`
+    and `str.startswith` both treat as a plain string prefix."""
+    for path in ("/a", "/ab", "/a/c", "/b"):
+        await store.write("ws1", path, b"x")
+    everything = await store.ls("ws1")
+    assert sorted(await store.ls("ws1", prefix="/a")) == sorted(
+        p for p in everything if p.startswith("/a")
+    )

@@ -287,3 +287,90 @@ async def test_query_includes_computed_backref_and_rollup() -> None:
     milestone_row = result.entities[0]
     assert milestone_row.fields["issues"] == [1, 2]
     assert milestone_row.fields["avg"] == 75
+
+
+class _CountingFileStore(MemoryFileStore):
+    """Records every path `read`, so a test can assert on the NUMBER of record
+    reads a query makes. Subclassed rather than monkey-patched so the override
+    keeps the protocol's signature."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads: list[str] = []
+
+    async def read(self, workspace_id: str, path: str) -> bytes:
+        self.reads.append(path)
+        return await super().read(workspace_id, path)
+
+
+async def test_query_does_not_reparse_the_type_it_just_parsed() -> None:
+    """`query` parses the type, then — when the type has backref/rollup fields —
+    builds the corpus for `compute_derived`. The corpus covered EVERY type
+    including the one already in hand, so a rollup type was read from the
+    filestore twice per request: one `ls` plus one `read` per record, wasted.
+
+    On the PM board that landed in the drag path (`discover_catalog` +
+    `_parse_type` + `_corpus`, ~10 `ls` per interaction), where each `ls` is
+    O(every file in the workspace) — measured at 796ms on a 3000-file
+    workspace, so a duplicate scan is not a rounding error.
+
+    Counting reads rather than timing: the duplicate IS the defect, and a
+    timing assertion would be flaky."""
+    issue = EntityType(
+        name="issue",
+        schema=EntitySchema(fields=[FieldSpec("progress", Role.PROGRESS)]),
+        skeleton="---\nprogress: {{arg.progress}}\n---\n",
+        records_path="issues",
+    )
+    milestone = EntityType(
+        name="milestone",
+        schema=EntitySchema(
+            fields=[
+                FieldSpec("kids", Role.BACKREF, from_="issue.milestone"),
+                FieldSpec("avg", Role.ROLLUP, over="kids", agg="avg", field="progress"),
+            ]
+        ),
+        skeleton="---\ntitle: m\n---\n",
+        records_path="milestones",
+    )
+    fs = _CountingFileStore()
+    store = EntityStore(fs, "ws1", EntityCatalog({"issue": issue, "milestone": milestone}))
+    for _ in range(3):
+        await store.create("milestone", {}, actor="a", now="d")
+    fs.reads.clear()  # only count what the query below reads
+
+    await store.query("milestone")
+
+    milestone_reads = [p for p in fs.reads if "milestones" in p]
+    assert len(milestone_reads) == 3, (
+        f"read {len(milestone_reads)} milestone records for 3 milestones — "
+        "the corpus re-parsed the type query() had already parsed"
+    )
+
+
+async def test_query_corpus_sees_pre_derived_fields_of_its_own_type() -> None:
+    """Reusing the parsed records for the corpus must not hand `compute_derived`
+    the very objects `query` then mutates: a self-referential rollup would read
+    a half-derived value and the result would depend on record order. The corpus
+    gets a snapshot, so a rollup over the type's own records still reads the
+    values as they are ON DISK."""
+    node = EntityType(
+        name="node",
+        schema=EntitySchema(
+            fields=[
+                FieldSpec("weight", Role.PROGRESS),
+                FieldSpec("kids", Role.BACKREF, from_="node.parent"),
+                FieldSpec("parent", Role.REF, to="node"),
+                FieldSpec("kid_avg", Role.ROLLUP, over="kids", agg="avg", field="weight"),
+            ]
+        ),
+        skeleton="---\nweight: {{arg.weight}}\nparent: {{arg.parent}}\n---\n",
+        records_path="nodes",
+    )
+    store = EntityStore(MemoryFileStore(), "ws1", EntityCatalog({"node": node}))
+    await store.create("node", {"weight": 10}, actor="a", now="d")
+    await store.create("node", {"weight": 20, "parent": 1}, actor="a", now="d")
+    await store.create("node", {"weight": 40, "parent": 1}, actor="a", now="d")
+
+    rows = {e.number: e for e in (await store.query("node")).entities}
+    assert rows[1].fields["kid_avg"] == 30
