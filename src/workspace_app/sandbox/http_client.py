@@ -17,7 +17,7 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -87,6 +87,11 @@ class IoRetryPolicy:
 
 
 class HttpSandbox:
+    #: #674: this backend has an artifact store behind it, so third-party tools
+    #: can be resolved. Local/mock backends do not set it, and their turns
+    #: report such tools as unavailable rather than leaving them silently absent.
+    resolves_tools = True
+
     def __init__(
         self,
         base_url: str,
@@ -203,12 +208,32 @@ class HttpSandbox:
                 "env": spec.env,
                 "exposed_ports": list(spec.exposed_ports),
                 "item_id": sandbox_id,
+                # #674: the third-party bundles this turn resolved, `{name: sha}`.
+                # An older host ignores the extra field and simply mounts none.
+                "tools": spec.tools,
             },
         )
         resp.raise_for_status()
         data = resp.json()
         logger.info("sandbox-http: created sandbox for item %s", sandbox_id)
         return SandboxHandle(id=_encode_handle(data["pod_url"], data["remote_id"]))
+
+    async def resolve_tools(self, declared: Mapping[str, str]) -> dict[str, Any]:
+        """#674: ask the host to make these third-party tools available.
+
+        Not per-sandbox: this runs at the START of a turn, before the sandbox
+        may even exist, because its answer decides which tools the model is
+        offered. The reply carries a sha per tool (mounted later, at create)
+        and that tool's command schemas — one act, so the interface the model
+        is shown and the bundle that runs cannot drift apart.
+
+        Only the host can reach the artifact store; the app holds no credential
+        for it."""
+        resp = await self._client.post(
+            f"{self._base_url}/tools/resolve", json={"tools": dict(declared)}
+        )
+        resp.raise_for_status()
+        return resp.json()
 
     async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
         # #492: ask the host to rsync this sandbox's live working dir → the

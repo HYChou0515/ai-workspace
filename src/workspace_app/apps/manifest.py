@@ -45,6 +45,17 @@ class AgentManifest(Struct):
 
     prompt_file: str  # base system prompt, relative to the app dir
     tools: list[str] = field(default_factory=list)
+    external_tools: dict[str, str] = field(default_factory=dict)
+    """#674: third-party tools, as `{local name: artifact manifest url}`.
+
+    The KEY is this deployment's name for the tool and belongs in `tools`
+    like any other; the value only says where its bytes come from. Naming it
+    here rather than trusting the artifact's own name is what lets two
+    authors both ship a `data-fetch` without one shadowing the other.
+
+    Changing a tool's VERSION needs no edit here: the url points at the
+    latest artifact, and the next sandbox picks it up. Only adding or
+    removing a tool is a change to this file."""
     picker: list[PickerEntry] = field(default_factory=list)
     suggestions: list[Suggestion] = field(default_factory=list)
     """App-level quick-prompt fallback — used when the chosen profile declares no

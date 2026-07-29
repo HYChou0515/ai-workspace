@@ -52,6 +52,8 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     app = FastAPI()
     app.state.created_item_ids = []  # #492: item_ids seen by create
     app.state.persisted = []  # #492: (rid, delete) seen by persist
+    app.state.created_tools = []  # #674: `{name: sha}` seen by create
+    app.state.resolved = []  # #674: tool declarations seen by /tools/resolve
 
     @app.exception_handler(SandboxNotFound)
     async def _nf(_r: Request, exc: SandboxNotFound) -> JSONResponse:
@@ -64,8 +66,25 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     @app.post("/sandboxes")
     async def create(body: dict) -> dict[str, str]:
         app.state.created_item_ids.append(body.get("item_id"))  # #492: capture for assertions
+        app.state.created_tools.append(body.get("tools"))  # #674
         h = await backend.create(SandboxSpec())
         return {"pod_url": advertise_url, "remote_id": h.id}
+
+    @app.post("/tools/resolve")
+    async def resolve_tools(body: dict) -> dict:
+        app.state.resolved.append(body.get("tools"))
+        return {
+            "tools": {
+                name: {
+                    "sha": "a" * 64,
+                    "version": "1.4.2",
+                    "stale": False,
+                    "commands": [],
+                }
+                for name in body.get("tools", {})
+            },
+            "refused": {},
+        }
 
     @app.post("/sandboxes/{rid}/persist", status_code=204)
     async def persist(rid: str, body: dict) -> None:
@@ -557,3 +576,31 @@ async def test_exec_transport_failure_is_still_a_missing_sandbox():
         sb = HttpSandbox(base_url=_ADVERTISE, client=client)
         with pytest.raises(SandboxNotFound):
             await sb.exec(_rid_handle(), ["echo", "hi"])
+
+
+async def test_create_carries_the_tools_the_sandbox_should_mount(host_and_client):
+    """#674: the shas resolved at the start of this turn travel with `create`,
+    so the bundle the sandbox mounts is the one the model was told about."""
+    sandbox, app = host_and_client
+
+    await sandbox.create(SandboxSpec(tools={"wafer-history": "a" * 64}), "item-1")
+
+    assert app.state.created_tools == [{"wafer-history": "a" * 64}]
+
+
+async def test_resolve_tools_asks_the_host_and_hands_back_its_answer(host_and_client):
+    # The app holds no artifact-store credential: this call is the only way it
+    # learns a third-party tool's sha or its schema.
+    sandbox, app = host_and_client
+
+    answer = await sandbox.resolve_tools({"wafer-history": "https://gitlab/m"})
+
+    assert app.state.resolved == [{"wafer-history": "https://gitlab/m"}]
+    assert answer["tools"]["wafer-history"]["sha"] == "a" * 64
+    assert answer["refused"] == {}
+
+
+async def test_the_hosted_backend_advertises_that_it_can_resolve_tools(http_sandbox):
+    # How `resolve_external_tools` tells a deployment with an artifact store
+    # from one without, so local dev reports "unavailable" instead of silence.
+    assert http_sandbox.resolves_tools is True

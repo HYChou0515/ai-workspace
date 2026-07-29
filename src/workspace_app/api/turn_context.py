@@ -30,12 +30,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from ..agent.context import AgentToolContext
+from ..apps.manifest import load_app_manifest
 from ..context_budget import ContextLimit, catalog_limit, estimate_tokens
 from ..entity.brief import entity_schema_brief
 from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tokens import CallLane
+from ..tooling.external import ExternalTools, resolve_external_tools
 from .turns import history_items
 
 if TYPE_CHECKING:
@@ -276,6 +278,16 @@ class TurnContextBuilder:
             return 0
         return estimate_tokens(payload)
 
+    async def _external_tools(self, item_id: str) -> ExternalTools:
+        """#674: resolve this app's third-party tools, once, at the top of a turn.
+
+        Before the sandbox exists, because the answer decides which tools the
+        model is offered — and the sha it returns is what the sandbox is later
+        created with, so the two can never describe different bundles."""
+        slug = self._locator.slug_of(item_id)
+        declared = load_app_manifest(slug).agent.external_tools if slug else {}
+        return await resolve_external_tools(self._sandbox, declared)
+
     def _common(
         self,
         item_id: str,
@@ -284,6 +296,7 @@ class TurnContextBuilder:
         agent_config: AgentConfig | None,
         run_subagent: RunSubagent,
         history_messages: list[Message],
+        external: ExternalTools,
     ) -> dict[str, Any]:
         """The fields identical across every RCA turn shape (interactive + workflow)."""
         # #624: capture whether history had to be cut, so the send path can say so
@@ -323,7 +336,10 @@ class TurnContextBuilder:
             filestore=self._filestore,
             files=self._files,
             sync=self._sync,
-            sandbox_spec=SandboxSpec(),
+            # #674: the third-party bundles this turn resolved travel with
+            # `create`, so the sandbox mounts the very shas whose schemas the
+            # model was handed a moment ago.
+            sandbox_spec=SandboxSpec(tools=external.shas or None),
             # The item's user env, read fresh per turn — which is what makes an
             # edit between turns take effect. NOT folded into `sandbox_spec`:
             # that is create-time infra env, and the launcher's own exports run
@@ -352,7 +368,10 @@ class TurnContextBuilder:
             history_reduced_note=said[0] if said else "",
             context_overhead_tokens=overhead,
             context_window=window.tokens,
-            packages=self._packages or [],
+            # First-party packages come from the startup scan; third-party ones
+            # from this turn's resolve. The model cannot tell them apart, which
+            # is the point — they are the same kind of thing.
+            packages=[*(self._packages or []), *external.packages],
             prebuilt_dir=self._prebuilt_dir,
             app_slug=self._locator.slug_of(item_id),
             template_profile=self._locator.profile_of(item_id),
@@ -406,6 +425,7 @@ class TurnContextBuilder:
         lane so a new caller that forgets cannot spend a person's quota."""
         session = await self._registry.session(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
+        external = await self._external_tools(item_id)
         return AgentToolContext(
             **self._common(
                 item_id,
@@ -413,6 +433,7 @@ class TurnContextBuilder:
                 agent_config=agent_config,
                 run_subagent=run_subagent,
                 history_messages=history_messages,
+                external=external,
             ),
             # #pm: live record-type schema so the agent creates valid issues /
             # milestones up front (field names, status vocab, timeline date-range).
@@ -477,6 +498,7 @@ class TurnContextBuilder:
         for a human/schedule run (a first-level write)."""
         session = await self._registry.session(item_id)
         logger.debug("turn-context: build workflow turn for %s", item_id)
+        external = await self._external_tools(item_id)
         return AgentToolContext(
             **self._common(
                 item_id,
@@ -484,6 +506,7 @@ class TurnContextBuilder:
                 agent_config=agent_config,
                 run_subagent=run_subagent,
                 history_messages=history_messages,
+                external=external,
             ),
             entity_write_origin=entity_write_origin,
         )
