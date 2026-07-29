@@ -1,11 +1,16 @@
 flowchart LR
-    A["一次性操作<br/>在 workspace 手動跑一遍"] --> B["skill / workflow<br/>把步驟存下來，可重跑"]
-    B --> C["tool<br/>包成任何 App 都能呼叫的能力"]
-    C --> D["App<br/>自成一格的儀表板 + 領域模型"]
-    D --> E["獨立系統<br/>長大到離開 AI Workspace"]
+    A["一次性操作<br/>這次做完就沒了"]
+    S["skill<br/>做法留下來<br/>但每次不保證一樣"]
+    W["workflow<br/>步驟交給程式推進<br/>每次跑法一致"]
+    T["tool<br/>任何 App 的 AI<br/>都能呼叫的能力"]
+    D["App<br/>有自己的工作項目<br/>與狀態機"]
+    E["獨立系統<br/>離開 AI Workspace<br/>也活得下去"]
+
+    A --> S --> W --> T --> D --> E
 
     style A fill:#EEF1F7,stroke:#C7CEDB,color:#14161C
-    style B fill:#EAF0FF,stroke:#3B6FF5,color:#14161C
-    style C fill:#EAF0FF,stroke:#3B6FF5,color:#14161C
+    style S fill:#FFF7ED,stroke:#E0A458,color:#14161C
+    style W fill:#FFE3C2,stroke:#B45309,color:#14161C
+    style T fill:#EAF0FF,stroke:#3B6FF5,color:#14161C
     style D fill:#E4FBF1,stroke:#0E9F6E,color:#14161C
-    style E fill:#12141C,stroke:#12141C,color:#FFFFFF
+    style E fill:#14161C,stroke:#14161C,color:#FFFFFF
