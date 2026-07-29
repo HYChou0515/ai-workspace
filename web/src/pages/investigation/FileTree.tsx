@@ -661,6 +661,14 @@ export function FileTree({
         }}
         tabIndex={0}
         onKeyDown={(e) => {
+          // The inline name box (rename + new file/folder) renders INSIDE this
+          // div, so its keys bubble here. Without this guard Backspace erased a
+          // character AND deleted the selected files (and preventDefault meant
+          // the character survived), while the Enter that commits a rename also
+          // opened everything selected. A shortcut never acts on a key the user
+          // aimed at a text field — one rule here, not a stopPropagation in
+          // every input we ever nest.
+          if (isTextEntry(e.target)) return;
           if (sel.selected.length === 0) return;
           if (caps.delete && (e.key === "Delete" || e.key === "Backspace")) {
             e.preventDefault();
@@ -766,6 +774,14 @@ export function FileTree({
       )}
     </div>
   );
+}
+
+/** Is this event target a place the user types text? Used to keep the tree's
+ * single-key shortcuts out of the inline name box nested inside the tree body. */
+function isTextEntry(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
 }
 
 /** Inline name input used for new file/folder + rename. */
