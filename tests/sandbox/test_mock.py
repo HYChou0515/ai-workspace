@@ -151,7 +151,7 @@ async def test_walk_returns_uploaded_files_with_size():
     h = await sandbox.create(SandboxSpec())
     await sandbox.upload(h, b"hello", "/a.txt")
     await sandbox.upload(h, b"world!!", "/sub/b.txt")
-    entries = await sandbox.walk(h, "/")
+    entries = (await sandbox.walk(h, "/")).files
     by_path = {e.path: e.size for e in entries}
     assert by_path == {"/a.txt": 5, "/sub/b.txt": 7}
 
@@ -167,7 +167,7 @@ async def test_walk_with_non_root_prefix_filters_results():
     h = await sandbox.create(SandboxSpec())
     await sandbox.upload(h, b"a", "/inside/a.txt")
     await sandbox.upload(h, b"b", "/elsewhere/b.txt")
-    entries = await sandbox.walk(h, "/inside")
+    entries = (await sandbox.walk(h, "/inside")).files
     assert [e.path for e in entries] == ["/inside/a.txt"]
 
 
@@ -175,12 +175,12 @@ async def test_walk_version_changes_iff_content_changes():
     sandbox = MockSandbox()
     h = await sandbox.create(SandboxSpec())
     await sandbox.upload(h, b"hello", "/a.txt")
-    v1 = (await sandbox.walk(h, "/"))[0].version
+    v1 = (await sandbox.walk(h, "/")).files[0].version
     assert v1  # non-empty
     await sandbox.upload(h, b"hello", "/a.txt")  # same bytes
-    assert (await sandbox.walk(h, "/"))[0].version == v1
+    assert (await sandbox.walk(h, "/")).files[0].version == v1
     await sandbox.upload(h, b"changed", "/a.txt")
-    assert (await sandbox.walk(h, "/"))[0].version != v1
+    assert (await sandbox.walk(h, "/")).files[0].version != v1
 
 
 async def test_exists_and_delete():
@@ -221,7 +221,7 @@ async def test_rename_file_and_subtree():
     await sandbox.upload(h, b"x", "/src/a.txt")
     await sandbox.upload(h, b"y", "/src/sub/b.txt")
     await sandbox.rename(h, "/src", "/dst")
-    paths = {e.path for e in await sandbox.walk(h, "/")}
+    paths = {e.path for e in (await sandbox.walk(h, "/")).files}
     assert paths == {"/dst/a.txt", "/dst/sub/b.txt"}
     with pytest.raises(FileNotFoundError):
         await sandbox.rename(h, "/nope", "/x")
@@ -241,7 +241,7 @@ async def test_readiness_toggles_and_is_invisible_to_the_workspace_366():
     await sandbox.mark_ready(h)
     assert await sandbox.is_ready(h) is True
     # invisible to the workspace: no phantom file appears anywhere
-    assert await sandbox.walk(h, "/") == []
+    assert (await sandbox.walk(h, "/")).files == []
     assert await sandbox.exists(h, "/.ready") is False
 
 

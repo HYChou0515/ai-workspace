@@ -797,7 +797,9 @@ async def test_host_managed_ensure_handle_skips_app_side_restore_492():
     )
     handle = await registry.ensure_handle(await registry.session("ws-1"))
     assert sync.calls == []  # no app-side restore in host-managed mode
-    assert [e.path for e in await sandbox.walk(handle, "/")] == ["/notes.md"]  # host filled it
+    assert [e.path for e in (await sandbox.walk(handle, "/")).files] == [
+        "/notes.md"
+    ]  # host filled it
 
 
 async def test_host_managed_flush_persists_via_host_with_delete_492():
@@ -948,7 +950,7 @@ async def test_host_managed_wake_gives_the_sandbox_every_durable_file_492():
     )
     handle = await registry.ensure_handle(await registry.session("ws-1"))
 
-    assert sorted(e.path for e in await sandbox.walk(handle, "/")) == [
+    assert sorted(e.path for e in (await sandbox.walk(handle, "/")).files) == [
         "/.entity/issue/schema.yaml",
         "/README.md",
         "/views/board.ai.yaml",

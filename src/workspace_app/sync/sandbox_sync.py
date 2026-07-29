@@ -123,12 +123,19 @@ class SandboxSync:
             n += 1
             if on_progress is not None:
                 on_progress(n, total)
+        # Folders holding no files: uploading the file set recreates every
+        # directory a file needs, but an EMPTY one is carried by nothing, so it
+        # has to be recreated explicitly or the user's folder is gone after a
+        # reap. Deepest-last ordering is irrelevant (`mkdir -p` semantics), but
+        # sorting keeps the log readable.
+        for d in sorted(await self._fs.listdir(workspace_id)):
+            await self._sb.mkdir(handle, d)
         logger.info("sync: restored %d files, %d bytes (workspace %s)", n, n_bytes, workspace_id)
         # Seed the diff state from the just-restored sandbox so the first mirror
         # after a wake is a no-op (nothing has changed yet).
         self._versions[workspace_id] = {
             e.path: e.version
-            for e in await self._sb.walk(handle, "/")
+            for e in (await self._sb.walk(handle, "/")).files
             if not should_ignore(e.path, self._ignores)
         }
         # #366: mark the sandbox authoritative AFTER the restore completes. The
@@ -157,7 +164,11 @@ class SandboxSync:
         started = time.monotonic()
         try:
             ready_before = await self._sb.is_ready(handle)
-            entries = await self._sb.walk(handle, "/")
+            # The file half drives the content diff below (a directory has no
+            # bytes to download); the directory half is mirrored separately,
+            # because an EMPTY folder rides along with no file.
+            walked = await self._sb.walk(handle, "/")
+            entries = walked.files
         except SandboxNotFound:
             logger.warning(
                 "sync: mirror workspace %s: sandbox %s gone (reaped) -> skip",
@@ -186,6 +197,12 @@ class SandboxSync:
                 await self._fs.write_from_path(workspace_id, entry.path, tmp, None)
                 n_bytes += tmp.stat().st_size
             n_uploaded += 1
+        # Directories, same shape as the files above: creating is always safe, so
+        # it runs unconditionally; removing needs the #366 readiness sandwich.
+        live_dirs = {d for d in walked.dirs if not should_ignore(d, self._ignores)}
+        stored_dirs = set(await self._fs.listdir(workspace_id))
+        for d in sorted(live_dirs - stored_dirs):
+            await self._fs.mkdir(workspace_id, d)
         n_deleted = 0
         if ready_before and await self._ready_after(handle):
             logger.debug(
@@ -194,6 +211,14 @@ class SandboxSync:
             for path in prev:
                 if path not in seen and await self._fs.exists(workspace_id, path):
                     await self._fs.delete(workspace_id, path)
+                    n_deleted += 1
+            # Shallowest first: `rmdir` takes the subtree, so a parent's removal
+            # already accounts for its children — skip whatever it swallowed
+            # rather than asking the store to delete a path that is now absent.
+            gone = stored_dirs - live_dirs
+            for d in sorted(gone):
+                if await self._fs.is_dir(workspace_id, d):
+                    await self._fs.rmdir(workspace_id, d)
                     n_deleted += 1
         self._versions[workspace_id] = seen
         # Only publish a measurement of a COMPLETE sandbox: a not-yet-ready one is

@@ -472,3 +472,35 @@ async def test_tree_walks_the_workspace_once_for_both_halves() -> None:
     assert [p for p, _ in entries] == ["/dir/a.md"]
     assert dirs == ["/dir"]
     assert walks["n"] == 1, walks
+
+
+async def test_tree_reports_a_folder_that_holds_no_files() -> None:
+    """An empty folder appears in NO file path, so a dir set derived from the
+    file listing cannot contain it — and the file tree simply never drew the
+    folder the user just created. The traversal has to report it directly."""
+    sb = MockSandbox()
+    handle = await sb.create(SandboxSpec(), sandbox_id=WS)
+    files = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
+    await files.write(WS, "/dir/a.md", b"a")
+    await files.mkdir(WS, "/empty")
+    await files.mkdir(WS, "/dir/nested/deep")
+
+    entries, dirs = await files.tree(WS)
+
+    assert [p for p, _ in entries] == ["/dir/a.md"]
+    assert dirs == ["/dir", "/dir/nested", "/dir/nested/deep", "/empty"]
+
+
+async def test_tree_stops_reporting_a_folder_once_it_is_removed() -> None:
+    """The dir listing tracks the sandbox, so a removed folder disappears —
+    the half a durable dir record could never get right (nothing reconciles it
+    against the sandbox, so a folder deleted out of band lingers forever)."""
+    sb = MockSandbox()
+    handle = await sb.create(SandboxSpec(), sandbox_id=WS)
+    files = WorkspaceFiles(MemoryFileStore(), sandbox=sb, handle_for=_resolver(lambda _ws: handle))
+    await files.mkdir(WS, "/gone")
+    await files.rmdir(WS, "/gone")
+
+    _entries, dirs = await files.tree(WS)
+
+    assert dirs == []

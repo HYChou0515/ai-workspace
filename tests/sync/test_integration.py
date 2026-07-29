@@ -72,5 +72,5 @@ async def test_ignored_paths_are_not_persisted(stack):
     s2 = await registry.session("ws")
     h2 = await registry.ensure_handle(s2)
     # Only the non-ignored file came back.
-    entries = await sandbox.walk(h2, "/")
+    entries = (await sandbox.walk(h2, "/")).files
     assert sorted(e.path for e in entries) == ["/src/main.py"]

@@ -66,8 +66,9 @@ async def test_walk_root_and_subdir(sb: MockSandbox):
     h = await sb.create(SandboxSpec())
     await sb.upload(h, b"a", "/dir/a")
     await sb.upload(h, b"bb", "/top")
-    assert {e.path for e in await sb.walk(h, "/")} == {"/dir/a", "/top"}
-    assert {e.path for e in await sb.walk(h, "/dir")} == {"/dir/a"}
+    assert {e.path for e in (await sb.walk(h, "/")).files} == {"/dir/a", "/top"}
+    assert {e.path for e in (await sb.walk(h, "/dir")).files} == {"/dir/a"}
+    assert (await sb.walk(h, "/")).dirs == ["/dir"]
 
 
 async def test_delete_hit_and_miss(sb: MockSandbox):
@@ -79,9 +80,14 @@ async def test_delete_hit_and_miss(sb: MockSandbox):
         await sb.delete(h, "/a")
 
 
-async def test_mkdir_is_noop_but_validates_handle(sb: MockSandbox):
+async def test_mkdir_creates_an_observable_empty_dir(sb: MockSandbox):
+    """It used to be a no-op, which made an empty dir inexpressible here — so no
+    test on this double could see the case the real backends are asked about."""
     h = await sb.create(SandboxSpec())
-    await sb.mkdir(h, "/d")  # no raise
+    await sb.mkdir(h, "/d/nested")
+    walked = await sb.walk(h, "/")
+    assert walked.files == []
+    assert walked.dirs == ["/d", "/d/nested"]
     with pytest.raises(SandboxNotFound):
         await sb.mkdir(SandboxHandle(id="nope"), "/d")
 

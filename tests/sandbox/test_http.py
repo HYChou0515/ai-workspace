@@ -114,10 +114,13 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
         return {"ready": await backend.is_ready(SandboxHandle(id=rid))}
 
     @app.get("/sandboxes/{rid}/walk")
-    async def walk(rid: str, root: str) -> dict[str, list[dict]]:
-        entries = await backend.walk(SandboxHandle(id=rid), root)
+    async def walk(rid: str, root: str) -> dict[str, list]:
+        walked = await backend.walk(SandboxHandle(id=rid), root)
         return {
-            "entries": [{"path": e.path, "size": e.size, "version": e.version} for e in entries]
+            "entries": [
+                {"path": e.path, "size": e.size, "version": e.version} for e in walked.files
+            ],
+            "dirs": walked.dirs,
         }
 
     @app.delete("/sandboxes/{rid}/file", status_code=204)
@@ -306,11 +309,43 @@ async def test_walk_lists_files_with_versions(http_sandbox: HttpSandbox):
     h = await http_sandbox.create(SandboxSpec())
     await http_sandbox.upload(h, b"aaa", "/dir/a.txt")
     await http_sandbox.upload(h, b"bb", "/dir/b.txt")
-    entries = await http_sandbox.walk(h, "/dir")
+    entries = (await http_sandbox.walk(h, "/dir")).files
     by_path = {e.path: e for e in entries}
     assert set(by_path) == {"/dir/a.txt", "/dir/b.txt"}
     assert by_path["/dir/a.txt"].size == 3
     assert by_path["/dir/a.txt"].version  # non-empty change-stamp (mirror diff)
+
+
+async def test_walk_carries_the_directory_half_over_the_wire(http_sandbox: HttpSandbox):
+    """An empty folder reaches the app ONLY through this half — it appears in no
+    file path, so nothing on the far side can reconstruct it from `entries`."""
+    h = await http_sandbox.create(SandboxSpec())
+    await http_sandbox.mkdir(h, "/empty/deep")
+
+    walked = await http_sandbox.walk(h, "/")
+
+    assert walked.files == []
+    assert walked.dirs == ["/empty", "/empty/deep"]
+
+
+async def test_walk_degrades_when_the_host_predates_the_directory_half():
+    """A host that has not been redeployed omits `dirs` entirely. That must read
+    as "this host cannot report folders" — the old files-only behaviour — not as
+    a KeyError that takes the whole file tree down."""
+
+    class _OldHost(HttpSandbox):
+        async def _io_request(self, handle, method, suffix, **kwargs):  # type: ignore[override]
+            class _Resp:
+                @staticmethod
+                def json():
+                    return {"entries": [{"path": "/a.txt", "size": 1, "version": "v"}]}
+
+            return _Resp()
+
+    walked = await _OldHost(base_url="http://unused").walk(SandboxHandle(id="x"), "/")
+
+    assert [e.path for e in walked.files] == ["/a.txt"]
+    assert walked.dirs == []
 
 
 async def test_delete_removes_file(http_sandbox: HttpSandbox):
