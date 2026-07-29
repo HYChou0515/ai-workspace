@@ -1,6 +1,7 @@
 import hashlib
 import shlex
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
 
 from .protocol import (
@@ -22,6 +23,9 @@ def _version(data: bytes) -> str:
 class MockSandbox:
     def __init__(self) -> None:
         self._fs: dict[str, dict[str, bytes]] = {}
+        # One entry per `exec`, in call order — what the caller asked to add to
+        # that command's environment.
+        self.exec_envs: list[dict[str, str]] = []
         self._exposed: dict[str, list[int]] = {}
         # #366: readiness is a first-class marker kept OUTSIDE the file store, so
         # it never appears in walk/exists (it lives outside the workspace on a
@@ -98,8 +102,13 @@ class MockSandbox:
         handle: SandboxHandle,
         cmd: list[str],
         on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         fs = self._require(handle)
+        # Recorded, not applied: there is no process to hand it to. A double
+        # that merely swallowed the argument would let a caller pass one and
+        # assert nothing — which is how a delivery half goes missing unnoticed.
+        self.exec_envs.append(dict(env) if env else {})
         result = self._exec_result(fs, cmd)
         # Stream the (whole) stdout to the sink in one shot — enough for tests
         # that assert live output is forwarded.

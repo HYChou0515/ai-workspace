@@ -24,6 +24,7 @@ import tarfile
 import tempfile
 import uuid
 import warnings
+from collections.abc import Mapping
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -124,9 +125,18 @@ class DockerSandbox:
         handle: SandboxHandle,
         cmd: list[str],
         on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         container = self._require(handle)
-        result: Any = await asyncio.to_thread(container.exec_run, cmd, demux=True, workdir=_WORKDIR)
+        result: Any = await asyncio.to_thread(
+            container.exec_run,
+            cmd,
+            demux=True,
+            workdir=_WORKDIR,
+            # docker-py merges this over the image's own environment, which is
+            # the precedence the protocol asks for.
+            environment=dict(env) if env else None,
+        )
         exit_code = result.exit_code if result.exit_code is not None else -1
         stdout_b, stderr_b = result.output
         # This adapter doesn't stream incrementally; hand the whole stdout to

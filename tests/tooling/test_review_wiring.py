@@ -59,7 +59,7 @@ class _StubSandbox(MockSandbox):
         self._exec_results = exec_results
         self.exec_calls: list[list[str]] = []
 
-    async def exec(self, handle, cmd, on_output=None):  # noqa: ANN001
+    async def exec(self, handle, cmd, on_output=None, env=None):  # noqa: ANN001
         self.exec_calls.append(cmd)
         r = self._exec_results.pop(0)
         if on_output is not None and r.stdout:

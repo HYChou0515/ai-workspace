@@ -30,6 +30,7 @@ import signal
 import subprocess
 import tempfile
 import uuid
+from collections.abc import Mapping
 from functools import cache
 from pathlib import Path
 
@@ -503,8 +504,12 @@ class LocalProcessSandbox:
         handle: SandboxHandle,
         cmd: list[str],
         on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
-        argv, sub_cwd, env = self._exec_argv(handle, cmd)
+        argv, sub_cwd, base_env = self._exec_argv(handle, cmd)
+        # The caller's variables land LAST, so they win over the exec path's own
+        # settings — the same precedence the tools have always had.
+        env = {**base_env, **env} if env else base_env
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,

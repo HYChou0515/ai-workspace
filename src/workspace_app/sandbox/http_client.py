@@ -17,7 +17,7 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -231,13 +231,22 @@ class HttpSandbox:
         await self._request(handle, "DELETE", "")
 
     async def exec(
-        self, handle: SandboxHandle, cmd: list[str], on_output: OutputSink | None = None
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         pod_url, remote_id = _decode_handle(handle)
         url = f"{pod_url}/sandboxes/{remote_id}/exec"
         logger.debug("sandbox-http: exec sandbox %s cmd=%s", handle.id, cmd)
+        body: dict[str, object] = {"cmd": cmd}
+        if env:
+            # Omitted when empty so the host sees the same request it always
+            # has — an older host ignores the key, a newer one applies it.
+            body["env"] = dict(env)
         try:
-            async with self._client.stream("POST", url, json={"cmd": cmd}) as resp:
+            async with self._client.stream("POST", url, json=body) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     if not line:

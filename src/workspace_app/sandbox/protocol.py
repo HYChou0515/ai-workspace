@@ -24,7 +24,7 @@ contracts; nothing else in the app needs to change (it's injected via
 `create_app(sandbox=...)`).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -154,7 +154,11 @@ class Sandbox(Protocol):
         ...
 
     async def exec(
-        self, handle: SandboxHandle, cmd: list[str], on_output: OutputSink | None = None
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> ExecResult:
         """Run `cmd` (an argv list — NOT a shell string; use
         `["sh", "-c", "..."]` if you need shell features) with the workspace
@@ -168,7 +172,11 @@ class Sandbox(Protocol):
           arrive (live streaming); the complete stdout is still in the result.
         - Implementations SHOULD bound runtime with a wall-clock timeout; on
           timeout, kill the process and return `exit_code=124` while preserving
-          whatever stdout was captured before the kill (don't discard it)."""
+          whatever stdout was captured before the kill (don't discard it).
+        - `env` is added to the command's environment and WINS over anything the
+          backend sets itself. It is per-call on purpose: the item's user-set
+          variables reach the tools this way, and nothing else the sandbox runs
+          — the agent's own `exec` included — has anything to inherit."""
         ...
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
