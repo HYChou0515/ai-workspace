@@ -214,12 +214,21 @@ class EntityStore:
             for number, path in numbered
         ]
 
-    async def _corpus(self) -> Corpus:
+    async def _corpus(self, prefetched: dict[str, list[ParsedEntity]] | None = None) -> Corpus:
         """Every type's clean records, keyed type → number → entity — the input
-        for compute-on-read relational projection (§A4)."""
+        for compute-on-read relational projection (§A4).
+
+        `prefetched` supplies types the caller has already parsed, so `query`
+        need not read its own type a second time: parsing a type costs one `ls`
+        plus one `read` per record, and the `ls` is O(every file in the
+        workspace), which is what made the PM board's drag path slow."""
         corpus: Corpus = {}
+        have = prefetched or {}
         for name in self._catalog.names():
-            corpus[name] = {e.number: e for e in await self._parse_type(name) if e.ok}
+            entities = have.get(name)
+            if entities is None:
+                entities = [e for e in await self._parse_type(name) if e.ok]
+            corpus[name] = {e.number: e for e in entities}
         return corpus
 
     async def health(self) -> list[HealthFinding]:
@@ -245,7 +254,13 @@ class EntityStore:
                 "store: %s has backref/rollup fields, computing relational projection",
                 type_name,
             )
-            corpus = await self._corpus()
+            # Hand the corpus a SNAPSHOT of what we just parsed, not `ok`
+            # itself: the loop below mutates those records' fields, and a
+            # self-referential rollup reading them mid-loop would depend on
+            # record order. The snapshot keeps the corpus at the on-disk values,
+            # exactly as a second parse used to.
+            snapshot = [msgspec.structs.replace(e, fields=dict(e.fields)) for e in ok]
+            corpus = await self._corpus(prefetched={type_name: snapshot})
             for entity in ok:
                 entity.fields.update(compute_derived(entity, entity_type.schema, corpus))
         return QueryResult(entities=ok, invalid=[e for e in parsed if not e.ok])
