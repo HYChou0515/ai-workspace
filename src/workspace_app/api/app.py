@@ -362,7 +362,7 @@ def create_app(
     kb_cluster_tau: float = 0.9,
     # #534: chunks per metric-extraction job — what keeps a pass inside the
     # 30-minute job ceiling (a batch costs one model call per chunk).
-    kb_graph_chunk_budget: int = 40,
+    kb_graph_chunk_budget: int = 20,
     kb_cluster_suppress_tau: float = 0.92,
     kb_cluster_update_tau: float = 0.8,
     kb_cluster_merge_tau: float = 0.95,

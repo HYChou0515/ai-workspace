@@ -147,7 +147,7 @@ def build_coordinators(
     # #534: chunks per extraction job. A batch costs one model call per
     # chunk, so this — not a document count — is what keeps a job inside
     # the 30-minute ceiling. See GraphSettings.
-    graph_chunk_budget: int = 40,
+    graph_chunk_budget: int = 20,
     embedder: Embedder | None = None,
     cluster_tau: float = 0.9,
     suppress_tau: float = 0.92,

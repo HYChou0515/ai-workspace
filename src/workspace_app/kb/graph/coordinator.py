@@ -50,7 +50,7 @@ class GraphCoordinator:
         spec: SpecStar,
         llm: ILlm,
         *,
-        chunk_budget: int = 40,
+        chunk_budget: int = 20,
         message_queue_factory: object | None = None,
     ) -> None:
         self._spec = spec

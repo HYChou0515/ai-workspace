@@ -63,3 +63,37 @@ def test_a_non_positive_budget_is_refused(budget: int):
     that takes hours; 0 would loop forever."""
     with pytest.raises(ValueError):
         into_chunk_budget_batches([("a", 1)], budget=budget)
+
+
+def test_the_chunk_budget_default_is_the_same_number_everywhere():
+    """The budget is threaded by hand through four signatures — the settings
+    dataclass, both composition roots, and the coordinator — which is how this
+    codebase passes tunables. Four copies of one number drift: someone lowers
+    the setting to fit a slower model, the coordinator's own default still says
+    something else, and a caller that omits the kwarg silently gets the stale
+    value. Pin them together so that drift is a failing test rather than a job
+    that overruns again for a reason nobody can see."""
+    import dataclasses
+    import inspect
+
+    from workspace_app.api.app import create_app
+    from workspace_app.config.schema import GraphSettings
+    from workspace_app.coordinators import build_coordinators
+    from workspace_app.kb.graph.coordinator import GraphCoordinator
+
+    settings_default = next(
+        f for f in dataclasses.fields(GraphSettings) if f.name == "chunk_budget"
+    ).default
+    defaults = {
+        "GraphSettings.chunk_budget": settings_default,
+        "GraphCoordinator.chunk_budget": inspect.signature(GraphCoordinator.__init__)
+        .parameters["chunk_budget"]
+        .default,
+        "build_coordinators.graph_chunk_budget": inspect.signature(build_coordinators)
+        .parameters["graph_chunk_budget"]
+        .default,
+        "create_app.kb_graph_chunk_budget": inspect.signature(create_app)
+        .parameters["kb_graph_chunk_budget"]
+        .default,
+    }
+    assert len(set(defaults.values())) == 1, f"chunk budget defaults disagree: {defaults}"

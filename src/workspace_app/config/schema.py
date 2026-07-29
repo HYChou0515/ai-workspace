@@ -552,7 +552,7 @@ class GraphSettings:
     budget still travels alone — `write_doc_graph` wipes and rewrites per doc,
     so a document cannot be split across jobs."""
 
-    chunk_budget: int = 40
+    chunk_budget: int = 20
 
 
 @dataclass(frozen=True)
