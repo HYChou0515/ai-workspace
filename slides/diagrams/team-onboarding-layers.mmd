@@ -1,0 +1,15 @@
+flowchart LR
+    A["App<br/>領域層<br/>圈出範圍"]
+    S["skill<br/>做法層<br/>交代一位老手"]
+    W["workflow<br/>做法層<br/>一條生產線"]
+    T["tool<br/>能力層<br/>對外唯一出入口<br/>閘門掛在這裡"]
+    B["sandbox<br/>執行層<br/>真的跑起來的地方"]
+
+    A --> S --> T --> B
+    A --> W --> T
+
+    style A fill:#E4FBF1,stroke:#0E9F6E,color:#14161C
+    style S fill:#FFF3E0,stroke:#C2760A,color:#14161C
+    style W fill:#FFF3E0,stroke:#C2760A,color:#14161C
+    style T fill:#EAF0FF,stroke:#3B6FF5,color:#14161C
+    style B fill:#14161C,stroke:#14161C,color:#FFFFFF

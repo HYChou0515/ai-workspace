@@ -1,0 +1,23 @@
+flowchart TB
+    SPA["React SPA（web/）<br/>工作區 UI · 即時串流"]
+    API["FastAPI · create_app —— 整個系統唯一的組裝點（路由 · 事件串流）"]
+    RUN["AgentRunner<br/>驅動一次 agent 回合<br/>→ LiteLLM → Ollama / 雲端"]
+    SB["Sandbox<br/>指令真正執行的<br/>隔離環境"]
+    FS["FileStore<br/>workspace 永久檔案<br/>（與 Sandbox 雙向同步）"]
+    KB["KB 子系統<br/>切塊 · 嵌入 · 混合檢索<br/>KB agent"]
+    SS["specstar 資料層<br/>自動 CRUD · 索引<br/>向量查詢"]
+    WK["背景 worker<br/>索引 · wiki · 卡片生成<br/>健檢（獨立擴縮）"]
+
+    SPA --> API
+    API --> RUN
+    API --> SB
+    API --> FS
+    API --> KB
+    API --> SS
+    API --> WK
+
+    style API fill:#EAF0FF,stroke:#3B6FF5,color:#14161C
+    style SPA fill:#F4F6FA,stroke:#C7CEDB,color:#14161C
+    style KB fill:#E4FBF1,stroke:#0E9F6E,color:#14161C
+    style WK fill:#FFF3E0,stroke:#B45309,color:#14161C
+    style SB fill:#14161C,stroke:#14161C,color:#FFFFFF

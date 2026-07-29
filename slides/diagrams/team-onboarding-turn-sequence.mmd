@@ -1,0 +1,20 @@
+sequenceDiagram
+    participant U as 使用者
+    participant API as FastAPI
+    participant E as ChatTurnEngine
+    participant R as AgentRunner
+    participant T as 工具 (exec / read_file / ask_kb)
+
+    U->>API: POST 訊息
+    API->>API: 存進 Conversation
+    API->>API: 解析 AgentConfig (app ◇ profile ◇ preset)
+    API->>E: stream(key, content, ctx)
+    E->>E: 取消同一 key 前一個還在跑的回合
+    E->>R: run(ctx)
+    loop 串流事件
+        R->>T: 呼叫工具
+        T-->>E: ToolLog (stdout 邊跑邊回)
+        R-->>E: 推理 / 訊息 / 用量
+        E-->>U: SSE 事件
+    end
+    E->>API: on_complete → 存回 Conversation

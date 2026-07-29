@@ -1,0 +1,14 @@
+flowchart LR
+    Q["問題"] --> EN{"查詢增強<br/>(可選)"}
+    EN --> D["dense 向量檢索"]
+    EN --> B["BM25 關鍵字檢索"]
+    D --> F["RRF 融合"]
+    B --> F
+    F --> M["MMR 去冗餘"]
+    M --> P["parent-doc 併回上下文"]
+    P --> RR["LLM rerank (可選)"]
+    RR --> A["帶 [n] 引註的答案"]
+
+    style Q fill:#F4F6FA,stroke:#C7CEDB,color:#14161C
+    style A fill:#E4FBF1,stroke:#0E9F6E,color:#14161C
+    style EN fill:#FFF3E0,stroke:#C2760A,color:#14161C

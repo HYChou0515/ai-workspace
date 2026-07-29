@@ -1,0 +1,8 @@
+flowchart LR
+    FS[("FileStore<br/>永久儲存 · 真相來源")]
+    SB["Sandbox<br/>臨時執行環境"]
+    FS -->|"restore 進場還原"| SB
+    SB -->|"mirror 定期回寫"| FS
+
+    style FS fill:#E4FBF1,stroke:#0E9F6E,color:#14161C
+    style SB fill:#EAF0FF,stroke:#3B6FF5,color:#14161C

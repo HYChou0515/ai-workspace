@@ -1,0 +1,12 @@
+flowchart LR
+    U["上傳<br/>md / pdf / zip / 整個資料夾"] --> C{"上傳邊界檢查<br/>加密?壞檔?"}
+    C -->|"擋下"| X["立刻給可行動的訊息"]
+    C -->|"通過"| S["store (快 · 同步)<br/>建 SourceDoc → status=indexing"]
+    S --> I["index (慢 · 背景)<br/>切塊 → 嵌入 → DocChunk"]
+    I --> R["status = ready"]
+    I -.->|"失敗"| E["status = error"]
+
+    style S fill:#EAF0FF,stroke:#3B6FF5,color:#14161C
+    style I fill:#FFF3E0,stroke:#C2760A,color:#14161C
+    style R fill:#E4FBF1,stroke:#0E9F6E,color:#14161C
+    style X fill:#FCE7F0,stroke:#D6336C,color:#14161C

@@ -1,0 +1,15 @@
+{
+  "theme": "base",
+  "themeVariables": {
+    "fontFamily": "\"Noto Sans TC\", \"PingFang TC\", \"Microsoft JhengHei\", \"Noto Sans CJK TC\", sans-serif",
+    "fontSize": "16px",
+    "primaryColor": "#EAF0FF",
+    "primaryTextColor": "#14161C",
+    "primaryBorderColor": "#3B6FF5",
+    "lineColor": "#5F6875",
+    "secondaryColor": "#E4FBF1",
+    "tertiaryColor": "#F4F6FA"
+  },
+  "flowchart": { "curve": "basis", "htmlLabels": false },
+  "sequence": { "useMaxWidth": true }
+}

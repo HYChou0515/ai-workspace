@@ -1,0 +1,5 @@
+# Picked up automatically by `marp` when run from this directory.
+# Diagrams are pre-rendered SVGs under diagrams/, so no custom engine is needed —
+# the deck renders identically in VS Code preview, GitHub, and the CLI exporters.
+# allowLocalFiles lets the PDF / PNG exporters read those local SVG files.
+allowLocalFiles: true
