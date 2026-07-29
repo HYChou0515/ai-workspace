@@ -28,8 +28,10 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from .artifact import ArtifactError
 from .nfs_archive import NfsArchive
 from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+from .tool_resolve import ToolResolver
 
 # What THIS build does, advertised on /healthz. Which code a running host
 # carries is otherwise invisible — `image: sandbox-host:latest` reads the same
@@ -130,6 +132,13 @@ class _MkdirBody(BaseModel):
 class _RenameBody(BaseModel):
     src: str
     dst: str
+
+
+class _ResolveToolsBody(BaseModel):
+    """`{local name: manifest url}` — the whole set an app wants, so the
+    host answers about all of them in one round trip."""
+
+    tools: dict[str, str] = {}
 
 
 class _ExecBody(BaseModel):
@@ -303,6 +312,7 @@ def make_host_app(
     clock: Callable[[], float] = time.monotonic,
     readiness: ReadinessCheck | None = None,
     archive: NfsArchive | None = None,
+    tool_resolver: ToolResolver | None = None,
 ) -> FastAPI:
     app = FastAPI()
     controller = _HostController(sandbox, idle_ttl=idle_ttl, clock=clock, archive=archive)
@@ -329,6 +339,46 @@ def make_host_app(
         except Exception as exc:  # noqa: BLE001 — surface any reason as not-ready
             return JSONResponse(status_code=503, content={"ready": False, "detail": str(exc)})
         return JSONResponse(status_code=200, content={"ready": True})
+
+    @app.post("/tools/resolve")
+    async def resolve_tools(body: _ResolveToolsBody) -> dict[str, object]:
+        """#674: make third-party tools available, and describe them.
+
+        One request carries every tool an app declares, and the reply is
+        deliberately PARTIAL rather than all-or-nothing: a refusal is reported
+        per tool so the app can drop that one and run the turn. Failing the
+        whole request would let one author's expired artifact quietly disable
+        every other tool in the workspace, which is the opposite of what an
+        operator would want at 3am.
+
+        Blocking work (an HTTP GET, a sha, a 150MB unpack) goes to a thread —
+        this is the host's event loop, and other sandboxes are using it.
+        """
+        resolved: dict[str, object] = {}
+        refused: dict[str, str] = {}
+        for name, url in body.tools.items():
+            if tool_resolver is None:
+                refused[name] = "this host has no tool store configured"
+                continue
+            try:
+                tool = await asyncio.to_thread(tool_resolver.resolve, name, url)
+            except ArtifactError as exc:
+                refused[name] = str(exc)
+                continue
+            resolved[name] = {
+                "sha": tool.sha,
+                "version": tool.version,
+                "stale": tool.stale,
+                "commands": [
+                    {
+                        "name": c.name,
+                        "description": c.description,
+                        "params_json_schema": c.params_json_schema,
+                    }
+                    for c in tool.commands
+                ],
+            }
+        return {"tools": resolved, "refused": refused}
 
     @app.post("/drain", status_code=202)
     async def drain() -> dict[str, bool]:

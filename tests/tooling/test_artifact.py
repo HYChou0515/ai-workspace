@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -197,3 +198,25 @@ def test_source_is_optional_and_survives_the_round_trip_as_absent() -> None:
     assert m.source is None
     assert "source" not in json.loads(render_manifest(m))
     assert parse_manifest(render_manifest(m)) == m
+
+
+def test_the_host_carries_a_byte_identical_copy_of_this_contract() -> None:
+    """sandbox-host is a separate service that deliberately imports nothing
+    from workspace_app (see its `protocol.py`), so the artifact contract must
+    exist on both sides. Both sides gate on it — the host to decide what to
+    unpack, the app to decide what to tell the model a tool accepts — and a
+    silent divergence would mean the two disagree about what a manifest says
+    while both believe they are right.
+
+    The module is stdlib-only precisely so the copy can be exact, which makes
+    "are they the same?" a question a test can answer.
+    """
+    repo = Path(__file__).resolve().parents[2]
+    app = repo / "src" / "workspace_app" / "tooling" / "artifact.py"
+    host = repo / "sandbox-host" / "src" / "sandbox_host" / "artifact.py"
+
+    assert host.read_bytes() == app.read_bytes(), (
+        "sandbox-host/src/sandbox_host/artifact.py has drifted from the app's "
+        "copy — copy it across; the module has no imports beyond the stdlib "
+        "exactly so this can stay a verbatim copy"
+    )

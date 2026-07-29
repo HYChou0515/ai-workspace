@@ -41,9 +41,23 @@ sandbox。
 | `POST /sandboxes/{rid}/mkdir` | `{path}` | `204` | mkdir |
 | `DELETE /sandboxes/{rid}/dir?path=` | — | `204` | rmdir |
 | `POST /sandboxes/{rid}/rename` | `{src, dst}` | `204` | rename |
+| `POST /tools/resolve` | `{tools: {名稱: manifest 網址}}` | `200 {tools: {名稱: {sha, version, stale, commands}}, refused: {名稱: 原因}}` | 第三方工具:抓→驗→裝,並回傳要掛的 sha 與要給模型的 schema(#674) |
 
 維運用(不屬於 sandbox 表面)：`GET /healthz`、`GET /readyz`、
 `POST /drain`。
+
+### `POST /tools/resolve` —— 為什麼回應是「部分成功」
+
+回應**刻意不是全有全無**:每個工具各自成功或被拒(`refused` 逐項給原因),
+app 收到後把失敗的那支拿掉、turn 照跑。若整個請求 500,一個作者過期的 artifact
+就會**連帶讓同一個 workspace 裡其他所有工具消失**——那是營運上最糟的失敗形狀。
+
+回應同時帶 `sha`(sandbox 要掛哪一份)與 `commands`(要告訴模型這支工具吃什麼參數)。
+**兩者出自同一次 resolve**,所以 app 眼中的介面與 sandbox 裡實際跑的 bundle 不可能對不上;
+若 app 自己另外去讀 manifest,作者在兩次讀取之間發版就會讓模型用上一版的參數去呼叫新版工具。
+
+`stale: true` 代表 artifact store 連不上、這是**上一次成功解析**的版本;
+工具仍可用,但 app 應該讓使用者知道它不是最新的。
 
 檔案以 **raw `application/octet-stream`** 的 body 傳遞(不是 base64-in-JSON)。
 路徑都是相對於 workspace root;開頭的 `/` 代表 workspace root。

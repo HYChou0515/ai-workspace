@@ -7,6 +7,8 @@ boot narration) lives in `__main__`.
 
 from __future__ import annotations
 
+import os
+import platform
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,6 +17,8 @@ from .app import check_cgroup_ready, make_host_app
 from .config import SandboxHostSettings
 from .isolated_process import IsolatedProcessSandbox
 from .nfs_archive import NfsArchive
+from .tool_cache import EXT_DIR, ToolCache
+from .tool_resolve import ToolResolver
 
 # Where a pod's own delegated cgroup v2 subtree is mounted when the operator
 # doesn't pin `cgroup_root` explicitly.
@@ -39,6 +43,27 @@ def resolve_tools_dir(settings: SandboxHostSettings) -> Path | None:
     in config (no magic default — the host is its own image) and lenient: unset
     ⇒ the host simply serves without tools (#251)."""
     return Path(settings.tools_dir) if settings.tools_dir else None
+
+
+def build_tool_resolver(settings: SandboxHostSettings) -> ToolResolver | None:
+    """#674: the third-party tool store, or None when it cannot be run safely.
+
+    Two things are required and neither has a sane default. Without a tools
+    dir there is nowhere to unpack; without `TOOL_BUILDER_ID` there is no ABI
+    anchor to gate on, and a host that cannot gate must not fetch — it would
+    happily mount a bundle built for another base and hand the failure to a
+    user. Absent either, the endpoint answers "no tool store configured",
+    which is a diagnosable state rather than a silent one."""
+    tools = resolve_tools_dir(settings)
+    builder_id = os.environ.get("TOOL_BUILDER_ID")
+    if tools is None or not builder_id:
+        return None
+    return ToolResolver(
+        ToolCache(tools / EXT_DIR),
+        builder_id=builder_id,
+        arch=platform.machine(),
+        state_dir=tools,
+    )
 
 
 def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
@@ -73,4 +98,5 @@ def build_host_app(settings: SandboxHostSettings, *, pod_ip: str | None) -> Fast
         idle_ttl=settings.idle_ttl,
         readiness=lambda: check_cgroup_ready(cgroup_root),
         archive=build_archive(settings),
+        tool_resolver=build_tool_resolver(settings),
     )
