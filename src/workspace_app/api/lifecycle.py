@@ -21,7 +21,7 @@ import asyncio
 import contextlib
 import logging
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -94,6 +94,7 @@ def build_lifespan(
     cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
     cluster_tau: float = _CLUSTER_SWEEP_TAU,
     cluster_merge_tau: float = _CLUSTER_MERGE_TAU,
+    prewarm_tools: Callable[[], Awaitable[dict[str, str]]],
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Build the FastAPI ``lifespan`` context manager, capturing the injected
     deps in the nested sweeper closures. The coordinators stay off-capture and
@@ -304,6 +305,16 @@ def build_lifespan(
         logger.info("lifespan: startup - running connectivity checks")
         with boot_step("health: connectivity checks"):
             await asyncio.to_thread(health_service.run_fast_sync)
+        # #674: pull third-party tool bundles into the host's cache now, so
+        # the first turn to use one does not pay a 150MB download. It DELAYS
+        # readiness but can never fail it — a pod that refuses to start
+        # because someone else's artifact store is down has turned their
+        # outage into ours. (Deliberately unlike first-party discovery, which
+        # IS fail-loud: those bundles live in our own image, so their absence
+        # means the image is broken.)
+        with boot_step("tools: warm third-party bundles"):
+            unwarmed = await prewarm_tools()
+        logger.info("lifespan: third-party tools warmed, %d unavailable", len(unwarmed))
         # #312: in-process consumers run only when `run_consumers` is on. Default
         # True keeps the all-in-one behaviour; a pod-split deploy sets it False so
         # the API is a pure producer and dedicated worker pods drain each JobType.

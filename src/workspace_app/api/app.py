@@ -37,6 +37,7 @@ from ..resources.groups import groups_of
 from ..resources.kb import EMBED_DIM, Collection
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxNotFound, SandboxSpec
 from ..sync import SandboxSync
+from ..tooling.external import prewarm_external_tools
 from ..tooling.registry import PackageInfo
 from ..turn_control import SpecstarTurnControl
 from ..users import MockUserDirectory, UserDirectory
@@ -577,6 +578,8 @@ def create_app(
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
         cluster_tau=kb_cluster_tau,
         cluster_merge_tau=kb_cluster_merge_tau,
+        # #674: warm every app's declared third-party bundles at boot.
+        prewarm_tools=lambda: prewarm_external_tools(sandbox, _declared_external_tools()),
     )
 
     # root_path lives on the app (not just uvicorn.run) so OpenAPI servers and
@@ -1370,3 +1373,15 @@ def create_app(
 
     logger.info("boot: app composition complete")
     return app
+
+
+def _declared_external_tools() -> dict[str, dict[str, str]]:
+    """#674: every App's third-party tool declarations, `{slug: {name: url}}`.
+
+    Read at boot for warming. Deliberately not cached: an App's manifest ships
+    with the image, so this is read once per process and a stale copy would be
+    a bug waiting for a redeploy to hide it."""
+    from ..apps.catalog import discover_app_slugs
+    from ..apps.manifest import load_app_manifest
+
+    return {slug: load_app_manifest(slug).agent.external_tools for slug in discover_app_slugs()}

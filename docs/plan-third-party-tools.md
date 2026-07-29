@@ -51,7 +51,8 @@
 | Q13 | private GitLab 的 token 怎麼給？ | **先一個全域 token**（host env）。per-project token 留待有需求再說 |
 | Q14 | 要不要人類可讀的版本號？ | **要**：manifest 帶 `version`（取自作者的 `pyproject`）。**不參與信任**（信任錨仍是 sha），純粹讓「他跑的是 1.4.2」比一串 sha 好溝通 |
 | Q15 | 要不要規定作者附測試？ | **不強制他們的單元測試**（我們管不到、也不該管），但 **`smoke` 是 build 的一部分：不過就不產出 artifact**。這是唯一有牙齒的那條 |
-| Q16 | 上架前平台要不要先驗一次？ | **要，但是人工執行的指令**（`python -m workspace_app.tooling verify <manifest-url>`），不是自動閘。貼進 `app.json` 之前跑它 |
+| Q16 | 上架前平台要不要先驗一次？ | **要，但是人工執行的指令**（`python -m workspace_app.tooling.verify <url> --name <本地名>`），不是自動閘。貼進 `app.json` 之前跑它 |
+| Q16b | verify 要不要真的把 bundle 跑起來？ | **不要**（實作時改的，P9）：作者的 build 已經在**正確的 base** 裡強制跑過 smoke（Q15），而在維運者的機器上執行陌生人的程式碼是錯的地方、錯的環境、學到的還更少。verify 改做「抓 + 閘門 + 結構比對（bundle 內容是否與 manifest 一致）」 |
 | Q17 | app 開機要不要 resolve 第三方、當 readiness 條件？ | **不要**。開機只做 best-effort 預熱；GitLab 掛掉不能讓 app 起不來（跟第一方 `discover_packages` 的 fail-loud 刻意不同，`__main__.py:149`） |
 
 ### Q2 為什麼一定要 builder image，不能是裸腳本

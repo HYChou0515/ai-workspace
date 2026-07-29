@@ -95,3 +95,35 @@ async def resolve_external_tools(sandbox: object, declared: Mapping[str, str]) -
         refused=refused,
         stale=tuple(name for name, described in tools.items() if described.get("stale")),
     )
+
+
+async def prewarm_external_tools(
+    sandbox: object,
+    declared_by_app: Mapping[str, Mapping[str, str]],
+) -> dict[str, str]:
+    """Pull every app's third-party tools into the host's cache at startup.
+
+    Best effort, and deliberately NOT part of readiness (#674 Q17). The first
+    turn to use a cold tool would otherwise pay a 150MB download, so warming is
+    worth doing — but a pod that refuses to start because an artifact store is
+    unreachable has turned someone else's outage into ours. That is the opposite
+    of the first-party `discover_packages`, which IS fail-loud at boot, and the
+    difference is deliberate: those bundles are inside our own image, so their
+    absence means the image is broken.
+
+    Returns `{name: reason}` for whatever could not be warmed, so boot logs say
+    what will be missing rather than leaving it to be discovered in a turn."""
+    unwarmed: dict[str, str] = {}
+    for slug, declared in declared_by_app.items():
+        if not declared:
+            continue
+        try:
+            external = await resolve_external_tools(sandbox, declared)
+        except Exception as exc:  # noqa: BLE001 - warming must never stop a boot
+            logger.warning("tool prewarm: app %s failed entirely: %s", slug, exc)
+            unwarmed.update(dict.fromkeys(declared, str(exc)))
+            continue
+        unwarmed.update(external.refused)
+        for name in external.refused:
+            logger.warning("tool prewarm: %s unavailable (%s)", name, external.refused[name])
+    return unwarmed

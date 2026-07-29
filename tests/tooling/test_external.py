@@ -9,7 +9,7 @@ bundle that actually runs.
 
 from __future__ import annotations
 
-from workspace_app.tooling.external import resolve_external_tools
+from workspace_app.tooling.external import prewarm_external_tools, resolve_external_tools
 
 
 class _Host:
@@ -117,3 +117,37 @@ async def test_a_tool_served_from_the_last_known_good_copy_is_flagged() -> None:
 
     assert external.stale == ("wafer-history",)
     assert external.shas == {"wafer-history": "a" * 64}  # still usable
+
+
+async def test_prewarm_pulls_every_apps_tools_into_the_cache() -> None:
+    host = _Host(_ANSWER)
+
+    unwarmed = await prewarm_external_tools(
+        host, {"rca": {"wafer-history": "https://g/m"}, "pm": {}}
+    )
+
+    assert host.asked == [{"wafer-history": "https://g/m"}]  # the empty app is skipped
+    assert unwarmed == {}
+
+
+async def test_a_store_outage_at_boot_does_not_stop_the_pod_starting() -> None:
+    # Q17: the opposite of first-party discovery, which IS fail-loud — those
+    # bundles are inside our own image, so their absence means a broken build.
+    # A third-party store is someone else's uptime.
+    class _Exploding:
+        resolves_tools = True
+
+        async def resolve_tools(self, _declared):
+            raise ConnectionError("gitlab unreachable")
+
+    unwarmed = await prewarm_external_tools(_Exploding(), {"rca": {"wafer-history": "u"}})
+
+    assert unwarmed == {"wafer-history": "gitlab unreachable"}
+
+
+async def test_prewarm_reports_what_will_be_missing_rather_than_staying_quiet() -> None:
+    host = _Host({"tools": {}, "refused": {"legacy": "404 — the artifact expired"}})
+
+    unwarmed = await prewarm_external_tools(host, {"rca": {"legacy": "u"}})
+
+    assert unwarmed == {"legacy": "404 — the artifact expired"}
