@@ -232,3 +232,67 @@ class _WorksThenBreaks:
             yield RunDone()
             return
         yield RunError(message="boom")
+
+
+# ── #615 P5: the morning hand-over ───────────────────────────────────────────
+
+
+def _bells(spec) -> list:
+    from specstar import QB
+
+    from workspace_app.resources.notification import Notification
+
+    rm = spec.get_resource_manager(Notification)
+    return [
+        r.data for r in rm.list_resources(QB.all()) if getattr(r.data, "kind", "") == "agent_done"
+    ]
+
+
+class _Handover(ILlm):
+    """Stands in for both jobs the cheap model does: judging the goal (never
+    met, so the run has to end some other way) and writing the hand-over."""
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        if "完成檢查" in prompt or "completion checker" in prompt:
+            yield ("NOT_MET", False)
+        else:
+            yield ("讀了 report.md 三次,沒有變更任何檔案。", False)
+
+
+def test_a_night_that_ends_writes_a_hand_over_and_rings_the_bell():
+    """Arriving to a thread you did not read and reconstructing the night
+    yourself is the same as the run never happening."""
+    app, spec, iid = _app(_SameCallEveryTurn(), checker=_Handover())
+    with TestClient(app) as client:
+        rid, _base = _start_night_goal(client, spec, iid)
+
+        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.state == "stalled")
+        _wait(lambda: _bells(spec))
+
+        bell = _bells(spec)[0]
+        assert bell.recipient == "alice"
+        assert "卡住" in bell.title  # what it is, before you open anything
+        assert bell.link  # and where to go
+
+        marker = [m for m in _messages(spec, rid) if m.role == "goal"][-1]
+        assert "讀了 report.md" in marker.content  # the story, in the thread
+
+
+def test_a_goal_that_never_ran_unattended_does_not_ring_anything():
+    """A bell for work someone watched happen is noise, and noise is how you
+    teach them to ignore the next one."""
+    app, spec, iid = _app(
+        ScriptedAgentRunner([MessageDelta(text="done"), RunDone()]),
+        checker=_Handover(),
+        offhours=False,
+        max_rounds=1,
+    )
+    with TestClient(app) as client:
+        chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()
+        rid = chat["chat_id"]
+        base = f"/a/rca/items/{iid}/chats/{rid}"
+        client.put(f"{base}/goal", json={"condition": "anything"})
+        client.post(f"{base}/messages", json={"content": "go"})
+
+        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.state == "exhausted")
+        assert _bells(spec) == []

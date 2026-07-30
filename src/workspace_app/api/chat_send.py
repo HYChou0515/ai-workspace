@@ -43,7 +43,9 @@ from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
 from .events import GoalUpdated, UserMessage
 from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
+from .goal_wrapup import headline, marker_text, night_transcript, write_summary
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
+from .notifications import notify
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
@@ -309,8 +311,7 @@ class ChatSendService:
             if met:
                 current.state = "met"
                 upsert_goal(self._spec, current, user=current.set_by)
-                self._append_goal_marker(rid, f"目標已達成:{current.condition}")
-                self._publish_goal(engine_key, current)
+                await self._hand_over(rid, engine_key, current, "met")
                 return
             # #615: which budget is this continuation spending? A night's
             # rounds are counted separately, so a long night cannot make the
@@ -331,10 +332,7 @@ class ChatSendService:
                 # closed has now finished, and that is where an unattended chain
                 # stops. The goal stays ACTIVE — it is not exhausted, it is
                 # waiting for tonight, and the sweeper will pick it up.
-                self._append_goal_marker(
-                    rid, f"上班時間到了,先停在這裡,晚上再繼續:{current.condition}"
-                )
-                self._publish_goal(engine_key, current)
+                await self._hand_over(rid, engine_key, current, "window")
                 return
             if driver_round and after_hours and self._owner_is_active(latest):
                 # Its owner came back mid-night. Stand down rather than talk
@@ -356,22 +354,14 @@ class ChatSendService:
             if current.stall_count >= _STALL_LIMIT:
                 current.state = "stalled"
                 upsert_goal(self._spec, current, user=current.set_by)
-                self._append_goal_marker(
-                    rid,
-                    f"連續 {_STALL_LIMIT} 輪沒有進展,卡住了,先停下等你:{current.condition}",
-                )
-                self._publish_goal(engine_key, current)
+                await self._hand_over(rid, engine_key, current, "stalled")
                 return
             spent = current.offhours_rounds_used if after_hours else current.rounds_used
             budget = self._offhours_max_rounds if after_hours else self._goal_max_rounds
             if spent >= budget:
                 current.state = "exhausted"
                 upsert_goal(self._spec, current, user=current.set_by)
-                self._append_goal_marker(
-                    rid,
-                    f"目標尚未達成,自動續跑額度({budget} 輪)已用完,交還給你:{current.condition}",
-                )
-                self._publish_goal(engine_key, current)
+                await self._hand_over(rid, engine_key, current, "exhausted")
                 return
             if after_hours:
                 current.offhours_rounds_used += 1
@@ -458,6 +448,52 @@ class ChatSendService:
             author=goal.set_by,
             driven_by=GOAL_DRIVER,
         )
+
+    async def _hand_over(self, rid: str, engine_key: str, goal, ending: str) -> None:  # noqa: ANN001
+        """#615 P5: close a goal out — the thread's marker, the bell, the broadcast.
+
+        A run that ended while nobody was watching gets a written hand-over and a
+        notification, because otherwise its owner arrives to a thread they did
+        not read and has to reconstruct the night themselves. A goal that only
+        ever ran with someone at the keyboard gets the marker alone: they
+        watched it happen, and a bell for it would be noise that teaches them to
+        ignore the next one.
+        """
+        unattended = goal.offhours and goal.offhours_rounds_used > 0
+        summary = ""
+        if unattended and self._goal_checker is not None:
+            conv = self._conv_rm.get(rid).data
+            assert isinstance(conv, Conversation)
+            summary = await asyncio.to_thread(
+                write_summary,
+                self._goal_checker,
+                condition=goal.condition,
+                ending=ending,
+                transcript=night_transcript(conv.messages),
+            )
+        self._append_goal_marker(rid, marker_text(ending, goal.condition, summary))
+        if unattended:
+            self._ring_the_bell(rid, goal, ending, summary)
+        self._publish_goal(engine_key, goal)
+
+    def _ring_the_bell(self, rid: str, goal, ending: str, summary: str) -> None:  # noqa: ANN001
+        """Tell the goal's owner their overnight run ended. Best-effort — a
+        notification that fails must not undo the ending that already happened."""
+        try:
+            conv = self._conv_rm.get(rid).data
+            assert isinstance(conv, Conversation)
+            slug = self._locator.slug_of(conv.item_id)
+            link = f"/a/{slug}/{conv.item_id}" if slug else ""
+            notify(
+                self._spec,
+                recipient=goal.set_by,
+                kind="agent_done",
+                title=headline(ending, goal.condition),
+                body=summary,
+                link=link,
+            )
+        except Exception:  # noqa: BLE001 — the ending stands with or without the bell
+            logger.exception("goal hand-over notification failed for %s", rid)
 
     def _append_goal_marker(self, rid: str, text: str) -> None:
         """A `role="goal"` marker in the thread — rendered by the FE, and by

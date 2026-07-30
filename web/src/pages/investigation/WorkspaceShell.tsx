@@ -3002,7 +3002,16 @@ function PanelBody({
         }
         if (e.kind === "goal_note") {
           // #613 P3: the goal driver's outcome marker (met / exhausted).
-          return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={e.text} />;
+          // #615: an overnight ending carries a written hand-over under it.
+          return (
+            <LogLine
+              key={i}
+              ts={fmtTs(e.at)}
+              kind="muted"
+              text={e.text}
+              multiline={e.text.includes("\n")}
+            />
+          );
         }
         if (e.kind === "step") {
           // #100: a workflow step's live line (deterministic-phase movement).
@@ -3151,10 +3160,15 @@ function LogLine({
   ts,
   kind,
   text,
+  multiline,
 }: {
   ts: string;
   kind: "info" | "accent" | "warn" | "muted";
   text: string;
+  /** #615: keep the line breaks. A morning hand-over is several sentences and
+   * a blank line between sections; squashed onto one line it is unreadable,
+   * which for a summary is the same as not writing it. */
+  multiline?: boolean;
 }) {
   const color =
     kind === "info"
@@ -3168,7 +3182,7 @@ function LogLine({
     <div style={{ display: "flex", gap: 8 }}>
       <span style={{ width: 64, color: "var(--text-paper-d2)" }}>{ts}</span>
       <span style={{ width: 60, color }}>{kind}</span>
-      <span>{text}</span>
+      <span style={multiline ? { whiteSpace: "pre-wrap" } : undefined}>{text}</span>
     </div>
   );
 }

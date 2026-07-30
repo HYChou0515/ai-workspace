@@ -234,7 +234,8 @@ def test_the_night_ends_at_the_morning_edge_with_the_goal_still_alive():
         # budget. Turn 2 is the DRIVER's, and by then the window has shut — that
         # is the round the chain has to stop after.
         marker = _wait(lambda: [m for m in _messages(spec, rid) if m.role == "goal"])[0]
-        assert "晚上再繼續" in marker.content
+        # The hand-over says what happens next, not just that it stopped.
+        assert "今天晚上會自己接著做" in marker.content
 
         goal = read_goal(spec, rid)
         assert goal is not None
