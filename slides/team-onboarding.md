@@ -122,27 +122,25 @@ style: |
 
 <!-- _class: brief -->
 
-# 主戰場：工具開發契約
-## 我們的 tool 是**一個 Python 專案、一支 CLI**，服從同一份協定 —— review 就照這張表逐條看
+# 主戰場：工具開發
+## 你寫的是**一個 uv 專案** —— 讓 prebuild 建得起來、讓模型叫得動
 
-```
-./launch                        列出所有 command                    → JSON array
-./launch <cmd>                  該 command 的說明 + params_json_schema → JSON
-./launch <cmd> '<args json>'    執行
-```
+`launch`、`commands.json`、venv、可攜 python 都是 **prebuild 產出**的，你不用寫。你要顧的是這些：
 
-| 面向 | 規則 |
-|---|---|
-| **參數** | 一整包 **JSON 字串**傳入（不是 argv flags），所以表達得了 list 與 nested object。用一份 **pydantic `Args`**：`model_json_schema()` 給模型看、`model_validate_json()` 做執行期驗證 —— **schema 只有一個來源** |
-| **stdout** | **只放 output，而且是 JSON** —— 這是給機器讀的 |
-| **stderr** | **只放 log** —— 這是給人讀的。混進 stdout，結果就解不出來 |
-| **returncode** | `0` 成功 · `2` 參數不合法或未知 command（錯誤訊息印 stderr）· `3` 上游拒絕或無權限，**不要重試** · `4` 上游暫時失敗或逾時，**可以重試** · `1` 其他未預期 |
-| **timeout** | 平台的 `exec` **不帶 timeout**，所以**工具自己要有**，逾時回 `4`。另設一個更短的 **log timeout**：超過就先吐一行進度到 stderr，讓長指令看得出還活著 |
-| **env** | 只在需要**秘密或連線資訊**時用；值由 item 的環境變數在**派送那一次**帶入、**不落地**。一般參數一律走 JSON —— 走 env 就進不了 schema，模型看不到 |
+| 你要做的 | 具體要求 | 漏掉會怎樣 |
+|---|---|---|
+| **一個獨立的 uv 專案** | `src/` layout + hatchling；`uv.lock` **進版控**；寫清楚 `requires-python`；**自帶依賴**，不碰平台的依賴樹 | 建不出可重現的 bundle |
+| **`[project.scripts]` 剛好一個** | 那個 key 就是 bundle 執行檔的名字（**不是** `[project].name`）；版本取自 `[project].version` | 零個或多個 → **build 直接失敗** |
+| **CLI 能回答三個問題** | 零參列出 command、一參給出 `params_json_schema`、兩參執行 —— 用 `tooling/dispatcher.py` 的 helper 就自動成立 | 模型看不到參數，叫不動 |
+| **stdout 乾淨** | 只放 output，**而且是 JSON**；log 一律走 **stderr** | prebuild 會**實跑並解析** stdout，印 traceback 或印一句話就 build 失敗 |
+| **returncode 分配** | `0` 成功 · `2` 參數不合法 · `3` 上游拒絕或無權限（**不要重試**）· `4` 暫時失敗或逾時（**可以重試**） | 呼叫端只能瞎猜要不要重試 |
+| **timeout 自己顧** | 平台的 `exec` **不帶 timeout**；另設一個更短的 **log timeout**，超過就吐一行進度到 stderr | 長指令看起來就像當掉 |
+| **env 只放秘密** | 連線資訊與金鑰走 item 的環境變數（派送那次帶入、**不落地**）；一般參數一律走 JSON | 走 env 的東西進不了 schema，模型不知道它存在 |
+| **絕對 import** | ruff `TID252` / `ban-relative-imports = "all"`；pytest 自帶 rootdir，不要吃到母 repo 的設定 | 程式碼被搬動後 import 爆掉 |
 
-### Review 三看：**安全性**（用呼叫者本人的權限 · 唯讀優先 · 有限流）· **協定遵循**（上表逐條）· **可維運**（失敗訊息可行動 · 事後查得到誰用誰的權限查了什麼）。
+### prebuild 會**把你的 launcher 真的跑起來**驗 stdout 與 schema —— 這是平台唯一強制得了的事，所以它在 build 裡面，不是可以略過的 CI 步驟。
 
-安全性一票否決；其餘可以討論取捨。
+Review 三看：**安全性**（呼叫者本人的權限 · 唯讀優先 · 有限流）· **協定遵循**（上表逐條）· **可維運**（失敗訊息可行動 · 事後查得到）。**安全性一票否決。**
 
 ---
 
