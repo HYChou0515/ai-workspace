@@ -160,7 +160,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
     hidden_fields: override?.hidden_fields ?? specHidden,
   };
   const sameList = (a: string[], b: string[]) =>
-    a.length === b.length && [...a].sort().join(" ") === [...b].sort().join(" ");
+    a.length === b.length && [...a].sort().join("\0") === [...b].sort().join("\0");
   const dirty =
     override !== undefined &&
     (eff.group_by !== specGroupBy ||
