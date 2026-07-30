@@ -24,9 +24,9 @@ import { useEntityWrite } from "../../hooks/useEntityWrite";
 import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
-import { pxToRem } from "../../lib/pxToRem";
 import { MarkdownRenderer } from "../MarkdownRenderer";
 import { EntityRecordPane } from "./EntityRecordPane";
+import { ConflictBanner } from "./shared";
 import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
 
 /** `{records_path}/{N}.md` → its folder + number, or null if the basename isn't a
@@ -91,31 +91,8 @@ export function RecordFileRenderer({ path }: { path: string }) {
 
   return (
     <div style={{ height: "100%", overflow: "auto" }}>
-      {inConflict && (
-        <div
-          role="alert"
-          style={{
-            margin: 12,
-            border: "1px solid var(--warn)",
-            borderRadius: 6,
-            padding: 8,
-            fontSize: pxToRem(13),
-          }}
-        >
-          Someone else changed this record — your edit wasn't applied and the latest values were reloaded.
-          <button
-            type="button"
-            className="btn"
-            data-variant="ghost"
-            data-size="sm"
-            aria-label={`dismiss conflict ${record.number}`}
-            style={{ marginLeft: 8 }}
-            onClick={() => write.dismissConflict(record.number)}
-          >
-            #{record.number} ✕
-          </button>
-        </div>
-      )}
+      {inConflict && <ConflictBanner conflicts={[record.number]} onDismiss={write.dismissConflict} />}
+
       <EntityRecordPane
         // The whole IDE mounts ONE <FileView>, so switching tabs only swaps the
         // `path` prop and this pane is reused in place. Both the form (seeded

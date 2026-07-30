@@ -4,6 +4,12 @@
  * one module so `TableView`, `BoardView`, and `GanttView` can each live in their
  * own file without one importing another. The editable widgets live in
  * `roleWidget` (the single role→widget table).
+ *
+ * The 409 conflict banner (§B2) lives here too, because every surface that can
+ * write a record has to be able to say "your edit didn't land": the view shell,
+ * the record file tab, and the #680 modal. It was private to `EntityViews` while
+ * there was one caller, and the file tab had grown its own inline copy of the
+ * same sentence — two copies of one rule is how the two drift apart.
  */
 
 import { load as parseYaml } from "js-yaml";
@@ -115,4 +121,36 @@ export function parseSpan(value: unknown): { start: number; end: number } | null
 
 export function roleOf(type: EntityType | null, name: string): EntityFieldSpec | undefined {
   return type?.fields.find((f) => f.name === name);
+}
+
+// ── conflict banner (§B2) ──────────────────────────────────────────────────
+
+/** A non-blocking alert for records whose optimistic-lock write hit a 409. The
+ * write hook has already reloaded the row to the other person's value; this just
+ * tells the user their edit didn't land and lets them dismiss per record. */
+export function ConflictBanner({ conflicts, onDismiss }: { conflicts: number[]; onDismiss?: (number: number) => void }) {
+  return (
+    <div role="alert" className="ev-banner">
+      <span className="ev-banner__icon" aria-hidden>
+        ⚠
+      </span>
+      <div className="ev-banner__body">
+        Someone else changed {conflicts.length === 1 ? "this record" : "these records"} — your edit wasn't applied and the
+        latest {conflicts.length === 1 ? "value was" : "values were"} reloaded.
+        <span className="ev-banner__actions">
+          {conflicts.map((n) => (
+            <button
+              key={n}
+              type="button"
+              className="ev-banner__chip"
+              aria-label={`dismiss conflict ${n}`}
+              onClick={() => onDismiss?.(n)}
+            >
+              #{n} ✕
+            </button>
+          ))}
+        </span>
+      </div>
+    </div>
+  );
 }
