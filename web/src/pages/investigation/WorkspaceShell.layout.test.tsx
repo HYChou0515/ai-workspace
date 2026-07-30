@@ -114,6 +114,10 @@ function renderTopBar(over: {
   ideCollapsed?: boolean;
   onToggleIde?: () => void;
   isNarrow?: boolean;
+  bottomState?: "closed" | "peeked" | "pinned";
+  onPanelBottom?: (a: unknown) => void;
+  chatCollapsed?: boolean;
+  onToggleChat?: () => void;
 }) {
   return render(
     <MemoryRouter>
@@ -124,6 +128,10 @@ function renderTopBar(over: {
         isNarrow={over.isNarrow ?? false}
         ideCollapsed={over.ideCollapsed ?? false}
         onToggleIde={over.onToggleIde ?? vi.fn()}
+        bottomState={over.bottomState ?? "closed"}
+        onPanelBottom={(over.onPanelBottom ?? vi.fn()) as never}
+        chatCollapsed={over.chatCollapsed ?? false}
+        onToggleChat={over.onToggleChat ?? vi.fn()}
         onCommandPalette={vi.fn()}
         onEdit={vi.fn()}
       />
@@ -131,22 +139,118 @@ function renderTopBar(over: {
   );
 }
 
-describe("TopBar Workspace toggle (#159)", () => {
-  it("offers a discoverable 'Workspace' toggle when the App has a file IDE", () => {
+const openView = () => fireEvent.click(screen.getByRole("button", { name: /view/i }));
+
+/**
+ * The old control was a lone "Workspace" pill wedged between the breadcrumb
+ * chips and the command palette. Three things were wrong with it and users
+ * said so: it was shaped and sized exactly like the P1 / triaging / Public
+ * STATUS chips beside it so it did not read as a control at all; it wore the
+ * accent (a red in this palette, the severity colour) when ON, so "workspace
+ * open" looked like a warning; and it duplicated the global nav's own
+ * "Workspace" brand link, two of the same word on one screen meaning different
+ * things. The log strip and the chat had no equivalent control at all.
+ *
+ * All three panels now live behind one "View" menu — the place layout settings
+ * go, and the place the next one will go too.
+ */
+describe("TopBar View menu", () => {
+  it("offers a View menu when the App has a workspace", () => {
     renderTopBar({ workspace: true });
-    expect(screen.getByRole("button", { name: /workspace/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /view/i })).toBeInTheDocument();
   });
 
-  it("toggles the IDE when the Workspace button is clicked", () => {
+  it("no longer parks a bare Workspace pill among the status chips", () => {
+    renderTopBar({ workspace: true });
+    // Nothing named "workspace" is on the bar until the menu is opened.
+    expect(screen.queryByRole("button", { name: /workspace/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /workspace/i })).not.toBeInTheDocument();
+  });
+
+  it("holds a toggle per panel once opened", () => {
+    renderTopBar({ workspace: true });
+    openView();
+    expect(screen.getByRole("checkbox", { name: /workspace/i })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /log/i })).toBeInTheDocument();
+  });
+
+  it("reports each panel's current state, so the menu can be read at a glance", () => {
+    renderTopBar({ workspace: true, ideCollapsed: false, bottomState: "closed" });
+    openView();
+    expect(screen.getByRole("checkbox", { name: /workspace/i })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /log/i })).not.toBeChecked();
+  });
+
+  it("counts a peeked panel as showing", () => {
+    renderTopBar({ workspace: true, bottomState: "peeked" });
+    openView();
+    expect(screen.getByRole("checkbox", { name: /log/i })).toBeChecked();
+  });
+
+  it("toggles the workspace from the menu", () => {
     const onToggleIde = vi.fn();
     renderTopBar({ workspace: true, ideCollapsed: true, onToggleIde });
-    fireEvent.click(screen.getByRole("button", { name: /workspace/i }));
+    openView();
+    fireEvent.click(screen.getByRole("checkbox", { name: /workspace/i }));
     expect(onToggleIde).toHaveBeenCalledTimes(1);
   });
 
-  it("hides the Workspace toggle for a chat-only App (no IDE to toggle)", () => {
+  it("toggles the log strip from the menu", () => {
+    const onPanelBottom = vi.fn();
+    renderTopBar({ workspace: true, onPanelBottom });
+    openView();
+    fireEvent.click(screen.getByRole("checkbox", { name: /log/i }));
+    expect(onPanelBottom).toHaveBeenCalledWith({ type: "toggle" });
+  });
+
+  // Seen in a real browser: an unstyled checkbox renders in the platform blue,
+  // which is nowhere in this warm paper palette and reads as a foreign control
+  // dropped into the menu. Same treatment as the font-size slider.
+  it("draws its checkboxes in the app accent, not the browser default blue", () => {
+    renderTopBar({ workspace: true });
+    openView();
+    expect(screen.getByRole("checkbox", { name: /workspace/i }).style.accentColor).toBe(
+      "var(--accent)",
+    );
+  });
+
+  // The item-details button next to it is already a gear. Two gears side by
+  // side, one for the item and one for the layout, is a coin toss.
+  it("does not wear the same gear glyph as the item-details button beside it", () => {
+    renderTopBar({ workspace: true });
+    const view = screen.getByRole("button", { name: /view/i });
+    const edit = screen.getByRole("button", { name: /edit item details/i });
+    const glyph = (b: HTMLElement) => b.querySelector("svg")?.getAttribute("data-icon");
+    expect(glyph(view)).toBeTruthy();
+    expect(glyph(view)).not.toBe(glyph(edit));
+  });
+
+  /**
+   * Measured in a real browser at 700px: the Chat row was inert AND wrong. On a
+   * narrow shell #464 already makes the workspace and the chat mutually
+   * exclusive — whichever the Workspace toggle is not showing — so a separate
+   * chat toggle governs nothing. Ticking it changed no pixels, and the row
+   * reported "Chat ✓" while no chat was on screen.
+   *
+   * One control per decision: on narrow the Workspace row IS the switch, and
+   * its tooltip already says the chat expands to fill.
+   */
+  it("drops the Chat row on a narrow shell, where the workspace row is the switch", () => {
+    renderTopBar({ workspace: true, isNarrow: true });
+    openView();
+    expect(screen.queryByRole("checkbox", { name: /chat/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /workspace/i })).toBeInTheDocument();
+  });
+
+  it("keeps the Chat row on a wide shell, where the two sit side by side", () => {
+    renderTopBar({ workspace: true, isNarrow: false });
+    openView();
+    expect(screen.getByRole("checkbox", { name: /chat/i })).toBeInTheDocument();
+  });
+
+  it("hides the menu for a chat-only App — there are no panels to arrange", () => {
     renderTopBar({ workspace: false });
-    expect(screen.queryByRole("button", { name: /workspace/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /view/i })).not.toBeInTheDocument();
   });
 
   it("hides the IDE-only command palette while the workspace is collapsed", () => {
@@ -159,23 +263,14 @@ describe("TopBar Workspace toggle (#159)", () => {
     expect(screen.getByRole("button", { name: /go to file/i })).toBeInTheDocument();
   });
 
-  it("shows the workspace-open state with an active accent fill, not just aria/title (#466)", () => {
-    renderTopBar({ workspace: true, ideCollapsed: false }); // open = pressed
-    const openStyle = screen.getByRole("button", { name: /workspace/i }).getAttribute("style") ?? "";
-    expect(openStyle).toMatch(/background:\s*var\(--accent-soft\)/);
-    cleanup();
-    renderTopBar({ workspace: true, ideCollapsed: true }); // collapsed = resting
-    const restStyle = screen.getByRole("button", { name: /workspace/i }).getAttribute("style") ?? "";
-    expect(restStyle).not.toMatch(/background:\s*var\(--accent-soft\)/);
-  });
-
-  it("names the chat effect in the tooltip so the toggle isn't a mystery control", () => {
-    // #: the control reads as "Workspace", but its visible effect is on the chat
-    // (it fills the row when the IDE folds away). Spell that out so it's obvious.
+  // Replaces the old "accent fill = pressed" assertion: a checkbox says on/off
+  // in its own right, so the state no longer has to be inferred from a colour —
+  // which is what let the ON state wear the severity red in the first place.
+  it("says what each toggle does to the chat, so it is not a mystery control", () => {
     renderTopBar({ workspace: true, ideCollapsed: false });
-    expect(screen.getByRole("button", { name: /workspace/i }).getAttribute("title")).toMatch(
-      /chat/i,
-    );
+    openView();
+    const ws = screen.getByRole("checkbox", { name: /workspace/i });
+    expect(ws.closest("label")?.getAttribute("title") ?? "").toMatch(/chat/i);
   });
 });
 

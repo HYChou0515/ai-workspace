@@ -19,6 +19,8 @@ import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
 import { modCombo } from "../../lib/platform";
+import { type PanelAction, type PanelState, panelPeek } from "../../lib/panelPeek";
+import { toggleShellPanel } from "../../lib/shellPanels";
 import { relPath } from "../../lib/relPath";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { PresenceBar } from "../../components/PresenceBar";
@@ -59,6 +61,7 @@ import { formatMetrics } from "./agentLog";
 import { shellIsNarrow, useContainerWidth } from "../../hooks/useContainerWidth";
 import { useIsNarrow } from "../../hooks/useMediaQuery";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
+import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { useOnTurnEnd } from "../../hooks/useOnTurnEnd";
@@ -259,8 +262,71 @@ function ShellBody({
   const sidebarStart = useRef(sidebarW);
   const agentStart = useRef(agentW);
   const bottomStart = useRef(bottomH);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [bottomOpen, setBottomOpen] = useState(true);
+  // The file sidebar shares the log strip's three states, driven from the
+  // activity rail: click an icon to glance, double-click to keep it. The rail
+  // stays put whatever the sidebar does, so a collapsed tree is never lost.
+  const [sidebarState, setSidebarState] = useState<PanelState>("pinned");
+  const sidebarOpen = sidebarState !== "closed";
+  const dispatchSidebar = useCallback(
+    (action: PanelAction) => setSidebarState((s) => panelPeek(s, action)),
+    [],
+  );
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (sidebarState !== "peeked") return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      // The rail counts as inside. Not for the end state — a rail click would
+      // retract on mousedown and peek straight back open on click, landing in
+      // the same place — but for what that costs on the way: the pane would be
+      // unmounted and remounted mid-switch, i.e. a visible flash every time you
+      // move between panes. No test asserts this; it is not observable as
+      // state, only as a flicker.
+      if (!sidebarRef.current?.contains(t) && !railRef.current?.contains(t)) {
+        dispatchSidebar({ type: "outside" });
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [sidebarState, dispatchSidebar]);
+  // The bottom strip opens CLOSED: an item is opened to read its files and talk
+  // to the agent, not to watch a log, and a panel that shows up uninvited on
+  // every single item is chrome the user has to dismiss before starting work.
+  // Its tab row stays visible, so it is one click away rather than hidden.
+  const [bottomPinned, setBottomPinned] = usePersistentBoolean(
+    "rca:layout:bottom-pinned",
+    false,
+  );
+  const [bottomState, setBottomState] = useState<PanelState>(
+    bottomPinned ? "pinned" : "closed",
+  );
+  const dispatchBottom = useCallback(
+    (action: PanelAction) => {
+      setBottomState((s) => {
+        const next = panelPeek(s, action);
+        // Only the deliberate states are remembered. A peek is the state that
+        // means "just for a moment" — storing it would turn a glance into a
+        // preference, and every later visit would open the panel uninvited,
+        // which is the behaviour this whole change set out to remove.
+        if (next !== "peeked") setBottomPinned(next === "pinned");
+        return next;
+      });
+    },
+    [setBottomPinned],
+  );
+  // A peek lasts until you go and do something else: any pointer press outside
+  // the panel retracts it. A pin ignores this (the reducer's rule), so pinning
+  // is what makes the panel yours to keep.
+  const bottomRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (bottomState !== "peeked") return;
+    const onDown = (e: MouseEvent) => {
+      if (!bottomRef.current?.contains(e.target as Node)) dispatchBottom({ type: "outside" });
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [bottomState, dispatchBottom]);
   // #159: chat is the main stage. When the IDE is collapsed, the whole
   // workspace (activity bar + tree + editor + bottom panel) folds away so the
   // chat fills the row — toggled by the TopBar `Workspace` button (and the
@@ -281,6 +347,31 @@ function ShellBody({
   // Nullish (not `||`) so an explicit `false` from the parent is honoured.
   const ideCollapsed = propIdeCollapsed ?? ideCollapsedInternal;
   const setIdeCollapsed = propOnIdeCollapsedChange ?? setIdeCollapsedInternal;
+  // The chat folds too, but plainly — open or closed, no peek. There is no
+  // strip or rail to click a third state out of, and unlike the log it is a
+  // place you work rather than glance at.
+  const [chatCollapsed, setChatCollapsed] = usePersistentBoolean(
+    "rca:layout:chat-collapsed",
+    false,
+  );
+  // Both stages folded would leave a top bar over a blank rectangle, so the
+  // rule lives in one place and both entry points (the View menu, the edge)
+  // go through it — see lib/shellPanels.
+  const applyPanels = useCallback(
+    (which: "ide" | "chat") => {
+      const next = toggleShellPanel(
+        { ideCollapsed, chatCollapsed },
+        which,
+        manifest.function.workspace,
+      );
+      setIdeCollapsed(next.ideCollapsed);
+      setChatCollapsed(next.chatCollapsed);
+    },
+    [ideCollapsed, chatCollapsed, manifest.function.workspace, setIdeCollapsed],
+  );
+  const toggleChat = useCallback(() => applyPanels("chat"), [applyPanels]);
+  const toggleIde = useCallback(() => applyPanels("ide"), [applyPanels]);
+
   // Cap the chat width so the editor always keeps a usable minimum. The chat is
   // fixed-width (flexShrink:0), so an over-wide agentW would otherwise squeeze
   // the editor into a broken sliver (the #108 regression). Dragging stops at
@@ -293,7 +384,9 @@ function ShellBody({
   // render with nothing subscribed to `resize`, so the cap went stale the
   // moment the window changed without crossing the 767px media boundary.
   const shellW = agentMaxW;
-  const chromeW = ACTIVITY_BAR_W + (sidebarOpen ? sidebarW : 0);
+  // A peeked sidebar floats over the editor, so it costs the row no width —
+  // only a docked (pinned) one narrows what the chat may take.
+  const chromeW = ACTIVITY_BAR_W + (sidebarState === "pinned" ? sidebarW : 0);
   const maxChatW = Math.max(280, shellW - chromeW - EDITOR_MIN_W);
   const effectiveAgentW = Math.min(agentW, maxChatW);
   // #200: the chat fills the whole row when there's no IDE beside it — a
@@ -319,7 +412,7 @@ function ShellBody({
     // (only closing on narrow) would strand a pointer-only user with the desktop
     // sidebar collapsed after a wide→narrow→wide resize, since the only wide reopen
     // is ⌘B and the ActivityBar reopen is gated to narrow (#464).
-    setSidebarOpen(!isNarrow);
+    setSidebarState(isNarrow ? "closed" : "pinned");
   }, [isNarrow]);
   const agentVisible = showAgentPanel(isNarrow, chatFills);
 
@@ -336,8 +429,13 @@ function ShellBody({
     (path, opts) => {
       groups.openInActive(path, opts);
       recentFiles.push(path);
+      // Glancing at the tree is a means to this end: the file is now on screen,
+      // so the peek has done its job and retracts. Same rule as pressing
+      // outside — the "something else" simply started inside the panel. A
+      // pinned tree is unaffected (the reducer ignores `outside` when pinned).
+      dispatchSidebar({ type: "outside" });
     },
-    [groups, recentFiles],
+    [groups, recentFiles, dispatchSidebar],
   );
   // Is the file pane actually on screen? Same condition the IDE column renders
   // under — anything else would have the chat believe in a pane that isn't there.
@@ -418,10 +516,10 @@ function ShellBody({
         setPaletteOpen(true);
       } else if (k === "b") {
         e.preventDefault();
-        setSidebarOpen((v) => !v);
+        dispatchSidebar({ type: "toggle" });
       } else if (k === "j") {
         e.preventDefault();
-        setBottomOpen((v) => !v);
+        dispatchBottom({ type: "toggle" });
       } else if (k === "s") {
         const active = g.activeGroup?.activePath;
         if (active) {
@@ -474,7 +572,11 @@ function ShellBody({
           onEditField={setField}
           isNarrow={isNarrow}
           ideCollapsed={ideCollapsed}
-          onToggleIde={() => setIdeCollapsed((v) => !v)}
+          onToggleIde={toggleIde}
+          bottomState={bottomState}
+          onPanelBottom={dispatchBottom}
+          chatCollapsed={chatCollapsed}
+          onToggleChat={toggleChat}
           onCommandPalette={() => setPaletteOpen(true)}
           onEdit={() => setEditOpen(true)}
         />
@@ -502,12 +604,9 @@ function ShellBody({
           <ActivityBar
             mode={activityMode}
             membersLabel={manifest.labels?.members ?? "Members"}
-            onMode={(m) => {
-              setActivityMode(m);
-              // On narrow the sidebar is a closed overlay; tapping an activity
-              // icon opens it (there's no persistent tree column to reveal).
-              if (isNarrow) setSidebarOpen(true);
-            }}
+            onMode={setActivityMode}
+            onPanel={dispatchSidebar}
+            railRef={railRef}
           />
           {isNarrow && sidebarOpen && (
             // Backdrop behind the overlay sidebar — tap to dismiss (starts after
@@ -515,16 +614,21 @@ function ShellBody({
             <button
               type="button"
               aria-label="Close file panel"
-              onClick={() => setSidebarOpen(false)}
+              onClick={() => dispatchSidebar({ type: "toggle" })}
               style={{ position: "absolute", inset: "0 0 0 50px", zIndex: 15, background: "rgba(20,22,28,0.28)", border: "none", cursor: "pointer" }}
             />
           )}
           {sidebarOpen && (
             <>
               <div
+                ref={sidebarRef}
+                data-testid="sidebar-pane"
                 style={
-                  isNarrow
-                    ? { position: "absolute", left: 50, top: 0, bottom: 0, zIndex: 20, width: "min(280px, 78vw)", display: "flex", minWidth: 0, background: "var(--paper)", borderRight: "1px solid var(--paper-3)", boxShadow: "6px 0 24px rgba(20,22,28,0.18)" }
+                  // Narrow has always been an overlay. Wide now overlays too
+                  // while PEEKED — same rule as the log strip: a temporary
+                  // glance floats over the editor, only a pin takes a column.
+                  isNarrow || sidebarState === "peeked"
+                    ? { position: "absolute", left: 50, top: 0, bottom: 0, zIndex: 20, width: isNarrow ? "min(280px, 78vw)" : sidebarW, display: "flex", minWidth: 0, background: "var(--paper)", borderRight: "1px solid var(--paper-3)", boxShadow: "6px 0 24px rgba(20,22,28,0.18)" }
                     : { width: sidebarW, flexShrink: 0, display: "flex", minWidth: 0 }
                 }
               >
@@ -546,7 +650,9 @@ function ShellBody({
                   }}
                 />
               </div>
-              {!isNarrow && (
+              {/* Only a docked sidebar has an edge to drag — a floating peek
+                  sits on top of the editor, so there is no boundary to move. */}
+              {!isNarrow && sidebarState === "pinned" && (
                 <ResizeDivider
                   orientation="vertical"
                   ariaLabel="resize sidebar"
@@ -564,12 +670,17 @@ function ShellBody({
             groups={groups}
             files={files}
             bottomHeight={bottomH}
-            bottomOpen={bottomOpen}
+            bottomState={bottomState}
+            bottomRef={bottomRef}
             onResizeBottomStart={() => {
               bottomStart.current = bottomH;
+              // Dragging a peeked panel taller is as clear a "I want to keep
+              // this" as a double click — without this it would vanish the
+              // moment the drag started, since the divider is outside it.
+              dispatchBottom({ type: "pin", sameTarget: false });
             }}
             onResizeBottom={(d) => setBottomH(bottomStart.current - d)}
-            onToggleBottom={() => setBottomOpen((v) => !v)}
+            onPanelBottom={dispatchBottom}
           />
           {!isNarrow && (
             <ResizeDivider
@@ -579,26 +690,60 @@ function ShellBody({
                 agentStart.current = effectiveAgentW;
               }}
               onResize={(d) => setAgentW(Math.min(maxChatW, agentStart.current - d))}
-              collapse={{
-                label: "Collapse workspace",
-                icon: "chev_l",
-                onToggle: () => setIdeCollapsed(true),
-              }}
             />
           )}
             </>
           )}
-          {/* #159: the old 16px collapsed-edge handle is gone — the discoverable
-              TopBar `Workspace` button is now the canonical way to bring the IDE
-              back, so a near-invisible edge sliver is just noise. */}
+          {/* The chat is the one panel someone could fold and then not know how
+              to bring back, so folding it leaves a labelled edge to click. The
+              View menu is the formal entry; this is the one under your hand. */}
+          {chatCollapsed && agentVisible && (
+            <button
+              type="button"
+              aria-label="Show chat"
+              title="Show chat"
+              onClick={() => toggleChat()}
+              style={{
+                width: 26,
+                flexShrink: 0,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+                borderLeft: "1px solid var(--paper-3)",
+                // Tinted, not the page colour: at the window's edge an
+                // untinted strip reads as the border rather than a control.
+                background: "var(--paper-2)",
+                color: "var(--text-paper-d)",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              <Icon name="chev_l" size={12} />
+              {/* The collapsed panel names itself, the way a collapsed tool
+                  window does in an IDE. An arrow alone leaves you to guess. */}
+              <span
+                style={{
+                  writingMode: "vertical-rl",
+                  fontSize: pxToRem(11),
+                  letterSpacing: "0.04em",
+                }}
+              >
+                Chat
+              </span>
+            </button>
+          )}
           <div
+            data-testid="chat-pane"
             style={{
               // #464: on a narrow viewport the agent hides while the IDE is up
-              // (mutually exclusive, toggled via `Workspace`) so the fixed agent
-              // width can't force overflow. Hidden, not unmounted — the chat and
-              // its live stream survive the toggle. `display:none` also drops it
-              // from the flex row so it consumes no width.
-              display: agentVisible ? "flex" : "none",
+              // (mutually exclusive) so the fixed agent width can't force
+              // overflow. Hidden, not unmounted — the chat and its live stream
+              // survive the toggle, which is also why FOLDING it hides rather
+              // than unmounts. `display:none` drops it from the flex row so it
+              // consumes no width.
+              display: agentVisible && !chatCollapsed ? "flex" : "none",
               flexDirection: "column",
               height: "100%",
               minHeight: 0,
@@ -752,6 +897,46 @@ export function EditItemModal({
 
 /* ------------------------------ Top bar ------------------------------ */
 
+/** One row of the View menu: a panel, and whether it is showing. A checkbox,
+ * not a coloured pill — on/off is then STATED rather than inferred from a hue,
+ * which is how the old control ended up wearing the severity red for "open". */
+function PanelToggle({
+  label,
+  title,
+  checked,
+  onChange,
+}: {
+  label: string;
+  title: string;
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <label
+      title={title}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 12px",
+        fontSize: pxToRem(12),
+        color: "var(--text-paper)",
+        cursor: "pointer",
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        // Left alone this renders in the platform blue, which is nowhere in
+        // this palette. Same treatment as the font-size slider.
+        style={{ accentColor: "var(--accent)" }}
+      />
+      {label}
+    </label>
+  );
+}
+
 export function TopBar({
   item,
   manifest,
@@ -759,6 +944,10 @@ export function TopBar({
   isNarrow,
   ideCollapsed,
   onToggleIde,
+  bottomState,
+  onPanelBottom,
+  chatCollapsed,
+  onToggleChat,
   onCommandPalette,
   onEdit,
 }: {
@@ -769,11 +958,16 @@ export function TopBar({
    * bar used to ask the viewport itself, which over-reports by the width of
    * whatever sits beside the shell (a chat-first App's 240px rail). */
   isNarrow: boolean;
-  /** #159: whether the file IDE is currently folded away (chat is the main
-   * stage). Drives the `Workspace` toggle's pressed state + hides IDE-only
-   * chrome (the command palette) while collapsed. */
+  /** Whether the file IDE is currently folded away (chat is the main stage).
+   * Drives the View menu's Workspace row + hides IDE-only chrome (the command
+   * palette) while collapsed. */
   ideCollapsed: boolean;
   onToggleIde: () => void;
+  /** The bottom log strip, so the View menu can report and flip it too. */
+  bottomState: PanelState;
+  onPanelBottom: (action: PanelAction) => void;
+  chatCollapsed: boolean;
+  onToggleChat: () => void;
   onCommandPalette: () => void;
   onEdit: () => void;
 }) {
@@ -866,39 +1060,83 @@ export function TopBar({
       </div>
       <span style={{ flex: 1 }} />
 
-      {/* #159: chat is the main stage; the file IDE (tree + editor + terminal)
-          folds behind this discoverable toggle. Only shown when the App has an
-          IDE at all (`function.workspace`); pressed = the workspace is open. */}
+      {/* Every panel this shell can fold lives behind ONE menu. The old lone
+          "Workspace" pill sat here shaped exactly like the P1 / triaging /
+          Public status chips, wore the severity accent when ON, and repeated
+          the global nav's own "Workspace" word — so it read as a label, in a
+          warning colour, about something else. Layout settings go here now,
+          and so does the next one. */}
       {manifest.function.workspace && (
-        <button
-          type="button"
-          onClick={onToggleIde}
-          aria-pressed={!ideCollapsed}
-          title={
-            ideCollapsed
-              ? "Show the file workspace"
-              : "Hide the file workspace — the chat expands to fill"
-          }
-          style={{
-            height: 28,
-            // Pressed (workspace open) = the accent-soft active fill used across
-            // the app's toggles, so the on/off direction is unmistakable rather
-            // than a faint bg swap read only via the title/aria (#466 ④).
-            border: `1px solid ${ideCollapsed ? "var(--paper-3)" : "var(--accent)"}`,
-            borderRadius: "var(--radius-btn)",
-            background: ideCollapsed ? "transparent" : "var(--accent-soft)",
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 6,
-            padding: "0 10px",
-            color: ideCollapsed ? "var(--text-paper-d)" : "var(--accent-h)",
-            fontSize: pxToRem(12),
-            cursor: "pointer",
-          }}
+        <Popover
+          align="end"
+          trigger={({ onClick, open }) => (
+            <button
+              type="button"
+              onClick={onClick}
+              title="Panels and layout"
+              style={{
+                height: 28,
+                border: "1px solid var(--paper-3)",
+                borderRadius: "var(--radius-btn)",
+                background: open ? "var(--paper-2)" : "transparent",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+                padding: "0 10px",
+                color: "var(--text-paper-d)",
+                fontSize: pxToRem(12),
+                cursor: "pointer",
+                flexShrink: 0,
+              }}
+            >
+              {/* NOT the gear — the item-details button beside it is already
+                  a gear, and two of them mean different things. */}
+              <Icon name="panel_left" size={13} />
+              <span>View</span>
+            </button>
+          )}
         >
-          <Icon name="panel_left" size={13} />
-          <span>Workspace</span>
-        </button>
+          {() => (
+            <div style={{ minWidth: 240, padding: "6px 0" }}>
+              <div className="caps" style={{ padding: "4px 12px" }}>
+                Panels
+              </div>
+              <PanelToggle
+                label="Workspace"
+                title={
+                  ideCollapsed
+                    ? "Show the file workspace — the chat makes room for it"
+                    : "Hide the file workspace — the chat expands to fill"
+                }
+                checked={!ideCollapsed}
+                onChange={onToggleIde}
+              />
+              <PanelToggle
+                label="Log panel"
+                title={`Problems, Output, Terminal and the agent log (${modCombo("J")})`}
+                checked={bottomState !== "closed"}
+                onChange={() => onPanelBottom({ type: "toggle" })}
+              />
+              {/* Wide only. On a narrow shell #464 already makes the two
+                  mutually exclusive — whichever the Workspace row is not
+                  showing — so a second toggle would govern nothing and would
+                  report "Chat ✓" over an empty column. One control per
+                  decision; the Workspace row's own tooltip names the effect. */}
+              {!isNarrow && (
+                <PanelToggle
+                  label="Chat"
+                  title={
+                    chatCollapsed
+                      ? "Show the chat — the workspace makes room for it"
+                      : "Hide the chat — the workspace expands to fill"
+                  }
+                  checked={!chatCollapsed}
+                  onChange={onToggleChat}
+                />
+              )}
+            </div>
+          )}
+        </Popover>
       )}
 
       {/* #159: the command palette jumps to files/symbols — IDE-only chrome.
@@ -1209,29 +1447,35 @@ const iconBtn: React.CSSProperties = {
 function ActivityBar({
   mode,
   onMode,
+  onPanel,
+  railRef,
   membersLabel,
 }: {
   mode: ActivityMode;
   onMode: (m: ActivityMode) => void;
+  /** Click an icon to glance at its pane, double-click to keep it — the same
+   * three-state rule the bottom strip uses (`lib/panelPeek`). */
+  onPanel: (action: PanelAction) => void;
+  railRef?: React.Ref<HTMLDivElement>;
   /** The App's word for the roster — the same label the panel and the top bar
    * popover use, so the icon's tooltip can't say "Reviewers" while the panel it
    * opens says "Members". */
   membersLabel: string;
 }) {
-  const items: {
-    name: IconName;
-    label: string;
-    onClick: () => void;
-    active: boolean;
-  }[] = [
-    { name: "folder", label: "Files", onClick: () => onMode("evidence"), active: mode === "evidence" },
-    { name: "search", label: "Search files", onClick: () => onMode("search"), active: mode === "search" },
-    { name: "clock", label: "History", onClick: () => onMode("history"), active: mode === "history" },
-    { name: "users", label: membersLabel, onClick: () => onMode("members"), active: mode === "members" },
-    { name: "bell", label: "Activity", onClick: () => onMode("activity"), active: mode === "activity" },
+  // Which pane was on show when the current gesture began — the first click of
+  // a double click has already switched `mode`, so "did you double-click the
+  // icon you were already looking at?" cannot be asked of the live value.
+  const gestureFrom = useRef(mode);
+  const items: { name: IconName; label: string; to: ActivityMode }[] = [
+    { name: "folder", label: "Files", to: "evidence" },
+    { name: "search", label: "Search files", to: "search" },
+    { name: "clock", label: "History", to: "history" },
+    { name: "users", label: membersLabel, to: "members" },
+    { name: "bell", label: "Activity", to: "activity" },
   ];
   return (
     <div
+      ref={railRef}
       style={{
         width: 50,
         flexShrink: 0,
@@ -1243,26 +1487,36 @@ function ActivityBar({
         padding: "8px 0",
       }}
     >
-      {items.map((it) => (
-        <button
-          key={it.label}
-          type="button"
-          title={it.label}
-          onClick={it.onClick}
-          style={{
-            width: 50,
-            height: 44,
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: it.active ? "var(--accent)" : "var(--text-paper-d)",
-            borderLeft: it.active ? "2px solid var(--accent)" : "2px solid transparent",
-            background: it.active ? "var(--accent-soft)" : "transparent",
-          }}
-        >
-          <Icon name={it.name} size={18} />
-        </button>
-      ))}
+      {items.map((it) => {
+        const active = mode === it.to;
+        return (
+          <button
+            key={it.label}
+            type="button"
+            title={it.label}
+            onClick={(e) => {
+              if (e.detail <= 1) gestureFrom.current = mode;
+              onMode(it.to);
+              onPanel({ type: "peek" });
+            }}
+            onDoubleClick={() =>
+              onPanel({ type: "pin", sameTarget: gestureFrom.current === it.to })
+            }
+            style={{
+              width: 50,
+              height: 44,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: active ? "var(--accent)" : "var(--text-paper-d)",
+              borderLeft: active ? "2px solid var(--accent)" : "2px solid transparent",
+              background: active ? "var(--accent-soft)" : "transparent",
+            }}
+          >
+            <Icon name={it.name} size={18} />
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1528,20 +1782,22 @@ function EditorArea({
   groups,
   files,
   bottomHeight,
-  bottomOpen,
+  bottomState,
+  bottomRef,
   onResizeBottom,
   onResizeBottomStart,
-  onToggleBottom,
+  onPanelBottom,
 }: {
   investigationId: string;
   showTerminal: boolean;
   groups: Groups;
   files: FileInfo[];
   bottomHeight: number;
-  bottomOpen: boolean;
+  bottomState: PanelState;
+  bottomRef: React.Ref<HTMLDivElement>;
   onResizeBottom: (deltaFromStart: number) => void;
   onResizeBottomStart: () => void;
-  onToggleBottom: () => void;
+  onPanelBottom: (action: PanelAction) => void;
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
 
@@ -1556,7 +1812,7 @@ function EditorArea({
         />
       </div>
 
-      {bottomOpen && (
+      {bottomState !== "closed" && (
         <ResizeDivider
           orientation="horizontal"
           ariaLabel="resize bottom panel"
@@ -1570,8 +1826,9 @@ function EditorArea({
         investigationId={investigationId}
         showTerminal={showTerminal}
         height={bottomHeight}
-        open={bottomOpen}
-        onToggle={onToggleBottom}
+        state={bottomState}
+        onPanel={onPanelBottom}
+        panelRef={bottomRef}
       />
       <StatusBar activeTab={groups.activeFile} investigationId={investigationId} />
     </section>
@@ -2352,14 +2609,34 @@ function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
   );
 }
 
+/** Where the bottom panel's body sits: docked in the flex column when pinned,
+ * floating directly above the (never-moving) tab strip when peeked. */
+function bodyBox(state: PanelState, height: number): React.CSSProperties {
+  if (state === "pinned") return { flex: 1, minHeight: 0 };
+  return {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    // The strip is the panel's only laid-out row, so its top edge is the
+    // panel's top edge — `bottom: 100%` lands the body exactly on top of it.
+    bottom: "100%",
+    height: height - 32,
+    background: "var(--white)",
+    borderTop: "1px solid var(--paper-3)",
+    boxShadow: "0 -6px 24px rgba(20,22,28,0.16)",
+    zIndex: 12,
+  };
+}
+
 export function BottomPanel({
   tab,
   onTab,
   investigationId,
   showTerminal,
   height,
-  open,
-  onToggle,
+  state,
+  onPanel,
+  panelRef,
 }: {
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
   onTab: (t: "problems" | "output" | "terminal" | "agent_log" | "run_history") => void;
@@ -2368,11 +2645,22 @@ export function BottomPanel({
    * (`function.terminal`). The backend already hard-errors incoherent toggles. */
   showTerminal: boolean;
   height: number;
-  open: boolean;
-  onToggle: () => void;
+  /** Three states, not two: the strip is always there, and the BODY is what
+   * `peeked` (temporary) or `pinned` (stays) reveals. The shell owns the state
+   * so ⌘J and the never-all-collapsed rule have a single source of truth. */
+  state: PanelState;
+  onPanel: (action: PanelAction) => void;
+  /** The shell watches for interaction OUTSIDE this node to retract a peek. */
+  panelRef?: React.Ref<HTMLDivElement>;
 }) {
   const { log } = useAgent();
   const bodyScrollRef = useStickToBottom<HTMLDivElement>(log);
+  const open = state !== "closed";
+  // Which tab the panel was showing when the CURRENT click gesture began. A
+  // double click delivers two clicks first, and the first one has already
+  // switched `tab` — so judging "did you double-click the tab you were already
+  // reading?" against the live prop would read every switch as a collapse.
+  const gestureFrom = useRef(tab);
   const tabs = [
     { key: "problems" as const, label: "Problems" },
     { key: "output" as const, label: "Output" },
@@ -2383,9 +2671,15 @@ export function BottomPanel({
 
   return (
     <div
+      ref={panelRef}
       style={{
-        height: open ? height : 32,
+        // Only a PIN claims height. A peek leaves the panel at strip height and
+        // floats its body over the editor instead — see the docked-growth bug
+        // in BottomPanel.peek.test.tsx: growing upward moved the tab row out
+        // from under the pointer mid-gesture and killed the double click.
+        height: state === "pinned" ? height : 32,
         flexShrink: 0,
+        position: "relative",
         borderTop: "1px solid var(--paper-3)",
         background: "var(--white)",
         display: "flex",
@@ -2433,7 +2727,17 @@ export function BottomPanel({
               <button
                 key={t.key}
                 type="button"
-                onClick={() => onTab(t.key)}
+                // Single click: switch to this tab and reveal it temporarily.
+                // Double click: pin it — or collapse, when it was already the
+                // tab on show (see `gestureFrom`).
+                onClick={(e) => {
+                  if (e.detail <= 1) gestureFrom.current = tab;
+                  onTab(t.key);
+                  onPanel({ type: "peek" });
+                }}
+                onDoubleClick={() =>
+                  onPanel({ type: "pin", sameTarget: gestureFrom.current === t.key })
+                }
                 style={{
                   padding: "0 10px",
                   height: 32,
@@ -2455,7 +2759,7 @@ export function BottomPanel({
             scrolling the tabs to find the control. */}
         <button
           type="button"
-          onClick={onToggle}
+          onClick={() => onPanel({ type: "toggle" })}
           title={`${open ? "Collapse" : "Expand"} panel (${modCombo("J")})`}
           aria-label="toggle bottom panel"
           style={{ color: "var(--text-paper-d)", padding: 4, flexShrink: 0 }}
@@ -2466,9 +2770,9 @@ export function BottomPanel({
       {open &&
         (tab === "terminal" ? (
           <div
+            data-testid="bottom-body"
             style={{
-              flex: 1,
-              minHeight: 0,
+              ...bodyBox(state, height),
               padding: "8px 14px",
               display: "flex",
               flexDirection: "column",
@@ -2479,10 +2783,10 @@ export function BottomPanel({
         ) : (
           <div
             ref={bodyScrollRef}
+            data-testid="bottom-body"
             className="scrollable"
             style={{
-              flex: 1,
-              minHeight: 0,
+              ...bodyBox(state, height),
               overflow: "auto",
               padding: "8px 14px",
               fontFamily: "var(--font-mono)",
