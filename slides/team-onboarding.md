@@ -134,9 +134,8 @@ style: |
 | **CLI 能回答三個問題** | 零參列出 command、一參給出 `params_json_schema`、兩參執行 —— 用 `tooling/dispatcher.py` 的 helper 就自動成立 | 模型看不到參數，叫不動 |
 | **stdout 乾淨** | 只放 output，**而且是 JSON**；log 一律走 **stderr** | prebuild 會**實跑並解析** stdout，印 traceback 或印一句話就 build 失敗 |
 | **returncode 分配** | `0` 成功 · `2` 參數不合法 · `3` 上游拒絕或無權限（**不要重試**）· `4` 暫時失敗或逾時（**可以重試**） | 呼叫端只能瞎猜要不要重試 |
-| **timeout 自己顧** | 平台的 `exec` **不帶 timeout**；另設一個更短的 **log timeout**，超過就吐一行進度到 stderr | 長指令看起來就像當掉 |
+| **timeout 自己顧** | 平台的 `exec` **不帶 timeout**，所以工具自己訂：**最長跑 1 小時**，逾時回 `4`；而且**每 60 秒至少吐一行 log 到 stderr** | 沒有上限就收不回來；超過 60 秒不出聲，看起來就像當掉 |
 | **env 只放秘密** | 連線資訊與金鑰走 item 的環境變數（派送那次帶入、**不落地**）；一般參數一律走 JSON | 走 env 的東西進不了 schema，模型不知道它存在 |
-| **絕對 import** | ruff `TID252` / `ban-relative-imports = "all"`；pytest 自帶 rootdir，不要吃到母 repo 的設定 | 程式碼被搬動後 import 爆掉 |
 
 ### prebuild 會**把你的 launcher 真的跑起來**驗 stdout 與 schema —— 這是平台唯一強制得了的事，所以它在 build 裡面，不是可以略過的 CI 步驟。
 
