@@ -242,3 +242,47 @@ async def test_a_deploy_with_no_window_never_sweeps():
     started: list[str] = []
     sweeper = _sweeper(spec, started, settings=OffHoursSettings())
     assert await sweeper.tick(now=NIGHT) == []
+
+
+# ── the two pure readings the driver makes of a thread ───────────────────────
+
+
+def test_a_turn_with_no_tool_calls_has_no_signature():
+    # Deliberately never "stuck": an agent writing prose may be summarising the
+    # work it just finished, and killing that is far worse than letting a stuck
+    # one spend one more round.
+    from workspace_app.api.goal_offhours import turn_signature
+
+    assert turn_signature(Conversation(item_id="i1")) == ""
+    assert (
+        turn_signature(
+            Conversation(item_id="i1", messages=[Message(role="assistant", content="thinking")])
+        )
+        == ""
+    )
+
+
+def test_the_same_calls_in_a_different_order_are_the_same_turn():
+    # Two turns that issued the same commands did the same thing; the order the
+    # model happened to emit them in is not progress.
+    from workspace_app.api.goal_offhours import turn_signature
+
+    def _turn(*calls: tuple[str, dict]) -> Conversation:
+        msgs: list[Message] = [Message(role="user", content="go")]
+        msgs += [
+            Message(role="tool", content="ok", tool_name=name, tool_args=args)
+            for name, args in calls
+        ]
+        return Conversation(item_id="i1", messages=msgs)
+
+    a = _turn(("read_file", {"path": "a.md"}), ("exec", {"cmd": "ls"}))
+    b = _turn(("exec", {"cmd": "ls"}), ("read_file", {"path": "a.md"}))
+    c = _turn(("read_file", {"path": "b.md"}), ("exec", {"cmd": "ls"}))
+    assert turn_signature(a) == turn_signature(b)
+    assert turn_signature(a) != turn_signature(c)
+
+
+def test_a_thread_nobody_has_spoken_in_reads_as_quiet():
+    from workspace_app.api.goal_offhours import last_human_message_ms
+
+    assert last_human_message_ms(Conversation(item_id="i1")) is None

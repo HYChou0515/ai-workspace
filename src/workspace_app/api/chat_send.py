@@ -42,7 +42,7 @@ from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
 from ..workcalendar import OffHoursCalendar
 from .events import GoalUpdated, UserMessage
-from .goal_offhours import build_offhours_calendar, owner_is_active
+from .goal_offhours import build_offhours_calendar, owner_is_active, turn_signature
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
@@ -68,6 +68,10 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# #615: how many consecutive no-progress turns park an unattended goal. Two,
+# because one is a blip worth retrying and three is a night already wasted.
+_STALL_LIMIT = 2
 
 
 async def _load_inline_image_urls(
@@ -239,19 +243,27 @@ class ChatSendService:
         """Turn-persisted hook: judge the chat's goal and maybe drive another
         round. Runs inside the turn task (the worker is awaiting it), so the
         follow-up is spawned DETACHED — awaiting it here would deadlock the
-        queue. A turn that ended in an error (incl. the user's Stop →
-        cancelled) never auto-continues: a human just intervened, and running
-        away from them is the one unforgivable behaviour."""
+        queue.
+
+        A user's Stop ends everything, at any hour: a human just intervened, and
+        running away from them is the one unforgivable behaviour. Other failures
+        are passed along as an `outcome` for the follow-up to judge — during
+        office hours it still hands straight back (#613), but overnight a single
+        blip has to be survivable, because there is nobody to hand back TO."""
         if self._goal_checker is None:
             return
-        if any(m.role == "error" for m in produced):
+        failure = next((m for m in produced if m.role == "error"), None)
+        if failure is not None and failure.error_kind == "cancelled":
             return
-        task = asyncio.create_task(self._goal_followup(investigation_id, rid, engine_key, author))
+        outcome = (failure.error_kind or "error") if failure is not None else "ok"
+        task = asyncio.create_task(
+            self._goal_followup(investigation_id, rid, engine_key, author, outcome)
+        )
         self._goal_tasks.add(task)
         task.add_done_callback(self._goal_tasks.discard)
 
     async def _goal_followup(
-        self, investigation_id: str, rid: str, engine_key: str, author: str
+        self, investigation_id: str, rid: str, engine_key: str, author: str, outcome: str = "ok"
     ) -> None:
         """One goal checkpoint: cheap-LLM verdict → met / continue / exhaust.
 
@@ -268,12 +280,25 @@ class ChatSendService:
             goal = read_goal(self._spec, rid)
             if goal is None or goal.state != "active":
                 return
-            baseline = await self._turn_engine.cancel_epoch(engine_key)
             conv = self._conv_rm.get(rid).data
             assert isinstance(conv, Conversation)
+            # #615: a failed turn is only retried when nobody is there to take
+            # over. At a desk, handing straight back is right (#613's rule) —
+            # and deciding that BEFORE the checker call keeps a broken turn from
+            # also costing a model call.
+            unattended = (
+                goal.offhours
+                and _last_user_was_the_driver(conv)
+                and self._offhours_calendar().is_offhours(datetime.now(UTC))
+            )
+            if outcome != "ok" and not unattended:
+                return
+            baseline = await self._turn_engine.cancel_epoch(engine_key)
             checker = self._goal_checker
             assert checker is not None  # guarded by _maybe_continue_goal
-            met = await asyncio.to_thread(
+            # An errored turn produced no new evidence, so there is nothing for
+            # the checker to judge — skip the call and treat it as unmet.
+            met = outcome == "ok" and await asyncio.to_thread(
                 check_goal_met, checker, goal.condition, transcript_tail(conv.messages)
             )
             # Re-read: the user may have cleared or replaced the goal while the
@@ -315,6 +340,26 @@ class ChatSendService:
                 # Its owner came back mid-night. Stand down rather than talk
                 # over them; the sweeper releases tonight's claim and re-takes
                 # it once the chat goes quiet again.
+                self._publish_goal(engine_key, current)
+                return
+            # #615: the self-destruct gate. A failed turn, or one that made the
+            # byte-identical tool calls as the last, counts as no progress; two
+            # in a row and the goal parks for a person. Counted separately from
+            # the round budget, so recovering from a blip costs a round while
+            # being stuck costs the night instead of thirty rounds of it.
+            signature = turn_signature(latest)
+            no_progress = outcome != "ok" or (
+                bool(signature) and signature == current.last_signature
+            )
+            current.stall_count = current.stall_count + 1 if no_progress else 0
+            current.last_signature = signature
+            if current.stall_count >= _STALL_LIMIT:
+                current.state = "stalled"
+                upsert_goal(self._spec, current, user=current.set_by)
+                self._append_goal_marker(
+                    rid,
+                    f"連續 {_STALL_LIMIT} 輪沒有進展,卡住了,先停下等你:{current.condition}",
+                )
                 self._publish_goal(engine_key, current)
                 return
             spent = current.offhours_rounds_used if after_hours else current.rounds_used

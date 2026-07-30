@@ -26,6 +26,8 @@ picked up at midnight.
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -144,6 +146,31 @@ def owner_is_active(conv: Conversation, now: datetime, settings: OffHoursSetting
         return False
     idle_ms = int(now.timestamp() * 1000) - spoke_at
     return idle_ms < settings.yield_after_human_minutes * 60_000
+
+
+def turn_signature(conv: Conversation) -> str:
+    """A fingerprint of the tool calls the last turn made, or `""` when it made
+    none (#615).
+
+    Two identical fingerprints in a row is the cheap, deterministic shape of an
+    agent going in circles — re-issuing the same command and re-reading the same
+    answer. No extra model call, and no judgement a small model could get wrong.
+
+    A turn with NO tool calls fingerprints as `""`, which never matches, so it is
+    never counted as stuck. That is the deliberate direction to be wrong in: an
+    agent writing prose might be summarising the work it just finished, and
+    killing that is far worse than letting a stuck one spend one more round.
+    """
+    calls: list[str] = []
+    for message in reversed(conv.messages):
+        if message.role == "user":
+            break  # everything above this belongs to an earlier turn
+        if message.tool_name:
+            args = json.dumps(message.tool_args or {}, sort_keys=True, ensure_ascii=False)
+            calls.append(f"{message.tool_name}({args})")
+    if not calls:
+        return ""
+    return hashlib.sha256("\n".join(sorted(calls)).encode()).hexdigest()[:16]
 
 
 def last_human_message_ms(conv: Conversation) -> int | None:

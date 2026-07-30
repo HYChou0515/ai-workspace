@@ -266,6 +266,15 @@ describe("#615 after-hours opt-in", () => {
     expect(screen.getByTestId("goal-offhours-unavailable")).toBeInTheDocument();
   });
 
+  it("says a stuck goal is stuck, not that its budget ran out", async () => {
+    // The two endings need different words: one wants a person to look, the
+    // other wants a bigger budget.
+    const goalApi = fakeGoalApi(mkGoal({ state: "stalled", offhours: true }), true, true);
+    mount(fakeApi([]), { goalClient: goalApi });
+    expect(await screen.findByTestId("goal-stalled")).toBeInTheDocument();
+    expect(screen.queryByTestId("goal-exhausted")).not.toBeInTheDocument();
+  });
+
   it("shows an active after-hours goal counting its own budget", async () => {
     const goalApi = fakeGoalApi(
       mkGoal({ rounds_used: 1, offhours: true, offhours_rounds_used: 4 }),

@@ -1010,6 +1010,10 @@ export const messages = {
     "zh-TW": "此部署未設定目標檢查模型,目標不會自動續跑",
     en: "No goal checker is configured on this deploy — the goal will not auto-continue",
   },
+  "goal.stalled": {
+    "zh-TW": "卡住了,先停下等你",
+    en: "Stuck — paused for you",
+  },
   // #615: opting a goal in to unattended work outside office hours.
   "goal.offhours": { "zh-TW": "下班時間繼續做", en: "Keep working after hours" },
   "goal.offhoursOn": { "zh-TW": "下班時間會繼續做", en: "Continues after hours" },

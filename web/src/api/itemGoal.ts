@@ -12,7 +12,11 @@ import { apiFetch } from "./http";
 
 const enc = encodeURIComponent;
 
-export type GoalState = "active" | "met" | "exhausted";
+/** `stalled` (#615) = the self-destruct gate stopped an unattended run that
+ * was not moving — distinct from `exhausted`, which means it worked through
+ * its whole budget. The two need different words: one wants a person, the
+ * other wants a bigger budget. */
+export type GoalState = "active" | "met" | "exhausted" | "stalled";
 export type ChatGoal = {
   condition: string;
   set_by: string;

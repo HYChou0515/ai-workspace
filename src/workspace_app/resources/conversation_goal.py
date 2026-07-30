@@ -21,7 +21,7 @@ from specstar.types import (
     RevisionStatus,
 )
 
-GOAL_STATES = ("active", "met", "exhausted")
+GOAL_STATES = ("active", "met", "exhausted", "stalled")
 
 GOAL_DRIVER = "goal"
 """`Message.driven_by` for an auto-continue round, so a driver's prompt is
@@ -50,6 +50,17 @@ class ConversationGoal(Struct):
     Opt-in, and deliberately NOT implied by the work-hours budget running out —
     spending tokens overnight with nobody watching should be a choice someone
     made, not the automatic consequence of a daytime cap."""
+
+    stall_count: int = 0
+    """#615: consecutive turns that failed or made no visible progress. The
+    self-destruct gate counts SEPARATELY from the round budget on purpose: a
+    transient blip has to be survivable (nobody is awake to restart the night),
+    while an agent genuinely circling must not spend thirty rounds proving it."""
+
+    last_signature: str = ""
+    """#615: the previous turn's tool-call fingerprint. Two identical turns in a
+    row is the cheap, deterministic shape of "stuck" — no extra model call, and
+    it can only misfire toward LETTING a working agent continue."""
 
     offhours_rounds_used: int = 0
     """#615: off-hours turns spent, counted separately from `rounds_used`.

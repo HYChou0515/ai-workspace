@@ -187,7 +187,7 @@ class _GoalWire(BaseModel):
     condition: str
     set_by: str
     rounds_used: int
-    state: Literal["active", "met", "exhausted"]
+    state: Literal["active", "met", "exhausted", "stalled"]
     max_rounds: int
     """The auto-continue budget (config `goal.max_rounds`) — so the panel can
     show `rounds_used/max_rounds` without a second endpoint."""

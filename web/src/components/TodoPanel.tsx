@@ -172,6 +172,11 @@ export function TodoPanel({
               {t("goal.exhausted")}
             </span>
           )}
+          {goal.state === "stalled" && (
+            <span data-testid="goal-stalled" style={{ color: "var(--err)" }}>
+              {t("goal.stalled")}
+            </span>
+          )}
           {!readOnly && (
             <button
               type="button"
