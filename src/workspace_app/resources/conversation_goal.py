@@ -23,6 +23,10 @@ from specstar.types import (
 
 GOAL_STATES = ("active", "met", "exhausted")
 
+GOAL_DRIVER = "goal"
+"""`Message.driven_by` for an auto-continue round, so a driver's prompt is
+distinguishable from something its owner actually said (#615)."""
+
 
 class ConversationGoal(Struct):
     conversation_id: str
@@ -56,9 +60,15 @@ class ConversationGoal(Struct):
 
 
 def register_conversation_goal(spec: SpecStar) -> None:
-    """Idempotently register the goal model. Safe to call on every pod."""
+    """Idempotently register the goal model. Safe to call on every pod.
+
+    `offhours` is indexed so the #615 sweeper QUERIES the handful of opted-in
+    chats every minute instead of scanning every goal ever set. No `rm.migrate`
+    backfill is needed for rows written before the index: they predate the field
+    entirely, so they are all opted OUT, and being invisible to an
+    `offhours == True` query is the right answer for them."""
     with contextlib.suppress(ValueError):
-        spec.add_model(ConversationGoal)
+        spec.add_model(ConversationGoal, indexed_fields=["offhours"])
 
 
 def upsert_goal(spec: SpecStar, goal: ConversationGoal, *, user: str = "") -> None:

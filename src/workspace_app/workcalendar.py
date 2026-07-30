@@ -10,12 +10,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, tzinfo
+from datetime import date, datetime, time, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # Sentinel for "the tz database does not know this name" — distinct from None,
 # which legitimately means "no zone configured, use the local wall clock".
 _UNKNOWN = object()
+
+# How far `stretch_id` walks back over consecutive non-working days. Longer
+# than any real holiday, short enough that a misconfigured calendar (nothing
+# is a working day) terminates instead of looping.
+_MAX_STRETCH_DAYS = 30
 
 
 def _parse_window(value: str) -> tuple[time, time] | None:
@@ -78,18 +83,53 @@ class OffHoursCalendar:
             return override == "work"
         return day.weekday() in self.workdays
 
+    def stretch_id(self, now: datetime) -> str:
+        """A stable name for the CONTIGUOUS off-hours stretch ``now`` falls in —
+        the date its first evening began, e.g. ``"2026-07-31"``.
+
+        This is the sweeper's cluster-wide claim key, so it must not change
+        while the office stays empty. A whole weekend (Friday 19:00 through
+        Monday 08:00) is ONE stretch, and so is a four-day holiday: if each
+        calendar day were its own key, a goal would be restarted every morning
+        and spend its whole budget by Sunday. The walk back is bounded — a
+        deployment that never works again is not a case worth looping over."""
+        moment = self._localized(now)
+        span = _parse_window(self.window)
+        day = moment.date()
+        # The morning tail of a wrapping window belongs to the previous evening.
+        if (
+            span is not None
+            and span[0] > span[1]
+            and moment.time() < span[1]
+            and self.is_workday(day)
+        ):
+            day -= timedelta(days=1)
+        # Whole non-working days belong to the stretch that opened before them.
+        for _ in range(_MAX_STRETCH_DAYS):
+            if self.is_workday(day):
+                break
+            day -= timedelta(days=1)
+        return day.isoformat()
+
+    def _localized(self, now: datetime) -> datetime:
+        """``now`` read in this calendar's zone (unchanged when it is naive, or
+        when no zone is configured — then it is already local wall clock)."""
+        zone = self._zone()
+        if zone is _UNKNOWN or zone is None or now.tzinfo is None:
+            return now
+        assert isinstance(zone, tzinfo)  # narrow for ty
+        return now.astimezone(zone)
+
     def is_offhours(self, now: datetime) -> bool:
         """Is ``now`` inside the off-hours window?"""
         span = _parse_window(self.window)
         zone = self._zone()
         if span is None or zone is _UNKNOWN:
             return False
-        if zone is not None and now.tzinfo is not None:
-            # An aware instant is read in the CALENDAR's zone, not the
-            # container's — a schedule that moves when the base image changes
-            # is a bug nobody would think to look for.
-            assert isinstance(zone, tzinfo)  # narrow for ty
-            now = now.astimezone(zone)
+        # An aware instant is read in the CALENDAR's zone, not the container's —
+        # a schedule that moves when the base image changes is a bug nobody
+        # would think to look for.
+        now = self._localized(now)
         if not self.is_workday(now.date()):
             return True  # nobody is in the office — the whole day is available
         lo, hi = span

@@ -581,6 +581,7 @@ def create_app(
         gc_t1=gc_t1,
         gc_t2=gc_t2,
         trigger_check_interval=trigger_check_interval,
+        offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
         cluster_tau=kb_cluster_tau,
         cluster_merge_tau=kb_cluster_merge_tau,
@@ -1246,6 +1247,9 @@ def create_app(
     chat_send_svc = ChatSendService(
         spec=spec,
         locator=locator,
+        # #615: the after-hours budget + window the turn-end driver reads to
+        # decide which budget a continuation spends and when to stop.
+        offhours=goal_offhours,
         turn_ctx=turn_ctx,
         subagent_bridge=subagent_bridge,
         filestore=filestore,
@@ -1269,6 +1273,9 @@ def create_app(
         send_await_timeout=send_await_timeout,
     )
 
+    # #615: the sweeper task (built in the lifespan, before this point) reaches
+    # the send service through app.state, like the wiki-reflect sweeper does.
+    app.state.chat_send = chat_send_svc
     # #615: an unset/typo'd window or an unknown zone leaves `enabled` False,
     # so off-hours autonomy stays off rather than guessing an hour.
     offhours = goal_offhours or OffHoursSettings()

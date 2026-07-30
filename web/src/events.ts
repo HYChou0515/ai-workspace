@@ -5,6 +5,8 @@
 // Variants tagged `[anticipated]` are not yet emitted by the backend.
 // They are listed in docs/contract.md §3.1 / §3.2 with their status.
 
+import type { ChatGoal } from "./api/itemGoal";
+
 /* ------------------------------------------------------------------ */
 /* AgentEvent — POST /investigations/{id}/messages                     */
 /* ------------------------------------------------------------------ */
@@ -143,13 +145,9 @@ export type ContextTrimmed = {
  * api/events.py GoalUpdated. */
 export type GoalUpdated = {
   type: "goal_updated";
-  goal: {
-    condition: string;
-    set_by: string;
-    rounds_used: number;
-    state: "active" | "met" | "exhausted";
-    max_rounds: number;
-  } | null;
+  /** The panel's whole new state — the same shape `GET /goal` returns, so the
+   * live event and the hydration cannot drift apart. */
+  goal: ChatGoal | null;
 };
 
 /* ------------------------------------------------------------------ */

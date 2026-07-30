@@ -28,9 +28,7 @@ GOAL: {condition}
 
 Below is the tail of the session transcript (most recent last). Judge whether \
 the GOAL is now fully achieved. Only what the transcript shows counts — \
-claimed intentions or plans are not completion. Auto-continue prompts in the \
-transcript (lines starting with "[goal]") are the driver re-asking; they are \
-not evidence either way.
+claimed intentions or plans are not completion.
 
 TRANSCRIPT:
 {transcript}
@@ -41,8 +39,15 @@ achieved, NOT_MET otherwise."""
 
 def transcript_tail(messages: list[Message]) -> str:
     """The checker's view of the conversation: the last few user/assistant/tool
-    messages, oldest first, clipped to a budget."""
-    shown = [m for m in messages if m.role in ("user", "assistant", "tool")][-_TAIL_MESSAGES:]
+    messages, oldest first, clipped to a budget.
+
+    A driver's own auto-continue rounds (`driven_by`) are left out entirely.
+    They are the driver re-asking, never evidence of progress — and dropping
+    them beats asking the model to ignore lines it can see, which is a rule a
+    small model can simply fail to follow (#615)."""
+    shown = [
+        m for m in messages if m.role in ("user", "assistant", "tool") and m.driven_by is None
+    ][-_TAIL_MESSAGES:]
     lines = [f"{m.role}: {m.content}" for m in shown if m.content]
     return "\n".join(lines)[-_TAIL_CHARS:]
 

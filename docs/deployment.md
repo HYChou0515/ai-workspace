@@ -475,7 +475,13 @@ RCA 的 system prompt 是純 markdown，存在
     API 入列的 job — 真正切 pod 必須讓所有進程指向同一個 **Postgres** specstar
     後端（必要時 `message_queue.kind: rabbitmq`）。
   - 非 queue 的背景 sweeper（sandbox 閒置回收 / 鏡像 / 索引卡住回收 / blob-GC /
-    code 同步）**一律留在 API**，不受 `run_consumers` 影響。
+    code 同步 / **下班時間 goal 續跑（#615）**）**一律留在 API**，不受
+    `run_consumers` 影響。下班 sweeper 特別留在 API 是因為它要起的是一個
+    **turn** —— turn 需要 turn engine、sandbox 與 `ChatSendService`，那整套只
+    存在於 API 進程；worker 沒有。多 pod 靠 specstar CAS 認領選出唯一一個 pod
+    起跑，所以每個 replica 都跑這個 sweeper 是安全的。
+    ⚠️**前提:API pod 半夜要活著**。若 HPA 夜間把 API 縮到 0,就沒有人掃描,
+    過夜長跑不會發生（`kubectl get hpa` 確認 API 的 `minReplicas` ≥ 1）。
   - k8s 範例見 [`kubernetes/base/workers.yaml`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/base/workers.yaml)
     與 [`kubernetes/README.md`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/README.md)（每 JobType 一個
     Deployment + CPU HPA，sanity 固定 1 replica；不使用 KEDA）。

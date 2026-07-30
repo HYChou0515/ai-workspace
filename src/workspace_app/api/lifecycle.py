@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI
 from specstar import SpecStar
 
+from ..config.schema import OffHoursSettings
 from ..filestore.blob_gc import register_gc_lease, run_blob_gc
 from ..health.service import HealthService
 from ..kernels import KernelService
@@ -91,6 +92,7 @@ def build_lifespan(
     gc_t1: str,
     gc_t2: str,
     trigger_check_interval: timedelta | None = None,
+    offhours: OffHoursSettings | None = None,
     cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
     cluster_tau: float = _CLUSTER_SWEEP_TAU,
     cluster_merge_tau: float = _CLUSTER_MERGE_TAU,
@@ -163,6 +165,37 @@ def build_lifespan(
                 # whole poll interval; the once-a-day gate prevents a re-run.
                 await asyncio.to_thread(sweeper.tick)
                 await asyncio.sleep(_WIKI_REFLECT_CHECK_INTERVAL_S)
+        except asyncio.CancelledError:
+            return
+
+    async def goal_offhours_sweeper(app: FastAPI) -> None:
+        """#615: start tonight's round for goals opted in to after-hours work.
+
+        On the API pod, not a CronJob and not a worker: the turn it starts needs
+        the turn engine, the sandbox and `ChatSendService`, which only exist
+        here — and "stand down while someone is still working, ask again later"
+        is a poll, which a single cron instant cannot express. Reads
+        `app.state.chat_send` post-construction, like `reflect_sweeper`.
+        Gated on a configured window (caller)."""
+        from .goal_offhours import OffHoursGoalSweeper, SpecstarStretchClaims
+
+        assert offhours is not None  # gated by caller
+        sweeper = OffHoursGoalSweeper(
+            spec,
+            settings=offhours,
+            claims=SpecstarStretchClaims(spec),
+            start_round=app.state.chat_send.start_offhours_round,
+        )
+        try:
+            while True:
+                # One item's failure must not end the sweep for the fleet: this
+                # loop is the only thing that ever starts unattended work, and a
+                # dead loop is indistinguishable from "nothing was due".
+                try:
+                    await sweeper.tick()
+                except Exception:
+                    logger.exception("goal offhours sweep failed; continuing")
+                await asyncio.sleep(offhours.poll_seconds)
         except asyncio.CancelledError:
             return
 
@@ -413,6 +446,14 @@ def build_lifespan(
             register_gc_lease(spec)
             bg.append(asyncio.create_task(blob_gc_sweeper()))
             logger.debug("lifespan: blob-GC sweeper enabled")
+        if offhours is not None and offhours.window:
+            # #615: the model the stretch claim lives in, registered post-apply
+            # like the blob-GC lease so its CRUD routes are never emitted.
+            from .goal_offhours import register_stretch_claims
+
+            register_stretch_claims(spec)
+            bg.append(asyncio.create_task(goal_offhours_sweeper(app)))
+            logger.debug("lifespan: goal off-hours sweeper enabled")
         if trigger_check_interval is not None:
             # #429 P7: register the shared window-ledger model (post-apply, so its CRUD
             # routes are never emitted — same reason as the blob-GC lease above), then run

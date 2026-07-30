@@ -20,11 +20,13 @@ import asyncio
 import base64
 import contextlib
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import magic
 
 from ..agent.context import KbSearchBudget, WikiSearchBudget
+from ..config.schema import OffHoursSettings
 from ..filestore.protocol import FileNotFound
 from ..kb.collections import (
     collection_ids_from_json,
@@ -35,9 +37,12 @@ from ..kb.collections import (
     resolve_withheld,
 )
 from ..resources import Conversation, Message
+from ..resources.conversation_goal import GOAL_DRIVER, read_goal, upsert_goal
 from ..sandbox.protocol import OutputSink
 from ..tokens import CallLane
+from ..workcalendar import OffHoursCalendar
 from .events import GoalUpdated, UserMessage
+from .goal_offhours import build_offhours_calendar, owner_is_active
 from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
@@ -87,6 +92,16 @@ async def _load_inline_image_urls(
     return urls
 
 
+def _last_user_was_the_driver(conv: Conversation) -> bool:
+    """Was the turn that just ended started by the goal driver rather than by a
+    person? (#615) The driver's round is stored as `role="user"` under the
+    goal's setter, so `driven_by` is the only thing that tells them apart."""
+    for message in reversed(conv.messages):
+        if message.role == "user":
+            return message.driven_by == GOAL_DRIVER
+    return False
+
+
 class ChatSendService:
     """Drive an RCA turn for a workspace/chat message: persist the user message,
     build the turn context from the conversation's history, and enqueue it on the
@@ -112,6 +127,7 @@ class ChatSendService:
         kb_max_searches_ceiling: int = 10,
         goal_checker_llm: ILlm | None = None,
         goal_max_rounds: int = 3,
+        offhours: OffHoursSettings | None = None,
         flush_item: Callable[[str], Awaitable[None]],
         send_await_timeout: float = 25.0,
     ) -> None:
@@ -134,6 +150,11 @@ class ChatSendService:
         # feature is inert (and the /goal routes disclose that on the wire).
         self._goal_checker = goal_checker_llm
         self._goal_max_rounds = goal_max_rounds
+        # #615: the off-hours budget + window. The CALENDAR is rebuilt per use
+        # (see `_offhours_calendar`), so recording a make-up workday takes
+        # effect tonight rather than after the next restart.
+        self._offhours = offhours or OffHoursSettings()
+        self._offhours_max_rounds = self._offhours.max_rounds
         # #492: flush this item's live sandbox to durable at turn-end (guarantee
         # (2)'s Y=1 turn) — a no-op when the item is cold.
         self._flush_item = flush_item
@@ -162,6 +183,7 @@ class ChatSendService:
         body: _MessageBody,
         author: str | None = None,
         lane: CallLane = "background",
+        driven_by: str | None = None,
     ) -> None:
         """Append the user message, build the turn ctx and enqueue it — see
         :meth:`_send` — but do it in a task this request only WATCHES.
@@ -189,7 +211,16 @@ class ChatSendService:
         from the file tree is never quota-gated."""
         await self._files.ensure_room_for(investigation_id, 1)
         task = asyncio.create_task(
-            self._send(investigation_id, rid, conv, engine_key, body, author=author, lane=lane)
+            self._send(
+                investigation_id,
+                rid,
+                conv,
+                engine_key,
+                body,
+                author=author,
+                lane=lane,
+                driven_by=driven_by,
+            )
         )
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
@@ -230,7 +261,6 @@ class ChatSendService:
         judging stands — the same baseline pattern as the workflow driver."""
         from specstar.types import ResourceIDNotFoundError, ResourceIsDeletedError
 
-        from ..resources.conversation_goal import read_goal, upsert_goal
         from .goal_checker import check_goal_met, transcript_tail
         from .schemas import _MessageBody
 
@@ -257,17 +287,53 @@ class ChatSendService:
                 self._append_goal_marker(rid, f"目標已達成:{current.condition}")
                 self._publish_goal(engine_key, current)
                 return
-            if current.rounds_used >= self._goal_max_rounds:
+            # #615: which budget is this continuation spending? A night's
+            # rounds are counted separately, so a long night cannot make the
+            # goal read as exhausted against the (much smaller) work-hours cap
+            # the next morning.
+            # Re-read the thread too, not just the goal: the checker call took
+            # seconds, and if its owner spoke during them the decision below has
+            # to see that. Judging "is anyone there?" off a stale copy is how an
+            # unattended agent talks over the person it works for.
+            latest = self._conv_rm.get(rid).data
+            assert isinstance(latest, Conversation)
+            after_hours = current.offhours and self._offhours_calendar().is_offhours(
+                datetime.now(UTC)
+            )
+            driver_round = _last_user_was_the_driver(latest)
+            if current.offhours and driver_round and not after_hours:
+                # The morning edge: the turn that was running when the window
+                # closed has now finished, and that is where an unattended chain
+                # stops. The goal stays ACTIVE — it is not exhausted, it is
+                # waiting for tonight, and the sweeper will pick it up.
+                self._append_goal_marker(
+                    rid, f"上班時間到了,先停在這裡,晚上再繼續:{current.condition}"
+                )
+                self._publish_goal(engine_key, current)
+                return
+            if driver_round and after_hours and self._owner_is_active(latest):
+                # Its owner came back mid-night. Stand down rather than talk
+                # over them; the sweeper releases tonight's claim and re-takes
+                # it once the chat goes quiet again.
+                self._publish_goal(engine_key, current)
+                return
+            spent = current.offhours_rounds_used if after_hours else current.rounds_used
+            budget = self._offhours_max_rounds if after_hours else self._goal_max_rounds
+            if spent >= budget:
                 current.state = "exhausted"
                 upsert_goal(self._spec, current, user=current.set_by)
                 self._append_goal_marker(
                     rid,
-                    f"目標尚未達成,自動續跑額度({self._goal_max_rounds} 輪)已用完,"
-                    f"交還給你:{current.condition}",
+                    f"目標尚未達成,自動續跑額度({budget} 輪)已用完,交還給你:{current.condition}",
                 )
                 self._publish_goal(engine_key, current)
                 return
-            current.rounds_used += 1
+            if after_hours:
+                current.offhours_rounds_used += 1
+                spent = current.offhours_rounds_used
+            else:
+                current.rounds_used += 1
+                spent = current.rounds_used
             upsert_goal(self._spec, current, user=current.set_by)
             self._publish_goal(engine_key, current)
             if await self._turn_engine.cancel_epoch(engine_key) != baseline:
@@ -276,15 +342,20 @@ class ChatSendService:
             assert isinstance(fresh, Conversation)
             body = _MessageBody(
                 content=(
-                    f"[goal] 尚未達成,繼續朝目標推進(第 {current.rounds_used}/"
-                    f"{self._goal_max_rounds} 輪):{current.condition}"
+                    f"[goal] 尚未達成,繼續朝目標推進(第 {spent}/{budget} 輪):{current.condition}"
                 )
             )
             # Through the full send path (quota gate, visible user message,
             # broadcast) — as the goal's setter, since this task has no request
             # context to resolve a user from.
             await self.send(
-                investigation_id, rid, fresh, engine_key, body, author=current.set_by or author
+                investigation_id,
+                rid,
+                fresh,
+                engine_key,
+                body,
+                author=current.set_by or author,
+                driven_by=GOAL_DRIVER,
             )
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return  # the chat was deleted mid-flight
@@ -303,6 +374,45 @@ class ChatSendService:
         conv.messages.append(Message(role=CONTEXT_NOTICE_ROLE, content=text, created_at=now_ms()))
         self._conv_rm.update(rid, conv)
         logger.info("chat_send: history reduced for chat %s — %s", rid, note)
+
+    def _offhours_calendar(self) -> OffHoursCalendar:
+        return build_offhours_calendar(self._spec, self._offhours)
+
+    def _owner_is_active(self, conv: Conversation) -> bool:
+        return owner_is_active(conv, datetime.now(UTC), self._offhours)
+
+    async def start_offhours_round(self, conversation_id: str) -> None:
+        """#615: begin an off-hours stretch for ``conversation_id``.
+
+        The sweeper only ever calls this once per stretch; from here the ordinary
+        turn-end driver (`_goal_followup`) carries the goal, so there is exactly
+        one thing continuing it and no second scheduler to keep in step."""
+        goal = read_goal(self._spec, conversation_id)
+        if goal is None or goal.state != "active" or not goal.offhours:
+            return  # changed under us between the sweep and now
+        conv = self._conv_rm.get(conversation_id).data
+        assert isinstance(conv, Conversation)
+        goal.offhours_rounds_used += 1
+        # Bump BEFORE enqueuing: a crash must not forget a spent round and let
+        # the budget restart from zero every night.
+        upsert_goal(self._spec, goal, user=goal.set_by)
+        engine_key = self._locator.engine_key(conv.item_id, conversation_id)
+        self._publish_goal(engine_key, goal)
+        body = _MessageBody(
+            content=(
+                f"[goal] 下班時間,繼續朝目標推進(第 {goal.offhours_rounds_used}/"
+                f"{self._offhours_max_rounds} 輪):{goal.condition}"
+            )
+        )
+        await self.send(
+            conv.item_id,
+            conversation_id,
+            conv,
+            engine_key,
+            body,
+            author=goal.set_by,
+            driven_by=GOAL_DRIVER,
+        )
 
     def _append_goal_marker(self, rid: str, text: str) -> None:
         """A `role="goal"` marker in the thread — rendered by the FE, and by
@@ -336,6 +446,7 @@ class ChatSendService:
         body: _MessageBody,
         author: str | None = None,
         lane: CallLane = "background",
+        driven_by: str | None = None,
     ) -> None:
         """Append the user message to conversation ``rid``, build the RCA turn ctx
         from ITS history, and enqueue the turn on ``engine_key`` (item_id for the
@@ -352,6 +463,9 @@ class ChatSendService:
                 author=author,
                 created_at=created,
                 answers=body.answers,
+                # #615: mark a driver's round, so "has a human spoken lately?"
+                # is answerable without sniffing the message text.
+                driven_by=driven_by,
             )
         )
         self._conv_rm.update(rid, conv)

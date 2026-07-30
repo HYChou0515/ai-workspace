@@ -112,6 +112,48 @@ def test_unset_window_disables_off_hours_autonomy() -> None:
     assert cal.is_offhours(_at("2026-08-01 03:00")) is False
 
 
+def test_one_evening_and_its_morning_tail_are_the_same_stretch() -> None:
+    # The sweeper claims a stretch once, cluster-wide, so the id must not change
+    # at midnight — Thursday 23:00 and Friday 07:00 are one night off.
+    cal = OffHoursCalendar(window="19:00-08:00", timezone=TAIPEI)
+    assert cal.stretch_id(_at("2026-07-30 23:00")) == cal.stretch_id(_at("2026-07-31 07:00"))
+    assert cal.stretch_id(_at("2026-07-30 19:00")) == "2026-07-30"
+
+
+def test_a_whole_weekend_is_one_stretch_including_monday_morning() -> None:
+    # Friday evening through Monday 08:00 is ONE uninterrupted stretch: nobody
+    # comes back in between. If it split, a goal would be re-started each day
+    # and burn its budget three times over.
+    cal = OffHoursCalendar(window="19:00-08:00", timezone=TAIPEI)
+    friday_night = cal.stretch_id(_at("2026-07-31 20:00"))
+    assert friday_night == "2026-07-31"
+    for moment in ("2026-08-01 03:00", "2026-08-01 14:00", "2026-08-02 23:00", "2026-08-03 07:00"):
+        assert cal.stretch_id(_at(moment)) == friday_night, moment
+    # Monday evening is a NEW stretch — people were in the office in between.
+    assert cal.stretch_id(_at("2026-08-03 19:00")) == "2026-08-03"
+
+
+def test_a_long_holiday_is_one_stretch_and_a_makeup_day_breaks_it() -> None:
+    cal = OffHoursCalendar(
+        window="19:00-08:00",
+        timezone=TAIPEI,
+        overrides={"2026-07-30": "off", "2026-07-31": "off", "2026-08-01": "work"},
+    )
+    # Wed evening opens a stretch that swallows both holiday days…
+    assert cal.stretch_id(_at("2026-07-29 20:00")) == "2026-07-29"
+    assert cal.stretch_id(_at("2026-07-31 14:00")) == "2026-07-29"
+    # …but the make-up Saturday is a working day, so its evening starts a new one.
+    assert cal.stretch_id(_at("2026-08-01 20:00")) == "2026-08-01"
+
+
+def test_a_calendar_with_no_working_days_still_terminates() -> None:
+    # Somebody will eventually save an empty working week. The walk back looking
+    # for the stretch's opening day must stop rather than spin the sweeper.
+    cal = OffHoursCalendar(window="19:00-08:00", timezone=TAIPEI, workdays=())
+    assert cal.is_offhours(_at("2026-07-30 14:00")) is True
+    assert cal.stretch_id(_at("2026-07-30 14:00"))  # a value, not a hang
+
+
 def test_malformed_window_disables_instead_of_crashing_the_sweeper() -> None:
     # A config typo must not take down a loop that runs every 60 seconds.
     for bad in ("19:00", "19:00-", "nineteen-eight", "19:00-19:00"):
