@@ -59,8 +59,13 @@ export function TodoPanel({
     queryFn: () => goalClient.getGoal(slug, itemId, chatId),
   });
   const [goalDraft, setGoalDraft] = useState("");
+  // #615: opting the goal in to unattended after-hours work. Starts unticked —
+  // an overnight token spend should be something someone chose.
+  const [goalOffhours, setGoalOffhours] = useState(false);
+  const offhoursAvailable = goalRead?.offhours_enabled === true;
   const setGoal = useMutation({
-    mutationFn: (condition: string) => goalClient.putGoal(slug, itemId, chatId, condition),
+    mutationFn: (condition: string) =>
+      goalClient.putGoal(slug, itemId, chatId, condition, goalOffhours && offhoursAvailable),
     onSuccess: (saved) => qc.setQueryData(goalKey, saved),
   });
   const clearGoal = useMutation({
@@ -145,6 +150,18 @@ export function TodoPanel({
               {t("goal.round", { k: goal.rounds_used, n: goal.max_rounds })}
             </span>
           )}
+          {goal.state === "active" && goal.offhours && (
+            <span
+              data-testid="goal-offhours-rounds"
+              title={t("goal.offhoursOn")}
+              style={{ color: "var(--text-paper-d)" }}
+            >
+              {t("goal.offhoursRound", {
+                k: goal.offhours_rounds_used,
+                n: goal.offhours_max_rounds,
+              })}
+            </span>
+          )}
           {goal.state === "met" && (
             <span data-testid="goal-met" style={{ color: "var(--ok, green)" }}>
               {t("goal.met")}
@@ -153,6 +170,11 @@ export function TodoPanel({
           {goal.state === "exhausted" && (
             <span data-testid="goal-exhausted" style={{ color: "var(--err)" }}>
               {t("goal.exhausted")}
+            </span>
+          )}
+          {goal.state === "stalled" && (
+            <span data-testid="goal-stalled" style={{ color: "var(--err)" }}>
+              {t("goal.stalled")}
             </span>
           )}
           {!readOnly && (
@@ -222,9 +244,39 @@ export function TodoPanel({
           </button>
         </div>
       )}
+      {expanded && goal === null && !readOnly && (
+        <div style={{ display: "grid", gap: 2 }}>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: pxToRem(11),
+              color: "var(--text-paper-d)",
+            }}
+          >
+            <input
+              type="checkbox"
+              data-testid="goal-offhours"
+              checked={goalOffhours && offhoursAvailable}
+              disabled={goalLocked || !offhoursAvailable}
+              onChange={(e) => setGoalOffhours(e.target.checked)}
+            />
+            {t("goal.offhours")}
+          </label>
+          {!offhoursAvailable && (
+            <span
+              data-testid="goal-offhours-unavailable"
+              style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}
+            >
+              {t("goal.offhoursUnavailable")}
+            </span>
+          )}
+        </div>
+      )}
 
       {expanded && (
-        <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+        <ul data-testid="todo-list" style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
           {items.map((it, idx) => (
             <li
               key={`${idx}-${it.text}`}

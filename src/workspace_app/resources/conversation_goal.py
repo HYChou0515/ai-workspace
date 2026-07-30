@@ -21,7 +21,11 @@ from specstar.types import (
     RevisionStatus,
 )
 
-GOAL_STATES = ("active", "met", "exhausted")
+GOAL_STATES = ("active", "met", "exhausted", "stalled")
+
+GOAL_DRIVER = "goal"
+"""`Message.driven_by` for an auto-continue round, so a driver's prompt is
+distinguishable from something its owner actually said (#615)."""
 
 
 class ConversationGoal(Struct):
@@ -41,11 +45,41 @@ class ConversationGoal(Struct):
     stay readable so the panel can show the outcome; setting a new goal
     overwrites the row back to `active`."""
 
+    offhours: bool = False
+    """#615: may this goal keep working unattended outside office hours?
+    Opt-in, and deliberately NOT implied by the work-hours budget running out —
+    spending tokens overnight with nobody watching should be a choice someone
+    made, not the automatic consequence of a daytime cap."""
+
+    stall_count: int = 0
+    """#615: consecutive turns that failed or made no visible progress. The
+    self-destruct gate counts SEPARATELY from the round budget on purpose: a
+    transient blip has to be survivable (nobody is awake to restart the night),
+    while an agent genuinely circling must not spend thirty rounds proving it."""
+
+    last_signature: str = ""
+    """#615: the previous turn's tool-call fingerprint. Two identical turns in a
+    row is the cheap, deterministic shape of "stuck" — no extra model call, and
+    it can only misfire toward LETTING a working agent continue."""
+
+    offhours_rounds_used: int = 0
+    """#615: off-hours turns spent, counted separately from `rounds_used`.
+    ONE counter compared against two different caps would make a night's
+    spending read as `exhausted` against the (much smaller) work-hours cap the
+    next morning. Cumulative across nights and never reset, so a multi-night
+    goal finishes on its own budget instead of renewing one every evening."""
+
 
 def register_conversation_goal(spec: SpecStar) -> None:
-    """Idempotently register the goal model. Safe to call on every pod."""
+    """Idempotently register the goal model. Safe to call on every pod.
+
+    `offhours` is indexed so the #615 sweeper QUERIES the handful of opted-in
+    chats every minute instead of scanning every goal ever set. No `rm.migrate`
+    backfill is needed for rows written before the index: they predate the field
+    entirely, so they are all opted OUT, and being invisible to an
+    `offhours == True` query is the right answer for them."""
     with contextlib.suppress(ValueError):
-        spec.add_model(ConversationGoal)
+        spec.add_model(ConversationGoal, indexed_fields=["offhours"])
 
 
 def upsert_goal(spec: SpecStar, goal: ConversationGoal, *, user: str = "") -> None:

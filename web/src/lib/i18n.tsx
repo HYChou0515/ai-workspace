@@ -1010,6 +1010,21 @@ export const messages = {
     "zh-TW": "此部署未設定目標檢查模型,目標不會自動續跑",
     en: "No goal checker is configured on this deploy — the goal will not auto-continue",
   },
+  "goal.stalled": {
+    "zh-TW": "卡住了,先停下等你",
+    en: "Stuck — paused for you",
+  },
+  // #615: opting a goal in to unattended work outside office hours.
+  "goal.offhours": { "zh-TW": "下班時間繼續做", en: "Keep working after hours" },
+  "goal.offhoursOn": { "zh-TW": "下班時間會繼續做", en: "Continues after hours" },
+  "goal.offhoursRound": {
+    "zh-TW": "下班續跑 {k}/{n} 輪",
+    en: "after-hours round {k}/{n}",
+  },
+  "goal.offhoursUnavailable": {
+    "zh-TW": "此部署未設定下班時間,目標只在上班時間續跑",
+    en: "No after-hours window is configured on this deploy — the goal only continues during working hours",
+  },
   // #613: the pinned todo checklist next to the chat.
   "todos.title": { "zh-TW": "待辦清單", en: "To-dos" },
   "todos.expand": { "zh-TW": "展開", en: "Show" },

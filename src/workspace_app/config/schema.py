@@ -1165,6 +1165,38 @@ class ToolsSettings:
 
 
 @dataclass(frozen=True)
+class OffHoursSettings:
+    """#615: when — and how far — a goal may keep working unattended.
+
+    The WHICH-DAYS half is not here: working days and holidays live in the
+    `WorkCalendar` resource, because they move every year and recording next
+    Saturday as a workday must not mean editing this file and restarting pods.
+
+    - ``window``: ``"HH:MM-HH:MM"`` in ``timezone``; wrapping past midnight is
+      the normal case. Empty (the default) ⇒ off-hours autonomy is OFF, and the
+      chat panel discloses that rather than offering a checkbox that does
+      nothing.
+    - ``timezone``: IANA name (``"Asia/Taipei"``). Not the container's clock —
+      a window that moves when the base image changes is untraceable.
+    - ``max_rounds``: the budget for ONE goal across ALL its nights, not per
+      night. Cumulative is what keeps a multi-night task finishable while still
+      ending on its own; per-night would renew forever.
+    - ``yield_after_human_minutes``: a goal whose chat has a human message this
+      recent is left alone entirely — better late than arguing with its owner.
+    - ``max_concurrent``: how many goals one pod starts per sweep, so the window
+      opening does not wake every goal at once.
+    - ``poll_seconds``: how often the sweeper looks. Also the retry granularity
+      for a goal that yielded."""
+
+    window: str = ""
+    timezone: str = ""
+    max_rounds: int = 30
+    yield_after_human_minutes: int = 30
+    max_concurrent: int = 3
+    poll_seconds: int = 60
+
+
+@dataclass(frozen=True)
 class GoalSettings:
     """#613 P3: per-chat goal auto-continue knobs.
 
@@ -1180,6 +1212,10 @@ class GoalSettings:
 
     checker: RetrievalLlmRef | None = None
     max_rounds: int = 3
+    offhours: OffHoursSettings = field(default_factory=OffHoursSettings)
+    """#615: the off-hours budget. `max_rounds` above stays WORK-hours only —
+    one counter compared against two caps would let a night's spending make the
+    goal read as exhausted the next morning."""
 
 
 # ─── top-level Settings ────────────────────────────────────────────────

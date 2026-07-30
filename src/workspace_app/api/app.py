@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from specstar import SpecStar
 
 from ..agent.config_catalog import AgentConfigCatalog
-from ..config.schema import EnhancementSettings
+from ..config.schema import EnhancementSettings, OffHoursSettings
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -41,6 +41,7 @@ from ..tooling.external import prewarm_external_tools
 from ..tooling.registry import PackageInfo
 from ..turn_control import SpecstarTurnControl
 from ..users import MockUserDirectory, UserDirectory
+from ..workcalendar import OffHoursCalendar
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
@@ -85,6 +86,7 @@ from .tools_routes import register_tools_routes
 from .turn_context import TurnContextBuilder
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
+from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
 
@@ -199,6 +201,10 @@ def create_app(
     # goals never auto-continue, and the /goal routes disclose it on the wire.
     goal_checker_llm: ILlm | None = None,
     goal_max_rounds: int = 3,
+    # #615: the off-hours autonomy knobs (settings.goal.offhours). Defaults are
+    # OFF — a deployment that configured no window never runs unattended work,
+    # and the /goal routes disclose that instead of offering a dead checkbox.
+    goal_offhours: OffHoursSettings | None = None,
     insights_collection_name: str = "Investigations Knowledge",
     kb_llm: ILlm | None = None,
     # #356: the LLM the Tune-parsing "Try answer" path streams through — the
@@ -575,6 +581,7 @@ def create_app(
         gc_t1=gc_t1,
         gc_t2=gc_t2,
         trigger_check_interval=trigger_check_interval,
+        offhours=goal_offhours,  # #615: the after-hours goal sweeper
         cluster_sweep_seconds=kb_cluster_sweep_seconds,
         cluster_tau=kb_cluster_tau,
         cluster_merge_tau=kb_cluster_merge_tau,
@@ -682,6 +689,7 @@ def create_app(
     api = APIRouter(prefix="/api")
 
     register_notification_routes(api, spec, get_user_id)
+    register_work_calendar_routes(api, spec, get_user_id, superusers=superusers)
     register_health_routes(api, health_service)
 
     @api.get("/readyz")
@@ -1198,9 +1206,13 @@ def create_app(
     # having run first. Idempotent, so the lifespan's call is belt-and-suspenders.
     from ..resources.conversation_goal import register_conversation_goal
     from ..resources.conversation_todos import register_conversation_todos
+    from ..resources.work_calendar import register_work_calendar
 
     register_conversation_todos(spec)
     register_conversation_goal(spec)
+    # #615 P1: same post-apply reason — the gated /work-calendar routes are the
+    # only wire surface for the deployment's one calendar row.
+    register_work_calendar(spec)
     event_dispatcher = EventTriggerDispatcher(
         triggers=discover_event_triggers,
         app_of_item=locator.slug_of,
@@ -1235,6 +1247,9 @@ def create_app(
     chat_send_svc = ChatSendService(
         spec=spec,
         locator=locator,
+        # #615: the after-hours budget + window the turn-end driver reads to
+        # decide which budget a continuation spends and when to stop.
+        offhours=goal_offhours,
         turn_ctx=turn_ctx,
         subagent_bridge=subagent_bridge,
         filestore=filestore,
@@ -1258,6 +1273,12 @@ def create_app(
         send_await_timeout=send_await_timeout,
     )
 
+    # #615: the sweeper task (built in the lifespan, before this point) reaches
+    # the send service through app.state, like the wiki-reflect sweeper does.
+    app.state.chat_send = chat_send_svc
+    # #615: an unset/typo'd window or an unknown zone leaves `enabled` False,
+    # so off-hours autonomy stays off rather than guessing an hour.
+    offhours = goal_offhours or OffHoursSettings()
     register_chat_routes(
         api,
         spec=spec,
@@ -1273,6 +1294,10 @@ def create_app(
         record_mention=mention_svc.record,
         goal_max_rounds=goal_max_rounds,
         goal_checker_enabled=goal_checker_llm is not None,
+        goal_offhours_max_rounds=offhours.max_rounds,
+        goal_offhours_enabled=OffHoursCalendar(
+            window=offhours.window, timezone=offhours.timezone
+        ).enabled,
     )
 
     # ---- Files API (plan-backend §3.8) ----

@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 from workspace_app.api import create_app
 from workspace_app.api.events import MessageDelta, RunDone, RunError
 from workspace_app.api.runner import ScriptedAgentRunner
+from workspace_app.config.schema import OffHoursSettings
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import Conversation, make_spec
@@ -36,7 +38,7 @@ class _ScriptLlm(ILlm):
         yield (self.answers.pop(0) if self.answers else "NOT_MET", False)
 
 
-def _app(checker: ILlm | None, *, max_rounds: int = 3, runner=None):
+def _app(checker: ILlm | None, *, max_rounds: int = 3, runner=None, offhours=None):
     spec = make_spec(default_user="u")
     iid = register_rca_item(spec)
     app = create_app(
@@ -47,6 +49,7 @@ def _app(checker: ILlm | None, *, max_rounds: int = 3, runner=None):
         get_user_id=lambda: "alice",
         goal_checker_llm=checker,
         goal_max_rounds=max_rounds,
+        goal_offhours=offhours,
     )
     return app, spec, iid
 
@@ -161,3 +164,80 @@ def test_a_failed_turn_never_auto_continues():
         assert llm.prompts == []
         goal = read_goal(spec, rid)
         assert goal is not None and goal.state == "active" and goal.rounds_used == 0
+
+
+# ── #615: which budget a continuation spends, and where a night ends ─────────
+#
+# The clock is not mocked; the WINDOW is moved instead, which is the same knob
+# an operator turns and keeps these tests honest about the real code path.
+
+
+def _today_is_a_workday(spec) -> None:
+    """Pin today as a working day, so the window — not the weekday the suite
+    happens to run on — decides whether it is after hours."""
+    from workspace_app.resources.work_calendar import WorkCalendar, upsert_work_calendar
+
+    today = datetime.now(UTC).date().isoformat()
+    upsert_work_calendar(spec, WorkCalendar(overrides={today: "work"}), user="alice")
+
+
+def _window_around_now() -> str:
+    now = datetime.now(UTC)
+    return f"{(now - timedelta(hours=2)):%H:%M}-{(now + timedelta(hours=2)):%H:%M}"
+
+
+def _window_excluding_now() -> str:
+    now = datetime.now(UTC)
+    return f"{(now + timedelta(hours=2)):%H:%M}-{(now + timedelta(hours=4)):%H:%M}"
+
+
+def test_a_night_round_spends_the_night_budget_not_the_daytime_one():
+    """The whole reason there are two counters: a night's work must not make the
+    goal read as exhausted against the (much smaller) work-hours cap."""
+    llm = _ScriptLlm(["NOT_MET", "MET"])
+    offhours = OffHoursSettings(window=_window_around_now(), timezone="UTC", max_rounds=30)
+    app, spec, iid = _app(llm, max_rounds=1, offhours=offhours)
+    with TestClient(app) as client:
+        _today_is_a_workday(spec)
+        chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()
+        rid = chat["chat_id"]
+        base = f"/a/rca/items/{iid}/chats/{rid}"
+        client.put(f"{base}/goal", json={"condition": "the report exists", "offhours": True})
+
+        client.post(f"{base}/messages", json={"content": "go"})
+
+        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.state == "met")
+        goal = read_goal(spec, rid)
+        assert goal is not None
+        # Spent a NIGHT round; the work-hours counter (capped at 1 here) is
+        # untouched, so tomorrow morning the goal is not falsely exhausted.
+        assert goal.offhours_rounds_used == 1
+        assert goal.rounds_used == 0
+
+
+def test_the_night_ends_at_the_morning_edge_with_the_goal_still_alive():
+    """Back at office hours the chain stops — but the goal is NOT exhausted. It
+    is waiting for tonight, and the sweeper will pick it up again."""
+    llm = _ScriptLlm(["NOT_MET", "NOT_MET"])
+    offhours = OffHoursSettings(window=_window_excluding_now(), timezone="UTC", max_rounds=30)
+    app, spec, iid = _app(llm, offhours=offhours)
+    with TestClient(app) as client:
+        _today_is_a_workday(spec)
+        chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()
+        rid = chat["chat_id"]
+        base = f"/a/rca/items/{iid}/chats/{rid}"
+        client.put(f"{base}/goal", json={"condition": "the report exists", "offhours": True})
+
+        client.post(f"{base}/messages", json={"content": "go"})
+
+        # Turn 1 was asked for by a person, so it continues on the work-hours
+        # budget. Turn 2 is the DRIVER's, and by then the window has shut — that
+        # is the round the chain has to stop after.
+        marker = _wait(lambda: [m for m in _messages(spec, rid) if m.role == "goal"])[0]
+        # The hand-over says what happens next, not just that it stopped.
+        assert "今天晚上會自己接著做" in marker.content
+
+        goal = read_goal(spec, rid)
+        assert goal is not None
+        assert goal.state == "active"  # waiting for tonight, not handed back
+        assert goal.offhours_rounds_used == 0  # nothing was spent off the clock

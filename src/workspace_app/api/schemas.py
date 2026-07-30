@@ -176,6 +176,9 @@ class _GoalBody(BaseModel):
     # #613 P3: set the chat's completion condition (whole replace; one goal per
     # chat). Stripped and non-blank — a blank goal is a 422, not an empty row.
     condition: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+    offhours: bool = False
+    """#615: opt in to unattended off-hours work. Defaults to off — an
+    overnight token spend is a choice, not a side effect of the daytime cap."""
 
 
 class _GoalWire(BaseModel):
@@ -184,10 +187,17 @@ class _GoalWire(BaseModel):
     condition: str
     set_by: str
     rounds_used: int
-    state: Literal["active", "met", "exhausted"]
+    state: Literal["active", "met", "exhausted", "stalled"]
     max_rounds: int
     """The auto-continue budget (config `goal.max_rounds`) — so the panel can
     show `rounds_used/max_rounds` without a second endpoint."""
+
+    offhours: bool = False
+    """#615: whether this goal may keep working outside office hours."""
+    offhours_rounds_used: int = 0
+    offhours_max_rounds: int = 0
+    """#615: the off-hours budget (config `goal.offhours.max_rounds`), spent
+    across ALL nights rather than renewed each evening."""
 
 
 class _GoalOut(BaseModel):
@@ -196,6 +206,11 @@ class _GoalOut(BaseModel):
     """Whether this deploy has a goal-checker LLM wired (`goal.checker` /
     `kb.retrieval_llm`). False ⇒ the panel warns that a set goal will NOT
     auto-continue — a set goal must never be a silently dead knob."""
+
+    offhours_enabled: bool = False
+    """#615: whether this deploy has a usable off-hours window
+    (`goal.offhours.window` + `timezone`). False ⇒ the panel shows the opt-in as
+    unavailable instead of offering a checkbox that would do nothing."""
 
 
 class _MentionBody(BaseModel):

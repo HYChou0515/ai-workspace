@@ -82,6 +82,11 @@ def register_chat_routes(
     record_mention: RecordMention,
     goal_max_rounds: int = 3,
     goal_checker_enabled: bool = True,
+    # #615: the deployment's off-hours budget + whether a usable window is
+    # configured at all. Disclosed on the wire so the opt-in checkbox is shown
+    # as unavailable rather than doing nothing when it is not.
+    goal_offhours_max_rounds: int = 0,
+    goal_offhours_enabled: bool = False,
 ) -> None:
     """Mount the RCA workspace + multi-chat routes onto ``app``."""
     conv_rm = spec.get_resource_manager(Conversation)
@@ -329,6 +334,9 @@ def register_chat_routes(
             rounds_used=goal.rounds_used,
             state=goal.state,
             max_rounds=goal_max_rounds,
+            offhours=goal.offhours,
+            offhours_rounds_used=goal.offhours_rounds_used,
+            offhours_max_rounds=goal_offhours_max_rounds,
         )
 
     @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/goal")
@@ -343,6 +351,7 @@ def register_chat_routes(
         return _GoalOut(
             goal=_goal_wire(goal) if goal is not None else None,
             checker_enabled=goal_checker_enabled,
+            offhours_enabled=goal_offhours_enabled,
         )
 
     @app.put("/a/{slug}/items/{item_id}/chats/{chat_id}/goal")
@@ -354,14 +363,25 @@ def register_chat_routes(
 
         investigation_id = locator.require_access(slug, item_id, "converse")
         rid, _conv = locator.require_chat(slug, item_id, chat_id)
-        goal = ConversationGoal(conversation_id=rid, condition=body.condition, set_by=get_user_id())
+        goal = ConversationGoal(
+            conversation_id=rid,
+            condition=body.condition,
+            set_by=get_user_id(),
+            # An opt-in a deployment cannot honour is refused here, not stored
+            # and silently ignored later.
+            offhours=body.offhours and goal_offhours_enabled,
+        )
         upsert_goal(spec, goal, user=get_user_id())
         out = _goal_wire(goal)
         turn_engine.publish(
             locator.engine_key(investigation_id, rid),
             GoalUpdated(goal=out.model_dump()),
         )
-        return _GoalOut(goal=out, checker_enabled=goal_checker_enabled)
+        return _GoalOut(
+            goal=out,
+            checker_enabled=goal_checker_enabled,
+            offhours_enabled=goal_offhours_enabled,
+        )
 
     @app.delete(
         "/a/{slug}/items/{item_id}/chats/{chat_id}/goal",

@@ -100,6 +100,17 @@ class Message(Struct):
     """Only set when role=tool — the tool call's arguments (captured from the
     ToolStart), so a reloaded log shows the full call, not just its output."""
 
+    driven_by: str | None = None
+    """#615: which DRIVER produced this message, when it was not a person —
+    `"goal"` for an auto-continue round. `None` means a human sent it.
+
+    A driver's message is persisted as `role="user"` and attributed to the goal's
+    setter, because it must run with exactly their permissions; that makes it
+    indistinguishable from a real one in the stored thread. Off-hours autonomy
+    has to tell them apart — "has my owner said anything recently?" is what
+    decides whether an unattended agent stands down — and sniffing a `[goal]`
+    text prefix would hinge on a string a user can type themselves."""
+
     created_at: int | None = None
     """Epoch milliseconds when the message was produced. Persisted so the agent
     log's timestamps survive a reload. None for messages created before this
