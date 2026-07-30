@@ -139,6 +139,14 @@ function Switcher() {
           {showGroups && (
             <FixedLink to="/groups" icon="users" label="Groups" pathname={pathname} />
           )}
+          {isSuperuser && (
+            <FixedLink
+              to="/work-calendar"
+              icon="clock"
+              label="Work calendar"
+              pathname={pathname}
+            />
+          )}
         </div>
       )}
     </Popover>

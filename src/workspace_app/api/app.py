@@ -85,6 +85,7 @@ from .tools_routes import register_tools_routes
 from .turn_context import TurnContextBuilder
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
+from .work_calendar_routes import register_work_calendar_routes
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
 
@@ -682,6 +683,7 @@ def create_app(
     api = APIRouter(prefix="/api")
 
     register_notification_routes(api, spec, get_user_id)
+    register_work_calendar_routes(api, spec, get_user_id, superusers=superusers)
     register_health_routes(api, health_service)
 
     @api.get("/readyz")
@@ -1198,9 +1200,13 @@ def create_app(
     # having run first. Idempotent, so the lifespan's call is belt-and-suspenders.
     from ..resources.conversation_goal import register_conversation_goal
     from ..resources.conversation_todos import register_conversation_todos
+    from ..resources.work_calendar import register_work_calendar
 
     register_conversation_todos(spec)
     register_conversation_goal(spec)
+    # #615 P1: same post-apply reason — the gated /work-calendar routes are the
+    # only wire surface for the deployment's one calendar row.
+    register_work_calendar(spec)
     event_dispatcher = EventTriggerDispatcher(
         triggers=discover_event_triggers,
         app_of_item=locator.slug_of,

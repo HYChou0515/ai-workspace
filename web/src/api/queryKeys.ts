@@ -17,6 +17,8 @@ export const qk = {
   // belong to); `pickableGroups` = every group, name+count, for the share picker.
   groups: ["groups"] as const,
   pickableGroups: ["groups", "pickable"] as const,
+  // #615 — the deployment's work calendar (which days people are in the office).
+  workCalendar: ["work-calendar"] as const,
 
   investigations: ["investigations"] as const,
   investigation: (id: string) => ["investigation", id] as const,

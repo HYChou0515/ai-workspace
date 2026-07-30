@@ -384,9 +384,11 @@ def build_lifespan(
         # FE reads/writes go through dedicated, permission-gated endpoints (P2).
         from ..resources.conversation_goal import register_conversation_goal
         from ..resources.conversation_todos import register_conversation_todos
+        from ..resources.work_calendar import register_work_calendar
 
         register_conversation_todos(spec)
         register_conversation_goal(spec)
+        register_work_calendar(spec)  # #615 P1
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
         if perf_trace.enabled():
             # Only ever sleeps, so any delay it observes beyond its own sleep is
