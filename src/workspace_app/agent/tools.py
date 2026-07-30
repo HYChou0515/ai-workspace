@@ -1380,8 +1380,15 @@ class AskOption(TypedDict):
 
 
 class AskQuestion(TypedDict):
-    """One question and the concrete choices for it."""
+    """One question and the concrete choices for it.
 
+    ``header`` is the tab label a multi-question card shows, so it has to fit in
+    a few characters — which is why the MODEL writes it instead of the UI
+    truncating ``question``. A whole sentence cut at the twelfth character
+    breaks wherever the sentence happens to be, and the result names nothing.
+    """
+
+    header: str
     question: str
     options: list[AskOption]
 
@@ -1406,6 +1413,11 @@ async def ask_user_impl(
     one short sentence, use the words the user has already used, and give a
     concrete example where it helps. Each option's description says what
     picking it leads to.
+
+    Each question also carries a `header` — two to six words naming what that
+    question is about ("storage backend", "rollout order"). Several questions
+    arrive as tabs and the header is the tab's label, so it is what the user
+    reads before deciding which one to open.
 
     The user can always answer in their own words, add a note to whichever
     option they pick, or tell you the question itself did not land — in which

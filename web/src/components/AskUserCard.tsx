@@ -24,6 +24,21 @@
  * rather than sending on the click — with a note to type, firing on the first
  * click would send before the person finished.
  *
+ * SEVERAL questions arrive as tabs, one per question (`header` is the label the
+ * model writes for it; questions from before that field fall back to their
+ * number). Stacked, five of them were one long strip, and whatever sat below the
+ * fold got sent as `(未選擇)` without the card ever saying so. But a tab HIDES
+ * its question, so the strip has to say which ones are still blank: an unanswered
+ * tab carries a dot, and 送出 counts them out loud. It still sends — someone who
+ * only cares about one of five may answer that one and leave; the count is there
+ * so that is a decision rather than an accident. The dot is hidden in place
+ * rather than removed, because the strip wraps in a ~320px chat panel and a tab
+ * that narrows on being answered slides its neighbours out from under the
+ * pointer. A pick does NOT advance the tab: each option owns a 補充 field, and
+ * leaving on the click takes that field away before it can be used. ONE question
+ * gets no strip at all — a single tab names nothing the question below it does
+ * not already say, and a lone question cannot be the one that got missed.
+ *
  * Pressing 送出 takes ONLY the button away. Its whole job was ahead of the send;
  * afterwards it says nothing happened, and the one thing it can still do is send
  * a second answer. The question and the chosen option stay exactly where they
@@ -36,7 +51,7 @@ import { useState } from "react";
 import type { ToolCallView } from "../pages/investigation/agentLog";
 
 type Option = { label: string; description?: string };
-type Question = { question: string; options: Option[] };
+type Question = { header?: string; question: string; options: Option[] };
 
 export type AskUserAnswer = { content: string; answers: string };
 
@@ -62,7 +77,16 @@ function parseQuestions(args: Record<string, unknown>): Question[] | null {
       const description = (o as { description?: unknown })?.description;
       parsed.push({ label, description: typeof description === "string" ? description : "" });
     }
-    out.push({ question: text, options: parsed });
+    // `header` is the tab label. Unlike the rest of the shape it is OPTIONAL
+    // here: every question asked before the field existed is still sitting in a
+    // transcript, and refusing those would make the card vanish from the
+    // history it is the record of. Missing simply falls back to the number.
+    const header = (q as { header?: unknown }).header;
+    out.push({
+      header: typeof header === "string" ? header.trim() : "",
+      question: text,
+      options: parsed,
+    });
   }
   return out;
 }
@@ -123,6 +147,36 @@ const noteInput: React.CSSProperties = {
   color: "var(--text-paper)",
   fontSize: "0.9em",
 };
+const tabList: React.CSSProperties = {
+  display: "flex",
+  gap: 4,
+  flexWrap: "wrap",
+  borderBottom: "1px solid var(--paper-3)",
+};
+const tabBtn = (selected: boolean): React.CSSProperties => ({
+  display: "flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "5px 10px",
+  border: "none",
+  // The selected tab is joined to the panel below it by its underline; the rest
+  // sit on the shared border.
+  borderBottom: `2px solid ${selected ? "var(--accent)" : "transparent"}`,
+  marginBottom: -1,
+  background: "transparent",
+  color: selected ? "var(--text-paper)" : "var(--text-paper-d)",
+  fontWeight: selected ? 600 : 400,
+  fontSize: "0.9em",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+});
+const blankDot = (unanswered: boolean): React.CSSProperties => ({
+  fontSize: "0.55em",
+  lineHeight: 1,
+  color: "var(--accent)",
+  // `visibility`, not `display` — it has to keep occupying its width.
+  visibility: unanswered ? "visible" : "hidden",
+});
 const plainBtn: React.CSSProperties = {
   padding: "5px 12px",
   border: "1px solid var(--paper-3)",
@@ -154,6 +208,10 @@ export function AskUserCard({
   // Pressed. Not "answered" — that word belongs to the transcript, which is a
   // round trip away; this is just the card knowing it already sent.
   const [sent, setSent] = useState(false);
+  // Which question is open. Picking an option deliberately does NOT advance it:
+  // every option carries its own 補充 field, and a tab that flies away on the
+  // click takes that field with it before it can be typed in.
+  const [active, setActive] = useState(0);
 
   if (!questions) return null;
 
@@ -166,6 +224,11 @@ export function AskUserCard({
   }
 
   const noteKey = (qi: number, label: string) => `${qi} ${label}`;
+  // Answered = the user said SOMETHING for this question, by any of the three
+  // routes the card offers: an option, 看不懂, or their own words. The 補充 note
+  // is not one of them — it supplements a pick rather than standing in for one.
+  const isAnswered = (i: number) => Boolean(picked[i]) || Boolean((freeText[i] ?? "").trim());
+  const blank = questions.filter((_q, i) => !isAnswered(i)).length;
   const send = () => {
     const lines = questions.map((q, i) => {
       const choice = picked[i];
@@ -179,111 +242,150 @@ export function AskUserCard({
 
   return (
     <div data-testid="ask-user" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {questions.map((q, i) => (
-        <div key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <div style={{ fontWeight: 600 }}>{q.question}</div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {q.options.map((opt, oi) => {
-                const active = picked[i] === opt.label;
-                return (
-                  <div key={opt.label} style={optionRow(active)}>
-                    <button
-                      type="button"
-                      aria-pressed={active}
-                      disabled={sent}
-                      onClick={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
-                      title={opt.description || undefined}
-                      style={{
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: 8,
-                        flex: "0 1 auto",
-                        minWidth: 0,
-                        background: "transparent",
-                        border: "none",
-                        padding: 0,
-                        textAlign: "left",
-                        // Still legible once sent — it is the record of the
-                        // choice, not a control any more.
-                        cursor: sent ? "default" : "pointer",
-                        color: "var(--text-paper)",
-                      }}
-                    >
-                      <span style={numBadge(active)}>{oi + 1}</span>
-                      <span
-                        style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}
-                      >
-                        <span style={{ fontWeight: active ? 600 : 400 }}>{opt.label}</span>
-                        {opt.description ? (
-                          <span
-                            style={{
-                              opacity: 0.7,
-                              fontSize: "0.85em",
-                              color: "var(--text-paper-d)",
-                            }}
-                          >
-                            {opt.description}
-                          </span>
-                        ) : null}
-                      </span>
-                    </button>
-                    {/* This option's OWN supplement — a note about THIS choice,
-                        not one shared box that could mean any of them. */}
-                    <input
-                      type="text"
-                      aria-label={`補充:${opt.label}`}
-                      value={optNote[noteKey(i, opt.label)] ?? ""}
-                      placeholder="補充(選填)"
-                      // `readOnly`, not `disabled`: a note that was sent has to
-                      // stay readable, and a disabled input greys its own text.
-                      readOnly={sent}
-                      onChange={(e) =>
-                        setOptNote((n) => ({ ...n, [noteKey(i, opt.label)]: e.target.value }))
-                      }
-                      onFocus={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
-                      style={noteInput}
-                    />
-                  </div>
-                );
-              })}
-          </div>
-
-          {/* Added by the card, never by the agent — so the way out exists even
-              when a small model forgets to offer one. "看不懂" rejects the
-              question; the input answers it in the user's own words. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              aria-pressed={picked[i] === DONT_UNDERSTAND}
-              disabled={sent}
-              onClick={() => setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }))}
-              style={{
-                ...plainBtn,
-                cursor: sent ? "default" : "pointer",
-                borderColor: picked[i] === DONT_UNDERSTAND ? "var(--accent)" : "var(--paper-3)",
-              }}
-            >
-              看不懂
-            </button>
-            <input
-              type="text"
-              aria-label="自己回答"
-              value={freeText[i] ?? ""}
-              placeholder="以上皆非,自己回答"
-              readOnly={sent}
-              onChange={(e) => {
-                const v = e.target.value;
-                setFreeText((n) => ({ ...n, [i]: v }));
-                // A free answer clears any picked option — it IS the answer now,
-                // so a leftover pick must not ride along with it.
-                if (v) setPicked((p) => (p[i] ? { ...p, [i]: "" } : p));
-              }}
-              style={noteInput}
-            />
-          </div>
+      {/* One question needs no tab strip — a single tab names nothing the
+          question below it does not already say, and a lone question cannot be
+          the one that got missed. */}
+      {questions.length > 1 && (
+        <div role="tablist" style={tabList}>
+          {questions.map((q, i) => {
+            const label = q.header || `${i + 1}`;
+            const unanswered = !isAnswered(i);
+            return (
+              <button
+                key={i}
+                type="button"
+                role="tab"
+                aria-selected={i === active}
+                // The dot is the glance; this is what a screen reader gets, and
+                // what says out loud what the dot only hints at.
+                aria-label={unanswered ? `${label}(未答)` : label}
+                onClick={() => setActive(i)}
+                style={tabBtn(i === active)}
+              >
+                {label}
+                {/* Hidden in place rather than removed: the strip wraps in a
+                    ~320px chat panel, so a tab that narrows on being answered
+                    re-flows the row and slides its neighbours out from under
+                    the pointer. */}
+                <span
+                  aria-hidden="true"
+                  data-testid="tab-blank-dot"
+                  style={blankDot(unanswered)}
+                >
+                  ●
+                </span>
+              </button>
+            );
+          })}
         </div>
-      ))}
+      )}
+      {questions.map((q, i) =>
+        i !== active ? null : (
+          <div key={i} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ fontWeight: 600 }}>{q.question}</div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {q.options.map((opt, oi) => {
+                  const active = picked[i] === opt.label;
+                  return (
+                    <div key={opt.label} style={optionRow(active)}>
+                      <button
+                        type="button"
+                        aria-pressed={active}
+                        disabled={sent}
+                        onClick={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
+                        title={opt.description || undefined}
+                        style={{
+                          display: "flex",
+                          alignItems: "flex-start",
+                          gap: 8,
+                          flex: "0 1 auto",
+                          minWidth: 0,
+                          background: "transparent",
+                          border: "none",
+                          padding: 0,
+                          textAlign: "left",
+                          // Still legible once sent — it is the record of the
+                          // choice, not a control any more.
+                          cursor: sent ? "default" : "pointer",
+                          color: "var(--text-paper)",
+                        }}
+                      >
+                        <span style={numBadge(active)}>{oi + 1}</span>
+                        <span
+                          style={{ display: "flex", flexDirection: "column", gap: 1, minWidth: 0 }}
+                        >
+                          <span style={{ fontWeight: active ? 600 : 400 }}>{opt.label}</span>
+                          {opt.description ? (
+                            <span
+                              style={{
+                                opacity: 0.7,
+                                fontSize: "0.85em",
+                                color: "var(--text-paper-d)",
+                              }}
+                            >
+                              {opt.description}
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                      {/* This option's OWN supplement — a note about THIS choice,
+                          not one shared box that could mean any of them. */}
+                      <input
+                        type="text"
+                        aria-label={`補充:${opt.label}`}
+                        value={optNote[noteKey(i, opt.label)] ?? ""}
+                        placeholder="補充(選填)"
+                        // `readOnly`, not `disabled`: a note that was sent has to
+                        // stay readable, and a disabled input greys its own text.
+                        readOnly={sent}
+                        onChange={(e) =>
+                          setOptNote((n) => ({ ...n, [noteKey(i, opt.label)]: e.target.value }))
+                        }
+                        onFocus={() => setPicked((p) => ({ ...p, [i]: opt.label }))}
+                        style={noteInput}
+                      />
+                    </div>
+                  );
+                })}
+            </div>
+
+            {/* Added by the card, never by the agent — so the way out exists even
+                when a small model forgets to offer one. "看不懂" rejects the
+                question; the input answers it in the user's own words. */}
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                aria-pressed={picked[i] === DONT_UNDERSTAND}
+                disabled={sent}
+                onClick={() => setPicked((p) => ({ ...p, [i]: DONT_UNDERSTAND }))}
+                style={{
+                  ...plainBtn,
+                  cursor: sent ? "default" : "pointer",
+                  borderColor: picked[i] === DONT_UNDERSTAND ? "var(--accent)" : "var(--paper-3)",
+                }}
+              >
+                看不懂
+              </button>
+              <input
+                type="text"
+                aria-label="自己回答"
+                value={freeText[i] ?? ""}
+                placeholder="以上皆非,自己回答"
+                readOnly={sent}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setFreeText((n) => ({ ...n, [i]: v }));
+                  // A free answer clears any picked option — it IS the answer now,
+                  // so a leftover pick must not ride along with it.
+                  if (v) setPicked((p) => (p[i] ? { ...p, [i]: "" } : p));
+                }}
+                style={noteInput}
+              />
+            </div>
+          </div>
+        ),
+      )}
 
       {/* Gone the moment it is pressed — nothing else moves. */}
       {!sent && (
@@ -301,7 +403,11 @@ export function AskUserCard({
             cursor: "pointer",
           }}
         >
-          送出
+          {/* It still sends. Someone who only cares about one of five questions
+              is entitled to answer that one and go — the count is there so that
+              is a decision rather than an accident. A single question needs no
+              count: it is on screen, and there is no tab hiding it. */}
+          {questions.length > 1 && blank > 0 ? `送出(還有 ${blank} 題未答)` : "送出"}
         </button>
       )}
     </div>
