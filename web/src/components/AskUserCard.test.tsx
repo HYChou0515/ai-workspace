@@ -33,7 +33,26 @@ const oneQuestion = {
   },
 };
 
+const twoQuestions = {
+  ...oneQuestion,
+  args: {
+    questions: [
+      {
+        header: "Format",
+        question: "Format?",
+        options: [{ label: "PDF" }, { label: "HTML" }],
+      },
+      {
+        header: "Charts",
+        question: "Include charts?",
+        options: [{ label: "Yes" }, { label: "No" }],
+      },
+    ],
+  },
+};
+
 const send = () => fireEvent.click(screen.getByRole("button", { name: /送出|Send/i }));
+const openTab = (name: RegExp) => fireEvent.click(screen.getByRole("tab", { name }));
 
 afterEach(cleanup);
 
@@ -111,10 +130,15 @@ describe("AskUserCard", () => {
       />,
     );
 
+    // These questions predate the `header` field, so their tabs are numbered —
+    // which is also how every question already sitting in a transcript renders.
     fireEvent.click(screen.getByRole("button", { name: /PDF/ }));
+    openTab(/^2/);
     fireEvent.click(screen.getByRole("button", { name: /2.*No/ }));
     send();
 
+    // One send carries both, so the answer to a tab the user left behind is
+    // still in it.
     const [{ content }] = onAnswer.mock.calls[0];
     expect(content).toContain("PDF");
     expect(content).toContain("No");
@@ -168,6 +192,107 @@ describe("AskUserCard", () => {
     render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} answered="SQLite" />);
     expect(screen.queryByRole("button", { name: /Postgres/ })).toBeNull();
     expect(screen.getByText(/SQLite/)).toBeTruthy();
+  });
+});
+
+describe("AskUserCard tabs", () => {
+  /* Stacked, five questions are one long strip and the ones below the fold are
+   * answered by nobody — the card sends `(未選擇)` for them without ever saying
+   * so. Tabs put each question in its own place; what actually stops the miss
+   * is that the tabs SAY which ones are still blank. */
+
+  it("shows one question at a time, behind a tab each", () => {
+    render(<AskUserCard call={twoQuestions} onAnswer={vi.fn()} />);
+
+    expect(screen.getByText("Format?")).toBeTruthy();
+    expect(screen.queryByText("Include charts?")).toBeNull();
+
+    openTab(/Charts/);
+    expect(screen.getByText("Include charts?")).toBeTruthy();
+    expect(screen.queryByText("Format?")).toBeNull();
+  });
+
+  it("marks which tabs are still blank, and counts them on 送出", () => {
+    // A tab hides its question, so hiding one is only safe if the strip says a
+    // question is in there unanswered. The count on the button is the part that
+    // cannot be misread — a dot alone never says what it wants.
+    render(<AskUserCard call={twoQuestions} onAnswer={vi.fn()} />);
+
+    expect(screen.getByRole("tab", { name: /Format.*未答/ })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /Charts.*未答/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /送出.*2 題未答/ })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: /PDF/ }));
+
+    expect(screen.getByRole("tab", { name: /^Format$/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /送出.*1 題未答/ })).toBeTruthy();
+  });
+
+  it("keeps the blank marker's space once the question is answered", () => {
+    // Dropping the dot narrows its tab, which re-flows a strip that wraps (it
+    // does: the card is ~320px in the chat panel, and five headers do not fit
+    // on one line). Answering one question would then shuffle the others out
+    // from under the pointer. So the dot is hidden in place, never removed.
+    render(<AskUserCard call={twoQuestions} onAnswer={vi.fn()} />);
+
+    expect(screen.getAllByTestId("tab-blank-dot")).toHaveLength(2);
+    expect(screen.getAllByTestId("tab-blank-dot")[0]).toBeVisible();
+
+    fireEvent.click(screen.getByRole("button", { name: /PDF/ }));
+
+    expect(screen.getAllByTestId("tab-blank-dot")).toHaveLength(2);
+    expect(screen.getAllByTestId("tab-blank-dot")[0]).not.toBeVisible();
+    expect(screen.getAllByTestId("tab-blank-dot")[1]).toBeVisible();
+  });
+
+  it("counts an answer in the user's own words as answered", () => {
+    // The card offers three ways to answer and only one of them is an option.
+    // A tab still marked blank after the user typed their answer into it would
+    // be telling them they had not answered.
+    render(<AskUserCard call={twoQuestions} onAnswer={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText("自己回答"), { target: { value: "SVG" } });
+
+    expect(screen.getByRole("tab", { name: /^Format$/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /送出.*1 題未答/ })).toBeTruthy();
+  });
+
+  it("stays on the question just answered instead of flying to the next", () => {
+    // Auto-advancing would be the stronger nudge, but every option carries its
+    // own 補充 field: leaving on the click takes that field away before it can
+    // be used, so the pick has to be able to sit still.
+    render(<AskUserCard call={twoQuestions} onAnswer={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /PDF/ }));
+
+    expect(screen.getByText("Format?")).toBeTruthy();
+    expect(screen.getByLabelText("補充:PDF")).toBeTruthy();
+  });
+
+  it("draws no tab strip for a single question", () => {
+    render(<AskUserCard call={oneQuestion} onAnswer={vi.fn()} />);
+
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
+    // And no count either — nothing is hidden, so there is nothing to warn about.
+    expect(screen.getByRole("button", { name: /^送出$/ })).toBeTruthy();
+  });
+
+  it("keeps the tabs walkable after 送出, as the record of what went", () => {
+    // #659's rule under tabs: only the button goes. If the strip stopped
+    // switching, four of five answers would become unreachable at the very
+    // moment they became the record of what was sent.
+    render(<AskUserCard call={twoQuestions} onAnswer={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /PDF/ }));
+    send();
+    expect(screen.queryByRole("button", { name: /送出/ })).toBeNull();
+
+    openTab(/Charts/);
+    expect(screen.getByText("Include charts?")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Yes/ })).toBeDisabled();
+
+    openTab(/Format/);
+    expect(screen.getByRole("button", { name: /PDF/ })).toHaveAttribute("aria-pressed", "true");
   });
 });
 
