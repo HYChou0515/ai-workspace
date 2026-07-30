@@ -21,11 +21,8 @@ import { useEffect, useRef, useState } from "react";
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
-import { ModalShell } from "../../components/ModalShell";
 import { Popover } from "../../components/Popover";
 import { handleDragEnd, partitionColumns, UNSET_COL } from "./boardOps";
-import { EntityFileEditor } from "./EntityFileEditor";
-import { refOptionsForField, type RefOption } from "./refTraversal";
 import { selectColor } from "./selectColor";
 import { sortRows } from "./sortRows";
 import { RoleField, widgetForRole } from "./roleWidget";
@@ -33,7 +30,18 @@ import { fieldText, roleOf } from "./shared";
 import { SelectChip } from "./TableView";
 import type { EntityViewProps } from "./types";
 
-export function BoardView({ spec, type, entities, users, canWrite, refIndex, onPatch, onSave, onOpenRecordFile, busy }: EntityViewProps) {
+export function BoardView({
+  spec,
+  type,
+  entities,
+  users,
+  canWrite,
+  refIndex,
+  onPatch,
+  onOpenRecord,
+  onOpenRecordFile,
+  busy,
+}: EntityViewProps) {
   const readOnly = canWrite === false; // §E — a non-writer can't drag or change status
   const groupField = spec.group_by ?? "status";
   const statusSpec = roleOf(type, groupField);
@@ -66,7 +74,6 @@ export function BoardView({ spec, type, entities, users, canWrite, refIndex, onP
       users,
     );
 
-  const refOptionsFor = (name: string) => refOptionsForField(type, refIndex, name);
 
   const renderCard = (e: EntityInstance) => (
     <Card
@@ -81,9 +88,8 @@ export function BoardView({ spec, type, entities, users, canWrite, refIndex, onP
       busy={busy}
       readOnly={readOnly}
       onPatch={onPatch}
-      onSave={onSave}
+      onOpenRecord={onOpenRecord}
       onOpenRecordFile={onOpenRecordFile}
-      refOptionsFor={refOptionsFor}
     />
   );
 
@@ -176,9 +182,8 @@ function Card({
   busy,
   readOnly,
   onPatch,
-  onSave,
+  onOpenRecord,
   onOpenRecordFile,
-  refOptionsFor,
 }: {
   entity: EntityInstance;
   titleField: string;
@@ -190,11 +195,9 @@ function Card({
   busy?: boolean;
   readOnly?: boolean;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
-  onSave?: (number: number, patch: Record<string, unknown>, body: string) => void;
+  onOpenRecord?: (number: number) => void;
   onOpenRecordFile?: (number: number) => void;
-  refOptionsFor?: (name: string) => RefOption[] | undefined;
 }) {
-  const [editing, setEditing] = useState(false);
   // §E — a read-only member can neither drag the card nor change its status.
   const { attributes, listeners, setNodeRef, transform } = useDraggable({
     id: `card-${entity.number}`,
@@ -210,8 +213,10 @@ function Card({
   };
 
   // The card face only shows read-only badges + the status select, so the ⋯ menu
-  // is the way to reach the rest of the fields (Edit) or the raw file (Open file).
-  const canEdit = !readOnly && !!onSave && !!type;
+  // is the way to reach the rest of the fields (Open) or the raw file (Open file).
+  // Open is NOT gated on write permission: it lands on the reading view, and a
+  // read-only member had no way at all to read a card's body before.
+  const canOpen = !!onOpenRecord && !!type;
   const canOpenFile = !!onOpenRecordFile;
 
   return (
@@ -221,15 +226,24 @@ function Card({
       data-over={isOver ? "" : undefined}
       className={`ev-card${readOnly ? " ev-card--readonly" : ""}`}
       style={{ transform: transform ? `translate(${transform.x}px, ${transform.y}px)` : undefined }}
+      // #680 — same gesture as the gantt bar and the table's #N cell. Controls
+      // inside the card stop it, so double-clicking the status chip edits the
+      // status instead of opening the record.
+      onDoubleClick={() => onOpenRecord?.(entity.number)}
       {...attributes}
       {...listeners}
     >
       <div className="ev-card__head">
         <div className="ev-card__title">{fieldText(entity.fields[titleField]) || `#${entity.number}`}</div>
-        {(canEdit || canOpenFile) && (
-          // Isolate the menu (and the modal it opens) from the card's drag
-          // listeners — a pointerdown here must not arm a drag.
-          <div className="ev-card__menu" onPointerDown={(e) => e.stopPropagation()}>
+        {(canOpen || canOpenFile) && (
+          // Isolate the menu from the card's drag listeners — a pointerdown here
+          // must not arm a drag — and from its open gesture, so double-clicking
+          // the menu doesn't also throw the record over the board.
+          <div
+            className="ev-card__menu"
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
             <Popover
               align="end"
               width={160}
@@ -247,16 +261,16 @@ function Card({
             >
               {(close) => (
                 <div className="ev-cardmenu">
-                  {canEdit && (
+                  {canOpen && (
                     <button
                       type="button"
                       className="ev-cardmenu__item"
                       onClick={() => {
-                        setEditing(true);
+                        onOpenRecord?.(entity.number);
                         close();
                       }}
                     >
-                      Edit
+                      Open
                     </button>
                   )}
                   {canOpenFile && (
@@ -286,32 +300,19 @@ function Card({
       )}
       {statusSpec && statusSpec.values && (
         // Stop pointerdown here from arming the card's drag sensor, so a click on
-        // the chip / select is a click, not the start of a drag.
-        <div className="ev-card__status-row" onPointerDown={(e) => e.stopPropagation()}>
+        // the chip / select is a click, not the start of a drag — and stop the
+        // double-click, so editing the status doesn't also open the record.
+        <div
+          className="ev-card__status-row"
+          onPointerDown={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
           <CardStatus
             spec={statusSpec}
             value={entity.fields[groupField]}
             disabled={busy || readOnly}
             onCommit={(next) => onPatch(entity.number, { [groupField]: next })}
           />
-        </div>
-      )}
-      {editing && type && (
-        <div onPointerDown={(e) => e.stopPropagation()}>
-          <ModalShell onClose={() => setEditing(false)} ariaLabel={`Edit #${entity.number}`} align="top" width={640}>
-            <EntityFileEditor
-              type={type}
-              record={entity}
-              users={users}
-              canWrite={!readOnly}
-              busy={busy}
-              refOptionsFor={refOptionsFor}
-              onSave={(patch, body) => {
-                onSave?.(entity.number, patch, body);
-                setEditing(false);
-              }}
-            />
-          </ModalShell>
         </div>
       )}
     </div>

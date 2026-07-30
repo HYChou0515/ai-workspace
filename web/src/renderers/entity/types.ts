@@ -103,9 +103,6 @@ export type EntityViewProps = {
    * milestone whose own span the schedule works out. Absent ⇒ that type is not
    * writable from here and its span is left alone. */
   onPatchAnchor?: (number: number, patch: Record<string, unknown>) => void;
-  /** #4 — save a record's frontmatter patch + markdown body (the file-editor
-   * path). Powers the board card's ⋯ → Edit modal. Omitted ≡ no edit modal. */
-  onSave?: (number: number, patch: Record<string, unknown>, body: string) => void;
   /** #680 — open one record in the shared modal, in place, without leaving the
    * view (a bar / row / card double-click). Undefined ≡ the gesture is inert, so
    * a view rendered outside a container that owns the modal stays harmless. */

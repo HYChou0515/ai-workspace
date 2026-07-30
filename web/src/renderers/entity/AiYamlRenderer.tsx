@@ -283,7 +283,6 @@ export function AiYamlRenderer({ path }: { path: string }) {
         onCreate={write.create}
         onPatch={write.patch}
         onPatchAnchor={anchorType ? anchorWrite.patch : undefined}
-        onSave={write.save}
         onOpenRecord={openInModal}
         onOpenRecordFile={onOpenRecordFile}
         busy={write.isBusy}
