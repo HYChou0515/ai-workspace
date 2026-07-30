@@ -118,7 +118,18 @@ function groupLanes(
   return order.map((k) => byKey.get(k)!);
 }
 
-export function GanttView({ spec, type, entities, users, refIndex, onPatch, onPatchAnchor, canWrite = true, busy }: EntityViewProps) {
+export function GanttView({
+  spec,
+  type,
+  entities,
+  users,
+  refIndex,
+  onPatch,
+  onPatchAnchor,
+  onOpenRecord,
+  canWrite = true,
+  busy,
+}: EntityViewProps) {
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
   const assigneeField = spec.assignee;
@@ -390,6 +401,13 @@ export function GanttView({ spec, type, entities, users, refIndex, onPatch, onPa
                         data-provisional={isProvisional(row.e) ? "true" : undefined}
                         data-busy={busy ? "1" : undefined}
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
+                        // #680 — a double-click opens the record. It coexists with
+                        // the drag for two measured reasons (docs/plan-issue-680.md):
+                        // startDrag's preventDefault suppresses only the
+                        // compatibility mouse events, so click/dblclick still
+                        // arrive; and a zero-day drag commits nothing, so the two
+                        // presses underneath write no span.
+                        onDoubleClick={() => onOpenRecord?.(row.e.number)}
                         style={{ left, width }}
                       >
                         <span className="ev-gantt__bar-label">

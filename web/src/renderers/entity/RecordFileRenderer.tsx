@@ -15,22 +15,19 @@
  *   - the raw byte-edit escape hatch (the tab-strip Edit toggle).
  */
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 
-import type { EntityInstance, EntityType } from "../../api/entities";
 import { useFileService } from "../../api/fileService";
-import type { User } from "../../api/types";
 import { useEditMode } from "../../hooks/editMode";
 import { useEntities, useEntityCatalog, useReferencedRecords } from "../../hooks/useEntities";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
 import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
-import { pxToRem } from "../../lib/pxToRem";
 import { MarkdownRenderer } from "../MarkdownRenderer";
-import { EntityFileEditor } from "./EntityFileEditor";
-import { EntityRecordView } from "./EntityRecordView";
-import { buildRefIndex, type RefOption, referencedTypes, refOptionsForField } from "./refTraversal";
+import { EntityRecordPane } from "./EntityRecordPane";
+import { ConflictBanner } from "./shared";
+import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
 
 /** `{records_path}/{N}.md` → its folder + number, or null if the basename isn't a
  * bare integer `.md`. The folder is normalised (no leading slash) to compare with
@@ -94,39 +91,17 @@ export function RecordFileRenderer({ path }: { path: string }) {
 
   return (
     <div style={{ height: "100%", overflow: "auto" }}>
-      {inConflict && (
-        <div
-          role="alert"
-          style={{
-            margin: 12,
-            border: "1px solid var(--warn)",
-            borderRadius: 6,
-            padding: 8,
-            fontSize: pxToRem(13),
-          }}
-        >
-          Someone else changed this record — your edit wasn't applied and the latest values were reloaded.
-          <button
-            type="button"
-            className="btn"
-            data-variant="ghost"
-            data-size="sm"
-            aria-label={`dismiss conflict ${record.number}`}
-            style={{ marginLeft: 8 }}
-            onClick={() => write.dismissConflict(record.number)}
-          >
-            #{record.number} ✕
-          </button>
-        </div>
-      )}
-      <RecordPane
+      {inConflict && <ConflictBanner conflicts={[record.number]} onDismiss={write.dismissConflict} />}
+
+      <EntityRecordPane
         // The whole IDE mounts ONE <FileView>, so switching tabs only swaps the
         // `path` prop and this pane is reused in place. Both the form (seeded
         // from `record` via useState, run once on mount) and the view/edit mode
         // would otherwise follow you across tabs — opening issues/2.md after
         // editing issues/1.md showed #1's title/date, and #1's edit mode. Key it
         // to the path so a different record file remounts, re-seeds, and opens
-        // in its own reading state.
+        // in its own reading state. (The pane is shared with the #680 modal, which
+        // gets the same freshness for free: it mounts per open.)
         key={path}
         path={path}
         type={type}
@@ -138,61 +113,5 @@ export function RecordFileRenderer({ path }: { path: string }) {
         onSave={(patch, body) => write.save(record.number, patch, body)}
       />
     </div>
-  );
-}
-
-/** The two states of a record file: read it, or edit it. Split from the
- * container so the mode is keyed to the path along with the form's seed — see
- * the key comment above. (The third state, the tab strip's raw whole-file
- * toggle, is handled by the container and outranks both.) */
-function RecordPane({
-  path,
-  type,
-  record,
-  users,
-  canWrite,
-  busy,
-  refOptionsFor,
-  onSave,
-}: {
-  path: string;
-  type: EntityType;
-  record: EntityInstance;
-  users?: User[];
-  canWrite?: boolean;
-  busy?: boolean;
-  refOptionsFor?: (name: string) => RefOption[] | undefined;
-  onSave: (patch: Record<string, unknown>, body: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  if (!editing) {
-    return (
-      <EntityRecordView
-        type={type}
-        record={record}
-        users={users}
-        path={path}
-        canWrite={canWrite}
-        refOptionsFor={refOptionsFor}
-        onEdit={() => setEditing(true)}
-      />
-    );
-  }
-  return (
-    <EntityFileEditor
-      type={type}
-      record={record}
-      users={users}
-      canWrite={canWrite}
-      busy={busy}
-      refOptionsFor={refOptionsFor}
-      onSave={(patch, body) => {
-        onSave(patch, body);
-        // Back to reading — the write is optimistic, so the view shows the new
-        // values immediately, and a 409 arrives as the banner above it.
-        setEditing(false);
-      }}
-      onCancel={() => setEditing(false)}
-    />
   );
 }

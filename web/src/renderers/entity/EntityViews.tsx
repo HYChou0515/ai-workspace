@@ -18,7 +18,7 @@ import type { User } from "../../api/types";
 import { ModalShell } from "../../components/ModalShell";
 import { refOptionsForField, type RefOption } from "./refTraversal";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
-import { fieldText, parseSpan, parseViewSpec } from "./shared";
+import { ConflictBanner, fieldText, parseSpan, parseViewSpec } from "./shared";
 import type { EntityViewProps, ViewConfig, ViewKind, ViewSpec } from "./types";
 import { ViewSettingsPanel } from "./ViewSettingsPanel";
 import { resolveViewRenderer } from "./viewKindRegistry";
@@ -136,38 +136,6 @@ export function QuickCreate({
 // The Group-by / Sort / Fields controls now live in the "View" gear panel
 // (#GH-projects P3) — see ViewSettingsPanel, driven by the ViewConfig the
 // container builds. The old standalone GroupByControl is retired.
-
-// ── conflict banner (§B2) ──────────────────────────────────────────────────
-
-/** A non-blocking alert for records whose optimistic-lock write hit a 409. The
- * write hook has already reloaded the row to the other person's value; this just
- * tells the user their edit didn't land and lets them dismiss per record. */
-function ConflictBanner({ conflicts, onDismiss }: { conflicts: number[]; onDismiss?: (number: number) => void }) {
-  return (
-    <div role="alert" className="ev-banner">
-      <span className="ev-banner__icon" aria-hidden>
-        ⚠
-      </span>
-      <div className="ev-banner__body">
-        Someone else changed {conflicts.length === 1 ? "this record" : "these records"} — your edit wasn't applied and the
-        latest {conflicts.length === 1 ? "value was" : "values were"} reloaded.
-        <span className="ev-banner__actions">
-          {conflicts.map((n) => (
-            <button
-              key={n}
-              type="button"
-              className="ev-banner__chip"
-              aria-label={`dismiss conflict ${n}`}
-              onClick={() => onDismiss?.(n)}
-            >
-              #{n} ✕
-            </button>
-          ))}
-        </span>
-      </div>
-    </div>
-  );
-}
 
 // ── diagnostics (§D) ────────────────────────────────────────────────────────
 

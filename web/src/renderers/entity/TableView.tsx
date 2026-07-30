@@ -42,7 +42,7 @@ function columnsFor(spec: ViewSpec, type: EntityType | null, entities: EntityIns
 
 type FilterOption = { value: string; label: string };
 
-export function TableView({ spec, type, entities, invalid, users, refIndex, canWrite, onPatch, busy }: EntityViewProps) {
+export function TableView({ spec, type, entities, invalid, users, refIndex, canWrite, onPatch, onOpenRecord, busy }: EntityViewProps) {
   const allColumns = columnsFor(spec, type, entities);
   const readOnly = canWrite === false; // §E — disable inline edits for non-writers
   const [sort, setSort] = useState<{ column: string; dir: SortDir } | null>(null);
@@ -145,7 +145,18 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
             />
           )}
         </td>
-        <td className="ev-table__num">{e.number}</td>
+        {/* #680 — the row's open handle. Deliberately NOT a value column: a cell
+            that swaps itself for an input on the first click never sees the
+            dblclick (measured — the second click lands on the input), so the
+            gesture would silently do nothing there. */}
+        <td
+          className="ev-table__num"
+          data-testid={`row-open-${e.number}`}
+          title={onOpenRecord ? `Double-click to open #${e.number}` : undefined}
+          onDoubleClick={() => onOpenRecord?.(e.number)}
+        >
+          {e.number}
+        </td>
         {columns.map((c) => {
           const warnMsg = warn[c];
           const td = warnMsg ? { className: "ev-table__cell--warn", title: warnMsg } : {};

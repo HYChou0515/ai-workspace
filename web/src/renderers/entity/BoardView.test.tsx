@@ -131,33 +131,57 @@ describe("BoardView (#451)", () => {
     expect(screen.getByTestId("card-1")).toHaveAttribute("aria-roledescription", "draggable");
   });
 
+  // #680 — the same gesture as the gantt bar and the table's #N cell.
+  it("opens the record on a card double-click", () => {
+    const onOpenRecord = vi.fn();
+    board({ entities: [issue(1, { title: "A", status: "open" })], onOpenRecord });
+
+    fireEvent.doubleClick(screen.getByTestId("card-1"));
+
+    expect(onOpenRecord).toHaveBeenCalledWith(1);
+  });
+
+  it("does not open the record when the double-click lands on a control inside the card", () => {
+    const onOpenRecord = vi.fn();
+    board({ entities: [issue(1, { title: "A", status: "open" })], onOpenRecord });
+
+    // The status chip is its own editing affordance; double-clicking it must not
+    // ALSO throw a modal over the board.
+    fireEvent.doubleClick(screen.getByRole("button", { name: "edit status" }));
+
+    expect(onOpenRecord).not.toHaveBeenCalled();
+  });
+
   describe("card actions menu (#4)", () => {
     it("opens the record's file from the card menu", () => {
+      const onOpenRecordFile = vi.fn();
+      board({ entities: [issue(1, { title: "A", status: "open" })], onOpenRecordFile });
+      fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
+      fireEvent.click(screen.getByRole("button", { name: "Open file" }));
+      expect(onOpenRecordFile).toHaveBeenCalledWith(1);
+    });
+
+    // #680 — the card used to open its OWN modal, straight into the edit form.
+    // The record modal is now one shared surface owned by the container (and it
+    // opens on the reading view), so the card asks instead of rendering one.
+    it("asks the container to open the record, without a modal of its own", () => {
       const onOpenRecord = vi.fn();
       board({ entities: [issue(1, { title: "A", status: "open" })], onOpenRecord });
       fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
-      fireEvent.click(screen.getByRole("button", { name: "Open file" }));
+      fireEvent.click(screen.getByRole("button", { name: "Open" }));
       expect(onOpenRecord).toHaveBeenCalledWith(1);
-    });
-
-    it("edits a card in a modal that saves through the file-editor path", () => {
-      const onSave = vi.fn();
-      board({ entities: [issue(1, { title: "A", status: "open" })], onSave });
-      fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
-      fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-      const dialog = screen.getByRole("dialog");
-      expect(within(dialog).getByLabelText("title")).toHaveValue("A");
-      fireEvent.change(within(dialog).getByLabelText("status"), { target: { value: "done" } });
-      fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
-      expect(onSave).toHaveBeenCalledWith(1, expect.objectContaining({ status: "done" }), expect.any(String));
-      // saving closes the modal.
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     });
 
-    it("hides Edit for a read-only member but still offers Open file (§E)", () => {
-      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false, onSave: vi.fn(), onOpenRecord: vi.fn() });
+    it("still lets a read-only member open a record — reading is not a write (§E)", () => {
+      board({
+        entities: [issue(1, { title: "A", status: "open" })],
+        canWrite: false,
+        onOpenRecord: vi.fn(),
+        onOpenRecordFile: vi.fn(),
+      });
       fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
-      expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open" })).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open file" })).toBeInTheDocument();
     });
   });
