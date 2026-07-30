@@ -34,6 +34,7 @@ const ISSUE_TYPE = {
 
 const BOARD = "view: board\nentity: issue\ngroup_by: status\ncard:\n  title: title\n";
 const HEALTH = "view: health\ntitle: Data issues\n";
+const GANTT = "view: gantt\nentity: issue\nspan: span\nlabel: title\n";
 
 function storeWith(text: string, path: string): FileBufferStore {
   return new FileBufferStore({
@@ -67,6 +68,36 @@ afterEach(() => {
 });
 
 describe("AiYamlRenderer", () => {
+  // #680 — the seam: a view asks to open a record, the CONTAINER owns the modal.
+  it("opens the record modal from a gantt bar double-click, and closes it again", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.list.mockResolvedValue({
+      entities: [
+        {
+          number: 4,
+          type_name: "issue",
+          fields: { title: "Bar stops short", status: "open", span: "2026-07-13/2026-07-15" },
+          body: "## Repro\n",
+          diagnostics: [],
+        },
+      ],
+      invalid: [],
+    });
+
+    renderView("/views/workload.ai.yaml", GANTT);
+
+    fireEvent.doubleClick(await screen.findByTestId("bar-4"));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveAccessibleName(expect.stringContaining("#4"));
+    // The record's own values, not a placeholder — the projection the chart is
+    // already holding is what feeds the modal (no second fetch).
+    expect(dialog).toHaveTextContent("Bar stops short");
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("renders the live board from the entity API and edits a card through the update route", async () => {
     mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
     mock.list.mockResolvedValue({ entities: [{ number: 1, type_name: "issue", fields: { title: "A", status: "open" }, body: "", diagnostics: [] }], invalid: [] });

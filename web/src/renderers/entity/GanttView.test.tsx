@@ -51,6 +51,54 @@ function props(overrides: Partial<EntityViewProps> = {}): EntityViewProps {
 }
 
 describe("GanttView", () => {
+  // #680 — double-clicking a bar opens the record. Measured in real chromium
+  // first (see docs/plan-issue-680.md): the bar's pointerdown calls
+  // preventDefault(), which suppresses the compatibility mouse events but NOT
+  // click/dblclick, so the plain handler is enough and no self-counted click
+  // fallback is needed.
+  it("opens the record on a bar double-click", () => {
+    const onOpenRecord = vi.fn();
+    render(
+      <GanttView
+        {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-11" })], onOpenRecord })}
+      />,
+    );
+
+    fireEvent.doubleClick(screen.getByTestId("bar-1"));
+
+    expect(onOpenRecord).toHaveBeenCalledWith(1);
+  });
+
+  it("does not confuse a double-click with a drag: no span is written", () => {
+    const onPatch = vi.fn();
+    const onOpenRecord = vi.fn();
+    render(
+      <GanttView
+        {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-11" })], onPatch, onOpenRecord })}
+      />,
+    );
+    const bar = screen.getByTestId("bar-1");
+
+    // Two press/release pairs at the SAME x — what a double-click is at the
+    // pointer level. A zero-day drag must not write.
+    fireEvent.pointerDown(bar, { clientX: 100 });
+    fireEvent.pointerUp(window, { clientX: 100 });
+    fireEvent.pointerDown(bar, { clientX: 100 });
+    fireEvent.pointerUp(window, { clientX: 100 });
+    fireEvent.doubleClick(bar);
+
+    expect(onPatch).not.toHaveBeenCalled();
+    expect(onOpenRecord).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the bar inert when nothing can open a record", () => {
+    render(
+      <GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-01/2026-01-11" })] })} />,
+    );
+    // No opener wired → the gesture is a no-op rather than a crash.
+    expect(() => fireEvent.doubleClick(screen.getByTestId("bar-1"))).not.toThrow();
+  });
+
   it("draws a bar only for records with a parseable span", () => {
     render(
       <GanttView

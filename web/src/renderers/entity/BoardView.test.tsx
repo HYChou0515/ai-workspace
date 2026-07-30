@@ -133,11 +133,11 @@ describe("BoardView (#451)", () => {
 
   describe("card actions menu (#4)", () => {
     it("opens the record's file from the card menu", () => {
-      const onOpenRecord = vi.fn();
-      board({ entities: [issue(1, { title: "A", status: "open" })], onOpenRecord });
+      const onOpenRecordFile = vi.fn();
+      board({ entities: [issue(1, { title: "A", status: "open" })], onOpenRecordFile });
       fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
       fireEvent.click(screen.getByRole("button", { name: "Open file" }));
-      expect(onOpenRecord).toHaveBeenCalledWith(1);
+      expect(onOpenRecordFile).toHaveBeenCalledWith(1);
     });
 
     it("edits a card in a modal that saves through the file-editor path", () => {
@@ -155,7 +155,7 @@ describe("BoardView (#451)", () => {
     });
 
     it("hides Edit for a read-only member but still offers Open file (§E)", () => {
-      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false, onSave: vi.fn(), onOpenRecord: vi.fn() });
+      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false, onSave: vi.fn(), onOpenRecordFile: vi.fn() });
       fireEvent.click(screen.getByRole("button", { name: /card 1 menu/i }));
       expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Open file" })).toBeInTheDocument();

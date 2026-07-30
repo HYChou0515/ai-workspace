@@ -106,8 +106,14 @@ export type EntityViewProps = {
   /** #4 — save a record's frontmatter patch + markdown body (the file-editor
    * path). Powers the board card's ⋯ → Edit modal. Omitted ≡ no edit modal. */
   onSave?: (number: number, patch: Record<string, unknown>, body: string) => void;
-  /** #4 — open a record's `{records_path}/N.md` file in a new tab (board card
-   * ⋯ → Open file). Undefined when no shell opener is wired ≡ action hidden. */
+  /** #680 — open one record in the shared modal, in place, without leaving the
+   * view (a bar / row / card double-click). Undefined ≡ the gesture is inert, so
+   * a view rendered outside a container that owns the modal stays harmless. */
   onOpenRecord?: (number: number) => void;
+  /** #4 — open a record's `{records_path}/N.md` file in a new tab (board card
+   * ⋯ → Open file). A DIFFERENT destination from `onOpenRecord`: the file tab
+   * carries the raw whole-file escape hatch the modal deliberately doesn't.
+   * Undefined when no shell opener is wired ≡ action hidden. */
+  onOpenRecordFile?: (number: number) => void;
   busy?: boolean;
 };

@@ -33,7 +33,7 @@ import { fieldText, roleOf } from "./shared";
 import { SelectChip } from "./TableView";
 import type { EntityViewProps } from "./types";
 
-export function BoardView({ spec, type, entities, users, canWrite, refIndex, onPatch, onSave, onOpenRecord, busy }: EntityViewProps) {
+export function BoardView({ spec, type, entities, users, canWrite, refIndex, onPatch, onSave, onOpenRecordFile, busy }: EntityViewProps) {
   const readOnly = canWrite === false; // §E — a non-writer can't drag or change status
   const groupField = spec.group_by ?? "status";
   const statusSpec = roleOf(type, groupField);
@@ -82,7 +82,7 @@ export function BoardView({ spec, type, entities, users, canWrite, refIndex, onP
       readOnly={readOnly}
       onPatch={onPatch}
       onSave={onSave}
-      onOpenRecord={onOpenRecord}
+      onOpenRecordFile={onOpenRecordFile}
       refOptionsFor={refOptionsFor}
     />
   );
@@ -177,7 +177,7 @@ function Card({
   readOnly,
   onPatch,
   onSave,
-  onOpenRecord,
+  onOpenRecordFile,
   refOptionsFor,
 }: {
   entity: EntityInstance;
@@ -191,7 +191,7 @@ function Card({
   readOnly?: boolean;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
   onSave?: (number: number, patch: Record<string, unknown>, body: string) => void;
-  onOpenRecord?: (number: number) => void;
+  onOpenRecordFile?: (number: number) => void;
   refOptionsFor?: (name: string) => RefOption[] | undefined;
 }) {
   const [editing, setEditing] = useState(false);
@@ -212,7 +212,7 @@ function Card({
   // The card face only shows read-only badges + the status select, so the ⋯ menu
   // is the way to reach the rest of the fields (Edit) or the raw file (Open file).
   const canEdit = !readOnly && !!onSave && !!type;
-  const canOpen = !!onOpenRecord;
+  const canOpenFile = !!onOpenRecordFile;
 
   return (
     <div
@@ -226,7 +226,7 @@ function Card({
     >
       <div className="ev-card__head">
         <div className="ev-card__title">{fieldText(entity.fields[titleField]) || `#${entity.number}`}</div>
-        {(canEdit || canOpen) && (
+        {(canEdit || canOpenFile) && (
           // Isolate the menu (and the modal it opens) from the card's drag
           // listeners — a pointerdown here must not arm a drag.
           <div className="ev-card__menu" onPointerDown={(e) => e.stopPropagation()}>
@@ -259,12 +259,12 @@ function Card({
                       Edit
                     </button>
                   )}
-                  {canOpen && (
+                  {canOpenFile && (
                     <button
                       type="button"
                       className="ev-cardmenu__item"
                       onClick={() => {
-                        onOpenRecord?.(entity.number);
+                        onOpenRecordFile?.(entity.number);
                         close();
                       }}
                     >
