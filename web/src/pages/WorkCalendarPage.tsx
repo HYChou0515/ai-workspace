@@ -121,7 +121,13 @@ export function WorkCalendarPage({ client = workCalendarApi }: { client?: WorkCa
 
       {canEdit && (
         <div>
-          <button type="button" onClick={onSave} disabled={save.isPending}>
+          <button
+            type="button"
+            className="btn"
+            data-variant="primary"
+            onClick={onSave}
+            disabled={save.isPending}
+          >
             {save.isPending ? "Saving…" : "Save"}
           </button>
           {save.isError && <span style={{ marginLeft: 8, color: "var(--err)" }}>
