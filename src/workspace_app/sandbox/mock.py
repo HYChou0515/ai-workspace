@@ -11,7 +11,13 @@ from .protocol import (
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
+    WalkResult,
 )
+
+
+def _parent(path: str) -> str:
+    """The directory holding `path` ("" when it sits at the workspace root)."""
+    return path.rstrip("/").rsplit("/", 1)[0]
 
 
 def _version(data: bytes) -> str:
@@ -23,6 +29,11 @@ def _version(data: bytes) -> str:
 class MockSandbox:
     def __init__(self) -> None:
         self._fs: dict[str, dict[str, bytes]] = {}
+        # Directories, tracked explicitly rather than implied by the file paths:
+        # an empty one implies nothing, and it is exactly the case that broke.
+        # A real filesystem keeps a directory after its last file is deleted, so
+        # entries here are removed only by `rmdir`/`rename`, never by `delete`.
+        self._dirs: dict[str, set[str]] = {}
         # One entry per `exec`, in call order — what the caller asked to add to
         # that command's environment.
         self.exec_envs: list[dict[str, str]] = []
@@ -57,6 +68,7 @@ class MockSandbox:
     async def kill(self, handle: SandboxHandle) -> None:
         self._require(handle)
         del self._fs[handle.id]
+        self._dirs.pop(handle.id, None)
         self._exposed.pop(handle.id, None)
         self._user_env.pop(handle.id, None)  # delivery file dies with the sandbox
         self._ready.discard(handle.id)  # #366: teardown drops the readiness mark
@@ -144,6 +156,7 @@ class MockSandbox:
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
         fs = self._require(handle)
         fs[remote_path] = data
+        self._register_dirs(handle, _parent(remote_path))
 
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         fs = self._require(handle)
@@ -154,6 +167,7 @@ class MockSandbox:
     async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
         fs = self._require(handle)
         fs[remote_path] = local_path.read_bytes()
+        self._register_dirs(handle, _parent(remote_path))
 
     async def download_to_file(
         self, handle: SandboxHandle, remote_path: str, local_path: Path
@@ -163,14 +177,20 @@ class MockSandbox:
             raise FileNotFoundError(remote_path)
         local_path.write_bytes(fs[remote_path])
 
-    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
+    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
         fs = self._require(handle)
+        dirs = self._dirs.setdefault(handle.id, set())
         prefix = root if root.endswith("/") else root + "/"
         if root in ("/", ""):
             items = list(fs.items())
+            under = sorted(dirs)
         else:
             items = [(p, d) for p, d in fs.items() if p.startswith(prefix)]
-        return [FileEntry(path=p, size=len(d), version=_version(d)) for p, d in items]
+            under = sorted(p for p in dirs if p.startswith(prefix))
+        return WalkResult(
+            files=[FileEntry(path=p, size=len(d), version=_version(d)) for p, d in items],
+            dirs=under,
+        )
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
         return path in self._require(handle)
@@ -189,30 +209,52 @@ class MockSandbox:
         del fs[path]
 
     async def mkdir(self, handle: SandboxHandle, path: str) -> None:
-        # The flat store has only implicit dirs (via file paths) and the Sandbox
-        # Protocol exposes no is_dir/listdir, so an empty dir is unobservable —
-        # validate the handle and no-op. Real backends create it for real.
+        # Directories are tracked for real. This used to be a no-op, on the
+        # grounds that a flat store has only the dirs its file paths imply — but
+        # that made an EMPTY dir inexpressible here, so no test using this double
+        # could observe the one case the real backends get asked about.
         self._require(handle)
+        self._register_dirs(handle, path.rstrip("/"))
 
     async def rmdir(self, handle: SandboxHandle, path: str) -> None:
         fs = self._require(handle)
+        dirs = self._dirs.setdefault(handle.id, set())
         base = path.rstrip("/")
         prefix = base + "/"
         victims = [p for p in fs if p == base or p.startswith(prefix)]
-        if not victims:
+        gone = {p for p in dirs if p == base or p.startswith(prefix)}
+        if not victims and not gone:
             raise FileNotFoundError(path)
         for p in victims:
             del fs[p]
+        dirs -= gone
 
     async def rename(self, handle: SandboxHandle, src: str, dst: str) -> None:
         fs = self._require(handle)
+        dirs = self._dirs.setdefault(handle.id, set())
         s, d = src.rstrip("/"), dst.rstrip("/")
         if s in fs:  # single file
             fs[d] = fs.pop(s)
+            self._register_dirs(handle, _parent(d))
             return
         prefix = s + "/"
         moved = [p for p in fs if p.startswith(prefix)]
-        if not moved:
+        moved_dirs = {p for p in dirs if p == s or p.startswith(prefix)}
+        if not moved and not moved_dirs:
             raise FileNotFoundError(src)
         for p in moved:
             fs[d + p[len(s) :]] = fs.pop(p)
+        dirs -= moved_dirs
+        for p in moved_dirs:
+            self._register_dirs(handle, d + p[len(s) :])
+
+    def _register_dirs(self, handle: SandboxHandle, path: str) -> None:
+        """Record `path` and every ancestor as directories. Ancestors matter
+        because a real filesystem's `mkdir -p` leaves them behind too, and
+        because a file written into a fresh subtree implies them."""
+        dirs = self._dirs.setdefault(handle.id, set())
+        parts = path.strip("/").split("/")
+        for i in range(1, len(parts) + 1):
+            seg = "/" + "/".join(parts[:i])
+            if seg != "/":
+                dirs.add(seg)

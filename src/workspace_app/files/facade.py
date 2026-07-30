@@ -674,7 +674,7 @@ class WorkspaceFiles:
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
-            return [e.path for e in await sb.walk(h, prefix or "/")]
+            return [e.path for e in (await sb.walk(h, prefix or "/")).files]
         return await self._fs.ls(workspace_id, prefix)
 
     async def list_dir(self, workspace_id: str, path: str = "") -> tuple[list[str], list[str]]:
@@ -732,7 +732,7 @@ class WorkspaceFiles:
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
-            return [(e.path, e.size) for e in await sb.walk(h, prefix or "/")]
+            return [(e.path, e.size) for e in (await sb.walk(h, prefix or "/")).files]
         return await self._stat_all_cold(workspace_id, prefix)
 
     async def _stat_all_cold(self, workspace_id: str, prefix: str) -> list[tuple[str, int]]:
@@ -771,7 +771,8 @@ class WorkspaceFiles:
         if warm is not None:
             sb, h = warm
             base = path.rstrip("/") + "/"
-            return any(e.path.startswith(base) for e in await sb.walk(h, "/"))
+            walked = await sb.walk(h, "/")
+            return path in walked.dirs or any(e.path.startswith(base) for e in walked.files)
         return await self._fs.is_dir(workspace_id, path)
 
     async def tree(
@@ -785,30 +786,27 @@ class WorkspaceFiles:
         liveness probe; cold it is a durable listing. Either way, asking once and
         splitting the result costs nothing extra.
 
-        Directories are derived from the file paths PLUS whatever the store
-        reports separately, because an empty directory appears in no file path —
-        that is the only thing the second call ever contributed."""
+        Directories come back from the traversal itself, not derived from the
+        file paths: an EMPTY directory appears in no file path, so deriving them
+        silently dropped every folder that held no files — the folder a user had
+        just created was never drawn. Only the durable branch still derives, and
+        it unions that with the store's own dir record."""
         prefix = abs_path(prefix) if prefix else prefix
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
-            entries = await sb.walk(h, prefix or "/")
-            files = [(e.path, e.size) for e in entries]
-            return files, _dirs_of(p for p, _ in files)
+            walked = await sb.walk(h, prefix or "/")
+            return [(e.path, e.size) for e in walked.files], sorted(walked.dirs)
         files = await self._stat_all_cold(workspace_id, prefix)
-        return files, await self._fs.listdir(workspace_id, prefix)
+        stored = await self._fs.listdir(workspace_id, prefix)
+        return files, sorted(set(stored) | set(_dirs_of(p for p, _ in files)))
 
     async def listdir(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = abs_path(prefix) if prefix else prefix
         warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
-            dirs: set[str] = set()
-            for e in await sb.walk(h, prefix or "/"):
-                parts = e.path.strip("/").split("/")
-                for i in range(1, len(parts)):
-                    dirs.add("/" + "/".join(parts[:i]))
-            return sorted(dirs)
+            return sorted((await sb.walk(h, prefix or "/")).dirs)
         return await self._fs.listdir(workspace_id, prefix)
 
     # ---- compare-and-swap writes (the agent must declare its expectation) ----

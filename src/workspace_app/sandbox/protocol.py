@@ -125,6 +125,25 @@ class FileEntry:
     version: str = ""
 
 
+@dataclass(frozen=True)
+class WalkResult:
+    """One traversal's two halves, as `Sandbox.walk` returns them.
+
+    Directories are plain paths, not `FileEntry`: a directory has no content, so
+    `size` and the `version` change-stamp (a content hash / CAS token) would be
+    meaningless for one, and a caller that received directories as file entries
+    would mirror them, bill them against the quota, or try to download them.
+    Keeping the halves apart makes each caller say which one it wants.
+
+    Both halves come from ONE walk because the file tree needs both and, warm,
+    that traversal crosses the network — and because an EMPTY directory appears
+    in no file path, so `dirs` cannot be derived from `files` afterwards. That
+    derivation is exactly why a folder holding no files was invisible."""
+
+    files: list[FileEntry]
+    dirs: list[str]
+
+
 class Sandbox(Protocol):
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         """Provision a sandbox and return its handle. Any `spec.exposed_ports`
@@ -216,11 +235,15 @@ class Sandbox(Protocol):
         #219). Raises `FileNotFoundError` if `remote_path` doesn't exist."""
         ...
 
-    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
-        """List every **regular file** under `root` (recursive), as `FileEntry`
-        with `/`-rooted paths. Directories and symlinks are excluded (only real
-        files round-trip to the FileStore). `root` is workspace-root-relative;
-        "/" walks the whole workspace."""
+    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
+        """Traverse `root` once and return its regular files AND its
+        directories, both with `/`-rooted paths. Symlinks are excluded (only
+        real files round-trip to the FileStore). `root` is workspace-root-
+        relative; "/" walks the whole workspace.
+
+        `dirs` holds EVERY directory under `root`, including the ones that hold
+        no files — those appear in no file path, so nothing downstream can
+        recover them from `files`."""
         ...
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:

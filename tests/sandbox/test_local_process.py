@@ -44,7 +44,7 @@ async def test_second_instance_same_root_sees_files_345(tmp_path):
     await pod_a.upload(h, b"written by A", "/report.md")
     # pod_b never called create; it operates on the same handle/dir.
     assert await pod_b.download(SandboxHandle(id="item-shared"), "/report.md") == b"written by A"
-    paths = {e.path for e in await pod_b.walk(SandboxHandle(id="item-shared"), "/")}
+    paths = {e.path for e in (await pod_b.walk(SandboxHandle(id="item-shared"), "/")).files}
     assert "/report.md" in paths
 
 
@@ -191,7 +191,7 @@ async def test_readiness_marker_lives_outside_workspace_366(sandbox: LocalProces
     assert (tmp_path / h.id / ".ready").is_file()  # sandbox root
     assert not (tmp_path / h.id / "root" / ".ready").exists()  # not the workspace
     await sandbox.upload(h, b"x", "/a.txt")
-    assert [e.path for e in await sandbox.walk(h, "/")] == ["/a.txt"]  # no /.ready
+    assert [e.path for e in (await sandbox.walk(h, "/")).files] == ["/a.txt"]  # no /.ready
     assert await sandbox.exists(h, "/.ready") is False
 
 
@@ -221,18 +221,30 @@ async def test_walk_returns_files_relative_to_root(sandbox: LocalProcessSandbox)
     h = await sandbox.create(SandboxSpec())
     await sandbox.upload(h, b"hello", "/a.txt")
     await sandbox.upload(h, b"world!!", "/sub/b.txt")
-    entries = await sandbox.walk(h, "/")
+    entries = (await sandbox.walk(h, "/")).files
     by_path = {e.path: e.size for e in entries}
     assert by_path == {"/a.txt": 5, "/sub/b.txt": 7}
     # version is populated for real-FS impls (mtime+size stamp).
     assert all(e.version for e in entries)
 
 
-async def test_walk_excludes_directories(sandbox: LocalProcessSandbox):
+async def test_walk_separates_directories_from_files(sandbox: LocalProcessSandbox):
+    """Directories come back in their own half — never as file entries, which
+    the mirror would try to download and the quota would bill."""
     h = await sandbox.create(SandboxSpec())
     await sandbox.upload(h, b"x", "/a/b/c.txt")
-    entries = await sandbox.walk(h, "/")
-    assert [e.path for e in entries] == ["/a/b/c.txt"]
+    walked = await sandbox.walk(h, "/")
+    assert [e.path for e in walked.files] == ["/a/b/c.txt"]
+    assert sorted(walked.dirs) == ["/a", "/a/b"]
+
+
+async def test_walk_reports_a_directory_that_holds_no_files(sandbox: LocalProcessSandbox):
+    """The case that has no other witness: an empty folder is in no file path."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.mkdir(h, "/empty")
+    walked = await sandbox.walk(h, "/")
+    assert walked.files == []
+    assert walked.dirs == ["/empty"]
 
 
 async def test_file_ops_exists_delete_mkdir_rmdir_rename(sandbox: LocalProcessSandbox):
@@ -243,7 +255,7 @@ async def test_file_ops_exists_delete_mkdir_rmdir_rename(sandbox: LocalProcessSa
 
     await sandbox.mkdir(h, "/d/e")  # empty dir, ancestors created
     await sandbox.rename(h, "/src", "/dst")
-    assert {e.path for e in await sandbox.walk(h, "/")} == {"/dst/a.txt"}
+    assert {e.path for e in (await sandbox.walk(h, "/")).files} == {"/dst/a.txt"}
 
     await sandbox.delete(h, "/dst/a.txt")
     assert await sandbox.exists(h, "/dst/a.txt") is False
@@ -273,10 +285,10 @@ async def test_workspace_is_a_subdir_so_infra_siblings_are_invisible(tmp_path):
     # exec but is not part of the walked/synced workspace
     await sb.exec(h, ["sh", "-c", "echo infra > ../infra.txt"])
     assert (tmp_path / h.id / "infra.txt").exists()
-    assert all("infra" not in e.path for e in await sb.walk(h, "/"))
+    assert all("infra" not in e.path for e in (await sb.walk(h, "/")).files)
     # while a normal (cwd-relative) output lands in the workspace and IS visible
     await sb.exec(h, ["sh", "-c", "echo out > made.txt"])
-    assert "/made.txt" in {e.path for e in await sb.walk(h, "/")}
+    assert "/made.txt" in {e.path for e in (await sb.walk(h, "/")).files}
 
 
 # ---------------- Live output streaming (on_output) ----------------
@@ -503,7 +515,7 @@ async def test_isolated_tools_dir_is_mounted_read_only_outside_workspace(tmp_pat
     ro = await sb.exec(h, ["sh", "-c", "echo x > /.tools/mytool/hack; echo rc=$?"])
     assert "rc=0" not in ro.stdout.decode()  # read-only → write fails
     await sb.upload(h, b"u", "/note.md")
-    assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # tools invisible
+    assert {e.path for e in (await sb.walk(h, "/")).files} == {"/note.md"}  # tools invisible
 
 
 async def test_unjailed_tools_dir_is_symlinked_outside_workspace(tmp_path):
@@ -515,7 +527,7 @@ async def test_unjailed_tools_dir_is_symlinked_outside_workspace(tmp_path):
     run = await sb.exec(h, ["../.tools/mytool/run"])  # relative from cwd=workspace
     assert run.exit_code == 0 and "TOOL-OK" in run.stdout.decode()
     await sb.upload(h, b"u", "/note.md")
-    assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # tools invisible
+    assert {e.path for e in (await sb.walk(h, "/")).files} == {"/note.md"}  # tools invisible
 
 
 @_needs_userns
@@ -526,7 +538,7 @@ async def test_isolated_exec_cleans_up_dev_scaffolding(tmp_path):
     h = await sb.create(SandboxSpec())
     await sb.upload(h, b"x", "/note.md")
     await sb.exec(h, ["echo", "hi"])
-    files = {e.path for e in await sb.walk(h, "/")}
+    files = {e.path for e in (await sb.walk(h, "/")).files}
     assert files == {"/note.md"}  # no /dev/null etc.
 
 
@@ -695,7 +707,7 @@ async def test_unjailed_python_shim_is_invisible_to_walk_and_idempotent(tmp_path
     r2 = await sb.exec(h, ["python", "-c", "print('ok')"])  # rebuild: must not raise
     assert r1.exit_code == 0 and r2.exit_code == 0
     assert r2.stdout.decode().strip() == "ok"
-    assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # shim invisible
+    assert {e.path for e in (await sb.walk(h, "/")).files} == {"/note.md"}  # shim invisible
 
 
 async def test_unjailed_exec_sets_sandbox_home_to_private_per_sandbox_dir(tmp_path):
@@ -711,7 +723,7 @@ async def test_unjailed_exec_sets_sandbox_home_to_private_per_sandbox_dir(tmp_pa
     assert home.name == ".home"
     assert home.is_dir()
     await sb.upload(h, b"x", "/note.md")
-    assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # .home invisible
+    assert {e.path for e in (await sb.walk(h, "/")).files} == {"/note.md"}  # .home invisible
 
 
 async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback(tmp_path):
@@ -827,7 +839,7 @@ async def test_unjailed_pip_install_stays_in_home_and_other_sandbox_cannot_see_i
         str(p) for p in a_home.rglob("*")
     )
     # .home is outside the workspace → invisible to the file tree.
-    assert {e.path for e in await sb.walk(a, "/")} == set()
+    assert {e.path for e in (await sb.walk(a, "/")).files} == set()
     # A fresh sandbox never sees A's install (no cross-sandbox leak).
     b = await sb.create(SandboxSpec(), sandbox_id="B")
     rb = await sb.exec(b, ["python", "-c", "import cowsay"])

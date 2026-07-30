@@ -33,6 +33,7 @@ from .protocol import (
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
+    WalkResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -352,12 +353,19 @@ class HttpSandbox:
         resp = await self._io_request(handle, "GET", "/ready")
         return bool(resp.json()["ready"])
 
-    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
+    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
         resp = await self._io_request(handle, "GET", "/walk", params={"root": root})
-        return [
-            FileEntry(path=e["path"], size=e["size"], version=e["version"])
-            for e in resp.json()["entries"]
-        ]
+        body = resp.json()
+        return WalkResult(
+            files=[
+                FileEntry(path=e["path"], size=e["size"], version=e["version"])
+                for e in body["entries"]
+            ],
+            # A host that predates the directory half omits the key entirely, so
+            # the file tree degrades to "empty folders are missing" — what it did
+            # before — instead of failing. Nothing else reads this half.
+            dirs=list(body.get("dirs") or []),
+        )
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         await self._io_request(handle, "DELETE", "/file", params={"path": path})

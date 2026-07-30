@@ -292,7 +292,7 @@ async def test_restore_marks_sandbox_ready_366(fs: SpecstarFileStore, sandbox: M
     await sync.restore("ws", h)
     assert await sandbox.is_ready(h) is True  # marked authoritative
     # readiness is out of the workspace, so restore never tracks it as a file
-    assert "/.ready" not in {e.path for e in await sandbox.walk(h, "/")}
+    assert "/.ready" not in {e.path for e in (await sandbox.walk(h, "/")).files}
     # a second restore is idempotent
     await sync.restore("ws", h)
     assert await sandbox.is_ready(h) is True
@@ -405,3 +405,91 @@ async def test_mirror_publishes_no_measurement_from_a_half_restored_sandbox(
     await sync.mirror("ws", h)  # never marked ready
 
     assert measured == {}
+
+
+# ---- directories (an empty one has no file to carry it) ----
+
+
+async def test_mirror_persists_a_folder_that_holds_no_files(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """The snapshot stores files, so an EMPTY folder had nothing to ride along
+    with: it lived only in the sandbox and was lost the moment one was reaped."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.mark_ready(h)
+    await sandbox.mkdir(h, "/empty")
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+
+    await sync.mirror("ws", h)
+
+    assert await fs.listdir("ws") == ["/empty"]
+
+
+async def test_an_empty_folder_survives_a_reap_and_restore(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """The round trip a user actually sees: make a folder, walk away long enough
+    for the sandbox to be recycled, come back and the folder is still there."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.mark_ready(h)
+    await sandbox.mkdir(h, "/notes/drafts")
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sync.mirror("ws", h)
+
+    await sandbox.kill(h)  # idle reap
+    fresh = await sandbox.create(SandboxSpec())
+    await sync.restore("ws", fresh)
+
+    assert (await sandbox.walk(fresh, "/")).dirs == ["/notes", "/notes/drafts"]
+
+
+async def test_mirror_drops_a_folder_the_sandbox_no_longer_has(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """Otherwise a folder deleted out of band (the agent's `rm -rf`) lingers in
+    the snapshot forever and comes back as a folder the user cannot delete."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.mark_ready(h)
+    await sandbox.mkdir(h, "/gone")
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sync.mirror("ws", h)
+    assert await fs.listdir("ws") == ["/gone"]
+
+    await sandbox.rmdir(h, "/gone")
+    await sync.mirror("ws", h)
+
+    assert await fs.listdir("ws") == []
+
+
+async def test_mirror_keeps_a_folder_when_the_readiness_sandwich_breaks(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """#366 applies to folders for the same reason it applies to files: a
+    half-restored or mid-reap sandbox is not evidence that anything was deleted."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.mark_ready(h)
+    await sandbox.mkdir(h, "/keep")
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sync.mirror("ws", h)
+
+    await sandbox.rmdir(h, "/keep")
+    sandbox._ready.discard(h.id)  # noqa: SLF001 — sandbox no longer authoritative
+    await sync.mirror("ws", h)
+
+    assert await fs.listdir("ws") == ["/keep"]
+
+
+async def test_mirror_does_not_persist_an_ignored_folder(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """`node_modules/` is deliberately not snapshotted; persisting its directory
+    record would restore a hollow shell of it on the next wake."""
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.mark_ready(h)
+    await sandbox.mkdir(h, "/node_modules/pkg")
+    await sandbox.mkdir(h, "/src")
+    sync = SandboxSync(filestore=fs, sandbox=sandbox, ignores=DEFAULT_IGNORES)
+
+    await sync.mirror("ws", h)
+
+    assert await fs.listdir("ws") == ["/src"]

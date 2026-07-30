@@ -124,6 +124,12 @@ class _SizeReply(BaseModel):
 
 class _WalkReply(BaseModel):
     entries: list[_FileEntryModel]
+    # Directories from the SAME traversal. An empty one appears in no file path,
+    # so a client cannot derive it from `entries` — that derivation is why a
+    # folder holding no files never reached the file tree. Defaulted so an older
+    # client that ignores the field, and an older host that omits it, both stay
+    # on the previous (files-only) behaviour instead of failing.
+    dirs: list[str] = []
 
 
 class _MkdirBody(BaseModel):
@@ -480,9 +486,12 @@ def make_host_app(
 
     @app.get("/sandboxes/{rid}/walk")
     async def walk(rid: str, root: str) -> _WalkReply:
-        entries = await sandbox.walk(SandboxHandle(id=rid), root)
+        walked = await sandbox.walk(SandboxHandle(id=rid), root)
         return _WalkReply(
-            entries=[_FileEntryModel(path=e.path, size=e.size, version=e.version) for e in entries]
+            entries=[
+                _FileEntryModel(path=e.path, size=e.size, version=e.version) for e in walked.files
+            ],
+            dirs=walked.dirs,
         )
 
     @app.delete("/sandboxes/{rid}/file", status_code=204)

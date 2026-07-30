@@ -35,6 +35,7 @@ from .protocol import (
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
+    WalkResult,
 )
 
 if TYPE_CHECKING:
@@ -204,7 +205,7 @@ class DockerSandbox:
         """#538. DEPRECATED backend (#252): summed from `walk` rather than a
         native `du`, which is the shape the protocol describes without the
         speed. Kept correct, not fast — new deploys use `kind: http`."""
-        return sum(e.size for e in await self.walk(handle, "/"))
+        return sum(e.size for e in (await self.walk(handle, "/")).files)
 
     async def size_of(self, handle: SandboxHandle, path: str) -> int | None:
         container = self._require(handle)
@@ -267,22 +268,24 @@ class DockerSandbox:
         first = binds[0]
         return (first.get("HostIp") or "127.0.0.1", int(first["HostPort"]))
 
-    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
+    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
         container = self._require(handle)
         target = PurePosixPath(_WORKDIR) / root.lstrip("/")
         # `find -printf` is a GNU extension but debian:12-slim has it; the
-        # format yields `<size>\t<mtime>\t<path>` so we can parse without
-        # invoking stat per file.
+        # format yields `<type>\t<size>\t<mtime>\t<path>` so we can parse without
+        # invoking stat per file. `%y` replaces the old `-type f` filter: the one
+        # traversal has to report directories too, or a folder holding no files
+        # is invisible to everything downstream.
         result = await asyncio.to_thread(
             container.exec_run,
-            ["find", str(target), "-type", "f", "-printf", "%s\\t%T@\\t%P\\n"],
+            ["find", str(target), "-printf", "%y\\t%s\\t%T@\\t%P\\n"],
         )
         if result.exit_code != 0:  # pragma: no cover — only when find binary missing
-            return []
+            return WalkResult(files=[], dirs=[])
         out = result.output or b""
         if isinstance(out, tuple):  # pragma: no cover — demux=False edge case
             out = out[0] or b""
-        return list(_parse_find_output(out, base=str(target)))
+        return _parse_find_output(out)
 
 
 def _make_single_file_tar(name: str, data: bytes, mode: int = 0o644) -> bytes:
@@ -345,25 +348,35 @@ def _extract_tar_stream_to_file(stream: Any, name: str, local_path: Path) -> Non
         os.unlink(tarpath)
 
 
-def _parse_find_output(output: bytes, base: str):
-    """Yield FileEntry from `find -printf "%s\\t%T@\\t%P\\n"` output.
+def _parse_find_output(output: bytes) -> WalkResult:
+    """Split `find -printf "%y\\t%s\\t%T@\\t%P\\n"` output into files and dirs.
 
     %P is the path relative to the find root. We re-prepend "/" so the
     result mirrors FileStore-style canonical paths (the same shape
-    Mock/LocalProcess.walk returns).
+    Mock/LocalProcess.walk returns). %y is the type char — `f` regular, `d`
+    directory; anything else (symlink, socket, fifo) is dropped, which is what
+    the old `-type f` filter did to everything that was not a regular file.
     """
+    files: list[FileEntry] = []
+    dirs: list[str] = []
     for raw_line in output.splitlines():
         if not raw_line:
             continue
         try:
-            size_b, mtime_b, rel_b = raw_line.split(b"\t", 2)
+            kind_b, size_b, mtime_b, rel_b = raw_line.split(b"\t", 3)
         except ValueError:  # pragma: no cover — malformed line
             continue
         rel = rel_b.decode("utf-8", errors="replace")
-        if not rel:  # pragma: no cover — the find root itself, dropped silently
+        if not rel:  # the find root itself, dropped silently
             continue
-        yield FileEntry(
-            path="/" + rel,
-            size=int(size_b),
-            version=f"{mtime_b.decode()}-{size_b.decode()}",
-        )
+        if kind_b == b"d":
+            dirs.append("/" + rel)
+        elif kind_b == b"f":
+            files.append(
+                FileEntry(
+                    path="/" + rel,
+                    size=int(size_b),
+                    version=f"{mtime_b.decode()}-{size_b.decode()}",
+                )
+            )
+    return WalkResult(files=files, dirs=dirs)

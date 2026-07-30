@@ -41,6 +41,7 @@ from .protocol import (
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
+    WalkResult,
 )
 from .tool_cache import BUILTIN_DIR, EXT_DIR
 
@@ -811,23 +812,29 @@ class LocalProcessSandbox:
         await asyncio.to_thread(s.rename, d)
         await asyncio.to_thread(self._own, handle, d)
 
-    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
+    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult:
         cwd = self._workspace(handle)
         base = self._resolve(cwd, root) if root.strip("/") else cwd
         return await asyncio.to_thread(self._walk_sync, cwd, base)
 
     @staticmethod
-    def _walk_sync(cwd: Path, base: Path) -> list[FileEntry]:
+    def _walk_sync(cwd: Path, base: Path) -> WalkResult:
         entries: list[FileEntry] = []
+        dirs: list[str] = []
+        # The rglob already visits directories; it used to `continue` past them,
+        # which is why a folder holding no files could not be seen from outside.
         for p in base.rglob("*"):
-            if not p.is_file():
-                continue
             rel = p.relative_to(cwd).as_posix()
+            if p.is_dir():
+                dirs.append(f"/{rel}")
+                continue
+            if not p.is_file():
+                continue  # symlink / socket / fifo — never round-trips to the store
             stat = p.stat()
             # mtime(ns)+size — cheap, no read; ns granularity avoids same-second collisions.
             version = f"{stat.st_mtime_ns}-{stat.st_size}"
             entries.append(FileEntry(path=f"/{rel}", size=stat.st_size, version=version))
-        return entries
+        return WalkResult(files=entries, dirs=dirs)
 
     @staticmethod
     def _resolve(cwd: Path, remote_path: str) -> Path:

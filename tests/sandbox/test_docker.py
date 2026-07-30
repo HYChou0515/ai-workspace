@@ -141,7 +141,7 @@ async def test_walk_lists_uploaded_files(sandbox: DockerSandbox):
     h = await sandbox.create(SandboxSpec(image=_IMAGE))
     await sandbox.upload(h, b"hello", "/a.txt")
     await sandbox.upload(h, b"world!!", "/sub/b.txt")
-    entries = await sandbox.walk(h, "/")
+    entries = (await sandbox.walk(h, "/")).files
     by_path = {e.path: e.size for e in entries}
     assert by_path == {"/a.txt": 5, "/sub/b.txt": 7}
     assert all(e.version for e in entries)  # mtime-size stamp populated
@@ -155,7 +155,7 @@ async def test_file_ops_exists_delete_mkdir_rmdir_rename(sandbox: DockerSandbox)
 
     await sandbox.mkdir(h, "/d/e")
     await sandbox.rename(h, "/src", "/dst")
-    assert {e.path for e in await sandbox.walk(h, "/")} == {"/dst/a.txt"}
+    assert {e.path for e in (await sandbox.walk(h, "/")).files} == {"/dst/a.txt"}
 
     await sandbox.delete(h, "/dst/a.txt")
     assert await sandbox.exists(h, "/dst/a.txt") is False
@@ -177,7 +177,7 @@ async def test_readiness_marker_is_out_of_workspace_366(sandbox: DockerSandbox):
     await sandbox.mark_ready(h)
     assert await sandbox.is_ready(h) is True
     await sandbox.upload(h, b"x", "/a.txt")
-    assert {e.path for e in await sandbox.walk(h, "/")} == {"/a.txt"}  # no /.ready
+    assert {e.path for e in (await sandbox.walk(h, "/")).files} == {"/a.txt"}  # no /.ready
 
 
 def test_parse_find_output_skips_blank_lines():
@@ -185,6 +185,17 @@ def test_parse_find_output_skips_blank_lines():
     has to skip the resulting empty record without throwing."""
     from workspace_app.sandbox.docker import _parse_find_output
 
-    raw = b"5\t1.0\ta.txt\n\n7\t2.0\tb.txt\n"
-    entries = list(_parse_find_output(raw, base="/workspace"))
-    assert [e.path for e in entries] == ["/a.txt", "/b.txt"]
+    raw = b"f\t5\t1.0\ta.txt\n\nf\t7\t2.0\tb.txt\n"
+    walked = _parse_find_output(raw)
+    assert [e.path for e in walked.files] == ["/a.txt", "/b.txt"]
+
+
+def test_parse_find_output_splits_dirs_from_files_and_drops_other_types():
+    """`%y` replaced the `-type f` filter, so the parser is now what keeps a
+    symlink out of the file half — and directories out of it entirely."""
+    from workspace_app.sandbox.docker import _parse_find_output
+
+    raw = b"d\t4096\t1.0\t\nd\t4096\t1.0\tsub\nf\t5\t2.0\tsub/a.txt\nl\t7\t3.0\tlink\n"
+    walked = _parse_find_output(raw)
+    assert [e.path for e in walked.files] == ["/sub/a.txt"]
+    assert walked.dirs == ["/sub"]  # the find root itself ("") is dropped

@@ -73,6 +73,18 @@ class FileEntry:
     version: str = ""
 
 
+@dataclass(frozen=True)
+class WalkResult:
+    """One traversal's two halves. Directories are plain paths, not FileEntry: a
+    directory has no content, so `size`/`version` would be meaningless for one,
+    and a caller handed directories as file entries would mirror or bill them.
+    `dirs` includes directories holding no files — those appear in no file path,
+    so nothing downstream can recover them from `files`."""
+
+    files: list[FileEntry]
+    dirs: list[str]
+
+
 class Sandbox(Protocol):
     """The host's internal backend interface — the 13 operations its HTTP shell
     proxies. Implemented by `IsolatedProcessSandbox` (production) and
@@ -98,7 +110,7 @@ class Sandbox(Protocol):
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None: ...
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes: ...
-    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]: ...
+    async def walk(self, handle: SandboxHandle, root: str) -> WalkResult: ...
     async def disk_usage(self, handle: SandboxHandle) -> int:
         """#538: total apparent bytes of the walked workspace (not the infra
         area beside it) — the app's quota basis, answered by the side that owns

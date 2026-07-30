@@ -96,6 +96,54 @@ describe("<FileTree /> multi-select", () => {
     await user.type(input, "b.md{Enter}");
     expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
   });
+
+  // The tree's Delete/Backspace/Enter shortcuts live on the body div, and the
+  // rename/new-name input renders INSIDE it — so an unguarded handler turned
+  // "erase a character" into "delete the selected files".
+  it("Backspace inside the rename box edits the name, it does not delete the file", async () => {
+    const user = userEvent.setup();
+    renderTree();
+    await user.click(screen.getByText("a.md")); // select it, so a stray Delete would fire
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    await user.click(await screen.findByRole("button", { name: /rename/i }));
+    const input = await screen.findByDisplayValue("a.md");
+
+    await user.type(input, "{Backspace}");
+
+    expect(input).toHaveValue("a.m");
+    expect(screen.queryByText(/cannot be undone/i)).not.toBeInTheDocument();
+  });
+
+  it("Delete inside the new-file box edits the name, it does not delete the selection", async () => {
+    const user = userEvent.setup();
+    renderTree();
+    await user.click(screen.getByText("a.md"));
+    await user.click(screen.getByTitle("New file"));
+    const input = await screen.findByPlaceholderText("file name");
+
+    await user.type(input, "xy{ArrowLeft}{Delete}");
+
+    expect(input).toHaveValue("x");
+    expect(screen.queryByText(/cannot be undone/i)).not.toBeInTheDocument();
+  });
+
+  it("Enter that commits a rename does not also open the selected files", async () => {
+    const user = userEvent.setup();
+    const { onOpen } = renderTree();
+    await user.click(screen.getByText("a.md"));
+    onOpen.mockClear(); // the selecting click opens it in preview; ignore that
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    await user.click(await screen.findByRole("button", { name: /rename/i }));
+    const input = await screen.findByDisplayValue("a.md");
+    await user.clear(input);
+
+    // A colliding name so the commit stops at the replace prompt — this asserts
+    // the ENTER SHORTCUT stayed out of it, not what a rename does on success.
+    await user.type(input, "b.md{Enter}");
+
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(onOpen).not.toHaveBeenCalled();
+  });
 });
 
 describe("<FileTree /> reindex (#98)", () => {
