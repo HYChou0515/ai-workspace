@@ -51,6 +51,9 @@ style: |
   table { font-size: 15px; border-collapse: collapse; width: 100%; margin: 7px 0; }
   th { background: var(--accent-soft); color: var(--ink); text-align: left; font-size: 14.5px; }
   th, td { border: 1px solid var(--line); padding: 4px 8px; vertical-align: top; }
+  pre { background: #F4F6FA; border: 1px solid var(--line); border-radius: 8px;
+        padding: 9px 14px; font-size: 14px; line-height: 1.5; overflow-x: auto; margin: 7px 0; }
+  pre code { background: none; padding: 0; }
   p img { display: block; margin: 2px auto 0; }
   /* brief = 主檔那幾頁：資訊密度高，段落當註腳用 */
   section.brief > p { color: var(--muted); font-size: 15px; margin: 7px 0 0; }
@@ -119,26 +122,27 @@ style: |
 
 <!-- _class: brief -->
 
-# 主戰場：工具開發
-## 用 MCP 把舊系統接上來，是現在大部分人的工作 —— 流程與 review 重點
+# 主戰場：工具開發契約
+## 我們的 tool 是**一個 Python 專案、一支 CLI**，服從同一份協定 —— review 就照這張表逐條看
 
-**每接一個系統就是一個 server**，所以流程要一次講清楚，之後每個人照著走。
+```
+./launch                        列出所有 command                    → JSON array
+./launch <cmd>                  該 command 的說明 + params_json_schema → JSON
+./launch <cmd> '<args json>'    執行
+```
 
-1. **先問清楚**（`/grill-me`）—— 要暴露哪些能力、給誰用、**哪些絕不暴露**
-2. **定契約** —— 參數用一份 pydantic model，同時當 LLM 的 schema 與執行期驗證
-3. **TDD**（`/tdd`）—— 紅 → 綠 → 重構；替身要模擬**對面系統**的契約，不是斷言我方沒做
-4. **接權限** —— 把呼叫者的身分帶進去，**每次呼叫都授權**
-5. **上護欄** —— 輸出上限、限流、逾時
-6. **live check** —— 用真的模型跑一次；fake 測試通過不算通過
-7. **散布** —— schema 與 bundle **同一次 resolve**，版本與回滾講清楚
-
-| Review 面向 | 一定要看的 |
+| 面向 | 規則 |
 |---|---|
-| **安全性** | 用的是**呼叫者本人**的權限，不是服務帳號萬用鑰匙 · 只暴露必要能力、**唯讀優先** · 有限流與逾時，不會把舊系統打掛 · 秘密只在派送那次帶入、**不落地** |
-| **Protocol 遵循** | 參數是 **pydantic 單一來源**（schema 與驗證同一份）· 每個參數說明**不填時會怎樣** · 描述**正面列能力**、docstring 第一句就是工具說明 · 輸出有上限、路徑一律相對 |
-| **可維運** | 失敗訊息**可行動**（告訴 AI 怎麼修，不是丟 stack trace）· 有 live check · **誰、在什麼時候、用誰的權限、查了什麼**，事後查得到 |
+| **參數** | 一整包 **JSON 字串**傳入（不是 argv flags），所以表達得了 list 與 nested object。用一份 **pydantic `Args`**：`model_json_schema()` 給模型看、`model_validate_json()` 做執行期驗證 —— **schema 只有一個來源** |
+| **stdout** | **只放 output，而且是 JSON** —— 這是給機器讀的 |
+| **stderr** | **只放 log** —— 這是給人讀的。混進 stdout，結果就解不出來 |
+| **returncode** | `0` 成功 · `2` 參數不合法或未知 command（錯誤訊息印 stderr）· `3` 上游拒絕或無權限，**不要重試** · `4` 上游暫時失敗或逾時，**可以重試** · `1` 其他未預期 |
+| **timeout** | 平台的 `exec` **不帶 timeout**，所以**工具自己要有**，逾時回 `4`。另設一個更短的 **log timeout**：超過就先吐一行進度到 stderr，讓長指令看得出還活著 |
+| **env** | 只在需要**秘密或連線資訊**時用；值由 item 的環境變數在**派送那一次**帶入、**不落地**。一般參數一律走 JSON —— 走 env 就進不了 schema，模型看不到 |
 
-### 這三類裡**安全性一票否決** —— 其餘可以討論取捨，權限與暴露面不行。
+### Review 三看：**安全性**（用呼叫者本人的權限 · 唯讀優先 · 有限流）· **協定遵循**（上表逐條）· **可維運**（失敗訊息可行動 · 事後查得到誰用誰的權限查了什麼）。
+
+安全性一票否決；其餘可以討論取捨。
 
 ---
 
