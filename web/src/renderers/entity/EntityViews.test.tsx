@@ -122,6 +122,48 @@ describe("fieldText", () => {
 });
 
 describe("TableView", () => {
+  // #680 — the row's open handle is the `#N` cell. It CAN'T be a value column:
+  // measured in real chromium (docs/plan-issue-680.md), a cell that swaps itself
+  // for an input on the first click never receives the dblclick — the second
+  // click lands on the input instead. `#N` is plain text, so it survives.
+  it("opens the record on a double-click of the #N cell", () => {
+    const onOpenRecord = vi.fn();
+    render(
+      <EntityViewBody
+        spec={tableSpec}
+        type={issueType}
+        entities={[issue(3, { title: "Login broken", status: "open" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+        onOpenRecord={onOpenRecord}
+      />,
+    );
+
+    fireEvent.doubleClick(screen.getByTestId("row-open-3"));
+
+    expect(onOpenRecord).toHaveBeenCalledWith(3);
+  });
+
+  it("keeps inline editing on a single click — the two gestures don't collide", () => {
+    const onOpenRecord = vi.fn();
+    render(
+      <EntityViewBody
+        spec={tableSpec}
+        type={issueType}
+        entities={[issue(3, { title: "Login broken", status: "open" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+        onOpenRecord={onOpenRecord}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("edit title"));
+
+    // The cell became an input, and no modal was asked for.
+    expect(screen.getByLabelText("title")).toBeInTheDocument();
+    expect(onOpenRecord).not.toHaveBeenCalled();
+  });
+
   it("renders a column per spec column plus the record number", () => {
     render(
       <EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "Login broken", status: "open" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
