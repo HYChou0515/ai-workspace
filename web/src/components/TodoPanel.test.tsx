@@ -2,7 +2,7 @@
 /** #613 P2: the pinned todo checklist next to the chat — hydrates via GET,
  * user edits whole-list-PUT when no turn is streaming, locks while one is. */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithQuery } from "../test/queryWrapper";
@@ -27,17 +27,38 @@ function fakeApi(initial: TodoItem[]): ItemTodosApi & { puts: TodoItem[][] } {
   };
 }
 
+/** A ChatGoal with the fields a test does not care about filled in. */
+const mkGoal = (over: Partial<ChatGoal> = {}): ChatGoal => ({
+  condition: "tests pass",
+  set_by: "me",
+  rounds_used: 0,
+  state: "active",
+  max_rounds: 3,
+  offhours: false,
+  offhours_rounds_used: 0,
+  offhours_max_rounds: 30,
+  ...over,
+});
+
 function fakeGoalApi(
   initial: ChatGoal | null,
   checkerEnabled = true,
-): ItemGoalApi & { puts: string[]; deletes: number } {
-  const state: GoalRead = { goal: initial, checker_enabled: checkerEnabled };
+  offhoursEnabled = false,
+): ItemGoalApi & { puts: string[]; offhoursPuts: boolean[]; deletes: number } {
+  const state: GoalRead = {
+    goal: initial,
+    checker_enabled: checkerEnabled,
+    offhours_enabled: offhoursEnabled,
+  };
   const api = {
     puts: [] as string[],
+    offhoursPuts: [] as boolean[],
     deletes: 0,
     getGoal: vi.fn(async () => state),
-    putGoal: vi.fn(async (_s: string, _i: string, _c: string, condition: string) => {
+    putGoal: vi.fn(
+      async (_s: string, _i: string, _c: string, condition: string, offhours = false) => {
       api.puts.push(condition);
+      api.offhoursPuts.push(offhours);
       return {
         goal: {
           condition,
@@ -45,8 +66,12 @@ function fakeGoalApi(
           rounds_used: 0,
           state: "active" as const,
           max_rounds: 3,
+          offhours,
+          offhours_rounds_used: 0,
+          offhours_max_rounds: 30,
         },
         checker_enabled: checkerEnabled,
+        offhours_enabled: offhoursEnabled,
       };
     }),
     deleteGoal: vi.fn(async () => {
@@ -82,7 +107,7 @@ describe("TodoPanel", () => {
     expect(await screen.findByText("fix bug")).toBeInTheDocument();
     expect(screen.getByText("read logs")).toBeInTheDocument();
     // The completed item's checkbox is checked; the pending one's is not.
-    const boxes = screen.getAllByRole("checkbox");
+    const boxes = within(screen.getByTestId("todo-list")).getAllByRole("checkbox");
     expect(boxes[0]).toBeChecked();
     expect(boxes[2]).not.toBeChecked();
   });
@@ -93,7 +118,8 @@ describe("TodoPanel", () => {
       { text: "b", status: "completed" },
     ]);
     mount(api);
-    fireEvent.click((await screen.findAllByRole("checkbox"))[0]);
+    const list = await screen.findByTestId("todo-list");
+    fireEvent.click((await within(list).findAllByRole("checkbox"))[0]);
     await waitFor(() => expect(api.puts).toHaveLength(1));
     expect(api.puts[0]).toEqual([
       { text: "a", status: "completed" },
@@ -103,7 +129,7 @@ describe("TodoPanel", () => {
 
   it("locks editing while a turn is streaming", async () => {
     mount(fakeApi([{ text: "a", status: "pending" }]), { streaming: true });
-    const box = (await screen.findAllByRole("checkbox"))[0];
+    const box = (await within(await screen.findByTestId("todo-list")).findAllByRole("checkbox"))[0];
     expect(box).toBeDisabled();
   });
 
@@ -135,13 +161,7 @@ describe("TodoPanel", () => {
   });
 
   it("shows an active goal with its round budget and clears it", async () => {
-    const goalApi = fakeGoalApi({
-      condition: "tests pass",
-      set_by: "me",
-      rounds_used: 1,
-      state: "active",
-      max_rounds: 3,
-    });
+    const goalApi = fakeGoalApi(mkGoal({ rounds_used: 1 }));
     mount(fakeApi([]), { goalClient: goalApi });
     expect(await screen.findByTestId("goal-row")).toHaveTextContent("tests pass");
     fireEvent.click(screen.getByTestId("goal-clear"));
@@ -149,34 +169,19 @@ describe("TodoPanel", () => {
   });
 
   it("shows the met state", async () => {
-    const goalApi = fakeGoalApi({
-      condition: "done",
-      set_by: "me",
-      rounds_used: 2,
-      state: "met",
-      max_rounds: 3,
-    });
+    const goalApi = fakeGoalApi(mkGoal({ condition: "done", rounds_used: 2, state: "met" }));
     mount(fakeApi([]), { goalClient: goalApi });
     expect(await screen.findByTestId("goal-met")).toBeInTheDocument();
   });
 
   it("warns when the deploy has no goal checker", async () => {
-    const goalApi = fakeGoalApi(
-      { condition: "c", set_by: "me", rounds_used: 0, state: "active", max_rounds: 3 },
-      false,
-    );
+    const goalApi = fakeGoalApi(mkGoal({ condition: "c" }), false);
     mount(fakeApi([]), { goalClient: goalApi });
     expect(await screen.findByTestId("goal-no-checker")).toBeInTheDocument();
   });
 
   it("locks the goal controls while a turn is streaming", async () => {
-    const goalApi = fakeGoalApi({
-      condition: "c",
-      set_by: "me",
-      rounds_used: 0,
-      state: "active",
-      max_rounds: 3,
-    });
+    const goalApi = fakeGoalApi(mkGoal({ condition: "c" }));
     mount(fakeApi([{ text: "a", status: "pending" }]), {
       goalClient: goalApi,
       streaming: true,
@@ -220,5 +225,54 @@ describe("TodoPanel rows shrink instead of pushing their button off-screen (#fe-
     mount(fakeApi([]), { goalClient: fakeGoalApi(null) });
     const input = (await screen.findByTestId("todo-add-input")) as HTMLInputElement;
     expect(input.style.minWidth).toBe("0");
+  });
+});
+
+describe("#615 after-hours opt-in", () => {
+  it("only sets a goal to run after hours when the user asks for it", async () => {
+    // Unattended overnight spending must be a deliberate tick, never the
+    // default that comes with setting a goal.
+    const goalApi = fakeGoalApi(null, true, true);
+    mount(fakeApi([]), { goalClient: goalApi });
+
+    fireEvent.change(await screen.findByTestId("goal-input"), {
+      target: { value: "the report exists" },
+    });
+    fireEvent.click(screen.getByTestId("goal-set"));
+    await waitFor(() => expect(goalApi.offhoursPuts).toEqual([false]));
+  });
+
+  it("passes the opt-in when the box is ticked", async () => {
+    const goalApi = fakeGoalApi(null, true, true);
+    mount(fakeApi([]), { goalClient: goalApi });
+
+    const box = await screen.findByTestId("goal-offhours");
+    await waitFor(() => expect(box).toBeEnabled());
+    fireEvent.click(box);
+    fireEvent.change(screen.getByTestId("goal-input"), {
+      target: { value: "the report exists" },
+    });
+    fireEvent.click(screen.getByTestId("goal-set"));
+    await waitFor(() => expect(goalApi.offhoursPuts).toEqual([true]));
+  });
+
+  it("shows the opt-in as unavailable when the deploy has no window", async () => {
+    // A tickable box that does nothing is worse than no box: the user would
+    // believe the work is scheduled for tonight.
+    const goalApi = fakeGoalApi(null, true, false);
+    mount(fakeApi([]), { goalClient: goalApi });
+
+    expect(await screen.findByTestId("goal-offhours")).toBeDisabled();
+    expect(screen.getByTestId("goal-offhours-unavailable")).toBeInTheDocument();
+  });
+
+  it("shows an active after-hours goal counting its own budget", async () => {
+    const goalApi = fakeGoalApi(
+      mkGoal({ rounds_used: 1, offhours: true, offhours_rounds_used: 4 }),
+      true,
+      true,
+    );
+    mount(fakeApi([]), { goalClient: goalApi });
+    expect(await screen.findByTestId("goal-offhours-rounds")).toHaveTextContent("4");
   });
 });

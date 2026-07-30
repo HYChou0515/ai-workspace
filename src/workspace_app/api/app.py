@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from specstar import SpecStar
 
 from ..agent.config_catalog import AgentConfigCatalog
-from ..config.schema import EnhancementSettings
+from ..config.schema import EnhancementSettings, OffHoursSettings
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -41,6 +41,7 @@ from ..tooling.external import prewarm_external_tools
 from ..tooling.registry import PackageInfo
 from ..turn_control import SpecstarTurnControl
 from ..users import MockUserDirectory, UserDirectory
+from ..workcalendar import OffHoursCalendar
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
 from ..workflow.orchestrator import (
@@ -200,6 +201,10 @@ def create_app(
     # goals never auto-continue, and the /goal routes disclose it on the wire.
     goal_checker_llm: ILlm | None = None,
     goal_max_rounds: int = 3,
+    # #615: the off-hours autonomy knobs (settings.goal.offhours). Defaults are
+    # OFF — a deployment that configured no window never runs unattended work,
+    # and the /goal routes disclose that instead of offering a dead checkbox.
+    goal_offhours: OffHoursSettings | None = None,
     insights_collection_name: str = "Investigations Knowledge",
     kb_llm: ILlm | None = None,
     # #356: the LLM the Tune-parsing "Try answer" path streams through — the
@@ -1264,6 +1269,9 @@ def create_app(
         send_await_timeout=send_await_timeout,
     )
 
+    # #615: an unset/typo'd window or an unknown zone leaves `enabled` False,
+    # so off-hours autonomy stays off rather than guessing an hour.
+    offhours = goal_offhours or OffHoursSettings()
     register_chat_routes(
         api,
         spec=spec,
@@ -1279,6 +1287,10 @@ def create_app(
         record_mention=mention_svc.record,
         goal_max_rounds=goal_max_rounds,
         goal_checker_enabled=goal_checker_llm is not None,
+        goal_offhours_max_rounds=offhours.max_rounds,
+        goal_offhours_enabled=OffHoursCalendar(
+            window=offhours.window, timezone=offhours.timezone
+        ).enabled,
     )
 
     # ---- Files API (plan-backend §3.8) ----

@@ -41,6 +41,19 @@ class ConversationGoal(Struct):
     stay readable so the panel can show the outcome; setting a new goal
     overwrites the row back to `active`."""
 
+    offhours: bool = False
+    """#615: may this goal keep working unattended outside office hours?
+    Opt-in, and deliberately NOT implied by the work-hours budget running out —
+    spending tokens overnight with nobody watching should be a choice someone
+    made, not the automatic consequence of a daytime cap."""
+
+    offhours_rounds_used: int = 0
+    """#615: off-hours turns spent, counted separately from `rounds_used`.
+    ONE counter compared against two different caps would make a night's
+    spending read as `exhausted` against the (much smaller) work-hours cap the
+    next morning. Cumulative across nights and never reset, so a multi-night
+    goal finishes on its own budget instead of renewing one every evening."""
+
 
 def register_conversation_goal(spec: SpecStar) -> None:
     """Idempotently register the goal model. Safe to call on every pod."""

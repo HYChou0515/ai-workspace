@@ -284,6 +284,7 @@ def main() -> None:
             # #613 P3: the turn-end goal checker + the hard auto-continue budget.
             goal_checker_llm=get_goal_checker_llm(settings),
             goal_max_rounds=settings.goal.max_rounds,
+            goal_offhours=settings.goal.offhours,  # #615
             # #506: reconcile / cluster-sweeper thresholds (dedup dup proposals + Qs).
             kb_cluster_tau=settings.kb.cluster.cluster_tau,
             kb_graph_chunk_budget=settings.kb.graph.chunk_budget,

@@ -52,6 +52,7 @@ from .schema import (
     LlmSettings,
     MessageQueueSettings,
     ObservabilitySettings,
+    OffHoursSettings,
     Preset,
     PresetLlmSettings,
     RabbitmqSettings,
@@ -487,6 +488,9 @@ _TOP_SCHEMA: dict[str, Any] = {
     "goal": {
         "checker": "__retrieval_llm__",
         "max_rounds": set(),
+        # #615: the off-hours window/budget. Whitelisted AND built below — a key
+        # that parses but never reaches Settings is the dead-knob class (#231).
+        "offhours": _dataclass_keys(OffHoursSettings),
     },
     "agents": "__agents__",  # sentinel — handled by _check_agents_keys
     # Issue #58/#59: durable wiki-maintenance queue backend selection.
@@ -781,6 +785,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         goal=GoalSettings(
             checker=_build_retrieval_llm(d.get("goal", {}).get("checker")),
             max_rounds=int(d.get("goal", {}).get("max_rounds", GoalSettings().max_rounds)),
+            offhours=_build(OffHoursSettings, d.get("goal", {}).get("offhours", {})),
         ),
         message_queue=_build_message_queue(d["message_queue"]),
         event_bus=_build(EventBusSettings, d["event_bus"]),

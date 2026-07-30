@@ -1093,6 +1093,42 @@ def test_goal_section_loads_checker_and_max_rounds(tmp_path: Path):
     assert settings.goal.checker.preset == "cheap"
 
 
+def test_goal_offhours_section_loads(tmp_path: Path):
+    """#615 P1: `goal.offhours` must survive the whitelist AND be BUILT — a
+    window that parsed but never reached `Settings` is the dead-knob class
+    (#231/#598), and here it would silently mean 'unattended work never runs'."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            goal:
+              offhours:
+                window: "19:00-08:00"
+                timezone: "Asia/Taipei"
+                max_rounds: 30
+                yield_after_human_minutes: 45
+                max_concurrent: 2
+                poll_seconds: 90
+        """),
+        encoding="utf-8",
+    )
+    settings = load(config_path=cfg, env={})
+    assert settings.goal.offhours.window == "19:00-08:00"
+    assert settings.goal.offhours.timezone == "Asia/Taipei"
+    assert settings.goal.offhours.max_rounds == 30
+    assert settings.goal.offhours.yield_after_human_minutes == 45
+    assert settings.goal.offhours.max_concurrent == 2
+    assert settings.goal.offhours.poll_seconds == 90
+
+
+def test_goal_offhours_is_off_by_default(tmp_path: Path):
+    """Unattended overnight work is opt-in at the DEPLOYMENT level too: an
+    operator who never configured a window gets no off-hours autonomy."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("", encoding="utf-8")
+    settings = load(config_path=cfg, env={})
+    assert settings.goal.offhours.window == ""
+
+
 def test_goal_defaults_when_absent(tmp_path: Path):
     cfg = tmp_path / "config.yaml"
     cfg.write_text("", encoding="utf-8")
