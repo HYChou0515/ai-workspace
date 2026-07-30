@@ -30,6 +30,7 @@ async def test_one_question_with_options():
         _ctx(),
         questions=[
             {
+                "header": "storage backend",
                 "question": "Which storage backend?",
                 "options": [
                     {"label": "Postgres", "description": "Durable, needs a server"},
@@ -50,6 +51,7 @@ async def test_up_to_five_questions_are_accepted():
         _ctx(),
         questions=[
             {
+                "header": f"H{i}",
                 "question": f"Q{i}",
                 "options": [
                     {"label": "a", "description": ""},
@@ -70,6 +72,7 @@ async def test_more_than_five_is_refused():
         _ctx(),
         questions=[
             {
+                "header": f"H{i}",
                 "question": f"Q{i}",
                 "options": [
                     {"label": "a", "description": ""},
@@ -95,7 +98,13 @@ async def test_a_question_needs_at_least_two_options():
     nothing to decide. Two is the minimum that carries information."""
     out = await ask_user_impl(
         _ctx(),
-        questions=[{"question": "Proceed?", "options": [{"label": "Yes", "description": ""}]}],
+        questions=[
+            {
+                "header": "proceed",
+                "question": "Proceed?",
+                "options": [{"label": "Yes", "description": ""}],
+            }
+        ],
     )
 
     assert out.startswith("error:")
@@ -106,6 +115,7 @@ async def test_a_question_needs_a_question():
         _ctx(),
         questions=[
             {
+                "header": "empty",
                 "question": "   ",
                 "options": [
                     {"label": "a", "description": ""},
@@ -173,3 +183,19 @@ def test_ask_user_has_a_strict_schema_that_names_the_option_fields():
     assert set(option["properties"]) == {"label", "description"}
     assert set(option["required"]) == {"label", "description"}
     assert option["additionalProperties"] is False
+
+
+def test_a_question_carries_a_short_header_for_its_tab():
+    """A multi-question card is a set of tabs, and a tab is a few characters
+    wide — the question itself is a whole sentence and does not fit. Truncating
+    it in the UI cuts a sentence at an arbitrary character, so the label is the
+    MODEL's to write, which makes it a named field on the schema rather than
+    something the front end invents."""
+    from agents import function_tool
+
+    from workspace_app.agent.tools import ask_user_impl
+
+    tool = function_tool(ask_user_impl, name_override="ask_user", strict_mode=True)
+    question = tool.params_json_schema["$defs"]["AskQuestion"]
+    assert set(question["properties"]) == {"header", "question", "options"}
+    assert set(question["required"]) == {"header", "question", "options"}
