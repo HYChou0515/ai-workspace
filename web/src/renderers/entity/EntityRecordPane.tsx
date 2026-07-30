@@ -39,6 +39,10 @@ export type EntityRecordPaneProps = {
   busy?: boolean;
   refOptionsFor?: (name: string) => RefOption[] | undefined;
   onSave: (patch: Record<string, unknown>, body: string) => void;
+  /** Told whenever the pane enters / leaves the form. A container that can be
+   * dismissed (the modal) uses it to withdraw its own exits while there are
+   * unsaved edits — the form's state lives here, so a dismissal drops it. */
+  onEditingChange?: (editing: boolean) => void;
 };
 
 export function EntityRecordPane({
@@ -50,8 +54,13 @@ export function EntityRecordPane({
   busy,
   refOptionsFor,
   onSave,
+  onEditingChange,
 }: EntityRecordPaneProps) {
   const [editing, setEditing] = useState(false);
+  const setMode = (next: boolean) => {
+    setEditing(next);
+    onEditingChange?.(next);
+  };
   if (!editing) {
     return (
       <EntityRecordView
@@ -61,7 +70,7 @@ export function EntityRecordPane({
         path={path}
         canWrite={canWrite}
         refOptionsFor={refOptionsFor}
-        onEdit={() => setEditing(true)}
+        onEdit={() => setMode(true)}
       />
     );
   }
@@ -77,9 +86,9 @@ export function EntityRecordPane({
         onSave(patch, body);
         // Back to reading — the write is optimistic, so the view shows the new
         // values immediately, and a 409 arrives as the container's banner.
-        setEditing(false);
+        setMode(false);
       }}
-      onCancel={() => setEditing(false)}
+      onCancel={() => setMode(false)}
     />
   );
 }

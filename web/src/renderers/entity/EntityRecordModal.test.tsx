@@ -95,6 +95,34 @@ describe("EntityRecordModal", () => {
     expect(onDismissConflict).toHaveBeenCalledWith(7);
   });
 
+  // An in-progress edit lives in the pane's own state, so anything that unmounts
+  // the modal drops it. Both exits below did exactly that, silently.
+  it("withdraws the file route while an edit is in progress", () => {
+    const openFile = vi.fn();
+    modal({}, openFile);
+    expect(screen.getByRole("button", { name: /open file/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    // Leaving for the file tab mid-edit would have thrown the typing away.
+    expect(screen.queryByRole("button", { name: /open file/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("button", { name: /open file/i })).toBeInTheDocument();
+  });
+
+  it("stops a stray backdrop click from discarding an in-progress edit", () => {
+    const { onClose } = modal();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    fireEvent.click(screen.getByTestId("entity-record-modal-backdrop"));
+
+    expect(onClose).not.toHaveBeenCalled();
+    // Escape is a deliberate exit, so it still works.
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("gives a read-only member no way in", () => {
     modal({ canWrite: false });
     expect(screen.queryByRole("button", { name: "Edit" })).not.toBeInTheDocument();

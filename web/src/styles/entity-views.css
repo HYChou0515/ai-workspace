@@ -1311,3 +1311,40 @@ button.ev-finding:hover {
   font-size: var(--text-mono-caps);
   color: var(--text-paper-d);
 }
+
+/* ── the record modal (#680) ───────────────────────────────────────────────────
+   One record opened in place from a view. The pane inside is the SAME
+   `.ev-editor` / `.ev-record__*` surface as the record's file tab, so this only
+   supplies the frame: a top action strip and the panel's own padding rules. The
+   pane brings its own padding, so the shell must not add a second layer. */
+.ev-record-modal {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Open file / close sit above the record, right-aligned, on a hairline so the
+   strip reads as chrome rather than as part of the record's own head. */
+.ev-record-modal__bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-4);
+  padding: var(--space-8) var(--space-12);
+  border-bottom: 1px solid var(--paper-2);
+}
+/* The banner is a child of the panel, not of the padded pane, so it needs the
+   inset the pane would otherwise have given it. */
+.ev-record-modal > .ev-banner {
+  margin: var(--space-12) var(--space-16) 0;
+}
+
+/* The table's record-number cell doubles as the row's open handle — but only
+   when something is wired to open (it carries a title then). Hinting at it
+   unconditionally would promise a gesture that does nothing in a preview. */
+.ev-table__num[title] {
+  cursor: pointer;
+}
+.ev-table__num[title]:hover {
+  color: var(--text-paper);
+  text-decoration: underline;
+}

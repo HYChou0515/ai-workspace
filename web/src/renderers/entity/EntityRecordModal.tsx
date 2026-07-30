@@ -19,6 +19,8 @@
  * §B1) and the conflict list, exactly as the file tab's container does.
  */
 
+import { useState } from "react";
+
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
 import { ModalShell } from "../../components/ModalShell";
@@ -61,6 +63,12 @@ export function EntityRecordModal({
   onClose,
 }: EntityRecordModalProps) {
   const openFile = useOpenFile();
+  // An unsaved edit lives in the pane, so every exit from this modal drops it.
+  // While the form is open the two ACCIDENTAL exits are withdrawn — the file
+  // route (which would swap the surface out from under the typing) and the
+  // backdrop (a stray click beside the panel). Escape and ✕ stay: those are
+  // deliberate, and a modal you can't dismiss is worse than a lost draft.
+  const [editing, setEditing] = useState(false);
   const path = recordPath(type, record);
   const title = String(record.fields.title ?? type.name);
   const inConflict = (conflicts ?? []).includes(record.number);
@@ -72,12 +80,13 @@ export function EntityRecordModal({
       // say which one — "Record" alone tells a screen-reader user nothing.
       ariaLabel={`#${record.number} ${title}`}
       data-testid="entity-record-modal"
+      closeOnBackdrop={!editing}
       width={720}
       maxWidth="94vw"
       panelClassName="ev-record-modal"
     >
       <div className="ev-record-modal__bar">
-        {openFile && (
+        {openFile && !editing && (
           <button
             type="button"
             className="btn"
@@ -116,6 +125,7 @@ export function EntityRecordModal({
         busy={busy}
         refOptionsFor={refOptionsFor}
         onSave={onSave}
+        onEditingChange={setEditing}
       />
     </ModalShell>
   );
