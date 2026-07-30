@@ -40,16 +40,37 @@
 2. 拖曳與雙擊天然共存：`startDrag` 的 `onUp` 在 `days === 0` 時早退，雙擊不會寫入任何東西。
 3. **C 的結果是 Q5 定案的技術根據**：table 格子上的雙擊，第二擊會落在替換後的 `<input>` 上，原本的格子按鈕永遠收不到 `dblclick`。所以 table 的雙擊必須掛在不會被替換掉的欄（`#N` / title），這不是偏好問題。
 
-## Phase
+## Phase（實際交付）
 
 - **P1** 真瀏覽器 spike + 本文件（✅ 上表）
 - **P2** `RecordPane` → `EntityRecordPane.tsx`；檔案分頁改用它，行為零變
-- **P3** `EntityRecordModal` = `ModalShell` + `EntityRecordPane` + 409 橫幅 + 「在檔案開啟」（`useOpenFile()` 為 null 就不畫死控制項）+ 唯讀 gate
-- **P4** 接縫：`AiYamlRenderer` 持 modal state + `EntityViewProps.onOpenRecord`
-- **P5** gantt bar 雙擊（workload / gantt / roadmap 三份宣告同時受益）
-- **P6** table `#N` / title 欄雙擊
-- **P7** board 卡雙擊
-- **P8** 樣式進 `web/src/styles/entity-views.css` 的 `.ev-*`，不寫 inline（PR#487 的規矩）
+- **P3** `EntityRecordModal` = `ModalShell` + `EntityRecordPane` + 409 橫幅 + 「在檔案開啟」（`useOpenFile()` 為 null 就不畫死控制項）+ 唯讀 gate。同時把 409 橫幅下沉到 `shared.tsx`（view shell 有一份、檔案分頁又長了一份 inline 的，modal 會是第三份）
+- **P4** 接縫 + gantt bar 雙擊（原計畫的 P4/P5 合為一個 phase：接縫沒有第一個使用者就無法驗證）。既有的 `onOpenRecord`（開檔案分頁）誠實改名 `onOpenRecordFile`
+- **P5** table `#N` 欄雙擊
+- **P6** board 卡雙擊，並**刪掉 board 自己那份 modal**（見下）
+- **P7** 樣式進 `web/src/styles/entity-views.css` 的 `.ev-*`（PR#487 的規矩）+ 編輯中的兩個守門（見下）
+
+### 計畫外的三個發現
+
+1. **board 早就有一份 record modal** —— `BoardView` 卡片的 ⋯ → Edit 自己 `ModalShell` + `EntityFileEditor`，而且**一開就是編輯表單**（#453 判定為「讀東西的錯介面」）。所以本 issue 實際上是**收斂三份重複**（view shell / 檔案分頁 / board 卡），不是新增第四份。連帶：卡片選單改成 **Open**（落在閱讀視圖，Edit 在裡面一步之遙）、**不再以寫權限為條件**（唯讀成員先前根本沒有辦法讀卡片的 body）、`EntityViewProps.onSave` 隨之作廢移除。
+2. **title 欄不能承載雙擊** —— grill 時 Q5 的選項寫「`#N`／title 欄」是基於「title 不可編輯」的錯誤假設；實際上 title 是普通的 `EditableCell`（單擊即換成 input），依 P1 的量測它收不到 `dblclick`。所以 table 的開啟把手**只有 `#N` 欄**（帶 `title` 提示，且只在真的接上 opener 時才提示）。
+3. **編輯中兩個靜默丟稿的出口**（真瀏覽器才看見）——表單開著時「Open file」會把介面從打字底下抽掉、backdrop 誤點會直接關掉 modal，兩者都靜默丟掉未存的編輯。修法：`EntityRecordPane` 回報 `onEditingChange`，modal 在編輯中**收起 Open file、停用 backdrop 關閉**；Esc 與 ✕ 保留（關不掉的 modal 比丟稿更糟）。
+
+## 端對端驗證（真 Chromium，非 happy-dom）
+
+用真的 `GanttView` / `TableView` / `BoardView` + `EntityRecordModal` 起一個拋棄式 harness（`VITE_USE_MOCK` 不需要，元件全是 props 驅動），playwright 實測：
+
+| 檢查 | 結果 |
+|---|---|
+| gantt bar 雙擊 | modal 開啟 |
+| table `#N` 欄雙擊 | modal 開啟 |
+| board 卡雙擊 | modal 開啟 |
+| table 值欄**單擊** | 只進 inline 編輯，不開 modal |
+| 編輯中是否還有 Open file | 沒有（0 個） |
+| 編輯中誤點 backdrop | modal 仍在 |
+| console error | 無 |
+
+明暗兩色都看過（`<html data-theme="dark">`）。harness 是拋棄式的，驗完即刪、不進 PR。
 
 ## 不在範圍
 
