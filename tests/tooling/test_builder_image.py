@@ -72,7 +72,7 @@ def test_the_ci_template_pins_artifacts_against_expiry() -> None:
     # 404s, hosts that already cached the tool limp on their copy while every
     # NEW host gets nothing — it presents as "it worked yesterday", which is
     # the worst kind of failure to hand a tool author.
-    template = (_REPO / "tool-builder" / "gitlab-ci.example.yml").read_text("utf-8")
+    template = (_REPO / "tool-starter" / ".gitlab-ci.yml").read_text("utf-8")
 
     assert "expire_in: never" in template
     assert "build-tool" in template
@@ -117,3 +117,81 @@ def test_the_deployment_docs_say_how_to_roll_a_third_party_tool_back() -> None:
     assert "TOOL_BUILDER_ID" in doc
     assert "SANDBOX_HOST_TOOL_CACHE_MAX_BYTES" in doc
     assert "退回" in doc
+
+
+def test_the_author_dev_host_keeps_the_privilege_that_makes_it_faithful() -> None:
+    """Without `privileged`, the kernel refuses the jail and the host does not
+    fail — it falls back to the unjailed path, where /.tools is a symlink
+    rather than a read-only mount. A tool that writes next to itself then
+    passes locally and breaks in production, which is precisely what this
+    environment exists to catch. Removing the line degrades it silently, so
+    the line is asserted."""
+    compose = (_REPO / "tool-starter" / "compose.tool-dev.yaml").read_text("utf-8")
+
+    assert "privileged: true" in compose
+    # And the ABI anchor, without which third-party tools are simply disabled.
+    assert "TOOL_BUILDER_ID" in compose
+
+
+def test_the_author_dev_host_pulls_a_published_image_rather_than_guessing_one() -> None:
+    # A hardcoded registry would be a guess that fails confusingly; a required
+    # variable fails by naming itself.
+    compose = (_REPO / "tool-starter" / "compose.tool-dev.yaml").read_text("utf-8")
+
+    assert "${SANDBOX_HOST_IMAGE:?" in compose
+
+
+def test_the_authoring_doc_is_honest_about_what_the_dev_host_cannot_reproduce() -> None:
+    # An author who believes a local pass means production works has been given
+    # false confidence — the failure mode this whole design keeps circling.
+    doc = (_REPO / "docs" / "tool-authoring.md").read_text("utf-8")
+
+    assert "privileged: true" in doc
+    assert "不重現什麼" in doc
+    assert "nginx" in doc
+
+
+_STARTER = _REPO / "tool-starter"
+
+
+def test_the_starter_never_reaches_into_the_platform() -> None:
+    """The one rule an author cannot be allowed to break by copying us.
+
+    An import of `workspace_app` means their tool cannot be tested without our
+    package, and that we cannot change ours without breaking theirs. The
+    dispatcher in the starter is hand-written for exactly this reason — which
+    is worth nothing if someone later "simplifies" it by importing ours."""
+    offenders = [
+        py.relative_to(_STARTER)
+        for py in _STARTER.rglob("*.py")
+        if ".venv" not in py.parts and "workspace_app" in py.read_text("utf-8")
+    ]
+
+    assert not offenders, f"the starter must stand alone, but these reach into ours: {offenders}"
+
+
+def test_the_starter_ships_exactly_one_entry_point() -> None:
+    # The launcher runs one console script. Two would make "which command did
+    # the model just run" unanswerable; the build refuses either way, and an
+    # author should not discover that from a red CI job.
+    import tomllib
+
+    project = tomllib.loads((_STARTER / "pyproject.toml").read_text("utf-8"))
+
+    assert len(project["project"]["scripts"]) == 1
+    assert project["project"]["version"]
+    assert (_STARTER / "uv.lock").is_file(), "the build refuses without a lock file"
+
+
+def test_the_starters_agent_brief_interviews_before_it_writes() -> None:
+    """A tool that nobody can describe in one sentence will not be called by a
+    model, so the brief has to stop an agent from coding first. And it has to
+    carry the rules, because an agent that does not know them writes something
+    that passes locally and fails in front of a user."""
+    brief = (_STARTER / "CLAUDE.md").read_text("utf-8")
+
+    assert "Before any code" in brief
+    assert "## 2. Rules" in brief
+    assert "workspace_app" in brief  # the coupling rule is stated
+    assert "stdout" in brief  # the answer channel
+    assert "read-only" in brief  # the bundle

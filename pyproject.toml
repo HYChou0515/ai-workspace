@@ -99,10 +99,17 @@ target-version = "py312"
 # sample-tools/* are standalone example projects (own pyproject + venv); they're
 # linted/typed on their own, not as part of this package. sandbox-host/ is a
 # fully independent project (own pyproject + uv.lock + CI job) — see #251.
-extend-exclude = ["sample-tools", "sandbox-host"]
+# tool-starter/ is handed to external authors as a repository of their own
+# (#674): it must stand alone, so it is neither built nor typed with ours.
+extend-exclude = ["sample-tools", "sandbox-host", "tool-starter"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ty.src]
-exclude = ["src/workspace_app/rca/templates/*/**", "sample-tools/**", "sandbox-host/**"]
+exclude = [
+    "src/workspace_app/rca/templates/*/**",
+    "sample-tools/**",
+    "sandbox-host/**",
+    "tool-starter/**",
+]

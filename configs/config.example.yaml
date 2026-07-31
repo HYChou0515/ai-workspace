@@ -117,8 +117,13 @@
 #     nfs_root: ""             # required for nfs_tree: the ReadWriteMany NFS mount
 #     migrate_from: ""         # "" | specstar (M2 dual-read + lazy backfill cut-over)
 #   # kind: http — run sandboxes in a separate host pod (see sandbox_host).
+#   # Also how a TOOL AUTHOR tests locally (#674): `compose.tool-dev.yaml`
+#   # runs the real host on their own machine, and base_url points at it —
+#   # third-party tools need the hosted backend, so `kind: local` cannot
+#   # exercise them at all.
 #   # http:
 #   #   base_url: http://sandbox-host:8000   # the host's ClusterIP Service
+#   #                                        # (a tool author: http://127.0.0.1:8000)
 #   #   read_timeout: 0          # 0 = no HTTP read deadline for exec (host bounds it)
 #   #   host_managed_durable: false  # #492 true ⇒ host owns durable (NFS rsync);
 #   #                                # pair with sandbox.durable.kind: nfs_tree on the SAME tree

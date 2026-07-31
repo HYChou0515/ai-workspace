@@ -1,5 +1,11 @@
 # 寫一支工具給這個平台（給外部工具作者）
 
+!!! tip "先拿 `tool-starter/`"
+
+    那個資料夾**本身就是一支能動的工具**：範例 command、可以直接跑的測試、CI 檔、
+    以及一份 `CLAUDE.md`（讓 agent 先問清楚你要做什麼、再開始寫）。
+    複製走、改名、換掉範例，就是你的工具。這一頁是它的背景說明。
+
 你不需要我們 repo 的權限，也不用等我們發版。你在**自己的 GitLab** 寫工具、跑一個 CI job，
 把產出的 artifact 網址給我們一次；之後你每推一版，**下一個開起來的 sandbox 就自動用新版**。
 
@@ -95,6 +101,34 @@ docker run --rm -v "$PWD/dist:/dist" \
 
 `smoke` 會把 bundle 解開、**在平台真正執行工具的那個底層裡**跑一遍三段式契約。
 所以「我這邊會動」跟「平台上會動」是同一件事，不是碰運氣。
+
+## 4b. 在真的 sandbox 裡跑（不用 push）
+
+`smoke` 只確認你的工具**會自我介紹**（列出 command、吐 schema）。它不會帶著參數真的執行，
+也不會重現平台實際給你的環境。要驗那件事，在自己機器上跑一個**真的** sandbox host：
+
+```sh
+export SANDBOX_HOST_IMAGE=<平台團隊給你的 image>
+export TOOL_BUILDER_ID=<跟部署一致的值>
+docker compose -f compose.tool-dev.yaml up -d
+```
+
+然後把平台的 `sandbox.kind` 設成 `http`、`base_url` 指到 `http://127.0.0.1:8000`，
+把你的工具掛上去跑。**改一行、重跑、看結果，不用 commit、不用 push、不用等 CI。**
+
+!!! warning "為什麼一定要 `privileged: true`"
+
+    沒有它，核心會拒絕建立 jail，而 host **不會報錯**——它會安靜地退回沒有 jail 的模式，
+    那裡的 `/.tools` 是 symlink 而不是唯讀掛載。於是「往自己旁邊寫檔案」的工具**在這裡會過、
+    上線會壞**，正好是這個環境存在的理由。（實測：預設 docker 與
+    `--security-opt seccomp=unconfined` 都不夠，要 `--privileged`。）
+
+**它重現什麼**：command 怎麼被呼叫、cwd、`HOME`、`PATH`、bundle 唯讀、降權 uid、
+時間上限、輸出上限——也就是 §6、§7 那兩張表裡的東西。
+
+**它不重現什麼**：你的**網路位置**。你的機器不在正式環境的 nginx 後面，所以那裡自動加上的
+header 這裡沒有，某些端點你這邊可能根本連不到。**會連外的工具，第一次遇到真實情況仍然是在正式環境**——
+這條路關掉的是另外那一大半（環境與呼叫方式），不是全部。
 
 ## 5. 交給我們的，就一串網址
 

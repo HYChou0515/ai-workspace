@@ -181,3 +181,29 @@ def await_(awaitable):
     import asyncio
 
     return asyncio.new_event_loop().run_until_complete(awaitable)
+
+
+def test_the_starter_we_hand_out_actually_builds(tmp_path: Path):
+    """#674: `tool-starter/` is given to an external team as their starting
+    point. A template that does not build is worse than none — they cannot
+    tell whether they broke it or received it broken, and they have no way to
+    ask us that does not cost a day.
+
+    This runs the real author path: prebuild, pack, and the smoke that
+    extracts the bundle and exercises the 3-stage contract through its own
+    launcher. Slow, like everything else in this file.
+    """
+    from workspace_app.tooling.builder import BUNDLE_NAME, MANIFEST_NAME, build_artifact
+
+    starter = Path(__file__).resolve().parents[2] / "tool-starter"
+    out = tmp_path / "dist"
+
+    manifest = build_artifact(source=starter, out=out, builder_id="test:starter")
+
+    assert manifest.name == "my-tool"
+    assert [c.name for c in manifest.commands] == ["count"]
+    # The description is what makes a model reach for it; an empty one ships a
+    # tool nobody calls, and the template is the example everyone copies.
+    assert manifest.commands[0].description.strip()
+    assert (out / BUNDLE_NAME).is_file()
+    assert (out / MANIFEST_NAME).is_file()

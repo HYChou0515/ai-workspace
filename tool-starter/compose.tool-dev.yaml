@@ -1,0 +1,61 @@
+# A real sandbox host, on a tool author's own machine (#674).
+#
+#   SANDBOX_HOST_IMAGE=<your published image> docker compose -f compose.tool-dev.yaml up
+#
+# WHY THE REAL HOST AND NOT A HAND-BUILT LOOKALIKE: the things that break a
+# third-party tool are produced by the host, not by a base image — the
+# read-only /.tools mount, HOME pointing at the sandbox's own .home, the PATH
+# shim, the dropped uid, the exec and idle timeouts. An image that merely
+# resembles it becomes a THIRD environment: unlike CI, unlike production, and
+# free to drift from both. Its green light would mean nothing.
+#
+# WHAT THIS REPRODUCES: how a command is invoked, cwd, HOME, PATH, the
+# read-only bundle, the unprivileged uid, the timeouts, the output cap.
+#
+# WHAT IT DOES NOT: your network position. A dev machine is not behind the
+# production nginx, so headers added there are absent here, and an endpoint
+# reachable in production may not be reachable at all. Tools that talk to the
+# outside still meet reality for the first time in production — this closes the
+# other, larger half.
+
+services:
+  sandbox-host:
+    # No default on purpose: a wrong registry would fail confusingly, and a
+    # guess baked in here would be worse than an error that names the variable.
+    image: ${SANDBOX_HOST_IMAGE:?set SANDBOX_HOST_IMAGE to your published sandbox-host image}
+
+    # REQUIRED, and not for convenience. Without it the kernel refuses the
+    # user+mount namespace, and the host does not fail — it quietly falls back
+    # to the unjailed path, where /.tools is a SYMLINK rather than a read-only
+    # bind mount. A tool that writes next to itself then passes here and breaks
+    # in production, which is the exact failure this environment exists to
+    # catch. Measured, not assumed: plain docker and
+    # `--security-opt seccomp=unconfined` both refuse; privileged succeeds.
+    privileged: true
+
+    environment:
+      # The ABI anchor. Third-party tools are DISABLED without it — a host that
+      # cannot check what a bundle was built against must not fetch one.
+      # Use the same value your deployment uses, or nothing you test here means
+      # anything about what will happen there.
+      TOOL_BUILDER_ID: ${TOOL_BUILDER_ID:?set TOOL_BUILDER_ID to the value your deployment uses}
+      # Only needed for artifacts behind a private project.
+      TOOL_ARTIFACT_TOKEN: ${TOOL_ARTIFACT_TOKEN:-}
+      SANDBOX_HOST_BIND: 0.0.0.0:8000
+      SANDBOX_HOST_ROOT: /sandbox
+      # Left at the image's own default so the layout stays whatever the image
+      # ships (`builtin/` beside `ext/`); overriding it here is how the two
+      # drift apart.
+      SANDBOX_HOST_TOOL_CACHE_MAX_BYTES: ${TOOL_CACHE_MAX_BYTES:-2147483648}
+
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    volumes:
+      # Sandboxes and the third-party bundle cache. Named, not bind-mounted:
+      # the host chowns files to per-item uids, which a bind mount from a
+      # desktop filesystem would fight.
+      - sandbox-scratch:/sandbox
+
+volumes:
+  sandbox-scratch:
