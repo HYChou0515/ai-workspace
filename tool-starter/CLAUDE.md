@@ -92,6 +92,13 @@ as hung. Long work prints progress or splits into several calls.
 **Add dependencies deliberately.** Each one ships inside a ~150MB artifact that
 every machine downloads.
 
+**Write the tool once; it reaches two places.** The platform runs the bundle
+in a sandbox, and CI also publishes it as an MCP server so an engineer's own
+agent can call it. The adapter is injected, so there is nothing to write for
+the second path — but a tool that assumes the sandbox (its caps, its injected
+variables) behaves differently there, which is worth knowing when you choose
+what to depend on.
+
 **Add a command rather than changing one.** Renaming a command or adding a
 required field takes effect on every new session the moment you publish, with
 no version gate. When a change is unavoidable, agree it with the platform team
@@ -121,6 +128,7 @@ plainly rather than implying it works.
 
 ```
 pyproject.toml            one [project.scripts], your dependencies
+mcp.Dockerfile            packages the built bundle as an MCP server
 uv.lock                   committed
 src/my_tool/cli.py        the 3-stage contract — copy, rarely edit
 src/my_tool/common.py     yours: the decorator one of the commands uses

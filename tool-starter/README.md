@@ -134,6 +134,35 @@ header 這裡沒有，某些端點你可能根本連不到。**會連外的工�
 | `-11` | crash（segfault）——通常代表 bundle 是為別的環境 build 的 |
 | `126` / `127` | 你的 launcher 沒能啟動——bundle 壞了或沒掛上 |
 
+## 5c. 讓別人也能用（MCP）
+
+同一次 CI 還會產出**第二個 artifact：一個 docker image**。平台拿 bundle 的流程完全不變
+（那仍是 AI workspace 使用你工具的唯一途徑），這個 image 是**額外**的——讓任何有 docker 的
+工程師，用自己的 agent（Claude Code／opencode／codex）呼叫同一支工具。
+
+你不用為此寫任何程式：三段式契約本來就等於 MCP 需要的東西，轉接器由 builder 注入。
+
+工程師那邊的設定長這樣：
+
+```json
+{
+  "mcpServers": {
+    "my-tool": {
+      "command": "docker",
+      "args": ["run", "-i", "--rm", "-v", "${PWD}:/work", "<你的 image>"]
+    }
+  }
+}
+```
+
+`-v ${PWD}:/work` **是必要的**：你的工具把路徑當成相對於工作目錄（在平台上就是使用者的
+workspace），沒掛載的話它會回「檔案不存在」。
+
+!!! note "這條路證明的是邏輯，不是環境"
+
+    工程師的 agent 跑起來時**不是 sandbox**：沒有輸出上限、沒有逾時、沒有平台注入的環境變數。
+    當成「多一個使用途徑」很好，當成「平台上會過的證明」則不成立。
+
 ## 6. 平台會怎麼跑你的工具
 
 | | |

@@ -210,3 +210,61 @@ def test_the_starter_we_hand_out_actually_builds(tmp_path: Path):
     assert all(c.description.strip() for c in manifest.commands)
     assert (out / BUNDLE_NAME).is_file()
     assert (out / MANIFEST_NAME).is_file()
+
+
+def test_a_published_bundle_answers_mcp_over_stdio(tmp_path: Path):
+    """#674: the same tool an engineer's own agent can drive.
+
+    Files existing proves nothing — this speaks the protocol to the entry
+    point a real build produced, on the interpreter that build shipped.
+    """
+    import io as _io
+    import json as _json
+    import subprocess
+    import tarfile as _tarfile
+
+    from workspace_app.tooling.builder import BUNDLE_NAME, build_artifact
+
+    starter = Path(__file__).resolve().parents[2] / "tool-starter"
+    dist, unpacked = tmp_path / "dist", tmp_path / "unpacked"
+    build_artifact(source=starter, out=dist, builder_id="test:mcp")
+    with _tarfile.open(fileobj=_io.BytesIO((dist / BUNDLE_NAME).read_bytes())) as tar:
+        tar.extractall(unpacked, filter="data")
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "notes.txt").write_text("one two\nthree\n")
+
+    conversation = "\n".join(
+        _json.dumps(m)
+        for m in (
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "count", "arguments": {"path": "notes.txt"}},
+            },
+        )
+    )
+    proc = subprocess.run(
+        [str(unpacked / "mcp")],
+        input=conversation,
+        capture_output=True,
+        text=True,
+        # cwd is the workspace, exactly as the platform runs a tool — which is
+        # what makes the tool's relative path mean the same thing here.
+        cwd=workspace,
+        timeout=120,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    replies = [_json.loads(line) for line in proc.stdout.splitlines() if line.strip()]
+    by_id = {r["id"]: r for r in replies}
+
+    assert "protocolVersion" in by_id[1]["result"]
+    assert sorted(t["name"] for t in by_id[2]["result"]["tools"]) == ["count", "head"]
+    # And the tool really ran: the answer is the workspace file's real content.
+    answered = _json.loads(by_id[3]["result"]["content"][0]["text"])
+    assert answered == {"path": "notes.txt", "lines": 2, "words": 3}

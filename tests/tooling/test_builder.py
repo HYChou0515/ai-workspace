@@ -53,6 +53,10 @@ def _fake_bundle(commands: dict[str, str]):
 
     def build(*, name: str, source: Path, dst: Path) -> None:  # noqa: ARG001
         dst.mkdir(parents=True, exist_ok=True)
+        # A bundle always ships its own interpreter; the doubles model that
+        # now, because the MCP entry point takes its version from it.
+        (dst / "python" / "bin").mkdir(parents=True, exist_ok=True)
+        (dst / "python" / "bin" / "python3.12").write_text("#!/bin/sh\n")
         (dst / "launch").write_text("#!/bin/sh\n")
         (dst / "launch").chmod(0o755)
         (dst / "commands.json").write_text(
@@ -376,7 +380,7 @@ def _venv_shaped_bundle(commands: dict[str, str], *, interpreter: str):
 
     def build(*, name: str, source: Path, dst: Path) -> None:
         plain(name=name, source=source, dst=dst)
-        (dst / "python" / "bin").mkdir(parents=True)
+        (dst / "python" / "bin").mkdir(parents=True, exist_ok=True)
         (dst / "python" / "bin" / "python3.12").write_text("#!/bin/sh\n")
         (dst / "python" / "bin" / "python3.12").chmod(0o755)
         venv = dst / ".venv" / "bin"
@@ -454,3 +458,43 @@ def test_an_absolute_link_into_the_bundle_becomes_relative(tmp_path: Path) -> No
         links = {m.name: m.linkname for m in tar.getmembers() if m.issym()}
 
     assert links["lib/alias.so"] == "real.so"
+
+
+def test_every_bundle_gains_an_mcp_entry_point(tmp_path: Path) -> None:
+    """#674: the same tool, reachable by an engineer's own agent. The adapter
+    is generic, so it is injected rather than written — an author publishing a
+    tool gets the MCP face without knowing MCP exists."""
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    with tarfile.open(fileobj=io.BytesIO((out / BUNDLE_NAME).read_bytes())) as tar:
+        names = {m.name: m for m in tar.getmembers()}
+
+    assert "mcp_server.py" in names
+    assert names["mcp"].mode & 0o111, "the entry point has to be runnable"
+
+
+def test_a_bundle_without_an_interpreter_fails_the_build(tmp_path: Path) -> None:
+    # The MCP entry point runs on the interpreter the bundle ships, so its
+    # absence means the build did not finish — better to say so than to write
+    # an entry point that names a python that is not there.
+    def build(*, name: str, source: Path, dst: Path) -> None:  # noqa: ARG001
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / "commands.json").write_text("[]")
+        (dst / "schemas").mkdir()
+
+    with pytest.raises(BuildError, match="no interpreter"):
+        build_artifact(
+            source=_source(tmp_path),
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=build,
+            smoke_check=lambda _dist: None,
+        )

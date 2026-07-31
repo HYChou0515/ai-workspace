@@ -31,3 +31,29 @@ build-tool:
     # at "the latest artifact of this ref", so a feature branch building over
     # it would ship work in progress to everyone.
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# The second artifact (#674): the same tool, packaged as an MCP server.
+#
+# The platform keeps getting the bundle from this pipeline — that is unchanged
+# and remains the only way it runs your tool. This job additionally publishes an
+# image, so any engineer with docker can point their own agent (Claude Code,
+# opencode, codex) at the same tool.
+#
+# Built FROM the bundle the previous job produced, never rebuilt: two builds of
+# the same source can differ, and then "it works in my editor" would stop
+# meaning anything about the platform.
+package-mcp:
+  needs: [build-tool]
+  image: docker:27
+  services:
+    - docker:27-dind
+  variables:
+    # The platform team gives you this, the same one `build-tool` uses.
+    MCP_IMAGE: $CI_REGISTRY_IMAGE/mcp:$CI_COMMIT_REF_SLUG
+  script:
+    - mkdir -p bundle && tar xzf dist/tool.tar.gz -C bundle
+    - docker build --build-arg BUILDER_IMAGE="$TOOL_BUILDER_IMAGE" -f mcp.Dockerfile -t "$MCP_IMAGE" .
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker push "$MCP_IMAGE"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

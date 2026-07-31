@@ -176,6 +176,44 @@ def _relocatable_link(bundle: Path, link: Path, target: str) -> str:
     )
 
 
+#: The MCP entry point injected into every bundle. It mirrors the tool
+#: launcher's preamble — `readlink -f` so a symlinked shim still finds the
+#: bundle, and the explicit dynamic loader — then runs the adapter on the
+#: interpreter the bundle ships. Falling back to a bare exec when no loader is
+#: found keeps it working outside the jail the loader trick exists for.
+_MCP_LAUNCH = """\
+#!/bin/sh
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+py="$here/python/bin/python{ver}"
+ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
+if [ -n "$ld" ]; then
+  exec "$ld" "$py" "$here/mcp_server.py" "$here"
+fi
+exec "$py" "$here/mcp_server.py" "$here"
+"""
+
+
+def _inject_mcp(bundle: Path) -> None:
+    """Give the bundle its MCP face.
+
+    Injected rather than written by the author: the 3-stage contract already
+    carries everything MCP asks for, so one adapter serves every tool and
+    nobody has to learn a second protocol to publish one."""
+    shutil.copy2(Path(__file__).with_name("mcp_server.py"), bundle / "mcp_server.py")
+
+    # The bundle ships exactly one minor version; take it from the interpreter
+    # that is actually there rather than from ours, which may differ.
+    interpreters = sorted((bundle / "python" / "bin").glob("python3.*"))
+    if not interpreters:
+        raise BuildError("the bundle carries no interpreter — the build did not complete")
+    version = interpreters[0].name.removeprefix("python")
+
+    entry = bundle / "mcp"
+    entry.write_text(_MCP_LAUNCH.format(ver=version))
+    entry.chmod(0o755)
+
+
 def build_artifact(
     *,
     source: Path,
@@ -194,6 +232,7 @@ def build_artifact(
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp) / name
         build_bundle(name=name, source=source, dst=bundle)
+        _inject_mcp(bundle)
         commands = read_commands(bundle)
         packed = pack_bundle(bundle)
 

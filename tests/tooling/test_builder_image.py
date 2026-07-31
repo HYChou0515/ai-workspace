@@ -229,3 +229,22 @@ def test_the_platform_docs_carry_the_exit_code_contract_too() -> None:
 
     for code in ("`2`", "`3`", "`124`", "`-9`"):
         assert code in authoring, f"{code} is part of the contract and belongs here"
+
+
+def test_the_ci_publishes_the_mcp_image_from_the_bundle_it_just_built() -> None:
+    """Rebuilding from source for the second artifact would let the two drift,
+    and then "it works in my editor" would say nothing about the platform."""
+    ci = (_STARTER / ".gitlab-ci.yml").read_text("utf-8")
+
+    assert "package-mcp" in ci
+    assert "needs: [build-tool]" in ci
+    assert "tar xzf dist/tool.tar.gz" in ci  # unpacks the artifact, not the repo
+
+
+def test_the_engineer_facing_setup_mounts_their_working_directory() -> None:
+    # Tools resolve paths against the working directory. Without the mount an
+    # engineer's first call returns "no such file" for a file they can see.
+    readme = (_STARTER / "README.md").read_text("utf-8")
+
+    assert "mcpServers" in readme
+    assert "/work" in readme
