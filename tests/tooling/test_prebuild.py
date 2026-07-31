@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -283,6 +284,40 @@ def test_build_package_forces_uv_to_refresh_the_local_wheel(tmp_path: Path, monk
     assert "--reinstall-package" in sync and "--refresh-package" in sync, sync
     assert sync[sync.index("--reinstall-package") + 1] == "data-fetch", sync
     assert sync[sync.index("--refresh-package") + 1] == "data-fetch", sync
+
+
+def test_build_package_leaves_the_dev_group_out_of_the_bundle(tmp_path: Path, monkeypatch):
+    """`uv sync` installs the `dev` dependency group by default, so a tool that
+    declared pytest the way every python project does — in a dev group, out of
+    its runtime dependencies — shipped it anyway.
+
+    Nobody could see this from the author's side: their pyproject was correct,
+    and the test framework was in the artifact regardless. The integration test
+    proves the built bundle is clean; this pins the flag, so the reason
+    survives someone tidying the argv."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "pyproject.toml").write_text('[project]\nname = "data-fetch"\nversion = "0"\n')
+    (src / "uv.lock").write_text("# fake")
+    dst = tmp_path / "dst"
+
+    invocations: list[list[str]] = []
+    monkeypatch.setattr(prebuild.subprocess, "run", lambda cmd, **kw: invocations.append(list(cmd)))
+    monkeypatch.setattr(prebuild.shutil, "copytree", lambda *a, **kw: None)
+    monkeypatch.setattr(prebuild, "_dump_schemas", lambda launch, dst: None)
+    bundled = tmp_path / "bin" / "python3.99"
+    bundled.parent.mkdir()
+    bundled.write_text("")
+    monkeypatch.setattr(
+        prebuild.Path, "resolve", lambda self: bundled if self.name == "python" else self
+    )
+
+    prebuild.build_package(name="data-fetch", source=src, dst=dst)
+
+    sync = next(cmd for cmd in invocations if cmd[0:2] == ["uv", "sync"])
+    assert "--no-dev" in sync, sync
 
 
 # ─── uv-run debug bundles (#63) ──────────────────────────────────────
@@ -1197,3 +1232,59 @@ def test_a_value_reaches_the_tool_exactly_as_typed(tmp_path: Path):
     tricky = "p@ss$word `id` $(whoami)"
     seen = _env_seen_with_inherited(launch, {"TOKEN": tricky, "SANDBOX_USER_ENV_KEYS": "TOKEN"})
     assert seen["TOKEN"] == tricky
+
+
+# ─── what the bundle carries (#674) ──────────────────────────────────
+
+
+@pytest.mark.skipif(not _has_uv(), reason="uv not available")
+@pytest.mark.integration
+def test_a_dev_only_dependency_never_reaches_the_bundle(tmp_path: Path):
+    """Every bundle we built shipped the author's test framework.
+
+    The cause was ours, not theirs: `uv sync` installs the `dev` group unless
+    told otherwise, so a pyproject that correctly keeps pytest out of its
+    runtime dependencies still put it in the artifact — and the author had no
+    way to see it, because their file was right.
+
+    This builds for real rather than asserting on our own argv: the behaviour
+    under test belongs to uv, and a flag we pass means nothing if uv stops
+    honouring it."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "devdep"
+    pkg = src / "src" / "devdep"
+    pkg.mkdir(parents=True)
+    (src / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "devdep"\n'
+        'version = "0.1.0"\n'
+        'requires-python = ">=3.10"\n'
+        "dependencies = []\n"
+        "\n"
+        "[project.scripts]\n"
+        'devdep = "devdep.cli:main"\n'
+        "\n"
+        # Declared exactly where a test dependency belongs. `iniconfig` stands
+        # in for pytest: same group, small enough not to slow the build.
+        "[dependency-groups]\n"
+        'dev = ["iniconfig"]\n'
+        "\n"
+        "[build-system]\n"
+        'requires = ["hatchling"]\n'
+        'build-backend = "hatchling.build"\n'
+        "\n"
+        "[tool.hatch.build.targets.wheel]\n"
+        'packages = ["src/devdep"]\n'
+    )
+    (pkg / "__init__.py").write_text("")
+    (pkg / "cli.py").write_text("import json\n\n\ndef main():\n    print(json.dumps([]))\n")
+    subprocess.run(["uv", "lock", "--directory", str(src)], check=True, capture_output=True)
+
+    dst = tmp_path / "dst"
+    prebuild.build_package(name="devdep", source=src, dst=dst)
+
+    (site,) = (dst / ".venv" / "lib").glob("python*/site-packages")
+    installed = {p.name.split("-")[0] for p in site.iterdir()}
+    assert "devdep" in installed, f"the tool itself must still be installed: {sorted(installed)}"
+    assert "iniconfig" not in installed, f"a dev-group dependency shipped: {sorted(installed)}"

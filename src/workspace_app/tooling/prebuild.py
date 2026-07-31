@@ -271,6 +271,9 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
     # `--reinstall-package`/`--refresh-package` defeat uv's version-keyed
     # wheel cache for the local package so edited-but-same-version source
     # is rebuilt from disk (#64), not restored stale from cache.
+    # `--no-dev` because uv installs the `dev` group by default: without it a
+    # tool that correctly declares pytest as a dev dependency ships it anyway,
+    # and the author cannot tell from their own pyproject that it happened.
     env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv.resolve())}
     logger.debug("prebuild: uv sync --frozen for %s (dist=%s)", name, dist_name)
     subprocess.run(
@@ -279,6 +282,7 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
             "sync",
             "--frozen",
             "--no-editable",
+            "--no-dev",
             "--reinstall-package",
             dist_name,
             "--refresh-package",
