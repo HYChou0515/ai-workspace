@@ -362,3 +362,95 @@ def test_a_failing_local_smoke_is_also_a_red_exit(tmp_path, monkeypatch, capsys)
 
     assert main(["smoke", str(tmp_path / "dist")]) == 1
     assert "exited 3" in capsys.readouterr().err
+
+
+def _venv_shaped_bundle(commands: dict[str, str], *, interpreter: str):
+    """A bundle shaped like the one `prebuild` really produces.
+
+    The earlier doubles wrote only regular files, which is why nothing caught
+    that a real build cannot be unpacked: `uv venv` leaves `.venv/bin/python`
+    pointing at the ABSOLUTE path of the interpreter it was built with, and
+    that path does not exist anywhere the bundle is going.
+    """
+    plain = _fake_bundle(commands)
+
+    def build(*, name: str, source: Path, dst: Path) -> None:
+        plain(name=name, source=source, dst=dst)
+        (dst / "python" / "bin").mkdir(parents=True)
+        (dst / "python" / "bin" / "python3.12").write_text("#!/bin/sh\n")
+        (dst / "python" / "bin" / "python3.12").chmod(0o755)
+        venv = dst / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").symlink_to(interpreter)
+        (venv / "python3").symlink_to("python")
+
+    return build
+
+
+def test_a_bundle_built_by_uv_can_actually_be_unpacked(tmp_path: Path) -> None:
+    """The build machine's interpreter path is meaningless anywhere else, so a
+    bundle carrying it is not relocatable — and the safe tar filter both this
+    build and the host use refuses an absolute link outright. Packing repoints
+    it at the interpreter the bundle ships with."""
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_venv_shaped_bundle(
+            {"trend": "t"}, interpreter="/home/someone/.local/share/uv/python/x/bin/python3.12"
+        ),
+        smoke_check=lambda _dist: None,
+    )
+
+    with tarfile.open(fileobj=io.BytesIO((out / BUNDLE_NAME).read_bytes())) as tar:
+        links = {m.name: m.linkname for m in tar.getmembers() if m.issym()}
+
+    assert not any(t.startswith("/") for t in links.values()), (
+        f"a relocatable bundle cannot carry an absolute link: {links}"
+    )
+    # And it points at something real inside the bundle.
+    assert links[".venv/bin/python"] == "../../python/bin/python3.12"
+
+
+def test_a_link_pointing_out_of_the_bundle_fails_the_authors_build(tmp_path: Path) -> None:
+    # Not something to quietly rewrite: a bundle that reaches outside itself is
+    # not self-contained, and no host would unpack it. Better a red build than
+    # an artifact nothing can install.
+    out = tmp_path / "dist"
+
+    with pytest.raises(BuildError, match="outside the bundle"):
+        build_artifact(
+            source=_source(tmp_path),
+            out=out,
+            builder_id=_BUILDER,
+            build_bundle=_venv_shaped_bundle({"trend": "t"}, interpreter="/etc/passwd"),
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_an_absolute_link_into_the_bundle_becomes_relative(tmp_path: Path) -> None:
+    # Same target, honest spelling. The path was correct on the build machine
+    # and correct nowhere else; relative, it is correct everywhere.
+    out = tmp_path / "dist"
+    src = _source(tmp_path)
+
+    def build(*, name: str, source: Path, dst: Path) -> None:  # noqa: ARG001
+        _fake_bundle({"trend": "t"})(name=name, source=source, dst=dst)
+        (dst / "lib").mkdir()
+        (dst / "lib" / "real.so").write_text("x")
+        (dst / "lib" / "alias.so").symlink_to(dst / "lib" / "real.so")
+
+    build_artifact(
+        source=src,
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=build,
+        smoke_check=lambda _dist: None,
+    )
+
+    with tarfile.open(fileobj=io.BytesIO((out / BUNDLE_NAME).read_bytes())) as tar:
+        links = {m.name: m.linkname for m in tar.getmembers() if m.issym()}
+
+    assert links["lib/alias.so"] == "real.so"

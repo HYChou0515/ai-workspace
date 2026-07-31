@@ -268,3 +268,27 @@ def test_sweeping_a_host_that_has_never_installed_anything_is_a_no_op(tmp_path: 
     # The reaper ticks from the moment a host starts, long before any app has
     # asked for a third-party tool.
     assert ToolCache(tmp_path / "never-created").sweep(in_use=set()) == []
+
+
+def test_a_bundle_with_a_venv_shaped_link_installs(tmp_path: Path) -> None:
+    """#674 follow-up: the guard that refuses links OUT of the tree must not
+    also refuse the ordinary ones a real bundle is full of — `uv` leaves over a
+    thousand of them. The first version of this feature could not unpack a
+    single real bundle, and no test said so because every double wrote plain
+    files only."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+
+    def build(tar: tarfile.TarFile) -> None:
+        body = b"#!/bin/sh\n"
+        info = tarfile.TarInfo("python/bin/python3.12")
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+        link = tarfile.TarInfo(".venv/bin/python")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../python/bin/python3.12"
+        tar.addfile(link)
+
+    installed = cache.ensure(_SHA, _tar_raw(build))
+
+    assert (installed / ".venv" / "bin" / "python").is_symlink()
+    assert (installed / ".venv" / "bin" / "python").resolve().is_file()

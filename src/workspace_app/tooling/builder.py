@@ -131,6 +131,8 @@ def pack_bundle(bundle: Path) -> bytes:
     with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=6) as tar:
         for path in sorted(bundle.rglob("*")):
             info = tar.gettarinfo(path, arcname=str(path.relative_to(bundle)))
+            if info.issym() and info.linkname.startswith("/"):
+                info.linkname = _relocatable_link(bundle, path, info.linkname)
             info.mtime = 0
             info.uid = info.gid = 0
             info.uname = info.gname = ""
@@ -140,6 +142,38 @@ def pack_bundle(bundle: Path) -> bytes:
             else:
                 tar.addfile(info)
     return buf.getvalue()
+
+
+def _relocatable_link(bundle: Path, link: Path, target: str) -> str:
+    """Turn an absolute symlink into one that survives being moved.
+
+    `uv venv` leaves `.venv/bin/python` pointing at the ABSOLUTE path of the
+    interpreter it built against — a path on the build machine, meaningless
+    anywhere the bundle is going. It has always been dangling once relocated;
+    it only went unnoticed because the launcher invokes the bundle's own
+    interpreter directly and never follows it. Packing is where a bundle stops
+    being a directory on one machine and becomes bytes for another, so it is
+    where the link has to be made honest.
+
+    A target that already lives inside the bundle is simply rewritten as
+    relative. An interpreter outside it is repointed at the one the bundle
+    ships. Anything else is refused: a bundle that links out of itself is not
+    self-contained, and the safe tar filter on the other side would reject it
+    anyway — better to fail the author's build than to publish something no
+    host will unpack."""
+    inside = Path(target)
+    if inside.is_relative_to(bundle):
+        return os.path.relpath(inside, link.parent)
+
+    shipped = bundle / "python" / "bin" / Path(target).name
+    if shipped.exists():
+        return os.path.relpath(shipped, link.parent)
+
+    raise BuildError(
+        f"{link.relative_to(bundle)} links to {target}, which is outside the bundle — "
+        "a bundle must carry everything it needs, and nothing that unpacks it will "
+        "follow a link off its own tree"
+    )
 
 
 def build_artifact(
