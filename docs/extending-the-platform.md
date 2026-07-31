@@ -167,6 +167,10 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
   數不對、annotation 不是 BaseModel)在**註冊時**就 `TypeError`——fail-loud,不會拖到執行期。
 - Dispatcher 本身**零 domain 邏輯**、除 pydantic 外零依賴;不想用照樣手寫 `main()`,framework 不挑。
 
+**exit code 是契約的一部分**(#674):`2` = 可以重試、`3` = 要有人先做一件事、`1` = 其他失敗;
+`124` / `-9`(記憶體上限)/ `-11`(ABI)/ `126`·`127`(bundle 壞了)由平台產生並自動翻成人話給模型。
+第一方工具走的是同一條路徑,細節見 [`tool-authoring.md`](tool-authoring.md)。
+
 ### 兩條路：vendor 進 repo，或外部作者自己發版
 
 同一個 tool package 的**寫法完全一樣**（三段式契約、`uv.lock`、pydantic Args）。差別只在

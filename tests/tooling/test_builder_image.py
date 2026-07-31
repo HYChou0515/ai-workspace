@@ -219,3 +219,13 @@ def test_the_starter_teaches_the_exit_code_contract_where_an_author_will_see_it(
     assert "NeedsAction" in (_STARTER / "src" / "my_tool" / "common.py").read_text("utf-8")
     assert "Retryable" in (_STARTER / "CLAUDE.md").read_text("utf-8")
     assert "exit code" in (_STARTER / "README.md").read_text("utf-8")
+
+
+def test_the_platform_docs_carry_the_exit_code_contract_too() -> None:
+    """The starter teaches it, but a first-party tool goes through the same
+    path and its author reads these pages instead. A contract documented in
+    only one of the two places is one half of the tools getting it wrong."""
+    authoring = (_REPO / "docs" / "tool-authoring.md").read_text("utf-8")
+
+    for code in ("`2`", "`3`", "`124`", "`-9`"):
+        assert code in authoring, f"{code} is part of the contract and belongs here"

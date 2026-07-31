@@ -178,7 +178,7 @@ src/workspace_app/rca/templates/methodology/.skill/
 | T7 | 既有 ToolDef + build_argv | **完全廢棄**;`provision.py` 重寫 |
 | T8 | prebuild script 簡化 | 大改 + 模組化(`workspace_app/tooling/{prebuild,dispatcher,registry}.py`)+ 增量(source mtime 比對 skip) |
 | T9 | sample tool 遷移 | `data-fetch` 留單 command(範例:最小可行);`csv-column-summary` 變多 command(`summarise` + `plot`,共享 venv) |
-| T10 | pydantic ValidationError 回 LLM | friendly str 印 stderr + exit_code=2;host 透傳 |
+| T10 | pydantic ValidationError 回 LLM | friendly str 印 stderr + exit_code=2;host 透傳。**#674 起 `2` 的意思擴大為「可以重試」**(對外已公布),參數錯只是其中一種;見 [`tool-authoring.md`](tool-authoring.md) 的 exit code 契約 |
 
 ## B.2 · Binary contract(T1 + T2)
 
