@@ -3914,6 +3914,7 @@ version = "2026.7.23"
 source = { editable = "." }
 dependencies = [
     { name = "cairosvg" },
+    { name = "cryptography" },
     { name = "docker" },
     { name = "docx2txt" },
     { name = "ipykernel" },
@@ -3964,6 +3965,7 @@ docs = [
 requires-dist = [
     { name = "aio-pika", marker = "extra == 'rabbitmq'", specifier = ">=9.4.0" },
     { name = "cairosvg", specifier = ">=2.9.0" },
+    { name = "cryptography", specifier = ">=44" },
     { name = "docker", specifier = ">=7.1.0" },
     { name = "docx2txt", specifier = ">=0.9" },
     { name = "ipykernel", specifier = ">=7.2.0" },

@@ -5,6 +5,9 @@ description = "Workspace management app with pluggable sandbox + agent runtime"
 requires-python = ">=3.12"
 dependencies = [
     "cairosvg>=2.9.0",
+    # Signs and checks the size-limit certificates in tooling/grant.py. It was
+    # already here by way of other packages; declared now because we import it.
+    "cryptography>=44",
     "docker>=7.1.0",
     "docx2txt>=0.9",
     "ipykernel>=7.2.0",
