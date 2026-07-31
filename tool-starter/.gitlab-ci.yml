@@ -52,7 +52,9 @@ package-mcp:
     MCP_IMAGE: $CI_REGISTRY_IMAGE/mcp:$CI_COMMIT_REF_SLUG
   script:
     - mkdir -p bundle && tar xzf dist/tool.tar.gz -C bundle
-    - docker build --build-arg BUILDER_IMAGE="$TOOL_BUILDER_IMAGE" -f mcp.Dockerfile -t "$MCP_IMAGE" .
+    # The recipe comes out of the build, so it always matches the bundle and
+    # you never have to edit it.
+    - docker build --build-arg BUILDER_IMAGE="$TOOL_BUILDER_IMAGE" -f dist/mcp.Dockerfile -t "$MCP_IMAGE" .
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
     - docker push "$MCP_IMAGE"
   rules:

@@ -128,7 +128,6 @@ plainly rather than implying it works.
 
 ```
 pyproject.toml            one [project.scripts], your dependencies
-mcp.Dockerfile            packages the built bundle as an MCP server
 uv.lock                   committed
 src/my_tool/cli.py        the 3-stage contract — copy, rarely edit
 src/my_tool/common.py     yours: the decorator one of the commands uses

@@ -239,6 +239,12 @@ def test_the_ci_publishes_the_mcp_image_from_the_bundle_it_just_built() -> None:
     assert "package-mcp" in ci
     assert "needs: [build-tool]" in ci
     assert "tar xzf dist/tool.tar.gz" in ci  # unpacks the artifact, not the repo
+    # And builds from the recipe the build emitted, so an author never edits
+    # — nor drifts from — how the image is packaged.
+    assert "-f dist/mcp.Dockerfile" in ci
+    assert not (_STARTER / "mcp.Dockerfile").exists(), (
+        "the recipe belongs to the builder; a copy per repo is a copy that drifts"
+    )
 
 
 def test_the_engineer_facing_setup_mounts_their_working_directory() -> None:

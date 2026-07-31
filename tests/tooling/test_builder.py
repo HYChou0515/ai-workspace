@@ -22,6 +22,7 @@ from workspace_app.tooling import builder as builder_mod
 from workspace_app.tooling.artifact import BundleRef, Manifest, parse_manifest
 from workspace_app.tooling.builder import (
     BUNDLE_NAME,
+    DOCKERFILE_NAME,
     MANIFEST_NAME,
     BuildError,
     SmokeFailed,
@@ -498,3 +499,27 @@ def test_a_bundle_without_an_interpreter_fails_the_build(tmp_path: Path) -> None
             build_bundle=build,
             smoke_check=lambda _dist: None,
         )
+
+
+def test_the_build_emits_the_packaging_recipe_beside_the_bundle(tmp_path: Path) -> None:
+    """#674: the MCP image's Dockerfile belongs to the builder, not to each
+    author's repository. A copy per repo drifts the moment we change how the
+    image is packaged, and we would have to ask every author to edit a file
+    they never wrote. Emitting it with the artifact keeps one source of truth,
+    and lets an old artifact keep the recipe that matches it."""
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    recipe = (out / DOCKERFILE_NAME).read_text("utf-8")
+
+    assert "ENTRYPOINT" in recipe
+    assert "/tool/mcp" in recipe
+    # It must build from the unpacked bundle this same run produced.
+    assert "bundle/" in recipe
