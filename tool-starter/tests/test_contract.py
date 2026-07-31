@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from my_tool.commands import COMMANDS
 from my_tool.commands.count import Args, run
 
@@ -36,3 +38,24 @@ def test_it_counts(tmp_path: Path, monkeypatch):
     answer = json.loads(run(Args(path="notes.txt", ignore_blank_lines=True)))
 
     assert answer == {"path": "notes.txt", "lines": 2, "words": 3}
+
+
+def test_a_decorated_command_is_indistinguishable_from_a_spelled_out_one():
+    """`cli.py` asks every command for the same three things. That is what
+    makes the choice between the two styles a matter of taste rather than a
+    fork in the contract."""
+    spelled_out, decorated = COMMANDS["count"], COMMANDS["head"]
+
+    for cmd in (spelled_out, decorated):
+        assert cmd.DESCRIPTION.strip()
+        assert issubclass(cmd.Args, BaseModel)
+        assert callable(cmd.run)
+
+
+def test_the_decorator_takes_its_schema_from_the_annotation():
+    # One source of truth: the model the code validates with is the model the
+    # schema is generated from.
+    from my_tool.commands.head import Args as HeadArgs
+
+    assert COMMANDS["head"].Args is HeadArgs
+    assert COMMANDS["head"].Args.model_json_schema()["properties"]["lines"]["maximum"] == 200

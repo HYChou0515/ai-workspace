@@ -201,9 +201,12 @@ def test_the_starter_we_hand_out_actually_builds(tmp_path: Path):
     manifest = build_artifact(source=starter, out=out, builder_id="test:starter")
 
     assert manifest.name == "my-tool"
-    assert [c.name for c in manifest.commands] == ["count"]
-    # The description is what makes a model reach for it; an empty one ships a
-    # tool nobody calls, and the template is the example everyone copies.
-    assert manifest.commands[0].description.strip()
+    # Both authoring styles survive a real build: `count` spells the three
+    # pieces out, `head` is one decorated function. They reach the manifest
+    # identically, which is what makes the choice a matter of taste.
+    assert sorted(c.name for c in manifest.commands) == ["count", "head"]
+    # The description is what makes a model reach for one; an empty one ships
+    # a tool nobody calls, and the template is the example everyone copies.
+    assert all(c.description.strip() for c in manifest.commands)
     assert (out / BUNDLE_NAME).is_file()
     assert (out / MANIFEST_NAME).is_file()

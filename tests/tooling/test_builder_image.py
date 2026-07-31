@@ -190,8 +190,22 @@ def test_the_starters_agent_brief_interviews_before_it_writes() -> None:
     that passes locally and fails in front of a user."""
     brief = (_STARTER / "CLAUDE.md").read_text("utf-8")
 
-    assert "Before any code" in brief
+    assert "Interview first" in brief
     assert "## 2. Rules" in brief
-    assert "workspace_app" in brief  # the coupling rule is stated
+    assert "Stand alone" in brief  # the standing-alone rule, stated as a requirement
     assert "stdout" in brief  # the answer channel
     assert "read-only" in brief  # the bundle
+
+
+def test_the_starter_shows_both_ways_to_write_a_command() -> None:
+    """The decorator lives in the author's own `common.py`, so they get the
+    ergonomics without importing ours — which is the whole reason ours is
+    off limits. Showing both styles side by side is what makes that a
+    choice rather than a restriction."""
+    assert (_STARTER / "src" / "my_tool" / "common.py").is_file()
+    commands = (_STARTER / "src" / "my_tool" / "commands").glob("*.py")
+    bodies = {p.name: p.read_text("utf-8") for p in commands}
+
+    assert "@command(" in bodies["head.py"]  # decorated
+    assert "DESCRIPTION" in bodies["count.py"]  # spelled out
+    assert "def run(" in bodies["count.py"]

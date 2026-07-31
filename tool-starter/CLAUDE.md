@@ -10,89 +10,83 @@ get the arguments right without asking, and be able to act on what comes back.
 
 ---
 
-## 1. Before any code: find out what they actually need
+## 1. Interview first
 
-Do not start writing. Most tool ideas arrive as a solution to a problem nobody
-has stated, and half of them should not be tools at all. Interview first, one
-question at a time, until you can answer all of these in the user's own words:
+Understand the job before writing any of it. Most tool ideas arrive as a
+solution to a problem nobody has stated, and some are better served by a plain
+script. Ask one question at a time until you can answer all of these in the
+user's own words:
 
 **What triggers it?** Have them describe a real moment: what the user typed,
-what the model should decide to do. If they cannot produce one, the tool has no
-description — and the description is what makes it get called at all.
+what the model should decide to do. That moment becomes the description, and
+the description is what makes the tool get called at all.
 
-**Where does the input come from?** A file in the user's workspace? A network
-endpoint? Something the model types out? Each answer changes the design, and
-the last one is a warning sign — if the model already has the data, it may not
-need a tool.
+**Where does the input come from?** A file in the user's workspace, a network
+endpoint, or something the model types out. Each answer leads to a different
+design — and if the model already holds the data, say so: a plain answer beats
+a tool.
 
-**What comes back, and how big?** Output is capped. If the honest answer is
-"a lot", the tool should write a file into the workspace and return its path.
+**What comes back, and how big?** Output is capped. When the honest answer is
+"a lot", the tool writes a file into the workspace and returns its path.
 
-**What happens when it fails?** A missing file, a refused login, a slow
-endpoint. There is no human watching to retry, so decide what the model should
-be told and what it should do next.
+**What should happen when it fails?** A missing file, a refused login, a slow
+endpoint. Decide what the model is told and what it should try next; there is
+nobody watching to retry.
 
-**Does it need credentials?** They must arrive as environment variables the
-platform passes in. Never in the code, never in the bundle — one bundle is
-shared by every sandbox on a machine.
+**Which secrets does it need?** They arrive as environment variables the
+platform passes in, so establish their names now.
 
-**Could this be a plain script instead?** If it is a one-off calculation over
-files already in the workspace, the user can have the agent write a script and
-run it — no packaging, no release, no version. A tool earns its cost when it is
-used repeatedly, needs pinned dependencies, or must behave identically for
-everyone.
+**Is a tool the right shape?** A one-off calculation over files already in the
+workspace is a script the agent can write on the spot. A tool earns its
+packaging when it is used repeatedly, needs pinned dependencies, or must behave
+identically for everyone.
 
-Only when they can answer these, and you can restate the tool's purpose in one
+When they can answer these, and you can restate the tool's purpose in one
 sentence they agree with, start writing.
-
----
 
 ## 2. Rules
 
-These are not style preferences. Each one is something the platform enforces,
-or something that breaks in front of a user.
+Each of these is enforced by the platform or visible to a user, so treat them
+as requirements rather than preferences.
 
-**Never import from `workspace_app`, or any platform package.** Your tool runs
-as a standalone program; the only contract is argv in, stdout out. An import
-means you cannot test without the platform, and the platform is free to change
-underneath you. The dispatcher in `cli.py` is hand-written for exactly this
-reason — copy it, do not replace it with a framework that reaches across the
-boundary.
+**Stand alone.** Depend on the standard library, pydantic, and whatever you add
+to `pyproject.toml`. The whole contract with the platform is argv in, stdout
+out — which is what lets `pytest` run here with nothing else installed, and
+lets the platform change without touching this repository. `common.py` holds
+the decorator for that reason: it is yours, in your repo, to edit or delete.
 
-**Exactly one `[project.scripts]` entry.** That is the command the bundle's
-launcher runs. Many commands live in `commands/`, one entry point.
+**Ship exactly one `[project.scripts]` entry.** That is the command the
+bundle's launcher runs. Many commands live in `commands/`, behind that one
+entry point.
 
-**Commit `uv.lock`.** The build refuses without it, and the point is that every
-machine runs the same versions.
+**Commit `uv.lock`.** The build requires it, so that every machine runs the
+versions you tested.
 
-**stdout is the answer.** Anything you print there is read as the command's
-result. Diagnostics go to stderr; failures exit non-zero.
+**Answer on stdout.** Whatever you print there is read as the command's result.
+Diagnostics go to stderr, and a failure exits non-zero.
 
-**Descriptions are the interface.** `DESCRIPTION` and every field's
-`description` are put in front of the model verbatim. "Do stuff" means your
-tool is never called, or is called wrongly. This is the highest-leverage text
-in the package — spend real effort on it.
+**Write descriptions for a reader who decides.** `DESCRIPTION` and every
+field's `description` are put in front of the model verbatim, and they decide
+whether your tool is chosen and called correctly. This is the
+highest-leverage text in the package; spend real effort on it.
 
-**Paths are relative to the user's workspace.** The process runs with the
-workspace as its working directory. Never build a path from `__file__`: your
-tool is mounted read-only somewhere else entirely.
+**Resolve paths against the working directory.** The platform sets it to the
+user's workspace, so `Path("notes/log.txt")` means what the user means. Your
+own code lives elsewhere, mounted read-only.
 
-**Your bundle is read-only, and `$HOME` is not where you think.** Write to the
-workspace (relative paths) or to a temp dir. Writing next to your own code
-fails.
+**Write to the workspace or to a temp dir.** Those are the two writable places.
+`$HOME` points at a per-session directory of the platform's choosing.
 
-**You are on a clock.** 60 seconds total, and 60 seconds of silence counts as
-hung. Long work should print progress or be split.
+**Finish inside 60 seconds, and keep talking.** Sixty seconds of silence counts
+as hung. Long work prints progress or splits into several calls.
 
-**Every dependency ships.** The artifact is ~150MB before you add anything, and
-every machine downloads it. Add what you need and nothing else.
+**Add dependencies deliberately.** Each one ships inside a ~150MB artifact that
+every machine downloads.
 
-**Renaming a command, or adding a required field, is a breaking change** — and
-it takes effect on every new session as soon as you publish, with no version
-gate. Add a new command instead, or agree the change with the platform team
+**Add a command rather than changing one.** Renaming a command or adding a
+required field takes effect on every new session the moment you publish, with
+no version gate. When a change is unavoidable, agree it with the platform team
 first.
-
----
 
 ## 3. How to work
 
@@ -120,7 +114,10 @@ plainly rather than implying it works.
 pyproject.toml            one [project.scripts], your dependencies
 uv.lock                   committed
 src/my_tool/cli.py        the 3-stage contract — copy, rarely edit
-src/my_tool/commands/     one module per command, one line in __init__.py
+src/my_tool/common.py     yours: the decorator one of the commands uses
+src/my_tool/commands/     one module per command; `count` spells the three
+                          pieces out, `head` uses the decorator — cli.py
+                          treats them identically, so pick either
 tests/                    plain pytest
 .gitlab-ci.yml            builds and publishes the artifact
 compose.tool-dev.yaml     a real sandbox on this machine
