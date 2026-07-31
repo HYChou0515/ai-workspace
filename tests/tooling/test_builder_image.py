@@ -209,3 +209,13 @@ def test_the_starter_shows_both_ways_to_write_a_command() -> None:
     assert "@command(" in bodies["head.py"]  # decorated
     assert "DESCRIPTION" in bodies["count.py"]  # spelled out
     assert "def run(" in bodies["count.py"]
+
+
+def test_the_starter_teaches_the_exit_code_contract_where_an_author_will_see_it() -> None:
+    """The platform reads these numbers to decide what the model does next, so
+    an author who learns them late has already shipped a tool that reports its
+    failures as unactionable. Both documents carry it, and the code raises it."""
+    assert "Retryable" in (_STARTER / "src" / "my_tool" / "common.py").read_text("utf-8")
+    assert "NeedsAction" in (_STARTER / "src" / "my_tool" / "common.py").read_text("utf-8")
+    assert "Retryable" in (_STARTER / "CLAUDE.md").read_text("utf-8")
+    assert "exit code" in (_STARTER / "README.md").read_text("utf-8")

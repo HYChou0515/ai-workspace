@@ -13,6 +13,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from my_tool.common import Retryable
+
 # The model decides whether to call your tool from this sentence alone, and
 # gets the arguments right (or not) from the field descriptions. It is the
 # highest-leverage text in the whole package — vaguer than this and the tool
@@ -36,9 +38,9 @@ def run(args: Args) -> str:
     # at the wrong tree.
     target = Path(args.path)
     if not target.is_file():
-        # A missing file is a normal outcome, not a crash. Say what you looked
-        # for; the model relays it and the user fixes the path.
-        return json.dumps({"error": f"no such file in the workspace: {args.path}"})
+        # Retryable: the model picked the path, so the model can pick a better
+        # one. Naming what was looked for is what makes that possible.
+        raise Retryable(f"no such file in the workspace: {args.path}")
 
     lines = target.read_text("utf-8", errors="replace").splitlines()
     if args.ignore_blank_lines:

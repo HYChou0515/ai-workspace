@@ -63,7 +63,16 @@ entry point.
 versions you tested.
 
 **Answer on stdout.** Whatever you print there is read as the command's result.
-Diagnostics go to stderr, and a failure exits non-zero.
+Diagnostics go to stderr.
+
+**Exit with the code that says what to do next.** The platform turns it into
+the model's next move, so it is part of the published contract:
+`Retryable` (2) when calling again may work — a bad argument the model can
+fix, a timeout, a brief outage; `NeedsAction` (3) when a person must act
+first, naming what is missing so the model can relay it; `ToolError` (1) for
+everything else. Raise them from `common.py`. The platform passes the
+guidance on and leaves the retrying to the model, because your tool may have
+side effects.
 
 **Write descriptions for a reader who decides.** `DESCRIPTION` and every
 field's `description` are put in front of the model verbatim, and they decide

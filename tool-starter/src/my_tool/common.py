@@ -19,6 +19,39 @@ from typing import get_type_hints
 from pydantic import BaseModel
 
 
+class ToolError(Exception):
+    """A failure worth reporting, with the exit code that says what to do next.
+
+    The platform reads the exit code and tells the model how to proceed, so
+    the code is guidance and the message is the detail. Raise the subclass
+    that matches; the plain `ToolError` covers everything else."""
+
+    exit_code = 1
+
+
+class Retryable(ToolError):
+    """Calling again may work — a bad argument the model can fix, a timeout,
+    an upstream that was briefly unavailable.
+
+        raise Retryable(f"no such file in the workspace: {args.path}")
+
+    The model may call again. The platform never retries on its own: your tool
+    may have side effects, and repeating them unasked is its own bug."""
+
+    exit_code = 2
+
+
+class NeedsAction(ToolError):
+    """A person has to do something first, so calling again changes nothing.
+
+        raise NeedsAction("set FTP_PASSWORD in the workspace's environment variables")
+
+    Name what is missing. The model relays it, and for a variable the user can
+    set it themselves in this workspace's environment panel."""
+
+    exit_code = 3
+
+
 @dataclass(frozen=True)
 class Command:
     """What `cli.py` needs from a command, however it was written."""

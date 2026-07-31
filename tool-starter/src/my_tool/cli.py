@@ -22,14 +22,16 @@ import sys
 from pydantic import ValidationError
 
 from my_tool.commands import COMMANDS
+from my_tool.common import Retryable, ToolError
 
 
-def _fail(message: str) -> int:
-    """Errors go to stderr and a non-zero exit. Never to stdout: stdout is the
-    channel the platform parses, and a stray line there is read as your
-    command's answer."""
+def _fail(message: str, exit_code: int) -> int:
+    """Report a failure: the detail on stderr, the next step in the exit code.
+
+    stdout stays clean — it is the channel the platform parses, and a stray
+    line there is read as your command's answer."""
     print(message, file=sys.stderr)
-    return 1
+    return exit_code
 
 
 def main() -> int:
@@ -46,7 +48,11 @@ def main() -> int:
     name, rest = argv[0], argv[1:]
     cmd = COMMANDS.get(name)
     if cmd is None:
-        return _fail(f"unknown command {name!r}; expected one of {sorted(COMMANDS)}")
+        # The model chose a name that does not exist; naming the real ones
+        # lets it correct itself, which is what makes this retryable.
+        return _fail(
+            f"unknown command {name!r}; expected one of {sorted(COMMANDS)}", Retryable.exit_code
+        )
 
     if not rest:
         print(
@@ -66,9 +72,14 @@ def main() -> int:
     try:
         args = cmd.Args.model_validate_json(rest[0])
     except ValidationError as exc:
-        return _fail(f"bad arguments for {name}: {exc}")
+        # Retryable: the model can read what was wrong and call again with it
+        # fixed, without involving the user at all.
+        return _fail(f"bad arguments for {name}: {exc}", Retryable.exit_code)
 
-    print(cmd.run(args))
+    try:
+        print(cmd.run(args))
+    except ToolError as exc:
+        return _fail(str(exc), exc.exit_code)
     return 0
 
 
