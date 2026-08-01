@@ -89,8 +89,14 @@ own code lives elsewhere, mounted read-only.
 **Finish inside 60 seconds, and keep talking.** Sixty seconds of silence counts
 as hung. Long work prints progress or splits into several calls.
 
-**Add dependencies deliberately.** Each one ships inside a ~150MB artifact that
-every machine downloads.
+**Keep the bundle inside 150MB.** `build-tool` measures the compressed
+artifact — what every machine downloads — and fails above that, naming the
+heaviest entries. An empty template is already ~40MB of bundled interpreter,
+so the room that remains is for what the tool needs at run time. Dependencies
+used only by tests belong in `[dependency-groups] dev`, which the build leaves
+out. When the weight is real, the platform team reviews the tool and issues a
+certificate: one line, committed as `tool-size-grant.token`, naming the tool,
+its raised ceiling, and the date that ceiling lapses.
 
 **Write the tool once; it reaches two places.** The platform runs the bundle
 in a sandbox, and CI also publishes it as an MCP server so an engineer's own

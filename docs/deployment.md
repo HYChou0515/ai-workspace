@@ -576,7 +576,53 @@ TOOL_BUILDER_ID=<這個部署的值> TOOL_ARTIFACT_TOKEN=<你的 token> \
 但**正在被使用的永遠不會被淘汰**。粗估：`工具數 × 保留版本數 × 150MB × host 數`。
 沒設上限則不保留任何沒被引用的版本（回滾會重抓）。
 
-### 15.6 出事時怎麼查
+### 15.6 體積上限與例外憑證
+
+每支 bundle 有上限：**壓縮後 150MB**。`build-tool` 在作者的 CI 擋一次，我們的
+`python -m workspace_app.tooling.verify` 在上架時再擋一次；兩邊跑的是同一個
+`tooling/grant.py`，不會有一邊比較鬆。
+
+作者端那次檢查跑在**作者自己的 runner** 上，所以它的作用是讓對方早點發現，
+真正的閘門是我們這一道。
+
+#### 開通（只做一次）
+
+```bash
+python -m workspace_app.tooling.grant keygen --key /path/you/choose/tool-grant.pem
+```
+
+私鑰只寫到你指定的路徑（`0600`，已存在就拒絕覆寫——覆寫等於讓所有已發出的憑證失效）。
+指令會印出一行公鑰，貼進 `src/workspace_app/tooling/grant.py` 的 `TRUSTED_KEYS` 並發版。
+
+`TRUSTED_KEYS` 是**列表**，所以輪替金鑰時新舊並存即可：用新的簽，舊的留到它最後一張
+憑證過期為止再刪。
+
+#### 有人要求放寬
+
+1. 對方寄工具給你，你 review 它是不是真的需要那麼大。
+2. 決定要發的話：
+
+```bash
+python -m workspace_app.tooling.grant issue \
+    --tool pdf-extract --max-mb 300 --expires 2026-09-01 \
+    --key /path/you/choose/tool-grant.pem
+```
+
+`--expires` 是**必填**，可以填 `never`——「永不過期」是一個決定，不會因為忘了填而發生。
+
+3. 把印出來的那一行回信給對方，請他存成 repo 根目錄的 `tool-size-grant.token` 並提交。
+
+憑證綁定 `--tool` 的名字（作者 `pyproject.toml` 裡的 `[project].name`），所以它不會被
+別人拿去用。
+
+#### 一件必須知道的事
+
+**憑證發出去之後，在到期之前收不回來。** 對方是離線驗章的，我們事後做什麼都碰不到它。
+
+所以：能給期限就給期限；真的要讓所有憑證立刻失效，唯一的辦法是把 `TRUSTED_KEYS` 裡的
+那把公鑰拿掉並發版（等於輪替金鑰）。
+
+### 15.7 出事時怎麼查
 
 - **某支工具突然不見**：agent 的 prompt 裡會有一段「Tools that are unavailable right now」
   寫著原因。最常見的是 GitLab artifact 過期（作者的 CI 沒設 `expire_in: never`）。

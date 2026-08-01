@@ -174,6 +174,7 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 | **smoke 沒過** | **build 失敗，而且不留下任何 artifact**（免得 CI 把壞的傳上去） |
 | 不是在 builder image 裡 build 的 | 平台拒絕掛載 |
 | `[project.scripts]` 不是剛好一個 / 沒有 `version` | build 失敗 |
+| **bundle 壓縮後超過 150MB** | build 失敗，並列出最重的幾樣；平台上架時也擋 |
 | manifest 裡的名字跟我們登記的不一樣 | 平台拒絕——代表這個網址指到了別支工具 |
 
 還有兩件**不是拒絕、但一定會發生**的事，不知道就會出事：
@@ -182,6 +183,20 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
   請寫成檔案再回一個路徑，不要整包往 stdout 倒。
 - **執行有時間上限。** 預設整體 60 秒、閒置 60 秒（沒有輸出就算閒置）。長時間的工作要嘛
   切小，要嘛持續印進度。
+
+### 體積上限與例外憑證
+
+量的是**壓縮後**的 `tool.tar.gz`，也就是每台 host 實際下載的東西。空模板本身就約 40MB
+（bundle 自帶的 python 直譯器），剩下的額度給你的相依。
+
+只有測試用得到的套件請放 `[dependency-groups] dev`——build 會略過它們（`uv sync
+--no-dev`）；寫在 `[project.dependencies]` 的一律打包。
+
+真的需要更大的額度：把工具寄給平台團隊 review，通過後會收到一行憑證，存成 repo 根目錄的
+`tool-size-grant.token` 並提交。憑證綁定**工具名字**、寫明**放寬到多少**與**到哪天為止**
+（或 `never`），並且跟著 manifest 一起發布，所以平台驗的和你 build 時用的是同一張。
+
+憑證只在超過 150MB 時起作用，所以工具瘦下來之後，憑證過期不會擋到發版。
 
 ## 7. 你自己要顧好的部分
 

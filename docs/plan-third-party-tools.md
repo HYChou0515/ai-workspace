@@ -1,7 +1,7 @@
 # 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上
 
 > Issue: [#674](https://github.com/HYChou0515/ai-workspace/issues/674)。
-> 狀態：**P1–P12 全部實作完成**（見 §7 每個 phase 的核對）。
+> 狀態：**P1–P14 全部實作完成**（見 §7 每個 phase 的核對）。
 
 **一句話**：讓不在我們 repo 裡的工具作者，把工具推上自己的 GitLab、跑我們提供的 CI，
 **下一個開起來的 sandbox 就自動帶上新版**——我們這邊不改 code、不重新部署。
@@ -55,6 +55,7 @@
 | Q16 | 上架前平台要不要先驗一次？ | **要，但是人工執行的指令**（`python -m workspace_app.tooling.verify <url> --name <本地名>`），不是自動閘。貼進 `app.json` 之前跑它 |
 | Q16b | verify 要不要真的把 bundle 跑起來？ | **不要**（實作時改的，P9）：作者的 build 已經在**正確的 base** 裡強制跑過 smoke（Q15），而在維運者的機器上執行陌生人的程式碼是錯的地方、錯的環境、學到的還更少。verify 改做「抓 + 閘門 + 結構比對（bundle 內容是否與 manifest 一致）」 |
 | Q17 | app 開機要不要 resolve 第三方、當 readiness 條件？ | **不要**。開機只做 best-effort 預熱；GitLab 掛掉不能讓 app 起不來（跟第一方 `discover_packages` 的 fail-loud 刻意不同，`__main__.py:149`） |
+| Q18 | bundle 要不要設體積上限？逃生門長什麼樣？ | **要**：壓縮後 150MB（等於作者文件一直在講的數字）。逃生門是**平台簽發的憑證**：線下 review 後簽一行，內含 tool id / 放寬到多少 / 到期日（或 `never`）。作者端與上架閘門跑同一份規則；憑證跟著 manifest 走。**代價**：憑證離線驗章，發出去在到期前收不回來，要全面失效只能輪替金鑰 |
 
 ### Q2 為什麼一定要 builder image，不能是裸腳本
 
@@ -305,7 +306,7 @@ url 指的是「latest」，所以平時會跟著作者走。要**釘回舊版**
 
 ## 7. Phases
 
-> **逐條核對**：`python3 scripts/check_third_party_tools_674.py` —— 45 條可執行檢查，全過。
+> **逐條核對**：`python3 scripts/check_third_party_tools_674.py` —— 60 條可執行檢查，全過。
 > 那份腳本自己也做過變異測試（故意破壞受檢的性質，確認它會變紅）。
 
 > 一個 phase 一個 commit，flat integer。每個 phase 都要有**會紅的新測試**。
@@ -429,6 +430,34 @@ jail 內只看得到這次授權的工具；換 sha 後**下一個** sandbox 拿
 的註解是今天的依據）。
 
 ---
+
+### P13 · dev 相依不再被打包
+
+**✅ 完成**（`tooling/prebuild.py`）。
+
+`uv sync` 預設會裝 `dev` 群組，所以把 pytest 正確放在 `[dependency-groups] dev` 的作者，
+**還是會被打包進去**——我們自己的 `sample-tools/csv-column-summary` 就帶著 pytest 9.0.3。
+作者從自己的檔案看不出這件事，因為他的檔案是對的。
+
+修法是 `uv sync` 補 `--no-dev`。測試分兩層：unit 釘 argv，integration **真的 build 一顆
+bundle 再進去翻**——受測的行為是 uv 的，我們傳的旗標若 uv 不再認得就毫無意義。
+
+### P14 · 體積上限與例外憑證
+
+**✅ 完成**（`tooling/grant.py`、`tooling/builder.py`、`tooling/verify.py`、`tool-builder/Dockerfile`）。
+
+- **規則只有一份**：`grant.check_size`，作者的 build 與我們的 `verify` 都呼叫它。
+- **作者端**：`build-tool` 量壓縮後的 tar.gz，超標時列出 bundle 裡佔比 ≥1% 的最重項目，
+  作者不必猜要砍哪個。那次檢查跑在作者自己的 runner 上，作用是早點發現；閘門是我們這道。
+- **平台端**：`verify` **在抓 bundle 之前**就用 manifest 的 `bundle.size` 判斷——體積寫在
+  manifest 裡就是為了不必下載一 GB 才知道它是一 GB。
+- **憑證**：ed25519，一行可貼進信件；綁 tool id（憑證是公開的，不綁就等於誰都能用）。
+  `TRUSTED_KEYS` 是列表，可輪替。`keygen` 用 `O_EXCL` + `0600` 建私鑰，拒絕覆寫。
+- **真的建一次才發現的設計錯誤**：41MB 的 bundle 帶著一張平台看不懂的憑證，整個 build 失敗——
+  理由和它的體積無關。改成**憑證只在超過預設上限時才被查閱**。
+- builder image 加了 `cryptography`（build path 唯一的第三方 import）。有測試從 import graph
+  推出這份清單並要求 Dockerfile 裝的**恰好等於它**，雙向：少裝會壞在別人的 pipeline，
+  多裝是每個作者 CI 的負擔。
 
 ## 8. 這輪之外
 

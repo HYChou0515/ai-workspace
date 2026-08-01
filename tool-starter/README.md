@@ -187,7 +187,41 @@ workspace），沒掛載的話它會回「檔案不存在」。
 | `uv.lock` 已提交 | `build-tool` |
 | **smoke 通過** | `build-tool`——沒過就**不留下任何 artifact**，CI 想傳也沒得傳 |
 | `[project.scripts]` 剛好一個、且有 `version` | `build-tool` |
+| **bundle 壓縮後 ≦ 150MB** | `build-tool`，以及平台上架時的閘門（見 7b） |
 | 在 builder image 裡 build | 平台掛載前的閘門 |
+
+## 7b. 體積上限：150MB
+
+`build-tool` 量的是**壓縮後**的 `tool.tar.gz`——那是每一台機器實際要下載的東西，也是
+manifest 裡本來就記著的數字。超過就讓 build 紅，並且列出 bundle 裡最重的幾樣，你不用
+自己猜。
+
+空模板本身大約 40MB，幾乎全是 bundle 自帶的 python 直譯器。剩下的額度是給你的相依用的。
+
+最常把額度吃掉的兩種：
+
+- **只有測試用得到的套件。** 放進 `[dependency-groups] dev`，build 會自動略過
+  （`uv sync --no-dev`）。寫在 `[project.dependencies]` 裡的一律會被打包進去。
+- **為了一張圖帶進整套繪圖庫、為了讀一個欄位帶進整套資料科學堆疊。** 先確認執行時
+  真的用得到。
+
+### 真的需要更大的額度
+
+把工具寄給平台團隊 review。通過的話你會收到**一行憑證**，存成 repo 根目錄的
+`tool-size-grant.token` 並提交：
+
+```
+$ cat tool-size-grant.token
+eyJleHBpcmVzIjoiMjAyNi0wOS0wMSIsIm1heF9ieXRlcyI6MzE0NTcyODAwLCJ0b29sIjoi….GkY1srqM…
+```
+
+它會跟著 manifest 一起發布，所以平台驗的和你 build 時用的是同一張。
+
+憑證上寫著三件事：**哪一支工具**、**放寬到多少**、**到哪一天為止**（或 `never`）。
+它綁定工具名字，所以別人的憑證對你沒有作用，你的對別人也一樣。
+
+**憑證只在你超過 150MB 時才起作用。** 工具之後瘦下來的話，就算憑證過期也不會擋到你發版。
+
 
 ## 8. 改東西的時候
 

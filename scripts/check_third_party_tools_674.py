@@ -94,7 +94,9 @@ check(
 check(
     "P3",
     "the CI template pins artifacts against expiry",
-    "expire_in: never" in text("tool-builder/gitlab-ci.example.yml"),
+    # The template moved into the starter folder we hand an author, so it
+    # arrives as a runnable `.gitlab-ci.yml` rather than an example to copy.
+    "expire_in: never" in text("tool-starter/.gitlab-ci.yml"),
 )
 check(
     "P3",
@@ -172,7 +174,9 @@ check(
     "P8",
     "the app resolves once per turn and pins the shas",
     "_external_tools" in text("src/workspace_app/api/turn_context.py")
-    and "SandboxSpec(tools=external.shas or None)" in text("src/workspace_app/api/turn_context.py"),
+    # `or None` was deliberately dropped in e2941027 — an empty mapping was
+    # the second way of spelling "no third-party tools".
+    and "SandboxSpec(tools=external.shas)" in text("src/workspace_app/api/turn_context.py"),
 )
 check(
     "P8",
@@ -265,6 +269,73 @@ check(
     "a root-gated test proves the real permissions",
     "root_owned_and_a_sandbox_cannot_write_it"
     in text("sandbox-host/tests/test_isolated_process_integration.py"),
+)
+
+# ---- P13: dev dependencies stay out of the bundle -------------------------
+pre = text("src/workspace_app/tooling/prebuild.py")
+check("P13", "uv sync is told to leave the dev group out", '"--no-dev",' in pre)
+check(
+    "P13",
+    "a real build proves the bundle is clean, not just the argv",
+    "test_a_dev_only_dependency_never_reaches_the_bundle" in text("tests/tooling/test_prebuild.py"),
+)
+
+# ---- P14: the size limit and its escape hatch -----------------------------
+g = text("src/workspace_app/tooling/grant.py")
+check("P14", "the limit is 150MB on the compressed artifact", "150 * 1024 * 1024" in g)
+check(
+    "P14",
+    "one rule, called by both the build and the gate",
+    "def check_size(" in g
+    and "grant_policy.check_size(" in text("src/workspace_app/tooling/builder.py")
+    and "grant_policy.check_size(" in text("src/workspace_app/tooling/verify.py"),
+)
+check("P14", "certificates are ed25519, and the key list allows rotation", "ed25519" in g and "TRUSTED_KEYS" in g)
+check("P14", "a certificate names one tool", "was issued for" in g)
+check("P14", "an expiry has to be asked for, `never` included", "--expires is required" in g)
+check("P14", "the signing key is created 0600 and never overwritten", "O_EXCL" in g and "0o600" in g)
+check(
+    "P14",
+    "the certificate is only consulted above the default limit",
+    "test_a_lapsed_certificate_does_not_fail_a_tool_that_no_longer_needs_one"
+    in text("tests/tooling/test_grant.py"),
+)
+check(
+    "P14",
+    "the refusal names what accounts for the weight",
+    "def _heaviest(" in text("src/workspace_app/tooling/builder.py"),
+)
+check(
+    "P14",
+    "the gate refuses before downloading the bundle",
+    "test_an_oversized_artifact_is_refused_without_downloading_it" in text("tests/tooling/test_verify.py"),
+)
+check(
+    "P14",
+    "the certificate travels in the manifest, both copies of the contract",
+    'grant=body.get("grant")' in text("src/workspace_app/tooling/artifact.py")
+    and 'grant=body.get("grant")' in text("sandbox-host/src/sandbox_host/artifact.py"),
+)
+check(
+    "P14",
+    "the builder image installs exactly what the build path imports",
+    "uv pip install --system --no-cache cryptography" in text("tool-builder/Dockerfile")
+    and "test_the_builder_image_installs_exactly_what_the_build_path_imports"
+    in text("tests/tooling/test_builder_image.py"),
+)
+check(
+    "P14",
+    "authors are told the limit and how to ask for more",
+    "150MB" in text("tool-starter/README.md")
+    and "tool-size-grant.token" in text("tool-starter/README.md")
+    and "tool-size-grant.token" in text("tool-starter/CLAUDE.md")
+    and "tool-size-grant.token" in text("docs/tool-authoring.md"),
+)
+check(
+    "P14",
+    "the platform team is told how to issue one, and that it cannot be recalled",
+    "grant keygen" in text("docs/deployment.md")
+    and "收不回來" in text("docs/deployment.md"),
 )
 
 # ---- report ----------------------------------------------------------------
