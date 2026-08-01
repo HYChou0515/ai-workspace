@@ -55,7 +55,7 @@
 | Q16 | 上架前平台要不要先驗一次？ | **要，但是人工執行的指令**（`python -m workspace_app.tooling.verify <url> --name <本地名>`），不是自動閘。貼進 `app.json` 之前跑它 |
 | Q16b | verify 要不要真的把 bundle 跑起來？ | **不要**（實作時改的，P9）：作者的 build 已經在**正確的 base** 裡強制跑過 smoke（Q15），而在維運者的機器上執行陌生人的程式碼是錯的地方、錯的環境、學到的還更少。verify 改做「抓 + 閘門 + 結構比對（bundle 內容是否與 manifest 一致）」 |
 | Q17 | app 開機要不要 resolve 第三方、當 readiness 條件？ | **不要**。開機只做 best-effort 預熱；GitLab 掛掉不能讓 app 起不來（跟第一方 `discover_packages` 的 fail-loud 刻意不同，`__main__.py:149`） |
-| Q18 | bundle 要不要設體積上限？逃生門長什麼樣？ | **要**：壓縮後 150MB（等於作者文件一直在講的數字）。逃生門是**平台簽發的憑證**：線下 review 後簽一行，內含 tool id / 放寬到多少 / 到期日（或 `never`）。作者端與上架閘門跑同一份規則；憑證跟著 manifest 走。**代價**：憑證離線驗章，發出去在到期前收不回來，要全面失效只能輪替金鑰 |
+| Q18 | bundle 要不要設體積上限？逃生門長什麼樣？ | **要**：壓縮後 150MB（等於作者文件一直在講的數字）。逃生門是**平台簽發的憑證**：線下 review 後簽一行，內含 tool id / 放寬到多少 / 到期日（或 `never`）。作者端與上架閘門跑同一份規則；憑證跟著 manifest 走。**代價**：憑證離線驗章，發出去在到期前收不回來，要全面失效只能輪替金鑰。**只管第三方**：第一方 `sample-tools`（`scripts/prebuild_tools.py` 直接呼叫 `build_package`，不經過 `build_artifact`）刻意不納入——這是決定，不是漏掉 |
 
 ### Q2 為什麼一定要 builder image，不能是裸腳本
 
