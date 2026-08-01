@@ -1,0 +1,223 @@
+# Sandbox 資源額度：依 App 設定 + 每人總量
+
+依 **App 種類**設定 sandbox 資源(cpu / memory / disk quota),並限制**一個人跨 App items 總共能用多少**。
+
+本文件是**對帳用的**:每個 phase 都寫「驗收條件」而不是「做了什麼」——條件是「怎麼證明它真的生效」。
+
+相關:issue #687(`owner` 鎖定 + 轉移流程,**本功能具有強制力的前提**)、PR #688(P1+P2)。
+
+---
+
+## 1. 定案的規則
+
+八輪 grill 後逐題拍板的結果。
+
+### 1.1 兩種資源,兩套機制
+
+|  | disk | cpu / memory |
+|---|---|---|
+| 性質 | **存量** —— 持久,sandbox 死了還在,可加總 | **流量** —— 只在 sandbox 活著時存在,回收後歸零 |
+| 機制 | 寫入時檢查,**只擋成長** | 開新 sandbox 時的**准入控制** |
+| 帳本 | 對 owner 的工作區加總,需要耐久記錄 | 由「探得到活著」推導 |
+
+「只擋成長」不是效能取捨而是**可用性要求**:縮小、同大小覆寫、刪除永遠放行,否則一個人一旦滿了就再也清不回來。
+
+cpu/mem 的帳**不能**是 `create` 加一、`kill` 減一的計數器:sandbox 會被閒置回收、pod 會猝死、reap 會漏掉,只要漏一次那格額度就永久蒸發,使用者明明零個活著的 sandbox 卻被鎖住。它必須綁活體憑證(心跳 / 租約 / 探活),盤點以「探得到活著」為準——這跟 #366 的 `_alive` 探活、`api/sandbox_activity.py` 的心跳是同一個做法,不是新發明。
+
+### 1.2 債務人:item 的 `owner` 欄位
+
+disk 和 cpu/mem **共用同一條歸屬規則**,不分兩套。item 預設 private,分享出去是 owner 自己的選擇,成本就該是他的;有特殊需求走個人額度擴充,並且**要 review 那個行為**。
+
+> ⚠️ **前提**:`owner` 目前是**沒有任何 checker 守著的普通 Tier-1 字串欄位**,任何有寫入權的人一個 PATCH 就能改成任何人。而且它**不是**權限擁有者(權限走 specstar 的 `created_by`,見 `api/item_routes.py:318`、`perm/scope.py:67`),所以設給別人**不會失去任何控制權**——item 照樣是你的,只有帳單跑到對方頭上。
+>
+> 因此 **issue #687 是本功能真正具有強制力的前提**。在它落地前,額度從第一天起就是可繞過的。這是知情的取捨(額度先做、鎖定後補),不是疏漏。
+
+### 1.3 撞到上限 = 直接拒絕
+
+不自動幫使用者讓位(不 LRU 回收他自己的 sandbox)。代價是必須配一個**「我的資源使用」畫面**(P8):cpu/mem 可**關閉**、disk 可**刪除**。沒有那個畫面,「直接拒絕」是缺一半的決定——被擋的人不知道要去關什麼。
+
+### 1.4 擋在 turn 送出前
+
+| 入口點 | 程式位置 | 要開新 sandbox 時 | disk |
+|---|---|---|---|
+| 送出聊天訊息 | `api/chat_send.py:send` | ✅ 擋(使用者訊息存進去之前) | 已有:workspace 滿就拒絕整輪 |
+| turn 開頭的預熱 | `api/turns.py:746` | ❌ **不能當閘門** —— 這行是 `suppress(Exception)`,擋了會被吞掉、turn 照跑 | — |
+| agent 中途第一次呼叫 exec | `agent/context.py:471` | ⚠️ 這時才擋 = 那一輪 turn 已經燒掉 | — |
+| Terminal 面板 | `POST /a/{slug}/items/{item_id}/exec` | ✅ 擋,回 507 | — |
+| Workflow 執行 | `api/workflow_exec.py:243` | ✅ 擋 | 已有 `ensure_room_for` |
+| 開 item / 瀏覽 / 上傳檔案 | 走 filestore,不碰 sandbox | 不受影響 | 已有 `_ensure_headroom` |
+
+**只有「要開新的」才檢查**:item 已經有活著的 sandbox 就直接放行,那一格他早就佔著了。
+
+排程觸發的 headless workflow 一樣拒絕,但要留**可見的失敗紀錄**——定時任務靜靜沒跑比擋下來更危險。
+
+### 1.5 設定形狀
+
+app.json 宣告胃口,config.yaml 給預設與天花板(k8s 的 Pod requests × namespace LimitRange 分工):
+
+```jsonc
+// apps/<slug>/app.json —— 每個欄位都可省略
+"resources": { "cpu": 2, "memory": "2G", "disk": "10G" }
+```
+
+```yaml
+resources:
+  per_app:
+    default: { cpu: 1, memory: 512M, disk: 20G }
+    max:     { cpu: 4, memory: 4G,   disk: 50G }   # 超過 → 開機失敗
+  per_user:
+    count: 10      # 同時活著的 sandbox
+    cpu: 0         # 那些 sandbox 的核心數總和(0 = 不限)
+    memory: ""
+    disk: 200G     # 名下所有 item 的工作區總和
+```
+
+三層解析,**每個維度各自往下掉**:
+
+```
+app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / filestore.workspace_quota
+```
+
+最底層是相容性保證:什麼都沒宣告的 App、什麼都沒設定的部署,解析出來就是**今天的數字**。
+
+天花板檢查的是**解析後**的值,所以把過大的數字從 app.json 搬到 `per_app.default` 也躲不掉。超過一律**開機失敗並指名是哪個 App**,不靜默截斷——設定寫 4 cores 而 pod 只給 2,只會在幾個月後變成一個沒人聯想得到設定的效能 bug。
+
+`per_user` 是 k8s `ResourceQuota` 形狀的四個維度,0 = 不限;全站預設 + **可逐人覆寫**。
+
+---
+
+## 2. Phases
+
+### P1 — 宣告與設定 ✅ 已完成(PR #688)
+
+**交付** app.json 的 `resources` 區塊;config 的 `resources.per_app.{default,max}` 與 `resources.per_user`;三層解析;開機天花板。無行為改變。
+
+**驗收**
+
+1. yaml 寫 `resources:` 真的進到 `Settings`(不是只被 whitelist 放行卻沒人建構)
+2. 三個既有 App 在預設 config 下解析 = 今天的數字
+3. 天花板調到 1 core → **開機失敗,且訊息裡有 App 名字**
+4. `per_app.default` 超過自己的 `max` 也要失敗(不能靠搬位置繞過)
+5. `disk: "0"` 是「無上限」會停止往下掉;`cpu: 0` 是「未指定」會繼續往下掉(刻意的不對稱,零核心不是任何人的本意)
+
+**部署** 無。
+
+### P2 — 讓 cpu/memory 真的生效 ✅ 已完成(PR #688)
+
+**交付** `SandboxSpec` 帶 `cpu_cores`/`memory_bytes`/`pids_max`;`IsolatedProcessSandbox` 寫進該 item 的 cgroup;registry 改 `spec_for(item)`;`create_app(app_resources=)` 由 `__main__` 注入。
+
+**驗收**
+
+1. 讀 cgroup 的 `memory.max` / `cpu.max` 檔案內容 = spec 給的值
+2. spec 只講 memory 時,cpu / pids 仍是部署的值(逐維度回退)
+3. registry 交給 `create` 的 spec **逐 item 不同**
+4. `memory_bytes=0` 寫進去是 `max`;`None` 才是繼承部署值
+
+**部署** 無 —— ⚠️ 但**只有 local backend 生效**。
+
+**設計註記** spec 層 `None` = 未指定、`0` = 明確無上限,**兩者不能合併**:合併的話,一個刻意解除限制的 App 會反過來繼承部署的限制。
+
+### P3 — http / sandbox-host
+
+**交付** `POST /sandboxes` 的 payload 帶資源;sandbox-host 收到就用、沒收到吃自己的 `SANDBOX_HOST_*`;host 那份 `isolated_process.py` 同步改。
+
+**驗收**
+
+1. 用 **contract double** 模擬 host 端契約 —— 只斷言「我方有送」對回歸免疫,不算數
+2. host 側測試證明「有帶就用」與「沒帶就吃 env」**兩條路都對**
+3. 舊版 host 收到多出來的欄位不會壞
+
+**部署** ⚠️ **必須重新部署 sandbox-host**,否則正式環境完全沒效果。
+
+**地雷** `sandbox-host/` 是獨立專案(自己的 pyproject / uv.lock / CI),**不能 import `workspace_app`**——共用的小工具要各留一份。
+
+### P4 — per-app disk quota
+
+**交付** `files/facade.py` 的上限從單一 scalar 改成「該 item 所屬 App 的值」;`create_app(workspace_quota=)` 退成 fallback。
+
+**驗收**
+
+1. 兩個 App 各給不同 disk,**同樣大小**的寫入一個過、一個回 507
+2. 「只擋成長」規則原封不動 —— 縮小 / 同大小覆寫 / 刪除在超標時**仍要過**
+3. `ensure_room_for` 的整批閘門(資料夾複製、search/replace、staging 一次執行的輸入)走**同一個**值,不能只改單檔那條路
+
+**部署** 無。
+
+**地雷** 這是所有寫入共用的節流點(#245 / #538)。改錯的後果是滿的工作區連清空間都做不到。
+
+### P5 — cpu/mem 帳本 + 准入閘門
+
+**交付** 活體帳(綁 `api/sandbox_activity.py` 的心跳 / 探活)、按 owner 統計;閘門裝在 `chat_send.send`、`workflow_exec`、terminal `POST /exec`;507 + 明確錯誤碼。
+
+**驗收**
+
+1. 超過 `count` 時,新 item 的 turn 在**使用者訊息存進去之前**就被拒(不是 agent 中途才發現)
+2. **已經有活 sandbox 的 item 照樣能用**
+3. 殺掉一個 sandbox 後額度**自己回來**,全程沒有任何 decrement 呼叫
+4. 模擬 pod 猝死(完全不呼叫 `kill`)後,額度仍然回得來
+
+**地雷**
+
+- `api/turns.py:746` 的預熱是 `suppress(Exception)`,**不能當閘門**
+- `owner` 目前不在任何 App 的 `INDEXED_FIELDS`。它是 Tier-1 平台結構欄位,應該由 `apps/registry.py` 的 registrar **一律補上**,不能靠每個 App 自己記得,否則新 App 會漏
+- ⚠️ 部署後**必須跑 `POST /{model}/migrate/execute`**,否則舊 item 對 `owner` 述詞是隱形的 → 額度算少(同 #668 教訓)
+
+### P6 — disk 帳本 + per-user 總量
+
+**交付** measurement 落地成一列(item, owner, bytes, measured_at,索引 owner),來源是現成的 `SandboxSync.on_measured → record_measurement`(目前只放記憶體);`_ensure_headroom` 加第二層檢查。
+
+**驗收**
+
+1. 同一人名下**兩個不同 App** 的 item 加總超標 → 被擋
+2. 超標狀態下**刪除永遠成功**(能自己清回來)
+3. 第一次量測前會低估 —— 這個視窗要有測試釘住,而不是假裝不存在
+
+**地雷** 不能從耐久快照反推大小(#538 踩過:快照是刻意 additive 的,會漏掉剛建的、又繼續對已刪的收費)。這裡要的是把**已經量到**的數字存下來供加總。
+
+**已知取捨** per-user 總量必然是**略微過期**的數字(以最後一次量測為準),即時加總所有 item 太貴。所以 per-user 那層是近似的,可能短暫超標一點;**per-item 那層仍然即時精準**。
+
+### P7 — per-user 覆寫 + admin 入口
+
+**交付** specstar model(id = user id)、兩層讀取(覆寫 ◇ 全站預設)、admin 設定入口。
+
+**驗收**
+
+1. 改某人的額度,**只有他**改變
+2. 沒有覆寫記錄 = 吃全站預設
+3. 改完**不用重啟**就生效
+
+### P8 — 「我的資源使用」畫面 ← 這一關才叫做完
+
+**交付** 用量 / 上限;cpu/mem 半列出活著的執行環境 + **關閉**鈕;disk 半列出 item 用量 + **刪除**鈕。
+
+**驗收** 親自按過一輪:**被 507 擋住 → 進畫面 → 關掉 / 刪掉 → 同一個操作重試成功**。
+
+少了這一關,§1.3 的「直接拒絕」是缺一半的決定。
+
+**註** 共用情境下「關閉」是**真的把 sandbox 關掉**,不是只把自己從帳上移除——機器資源只有一份,只移除帳面等於帳是假的。
+
+### P9 — 排程 workflow 的失敗紀錄
+
+**驗收** 定時觸發撞到額度 → 隔天在畫面上**看得到**「因額度不足未執行」,不是靜靜消失。
+
+---
+
+## 3. 最後對帳
+
+1. 兩個 App 設不同 cpu / mem / disk,**在 http 後端**實測有差 ← P3 沒做這條就是假的
+2. 一個人開到上限被擋,且擋在 **turn 送出前**
+3. 被擋的人能**自己**在畫面上解決,不用找人
+4. 額度不會因為 pod 猝死 / reap 漏掉而**永久蒸發**
+5. app.json 超過部署天花板 → **開機失敗並指名 App**
+6. 什麼都不設的既有部署,行為**完全不變**
+7. ⚠️ **#687 沒做之前,以上全部可被繞過**(改 `owner` 就把帳丟給別人)
+
+**不在本計畫範圍**:owner 轉移 UI(= #687)。
+
+**建議順序** P4 → P5 → P6 → P8 → P7 → P3 → P9。P4 補完「依 App 設定」的最後一維且不用重新部署;P5/P6/P8 是最短的「看得見」路徑;P3 要決定何時重新部署 sandbox-host,可以晚做,但**不做就等於正式環境沒上**。
+
+---
+
+## 4. 順手發現(未在本計畫處理)
+
+`api/registry.py:_acquire` 建 sandbox 時用的是 registry 自己的 spec,而 #674 每回合解析出來的 `tools` shas 掛在 `AgentToolContext.sandbox_spec` 上,那個 spec 只在 `ensure_sandbox_via is None` 的分支才會被用到。若正式路徑的第三方工具是靠 host 自己 resolve 掛載的,那沒問題;若不是,那條路徑值得單獨看一眼。
