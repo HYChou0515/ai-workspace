@@ -212,6 +212,47 @@
 #   gc_t1: 1h
 #   gc_t2: 24h
 
+# ─── resources (per-App + per-person limits) ───── [OPT] ────────────
+# How much ONE item may consume, and how much ONE person may hold across
+# every item they own. The whole section is optional: leave it out and each
+# App falls through to `sandbox.isolation.*` (cpu/memory) and
+# `filestore.workspace_quota` (disk) exactly as it does today, with no
+# per-person limit at all.
+#
+# THREE layers, most specific first:
+#   apps/<slug>/app.json `resources`  ◇  per_app.default  ◇  the knobs above
+# Each dimension falls through on its own, so an App that only states memory
+# keeps the deploy's cpu and disk.
+#
+# `per_app.max` is the deploy's ceiling (k8s LimitRange). An App resolving
+# above it FAILS THE BOOT and names itself — never a silent trim, because a
+# config that reads "4 cores" while the pod hands out 2 is a lie you only
+# discover from a performance bug months later.
+#
+# 0 / "" / "max" all mean "no limit" in every dimension.
+# resources:
+#   per_app:
+#     default:
+#       cpu: 1          # cores
+#       memory: 512M
+#       disk: 20G       # ONE item's workspace quota
+#     max:
+#       cpu: 4
+#       memory: 4G
+#       disk: 50G
+#   # Charged to the item's `owner` field. NOTE (#687): that field is today
+#   # writable by anyone with write access, so these limits are only as strong
+#   # as that issue's lockdown + consent-based transfer. count/cpu/memory bound
+#   # LIVE sandboxes (reclaimed on reap, so the tally is derived from what is
+#   # provably alive — never a counter someone must remember to decrement);
+#   # `disk` is a sum over the owner's workspaces and blocks only GROWTH, so
+#   # someone at their cap can always delete their way back under it.
+#   per_user:
+#     count: 10         # concurrently live sandboxes
+#     cpu: 0            # summed cores of those sandboxes (0 = unlimited)
+#     memory: ""        # summed memory of those sandboxes
+#     disk: 200G        # summed workspace bytes across every item they own
+
 # ─── runner (RCA agent loop) ──────────────────── [OPT] ─────────────
 # runner:
 #   max_retries: 2

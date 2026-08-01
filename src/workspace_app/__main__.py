@@ -56,6 +56,7 @@ from workspace_app.factories import (
 from workspace_app.monitor import SpecstarMonitor
 from workspace_app.observability.boot import boot_step
 from workspace_app.observability.setup import install_llm_logging
+from workspace_app.quota.limits import validate_discovered_apps
 from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
 from workspace_app.tooling.registry import discover_packages
 
@@ -108,6 +109,11 @@ def main() -> None:
     # masked) and write the full real-value copy next to config.yaml (0600).
     # Best-effort — never blocks boot.
     emit_config_dump(settings, provenance, config_dir=config_dir, stream=sys.stdout)
+    # Resource limits: an app.json asking for more than `resources.per_app.max`
+    # is a config error, and it has to surface HERE — a ceiling that silently
+    # trimmed the value would leave the dump above printing one number while the
+    # pod hands out another. Cheap (a manifest decode per App) and pure.
+    validate_discovered_apps(settings)
     # Single current-user seam, threaded into BOTH get_spec (so specstar stamps
     # `created_by`) and create_app (access layer + KB doc-id minting) so they
     # never diverge — a divergence silently breaks KB cross-ref links for any

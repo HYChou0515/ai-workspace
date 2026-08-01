@@ -31,6 +31,33 @@ class FunctionToggles(Struct):
     terminal: bool = True  # human shell pane (needs sandbox)
 
 
+class AppResources(Struct):
+    """What ONE item of this App is allowed to consume — the App's own statement
+    of its appetite, the way a k8s Pod states ``requests``/``limits``.
+
+    Named ``resources`` rather than ``sandbox`` in app.json for two reasons: the
+    manifest already has a ``function.sandbox`` boolean (a capability gate — a
+    different thing entirely), and ``disk`` bounds the item's *workspace*, which
+    outlives every sandbox it is ever mirrored into.
+
+    A data-analysis App genuinely needs more memory than a chat App, and that
+    fact belongs with the App, not in a deploy-side table keyed by slug (which
+    a new App would have to remember to edit). The deploy still has the last
+    word: ``resources.per_app.max`` in config.yaml is a ceiling, and a value
+    above it fails at BOOT rather than being trimmed behind the operator's back.
+
+    Every field is optional and falls through on its own — an App that only
+    cares about memory does not restate cpu/disk. Absent ⇒ the deploy's
+    ``resources.per_app.default``, then today's knobs
+    (``sandbox.isolation.*`` / ``filestore.workspace_quota``), so an App that
+    declares nothing runs exactly as it does today.
+    """
+
+    cpu: float = 0.0  # cores; 0 ⇒ not declared
+    memory: str = ""  # "512M" / "2G"; "" ⇒ not declared
+    disk: str = ""  # workspace quota for ONE item; "" ⇒ not declared
+
+
 class PickerEntry(Struct):
     """One entry in the App's model picker — references a config.yaml preset by
     name (model + creds) and gives it a display ``name``."""
@@ -164,6 +191,9 @@ class AppManifest(Struct):
     field_styles: dict[str, dict[str, str]] = field(default_factory=dict)
     lifecycle: Lifecycle | None = None
     default_profile: str = "default"
+    # What one item of this App may consume. Absent ⇒ the deploy's defaults;
+    # see `AppResources` and `quota.limits.resolve_app_limits`.
+    resources: AppResources | None = None
 
 
 def load_app_manifest(slug: str) -> AppManifest:
