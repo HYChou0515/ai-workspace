@@ -35,6 +35,7 @@ import csv
 import json
 from dataclasses import dataclass
 from datetime import date
+from urllib.parse import unquote, urlsplit
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -84,6 +85,10 @@ _NEVER = "never"
 #: has been issued.
 REGISTRY_FILE = "tool-registry.csv"
 
+#: What a manifest URL ends in — a `--source` ending here is one artifact,
+#: not the place they live.
+MANIFEST_BASENAME = "tool.manifest.json"
+
 
 class GrantError(Exception):
     """This certificate cannot be used, and the message says why.
@@ -101,6 +106,17 @@ class Grant:
     #: comes from the certificate rather than from what the author called
     #: their command, so two authors may both ship a `data-fetch`.
     tool: str
+    #: Where this tool's artifacts live — a URL PREFIX, not one artifact.
+    #:
+    #: Certificates are public: they ride in manifests anyone can read. Bound
+    #: to a name alone, one could be lifted out of a published manifest and
+    #: used to be admitted under that name from somewhere else entirely.
+    #:
+    #: A prefix rather than the manifest URL because rolling back means
+    #: pointing at one job's artifact instead of the ref's latest — a
+    #: different URL under the same project. Binding to the whole URL would
+    #: refuse exactly the move an operator makes when something is wrong.
+    source: str
     max_bytes: int
     #: A PUBLISHING deadline on `max_bytes` — "you are in a hurry, ship it,
     #: but be under the limit within a month". ``None`` when nothing was
@@ -153,6 +169,7 @@ def issue(grant: Grant, *, private_key: bytes) -> str:
     payload = json.dumps(
         {
             "tool": grant.tool,
+            "source": grant.source,
             "max_bytes": grant.max_bytes,
             "publish_until": (grant.publish_until.isoformat() if grant.publish_until else _NEVER),
         },
@@ -205,6 +222,7 @@ def verify(token: str, *, public_keys: dict[str, str], tool: str) -> Grant:
         body = json.loads(payload)
         granted = Grant(
             tool=body["tool"],
+            source=body["source"],
             max_bytes=int(body["max_bytes"]),
             publish_until=(
                 None
@@ -229,6 +247,7 @@ def verify(token: str, *, public_keys: dict[str, str], tool: str) -> Grant:
 def admit(
     *,
     tool: str,
+    url: str,
     token: str | None,
     public_keys: dict[str, str] | None = None,
 ) -> str | None:
@@ -244,13 +263,21 @@ def admit(
             "issued by the platform team; ask them to review it."
         )
     try:
-        verify(
+        granted = verify(
             token,
             public_keys=TRUSTED_KEYS if public_keys is None else public_keys,
             tool=tool,
         )
     except GrantError as exc:
         return str(exc)
+    # Compared with percent-encoding undone on both sides. GitLab's API form
+    # writes the project as `rca%2Fwafer-history` and its web form as
+    # `rca/wafer-history`; the same place written two ways has to match.
+    if not unquote(url).startswith(unquote(granted.source)):
+        return (
+            f"the certificate for {tool!r} is good for artifacts under "
+            f"{granted.source}, and this one came from {url}"
+        )
     return None
 
 
@@ -312,7 +339,7 @@ def check_size(
 
 _USAGE = """usage:
   python -m workspace_app.tooling.grant keygen --key <path> --as <handle>
-  python -m workspace_app.tooling.grant issue --tool <name> --key <path>
+  python -m workspace_app.tooling.grant issue --tool <name> --source <url prefix> --key <path>
       [--registry <path to tool-registry.csv>]
       [--max-mb <n> --publish-until <YYYY-MM-DD|never>]  raise the size limit,
                                                         with a deadline to fix it"""
@@ -388,6 +415,34 @@ def _issue(flags: dict[str, str], out, err) -> int:
         )
         return 2
 
+    if "--source" not in flags:
+        print(
+            "--source is required: the URL prefix this tool's artifacts live under, "
+            "e.g. https://gitlab.example/api/v4/projects/rca%2Fwafer-history/ . A "
+            "certificate is public, so without it one can be copied out of a "
+            "published manifest and used from somewhere else.",
+            file=err,
+        )
+        return 2
+    source = flags["--source"]
+    if MANIFEST_BASENAME in source:
+        print(
+            f"--source is a prefix, not one artifact: {source} names a single "
+            "manifest, so rolling back to an older build — which is a different "
+            "URL under the same project — would be refused. Cut it back to the "
+            "project.",
+            file=err,
+        )
+        return 2
+    if urlsplit(source).path.strip("/") == "":
+        print(
+            f"--source names a server, not a place on it: {source} would admit "
+            "anything published anywhere on that host under this name. Include "
+            "the project path.",
+            file=err,
+        )
+        return 2
+
     publish_until = _a_date(flags.get("--publish-until"))
     tool = flags["--tool"]
 
@@ -425,6 +480,7 @@ def _issue(flags: dict[str, str], out, err) -> int:
     megabytes = int(flags["--max-mb"]) if "--max-mb" in flags else DEFAULT_MAX_BYTES // 1024 // 1024
     grant = Grant(
         tool=tool,
+        source=source,
         max_bytes=megabytes * 1024 * 1024,
         publish_until=publish_until,
     )

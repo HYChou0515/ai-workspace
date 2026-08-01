@@ -20,6 +20,8 @@ import pytest
 
 from workspace_app.tooling.verify import VerifyFailed, verify_artifact
 
+_SOURCE = "https://gitlab.example/raw/"
+
 _BUILDER = "registry.example/tool-builder@sha256:beef"
 _MANIFEST_URL = "https://gitlab.example/raw/dist/tool.manifest.json?job=build-tool"
 
@@ -38,7 +40,7 @@ def _certify(tool: str = "wafer-history", max_bytes: int | None = None, **kw) ->
     # The ordinary limit by default, read when the certificate is made so a
     # test that shrinks it gets a certificate that agrees.
     ceiling = grant_mod.DEFAULT_MAX_BYTES if max_bytes is None else max_bytes
-    return issue(Grant(tool=tool, max_bytes=ceiling, **kw), private_key=_PRIVATE)
+    return issue(Grant(source=_SOURCE, tool=tool, max_bytes=ceiling, **kw), private_key=_PRIVATE)
 
 
 @pytest.fixture(autouse=True)
@@ -338,7 +340,8 @@ def _token(private, *, tool="wafer-history", max_bytes=10_000_000, publish_until
     from workspace_app.tooling.grant import Grant, issue
 
     return issue(
-        Grant(tool=tool, max_bytes=max_bytes, publish_until=publish_until), private_key=private
+        Grant(source=_SOURCE, tool=tool, max_bytes=max_bytes, publish_until=publish_until),
+        private_key=private,
     )
 
 

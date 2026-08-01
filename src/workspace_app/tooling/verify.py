@@ -114,6 +114,7 @@ def verify_artifact(
     # is what says which tool this is.
     refusal = grant_policy.admit(
         tool=expected_name,
+        url=manifest_url,
         token=manifest.grant,
         public_keys=grant_policy.TRUSTED_KEYS,
     )

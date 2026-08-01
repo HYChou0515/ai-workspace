@@ -14,7 +14,10 @@ from datetime import date
 
 import pytest
 
+
 from sandbox_host import grant as grant_mod
+
+_SOURCE = "https://gitlab.example/api/v4/projects/7/"
 
 _PRIVATE, _PUBLIC = grant_mod.keypair()
 
@@ -22,7 +25,9 @@ _PRIVATE, _PUBLIC = grant_mod.keypair()
 def certify(tool: str, *, max_mb: int = 150, expires: date | None = None) -> str:
     """A certificate for `tool`, signed by the key the tests trust."""
     return grant_mod.issue(
-        grant_mod.Grant(tool=tool, max_bytes=max_mb * 1024 * 1024, publish_until=expires),
+        grant_mod.Grant(
+            source=_SOURCE, tool=tool, max_bytes=max_mb * 1024 * 1024, publish_until=expires
+        ),
         private_key=_PRIVATE,
     )
 

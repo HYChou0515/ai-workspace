@@ -35,6 +35,8 @@ from workspace_app.tooling.builder import (
     smoke,
 )
 
+_SOURCE = "https://gitlab.example/api/v4/projects/rca%2Fwafer-history/"
+
 _BUILDER = "registry.example/tool-builder@sha256:beef"
 
 
@@ -552,7 +554,7 @@ def _grant(private, *, tool="wafer-history", mb=1, publish_until=None):
     from workspace_app.tooling.grant import Grant, issue
 
     return issue(
-        Grant(tool=tool, max_bytes=mb * 1024 * 1024, publish_until=publish_until),
+        Grant(source=_SOURCE, tool=tool, max_bytes=mb * 1024 * 1024, publish_until=publish_until),
         private_key=private,
     )
 
