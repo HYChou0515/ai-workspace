@@ -37,9 +37,15 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY sandbox-host/src/ ./src/
 RUN uv sync --frozen --no-dev
 
-# Bundles land here, keyed by sha. Mount a volume: that is what makes the
-# download a once-per-version cost rather than a once-per-start one.
-VOLUME /cache
+# Bundles land here, keyed by sha. Mounting a named volume is what makes the
+# download a once-per-version cost rather than a once-per-start one; running
+# without one works too and simply fetches every start.
+#
+# Deliberately NOT declared as a VOLUME. That would hand every unmounted run
+# an anonymous volume, which `--rm` cleans up and anything else leaves behind
+# — one orphan holding a whole unpacked bundle per start, surviving even
+# `docker rm`. Left as an ordinary directory, an unmounted cache lives in the
+# container's own layer and goes when the container does.
 
 # Tools resolve relative paths against the working directory, exactly as they
 # do on the platform, where it is the user's workspace. Mount the project here.

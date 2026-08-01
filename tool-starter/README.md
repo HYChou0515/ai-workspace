@@ -167,13 +167,17 @@ job**。平台團隊發一顆 **runner image**，任何有 docker 的工程師�
 
 - `-v ${PWD}:/work` —— 你的工具把路徑當成相對於工作目錄（平台上就是使用者的 workspace），
   沒掛載的話它會回「檔案不存在」。
-- `-v mcp-tools:/cache` —— bundle 依 sha 存在這裡。第一次要抓，之後直接命中。
-  用 **named volume**（就是這樣寫），不要換成主機目錄:容器以 root 執行，bind mount
+- `-v mcp-tools:/cache` —— **可選**。掛了，bundle 依 sha 存在這裡，第一次抓、之後命中;
+  不掛，每次啟動都重抓一次（會慢，但不留任何東西在機器上）。
+  要掛就用 **named volume**（就是這樣寫），不要換成主機目錄:容器以 root 執行，bind mount
   會讓快取變成 root 所有，之後你自己刪不掉。named volume 用 `docker volume rm` 清即可。
 - `-e TOOL_ARTIFACT_TOKEN` —— 讀 artifact 用的 token（私有 GitLab 才需要）。
 
 **工程師會自動吃到你的新版**:runner 每次啟動都會看一次 manifest，sha 變了就抓新的。
 和平台「下一個 sandbox 就是新版」是同一個性質。
+
+所以**掛快取不會讓他們用到舊版**——每次啟動都還是會問一次 manifest，快取只是省下「已經有的
+位元組再抓一遍」。掛與不掛的差別是磁碟換頻寬，不是新舊。
 
 而且它拿到的 bundle 和平台拿到的是**同一份、經過同樣檢查的位元組**——同一段 resolve、
 同樣的 builder 閘門、同樣的 sha 驗證。

@@ -652,6 +652,10 @@ docker build -f sandbox-host/mcp-runner.Dockerfile \
 - **bundle 不會被存第二份。** artifact store 裡已經有一份，runner 依 sha 存進
   `mcp-tools` volume，第二次啟動就命中。以前的做法是每支工具烤一顆 image，等於把同樣的
   位元組再存一遍（每支 × 每版）。
+- **快取是可選的。** 不掛 `/cache` 就每次啟動重抓一次，一樣能跑，機器上不留東西。
+  掛與不掛的差別是磁碟換頻寬,**不是新舊**——兩種模式每次啟動都會問一次 manifest。
+  映像刻意不宣告 `VOLUME /cache`:那會讓沒掛載的每一次執行都拿到一個匿名 volume，
+  只有 `--rm` 會清掉,其餘情況每跑一次就留一個裝著整份解開 bundle 的孤兒。
 - **它跑的是和平台同一段 `resolve`。** 同樣的 builder 閘門、同樣的 sha 驗證、同樣的
   「artifact 過期」提示。烤進 image 的做法在執行時**什麼都不驗**——複製進去的是什麼就跑什麼。
 - **新版自動生效**,和「下一個 sandbox 就是新版」同一個性質。

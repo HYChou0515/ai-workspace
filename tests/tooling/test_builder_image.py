@@ -137,6 +137,18 @@ def test_the_mcp_runner_is_built_on_the_base_the_bundles_expect() -> None:
     assert runner == _bases(_REPO / "tool-builder" / "Dockerfile")[-1]
 
 
+def test_the_runner_leaves_no_orphan_volume_behind_when_no_cache_is_mounted() -> None:
+    """Running without a cache mount is a supported choice — it fetches every
+    start and keeps nothing. Declaring /cache as a VOLUME would quietly break
+    that: docker hands each unmounted run an anonymous volume holding a whole
+    unpacked bundle, and only `--rm` ever removes one.
+
+    Measured, not assumed: two runs without `--rm` left two orphans behind."""
+    text = (_REPO / "sandbox-host" / "mcp-runner.Dockerfile").read_text("utf-8")
+
+    assert not re.search(r"^VOLUME\b", text, re.MULTILINE)
+
+
 def test_the_ci_template_pins_artifacts_against_expiry() -> None:
     # R5. GitLab expires CI artifacts after ~30 days by default. Once the URL
     # 404s, hosts that already cached the tool limp on their copy while every
