@@ -341,3 +341,34 @@ def test_the_engineer_facing_setup_mounts_their_working_directory() -> None:
 
     assert "mcpServers" in readme
     assert "/work" in readme
+
+
+def test_the_grant_runbook_takes_the_tool_name_from_the_manifest() -> None:
+    """A certificate binds to the name in the manifest, which `read_project`
+    takes from the single `[project.scripts]` key — NOT from `[project].name`,
+    and nothing makes those two agree.
+
+    The runbook used to say `[project].name`. Following it would produce a
+    certificate for a name that does not exist, the author's next build would
+    refuse it, and the round trip costs both of them a day. So the runbook
+    reads the name out of the artifact the author already published, which is
+    the same thing the platform checks against."""
+    doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+    grant_section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
+
+    assert "[project.scripts]" in grant_section
+    assert 'm["name"]' in grant_section, "the runbook must read the name from the manifest"
+
+
+def test_the_grant_runbook_is_walkable_alone() -> None:
+    """It is followed by one person, in production, with nobody to ask. Every
+    step that would otherwise be tribal knowledge has to be on the page: where
+    the commands run, that a new key needs a release before it does anything,
+    what to tell the author, and how to confirm it worked."""
+    doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
+
+    assert "uv run python -m workspace_app.tooling.grant keygen" in section
+    assert "發版之後才生效" in section
+    assert "tool-size-grant.token" in section  # what the author is told to do
+    assert "size granted by" in section  # how they confirm it landed

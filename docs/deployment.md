@@ -585,17 +585,18 @@ TOOL_BUILDER_ID=<這個部署的值> TOOL_ARTIFACT_TOKEN=<你的 token> \
 作者端那次檢查跑在**作者自己的 runner** 上，所以它的作用是讓對方早點發現，
 真正的閘門是我們這一道。
 
-#### 開通（只做一次）
+#### 開通（每人只做一次）
 
-**一人一把。** 平台團隊每個能發憑證的人各跑一次，`--as` 填自己的代號：
+**一人一把金鑰。** 每個要能發憑證的人各跑一次，`--as` 填自己的代號。在這個 repo 的
+checkout 裡跑：
 
 ```bash
-python -m workspace_app.tooling.grant keygen --key /path/you/choose/tool-grant.pem --as hychou
+uv run python -m workspace_app.tooling.grant keygen \
+    --key ~/.secrets/tool-grant.pem --as hychou
 ```
 
-私鑰只寫到你指定的路徑（`0600`，已存在就拒絕覆寫——覆寫等於讓那個人已發出的憑證全部失效）。
-指令會印出一行可直接貼的內容，加進 `src/workspace_app/tooling/grant.py` 的 `TRUSTED_KEYS`
-並發版：
+私鑰只寫到你指定的路徑（`0600`，已存在就拒絕覆寫——覆寫等於讓你已發出的憑證全部失效）。
+指令印出一行,把它加進 `src/workspace_app/tooling/grant.py` 的 `TRUSTED_KEYS`：
 
 ```python
 TRUSTED_KEYS: dict[str, str] = {
@@ -603,37 +604,60 @@ TRUSTED_KEYS: dict[str, str] = {
 }
 ```
 
+**發版之後才生效。** 在那之前 `TRUSTED_KEYS` 是空的，任何憑證都會被拒絕，而所有工具吃
+150MB 預設值——功能是完整的，只是還沒有金鑰可簽。
+
 **為什麼是一人一把，而不是一把共用金鑰加一個「發證者」欄位：** 欄位是自己填的，值多少
 就看填的人多誠實，而且真的出事那天它會和簽章各說各話。金鑰不會——只有本人有那把私鑰，
 所以「誰核准的」是簽章證明的，不是文件宣稱的。
 
-它同時是**關掉的開關**:有人離職，把他那行拿掉並發版，他簽過的憑證全部立刻驗不過。這是
-這個設計除了等過期以外唯一的撤銷手段。
-
-代價要知道:**新增或移除一個發證者是改 code + 發一次版**。輪替也是同一件事——新舊並存，
-用新的簽，舊的留到它最後一張憑證過期再刪。
-
-上架時 `verify` 會把發證者印出來，例如
-`accepted: pdf-extract 2.1.0 (…) sha256=… ， size granted by hychou`——「這支 300MB 的工具
-當初是誰看過的」半年後還答得出來。
+代價要知道：**新增或移除一個發證者是改 code + 發一次版。**
 
 #### 有人要求放寬
 
-1. 對方寄工具給你，你 review 它是不是真的需要那麼大。
-2. 決定要發的話：
+**第 1 步:先確認他的工具叫什麼。** 這是最容易發錯的地方——憑證綁的名字是他
+`pyproject.toml` 裡 **`[project.scripts]` 的那個鍵**，不是 `[project].name`，兩者允許不一樣。
+不要用猜的，直接讀他已經發布的 manifest：
 
 ```bash
-python -m workspace_app.tooling.grant issue \
+curl -sH "PRIVATE-TOKEN: $TOOL_ARTIFACT_TOKEN" '<他的 manifest 網址>' \
+  | python -c 'import json,sys; m=json.load(sys.stdin); print(m["name"], m["version"], m["bundle"]["size"])'
+```
+
+印出來的第一個字就是 `--tool` 要填的值，第三個是它現在多大（bytes），可以拿來判斷該給多少。
+
+**第 2 步:review。** 看他的 repo，判斷那個重量是不是真的必要——常見的是只有測試用得到的
+套件被寫進 `[project.dependencies]`，或為了一張圖帶進整套繪圖庫。
+
+**第 3 步:簽。**
+
+```bash
+uv run python -m workspace_app.tooling.grant issue \
     --tool pdf-extract --max-mb 300 --expires 2026-09-01 \
-    --key /path/you/choose/tool-grant.pem
+    --key ~/.secrets/tool-grant.pem
 ```
 
 `--expires` 是**必填**，可以填 `never`——「永不過期」是一個決定，不會因為忘了填而發生。
 
-3. 把印出來的那一行回信給對方，請他存成 repo 根目錄的 `tool-size-grant.token` 並提交。
+**第 4 步:回信。** 把印出來的那一行給他，請他:
 
-憑證綁定 `--tool` 的名字（作者 `pyproject.toml` 裡的 `[project].name`），所以它不會被
-別人拿去用。
+> 存成 repo 根目錄的 `tool-size-grant.token`（整行，不要換行）並提交。下次 build 就會生效，
+> 而且它會跟著 manifest 一起發布，所以平台驗的和你 build 時用的是同一張。
+
+**第 5 步:確認。** 等他發布後，用 §15.2 的 `verify` 跑一次。接受時會印出發證者：
+
+```
+accepted: pdf-extract 2.1.0 (extract, ocr) sha256=… , size granted by hychou
+```
+
+沒印出 `size granted by`，表示它其實沒超過 150MB——那張憑證根本沒被查閱，也不需要。
+
+#### 有人離職，或要換金鑰
+
+把他那一行從 `TRUSTED_KEYS` 拿掉並發版。**他簽過的每一張憑證立刻全部失效**——署名和撤銷
+是同一個機制。
+
+換金鑰同理：新舊並存，用新的簽，舊的留到它最後一張憑證過期再刪。
 
 #### 一件必須知道的事
 
