@@ -33,12 +33,40 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit
 
 #: The only manifest layout this platform understands. A newer artifact is
 #: refused rather than parsed on a guess.
 FORMAT_VERSION = 1
+
+
+#: The environment names that decide whether a fetch may carry a credential.
+#: Here rather than beside either fetcher because there are three of them —
+#: the host, the runner, and the operator's `verify` — and a rule about where
+#: a secret may go is not one to keep three copies of.
+TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
+HOSTS_ENV = "TOOL_ARTIFACT_HOSTS"
+
+
+def credential_for(url: str) -> str | None:
+    """The artifact credential, if this URL is somewhere it may be sent.
+
+    A certificate cannot protect this: it is read FROM the manifest, so by the
+    time there is anything to verify, the request has been made. Pointing a
+    fetch at a hostile URL would otherwise be a way to collect the token, and
+    it would present as a failed install.
+
+    No configured host means no credential. Not knowing where it may go is not
+    a reason to send it anywhere; the resulting 401 names a setting, which a
+    token on a stranger's server does not."""
+    token = os.environ.get(TOKEN_ENV)
+    if not token:
+        return None
+    allowed = {h.strip() for h in os.environ.get(HOSTS_ENV, "").split(",") if h.strip()}
+    return token if urlsplit(url).hostname in allowed else None
 
 
 class ArtifactError(Exception):

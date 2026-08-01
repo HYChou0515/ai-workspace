@@ -49,7 +49,10 @@ check(
     "P1",
     "the module is stdlib-only, so the builder can import it",
     not re.search(
-        r"^from (?!__future__|dataclasses|collections|typing)\w|^import (?!hashlib|json)", a, re.M
+        r"^from (?!__future__|dataclasses|collections|typing|urllib)\w"
+        r"|^import (?!hashlib|json|os)",
+        a,
+        re.M,
     ),
 )
 check(
@@ -296,7 +299,28 @@ check(
     "ed25519" in g and "TRUSTED_KEYS" in g,
 )
 check("P14", "a certificate names one tool", "was issued for" in g)
-check("P14", "an expiry has to be asked for, `never` included", "--expires is required" in g)
+check(
+    "P14",
+    "a raised allowance has to carry the deadline that ends it",
+    "--publish-until is required" in g,
+)
+check(
+    "P14",
+    "a certificate admits one tool, from one place",
+    "def admit(" in g and "granted.source" in g,
+)
+check(
+    "P14",
+    "names are not handed out twice",
+    "REGISTRY_FILE" in g and "already issued to" in g,
+)
+check(
+    "P14",
+    "the credential is one rule, shared by all three fetchers",
+    "def credential_for(" in text("src/workspace_app/tooling/artifact.py")
+    and "credential_for(url)" in text("src/workspace_app/tooling/verify.py")
+    and "credential_for(url)" in text("sandbox-host/src/sandbox_host/tool_resolve.py"),
+)
 check(
     "P14", "the signing key is created 0600 and never overwritten", "O_EXCL" in g and "0o600" in g
 )
@@ -334,14 +358,19 @@ check(
     "P14",
     "authors are told the limit and how to ask for more",
     "150MB" in text("tool-starter/README.md")
-    and "tool-size-grant.token" in text("tool-starter/README.md")
-    and "tool-size-grant.token" in text("tool-starter/CLAUDE.md")
-    and "tool-size-grant.token" in text("docs/tool-authoring.md"),
+    and "tool-certificate.token" in text("tool-starter/README.md")
+    and "tool-certificate.token" in text("tool-starter/CLAUDE.md")
+    and "tool-certificate.token" in text("docs/tool-authoring.md"),
 )
 check(
     "P14",
-    "the platform team is told how to issue one, and that it cannot be recalled",
-    "grant keygen" in text("docs/deployment.md") and "收不回來" in text("docs/deployment.md"),
+    "the platform team is told how to issue one, and both ways to take one back",
+    "grant keygen" in text("docs/deployment.md")
+    # A certificate is checked offline, so neither removal is a thing you do
+    # TO it — the doc has to name what you do instead.
+    and "改不到它" in text("docs/deployment.md")
+    and "從 `app.json` 拿掉" in text("docs/deployment.md")
+    and "從 `TRUSTED_KEYS` 拿掉" in text("docs/deployment.md"),
 )
 
 # ---- P15: one MCP runner, not an image per tool ---------------------------
@@ -409,6 +438,41 @@ check(
     "the operator is told the one line to fill in",
     "<<RUNNER_IMAGE>>" in text("tool-skill/README.md")
     and "tool-skill" in text("docs/deployment.md"),
+)
+
+# ---- P17/P18: admission, uniqueness, and where a credential may go -------
+check(
+    "P17",
+    "identity left the manifest's name for the certificate",
+    "expected_name" not in text("src/workspace_app/tooling/artifact.py")
+    and "admit(tool=name" in text("sandbox-host/src/sandbox_host/tool_resolve.py"),
+)
+check(
+    "P17",
+    "the one deadline is the author's, and the host does not read it",
+    "publish_until" in g
+    and "publish_until" not in text("sandbox-host/src/sandbox_host/tool_resolve.py"),
+)
+check(
+    "P18",
+    "the images that fetch are told where the credential may go",
+    all(
+        "TOOL_ARTIFACT_HOSTS=${ARTIFACT_HOSTS}" in text(f"sandbox-host/{n}")
+        for n in ("Dockerfile", "mcp-runner.Dockerfile")
+    ),
+)
+check(
+    "P18",
+    "a tool does not inherit the credential that fetched it",
+    "os.execve(" in text("sandbox-host/src/sandbox_host/mcp_runner.py"),
+)
+check(
+    "P18",
+    "the skill explains the refusals this added",
+    all(
+        s in text("tool-skill/SKILL.md")
+        for s in ("carries no certificate", "TOOL_ARTIFACT_HOSTS", "is good for artifacts under")
+    ),
 )
 
 # ---- report ----------------------------------------------------------------

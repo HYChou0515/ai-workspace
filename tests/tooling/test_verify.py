@@ -221,21 +221,38 @@ class _Response:
         return None
 
 
-def test_the_operators_fetch_uses_their_own_token(monkeypatch) -> None:
-    # The RUNNING app never holds an artifact-store credential; the human
-    # running this command already has one, because they were handed the URL.
+def test_the_operators_fetch_carries_the_token_only_where_it_may_go(monkeypatch) -> None:
+    """The same rule as the host and the runner, and for a sharper reason: the
+    credential here is the PLATFORM's, not one person's. An operator typing
+    the URL makes it likelier to be right, not less able to be wrong."""
     import urllib.request
 
+    from workspace_app.tooling.artifact import HOSTS_ENV, TOKEN_ENV
     from workspace_app.tooling.verify import _http_get
 
     seen: list[urllib.request.Request] = []
-    monkeypatch.setenv("TOOL_ARTIFACT_TOKEN", "glpat-operator")
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response(b"ok")
-    )
 
-    assert _http_get("https://gitlab.example/m") == b"ok"
-    assert seen[0].get_header("Private-token") == "glpat-operator"
+    class _Response:
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response()
+    )
+    monkeypatch.setenv(TOKEN_ENV, "glpat-platform")
+    monkeypatch.setenv(HOSTS_ENV, "gitlab.example")
+
+    _http_get("https://gitlab.example/m")
+    _http_get("https://elsewhere.example/m")
+
+    assert seen[0].get_header("Private-token") == "glpat-platform"
+    assert seen[1].get_header("Private-token") is None
 
 
 def test_a_public_project_needs_no_token(monkeypatch) -> None:

@@ -48,12 +48,27 @@ Fetch that URL. A private GitLab needs a header — `PRIVATE-TOKEN: <token>`.
 What comes back tells you the rest:
 
 ```json
-{ "name": "wafer-history", "version": "1.4.2", "commands": [ … ] }
+{ "name": "wafer-history", "version": "1.4.2", "commands": [ … ],
+  "grant": "eyJtYXhfYnl0ZXMiOjE1…" }
 ```
 
-`name` is what you will call the server. Take it from the manifest, never
-from the repository name — they are allowed to differ, and the runner checks
-the one you pass against the one the manifest publishes.
+`grant` is the platform's certificate, and it is what says which tool this is.
+Its first half is base64 JSON — decode it for the name to use:
+
+```sh
+python3 -c 'import base64,json,sys
+p = sys.argv[1].split(".")[0]
+print(json.loads(base64.urlsafe_b64decode(p + "=" * (-len(p) % 4)))["tool"])' '<the grant value>'
+```
+
+**That name** — not the manifest's own `name`, and not the repository's.
+Identity comes from the certificate, which is why two authors may both publish
+a tool whose command is called `data-fetch` and neither shadows the other. The
+runner checks the name you pass against the certificate, so the manifest's
+`name` will not do.
+
+No `grant` field at all means the tool has not been admitted to the platform;
+see **When it does not work**.
 
 If the fetch fails, go to **When it does not work** below rather than trying
 a different URL shape.
@@ -129,6 +144,7 @@ are different people, and sending someone to the wrong one costs them a day.
 |---|---|---|
 | `404` | **Two causes that look identical.** The artifact expired (GitLab discards them ~30 days after the build unless the job sets `expire_in: never`), or the account has no access to that project — GitLab answers 404 for a project you may not see, rather than admitting it exists. | Ask the person to open the URL in their browser. It loads ⇒ expiry, and the **tool's author** must fix their CI. It does not ⇒ access, and the **platform team** grants it. |
 | `401` | The project is private and no token was sent. | **The person**: create a GitLab read token and set `TOOL_ARTIFACT_TOKEN` in the environment this editor runs in. |
+| `401` … `the artifact credential was NOT sent: <host> is not in TOOL_ARTIFACT_HOSTS` | The token exists, and the runner declined to send it to that host. The runner only sends it to the artifact store the platform published it for. | **Check the URL first** — this is what a wrong host looks like, and it is the one failure that means somebody may be trying to collect the token. If the host is genuinely right, **the platform team** adds it to the image. |
 | `403` | Authenticated, but not allowed this project. | **The platform team.** |
 | The URL 404s but the repo browses fine, and `dist/` has never existed | That repository has never published a successful build, or its job is not called `build-tool`. | **The tool's author.** Read their `.gitlab-ci.yml` and say which. |
 
@@ -140,6 +156,9 @@ nobody else has months later.
 
 | What you see | What it means | Who fixes it |
 |---|---|---|
+| `carries no certificate` | Every tool needs one the platform signed. This one has not been admitted — or the author has not committed the certificate they were given as `tool-certificate.token`. | **The platform team** if it was never issued; **the tool's author** if it was. Ask which. |
+| `this certificate was issued for '<other>'` | The certificate in that artifact admits a different tool than the name you were given. | **The platform team** — either the name is wrong or the wrong certificate was committed. |
+| `is good for artifacts under <X>, and this one came from <Y>` | The certificate belongs to a tool published somewhere else. Certificates are public, so this is what a copied one looks like. | **Stop and say so.** Do not try another URL. Whoever gave you this one is pointing at something that is not the tool it claims to be. |
 | `refused: … builder …` | The bundle was built against a different base than this runner. Its interpreter and compiled dependencies will not load here. | **The tool's author** rebuilds with the current builder image. There is no flag for this and you must not look for one — the alternative to refusing is a segmentation fault inside their tool. |
 | `refused: … sha256 …` | The bytes fetched are not the bytes the manifest describes. | Retry once; a truncated download does this. If it repeats, the **tool's author** has a broken publish. |
 | `this certificate was issued for '<other tool>'` | The size certificate in that repo belongs to a different tool. | **The tool's author.** |
@@ -161,5 +180,10 @@ nobody else has months later.
 - Do not add `--user`, a uid, or a host path to the config. Anything
   machine-specific breaks the next person who copies it.
 - Do not substitute a different image for `RUNNER_IMAGE`. It is the platform's
-  and is what a tool's compiled dependencies were built to run against.
+  and is what a tool's compiled dependencies were built to run against. It is
+  also what decides where the artifact credential may be sent, so another
+  image is another answer to that question.
+- Do not set `TOOL_ARTIFACT_TOKEN` to get past a refusal you do not
+  understand. A refusal that mentions the certificate is not about
+  credentials, and a token sent somewhere unexpected does not come back.
 - Do not report an install as done without step 3.

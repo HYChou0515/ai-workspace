@@ -183,6 +183,7 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 | 不是在 builder image 裡 build 的 | 平台拒絕掛載 |
 | `[project.scripts]` 不是剛好一個 / 沒有 `version` | build 失敗 |
 | **bundle 壓縮後超過 150MB** | build 失敗，並列出最重的幾樣；平台上架時也擋 |
+| **沒有平台憑證** | 平台拒絕執行——`tool-certificate.token` 是上架的前提，不只是體積的例外 |
 | manifest 裡的名字跟我們登記的不一樣 | 平台拒絕——代表這個網址指到了別支工具 |
 
 還有兩件**不是拒絕、但一定會發生**的事，不知道就會出事：
@@ -201,7 +202,7 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 --no-dev`）；寫在 `[project.dependencies]` 的一律打包。
 
 真的需要更大的額度：把工具寄給平台團隊 review，通過後會收到一行憑證，存成 repo 根目錄的
-`tool-size-grant.token` 並提交。憑證綁定**工具名字**、寫明**放寬到多少**與**到哪天為止**
+`tool-certificate.token` 並提交。憑證綁定**工具名字**、寫明**放寬到多少**與**到哪天為止**
 （或 `never`），並且跟著 manifest 一起發布，所以平台驗的和你 build 時用的是同一張。
 
 憑證只在超過 150MB 時起作用，所以工具瘦下來之後，憑證過期不會擋到發版。

@@ -621,7 +621,7 @@ def test_the_refusal_names_the_heaviest_things_so_the_author_knows_what_to_cut(
 
 def test_a_certificate_raises_the_limit_for_the_tool_it_names(tmp_path: Path, signing) -> None:
     source = _source(tmp_path)
-    (source / "tool-size-grant.token").write_text(_grant(signing))
+    (source / "tool-certificate.token").write_text(_grant(signing))
 
     manifest = build_artifact(
         source=source,
@@ -639,7 +639,7 @@ def test_the_certificate_travels_in_the_manifest(tmp_path: Path, signing) -> Non
     without an operator having to go and ask for it."""
     source = _source(tmp_path)
     token = _grant(signing)
-    (source / "tool-size-grant.token").write_text(token)
+    (source / "tool-certificate.token").write_text(token)
     out = tmp_path / "dist"
 
     build_artifact(
@@ -671,7 +671,7 @@ def test_a_certificate_issued_to_another_tool_does_not_raise_this_one(
     tmp_path: Path, signing
 ) -> None:
     source = _source(tmp_path)  # this tool is "wafer-history"
-    (source / "tool-size-grant.token").write_text(_grant(signing, tool="pdf-extract"))
+    (source / "tool-certificate.token").write_text(_grant(signing, tool="pdf-extract"))
 
     # No longer "this certificate is not yours" — weight and admission are
     # separate now, and a certificate that does not apply simply raises
@@ -695,7 +695,7 @@ def test_an_expired_certificate_says_it_expired_rather_than_too_big(
     from workspace_app.tooling import builder as mod
 
     source = _source(tmp_path)
-    (source / "tool-size-grant.token").write_text(_grant(signing, publish_until=date(2026, 1, 1)))
+    (source / "tool-certificate.token").write_text(_grant(signing, publish_until=date(2026, 1, 1)))
     monkeypatch.setattr(mod, "_today", lambda: date(2026, 8, 1))
 
     with pytest.raises(BuildError, match="publish until"):

@@ -33,6 +33,7 @@ from workspace_app.tooling import grant as grant_policy
 from workspace_app.tooling.artifact import (
     ArtifactError,
     check_compatible,
+    credential_for,
     parse_manifest,
     verify_bundle,
 )
@@ -69,12 +70,13 @@ def _bundle_url(manifest_url: str) -> str:
 
 
 def _http_get(url: str) -> bytes:
-    import os
-    import urllib.error
     import urllib.request
 
     request = urllib.request.Request(url)  # noqa: S310 - operator-supplied https URL
-    token = os.environ.get("TOOL_ARTIFACT_TOKEN")
+    # The same rule the host and the runner apply. An operator typed this URL,
+    # which makes it likelier to be right and no less able to be wrong — and
+    # the credential here is the PLATFORM's, not one person's.
+    token = credential_for(url)
     if token:
         request.add_header("PRIVATE-TOKEN", token)
     with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310

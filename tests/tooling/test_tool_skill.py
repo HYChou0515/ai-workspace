@@ -106,3 +106,12 @@ def test_the_skill_covers_the_refusals_the_platform_can_produce(skill: str) -> N
     explain arrives as a wall of text nobody can act on."""
     for gate in ("builder", "sha256", "certificate", "limit"):
         assert gate in skill, gate
+
+
+def test_the_skill_takes_the_name_from_the_certificate(skill: str) -> None:
+    """It used to say "take it from the manifest's `name`". That field stopped
+    being identity when the certificate became it — following the old
+    instruction gets a name the runner will refuse, and the refusal talks
+    about a certificate the reader never looked at."""
+    assert "grant" in skill
+    assert "not the manifest's own `name`" in skill

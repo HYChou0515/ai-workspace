@@ -89,14 +89,20 @@ own code lives elsewhere, mounted read-only.
 **Finish inside 60 seconds, and keep talking.** Sixty seconds of silence counts
 as hung. Long work prints progress or splits into several calls.
 
+**Commit the platform's certificate.** Every tool needs one, as
+`tool-certificate.token` at the repository root — without it the platform will
+not run this tool and neither will an engineer's editor. It carries the name
+the platform knows this tool by, where its artifacts live, and what it may
+weigh. Ask the platform team for it; they issue it after reading the tool.
+
 **Keep the bundle inside 150MB.** `build-tool` measures the compressed
 artifact — what every machine downloads — and fails above that, naming the
 heaviest entries. An empty template is already ~40MB of bundled interpreter,
 so the room that remains is for what the tool needs at run time. Dependencies
 used only by tests belong in `[dependency-groups] dev`, which the build leaves
-out. When the weight is real, the platform team reviews the tool and issues a
-certificate: one line, committed as `tool-size-grant.token`, naming the tool,
-its raised ceiling, and the date that ceiling lapses.
+out. A larger allowance can be granted, and comes with a deadline to get back
+under the limit: past it you cannot publish another oversized build, while
+what is already published keeps serving.
 
 **Write the tool once; it reaches two places.** The platform runs the bundle
 in a sandbox. The same artifact is also what an engineer's own agent runs, via

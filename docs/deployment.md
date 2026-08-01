@@ -553,8 +553,10 @@ TOOL_BUILDER_ID=<這個部署的值> TOOL_ARTIFACT_TOKEN=<你的 token> \
 #               "external_tools": { "wafer-history": "<同一個網址>" } }
 ```
 
-**名字是我們定的**（`external_tools` 的 key）。manifest 裡作者宣告的名字只拿來校驗
-「這個網址指的是不是我以為的那支」，所以兩個作者都叫 `data-fetch` 也不會互相蓋掉。
+**名字是我們定的**（`external_tools` 的 key），而且它就是憑證上的 `tool`。作者的 command
+叫什麼完全不參與，所以兩個作者都叫 `data-fetch` 也不會互相蓋掉——各發一張憑證、各取一個名字。
+
+先發憑證（§15.6）再登記：沒有憑證的 artifact，`verify` 和 host 都會拒絕。
 
 ### 15.3 換版本：不用做任何事
 
@@ -576,19 +578,29 @@ TOOL_BUILDER_ID=<這個部署的值> TOOL_ARTIFACT_TOKEN=<你的 token> \
 但**正在被使用的永遠不會被淘汰**。粗估：`工具數 × 保留版本數 × 150MB × host 數`。
 沒設上限則不保留任何沒被引用的版本（回滾會重抓）。
 
-### 15.6 體積上限與例外憑證
+### 15.6 工具憑證(准入 + 體積)
 
-每支 bundle 有上限：**壓縮後 150MB**。`build-tool` 在作者的 CI 擋一次，我們的
-`python -m workspace_app.tooling.verify` 在上架時再擋一次；兩邊跑的是同一個
-`tooling/grant.py`，不會有一邊比較鬆。
+**每一支第三方工具都需要一張你簽的憑證。** 把網址貼進 `app.json` 不算核准——憑證才算。
+沒有憑證的 artifact，host 每次 resolve 都會拒絕。
 
-作者端那次檢查跑在**作者自己的 runner** 上，所以它的作用是讓對方早點發現，
-真正的閘門是我們這一道。
+一張憑證講三件事：
+
+| 欄位 | 意思 | 誰檢查 |
+|---|---|---|
+| `tool` | **你**給它的名字，就是身分 | host 每次 resolve、上架時的 `verify` |
+| `source` | 它的 artifact 住在哪（網址前綴） | 同上 |
+| `max_bytes` + `publish_until` | 能多大、以及**發布期限** | 只有發布端（作者 build、你的 `verify`）|
+
+**發布期限不會讓工具停掉。** 它是給作者的：「你今天急著上，體積先放你過，但這個日期前要處理好。」
+過期之後他發不出新的超標版本，**已經在跑的那一版原封不動**——拖延是他的事，使用的人沒有同意
+要跟著受罰。所以 host 根本不讀這個欄位。
+
+因為身分來自憑證而不是作者取的名字，**兩個團隊的工具都叫 `data-fetch` 也不衝突**，各拿各的
+id 就好。
 
 #### 開通（每人只做一次）
 
-**一人一把金鑰。** 每個要能發憑證的人各跑一次，`--as` 填自己的代號。在這個 repo 的
-checkout 裡跑：
+**一人一把金鑰。** 每個要能發憑證的人各跑一次，`--as` 填自己的代號。在這個 repo 的 checkout 裡跑：
 
 ```bash
 uv run python -m workspace_app.tooling.grant keygen \
@@ -596,7 +608,7 @@ uv run python -m workspace_app.tooling.grant keygen \
 ```
 
 私鑰只寫到你指定的路徑（`0600`，已存在就拒絕覆寫——覆寫等於讓你已發出的憑證全部失效）。
-指令印出一行,把它加進 `src/workspace_app/tooling/grant.py` 的 `TRUSTED_KEYS`：
+指令印出一行，加進 `src/workspace_app/tooling/grant.py` 的 `TRUSTED_KEYS`：
 
 ```python
 TRUSTED_KEYS: dict[str, str] = {
@@ -604,67 +616,77 @@ TRUSTED_KEYS: dict[str, str] = {
 }
 ```
 
-**發版之後才生效。** 在那之前 `TRUSTED_KEYS` 是空的，任何憑證都會被拒絕，而所有工具吃
-150MB 預設值——功能是完整的，只是還沒有金鑰可簽。
+**發版之後才生效。** 在那之前 `TRUSTED_KEYS` 是空的，任何憑證都驗不過，也就是**沒有任何
+第三方工具能上架**。
 
-**為什麼是一人一把，而不是一把共用金鑰加一個「發證者」欄位：** 欄位是自己填的，值多少
-就看填的人多誠實，而且真的出事那天它會和簽章各說各話。金鑰不會——只有本人有那把私鑰，
-所以「誰核准的」是簽章證明的，不是文件宣稱的。
+**為什麼是一人一把，而不是一把共用金鑰加一個「發證者」欄位：** 欄位是自己填的，值多少就看
+填的人多誠實，而且真的出事那天它會和簽章各說各話。金鑰不會——只有本人有那把私鑰。
+
+它同時是**關掉的開關**：有人離職，把他那行拿掉並發版，他核准過的工具全部立刻停用。
 
 代價要知道：**新增或移除一個發證者是改 code + 發一次版。**
 
-#### 有人要求放寬
+#### 發一張憑證
 
-**第 1 步:先確認他的工具叫什麼。** 這是最容易發錯的地方——憑證綁的名字是他
-`pyproject.toml` 裡 **`[project.scripts]` 的那個鍵**，不是 `[project].name`，兩者允許不一樣。
-不要用猜的，直接讀他已經發布的 manifest：
+**第 1 步：決定名字。** 這是**你**取的，會成為 `app.json` 裡 `external_tools` 的 key，也是
+模型看到的名字。和作者的 command 叫什麼無關。
 
-```bash
-curl -sH "PRIVATE-TOKEN: $TOOL_ARTIFACT_TOKEN" '<他的 manifest 網址>' \
-  | python -c 'import json,sys; m=json.load(sys.stdin); print(m["name"], m["version"], m["bundle"]["size"])'
+**第 2 步：確認名字沒被用過。** `issue` 會擋，但你可以先看
+[`tool-registry.csv`](https://github.com/HYChou0515/ai-workspace/blob/master/tool-registry.csv)。
+同一個名字發兩張，那兩張就互相通用——而憑證是公開的，對方 manifest 裡看得到。
+
+**第 3 步：找出他的 artifact 住在哪。** `--source` 是**前綴**，不是某一個 artifact：
+
+```
+https://gitlab.example/api/v4/projects/rca%2Fwafer-history/
 ```
 
-印出來的第一個字就是 `--tool` 要填的值，第三個是它現在多大（bytes），可以拿來判斷該給多少。
+貼整串 manifest 網址會被擋——那樣**回滾當天會擋住你自己的修復動作**（回滾是指向某次 build 的
+artifact，網址不同）。只給網域也會被擋（那台 GitLab 上任何專案都能冒用這個名字）。
 
-**第 2 步:review。** 看他的 repo，判斷那個重量是不是真的必要——常見的是只有測試用得到的
-套件被寫進 `[project.dependencies]`，或為了一張圖帶進整套繪圖庫。
-
-**第 3 步:簽。**
+**第 4 步：簽。**
 
 ```bash
+# 一般情況
 uv run python -m workspace_app.tooling.grant issue \
-    --tool pdf-extract --max-mb 300 --expires 2026-09-01 \
+    --tool wafer-data-fetch \
+    --source https://gitlab.example/api/v4/projects/rca%2Fwafer-history/ \
+    --key ~/.secrets/tool-grant.pem
+
+# 放寬體積，並給他一個月處理
+uv run python -m workspace_app.tooling.grant issue \
+    --tool pdf-extract --max-mb 300 --publish-until 2026-09-01 \
+    --source https://gitlab.example/api/v4/projects/docs%2Fpdf-extract/ \
     --key ~/.secrets/tool-grant.pem
 ```
 
-`--expires` 是**必填**，可以填 `never`——「永不過期」是一個決定，不會因為忘了填而發生。
+`--max-mb` 一定要配 `--publish-until`——沒有期限的放寬只是「某支工具的上限比較大」，
+不會有人再回頭看。
 
-**第 4 步:回信。** 把印出來的那一行給他，請他:
+**第 5 步：回信 + 記錄。** stdout 那一行給對方，請他：
 
-> 存成 repo 根目錄的 `tool-size-grant.token`（整行，不要換行）並提交。下次 build 就會生效，
-> 而且它會跟著 manifest 一起發布，所以平台驗的和你 build 時用的是同一張。
+> 存成 repo 根目錄的 `tool-certificate.token`（整行，不要換行）並提交。下次 build 就會生效。
 
-**第 5 步:確認。** 等他發布後，用 §15.2 的 `verify` 跑一次。接受時會印出發證者：
+stderr 會印出要加進 `tool-registry.csv` 的那一列，把 `<their repo>` 之類補上，和登記工具的那次
+改動一起送。
+
+**第 6 步：登記 + 確認。** 照 §15.2 把名字和網址寫進 `app.json`，發版，然後跑 `verify`：
 
 ```
-accepted: pdf-extract 2.1.0 (extract, ocr) sha256=… , size granted by hychou
+accepted: wafer-data-fetch 1.4.2 (trend) sha256=… , size granted by hychou
 ```
-
-沒印出 `size granted by`，表示它其實沒超過 150MB——那張憑證根本沒被查閱，也不需要。
 
 #### 有人離職，或要換金鑰
 
-把他那一行從 `TRUSTED_KEYS` 拿掉並發版。**他簽過的每一張憑證立刻全部失效**——署名和撤銷
-是同一個機制。
-
-換金鑰同理：新舊並存，用新的簽，舊的留到它最後一張憑證過期再刪。
+把他那一行從 `TRUSTED_KEYS` 拿掉並發版。**他核准過的工具立刻全部停用**——署名和撤銷是同一個
+機制。換金鑰同理：新舊並存，用新的簽，舊的留到它最後一張憑證不再需要為止。
 
 #### 一件必須知道的事
 
-**憑證發出去之後，在到期之前收不回來。** 對方是離線驗章的，我們事後做什麼都碰不到它。
+**憑證發出去之後你改不到它。** 對方是離線驗章的。所以：
 
-所以：能給期限就給期限；真的要讓所有憑證立刻失效，唯一的辦法是把 `TRUSTED_KEYS` 裡的
-那把公鑰拿掉並發版（等於輪替金鑰）。
+- 要下架**單一一支**工具 → 從 `app.json` 拿掉並發版
+- 要一次停掉**某人核准過的全部** → 從 `TRUSTED_KEYS` 拿掉他的金鑰並發版
 
 ### 15.7 讓工程師用自己的 agent 跑同一支工具（MCP runner）
 
@@ -674,8 +696,15 @@ accepted: pdf-extract 2.1.0 (extract, ocr) sha256=… , size granted by hychou
 ```bash
 docker build -f sandbox-host/mcp-runner.Dockerfile \
     --build-arg BUILDER_ID="$THE_SAME_ID_YOU_GIVE_TOOL_BUILDER" \
+    --build-arg ARTIFACT_HOSTS=gitlab.example \
     -t registry/ai-workspace/mcp-runner:<tag> .
 ```
+
+`ARTIFACT_HOSTS` 是**憑證能被送去的網域**（逗號分隔），host 映像也要給同一份。
+
+沒設的話 token 永遠不會被送出去——聽起來很嚴格，但反過來是災難:runner 抓 manifest 是發生在
+驗證**之前**的，所以只要有人讓工程師執行一個惡意網址，他的 GitLab token 就會被送過去，
+而他看到的只是一句「安裝失敗」。憑證擋得住那份程式碼,擋不住那個 token——順序不對。
 
 `BUILDER_ID` 要和你給 `tool-builder`、`sandbox-host` 的**同一個值**——runner 會直接執行
 第三方 bundle，所以它跟 host 受同一條 ABI 規則約束。有測試釘住這三顆映像的錨點一致。

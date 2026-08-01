@@ -64,11 +64,14 @@ DEFAULT_MAX_BYTES = 150 * 1024 * 1024
 #: certificate is refused and every tool gets ``DEFAULT_MAX_BYTES``.
 TRUSTED_KEYS: dict[str, str] = {}
 
-#: The file an author drops a certificate into, at the root of their tool's
-#: source. A committed file rather than a CI variable because it is not a
-#: secret — it is a public statement about one tool that anyone may read and
-#: nobody but us can write.
-GRANT_FILE = "tool-size-grant.token"
+#: The file an author commits their certificate as, at the root of their
+#: tool's source. Named for what it is rather than for the size allowance it
+#: also carries: without one the tool is not admitted at all.
+#:
+#: A committed file rather than a CI variable because it is not a secret — it
+#: is a public statement about one tool that anyone may read and nobody but us
+#: can write.
+GRANT_FILE = "tool-certificate.token"
 
 _NEVER = "never"
 

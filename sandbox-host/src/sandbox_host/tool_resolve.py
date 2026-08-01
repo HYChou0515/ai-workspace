@@ -30,10 +30,13 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from .artifact import (
+    HOSTS_ENV,
+    TOKEN_ENV,
     ArtifactError,
     CommandSpec,
     IncompatibleArtifact,
     check_compatible,
+    credential_for,
     parse_manifest,
     verify_bundle,
 )
@@ -49,19 +52,7 @@ BUNDLE_NAME = "tool.tar.gz"
 
 #: Where the artifact store's credential comes from. One token for the whole
 #: host; per-project tokens are a later problem than the first tool.
-TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
 
-#: The hosts the artifact credential may be sent to, comma separated. Baked
-#: into the images that fetch, beside `TOOL_BUILDER_ID`, by the same release.
-#:
-#: A certificate cannot protect this: it is read FROM the manifest, so by the
-#: time there is anything to verify, the request has been made. Pointing a
-#: runner at a hostile URL would otherwise be a way to collect somebody's
-#: GitLab token — and it would present to them as a failed install.
-#:
-#: Unset means the credential is never sent. Not knowing where it may go is
-#: not a reason to send it anywhere.
-HOSTS_ENV = "TOOL_ARTIFACT_HOSTS"
 
 # A seam for the network: the default performs the real GET; tests inject a
 # stand-in so the rest of the behaviour is exercised without a server.
@@ -86,15 +77,11 @@ def bundle_url(manifest_url: str) -> str:
     return urlunsplit(parts._replace(path=f"{head}/{BUNDLE_NAME}"))
 
 
-def _allowed_hosts() -> set[str]:
-    return {h.strip() for h in os.environ.get(HOSTS_ENV, "").split(",") if h.strip()}
-
-
 def _http_get(url: str) -> bytes:
     request = urllib.request.Request(url)  # noqa: S310 - https URLs from config
-    token = os.environ.get(TOKEN_ENV)
-    withheld = bool(token) and urlsplit(url).hostname not in _allowed_hosts()
-    if token and not withheld:
+    token = credential_for(url)
+    withheld = bool(os.environ.get(TOKEN_ENV)) and token is None
+    if token:
         # GitLab accepts either header; PRIVATE-TOKEN is the one that works for
         # both personal and project access tokens.
         request.add_header("PRIVATE-TOKEN", token)

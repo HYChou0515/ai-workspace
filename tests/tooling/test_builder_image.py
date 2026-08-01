@@ -343,21 +343,29 @@ def test_the_engineer_facing_setup_mounts_their_working_directory() -> None:
     assert "/work" in readme
 
 
-def test_the_grant_runbook_takes_the_tool_name_from_the_manifest() -> None:
-    """A certificate binds to the name in the manifest, which `read_project`
-    takes from the single `[project.scripts]` key — NOT from `[project].name`,
-    and nothing makes those two agree.
+def test_the_grant_runbook_says_the_name_is_ours_to_choose() -> None:
+    """It used to tell an operator to read the name off the author's
+    pyproject, and got the field wrong — a certificate for a name that did not
+    exist, refused by the author's next build.
 
-    The runbook used to say `[project].name`. Following it would produce a
-    certificate for a name that does not exist, the author's next build would
-    refuse it, and the round trip costs both of them a day. So the runbook
-    reads the name out of the artifact the author already published, which is
-    the same thing the platform checks against."""
+    The trap is gone rather than documented around: identity comes from the
+    certificate, so the name is one we pick. The runbook has to say that, or
+    someone will still go looking for the author's."""
     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
-    grant_section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
+    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
 
-    assert "[project.scripts]" in grant_section
-    assert 'm["name"]' in grant_section, "the runbook must read the name from the manifest"
+    assert "這是**你**取的" in section
+    assert "和作者的 command 叫什麼無關" in section
+
+
+def test_the_grant_runbook_covers_the_two_ways_a_source_is_written_wrong() -> None:
+    """Both are refused by the command, but an operator who reads why first
+    does not have to be refused at all."""
+    doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
+
+    assert "回滾" in section  # too narrow: pinning breaks
+    assert "只給網域" in section  # too broad
 
 
 def test_the_grant_runbook_is_walkable_alone() -> None:
@@ -370,7 +378,8 @@ def test_the_grant_runbook_is_walkable_alone() -> None:
 
     assert "uv run python -m workspace_app.tooling.grant keygen" in section
     assert "發版之後才生效" in section
-    assert "tool-size-grant.token" in section  # what the author is told to do
+    assert "tool-certificate.token" in section  # what the author is told to do
+    assert "tool-registry.csv" in section  # where the name is recorded
     assert "size granted by" in section  # how they confirm it landed
 
 
