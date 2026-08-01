@@ -156,11 +156,16 @@ def parse_manifest(raw: bytes) -> Manifest:
         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
 
 
-def check_compatible(manifest: Manifest, *, expected_name: str, builder: str, arch: str) -> None:
-    """Refuse an artifact this deployment cannot run, or is not asking for.
+def check_compatible(manifest: Manifest, *, builder: str, arch: str) -> None:
+    """Refuse an artifact this deployment cannot RUN — wrong build base, wrong
+    architecture. Raises ``IncompatibleArtifact``; returns None when the bytes
+    could at least execute here.
 
-    Raises ``IncompatibleArtifact``; returns None when the artifact may be
-    mounted. Called before a single byte of the bundle is trusted."""
+    Says nothing about whether they are ALLOWED to. Identity and admission
+    come from the certificate the platform signed (`grant.admit`), not from
+    the name an author happened to give their command — which is what let two
+    authors' `data-fetch` collide, and what a manifest can claim for itself
+    anyway."""
     if manifest.builder != builder:
         raise IncompatibleArtifact(
             f"{manifest.name!r} was built against {manifest.builder!r}, "
@@ -169,11 +174,6 @@ def check_compatible(manifest: Manifest, *, expected_name: str, builder: str, ar
     if manifest.arch != arch:
         raise IncompatibleArtifact(
             f"{manifest.name!r} was built for {manifest.arch!r}, this host is {arch!r}"
-        )
-    if manifest.name != expected_name:
-        raise IncompatibleArtifact(
-            f"artifact declares itself {manifest.name!r} but is registered here as "
-            f"{expected_name!r} — the URL points at a different tool"
         )
 
 

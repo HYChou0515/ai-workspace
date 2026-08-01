@@ -105,14 +105,20 @@ def verify_artifact(
     raw = _fetch(fetch, manifest_url, "the manifest")
     try:
         manifest = parse_manifest(raw)
-        check_compatible(
-            manifest,
-            expected_name=expected_name,
-            builder=builder,
-            arch=arch or platform.machine(),
-        )
+        check_compatible(manifest, builder=builder, arch=arch or platform.machine())
     except ArtifactError as exc:
         raise VerifyFailed(str(exc)) from exc
+
+    # Admission before anything else about the artifact: pasting a URL into an
+    # app is not the approval — a certificate the platform signed is, and it
+    # is what says which tool this is.
+    refusal = grant_policy.admit(
+        tool=expected_name,
+        token=manifest.grant,
+        public_keys=grant_policy.TRUSTED_KEYS,
+    )
+    if refusal is not None:
+        raise VerifyFailed(refusal)
 
     # Before the bundle is fetched: the size is published in the manifest so
     # that refusing an oversized artifact costs one small request, not the
@@ -166,19 +172,14 @@ def _check_weight(manifest) -> None:
 
 
 def _granted_by(manifest) -> str | None:
-    """Who signed the certificate this artifact needed, if it needed one.
-
-    Only asked once the weight check has passed, and only when the weight
-    actually required a certificate: below the default limit one is never
-    consulted, and naming an issuer there would credit somebody with a
-    decision that did not bear on this artifact."""
-    if manifest.grant is None or manifest.bundle.size <= grant_policy.DEFAULT_MAX_BYTES:
+    """Who admitted this tool. Asked only after the gates have passed, so the
+    certificate is known good by the time its issuer is read off it."""
+    if manifest.grant is None:
         return None
     return grant_policy.verify(
         manifest.grant,
         public_keys=grant_policy.TRUSTED_KEYS,
         tool=manifest.name,
-        today=_today(),
     ).issued_by
 
 

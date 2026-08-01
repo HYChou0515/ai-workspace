@@ -32,10 +32,12 @@ from urllib.parse import urlsplit, urlunsplit
 from .artifact import (
     ArtifactError,
     CommandSpec,
+    IncompatibleArtifact,
     check_compatible,
     parse_manifest,
     verify_bundle,
 )
+from .grant import admit
 from .tool_cache import ToolCache
 
 logger = logging.getLogger(__name__)
@@ -153,7 +155,15 @@ class ToolResolver:
             # the one case we built a last-known-good copy to survive.
             return self._fall_back(name, manifest_url, exc)
 
-        check_compatible(manifest, expected_name=name, builder=self._builder_id, arch=self._arch)
+        check_compatible(manifest, builder=self._builder_id, arch=self._arch)
+
+        # Every third-party tool needs a certificate the platform signed, and
+        # it is what says which tool this is — so a URL cannot be admitted by
+        # having been pasted somewhere, and two authors' identically-named
+        # commands do not collide.
+        refusal = admit(tool=name, token=manifest.grant)
+        if refusal is not None:
+            raise IncompatibleArtifact(refusal)
 
         if not self._cache.has(manifest.bundle.sha256):
             data = self._fetch(bundle_url(manifest_url))

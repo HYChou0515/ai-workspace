@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from .conftest import certify
+
 from sandbox_host.artifact import ArtifactError, IncompatibleArtifact
 from sandbox_host.tool_cache import ToolCache
 from sandbox_host.tool_resolve import FetchError, ToolResolver, bundle_url
@@ -51,6 +53,9 @@ def _manifest(data: bytes, **over: object) -> bytes:
         "python": "3.12",
         "arch": "x86_64",
         "bundle": {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)},
+        # Certified, because that is what an artifact is: a tool the
+        # platform admitted. Tests that want a refusal pass `grant=None`.
+        "grant": certify("wafer-history"),
     }
     body.update(over)
     return json.dumps(body).encode()
@@ -280,3 +285,20 @@ def test_the_fetch_works_without_a_token_for_a_public_project(monkeypatch) -> No
 
     assert _http_get("https://gitlab.example/m") == b"ok"
     assert seen[0].get_header("Private-token") is None
+
+
+def test_the_grant_module_is_a_verbatim_copy_of_the_apps() -> None:
+    """Like `artifact.py`: the rule that admits a tool must mean the same
+    thing where an artifact is built, where it is registered, and where it
+    runs. Two copies that drift are three different platforms."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    app = repo / "src" / "workspace_app" / "tooling" / "grant.py"
+    host = repo / "sandbox-host" / "src" / "sandbox_host" / "grant.py"
+
+    assert host.read_bytes() == app.read_bytes(), (
+        "sandbox-host/src/sandbox_host/grant.py has drifted from the app's copy — "
+        "copy it across; it depends only on the stdlib and cryptography exactly "
+        "so this can stay a verbatim copy"
+    )

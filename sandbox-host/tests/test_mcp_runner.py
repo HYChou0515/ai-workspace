@@ -23,6 +23,8 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from .conftest import certify
+
 from sandbox_host.mcp_runner import main
 
 _MANIFEST_URL = "https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build-tool"
@@ -56,6 +58,9 @@ def _manifest(data: bytes, **over: object) -> bytes:
         "python": "3.12",
         "arch": "x86_64",
         "bundle": {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)},
+        # Certified, because that is what an artifact is: a tool the
+        # platform admitted. Tests that want a refusal pass `grant=None`.
+        "grant": certify("wafer-history"),
     }
     body.update(over)
     return json.dumps(body).encode()
@@ -170,14 +175,17 @@ def test_an_artifact_this_platform_would_refuse_is_refused_here_too(env, capsys)
 
 
 def test_a_url_serving_a_different_tool_is_refused(env, capsys) -> None:
-    # The name in the config is what the engineer's agent will call this
-    # server; a URL that quietly starts serving something else would put
-    # another tool's commands behind that name.
+    """The name in the config is what the engineer's agent will call this
+    server; a URL that quietly starts serving something else would put another
+    tool's commands behind that name.
+
+    Which tool an artifact IS comes from its certificate, not from the name in
+    its manifest — a manifest can call itself anything."""
     data = _bundle()
 
     code = main(
         ["wafer-history", _MANIFEST_URL],
-        fetch=_Wire(manifest=_manifest(data, name="pdf-extract"), bundle=data),
+        fetch=_Wire(manifest=_manifest(data, grant=certify("pdf-extract")), bundle=data),
         hand_over=lambda _e: pytest.fail("must not hand over"),
     )
 

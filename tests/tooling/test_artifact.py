@@ -99,14 +99,14 @@ _HOST = {"builder": "registry.example/tool-builder@sha256:beef", "arch": "x86_64
 def test_check_compatible_accepts_an_artifact_built_for_this_platform() -> None:
     m = parse_manifest(_manifest_bytes())
 
-    check_compatible(m, expected_name="wafer-history", **_HOST)  # does not raise
+    check_compatible(m, **_HOST)  # does not raise
 
 
 def test_check_compatible_refuses_a_bundle_built_against_another_base() -> None:
     m = parse_manifest(_manifest_bytes(builder="registry.example/tool-builder@sha256:old"))
 
     with pytest.raises(IncompatibleArtifact) as exc:
-        check_compatible(m, expected_name="wafer-history", **_HOST)
+        check_compatible(m, **_HOST)
 
     # Refusing here is the whole point: the alternative is a segfault at run
     # time, in someone else's tool, with no trace back to the build.
@@ -118,21 +118,20 @@ def test_check_compatible_refuses_a_bundle_for_another_architecture() -> None:
     m = parse_manifest(_manifest_bytes(arch="aarch64"))
 
     with pytest.raises(IncompatibleArtifact) as exc:
-        check_compatible(m, expected_name="wafer-history", **_HOST)
+        check_compatible(m, **_HOST)
 
     assert "aarch64" in str(exc.value)
 
 
-def test_check_compatible_refuses_when_the_manifest_is_a_different_tool() -> None:
-    # The local name is ours (app.json's key); the manifest's `name` is only a
-    # check that the URL points at the tool we think it does.
-    m = parse_manifest(_manifest_bytes(name="data-fetch"))
+def test_check_compatible_says_nothing_about_which_tool_this_is() -> None:
+    """Identity moved to the certificate the platform signs. It used to live
+    here, as "the manifest's name must equal the name we registered" — which
+    made our name a copy of the author's, so two authors could not both ship
+    a `data-fetch`. And a manifest can claim any name for itself, so it was
+    never evidence of anything."""
+    other = parse_manifest(_manifest_bytes(name="something-else"))
 
-    with pytest.raises(IncompatibleArtifact) as exc:
-        check_compatible(m, expected_name="wafer-history", **_HOST)
-
-    assert "data-fetch" in str(exc.value)
-    assert "wafer-history" in str(exc.value)
+    check_compatible(other, builder="registry.example/tool-builder@sha256:beef", arch="x86_64")
 
 
 def test_verify_bundle_accepts_the_bytes_the_manifest_describes() -> None:

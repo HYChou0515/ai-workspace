@@ -16,6 +16,8 @@ import json
 import tarfile
 from pathlib import Path
 
+from .conftest import certify
+
 from sandbox_host.local_process import LocalProcessSandbox
 from sandbox_host.protocol import SandboxSpec
 from sandbox_host.tool_cache import EXT_DIR, ToolCache
@@ -45,6 +47,8 @@ def _published(version: str, says: str) -> tuple[bytes, bytes]:
             "python": "3.12",
             "arch": "x86_64",
             "bundle": {"sha256": hashlib.sha256(bundle).hexdigest(), "size": len(bundle)},
+            # Certified: an artifact is a tool the platform admitted.
+            "grant": certify("wafer-history"),
         }
     ).encode()
     return manifest, bundle

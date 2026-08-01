@@ -25,6 +25,28 @@ _MANIFEST_URL = "https://gitlab.example/raw/dist/tool.manifest.json?job=build-to
 
 _SCHEMA = {"type": "object", "properties": {}}
 
+# Every artifact here is certified, because that is what an artifact is now:
+# a tool the platform admitted. A test that wants a refusal passes
+# `grant=None`, which reads as the exception it is.
+_PRIVATE, _PUBLIC = __import__("workspace_app.tooling.grant", fromlist=["keypair"]).keypair()
+
+
+def _certify(tool: str = "wafer-history", max_bytes: int | None = None, **kw) -> str:
+    from workspace_app.tooling import grant as grant_mod
+    from workspace_app.tooling.grant import Grant, issue
+
+    # The ordinary limit by default, read when the certificate is made so a
+    # test that shrinks it gets a certificate that agrees.
+    ceiling = grant_mod.DEFAULT_MAX_BYTES if max_bytes is None else max_bytes
+    return issue(Grant(tool=tool, max_bytes=ceiling, **kw), private_key=_PRIVATE)
+
+
+@pytest.fixture(autouse=True)
+def _trusted(monkeypatch):
+    from workspace_app.tooling import grant as grant_mod
+
+    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", {"alice": _PUBLIC})
+
 
 def _bundle(commands: list[str] | None = None) -> bytes:
     names = ["trend"] if commands is None else commands
@@ -56,6 +78,7 @@ def _manifest(data: bytes, **over: object) -> bytes:
         "python": "3.12",
         "arch": "x86_64",
         "bundle": {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)},
+        "grant": _certify(),
     }
     body.update(over)
     return json.dumps(body).encode()
@@ -303,20 +326,20 @@ def test_bytes_that_do_not_match_the_published_sha_are_refused() -> None:
 
 @pytest.fixture
 def signing(monkeypatch):
-    """A signing key this deployment trusts, and a limit small enough that a
-    test bundle can exceed it. The real limit is pinned in test_grant.py."""
+    """A limit small enough that a test bundle exceeds it. The real number is
+    pinned in test_grant.py; the trusted key comes from `_trusted`."""
     from workspace_app.tooling import grant as grant_mod
 
-    private, public = grant_mod.keypair()
-    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", {"alice": public})
     monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 200)
-    return private
+    return _PRIVATE
 
 
-def _token(private, *, tool="wafer-history", max_bytes=10_000_000, expires=None):
+def _token(private, *, tool="wafer-history", max_bytes=10_000_000, publish_until=None):
     from workspace_app.tooling.grant import Grant, issue
 
-    return issue(Grant(tool=tool, max_bytes=max_bytes, expires=expires), private_key=private)
+    return issue(
+        Grant(tool=tool, max_bytes=max_bytes, publish_until=publish_until), private_key=private
+    )
 
 
 def test_an_oversized_artifact_is_refused(signing) -> None:
@@ -387,9 +410,13 @@ def test_a_certificate_issued_to_another_tool_is_not_accepted_here(signing) -> N
         )
 
 
-def test_an_expired_certificate_is_refused_at_the_gate(signing, monkeypatch) -> None:
-    """The author built while it was valid and published; the artifact stays
-    on the platform long after. The gate reads the certificate as of today."""
+def test_an_artifact_published_after_its_deadline_falls_back_to_the_limit(
+    signing, monkeypatch
+) -> None:
+    """The deadline was "ship it now, be under the limit within a month". Past
+    it the allowance is gone, so an oversized artifact is refused again — but
+    what that refuses is REGISTERING a new one. Nothing here reaches a tool
+    already running, which is the whole reason the host never reads this."""
     from datetime import date
 
     from workspace_app.tooling import verify as verify_mod
@@ -397,14 +424,17 @@ def test_an_expired_certificate_is_refused_at_the_gate(signing, monkeypatch) -> 
     data = _bundle()
     monkeypatch.setattr(verify_mod, "_today", lambda: date(2026, 8, 1))
 
-    with pytest.raises(VerifyFailed, match="expired"):
+    with pytest.raises(VerifyFailed, match="2026-01-01"):
         verify_artifact(
             _MANIFEST_URL,
             expected_name="wafer-history",
             builder=_BUILDER,
             arch="x86_64",
             fetch=_wire(
-                manifest=_manifest(data, grant=_token(signing, expires=date(2026, 1, 1))),
+                manifest=_manifest(
+                    data,
+                    grant=_certify(max_bytes=10_000_000, publish_until=date(2026, 1, 1)),
+                ),
                 bundle=data,
             ),
         )
@@ -427,12 +457,9 @@ def test_an_accepted_oversized_artifact_reports_who_granted_it(signing, capsys) 
     assert report.granted_by == "alice"
 
 
-def test_a_tool_inside_the_default_limit_reports_no_grantor(signing, monkeypatch) -> None:
-    """Its certificate, if it has one, was never consulted — naming an issuer
-    would credit somebody with a decision that did not bear on this."""
-    from workspace_app.tooling import grant as grant_mod
-
-    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 10_000)
+def test_every_accepted_artifact_names_who_admitted_it(signing) -> None:
+    """There is no un-admitted tool any more, so there is always an answer to
+    "who let this in" — which is what makes it worth recording."""
     data = _bundle()
 
     report = verify_artifact(
@@ -440,7 +467,7 @@ def test_a_tool_inside_the_default_limit_reports_no_grantor(signing, monkeypatch
         expected_name="wafer-history",
         builder=_BUILDER,
         arch="x86_64",
-        fetch=_wire(manifest=_manifest(data, grant=_token(signing)), bundle=data),
+        fetch=_wire(manifest=_manifest(data, grant=_certify(max_bytes=10_000_000)), bundle=data),
     )
 
-    assert report.granted_by is None
+    assert report.granted_by == "alice"

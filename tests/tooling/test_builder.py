@@ -548,10 +548,13 @@ def signing(monkeypatch):
     return private
 
 
-def _grant(private, *, tool="wafer-history", mb=1, expires=None):
+def _grant(private, *, tool="wafer-history", mb=1, publish_until=None):
     from workspace_app.tooling.grant import Grant, issue
 
-    return issue(Grant(tool=tool, max_bytes=mb * 1024 * 1024, expires=expires), private_key=private)
+    return issue(
+        Grant(tool=tool, max_bytes=mb * 1024 * 1024, publish_until=publish_until),
+        private_key=private,
+    )
 
 
 def test_a_bundle_over_the_limit_is_refused(tmp_path: Path, signing) -> None:
@@ -668,7 +671,10 @@ def test_a_certificate_issued_to_another_tool_does_not_raise_this_one(
     source = _source(tmp_path)  # this tool is "wafer-history"
     (source / "tool-size-grant.token").write_text(_grant(signing, tool="pdf-extract"))
 
-    with pytest.raises(BuildError, match="pdf-extract"):
+    # No longer "this certificate is not yours" — weight and admission are
+    # separate now, and a certificate that does not apply simply raises
+    # nothing. Admission is refused at the gate, where it can be acted on.
+    with pytest.raises(BuildError, match="may weigh"):
         build_artifact(
             source=source,
             out=tmp_path / "dist",
@@ -681,15 +687,16 @@ def test_a_certificate_issued_to_another_tool_does_not_raise_this_one(
 def test_an_expired_certificate_says_it_expired_rather_than_too_big(
     tmp_path: Path, signing, monkeypatch
 ) -> None:
-    """The two failures need different actions: one is deleting dependencies,
-    the other is asking us. Reporting the wrong one costs an afternoon."""
+    """Past the deadline the allowance is gone, so the build refuses again —
+    and says the allowance ran out rather than "too big", because the two need
+    different actions: one is deleting dependencies, the other is asking us."""
     from workspace_app.tooling import builder as mod
 
     source = _source(tmp_path)
-    (source / "tool-size-grant.token").write_text(_grant(signing, expires=date(2026, 1, 1)))
+    (source / "tool-size-grant.token").write_text(_grant(signing, publish_until=date(2026, 1, 1)))
     monkeypatch.setattr(mod, "_today", lambda: date(2026, 8, 1))
 
-    with pytest.raises(BuildError, match="expired"):
+    with pytest.raises(BuildError, match="publish until"):
         build_artifact(
             source=source,
             out=tmp_path / "dist",
