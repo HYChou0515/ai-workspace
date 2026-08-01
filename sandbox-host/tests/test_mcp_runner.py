@@ -257,3 +257,54 @@ def test_a_stale_answer_says_the_artifact_store_was_unreachable(env, capsys) -> 
 
     assert code == 0
     assert "unreachable" in capsys.readouterr().err
+
+
+# ─── where a tool's files go ─────────────────────────────────────────
+
+
+def test_nothing_mounted_is_detected_for_a_path_that_is_not_there() -> None:
+    from sandbox_host.mcp_runner import _nothing_mounted_at
+
+    assert _nothing_mounted_at("/definitely/not/mounted/anywhere")
+
+
+def test_an_unmounted_workspace_is_called_out_before_the_tool_runs(
+    env, capsys, monkeypatch
+) -> None:
+    """Reads fail loudly when nothing is mounted — "no such file". Writes do
+    not: the tool succeeds, reports a path, and the file goes with the
+    container. The agent then tells someone their download is ready and it is
+    nowhere on their disk.
+
+    Measured: `docker run` with no `-v …:/work` wrote the file into the
+    container layer and it was gone on exit."""
+    from sandbox_host import mcp_runner
+
+    monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: True)
+    data = _bundle()
+
+    main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        hand_over=lambda _e: None,
+    )
+
+    err = capsys.readouterr().err
+    assert "/work" in err
+    assert "lost" in err.lower()
+
+
+def test_a_mounted_workspace_says_nothing(env, capsys, monkeypatch) -> None:
+    # The normal case. A warning on every start is a warning nobody reads.
+    from sandbox_host import mcp_runner
+
+    monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: False)
+    data = _bundle()
+
+    main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        hand_over=lambda _e: None,
+    )
+
+    assert "lost" not in capsys.readouterr().err.lower()

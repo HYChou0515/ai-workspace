@@ -45,6 +45,22 @@ _USAGE = (
 CACHE_ENV = "TOOL_CACHE_DIR"
 DEFAULT_CACHE = "/cache"
 
+#: The working directory, and therefore what a tool's relative paths mean.
+#: Meant to be the engineer's project, mounted in.
+WORK_DIR = "/work"
+
+
+def _nothing_mounted_at(path: str) -> bool:
+    """True when `path` is an ordinary directory in the container's own layer
+    rather than something mounted in.
+
+    A directory and a mount point look identical from inside; what separates
+    them is the device they live on."""
+    try:
+        return os.stat(path).st_dev == os.stat("/").st_dev
+    except OSError:
+        return True
+
 
 def _unguarded(_root: Path) -> None:
     """The host makes an installed tool root-owned, because many sandboxes
@@ -120,6 +136,18 @@ def main(
         else ""
     )
     print(f"{resolved.name} {resolved.version} [{resolved.sha[:12]}]{note}", file=sys.stderr)
+
+    # Said once, at startup, because the failure it warns about is silent.
+    # A tool reading a missing file fails loudly; a tool WRITING one succeeds,
+    # reports the path, and the file leaves with the container — so the agent
+    # tells someone their file is ready and their disk disagrees.
+    if _nothing_mounted_at(WORK_DIR):
+        print(
+            f"warning: nothing is mounted at {WORK_DIR}, so files this tool "
+            f'writes are lost when it exits. Add -v "$PWD:{WORK_DIR}" to work '
+            "on your own files.",
+            file=sys.stderr,
+        )
 
     hand_over(cache.path_for(resolved.sha) / "mcp")
     return 0

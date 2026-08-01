@@ -46,6 +46,16 @@ RUN uv sync --frozen --no-dev
 # — one orphan holding a whole unpacked bundle per start, surviving even
 # `docker rm`. Left as an ordinary directory, an unmounted cache lives in the
 # container's own layer and goes when the container does.
+#
+# Created here, and writable by any uid, so the image works under
+# `--user "$(id -u):$(id -g)"` — which is how a tool's output ends up owned by
+# the engineer instead of by root. Without this, `--user` cannot create the
+# directory, and a fresh named volume (which inherits this path's mode)
+# could not be written either.
+#
+# 0777 is safe because this cache has one consumer. Give each person their own
+# volume, as the docs say; it is not a shared tree like the host's.
+RUN mkdir -p /cache && chmod 0777 /cache
 
 # Tools resolve relative paths against the working directory, exactly as they
 # do on the platform, where it is the user's workspace. Mount the project here.

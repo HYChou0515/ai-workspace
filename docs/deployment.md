@@ -640,7 +640,7 @@ docker build -f sandbox-host/mcp-runner.Dockerfile \
 
 ```json
 { "mcpServers": { "wafer-history": { "command": "docker", "args": [
-    "run","-i","--rm",
+    "run","-i","--rm","--user","1000:1000",
     "-v","mcp-tools:/cache","-v","${PWD}:/work",
     "-e","TOOL_ARTIFACT_TOKEN",
     "registry/ai-workspace/mcp-runner:<tag>",
@@ -659,6 +659,11 @@ docker build -f sandbox-host/mcp-runner.Dockerfile \
 - **它跑的是和平台同一段 `resolve`。** 同樣的 builder 閘門、同樣的 sha 驗證、同樣的
   「artifact 過期」提示。烤進 image 的做法在執行時**什麼都不驗**——複製進去的是什麼就跑什麼。
 - **新版自動生效**,和「下一個 sandbox 就是新版」同一個性質。
+- **叫他們加 `--user "$(id -u):$(id -g)"`。** 容器預設以 root 執行,工具寫進他們專案的檔
+  會是 root 所有,自己刪不掉。映像裡的 `/cache` 是 0777 就是為了讓 `--user` 跑得起來
+  （新的 named volume 會繼承這個 mode）。
+- **沒掛 `/work` 的話,寫檔是靜默丟失。** 讀檔會大聲失敗,寫檔卻會「成功」然後隨容器消失。
+  runner 啟動時會在 stderr 提醒。
 - **快取 volume 請一個人用一個。** host 端會把工具樹 chown 成 root，因為那裡是多個
   不同 uid 的 sandbox 共用一棵樹;runner 的快取只有掛載它的人在讀，所以不做這件事。
 - **叫他們用 named volume，不要 bind mount 主機目錄。** 容器以 root 執行（和 host 一樣），
