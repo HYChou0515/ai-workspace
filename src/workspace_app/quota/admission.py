@@ -29,10 +29,17 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
-from ..api.sandbox_activity import IActivityStore, LiveSandbox
 from ..config.schema import PerUserResources
 from .limits import ResourceLimits, parse_size
+
+if TYPE_CHECKING:  # pragma: no cover — types only
+    # Imported for typing ONLY. `quota` sits below `api` in the import graph and
+    # must stay there: a runtime import here closes a cycle (`api.app` needs the
+    # gate, this module would need `api`), and at runtime the gate only ever
+    # calls `live_for` on whatever it was handed.
+    from ..api.sandbox_activity import IActivityStore, LiveSandbox
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +74,7 @@ class AdmissionGate:
     def __init__(
         self,
         activity: IActivityStore | None,
-        limits: PerUserResources,
+        limits_for: Callable[[str], Awaitable[PerUserResources]],
         *,
         owner_of: Callable[[str], str | None],
         has_live_sandbox: Callable[[str], Awaitable[bool]],
@@ -75,15 +82,18 @@ class AdmissionGate:
         now_ms: Callable[[], int],
     ) -> None:
         self._activity = activity
-        self._limits = limits
+        # Resolved per check, not captured at construction: raising someone's
+        # allowance has to take effect on their next turn, not at the next
+        # restart. It is one point read on a path already about to query the
+        # ledger.
+        self._limits_for = limits_for
         self._owner_of = owner_of
         self._has_live = has_live_sandbox
         self._window_ms = window_ms
         self._now_ms = now_ms
 
-    @property
-    def _configured(self) -> bool:
-        lim = self._limits
+    @staticmethod
+    def _configured(lim: PerUserResources) -> bool:
         return bool(lim.count or lim.cpu or parse_size(lim.memory))
 
     async def check(self, item_id: str, incoming: ResourceLimits | None = None) -> None:
@@ -98,10 +108,13 @@ class AdmissionGate:
         A no-op when no per-person limit is configured, when there is no shared
         activity store to tally against (single-process), or when the item
         already has a live sandbox."""
-        if self._activity is None or not self._configured:
+        if self._activity is None:
             return
         owner = self._owner_of(item_id)
         if not owner:
+            return
+        limits = await self._limits_for(owner)
+        if not self._configured(limits):
             return
         if await self._has_live(item_id):
             return  # already holding its slot — never refuse what is already open
@@ -109,12 +122,15 @@ class AdmissionGate:
         live = [
             s for s in await self._activity.live_for(owner, since_ms=since) if s.item_id != item_id
         ]
-        self._enforce(owner, live, incoming)
+        self._enforce(owner, live, incoming, limits)
 
     def _enforce(
-        self, owner: str, live: list[LiveSandbox], incoming: ResourceLimits | None
+        self,
+        owner: str,
+        live: list[LiveSandbox],
+        incoming: ResourceLimits | None,
+        lim: PerUserResources,
     ) -> None:
-        lim = self._limits
         add_cpu = incoming.cpu_cores if incoming else 0.0
         add_mem = incoming.memory_bytes if incoming else 0
         checks: tuple[tuple[str, float, float], ...] = (

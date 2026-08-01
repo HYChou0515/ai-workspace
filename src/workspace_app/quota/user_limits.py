@@ -1,0 +1,122 @@
+"""Per-person limits, in two layers: a deploy default and an optional override.
+
+A single number for everyone cannot express "this person is an exception", and
+exceptions are certain — somebody will need to run something large. So the read
+path is `override ◇ deploy default`, with only the second layer populated until
+an operator sets the first.
+
+Resolved per CHECK rather than captured at boot, so raising someone's allowance
+takes effect on their next turn instead of at the next restart. That costs one
+point read on the path that was already about to query the ledger.
+
+An override is per DIMENSION: setting only `count` leaves cpu/memory/disk on the
+deploy default, the same fall-through the per-App limits use, so an exception
+grants exactly what it says and nothing else.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+
+from msgspec import Struct
+from specstar import SpecStar
+from specstar.types import (
+    DuplicateResourceError,
+    ResourceIDNotFoundError,
+    ResourceIsDeletedError,
+    RevisionStatus,
+)
+
+from ..config.schema import PerUserResources
+
+logger = logging.getLogger(__name__)
+
+
+class _UserQuota(Struct):
+    """One person's overrides. resource_id == user id, so a lookup is a point
+    read. Every field is optional in the "0 / empty means not stated" sense this
+    feature uses everywhere — an override says only what it changes."""
+
+    user_id: str
+    count: int = 0
+    cpu: float = 0.0
+    memory: str = ""
+    disk: str = ""
+
+
+def register_user_quota(spec: SpecStar) -> None:
+    """Idempotently register the override model, post-`spec.apply`. Its CRUD
+    routes stay unemitted: writing an allowance is an admin action with its own
+    guarded route, not something any authenticated caller may PUT."""
+    with contextlib.suppress(ValueError):
+        spec.add_model(_UserQuota)
+
+
+class UserLimits:
+    """Resolves one person's effective limits, and records overrides."""
+
+    def __init__(self, spec: SpecStar, default: PerUserResources) -> None:
+        self._spec = spec
+        self._default = default
+
+    @property
+    def default(self) -> PerUserResources:
+        return self._default
+
+    async def for_user(self, user_id: str) -> PerUserResources:
+        override = await asyncio.to_thread(self._read_sync, user_id)
+        if override is None:
+            return self._default
+        d = self._default
+        return PerUserResources(
+            count=override.count or d.count,
+            cpu=override.cpu or d.cpu,
+            memory=override.memory or d.memory,
+            disk=override.disk or d.disk,
+        )
+
+    def _read_sync(self, user_id: str) -> _UserQuota | None:
+        rm = self._spec.get_resource_manager(_UserQuota)
+        try:
+            res = rm.get(user_id)
+        except (ResourceIDNotFoundError, ResourceIsDeletedError, KeyError):
+            return None
+        data = res.data
+        assert isinstance(data, _UserQuota)
+        return data
+
+    async def set_for(self, user_id: str, limits: PerUserResources) -> None:
+        await asyncio.to_thread(self._set_sync, user_id, limits)
+
+    def _set_sync(self, user_id: str, limits: PerUserResources) -> None:
+        rm = self._spec.get_resource_manager(_UserQuota)
+        rec = _UserQuota(
+            user_id=user_id,
+            count=limits.count,
+            cpu=limits.cpu,
+            memory=limits.memory,
+            disk=limits.disk,
+        )
+        logger.info("quota: setting per-user override for %s -> %s", user_id, rec)
+        try:
+            rm.modify(user_id, rec, status=RevisionStatus.draft)
+            return
+        except ResourceIDNotFoundError:
+            pass
+        except ResourceIsDeletedError:
+            rm.restore(user_id)
+            rm.modify(user_id, rec, status=RevisionStatus.draft)
+            return
+        with contextlib.suppress(DuplicateResourceError):
+            rm.create(rec, resource_id=user_id, status=RevisionStatus.draft)
+
+    async def clear_for(self, user_id: str) -> None:
+        """Drop an override so the person falls back to the deploy default."""
+        await asyncio.to_thread(self._clear_sync, user_id)
+
+    def _clear_sync(self, user_id: str) -> None:
+        rm = self._spec.get_resource_manager(_UserQuota)
+        with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError, KeyError):
+            rm.delete(user_id)

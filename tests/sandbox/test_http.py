@@ -49,6 +49,11 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     app.state.created_item_ids = []  # #492: item_ids seen by create
     app.state.persisted = []  # #492: (rid, delete) seen by persist
     app.state.created_tools = []  # #674: `{name: sha}` seen by create
+    # The resource ceilings the host reads off a create. Modelled here because a
+    # test that only asserted "our side sent something" would be immune to the
+    # one regression that matters — the app and the host disagreeing about the
+    # field names. These are the names `sandbox_host.app._CreateBody` declares.
+    app.state.created_limits = []
     app.state.resolved = []  # #674: tool declarations seen by /tools/resolve
 
     @app.exception_handler(SandboxNotFound)
@@ -63,6 +68,9 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     async def create(body: dict) -> dict[str, str]:
         app.state.created_item_ids.append(body.get("item_id"))  # #492: capture for assertions
         app.state.created_tools.append(body.get("tools"))  # #674
+        app.state.created_limits.append(
+            (body.get("cpu_cores"), body.get("memory_bytes"), body.get("pids_max"))
+        )
         h = await backend.create(SandboxSpec())
         return {"pod_url": advertise_url, "remote_id": h.id}
 
@@ -653,3 +661,26 @@ async def test_no_env_sends_the_same_request_it_always_did():
         h = await sb.create(SandboxSpec())
         await sb.exec(h, ["true"])
     assert seen[-1] == {"cmd": ["true"]}
+
+
+async def test_create_sends_the_items_resource_ceilings():
+    """P3: the App-resolved ceilings travel with `create`, under the names the
+    real host reads (`sandbox_host.app._CreateBody`)."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        await sb.create(SandboxSpec(cpu_cores=2.0, memory_bytes=1024, pids_max=64))
+    assert app.state.created_limits == [(2.0, 1024, 64)]
+
+
+async def test_create_states_nothing_when_the_app_has_no_limits():
+    """An unstated ceiling must go on the wire as null, not as 0: the host reads
+    null as "use my default" and 0 as "explicitly unbounded", and sending the
+    wrong one would hand every sandbox unlimited memory."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        await sb.create(SandboxSpec())
+    assert app.state.created_limits == [(None, None, None)]

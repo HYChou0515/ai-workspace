@@ -55,9 +55,12 @@ def _gate(
     async def _has_live(item_id: str) -> bool:
         return item_id in held
 
+    async def _limits_for(_owner: str) -> PerUserResources:
+        return limits
+
     return AdmissionGate(
         store,
-        limits,
+        _limits_for,
         owner_of=lambda item: "alice" if item.startswith("a-") else None,
         has_live_sandbox=_has_live,
         window_ms=1800_000,  # the reaper's idle threshold

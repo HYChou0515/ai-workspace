@@ -45,6 +45,17 @@ class SandboxSpec:
     env: dict[str, str] | None = None
     exposed_ports: tuple[int, ...] = ()
 
+    cpu_cores: float | None = None
+    memory_bytes: int | None = None
+    pids_max: int | None = None
+    """Per-sandbox resource ceilings, resolved by the app from the item's App.
+
+    `None` means "not stated" and the host applies its configured
+    `SANDBOX_HOST_*` default — which is also what happens when an older app
+    sends no such field at all, so the two are the same case and neither side
+    has to be deployed first. **0 is different**: it means explicitly unbounded.
+    """
+
     tools: dict[str, str] | None = None
     """#674: third-party tools to make available, as `{local name: sha}`.
     The sha names a bundle already installed in the host's content-addressed

@@ -156,6 +156,8 @@ class WorkspaceFiles:
         handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
         rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
         quota: int | Callable[[str], int] = 0,
+        person_gate: Callable[[str, int, int], Awaitable[None]] | None = None,
+        on_usage: Callable[[str, int], Awaitable[None]] | None = None,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -172,6 +174,21 @@ class WorkspaceFiles:
         self._quota_for: Callable[[str], int] = (
             quota if callable(quota) else (lambda _ws, _q=quota: _q)
         )
+        # The SECOND gate: this workspace's owner may also have a total across
+        # every item they own. Injected as a callback rather than implemented
+        # here — the facade knows about workspaces, not about people — and only
+        # consulted when a write actually GROWS the workspace, so the per-person
+        # rule inherits the same "shrinking and deleting always pass" guarantee
+        # without restating it. Called as (workspace_id, its new size, growth).
+        self._person_gate = person_gate
+        # Publishes a workspace's size whenever this facade has a fresh one.
+        # It has to fire on SHRINKS and DELETES too, not only on growth: a
+        # durable per-person total that only ever learns about writes would keep
+        # charging for bytes the user just deleted, which is #538's "clear the
+        # workspace, still be told you are out of space" all over again — this
+        # time across items, where the user cannot even see what is charging
+        # them.
+        self._on_usage = on_usage
         # Async resolver: item → the handle its ONE live sandbox is reachable at,
         # or None when the item is globally cold (#492 same-source resolution).
         self._handle_for = handle_for
@@ -553,6 +570,18 @@ class WorkspaceFiles:
         if measured is not None:
             measured.total += delta
 
+    async def _publish_usage(self, workspace_id: str, total: int) -> None:
+        """Hand a fresh size to whoever is keeping the durable per-person sum.
+        Best-effort by design: a ledger write that fails must not fail the user's
+        write — the worst it costs is a total that stays stale until the next
+        measurement."""
+        if self._on_usage is None:
+            return
+        try:
+            await self._on_usage(workspace_id, max(total, 0))
+        except Exception:  # noqa: BLE001 — accounting must never break a write
+            logger.warning("files: usage publish failed for %s", workspace_id, exc_info=True)
+
     def _forget(self, workspace_id: str) -> None:
         """Drop the measurement after a change whose size we didn't compute, so
         the next read measures rather than serving a number we know is stale."""
@@ -579,12 +608,19 @@ class WorkspaceFiles:
         when there is no quota and nothing was looked up; the caller then drops
         its measurement rather than guessing."""
         quota = self._quota_for(workspace_id)
-        if not quota:
+        # The per-person total binds even where the item itself is uncapped, so
+        # this cannot short-circuit on `quota` alone — only on there being no
+        # rule of either kind to apply.
+        if not quota and self._person_gate is None:
             return None
         used, old = await self._usage_and_size(workspace_id, path, warm)
         growth = new_size - old
-        if growth > 0 and used + growth > quota:
-            raise WorkspaceFull(used=used, quota=quota, attempted=new_size)
+        if growth > 0:
+            if quota and used + growth > quota:
+                raise WorkspaceFull(used=used, quota=quota, attempted=new_size)
+            if self._person_gate is not None:
+                await self._person_gate(workspace_id, used + growth, growth)
+        await self._publish_usage(workspace_id, used + growth)
         return old
 
     async def ensure_room_for(self, workspace_id: str, extra_bytes: int) -> None:
@@ -596,11 +632,13 @@ class WorkspaceFiles:
         clean up while over quota. Per-write gating alone can only fail in the
         middle."""
         quota = self._quota_for(workspace_id)
-        if not quota or extra_bytes <= 0:
+        if extra_bytes <= 0 or (not quota and self._person_gate is None):
             return
         used = await self.workspace_usage(workspace_id)
-        if used + extra_bytes > quota:
+        if quota and used + extra_bytes > quota:
             raise WorkspaceFull(used=used, quota=quota, attempted=extra_bytes)
+        if self._person_gate is not None:
+            await self._person_gate(workspace_id, used + extra_bytes, extra_bytes)
 
     async def _usage_and_size(
         self, workspace_id: str, path: str, warm: tuple[Sandbox, SandboxHandle] | None
@@ -690,6 +728,11 @@ class WorkspaceFiles:
             self._forget(workspace_id)
         else:
             self._adjust(workspace_id, -freed)
+        # Deleting is exactly what someone at their limit does, so the freed
+        # bytes must reach the per-person total NOW — not at the next mirror
+        # sweep, by which time they have already retried and been refused again.
+        if self._on_usage is not None:
+            await self._publish_usage(workspace_id, await self.workspace_usage(workspace_id))
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = abs_path(prefix) if prefix else prefix

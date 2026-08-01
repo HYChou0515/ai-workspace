@@ -30,7 +30,9 @@ from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
 from ..quota.admission import AdmissionGate, SandboxQuotaExceeded
-from ..quota.limits import ResourceLimits
+from ..quota.disk_ledger import DiskLedger, UserDiskFull, register_disk_ledger
+from ..quota.limits import ResourceLimits, parse_size
+from ..quota.user_limits import UserLimits, register_user_quota
 from ..resources import (
     AgentConfig,
     CheckRun,
@@ -76,6 +78,7 @@ from .locator import ItemLocator
 from .mention import MentionService
 from .meta_routes import register_meta_routes
 from .notifications import register_notification_routes
+from .quota_routes import register_quota_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
 from .review_inbox_routes import register_review_inbox_routes
@@ -535,6 +538,43 @@ def create_app(
         found = find_work_item(spec, item_id)
         return app_resources.get(found[0]) if found is not None else None
 
+    disk_ledger = DiskLedger(spec)
+    user_limits = UserLimits(spec, per_user_resources or PerUserResources())
+
+    async def _person_disk_gate(item_id: str, new_size: int, growth: int) -> None:
+        """The per-person disk total, checked only on GROWTH.
+
+        `new_size` is this workspace's LIVE size (measured on the write path, so
+        exact); the ledger supplies the other items' last measured sizes. The
+        item being written is excluded from the sum so its stale row and the
+        fresh number cannot both be counted.
+
+        This only DECIDES. Recording is `_record_usage` below, wired as the
+        facade's usage publisher so that shrinks and deletes update the ledger
+        too — a total that only learned about growth would keep charging for
+        bytes the user just deleted."""
+        owner = _owner_of(item_id)
+        if not owner:
+            return
+        limit = parse_size((await user_limits.for_user(owner)).disk)
+        if not limit:
+            return
+        others = await disk_ledger.total_for(owner, exclude=item_id)
+        if others + new_size > limit:
+            raise UserDiskFull(
+                owner=owner,
+                used=others + new_size - growth,
+                quota=limit,
+                attempted=growth,
+            )
+
+    async def _record_usage(item_id: str, total: int) -> None:
+        """The ledger's single writer: every fresh measurement this facade takes,
+        whichever direction it moved."""
+        owner = _owner_of(item_id)
+        if owner:
+            await disk_ledger.record(item_id, owner, total)
+
     def _quota_for(item_id: str) -> int:
         """Disk ceiling for one item: its App's, else the deploy-wide number.
 
@@ -596,10 +636,12 @@ def create_app(
         # The rule is now per-App (a data-analysis workspace is not a chat
         # workspace), so what the facade holds is a LOOKUP, not a number.
         quota=_quota_for,
+        person_gate=_person_disk_gate,
+        on_usage=_record_usage,
     )
     admission = AdmissionGate(
         activity_store,
-        per_user_resources or PerUserResources(),
+        user_limits.for_user,
         owner_of=_owner_of,
         has_live_sandbox=registry.has_live_sandbox,
         # The window over which a heartbeat still counts as a live sandbox. It is
@@ -709,6 +751,24 @@ def create_app(
             content={
                 "detail": {
                     "error": "workspace_quota_exceeded",
+                    "used": exc.used,
+                    "quota": exc.quota,
+                    "attempted": exc.attempted,
+                }
+            },
+        )
+
+    @app.exception_handler(UserDiskFull)
+    async def _user_disk_full(_request: Request, exc: UserDiskFull) -> JSONResponse:
+        """The per-person sibling of the full-workspace 507. Reported separately
+        because the remedy is different: the space to free may be in a completely
+        different item, so an FE that said "this workspace is full" would send
+        the user looking in the wrong place."""
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "error": "user_quota_exceeded",
                     "used": exc.used,
                     "quota": exc.quota,
                     "attempted": exc.attempted,
@@ -922,6 +982,8 @@ def create_app(
     # wired for one backend; now that it is also the per-person ledger, a
     # sandbox wake on a bare test client would hit an unregistered model.
     register_sandbox_activity(spec)
+    register_disk_ledger(spec)
+    register_user_quota(spec)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -1436,6 +1498,21 @@ def create_app(
         get_user_id=get_user_id,
         workflow_credentials=workflow_credentials,
         workflow_executor=workflow_executor,
+    )
+
+    register_quota_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        registry=registry,
+        files=files,
+        activity=activity_store,
+        disk_ledger=disk_ledger,
+        user_limits=user_limits,
+        get_user_id=get_user_id,
+        idle_window_ms=int(idle_timeout.total_seconds() * 1000),
+        now_ms=lambda: int(datetime.now(UTC).timestamp() * 1000),
+        superusers=superusers,
     )
 
     register_file_routes(

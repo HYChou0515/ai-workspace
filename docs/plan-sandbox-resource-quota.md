@@ -117,7 +117,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 **設計註記** spec 層 `None` = 未指定、`0` = 明確無上限,**兩者不能合併**:合併的話,一個刻意解除限制的 App 會反過來繼承部署的限制。
 
-### P3 — http / sandbox-host
+### P3 — http / sandbox-host ✅ 已完成
 
 **交付** `POST /sandboxes` 的 payload 帶資源;sandbox-host 收到就用、沒收到吃自己的 `SANDBOX_HOST_*`;host 那份 `isolated_process.py` 同步改。
 
@@ -131,7 +131,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 **地雷** `sandbox-host/` 是獨立專案(自己的 pyproject / uv.lock / CI),**不能 import `workspace_app`**——共用的小工具要各留一份。
 
-### P4 — per-app disk quota
+### P4 — per-app disk quota ✅ 已完成
 
 **交付** `files/facade.py` 的上限從單一 scalar 改成「該 item 所屬 App 的值」;`create_app(workspace_quota=)` 退成 fallback。
 
@@ -145,7 +145,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 **地雷** 這是所有寫入共用的節流點(#245 / #538)。改錯的後果是滿的工作區連清空間都做不到。
 
-### P5 — cpu/mem 帳本 + 准入閘門
+### P5 — cpu/mem 帳本 + 准入閘門 ✅ 已完成
 
 **交付** 活體帳(綁 `api/sandbox_activity.py` 的心跳 / 探活)、按 owner 統計;閘門裝在 `chat_send.send`、`workflow_exec`、terminal `POST /exec`;507 + 明確錯誤碼。
 
@@ -162,7 +162,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 - `owner` 目前不在任何 App 的 `INDEXED_FIELDS`。它是 Tier-1 平台結構欄位,應該由 `apps/registry.py` 的 registrar **一律補上**,不能靠每個 App 自己記得,否則新 App 會漏
 - ⚠️ 部署後**必須跑 `POST /{model}/migrate/execute`**,否則舊 item 對 `owner` 述詞是隱形的 → 額度算少(同 #668 教訓)
 
-### P6 — disk 帳本 + per-user 總量
+### P6 — disk 帳本 + per-user 總量 ✅ 已完成
 
 **交付** measurement 落地成一列(item, owner, bytes, measured_at,索引 owner),來源是現成的 `SandboxSync.on_measured → record_measurement`(目前只放記憶體);`_ensure_headroom` 加第二層檢查。
 
@@ -176,7 +176,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 **已知取捨** per-user 總量必然是**略微過期**的數字(以最後一次量測為準),即時加總所有 item 太貴。所以 per-user 那層是近似的,可能短暫超標一點;**per-item 那層仍然即時精準**。
 
-### P7 — per-user 覆寫 + admin 入口
+### P7 — per-user 覆寫 + admin 入口 ✅ 已完成
 
 **交付** specstar model(id = user id)、兩層讀取(覆寫 ◇ 全站預設)、admin 設定入口。
 
@@ -196,7 +196,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 **註** 共用情境下「關閉」是**真的把 sandbox 關掉**,不是只把自己從帳上移除——機器資源只有一份,只移除帳面等於帳是假的。
 
-### P9 — 排程 workflow 的失敗紀錄
+### P9 — 排程 workflow 的失敗紀錄 ✅ 已完成
 
 **驗收** 定時觸發撞到額度 → 隔天在畫面上**看得到**「因額度不足未執行」,不是靜靜消失。
 
