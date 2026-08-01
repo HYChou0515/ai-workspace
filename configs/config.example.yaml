@@ -252,6 +252,13 @@
 #     cpu: 0            # summed cores of those sandboxes (0 = unlimited)
 #     memory: ""        # summed memory of those sandboxes
 #     disk: 200G        # summed workspace bytes across every item they own
+#   # Per-person EXCEPTIONS are not configured here — they are data, set by a
+#   # superuser at PUT /api/admin/user-resources/{user}, and they take effect on
+#   # that person's next turn (the gate resolves limits per check, not at boot).
+#   # An override states only the dimensions it names; the rest keep these
+#   # defaults. Everyone can see their own usage at /my-resources, which is also
+#   # where they close a live environment to get a slot back — the limits refuse
+#   # rather than evict, so that page is how being at your limit is survivable.
 
 # ─── runner (RCA agent loop) ──────────────────── [OPT] ─────────────
 # runner:

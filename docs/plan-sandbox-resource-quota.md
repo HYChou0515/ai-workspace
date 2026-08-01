@@ -159,8 +159,8 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 **地雷**
 
 - `api/turns.py:746` 的預熱是 `suppress(Exception)`,**不能當閘門**
-- `owner` 目前不在任何 App 的 `INDEXED_FIELDS`。它是 Tier-1 平台結構欄位,應該由 `apps/registry.py` 的 registrar **一律補上**,不能靠每個 App 自己記得,否則新 App 會漏
-- ⚠️ 部署後**必須跑 `POST /{model}/migrate/execute`**,否則舊 item 對 `owner` 述詞是隱形的 → 額度算少(同 #668 教訓)
+- ~~`owner` 要進每個 App 的 `INDEXED_FIELDS`,部署後跑 migrate~~ —— **實作後訂正:不需要**。歸屬是用 `find_work_item` 對 item **點查**(不是對 item 表下 `owner` 述詞),而兩本帳(`_SandboxActivity` / `_WorkspaceDisk`)各自帶著**自己的** `owner` 欄位並索引在自己身上。所以 **item model 不必加索引、不必跑 migrate**,#668 那個陷阱在這裡不成立。
+- ⚠️ 但 `list_resources` **會回傳 soft-deleted 的列**,而 `forget` 是軟刪除。查詢一定要帶 `is_deleted == False`,否則被回收的 sandbox 會永遠佔著它 owner 的額度——正是這本帳存在要避免的那個失敗。
 
 ### P6 — disk 帳本 + per-user 總量 ✅ 已完成
 
@@ -186,11 +186,15 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 2. 沒有覆寫記錄 = 吃全站預設
 3. 改完**不用重啟**就生效
 
-### P8 — 「我的資源使用」畫面 ← 這一關才叫做完
+### P8 — 「我的資源使用」畫面 ✅ 已完成
 
 **交付** 用量 / 上限;cpu/mem 半列出活著的執行環境 + **關閉**鈕;disk 半列出 item 用量 + **刪除**鈕。
 
 **驗收** 親自按過一輪:**被 507 擋住 → 進畫面 → 關掉 / 刪掉 → 同一個操作重試成功**。
+
+**實測結果**(在真的跑起來的服務 + 真 Chromium 上,不是替身):`per_user.count: 1` → 開第二個 item 的 terminal 回 `507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes"}` → `/my-resources` 顯示「執行環境 1 個 / 1 個 · 第二個 · 1 核 · 512 MB」與「儲存空間 2.9 MB / 80 MB」→ 在瀏覽器點「關閉」→ 變成「0 個 / 1 個 · 目前沒有執行中的環境」→ 同一個 exec 回 200。
+
+**一個刻意的取捨**:disk 那半**不在這裡刪檔**,只列出用量並連到該項目。刪除要在項目自己的檔案清單做,因為那是唯一看得到「正在刪什麼」的地方,而在這裡誤刪是不可回復的。畫面上明講了這件事,也明講「刪除永遠不受額度限制」。
 
 少了這一關,§1.3 的「直接拒絕」是缺一半的決定。
 
@@ -204,13 +208,17 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 ## 3. 最後對帳
 
-1. 兩個 App 設不同 cpu / mem / disk,**在 http 後端**實測有差 ← P3 沒做這條就是假的
-2. 一個人開到上限被擋,且擋在 **turn 送出前**
-3. 被擋的人能**自己**在畫面上解決,不用找人
-4. 額度不會因為 pod 猝死 / reap 漏掉而**永久蒸發**
-5. app.json 超過部署天花板 → **開機失敗並指名 App**
-6. 什麼都不設的既有部署,行為**完全不變**
-7. ⚠️ **#687 沒做之前,以上全部可被繞過**(改 `owner` 就把帳丟給別人)
+| # | 條件 | 狀態 | 憑什麼 |
+|---|---|---|---|
+| 1 | 兩個 App 設不同 cpu / mem / disk 真的有差 | ✅ | `tests/quota/test_spec_plumbing.py`(cgroup 檔案內容)、`test_per_app_disk.py`(同樣大小一過一擋)。⚠️ **http 後端要重新部署 sandbox-host 才生效**;契約兩半各自有測試,但沒有在真 host 上跑過 |
+| 2 | 開到上限被擋,且擋在 turn 送出前 | ✅ | `test_turn_gate.py` 斷言訊息**沒有**被寫進 store |
+| 3 | 被擋的人能自己在畫面上解決 | ✅ | 真服務 + 真瀏覽器實測(見 P8);`test_routes.py` 補端對端 |
+| 4 | 額度不會因 pod 猝死 / reap 漏掉而永久蒸發 | ✅ | `test_admission.py` 兩條:`forget` 後回來、**完全不呼叫任何清理**只等視窗過期也回來 |
+| 5 | app.json 超過天花板 → 開機失敗並指名 App | ✅ | `test_boot.py`、`test_limits.py` |
+| 6 | 什麼都不設的既有部署行為完全不變 | ✅ | 三層解析最底層就是今天的旋鈕;全套 5455 passed |
+| 7 | ⚠️ #687 沒做之前以上全部可被繞過 | ❌ **仍成立** | `owner` 仍是誰都能 PATCH 的欄位 |
+
+**唯一沒有實機驗證的**:第 1 條的 http 後端那一半 —— 需要一個真的 sandbox-host 部署。程式碼兩側都有測試,但「重新部署後兩個 App 真的拿到不同 cgroup」這件事我沒有辦法在這裡證明。
 
 **不在本計畫範圍**:owner 轉移 UI(= #687)。
 
