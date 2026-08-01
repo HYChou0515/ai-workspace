@@ -1,0 +1,128 @@
+/**
+ * "My resource usage" — the way out of being at your limit.
+ *
+ * The backend refuses outright rather than evicting anything, which is only a
+ * defensible choice if the person refused has somewhere to go. This page is that
+ * place: two lists, each with the action that frees the thing it lists.
+ *
+ * The split mirrors the two kinds of resource, because the actions differ:
+ * a live environment is CLOSED (cpu/memory come back at once), while stored
+ * bytes are DELETED (and deleting is never quota-gated, so it always works —
+ * that is what makes an over-limit state recoverable).
+ */
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
+
+import { type MyResourcesApi, myResourcesApi } from "../api/myResources";
+import { qk } from "../api/queryKeys";
+
+/** Bytes → a short human string. Sizes here span KB to tens of GB. */
+export function formatBytes(n: number): string {
+  if (n <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1);
+  const value = n / 1024 ** i;
+  return `${value >= 10 || i === 0 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
+}
+
+/** `used of limit`, or just `used` when the dimension is unlimited (limit 0). */
+export function formatAgainstLimit(
+  used: number,
+  limit: number,
+  render: (n: number) => string,
+): string {
+  return limit ? `${render(used)} / ${render(limit)}` : render(used);
+}
+
+function Meter({ used, limit }: { used: number; limit: number }) {
+  if (!limit) return null;
+  const pct = Math.min(100, Math.round((used / limit) * 100));
+  return (
+    <div className="meter" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+      <div className="meter-fill" style={{ width: `${pct}%` }} />
+    </div>
+  );
+}
+
+export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResourcesApi }) {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: qk.myResources,
+    queryFn: () => client.get(),
+  });
+
+  const close = useMutation({
+    mutationFn: (itemId: string) => client.closeEnvironment(itemId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
+  });
+
+  if (isLoading || !data) return <p>載入中…</p>;
+
+  const { limits } = data;
+  return (
+    <div className="page">
+      <h1>我的資源使用</h1>
+
+      <section aria-labelledby="live-heading">
+        <h2 id="live-heading">執行環境</h2>
+        <p className="summary">
+          {formatAgainstLimit(data.live.length, limits.count, (n) => `${n} 個`)}
+          {limits.cpu ? ` · CPU ${formatAgainstLimit(data.cpu_in_use, limits.cpu, (n) => `${n}`)}` : ""}
+          {limits.memory_bytes
+            ? ` · 記憶體 ${formatAgainstLimit(data.memory_in_use, limits.memory_bytes, formatBytes)}`
+            : ""}
+        </p>
+        <Meter used={data.live.length} limit={limits.count} />
+        {data.live.length === 0 ? (
+          <p className="empty">目前沒有執行中的環境。</p>
+        ) : (
+          <ul>
+            {data.live.map((env) => (
+              <li key={env.item_id}>
+                <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
+                <span className="detail">
+                  {env.cpu_cores ? `${env.cpu_cores} 核` : ""}
+                  {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => close.mutate(env.item_id)}
+                  disabled={close.isPending}
+                >
+                  關閉
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section aria-labelledby="disk-heading">
+        <h2 id="disk-heading">儲存空間</h2>
+        <p className="summary">
+          {formatAgainstLimit(data.disk_in_use, limits.disk_bytes, formatBytes)}
+        </p>
+        <Meter used={data.disk_in_use} limit={limits.disk_bytes} />
+        {data.workspaces.length === 0 ? (
+          <p className="empty">還沒有任何項目佔用空間。</p>
+        ) : (
+          <ul>
+            {data.workspaces.map((ws) => (
+              <li key={ws.item_id}>
+                {/* Deleting happens in the item's own file view: it is the only
+                    place that shows WHAT is being deleted, and deleting the
+                    wrong thing here would be unrecoverable. */}
+                <Link to={`/a/${ws.slug}/${ws.item_id}`}>{ws.title || ws.item_id}</Link>
+                <span className="detail">{formatBytes(ws.bytes_used)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="hint">
+          要清出空間,開啟項目後在檔案清單中刪除 —— 刪除永遠不受額度限制。
+        </p>
+      </section>
+    </div>
+  );
+}

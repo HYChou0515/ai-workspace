@@ -8,6 +8,7 @@ import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { GroupsPage } from "./pages/GroupsPage";
+import { MyResourcesPage } from "./pages/MyResourcesPage";
 import { WorkCalendarPage } from "./pages/WorkCalendarPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
@@ -50,6 +51,10 @@ export function AppRoutes() {
             superusers + anyone who belongs to a group. */}
         <Route path="/groups" element={<GroupsPage />} />
         <Route path="/work-calendar" element={<WorkCalendarPage />} />
+        {/* What I am holding vs what I may hold. The limits refuse rather
+            than evict, so this is where a refused person goes to free
+            something up — without it, being at your limit is a dead end. */}
+        <Route path="/my-resources" element={<MyResourcesPage />} />
         {/* #481: the global 審核 inbox — every pending-review item (card proposals +
             clarification questions) across every readable collection, in one
             filterable table. Absorbs the old (invisible) /clarifications page. */}

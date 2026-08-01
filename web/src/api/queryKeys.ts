@@ -19,6 +19,10 @@ export const qk = {
   pickableGroups: ["groups", "pickable"] as const,
   // #615 — the deployment's work calendar (which days people are in the office).
   workCalendar: ["work-calendar"] as const,
+  // What I am holding vs what I may hold (live sandboxes + workspace bytes).
+  // Invalidate after closing an environment, and after any 507 — being refused
+  // is precisely when the panel's numbers are what the user needs.
+  myResources: ["myResources"] as const,
 
   investigations: ["investigations"] as const,
   investigation: (id: string) => ["investigation", id] as const,

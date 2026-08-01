@@ -801,6 +801,7 @@ export const messages = {
   // #481: the global 審核 review inbox — one filterable table over every pending
   // card proposal + clarification question the user may see, across collections.
   "review.title": { "zh-TW": "審核", en: "Review" },
+  "resources.title": { "zh-TW": "我的資源", en: "My resources" },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",
