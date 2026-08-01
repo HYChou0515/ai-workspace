@@ -163,6 +163,14 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 
 ---
 
+## 5b. 同一份 artifact，工程師也能用
+
+你發布的那兩個檔案，同時就是別人可以透過 MCP 使用的東西——**CI 不必多跑一個 job，你也不必
+發自己的 container image**。平台團隊發一顆 runner image，工程師拿它加上你的 artifact 網址，
+就能用自己的 agent 呼叫你的工具;轉接器由 builder 注入 bundle，你不用寫任何程式。
+
+設定範例見 `tool-starter/README.md` §5c。
+
 ## 6. 必須通過的檢查
 
 這些不是建議，是有程式在擋的：

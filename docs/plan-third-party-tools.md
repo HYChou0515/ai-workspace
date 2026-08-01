@@ -1,7 +1,7 @@
 # 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上
 
 > Issue: [#674](https://github.com/HYChou0515/ai-workspace/issues/674)。
-> 狀態：**P1–P14 全部實作完成**（見 §7 每個 phase 的核對）。
+> 狀態：**P1–P15 全部實作完成**（見 §7 每個 phase 的核對）。
 
 **一句話**：讓不在我們 repo 裡的工具作者，把工具推上自己的 GitLab、跑我們提供的 CI，
 **下一個開起來的 sandbox 就自動帶上新版**——我們這邊不改 code、不重新部署。
@@ -458,6 +458,26 @@ bundle 再進去翻**——受測的行為是 uv 的，我們傳的旗標若 uv 
 - builder image 加了 `cryptography`（build path 唯一的第三方 import）。有測試從 import graph
   推出這份清單並要求 Dockerfile 裝的**恰好等於它**，雙向：少裝會壞在別人的 pipeline，
   多裝是每個作者 CI 的負擔。
+
+### P15 · MCP 改成單一 runner image + artifact URL
+
+**✅ 完成**（`sandbox-host/src/sandbox_host/mcp_runner.py`、`sandbox-host/mcp-runner.Dockerfile`）。
+**取代**原本「每支工具烤一顆 image」的做法（P14 之前的版本，未曾上線）。
+
+原本的做法有兩個問題。一是 bundle 被存兩次:artifact store 裡已經有一份，每支工具
+× 每個版本再烤進 registry 一份。二是**烤進去的 image 在執行時什麼都不驗**——複製進去的
+是什麼就跑什麼，ABI 是否正確全靠 CI 有沒有傳對 `--build-arg`，而沒有人檢查那個值。
+
+現在:一顆 runner image，工具靠網址帶進來，跑的是和 host **同一個 `ToolResolver`**——
+同樣的 builder 閘門、同樣的 sha 驗證、同樣的 content-addressed 快取、同樣的
+last-known-good 退回。連帶好處是作者的 CI 少一整個 job（不再需要 docker:dind 和
+registry 帳密），而且工程師會自動吃到新版。
+
+實測（真的建映像、真的用 HTTP 端 artifact）:兩次啟動共 **0 次 bundle 下載、2 次 manifest
+請求**，`tools/call` 對掛進去的 workspace 檔案回出正確結果。
+
+代價誠實列:第一次要抓 ~150MB（用 volume 攤成每版一次）、多一顆我們要發版的映像、
+工程師需要讀 artifact 的 token。air-gapped 機器需要另外想辦法。
 
 ## 8. 這輪之外
 

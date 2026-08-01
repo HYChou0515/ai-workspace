@@ -114,16 +114,27 @@ def test_the_builder_image_installs_exactly_what_the_build_path_imports() -> Non
     assert installed == _third_party_imports_reachable_from("builder")
 
 
-def test_both_images_carry_the_same_abi_anchor_knob() -> None:
-    # The gate compares the manifest's `builder` against the host's
-    # TOOL_BUILDER_ID. If only one image took the value, every third-party
-    # artifact would be refused (or, worse, none would be).
-    builder = (_REPO / "tool-builder" / "Dockerfile").read_text("utf-8")
-    host = (_REPO / "sandbox-host" / "Dockerfile").read_text("utf-8")
+def test_every_image_carries_the_same_abi_anchor_knob() -> None:
+    # The gate compares the manifest's `builder` against the image's
+    # TOOL_BUILDER_ID. If only some images took the value, third-party
+    # artifacts would be refused in one place and accepted in another.
+    for rel in (
+        ("tool-builder", "Dockerfile"),
+        ("sandbox-host", "Dockerfile"),
+        ("sandbox-host", "mcp-runner.Dockerfile"),
+    ):
+        text = _REPO.joinpath(*rel).read_text("utf-8")
+        assert "ARG BUILDER_ID" in text, rel
+        assert "TOOL_BUILDER_ID=${BUILDER_ID}" in text, rel
 
-    for text in (builder, host):
-        assert "ARG BUILDER_ID" in text
-        assert "TOOL_BUILDER_ID=${BUILDER_ID}" in text
+
+def test_the_mcp_runner_is_built_on_the_base_the_bundles_expect() -> None:
+    """The runner executes a third-party bundle directly, so it is bound by
+    the same rule as everything else that does: the bundle's interpreter and
+    native wheels only load on the base they were built against."""
+    runner = _bases(_REPO / "sandbox-host" / "mcp-runner.Dockerfile")[-1]
+
+    assert runner == _bases(_REPO / "tool-builder" / "Dockerfile")[-1]
 
 
 def test_the_ci_template_pins_artifacts_against_expiry() -> None:
@@ -290,20 +301,25 @@ def test_the_platform_docs_carry_the_exit_code_contract_too() -> None:
         assert code in authoring, f"{code} is part of the contract and belongs here"
 
 
-def test_the_ci_publishes_the_mcp_image_from_the_bundle_it_just_built() -> None:
-    """Rebuilding from source for the second artifact would let the two drift,
-    and then "it works in my editor" would say nothing about the platform."""
+def test_the_author_ci_publishes_the_artifact_and_stops_there() -> None:
+    """An author's pipeline used to build and push a container image as well,
+    which meant docker-in-docker, registry credentials and a second push in a
+    stranger's CI — to store bytes their artifact already held.
+
+    The MCP runner fetches any tool from its URL, so the same two files serve
+    both paths and the author's CI has one job."""
     ci = (_STARTER / ".gitlab-ci.yml").read_text("utf-8")
 
-    assert "package-mcp" in ci
-    assert "needs: [build-tool]" in ci
-    assert "tar xzf dist/tool.tar.gz" in ci  # unpacks the artifact, not the repo
-    # And builds from the recipe the build emitted, so an author never edits
-    # — nor drifts from — how the image is packaged.
-    assert "-f dist/mcp.Dockerfile" in ci
-    assert not (_STARTER / "mcp.Dockerfile").exists(), (
-        "the recipe belongs to the builder; a copy per repo is a copy that drifts"
-    )
+    assert "package-mcp" not in ci
+    assert "docker" not in ci.lower()
+    assert "build-tool" in ci
+
+
+def test_the_runner_is_the_only_way_a_tool_reaches_mcp() -> None:
+    # Two ways to run the same tool would drift, and the one being removed
+    # verified nothing at run time.
+    assert not (_STARTER / "mcp.Dockerfile").exists()
+    assert (_REPO / "sandbox-host" / "mcp-runner.Dockerfile").exists()
 
 
 def test_the_engineer_facing_setup_mounts_their_working_directory() -> None:

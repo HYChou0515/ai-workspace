@@ -24,7 +24,6 @@ from workspace_app.tooling import builder as builder_mod
 from workspace_app.tooling.artifact import BundleRef, Manifest, parse_manifest
 from workspace_app.tooling.builder import (
     BUNDLE_NAME,
-    DOCKERFILE_NAME,
     MANIFEST_NAME,
     BuildError,
     SmokeFailed,
@@ -511,12 +510,14 @@ def test_a_bundle_without_an_interpreter_fails_the_build(tmp_path: Path) -> None
         )
 
 
-def test_the_build_emits_the_packaging_recipe_beside_the_bundle(tmp_path: Path) -> None:
-    """#674: the MCP image's Dockerfile belongs to the builder, not to each
-    author's repository. A copy per repo drifts the moment we change how the
-    image is packaged, and we would have to ask every author to edit a file
-    they never wrote. Emitting it with the artifact keeps one source of truth,
-    and lets an old artifact keep the recipe that matches it."""
+def test_the_build_publishes_the_two_files_and_nothing_else(tmp_path: Path) -> None:
+    """A tool used to ship a second artifact — a Dockerfile, for an image per
+    tool. That image stored the bundle a second time and, having it baked in,
+    had nothing left to verify at run time.
+
+    One runner image now fetches any tool from its URL through the same
+    resolver the platform uses, so a build publishes only what the platform
+    consumes."""
     out = tmp_path / "dist"
 
     build_artifact(
@@ -527,12 +528,7 @@ def test_the_build_emits_the_packaging_recipe_beside_the_bundle(tmp_path: Path) 
         smoke_check=lambda _dist: None,
     )
 
-    recipe = (out / DOCKERFILE_NAME).read_text("utf-8")
-
-    assert "ENTRYPOINT" in recipe
-    assert "/tool/mcp" in recipe
-    # It must build from the unpacked bundle this same run produced.
-    assert "bundle/" in recipe
+    assert sorted(p.name for p in out.iterdir()) == sorted([BUNDLE_NAME, MANIFEST_NAME])
 
 
 # ─── what a bundle may weigh (#674) ──────────────────────────────────

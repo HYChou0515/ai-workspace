@@ -290,10 +290,16 @@ check(
     and "grant_policy.check_size(" in text("src/workspace_app/tooling/builder.py")
     and "grant_policy.check_size(" in text("src/workspace_app/tooling/verify.py"),
 )
-check("P14", "certificates are ed25519, and the key list allows rotation", "ed25519" in g and "TRUSTED_KEYS" in g)
+check(
+    "P14",
+    "certificates are ed25519, and the key list allows rotation",
+    "ed25519" in g and "TRUSTED_KEYS" in g,
+)
 check("P14", "a certificate names one tool", "was issued for" in g)
 check("P14", "an expiry has to be asked for, `never` included", "--expires is required" in g)
-check("P14", "the signing key is created 0600 and never overwritten", "O_EXCL" in g and "0o600" in g)
+check(
+    "P14", "the signing key is created 0600 and never overwritten", "O_EXCL" in g and "0o600" in g
+)
 check(
     "P14",
     "the certificate is only consulted above the default limit",
@@ -308,7 +314,8 @@ check(
 check(
     "P14",
     "the gate refuses before downloading the bundle",
-    "test_an_oversized_artifact_is_refused_without_downloading_it" in text("tests/tooling/test_verify.py"),
+    "test_an_oversized_artifact_is_refused_without_downloading_it"
+    in text("tests/tooling/test_verify.py"),
 )
 check(
     "P14",
@@ -334,8 +341,38 @@ check(
 check(
     "P14",
     "the platform team is told how to issue one, and that it cannot be recalled",
-    "grant keygen" in text("docs/deployment.md")
-    and "收不回來" in text("docs/deployment.md"),
+    "grant keygen" in text("docs/deployment.md") and "收不回來" in text("docs/deployment.md"),
+)
+
+# ---- P15: one MCP runner, not an image per tool ---------------------------
+runner = text("sandbox-host/src/sandbox_host/mcp_runner.py")
+check(
+    "P15",
+    "the runner resolves through the same machinery the host uses",
+    "ToolResolver" in runner and "ToolCache" in runner,
+)
+check("P15", "it becomes the tool's own server rather than wrapping it", "os.execv" in runner)
+check(
+    "P15",
+    "nothing but the protocol reaches stdout",
+    "test_nothing_reaches_stdout_before_the_handover"
+    in text("sandbox-host/tests/test_mcp_runner.py"),
+)
+check(
+    "P15",
+    "the runner image exists and is ABI-anchored like the others",
+    "TOOL_BUILDER_ID=${BUILDER_ID}" in text("sandbox-host/mcp-runner.Dockerfile"),
+)
+check(
+    "P15",
+    "the per-tool image path is gone, not merely unused",
+    "DOCKERFILE_NAME" not in text("src/workspace_app/tooling/builder.py")
+    and "package-mcp" not in text("tool-starter/.gitlab-ci.yml"),
+)
+check(
+    "P15",
+    "authors and operators are told how the second path now works",
+    "runner" in text("tool-starter/README.md") and "mcp-runner" in text("docs/deployment.md"),
 )
 
 # ---- report ----------------------------------------------------------------

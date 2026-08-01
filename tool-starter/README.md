@@ -136,31 +136,51 @@ header 這裡沒有，某些端點你可能根本連不到。**會連外的工�
 
 ## 5c. 讓別人也能用（MCP）
 
-同一次 CI 還會產出**第二個 artifact：一個 docker image**。平台拿 bundle 的流程完全不變
-（那仍是 AI workspace 使用你工具的唯一途徑），這個 image 是**額外**的——讓任何有 docker 的
-工程師，用自己的 agent（Claude Code／opencode／codex）呼叫同一支工具。
+你發布的那兩個檔案，同時就是別人可以用的東西——**你不用多做任何事，CI 也不必多跑一個
+job**。平台團隊發一顆 **runner image**，任何有 docker 的工程師拿它加上你的 artifact 網址，
+就能用自己的 agent（Claude Code／opencode／codex）呼叫你的工具。
 
-你不用為此寫任何程式：三段式契約本來就等於 MCP 需要的東西，轉接器由 builder 注入。
+你不用為此寫任何程式:三段式契約本來就等於 MCP 需要的東西，轉接器由 builder 注入到 bundle 裡。
 
-工程師那邊的設定長這樣：
+工程師那邊的設定長這樣，`N` 支工具就 `N` 筆，差別只有最後那個網址：
 
 ```json
 {
   "mcpServers": {
     "my-tool": {
       "command": "docker",
-      "args": ["run", "-i", "--rm", "-v", "${PWD}:/work", "<你的 image>"]
+      "args": [
+        "run", "-i", "--rm",
+        "-v", "mcp-tools:/cache",
+        "-v", "${PWD}:/work",
+        "-e", "TOOL_ARTIFACT_TOKEN",
+        "<平台團隊給的 runner image>",
+        "my-tool",
+        "https://gitlab.example/.../tool.manifest.json"
+      ]
     }
   }
 }
 ```
 
-`-v ${PWD}:/work` **是必要的**：你的工具把路徑當成相對於工作目錄（在平台上就是使用者的
-workspace），沒掛載的話它會回「檔案不存在」。
+三個掛載各有各的必要:
+
+- `-v ${PWD}:/work` —— 你的工具把路徑當成相對於工作目錄（平台上就是使用者的 workspace），
+  沒掛載的話它會回「檔案不存在」。
+- `-v mcp-tools:/cache` —— bundle 依 sha 存在這裡。第一次要抓，之後直接命中。
+  用 **named volume**（就是這樣寫），不要換成主機目錄:容器以 root 執行，bind mount
+  會讓快取變成 root 所有，之後你自己刪不掉。named volume 用 `docker volume rm` 清即可。
+- `-e TOOL_ARTIFACT_TOKEN` —— 讀 artifact 用的 token（私有 GitLab 才需要）。
+
+**工程師會自動吃到你的新版**:runner 每次啟動都會看一次 manifest，sha 變了就抓新的。
+和平台「下一個 sandbox 就是新版」是同一個性質。
+
+而且它拿到的 bundle 和平台拿到的是**同一份、經過同樣檢查的位元組**——同一段 resolve、
+同樣的 builder 閘門、同樣的 sha 驗證。
 
 !!! note "這條路證明的是邏輯，不是環境"
 
-    工程師的 agent 跑起來時**不是 sandbox**：沒有輸出上限、沒有逾時、沒有平台注入的環境變數。
+    工程師的 agent 跑起來時**不是 sandbox**:沒有輸出上限、沒有逾時、沒有平台注入的環境變數。
     當成「多一個使用途徑」很好，當成「平台上會過的證明」則不成立。
 
 ## 6. 平台會怎麼跑你的工具

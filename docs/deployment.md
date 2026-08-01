@@ -622,7 +622,46 @@ python -m workspace_app.tooling.grant issue \
 所以：能給期限就給期限；真的要讓所有憑證立刻失效，唯一的辦法是把 `TRUSTED_KEYS` 裡的
 那把公鑰拿掉並發版（等於輪替金鑰）。
 
-### 15.7 出事時怎麼查
+### 15.7 讓工程師用自己的 agent 跑同一支工具（MCP runner）
+
+同一份 artifact，除了平台會拉，也可以被工程師自己的 agent（Claude Code／opencode／codex）
+透過 MCP 呼叫。**一顆 runner image 對應所有工具**，工具靠網址帶進來。
+
+```bash
+docker build -f sandbox-host/mcp-runner.Dockerfile \
+    --build-arg BUILDER_ID="$THE_SAME_ID_YOU_GIVE_TOOL_BUILDER" \
+    -t registry/ai-workspace/mcp-runner:<tag> .
+```
+
+`BUILDER_ID` 要和你給 `tool-builder`、`sandbox-host` 的**同一個值**——runner 會直接執行
+第三方 bundle，所以它跟 host 受同一條 ABI 規則約束。有測試釘住這三顆映像的錨點一致。
+
+工程師那邊一支工具一筆設定，差別只有最後那個網址:
+
+```json
+{ "mcpServers": { "wafer-history": { "command": "docker", "args": [
+    "run","-i","--rm",
+    "-v","mcp-tools:/cache","-v","${PWD}:/work",
+    "-e","TOOL_ARTIFACT_TOKEN",
+    "registry/ai-workspace/mcp-runner:<tag>",
+    "wafer-history","https://gitlab.example/.../tool.manifest.json" ] } } }
+```
+
+幾件值得知道的:
+
+- **bundle 不會被存第二份。** artifact store 裡已經有一份，runner 依 sha 存進
+  `mcp-tools` volume，第二次啟動就命中。以前的做法是每支工具烤一顆 image，等於把同樣的
+  位元組再存一遍（每支 × 每版）。
+- **它跑的是和平台同一段 `resolve`。** 同樣的 builder 閘門、同樣的 sha 驗證、同樣的
+  「artifact 過期」提示。烤進 image 的做法在執行時**什麼都不驗**——複製進去的是什麼就跑什麼。
+- **新版自動生效**,和「下一個 sandbox 就是新版」同一個性質。
+- **快取 volume 請一個人用一個。** host 端會把工具樹 chown 成 root，因為那裡是多個
+  不同 uid 的 sandbox 共用一棵樹;runner 的快取只有掛載它的人在讀，所以不做這件事。
+- **叫他們用 named volume，不要 bind mount 主機目錄。** 容器以 root 執行（和 host 一樣），
+  bind mount 的快取會變成 root 所有，使用者之後刪不掉;named volume 用
+  `docker volume rm` 就清得掉。
+
+### 15.8 出事時怎麼查
 
 - **某支工具突然不見**：agent 的 prompt 裡會有一段「Tools that are unavailable right now」
   寫著原因。最常見的是 GitLab artifact 過期（作者的 CI 沒設 `expire_in: never`）。
