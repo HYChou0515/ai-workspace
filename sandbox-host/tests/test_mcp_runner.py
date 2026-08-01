@@ -273,6 +273,7 @@ def test_a_local_runner_never_serves_a_copy_it_could_not_confirm(env, capsys) ->
     err = capsys.readouterr().err
     assert "wafer-history" in err
 
+
 # ─── where a tool's files go ─────────────────────────────────────────
 
 

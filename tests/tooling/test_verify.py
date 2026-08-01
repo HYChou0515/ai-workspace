@@ -308,7 +308,7 @@ def signing(monkeypatch):
     from workspace_app.tooling import grant as grant_mod
 
     private, public = grant_mod.keypair()
-    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", (public,))
+    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", {"alice": public})
     monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 200)
     return private
 
@@ -408,3 +408,39 @@ def test_an_expired_certificate_is_refused_at_the_gate(signing, monkeypatch) -> 
                 bundle=data,
             ),
         )
+
+
+def test_an_accepted_oversized_artifact_reports_who_granted_it(signing, capsys) -> None:
+    """The question this answers is asked months later: "who reviewed this
+    tool, and can tell me why 300MB was reasonable". The operator running
+    `verify` is the person holding the artifact at that moment."""
+    data = _bundle()
+
+    report = verify_artifact(
+        _MANIFEST_URL,
+        expected_name="wafer-history",
+        builder=_BUILDER,
+        arch="x86_64",
+        fetch=_wire(manifest=_manifest(data, grant=_token(signing)), bundle=data),
+    )
+
+    assert report.granted_by == "alice"
+
+
+def test_a_tool_inside_the_default_limit_reports_no_grantor(signing, monkeypatch) -> None:
+    """Its certificate, if it has one, was never consulted — naming an issuer
+    would credit somebody with a decision that did not bear on this."""
+    from workspace_app.tooling import grant as grant_mod
+
+    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 10_000)
+    data = _bundle()
+
+    report = verify_artifact(
+        _MANIFEST_URL,
+        expected_name="wafer-history",
+        builder=_BUILDER,
+        arch="x86_64",
+        fetch=_wire(manifest=_manifest(data, grant=_token(signing)), bundle=data),
+    )
+
+    assert report.granted_by is None

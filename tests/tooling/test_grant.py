@@ -30,10 +30,11 @@ from workspace_app.tooling.grant import (
 
 
 @pytest.fixture
-def keys() -> tuple[bytes, str]:
-    """A throwaway signing keypair: the private key bytes and the public key
-    in the form that gets committed."""
-    return keypair()
+def keys() -> tuple[bytes, dict[str, str]]:
+    """One issuer's throwaway keypair: their private key, and the trusted-key
+    entry it is published as — keyed by WHO, because the key is what says so."""
+    private, public = keypair()
+    return private, {"alice": public}
 
 
 def test_a_certificate_says_which_tool_how_big_and_until_when(keys):
@@ -43,7 +44,7 @@ def test_a_certificate_says_which_tool_how_big_and_until_when(keys):
         private_key=private,
     )
 
-    granted = verify(token, public_keys=[public], tool="pdf-extract", today=date(2026, 8, 1))
+    granted = verify(token, public_keys=public, tool="pdf-extract", today=date(2026, 8, 1))
 
     assert granted.tool == "pdf-extract"
     assert granted.max_bytes == 300 * 1024 * 1024
@@ -69,7 +70,7 @@ def test_a_certificate_for_another_tool_is_refused(keys):
     token = issue(Grant(tool="pdf-extract", max_bytes=10, expires=None), private_key=private)
 
     with pytest.raises(GrantError, match="pdf-extract"):
-        verify(token, public_keys=[public], tool="wafer-history", today=date(2026, 8, 1))
+        verify(token, public_keys=public, tool="wafer-history", today=date(2026, 8, 1))
 
 
 def test_an_expired_certificate_is_refused_and_says_when_it_lapsed(keys):
@@ -79,7 +80,7 @@ def test_an_expired_certificate_is_refused_and_says_when_it_lapsed(keys):
     token = issue(Grant(tool="t", max_bytes=10, expires=date(2026, 9, 1)), private_key=private)
 
     with pytest.raises(GrantError, match="2026-09-01"):
-        verify(token, public_keys=[public], tool="t", today=date(2026, 9, 2))
+        verify(token, public_keys=public, tool="t", today=date(2026, 9, 2))
 
 
 def test_a_certificate_is_still_valid_on_the_day_it_expires(keys):
@@ -88,7 +89,7 @@ def test_a_certificate_is_still_valid_on_the_day_it_expires(keys):
     private, public = keys
     token = issue(Grant(tool="t", max_bytes=10, expires=date(2026, 9, 1)), private_key=private)
 
-    assert verify(token, public_keys=[public], tool="t", today=date(2026, 9, 1)).max_bytes == 10
+    assert verify(token, public_keys=public, tool="t", today=date(2026, 9, 1)).max_bytes == 10
 
 
 def test_a_certificate_can_be_issued_with_no_expiry_at_all(keys):
@@ -98,7 +99,7 @@ def test_a_certificate_can_be_issued_with_no_expiry_at_all(keys):
     private, public = keys
     token = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=private)
 
-    granted = verify(token, public_keys=[public], tool="t", today=date(2099, 1, 1))
+    granted = verify(token, public_keys=public, tool="t", today=date(2099, 1, 1))
 
     assert granted.expires is None
 
@@ -116,16 +117,16 @@ def test_raising_the_number_after_it_was_signed_is_refused(keys):
     forged = base64.urlsafe_b64encode(json.dumps(decoded).encode()).decode().rstrip("=")
 
     with pytest.raises(GrantError, match="signature"):
-        verify(f"{forged}.{signature}", public_keys=[public], tool="t", today=date(2026, 8, 1))
+        verify(f"{forged}.{signature}", public_keys=public, tool="t", today=date(2026, 8, 1))
 
 
 def test_a_certificate_signed_by_someone_else_is_refused(keys):
     private, _ = keys
-    _, other_public = keypair()
+    other_public = {"mallory": keypair()[1]}
     token = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=private)
 
     with pytest.raises(GrantError, match="signature"):
-        verify(token, public_keys=[other_public], tool="t", today=date(2026, 8, 1))
+        verify(token, public_keys=other_public, tool="t", today=date(2026, 8, 1))
 
 
 def test_any_of_the_trusted_keys_may_have_signed_it(keys):
@@ -133,10 +134,10 @@ def test_any_of_the_trusted_keys_may_have_signed_it(keys):
     are still in the field. Neither the author nor the platform team sees this
     happen."""
     private, public = keys
-    _, retired = keypair()
+    retired = {"bob": keypair()[1]}
     token = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=private)
 
-    assert verify(token, public_keys=[retired, public], tool="t", today=date(2026, 8, 1))
+    assert verify(token, public_keys={**retired, **public}, tool="t", today=date(2026, 8, 1))
 
 
 def test_a_certificate_is_refused_when_no_key_is_trusted_yet(keys):
@@ -146,7 +147,7 @@ def test_a_certificate_is_refused_when_no_key_is_trusted_yet(keys):
     token = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=private)
 
     with pytest.raises(GrantError, match="no trusted"):
-        verify(token, public_keys=[], tool="t", today=date(2026, 8, 1))
+        verify(token, public_keys={}, tool="t", today=date(2026, 8, 1))
 
 
 @pytest.mark.parametrize("bad", ["", "not-a-token", "a.b.c", "!!!.???"])
@@ -154,7 +155,7 @@ def test_a_damaged_certificate_says_so_instead_of_crashing(bad, keys):
     _, public = keys
 
     with pytest.raises(GrantError):
-        verify(bad, public_keys=[public], tool="t", today=date(2026, 8, 1))
+        verify(bad, public_keys=public, tool="t", today=date(2026, 8, 1))
 
 
 # ─── the rule both sides apply ───────────────────────────────────────
@@ -163,13 +164,13 @@ def test_a_damaged_certificate_says_so_instead_of_crashing(bad, keys):
 def test_a_bundle_within_the_default_needs_no_certificate(keys):
     _, public = keys
 
-    assert check_size(tool="t", size=DEFAULT_MAX_BYTES, token=None, public_keys=[public]) is None
+    assert check_size(tool="t", size=DEFAULT_MAX_BYTES, token=None, public_keys=public) is None
 
 
 def test_a_bundle_over_the_default_with_no_certificate_is_refused(keys):
     _, public = keys
 
-    reason = check_size(tool="t", size=DEFAULT_MAX_BYTES + 1, token=None, public_keys=[public])
+    reason = check_size(tool="t", size=DEFAULT_MAX_BYTES + 1, token=None, public_keys=public)
 
     assert reason is not None and "150.0MB" in reason
 
@@ -183,7 +184,7 @@ def test_a_certificate_lets_a_bundle_weigh_what_it_grants(keys):
             tool="t",
             size=300 * 1024 * 1024,
             token=token,
-            public_keys=[public],
+            public_keys=public,
             today=date(2026, 8, 1),
         )
         is None
@@ -198,7 +199,7 @@ def test_a_bundle_over_even_its_certificate_is_refused(keys):
         tool="t",
         size=400 * 1024 * 1024,
         token=token,
-        public_keys=[public],
+        public_keys=public,
         today=date(2026, 8, 1),
     )
 
@@ -221,7 +222,7 @@ def test_a_lapsed_certificate_does_not_fail_a_tool_that_no_longer_needs_one(keys
             tool="t",
             size=40 * 1024 * 1024,
             token=stale,
-            public_keys=[public],
+            public_keys=public,
             today=date(2026, 8, 1),
         )
         is None
@@ -242,7 +243,7 @@ def test_an_expired_certificate_is_reported_when_the_weight_needs_it(keys):
         tool="t",
         size=200 * 1024 * 1024,
         token=stale,
-        public_keys=[public],
+        public_keys=public,
         today=date(2026, 8, 1),
     )
 
@@ -273,11 +274,10 @@ def test_keygen_then_issue_produces_a_certificate_the_platform_accepts(tmp_path,
     certificate check out against that line."""
     key = tmp_path / "tool-grant.pem"
 
-    code, printed, _ = _run(["keygen", "--key", str(key)], capsys)
+    code, printed, _ = _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
     assert code == 0
-    public = next(
-        line.strip().strip('",') for line in printed.splitlines() if line.strip().startswith('"')
-    )
+    line = next(ln.strip() for ln in printed.splitlines() if ln.strip().startswith('"alice"'))
+    public = {"alice": line.split('"')[3]}
 
     code, token, _ = _run(
         ["issue", "--tool", "pdf-extract", "--max-mb", "300", "--expires", "2026-09-01"]
@@ -286,9 +286,7 @@ def test_keygen_then_issue_produces_a_certificate_the_platform_accepts(tmp_path,
     )
 
     assert code == 0
-    granted = verify(
-        token.strip(), public_keys=[public], tool="pdf-extract", today=date(2026, 8, 1)
-    )
+    granted = verify(token.strip(), public_keys=public, tool="pdf-extract", today=date(2026, 8, 1))
     assert granted.max_bytes == 300 * 1024 * 1024
     assert granted.expires == date(2026, 9, 1)
 
@@ -296,7 +294,7 @@ def test_keygen_then_issue_produces_a_certificate_the_platform_accepts(tmp_path,
 def test_the_private_key_is_written_readable_only_by_its_owner(tmp_path, capsys):
     key = tmp_path / "tool-grant.pem"
 
-    _run(["keygen", "--key", str(key)], capsys)
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
 
     assert key.stat().st_mode & 0o077 == 0, oct(key.stat().st_mode)
 
@@ -306,10 +304,10 @@ def test_keygen_refuses_to_overwrite_an_existing_key(tmp_path, capsys):
     certificate ever issued, and the tools holding them fail at their next
     build with a signature error nobody will connect to this."""
     key = tmp_path / "tool-grant.pem"
-    _run(["keygen", "--key", str(key)], capsys)
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
     before = key.read_bytes()
 
-    code, _, err = _run(["keygen", "--key", str(key)], capsys)
+    code, _, err = _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
 
     assert code == 2
     assert "exists" in err
@@ -318,7 +316,7 @@ def test_keygen_refuses_to_overwrite_an_existing_key(tmp_path, capsys):
 
 def test_issuing_forever_has_to_be_asked_for_in_those_words(tmp_path, capsys):
     key = tmp_path / "k.pem"
-    _run(["keygen", "--key", str(key)], capsys)
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
 
     code, token, _ = _run(
         ["issue", "--tool", "t", "--max-mb", "300", "--expires", "never", "--key", str(key)],
@@ -337,7 +335,7 @@ def test_issuing_forever_has_to_be_asked_for_in_those_words(tmp_path, capsys):
 def test_issuing_without_an_expiry_is_refused(tmp_path, capsys):
     """`never` is a decision. Leaving the flag off must not quietly make one."""
     key = tmp_path / "k.pem"
-    _run(["keygen", "--key", str(key)], capsys)
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
 
     code, _, err = _run(["issue", "--tool", "t", "--max-mb", "300", "--key", str(key)], capsys)
 
@@ -347,7 +345,7 @@ def test_issuing_without_an_expiry_is_refused(tmp_path, capsys):
 
 def test_a_certificate_is_printed_alone_so_it_can_be_copied(tmp_path, capsys):
     key = tmp_path / "k.pem"
-    _run(["keygen", "--key", str(key)], capsys)
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
 
     _, printed, _ = _run(
         ["issue", "--tool", "t", "--max-mb", "1", "--expires", "never", "--key", str(key)], capsys
@@ -393,6 +391,8 @@ def test_keygen_names_the_real_file_when_run_the_documented_way(tmp_path):
             "keygen",
             "--key",
             str(tmp_path / "k"),
+            "--as",
+            "alice",
         ],
         capture_output=True,
         text=True,
@@ -400,3 +400,74 @@ def test_keygen_names_the_real_file_when_run_the_documented_way(tmp_path):
     )
 
     assert "workspace_app/tooling/grant.py" in done.stdout, done.stdout
+
+
+# ─── who issued it ───────────────────────────────────────────────────
+
+
+def test_a_certificate_says_which_of_us_issued_it(keys):
+    """Not for defending against a forged name — everyone who can sign is on
+    the platform team already. It is so that "who reviewed this tool, and can
+    tell me why 400MB was reasonable" has an answer six months later."""
+    private, public = keys
+    token = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=private)
+
+    assert verify(token, public_keys=public, tool="t", today=date(2026, 8, 1)).issued_by == "alice"
+
+
+def test_two_issuers_are_told_apart_by_their_signatures(keys):
+    alice_private, trusted = keys
+    bob_private, bob_public = keypair()
+    both = {**trusted, "bob": bob_public}
+
+    from_alice = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=alice_private)
+    from_bob = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=bob_private)
+
+    assert verify(from_alice, public_keys=both, tool="t", today=date(2026, 8, 1)).issued_by == (
+        "alice"
+    )
+    assert verify(from_bob, public_keys=both, tool="t", today=date(2026, 8, 1)).issued_by == "bob"
+
+
+def test_dropping_someones_key_lapses_what_they_issued(keys):
+    """The reason attribution is worth doing this way rather than as a field
+    someone types: it is also the off switch. Somebody leaves, their key comes
+    out of the list, and every certificate they signed stops verifying — which
+    is the only revocation this design has other than waiting for an expiry."""
+    private, _ = keys
+    token = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=private)
+    theirs_removed = {"bob": keypair()[1]}
+
+    with pytest.raises(GrantError, match="signature"):
+        verify(token, public_keys=theirs_removed, tool="t", today=date(2026, 8, 1))
+
+
+def test_the_payload_cannot_claim_an_issuer(keys):
+    """The name comes from the key that signed, never from the document. A
+    field saying who wrote it would be worth exactly as much as the honesty of
+    whoever wrote it, and would disagree with the signature the day it
+    mattered."""
+    private, public = keys
+    token = issue(Grant(tool="t", max_bytes=10, expires=None), private_key=private)
+    payload = json.loads(
+        __import__("base64").urlsafe_b64decode(
+            token.split(".")[0] + "=" * (-len(token.split(".")[0]) % 4)
+        )
+    )
+
+    assert "issued_by" not in payload
+
+
+def test_a_key_with_nobody_s_name_on_it_is_refused(tmp_path, capsys):
+    """The handle is what makes a certificate answerable months later. A key
+    generated without one would sign certificates that verify perfectly and
+    credit nobody — which is the whole thing this design exists to avoid."""
+    code, _, err = _run(["keygen", "--key", str(tmp_path / "k.pem")], capsys)
+
+    assert code == 2
+    # The sentence that explains WHY, not the generic usage — dropping the
+    # check leaves `flags["--as"]` raising KeyError, which also exits 2 and
+    # also prints a usage line containing "--as". A test that accepted that
+    # would pass while the requirement was gone.
+    assert "the handle this key is trusted under" in err
+    assert not (tmp_path / "k.pem").exists()

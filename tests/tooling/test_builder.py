@@ -541,7 +541,7 @@ def signing(monkeypatch):
     from workspace_app.tooling import grant as grant_mod
 
     private, public = grant_mod.keypair()
-    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", (public,))
+    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", {"alice": public})
     # Small enough that a few kilobytes of random bytes exceed it. The real
     # number is pinned in test_grant.py, against the figure the guide quotes.
     monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 4096)

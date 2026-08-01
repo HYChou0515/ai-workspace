@@ -587,15 +587,35 @@ TOOL_BUILDER_ID=<這個部署的值> TOOL_ARTIFACT_TOKEN=<你的 token> \
 
 #### 開通（只做一次）
 
+**一人一把。** 平台團隊每個能發憑證的人各跑一次，`--as` 填自己的代號：
+
 ```bash
-python -m workspace_app.tooling.grant keygen --key /path/you/choose/tool-grant.pem
+python -m workspace_app.tooling.grant keygen --key /path/you/choose/tool-grant.pem --as hychou
 ```
 
-私鑰只寫到你指定的路徑（`0600`，已存在就拒絕覆寫——覆寫等於讓所有已發出的憑證失效）。
-指令會印出一行公鑰，貼進 `src/workspace_app/tooling/grant.py` 的 `TRUSTED_KEYS` 並發版。
+私鑰只寫到你指定的路徑（`0600`，已存在就拒絕覆寫——覆寫等於讓那個人已發出的憑證全部失效）。
+指令會印出一行可直接貼的內容，加進 `src/workspace_app/tooling/grant.py` 的 `TRUSTED_KEYS`
+並發版：
 
-`TRUSTED_KEYS` 是**列表**，所以輪替金鑰時新舊並存即可：用新的簽，舊的留到它最後一張
-憑證過期為止再刪。
+```python
+TRUSTED_KEYS: dict[str, str] = {
+    "hychou": "ByiVvmDZtAhssyCIikYGsWWyL81PmYW/jFLcKsbdRgI=",
+}
+```
+
+**為什麼是一人一把，而不是一把共用金鑰加一個「發證者」欄位：** 欄位是自己填的，值多少
+就看填的人多誠實，而且真的出事那天它會和簽章各說各話。金鑰不會——只有本人有那把私鑰，
+所以「誰核准的」是簽章證明的，不是文件宣稱的。
+
+它同時是**關掉的開關**:有人離職，把他那行拿掉並發版，他簽過的憑證全部立刻驗不過。這是
+這個設計除了等過期以外唯一的撤銷手段。
+
+代價要知道:**新增或移除一個發證者是改 code + 發一次版**。輪替也是同一件事——新舊並存，
+用新的簽，舊的留到它最後一張憑證過期再刪。
+
+上架時 `verify` 會把發證者印出來，例如
+`accepted: pdf-extract 2.1.0 (…) sha256=… ， size granted by hychou`——「這支 300MB 的工具
+當初是誰看過的」半年後還答得出來。
 
 #### 有人要求放寬
 

@@ -53,6 +53,11 @@ class VerifyReport:
     version: str
     sha: str
     commands: tuple[str, ...]
+    #: Who on the platform team signed the certificate that let this artifact
+    #: weigh what it does, or None when it is inside the default limit and no
+    #: certificate bore on the decision. Read from the KEY that signed, so it
+    #: is the one thing about a certificate nobody can assert about themselves.
+    granted_by: str | None = None
 
 
 def _bundle_url(manifest_url: str) -> str:
@@ -126,6 +131,7 @@ def verify_artifact(
         version=manifest.version,
         sha=manifest.bundle.sha256,
         commands=tuple(c.name for c in manifest.commands),
+        granted_by=_granted_by(manifest),
     )
 
 
@@ -157,6 +163,23 @@ def _check_weight(manifest) -> None:
             f"{reason} — either the tool sheds weight, or it is reviewed and "
             "issued a certificate raising the limit"
         )
+
+
+def _granted_by(manifest) -> str | None:
+    """Who signed the certificate this artifact needed, if it needed one.
+
+    Only asked once the weight check has passed, and only when the weight
+    actually required a certificate: below the default limit one is never
+    consulted, and naming an issuer there would credit somebody with a
+    decision that did not bear on this artifact."""
+    if manifest.grant is None or manifest.bundle.size <= grant_policy.DEFAULT_MAX_BYTES:
+        return None
+    return grant_policy.verify(
+        manifest.grant,
+        public_keys=grant_policy.TRUSTED_KEYS,
+        tool=manifest.name,
+        today=_today(),
+    ).issued_by
 
 
 def _check_contents(data: bytes, manifest) -> None:
@@ -211,9 +234,10 @@ def main(argv: list[str]) -> int:
     except ArtifactError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 1
+    granted = f", size granted by {report.granted_by}" if report.granted_by else ""
     print(
         f"accepted: {report.name} {report.version} "
-        f"({', '.join(report.commands) or 'no commands'}) sha256={report.sha}"
+        f"({', '.join(report.commands) or 'no commands'}) sha256={report.sha}{granted}"
     )
     return 0
 
