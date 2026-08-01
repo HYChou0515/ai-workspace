@@ -135,6 +135,10 @@ def main(
         arch=platform.machine(),
         fetch=fetch,
         state_dir=root,
+        # Confirm it today, or do not run it — see `serve_last_known_good`.
+        # This is the only place a tool's access can be withdrawn from
+        # someone running it on their own machine.
+        serve_last_known_good=False,
     )
 
     try:
@@ -151,12 +155,10 @@ def main(
     # Say only what is known. An earlier version claimed "from cache" every
     # time, including on the run that had just downloaded — a line that is
     # right half the time is worse than no line, because it gets believed.
-    note = (
-        " — the artifact store was unreachable, so this is the last version that resolved"
-        if resolved.stale
-        else ""
-    )
-    print(f"{resolved.name} {resolved.version} [{resolved.sha[:12]}]{note}", file=sys.stderr)
+    #
+    # No "stale" case to report: this resolver never serves a version it could
+    # not confirm today, so reaching here means the artifact store answered.
+    print(f"{resolved.name} {resolved.version} [{resolved.sha[:12]}]", file=sys.stderr)
 
     # Said once, at startup, because the failure it warns about is silent.
     # A tool reading a missing file fails loudly; a tool WRITING one succeeds,

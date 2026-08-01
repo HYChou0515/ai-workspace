@@ -119,6 +119,7 @@ class ToolResolver:
         arch: str,
         fetch: Fetcher = _http_get,
         state_dir: Path,
+        serve_last_known_good: bool = True,
     ) -> None:
         self._cache = cache
         #: Exposed so the host's sweeper can reclaim what nothing is running.
@@ -127,6 +128,17 @@ class ToolResolver:
         self._arch = arch
         self._fetch = fetch
         self._state = state_dir / "last-known-good.json"
+        #: The host serves a remembered version through an outage, because one
+        #: artifact store being unreachable should not stop every workspace.
+        #:
+        #: A single-user runner turns this OFF, and the reason is revocation:
+        #: access to a tool is managed where the artifact lives, so taking
+        #: someone's read access away has to stop them running it. A resolver
+        #: that fell back would keep serving the copy it already had for as
+        #: long as that machine lived, somewhere nothing we do can reach.
+        #: The status code cannot make the decision instead — GitLab answers
+        #: 404 both for an expired artifact and for a project you may not see.
+        self._serve_last_known_good = serve_last_known_good
 
     def resolve(self, name: str, manifest_url: str) -> ResolvedTool:
         """Install (or confirm) the tool at this URL and describe it.
@@ -163,7 +175,11 @@ class ToolResolver:
         An artifact store outage should not take every workspace with it — but
         the answer is marked `stale` so nobody mistakes it for the latest."""
         remembered = self._recall().get(url)
-        if remembered is None or not self._cache.has(remembered["sha"]):
+        if (
+            not self._serve_last_known_good
+            or remembered is None
+            or not self._cache.has(remembered["sha"])
+        ):
             raise FetchError(f"cannot resolve {name}: {cause}") from cause
         logger.warning("tool %s: serving last known good %s (%s)", name, remembered["sha"], cause)
         return ResolvedTool(

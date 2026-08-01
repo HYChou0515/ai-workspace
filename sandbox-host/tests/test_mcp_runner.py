@@ -244,20 +244,34 @@ def test_the_note_on_stderr_claims_only_what_is_known(env, capsys) -> None:
     assert "cache" not in capsys.readouterr().err
 
 
-def test_a_stale_answer_says_the_artifact_store_was_unreachable(env, capsys) -> None:
-    """Serving the last version that resolved keeps an engineer working
-    through an outage, but silently serving yesterday's tool is how someone
-    spends an afternoon on a bug that was fixed this morning."""
+def test_a_local_runner_never_serves_a_copy_it_could_not_confirm(env, capsys) -> None:
+    """The host serves last-known-good through an outage, because one artifact
+    store being down should not stop every workspace. A runner on someone's
+    laptop is the opposite case, and the reason is revocation.
+
+    Access to a tool is managed where the artifact lives. Take someone's read
+    access away and their next start should fail — but a resolver that falls
+    back to its cache would keep running the tool it already had, for as long
+    as that machine lives, and nothing we do could reach it. GitLab also
+    answers 404 for a project you may not see, which is indistinguishable
+    from an expired artifact, so the status code cannot make this decision.
+
+    So locally: confirm it today, or do not run it."""
     data = _bundle()
     args = ["wafer-history", _MANIFEST_URL]
 
     main(args, fetch=_Wire(manifest=_manifest(data), bundle=data), hand_over=lambda _e: None)
     capsys.readouterr()
-    code = main(args, fetch=_Wire(), hand_over=lambda _e: None)
 
-    assert code == 0
-    assert "unreachable" in capsys.readouterr().err
+    code = main(
+        args,
+        fetch=_Wire(),  # the artifact store now refuses, or is gone
+        hand_over=lambda _e: pytest.fail("a cached copy must not be served"),
+    )
 
+    assert code == 1
+    err = capsys.readouterr().err
+    assert "wafer-history" in err
 
 # ─── where a tool's files go ─────────────────────────────────────────
 
