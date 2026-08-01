@@ -32,6 +32,7 @@ from ..files.zip_download import (
 )
 from ..filestore.protocol import FileExists, FileNotFound
 from ..kernels import KernelService
+from ..quota.admission import AdmissionGate
 from ..sandbox.protocol import Sandbox
 from .activity import ActivityLog
 from .events import CellEvent, FileChanged, to_sse
@@ -150,6 +151,7 @@ def register_file_routes(
     turn_engine: ChatTurnEngine,
     activity: ActivityLog,
     max_file_size: int,
+    admission: AdmissionGate | None = None,
 ) -> None:
     """Mount the workspace file / notebook / shell routes onto ``app``."""
 
@@ -656,6 +658,11 @@ def register_file_routes(
         investigation_id = locator.require_access(slug, item_id, "execute")
         if not body.cmd:
             raise HTTPException(status_code=422, detail="cmd must be non-empty")
+        # The human shell wakes a sandbox exactly like an agent turn does, so it
+        # passes the same per-person gate. Leaving it out would make the terminal
+        # the way around the limit.
+        if admission is not None:
+            await admission.check(investigation_id)
         try:
             session = await registry.session(investigation_id)
             handle = await registry.ensure_handle(session)

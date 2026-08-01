@@ -41,10 +41,11 @@ if TYPE_CHECKING:
     from ..files import WorkspaceFiles
     from ..kb.ingest import Ingestor
     from ..kb.llm import ILlm
+    from ..quota.admission import AdmissionGate
     from .locator import ItemLocator
     from .registry import InvestigationRegistry
     from .turn_context import TurnContextBuilder
-    from .turns import ChatTurnEngine, TurnMessage
+from .turns import ChatTurnEngine, TurnMessage
 
 # The generic sub-agent bridge callable shape (purpose, payload, sink, origin_id, ...).
 RunSubagent = Callable[..., Awaitable[tuple[str, list]]]
@@ -71,6 +72,7 @@ class WorkflowExecutor:
         run_subagent: RunSubagent,
         turn_concurrency: int = 1,
         ask_llm: ILlm | None = None,
+        admission: AdmissionGate | None = None,
     ) -> None:
         self._spec = spec
         self._files = files
@@ -82,6 +84,8 @@ class WorkflowExecutor:
         self._turn_ctx = turn_ctx
         self._locator = locator
         self._run_subagent = run_subagent
+        # Per-person cpu/memory admission, same gate an interactive turn passes.
+        self._admission = admission
         # #435 P6: the ILlm backing the create_entity cross-origin match (M1-AI, §decide-AI).
         # None ⇒ dedup stays journal-only (self-dedup); a wired model enables cross-match.
         self._ask_llm = ask_llm
@@ -142,6 +146,12 @@ class WorkflowExecutor:
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError  # Stop arrived before this turn ran
         await self._files.ensure_room_for(item_id, 1)
+        # Same pair of gates as an interactive turn (`chat_send.send`). A
+        # scheduled headless run is refused too, rather than exempted: an
+        # exemption would be a way to spend resources the limit says you do not
+        # have, just by scheduling it. #9 in the plan makes the refusal visible.
+        if self._admission is not None:
+            await self._admission.check(item_id)
         try:
             rid = chat_key
             got = self._conv_rm.get(rid).data

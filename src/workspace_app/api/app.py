@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as importlib_version
 from pathlib import Path
@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from specstar import SpecStar
 
 from ..agent.config_catalog import AgentConfigCatalog
-from ..config.schema import EnhancementSettings, OffHoursSettings
+from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -29,6 +29,7 @@ from ..kb.vlm import IVlm, VlmDescriber
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
+from ..quota.admission import AdmissionGate, SandboxQuotaExceeded
 from ..quota.limits import ResourceLimits
 from ..resources import (
     AgentConfig,
@@ -79,7 +80,7 @@ from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
 from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
-from .sandbox_activity import IActivityStore, SpecstarActivityStore
+from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
 from .sandbox_address import IAddressStore, SpecstarAddressStore
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
@@ -309,6 +310,10 @@ def create_app(
     # `workspace_quota` is). None / a slug that is absent ⇒ the sandbox backend's
     # own configured defaults, i.e. exactly today's behaviour.
     app_resources: Mapping[str, ResourceLimits] | None = None,
+    # What ONE person may hold across every item they own, in live sandboxes.
+    # None ⇒ no per-person limit at all (today's behaviour). Threaded from
+    # `__main__` as `settings.resources.per_user`.
+    per_user_resources: PerUserResources | None = None,
     # #245: blob-GC sweeper. `gc_interval` None ⇒ off; `gc_t1`/`gc_t2` are the
     # fresh-blob grace and quarantine dwell passed to `SpecStar.gc(reconcile)`.
     gc_interval: timedelta | None = timedelta(hours=1),
@@ -480,16 +485,23 @@ def create_app(
         monitor=monitor,
         on_measured=lambda ws, total: files.record_measurement(ws, total),
     )
-    # #345: only the local process sandbox keeps an item's working dir on a
-    # shared volume across pods, so only it needs the GLOBAL activity heartbeat
-    # that lets the idle reaper recycle a dir solely when no pod is using it.
-    # Other backends (mock/http) own their own per-pod lifecycle → no heartbeat.
+    # #345 wired this for the local process sandbox only: it is the one backend
+    # that keeps an item's working dir on a shared volume, so it is the one whose
+    # idle reaper must ask "is ANY pod using this?" before recycling.
+    #
+    # The heartbeat now carries a second job — it IS the per-person cpu/memory
+    # ledger — and that job belongs to every backend. Leaving it local-only would
+    # mean the limits silently never bind in production, which runs `kind: http`:
+    # the tally would be empty, every check would pass, and nothing would look
+    # broken. A knob that is off exactly where it matters is worse than no knob.
+    #
+    # The reaper reading it on the other backends too is a strict improvement,
+    # not a side effect to tolerate: with #366 all pods converge on ONE http
+    # sandbox per item, so reaping on pod-local idleness could already tear down
+    # an environment a peer is actively serving.
     from ..sandbox.http_client import HttpSandbox
-    from ..sandbox.local_process import LocalProcessSandbox
 
-    activity_store: IActivityStore | None = (
-        SpecstarActivityStore(spec) if isinstance(sandbox, LocalProcessSandbox) else None
-    )
+    activity_store: IActivityStore = SpecstarActivityStore(spec)
     # #366: the HTTP sandbox-host mints a per-pod uuid handle on every `create`
     # (it does NOT reattach by item id), so two pods diverge into two sandboxes
     # for one item. The shared per-item address store makes them converge on ONE
@@ -542,9 +554,20 @@ def create_app(
             return SandboxSpec()
         return SandboxSpec(cpu_cores=limits.cpu_cores, memory_bytes=limits.memory_bytes)
 
+    def _owner_of(item_id: str) -> str | None:
+        """The debtor for an item's resources: its `owner` field (#687).
+
+        Deliberately NOT specstar's `created_by`. `owner` is the field the
+        product treats as "whose item is this", and #687 is what makes it
+        trustworthy — until it lands, this is charged to a field anyone with
+        write access can rewrite."""
+        found = find_work_item(spec, item_id)
+        return found[1].owner if found is not None else None
+
     registry = InvestigationRegistry(
         sandbox=sandbox,
         spec_for=_spec_for,
+        owner_of=_owner_of,
         sync=sync,
         activity=activity_store,
         address=address_store,
@@ -574,6 +597,19 @@ def create_app(
         # workspace), so what the facade holds is a LOOKUP, not a number.
         quota=_quota_for,
     )
+    admission = AdmissionGate(
+        activity_store,
+        per_user_resources or PerUserResources(),
+        owner_of=_owner_of,
+        has_live_sandbox=registry.has_live_sandbox,
+        # The window over which a heartbeat still counts as a live sandbox. It is
+        # the reaper's idle threshold on purpose: shorter under-counts a
+        # live-but-idle sandbox that is still holding memory, longer keeps
+        # charging for one already reclaimed.
+        window_ms=int(idle_timeout.total_seconds() * 1000),
+        now_ms=lambda: int(datetime.now(UTC).timestamp() * 1000),
+    )
+
     kernels = KernelService()
     activity = ActivityLog()
     # Feed the monitor (resolved above) from the OpenAI Agents SDK's own tracing
@@ -676,6 +712,27 @@ def create_app(
                     "used": exc.used,
                     "quota": exc.quota,
                     "attempted": exc.attempted,
+                }
+            },
+        )
+
+    @app.exception_handler(SandboxQuotaExceeded)
+    async def _sandbox_quota(_request: Request, exc: SandboxQuotaExceeded) -> JSONResponse:
+        """The cpu/memory sibling of the full-workspace 507. Same reasoning for
+        registering it centrally: a gate added at a new entry point should be
+        reported the same way without anyone remembering to convert it.
+
+        507 rather than 429: this is not "slow down", it is "you are holding as
+        much as you may hold" — the fix is to close something, and the body says
+        which dimension bound so the FE can point at the right list."""
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "error": "sandbox_quota_exceeded",
+                    "dimension": exc.dimension,
+                    "used": exc.used,
+                    "limit": exc.limit,
                 }
             },
         )
@@ -857,6 +914,14 @@ def create_app(
     # below; we include it once, after all routes exist, before spec.openapi.
     with boot_step("apply spec to backend (DB schema)"):
         spec.apply(app, router=api, auto_include=False)
+
+    # Registered HERE — immediately post-`apply`, so its CRUD routes are never
+    # emitted (an internal coordination row, not an API resource) but the model
+    # exists for every caller, not only for an app whose lifespan was entered.
+    # It used to be registered in the lifespan, which was fine while it was
+    # wired for one backend; now that it is also the per-person ledger, a
+    # sandbox wake on a bare test client would hit an unregistered model.
+    register_sandbox_activity(spec)
 
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -1177,6 +1242,7 @@ def create_app(
     # release / notify-failure hooks all bind ``create_app``'s services through one
     # adapter. The orchestrator wiring + capability routes call its methods.
     workflow_executor = WorkflowExecutor(
+        admission=admission,
         spec=spec,
         files=files,
         registry=registry,
@@ -1282,6 +1348,7 @@ def create_app(
     )
 
     chat_send_svc = ChatSendService(
+        admission=admission,
         spec=spec,
         locator=locator,
         # #615: the after-hours budget + window the turn-end driver reads to
@@ -1382,6 +1449,7 @@ def create_app(
         turn_engine=turn_engine,
         activity=activity,
         max_file_size=max_file_size,
+        admission=admission,
     )
 
     # #419: file-first entity CRUD. Opt-in — an item with no `.entity/` schema

@@ -36,7 +36,6 @@ from ..kernels import KernelService
 from ..observability.boot import boot_step
 from . import perf_trace
 from .registry import InvestigationRegistry
-from .sandbox_activity import register_sandbox_activity
 from .sandbox_address import register_sandbox_address
 
 if TYPE_CHECKING:
@@ -392,13 +391,9 @@ def build_lifespan(
                 app.state.ingestor,
                 user=HELP_SYSTEM_USER,
             )
-        # #345: register the shared per-item activity-heartbeat model (only when
-        # the registry uses it — the local shared-vol sandbox). Registered HERE,
-        # after spec.apply, so its CRUD routes are never emitted (same reason as
-        # the #245 blob-GC lease below).
-        if registry.activity is not None:
-            register_sandbox_activity(spec)
-            logger.debug("lifespan: registered sandbox-activity heartbeat model")
+        # (#345's activity-heartbeat model is registered in `create_app`, right
+        # after `spec.apply` — it must exist whether or not a lifespan ran, since
+        # it is now also the per-person resource ledger.)
         # #366: register the shared per-item sandbox-address model (only when the
         # registry uses it — the HTTP sandbox-host backend). Same post-apply
         # timing so its CRUD routes are never emitted.

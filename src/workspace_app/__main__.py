@@ -226,6 +226,7 @@ def main() -> None:
             # #245: per-workspace total-size quota (protects the shared disk root).
             workspace_quota=settings.filestore.workspace_quota,
             app_resources=app_resources,
+            per_user_resources=settings.resources.per_user,
             # #345: scratch-vol soft cap — the idle reaper recycles any item whose
             # working dir grows past this (0 ⇒ off), so one runaway workspace can't
             # fill the shared scratch volume the whole fleet shares.

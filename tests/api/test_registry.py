@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from workspace_app.api.registry import InvestigationRegistry
-from workspace_app.api.sandbox_activity import IActivityStore
+from workspace_app.api.sandbox_activity import IActivityStore, LiveSandbox
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.filestore.migrating import MigratingFileStore
 from workspace_app.filestore.nfs_tree import NfsTreeFileStore
@@ -334,19 +334,46 @@ async def test_mirror_warm_survives_one_failing_item_366():
 
 
 class _FakeActivity(IActivityStore):
-    """In-memory IActivityStore double: item_id → last_active_ms."""
+    """In-memory IActivityStore double.
+
+    It models the WHOLE contract, including the ledger fields the row now
+    carries and the `live_for` query built on them — a double that only
+    implemented the heartbeat would pass while the real store's per-person tally
+    silently regressed, since nothing in the registry reads it back."""
 
     def __init__(self) -> None:
         self.ms: dict[str, int] = {}
+        self.rows: dict[str, LiveSandbox] = {}
+        self.owners: dict[str, str] = {}
 
-    async def bump(self, item_id: str) -> None:
+    async def bump(
+        self,
+        item_id: str,
+        *,
+        owner: str = "",
+        cpu_milli: int = 0,
+        memory_bytes: int = 0,
+    ) -> None:
         self.ms[item_id] = 10**13  # far future → counts as "active now"
+        self.owners[item_id] = owner
+        self.rows[item_id] = LiveSandbox(
+            item_id=item_id, cpu_milli=cpu_milli, memory_bytes=memory_bytes
+        )
 
     async def last_active_ms(self, item_id: str) -> int | None:
         return self.ms.get(item_id)
 
     async def forget(self, item_id: str) -> None:
         self.ms.pop(item_id, None)
+        self.rows.pop(item_id, None)
+        self.owners.pop(item_id, None)
+
+    async def live_for(self, owner: str, *, since_ms: int) -> list[LiveSandbox]:
+        return [
+            row
+            for item, row in self.rows.items()
+            if self.owners.get(item) == owner and self.ms.get(item, 0) >= since_ms
+        ]
 
 
 async def test_kill_idle_spares_globally_active_shared_dir_345():

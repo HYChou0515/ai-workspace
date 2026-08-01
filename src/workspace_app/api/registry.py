@@ -73,6 +73,10 @@ class InvestigationRegistry:
     # One source, not a constant-plus-override pair — two ways to answer the
     # same question is how they end up disagreeing.
     spec_for: Callable[[str], SandboxSpec] = _bare_spec
+    # Who a live sandbox is charged to (the item's `owner` field). Wired for the
+    # per-person limits; None ⇒ nothing is charged, and the heartbeat row stays
+    # the plain liveness signal it was before.
+    owner_of: Callable[[str], str | None] = lambda _item: None
     sync: _SyncHook | None = None
     # #345: global per-item activity heartbeat. When wired (shared-vol local
     # sandbox on multi-replica API), the idle reaper recycles a shared dir only
@@ -180,8 +184,7 @@ class InvestigationRegistry:
                 investigation_id,
             )
             session.handle = await self._acquire(investigation_id)
-            if self.activity is not None:
-                await self.activity.bump(investigation_id)
+            await self._bump(investigation_id)
             session.last_active = _utcnow()
         return session.handle
 
@@ -218,10 +221,27 @@ class InvestigationRegistry:
                 )
             # Refresh the GLOBAL heartbeat on every wake/use (not just the first)
             # so another pod's idle reaper sees this item as live (#345).
-            if self.activity is not None:
-                await self.activity.bump(session.investigation_id)
+            await self._bump(session.investigation_id)
             session.last_active = _utcnow()
         return session.handle
+
+    async def _bump(self, item: str) -> None:
+        """Refresh the item's global heartbeat, carrying what its live sandbox
+        costs and who owes it.
+
+        Cost and debtor ride the SAME row as liveness on purpose: the per-person
+        cpu/memory tally is only ever "sum the sandboxes that are alive", and a
+        separate ledger would need its own answer to "is it alive" — two answers
+        to that question is how a quota starts charging for things that are gone."""
+        if self.activity is None:
+            return
+        spec = self.spec_for(item)
+        await self.activity.bump(
+            item,
+            owner=self.owner_of(item) or "",
+            cpu_milli=int((spec.cpu_cores or 0) * 1000),
+            memory_bytes=spec.memory_bytes or 0,
+        )
 
     async def _alive(self, handle: SandboxHandle) -> bool:
         """True when the sandbox behind ``handle`` still EXISTS — a cheap probe.
@@ -341,6 +361,25 @@ class InvestigationRegistry:
                 handle.id,
             )
         return handle
+
+    async def has_live_sandbox(self, investigation_id: str) -> bool:
+        """Whether this item is ALREADY holding a live sandbox.
+
+        Deliberately not `resolve_io_handle is not None`: that answers "where
+        would I/O for this item go", and for an id-addressable backend it derives
+        a handle whether or not anything is running there. Asking it about
+        liveness would make every item look live, and a gate built on it would
+        never refuse anything.
+
+        This is `_is_cold` inverted — a real probe, plus the shared address for
+        the http backend, which is the only place a live sandbox's existence is
+        recorded across pods."""
+        if investigation_id in self._sessions and self._sessions[investigation_id].handle:
+            return True
+        if self.address is not None:
+            existing = await self.address.get(investigation_id)
+            return existing is not None and await self._alive(existing)
+        return not await self._is_cold(investigation_id)
 
     async def _is_cold(self, investigation_id: str) -> bool:
         """True when the item's sandbox dir is NOT yet materialized on shared
