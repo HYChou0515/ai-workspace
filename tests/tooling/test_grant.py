@@ -471,3 +471,73 @@ def test_a_key_with_nobody_s_name_on_it_is_refused(tmp_path, capsys):
     # would pass while the requirement was gone.
     assert "the handle this key is trusted under" in err
     assert not (tmp_path / "k.pem").exists()
+
+
+# ─── the error paths, which are the ones that get read ───────────────
+
+
+def test_a_signing_key_of_the_wrong_kind_is_refused():
+    """Someone points `--key` at an RSA key, or at a TLS key lying around.
+    It has to say which, or they will conclude the certificate machinery is
+    broken rather than that they picked the wrong file."""
+    from cryptography.hazmat.primitives import serialization as ser
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    wrong = rsa.generate_private_key(public_exponent=65537, key_size=2048).private_bytes(
+        encoding=ser.Encoding.PEM,
+        format=ser.PrivateFormat.PKCS8,
+        encryption_algorithm=ser.NoEncryption(),
+    )
+
+    with pytest.raises(GrantError, match="ed25519"):
+        issue(Grant(tool="t", max_bytes=1, expires=None), private_key=wrong)
+
+
+def test_a_certificate_that_is_not_even_base64_says_it_is_damaged(keys):
+    # Truncated in a mail client, or a stray character on paste. `"a"` is not
+    # a decodable length, which is what actually raises.
+    _, public = keys
+
+    with pytest.raises(GrantError, match="damaged"):
+        verify("a.b", public_keys=public, tool="t", today=date(2026, 8, 1))
+
+
+def test_a_properly_signed_certificate_with_the_wrong_shape_inside(keys):
+    """Signed by a key we trust, so it gets past the signature — and then the
+    payload is missing a field. Only we can produce this, by shipping a bug;
+    it must still read as "malformed", not as a KeyError traceback."""
+    import base64 as b64
+
+    from cryptography.hazmat.primitives import serialization as ser
+
+    private, public = keys
+    key = ser.load_pem_private_key(private, password=None)
+    payload = json.dumps({"tool": "t"}).encode()  # no max_bytes, no expires
+    enc = lambda raw: b64.urlsafe_b64encode(raw).decode().rstrip("=")  # noqa: E731
+
+    with pytest.raises(GrantError, match="malformed"):
+        verify(
+            f"{enc(payload)}.{enc(key.sign(payload))}",
+            public_keys=public,
+            tool="t",
+            today=date(2026, 8, 1),
+        )
+
+
+def test_a_stray_argument_is_reported_rather_than_swallowed(capsys):
+    code, _, err = _run(["issue", "pdf-extract"], capsys)
+
+    assert code == 2
+    assert "pdf-extract" in err
+
+
+def test_an_expiry_that_is_not_a_date_is_reported(tmp_path, capsys):
+    key = tmp_path / "k.pem"
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
+
+    code, _, err = _run(
+        ["issue", "--tool", "t", "--max-mb", "1", "--expires", "soon", "--key", str(key)], capsys
+    )
+
+    assert code == 2
+    assert "soon" in err

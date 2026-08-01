@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import json
 import tarfile
 from pathlib import Path
@@ -446,3 +447,12 @@ def test_the_skill_explains_the_warning_this_runner_prints(env, capsys, monkeypa
     skill = (Path(__file__).resolve().parents[2] / "tool-skill" / "SKILL.md").read_text("utf-8")
 
     assert printed in skill, f"the skill does not explain what the runner prints: {printed!r}"
+
+
+def test_the_workspace_owner_is_read_from_the_directory(tmp_path) -> None:
+    """The seam every other test replaces. It decides whether the runner drops
+    privileges, so the real thing has to be exercised somewhere."""
+    from sandbox_host.mcp_runner import _workspace_owner
+
+    assert _workspace_owner(str(tmp_path)) == (os.getuid(), os.getgid())
+    assert _workspace_owner("/definitely/not/here") is None

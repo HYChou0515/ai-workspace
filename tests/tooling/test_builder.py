@@ -697,3 +697,16 @@ def test_an_expired_certificate_says_it_expired_rather_than_too_big(
             build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
             smoke_check=lambda _dist: None,
         )
+
+
+def test_weighing_a_bundle_that_carries_no_interpreter(tmp_path: Path) -> None:
+    """`_heaviest` runs on whatever the build produced, including a tree that
+    never got its interpreter because the build failed earlier. It reports
+    what is there rather than raising on what is not — a diagnostic that dies
+    while explaining a failure explains nothing."""
+    bundle = tmp_path / "b"
+    site = bundle / ".venv" / "lib" / "python3.12" / "site-packages" / "pandas"
+    site.mkdir(parents=True)
+    (site / "data.bin").write_bytes(os.urandom(1000))
+
+    assert builder_mod._heaviest(bundle) == [("pandas", 1000)]
