@@ -226,10 +226,12 @@ class _Response:
 def test_the_real_fetch_carries_the_hosts_token(monkeypatch) -> None:
     import urllib.request
 
-    from sandbox_host.tool_resolve import TOKEN_ENV, _http_get
+    from sandbox_host.tool_resolve import HOSTS_ENV, TOKEN_ENV, _http_get
 
     seen: list[urllib.request.Request] = []
     monkeypatch.setenv(TOKEN_ENV, "glpat-secret")
+    # Where it is allowed to go. Unset, it goes nowhere — see the tests below.
+    monkeypatch.setenv(HOSTS_ENV, "gitlab.example")
     monkeypatch.setattr(
         urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response(b"ok")
     )
@@ -302,3 +304,80 @@ def test_the_grant_module_is_a_verbatim_copy_of_the_apps() -> None:
         "copy it across; it depends only on the stdlib and cryptography exactly "
         "so this can stay a verbatim copy"
     )
+
+
+# ─── where the credential may go (#674) ──────────────────────────────
+
+
+def _sent(url: str, monkeypatch) -> dict[str, str]:
+    """The headers a fetch of `url` would actually put on the wire."""
+    import urllib.request
+
+    from sandbox_host import tool_resolve
+
+    seen: dict[str, str] = {}
+
+    class _Response:
+        def read(self) -> bytes:
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def urlopen(request, timeout=None):  # noqa: ARG001
+        seen.update(request.headers)
+        return _Response()
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    tool_resolve._http_get(url)
+    return seen
+
+
+def test_the_credential_goes_only_where_the_deployment_says(monkeypatch) -> None:
+    """The certificate cannot protect this. It is read from the manifest, and
+    the manifest is what the request was for — so by the time there is
+    anything to verify, the token has already been sent.
+
+    Which makes pointing a runner at a hostile URL a way to collect somebody's
+    GitLab token, and it presents as a failed install."""
+    monkeypatch.setenv("TOOL_ARTIFACT_TOKEN", "glpat-secret")
+    monkeypatch.setenv("TOOL_ARTIFACT_HOSTS", "gitlab.example")
+
+    ours = _sent("https://gitlab.example/api/v4/projects/7/x.json", monkeypatch)
+    theirs = _sent("https://evil.example/x.json", monkeypatch)
+
+    assert ours.get("Private-token") == "glpat-secret"
+    assert "Private-token" not in theirs
+    assert "glpat-secret" not in str(theirs)
+
+
+def test_no_configured_host_means_the_credential_is_never_sent(monkeypatch) -> None:
+    """Not knowing where it may go is not a reason to send it everywhere. The
+    result is a 401 that names the setting, which is diagnosable; the
+    alternative is a token on a stranger's server, which is not."""
+    monkeypatch.setenv("TOOL_ARTIFACT_TOKEN", "glpat-secret")
+    monkeypatch.delenv("TOOL_ARTIFACT_HOSTS", raising=False)
+
+    assert "Private-token" not in _sent("https://gitlab.example/x.json", monkeypatch)
+
+
+def test_a_refusal_says_the_credential_was_withheld(monkeypatch) -> None:
+    """Otherwise "401" on a URL you can open in a browser is unexplainable."""
+    import urllib.error
+    import urllib.request
+
+    from sandbox_host.tool_resolve import FetchError, _http_get
+
+    monkeypatch.setenv("TOOL_ARTIFACT_TOKEN", "glpat-secret")
+    monkeypatch.setenv("TOOL_ARTIFACT_HOSTS", "gitlab.example")
+
+    def urlopen(request, timeout=None):  # noqa: ARG001
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+
+    with pytest.raises(FetchError, match="TOOL_ARTIFACT_HOSTS"):
+        _http_get("https://elsewhere.example/x.json")

@@ -33,7 +33,6 @@ from __future__ import annotations
 import base64
 import csv
 import json
-from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 from urllib.parse import unquote, urlsplit
@@ -248,7 +247,7 @@ def verify(token: str, *, public_keys: dict[str, str], tool: str) -> Grant:
 def admit(
     *,
     tool: str,
-    urls: Iterable[str],
+    url: str,
     token: str | None,
     public_keys: dict[str, str] | None = None,
 ) -> str | None:
@@ -271,21 +270,14 @@ def admit(
         )
     except GrantError as exc:
         return str(exc)
-    # EVERY url this artifact will be fetched from, not just the manifest's.
-    # The manifest carries the certificate, but the bundle is what runs, and
-    # checking only the first made the second's provenance emergent — true
-    # because one path segment gets swapped — rather than stated.
-    #
     # Compared with percent-encoding undone on both sides. GitLab's API form
     # writes the project as `rca%2Fwafer-history` and its web form as
     # `rca/wafer-history`; the same place written two ways has to match.
-    covers = unquote(granted.source)
-    for url in urls:
-        if not unquote(url).startswith(covers):
-            return (
-                f"the certificate for {tool!r} is good for artifacts under "
-                f"{granted.source}, and this one came from {url}"
-            )
+    if not unquote(url).startswith(unquote(granted.source)):
+        return (
+            f"the certificate for {tool!r} is good for artifacts under "
+            f"{granted.source}, and this one came from {url}"
+        )
     return None
 
 

@@ -56,13 +56,19 @@ RUN npm install -g pptxgenjs@^3.12
 # gives tool-builder; leaving them out of step is exactly what the gate exists
 # to catch.
 ARG BUILDER_ID=tool-builder:dev
+# Where the artifact credential may be sent, comma separated. A certificate
+# cannot protect this: it is read FROM the manifest, so by the time there is
+# anything to verify, the request has been made. Unset, the credential is
+# never sent — not knowing where it may go is not a reason to send it anywhere.
+ARG ARTIFACT_HOSTS=
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PATH="/host/.venv/bin:$PATH" \
     NODE_PATH=/usr/local/lib/node_modules \
     SANDBOX_HOST_BIND=0.0.0.0:8000 \
     SANDBOX_HOST_TOOLS_DIR=/opt/tools \
-    TOOL_BUILDER_ID=${BUILDER_ID}
+    TOOL_BUILDER_ID=${BUILDER_ID} \
+    TOOL_ARTIFACT_HOSTS=${ARTIFACT_HOSTS}
 WORKDIR /host
 
 # Dependencies first (cached until the host's pyproject/lock change).

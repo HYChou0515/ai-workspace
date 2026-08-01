@@ -372,3 +372,14 @@ def test_the_grant_runbook_is_walkable_alone() -> None:
     assert "發版之後才生效" in section
     assert "tool-size-grant.token" in section  # what the author is told to do
     assert "size granted by" in section  # how they confirm it landed
+
+
+def test_the_images_that_fetch_can_be_told_where_the_credential_may_go() -> None:
+    """The builder never fetches an artifact, so it has no credential to
+    misplace. The other two do, and both need the same knob — a runner that
+    can send a token anywhere turns "install this tool" into a way to collect
+    one, and it presents to the person as a failed install."""
+    for rel in (("sandbox-host", "Dockerfile"), ("sandbox-host", "mcp-runner.Dockerfile")):
+        text = _REPO.joinpath(*rel).read_text("utf-8")
+        assert "ARG ARTIFACT_HOSTS" in text, rel
+        assert "TOOL_ARTIFACT_HOSTS=${ARTIFACT_HOSTS}" in text, rel

@@ -51,6 +51,18 @@ BUNDLE_NAME = "tool.tar.gz"
 #: host; per-project tokens are a later problem than the first tool.
 TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
 
+#: The hosts the artifact credential may be sent to, comma separated. Baked
+#: into the images that fetch, beside `TOOL_BUILDER_ID`, by the same release.
+#:
+#: A certificate cannot protect this: it is read FROM the manifest, so by the
+#: time there is anything to verify, the request has been made. Pointing a
+#: runner at a hostile URL would otherwise be a way to collect somebody's
+#: GitLab token — and it would present to them as a failed install.
+#:
+#: Unset means the credential is never sent. Not knowing where it may go is
+#: not a reason to send it anywhere.
+HOSTS_ENV = "TOOL_ARTIFACT_HOSTS"
+
 # A seam for the network: the default performs the real GET; tests inject a
 # stand-in so the rest of the behaviour is exercised without a server.
 Fetcher = Callable[[str], bytes]
@@ -74,10 +86,15 @@ def bundle_url(manifest_url: str) -> str:
     return urlunsplit(parts._replace(path=f"{head}/{BUNDLE_NAME}"))
 
 
+def _allowed_hosts() -> set[str]:
+    return {h.strip() for h in os.environ.get(HOSTS_ENV, "").split(",") if h.strip()}
+
+
 def _http_get(url: str) -> bytes:
     request = urllib.request.Request(url)  # noqa: S310 - https URLs from config
     token = os.environ.get(TOKEN_ENV)
-    if token:
+    withheld = bool(token) and urlsplit(url).hostname not in _allowed_hosts()
+    if token and not withheld:
         # GitLab accepts either header; PRIVATE-TOKEN is the one that works for
         # both personal and project access tokens.
         request.add_header("PRIVATE-TOKEN", token)
@@ -91,6 +108,13 @@ def _http_get(url: str) -> bytes:
             if exc.code == 404
             else ""
         )
+        if withheld:
+            # Otherwise a 401 on a URL they can open in a browser is
+            # unexplainable, and the explanation is a setting they can see.
+            hint += (
+                f" — the artifact credential was NOT sent: {urlsplit(url).hostname} is "
+                f"not in {HOSTS_ENV}"
+            )
         raise FetchError(f"{url} answered {exc.code} {exc.reason}{hint}") from exc
     except OSError as exc:
         raise FetchError(f"{url} is unreachable: {exc}") from exc
@@ -161,7 +185,7 @@ class ToolResolver:
         # it is what says which tool this is — so a URL cannot be admitted by
         # having been pasted somewhere, and two authors' identically-named
         # commands do not collide.
-        refusal = admit(tool=name, urls=(manifest_url, bundle_url(manifest_url)), token=manifest.grant)
+        refusal = admit(tool=name, url=manifest_url, token=manifest.grant)
         if refusal is not None:
             raise IncompatibleArtifact(refusal)
 

@@ -24,11 +24,17 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 # The ABI anchor. The release pipeline sets it to the same value it gives
 # tool-builder and the host; out of step is exactly what the gate catches.
 ARG BUILDER_ID=tool-builder:dev
+# Where the artifact credential may be sent, comma separated. A certificate
+# cannot protect this: it is read FROM the manifest, so by the time there is
+# anything to verify, the request has been made. Unset, the credential is
+# never sent — not knowing where it may go is not a reason to send it anywhere.
+ARG ARTIFACT_HOSTS=
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PATH="/runner/.venv/bin:$PATH" \
     TOOL_CACHE_DIR=/cache \
-    TOOL_BUILDER_ID=${BUILDER_ID}
+    TOOL_BUILDER_ID=${BUILDER_ID} \
+    TOOL_ARTIFACT_HOSTS=${ARTIFACT_HOSTS}
 
 WORKDIR /runner
 # Dependencies first (cached until the host's pyproject/lock change).
