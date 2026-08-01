@@ -62,6 +62,15 @@ def _nothing_mounted_at(path: str) -> bool:
         return True
 
 
+def _workspace_owner(path: str) -> tuple[int, int] | None:
+    """Who owns the mounted workspace, or None if it cannot be read."""
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return info.st_uid, info.st_gid
+
+
 def _unguarded(_root: Path) -> None:
     """The host makes an installed tool root-owned, because many sandboxes
     with different uids share one tree and none of them may rewrite a tool the
@@ -148,6 +157,19 @@ def main(
             "on your own files.",
             file=sys.stderr,
         )
+    else:
+        # Compared against the DIRECTORY's owner rather than against uid 0:
+        # under rootless docker this process is root and the files still land
+        # owned by the person outside, so "you are running as root" would be a
+        # false alarm exactly where nothing is wrong.
+        owner = _workspace_owner(WORK_DIR)
+        if owner is not None and owner[0] != os.geteuid():
+            print(
+                f"warning: files this tool writes into {WORK_DIR} will be owned by "
+                f"uid {os.geteuid()}, but that directory belongs to uid {owner[0]} — "
+                f'they will not be editable. Add --user "{owner[0]}:{owner[1]}".',
+                file=sys.stderr,
+            )
 
     hand_over(cache.path_for(resolved.sha) / "mcp")
     return 0

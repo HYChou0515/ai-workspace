@@ -308,3 +308,50 @@ def test_a_mounted_workspace_says_nothing(env, capsys, monkeypatch) -> None:
     )
 
     assert "lost" not in capsys.readouterr().err.lower()
+
+
+def test_writing_as_someone_other_than_the_workspace_owner_is_called_out(
+    env, capsys, monkeypatch
+) -> None:
+    """Forgetting `--user` leaves every file the tool produces owned by root,
+    in the engineer's own project, where they cannot edit or delete it. They
+    find out later, from a permission error, with nothing pointing back here.
+
+    The test is uid against the DIRECTORY's owner, not against zero: under
+    rootless docker the process is uid 0 and the files still land owned by the
+    person outside, so "you are root" would be a false alarm there."""
+    from sandbox_host import mcp_runner
+
+    monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: False)
+    monkeypatch.setattr(mcp_runner, "_workspace_owner", lambda _p: (1000, 1000))
+    monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 0)
+    data = _bundle()
+
+    main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        hand_over=lambda _e: None,
+    )
+
+    err = capsys.readouterr().err
+    assert "--user" in err
+    assert "1000:1000" in err
+
+
+def test_matching_the_workspace_owner_says_nothing(env, capsys, monkeypatch) -> None:
+    """Both the `--user 1000:1000` case and rootless docker, where the process
+    is uid 0 and so is the mounted directory."""
+    from sandbox_host import mcp_runner
+
+    monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: False)
+    monkeypatch.setattr(mcp_runner, "_workspace_owner", lambda _p: (0, 0))
+    monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 0)
+    data = _bundle()
+
+    main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        hand_over=lambda _e: None,
+    )
+
+    assert "--user" not in capsys.readouterr().err
