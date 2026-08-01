@@ -774,11 +774,14 @@ def test_a_certificate_admits_only_artifacts_from_the_source_it_names(keys):
     private, public = keys
     token = issue(Grant(tool="wafer-history", max_bytes=10, source=_PROJECT), private_key=private)
 
-    assert admit(tool="wafer-history", url=_LATEST, token=token, public_keys=public) is None
+    assert admit(tool="wafer-history", urls=[_LATEST], token=token, public_keys=public) is None
 
     stolen = admit(
         tool="wafer-history",
-        url="https://gitlab.example/api/v4/projects/someone%2Felse/jobs/artifacts/main/raw/dist/tool.manifest.json",
+        urls=[
+            "https://gitlab.example/api/v4/projects/someone%2Felse"
+            "/jobs/artifacts/main/raw/dist/tool.manifest.json"
+        ],
         token=token,
         public_keys=public,
     )
@@ -793,7 +796,7 @@ def test_pinning_an_older_build_still_passes(keys):
     private, public = keys
     token = issue(Grant(tool="wafer-history", max_bytes=10, source=_PROJECT), private_key=private)
 
-    assert admit(tool="wafer-history", url=_PINNED, token=token, public_keys=public) is None
+    assert admit(tool="wafer-history", urls=[_PINNED], token=token, public_keys=public) is None
 
 
 def test_issuing_needs_a_source(tmp_path, capsys):
@@ -864,4 +867,31 @@ def test_the_same_place_written_two_ways_still_matches(keys):
     )
     encoded = "https://gitlab.example/api/v4/projects/rca%2Ftool/jobs/artifacts/main/raw/x.json"
 
-    assert admit(tool="t", url=encoded, token=token, public_keys=public) is None
+    assert admit(tool="t", urls=[encoded], token=token, public_keys=public) is None
+
+
+def test_every_url_the_artifact_is_fetched_from_has_to_be_covered(keys):
+    """The manifest is what carries the certificate, but the BUNDLE is what
+    runs. Checking only the manifest made the bundle's provenance emergent —
+    true because `bundle_url` swaps one path segment — rather than stated.
+
+    A source that cuts into the filename is where that comes apart: the
+    manifest matches and the bundle does not, and nothing looked."""
+    private, public = keys
+    token = issue(
+        Grant(tool="t", max_bytes=10, source="https://gitlab.example/p/dist/tool.man"),
+        private_key=private,
+    )
+
+    both = admit(
+        tool="t",
+        urls=[
+            "https://gitlab.example/p/dist/tool.manifest.json",
+            "https://gitlab.example/p/dist/tool.tar.gz",
+        ],
+        token=token,
+        public_keys=public,
+    )
+
+    assert both is not None
+    assert "tool.tar.gz" in both

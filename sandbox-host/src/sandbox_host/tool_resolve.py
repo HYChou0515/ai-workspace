@@ -161,7 +161,7 @@ class ToolResolver:
         # it is what says which tool this is — so a URL cannot be admitted by
         # having been pasted somewhere, and two authors' identically-named
         # commands do not collide.
-        refusal = admit(tool=name, url=manifest_url, token=manifest.grant)
+        refusal = admit(tool=name, urls=(manifest_url, bundle_url(manifest_url)), token=manifest.grant)
         if refusal is not None:
             raise IncompatibleArtifact(refusal)
 
