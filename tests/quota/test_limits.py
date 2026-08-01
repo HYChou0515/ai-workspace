@@ -3,9 +3,9 @@
 The knob has THREE layers, deliberately ordered so an existing deploy that sets
 nothing new keeps its exact behaviour:
 
-    app.json `sandbox`  ◇  config `resources.per_app.default`  ◇  today's knobs
-                                                    (`sandbox.isolation.*` /
-                                                     `filestore.workspace_quota`)
+    app.json `resources`  ◇  config `resources.per_app.default`  ◇  today's knobs
+                                                     (`sandbox.isolation.*` /
+                                                      `filestore.workspace_quota`)
 
 `resources.per_app.max` is the deploy's ceiling: a resolved value above it is a
 BOOT failure, never a silent trim — a config that says 8 cores while the pod
@@ -34,10 +34,8 @@ from workspace_app.config.schema import (
 from workspace_app.quota.limits import (
     ResourceLimitError,
     ResourceLimits,
-    format_cgroup_size,
     parse_size,
     resolve_app_limits,
-    validate_app_resources,
 )
 
 # ─── parse_size ────────────────────────────────────────────────────────
@@ -72,11 +70,6 @@ def test_parse_size_rejects_junk_loudly(text):
         parse_size(text)
 
 
-def test_format_cgroup_size_round_trips_no_limit_to_max():
-    assert format_cgroup_size(0) == "max"
-    assert format_cgroup_size(512 * 1024**2) == str(512 * 1024**2)
-
-
 # ─── layering ──────────────────────────────────────────────────────────
 
 
@@ -91,7 +84,7 @@ def _manifest(slug: str = "demo", **sandbox) -> AppManifest:
 
 
 def test_unconfigured_app_inherits_todays_knobs_unchanged():
-    """The zero-change guarantee: an app.json with no `sandbox` block and a
+    """The zero-change guarantee: an app.json with no `resources` block and a
     config with no `resources` section must reproduce exactly what the deploy
     runs today — `sandbox.isolation.*` for cpu/memory, `filestore.workspace_quota`
     for disk."""
@@ -205,11 +198,11 @@ def test_at_the_ceiling_is_allowed():
     assert resolve_app_limits(_manifest(cpu=2), settings).cpu_cores == 2
 
 
-def test_validate_app_resources_names_the_offending_app():
-    """Boot-time sweep over every discovered app — the message has to say WHICH
-    app.json is wrong, or an operator is left bisecting their own repo."""
+def test_the_error_names_the_offending_app():
+    """The message has to say WHICH app.json is wrong, or an operator staring at
+    a failed boot is left bisecting their own repo."""
     settings = Settings(
         resources=ResourceSettings(per_app=PerAppResources(max=ResourceAmounts(cpu=2)))
     )
     with pytest.raises(ResourceLimitError, match="greedy"):
-        validate_app_resources(settings, manifests=[_manifest(), _manifest("greedy", cpu=64)])
+        resolve_app_limits(_manifest("greedy", cpu=64), settings)

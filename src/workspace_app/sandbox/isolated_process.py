@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import logging
 import os
 import shlex
@@ -56,6 +57,13 @@ def _parse_size(text: str) -> str:
     if unit is None:
         return str(int(text))
     return str(int(text[:-1]) * unit)
+
+
+def _fmt_bytes(nbytes: int) -> str:
+    """A resolved byte count → what cgroup v2's `memory.max` wants. 0 is this
+    feature's "unbounded" sentinel everywhere else, and it must reach the cgroup
+    as `max` — writing a literal 0 would OOM-kill every process instantly."""
+    return "max" if nbytes <= 0 else str(nbytes)
 
 
 def _cpu_max(cores: float) -> str:
@@ -160,16 +168,32 @@ class _CgroupManager:
         self._cpu_max = _cpu_max(cpu_cores)
         self._pids_max = str(pids_max)
 
-    def create(self, name: str) -> Path:
+    def create(
+        self,
+        name: str,
+        *,
+        cpu_cores: float | None = None,
+        memory_bytes: int | None = None,
+        pids_max: int | None = None,
+    ) -> Path:
         # #345: exist_ok=True (vs the host's exist_ok=False) so a re-create on the
         # same pod — an item whose local session was dropped while its shared dir
         # stayed live — re-attaches to its cgroup instead of raising. The limit
         # files are (re)written either way, so the caps are always current.
+        #
+        # The keyword limits are ONE sandbox's resolved ceilings (per-App, from
+        # its `SandboxSpec`). `None` falls back to what this manager was
+        # constructed with, PER DIMENSION, so a spec stating only memory keeps
+        # the deploy's cpu and pids. 0 is not None: it means explicitly
+        # unbounded, and `_fmt_bytes` turns it into the cgroup's own `max`.
         cg = self._root / name
         cg.mkdir(parents=True, exist_ok=True)
-        (cg / "memory.max").write_text(self._memory_max)
-        (cg / "cpu.max").write_text(self._cpu_max)
-        (cg / "pids.max").write_text(self._pids_max)
+        memory = self._memory_max if memory_bytes is None else _fmt_bytes(memory_bytes)
+        cpu = self._cpu_max if cpu_cores is None else _cpu_max(cpu_cores)
+        pids = self._pids_max if pids_max is None else str(pids_max)
+        (cg / "memory.max").write_text(memory)
+        (cg / "cpu.max").write_text(cpu)
+        (cg / "pids.max").write_text(pids)
         return cg
 
     def remove(self, cg: Path) -> None:
@@ -271,7 +295,15 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         handle = await super().create(spec, sandbox_id)
         uid = self._uid_for(handle.id)
         ws = self._workspace(handle)
-        await asyncio.to_thread(self._cgroups.create, handle.id)
+        await asyncio.to_thread(
+            functools.partial(
+                self._cgroups.create,
+                handle.id,
+                cpu_cores=spec.cpu_cores,
+                memory_bytes=spec.memory_bytes,
+                pids_max=spec.pids_max,
+            )
+        )
         await asyncio.to_thread(self._provision, ws, uid)
         logger.info("isolated: created sandbox %s uid=%d (uid+cgroup isolation)", handle.id, uid)
         return handle

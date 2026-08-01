@@ -13,7 +13,6 @@ that only cares about memory does not have to restate cpu and disk.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..apps.manifest import AppManifest, AppResources
@@ -53,12 +52,6 @@ def parse_size(text: str) -> int:
             f"K/M/G/T suffix (e.g. '512M', '2G'), or 'max' for no limit"
         )
     return int(digits) * (unit or 1)
-
-
-def format_cgroup_size(nbytes: int) -> str:
-    """Bytes → what cgroup v2's `memory.max` wants. `NO_LIMIT` → the literal
-    "max"; anything else → a raw byte count."""
-    return "max" if nbytes == NO_LIMIT else str(nbytes)
 
 
 @dataclass(frozen=True)
@@ -144,19 +137,15 @@ def _enforce_ceiling(slug: str, limits: ResourceLimits, ceiling: ResourceAmounts
             )
 
 
-def validate_app_resources(settings: Settings, manifests: Iterable[AppManifest]) -> None:
-    """Boot-time sweep: resolve every App so a bad `resources` block fails at
-    startup, naming the App, instead of surfacing whenever someone happens to
-    open an item of that App."""
-    for manifest in manifests:
-        resolve_app_limits(manifest, settings)
+def resolve_discovered_apps(settings: Settings) -> dict[str, ResourceLimits]:
+    """Every App on disk → its resolved limits. What the boot sequence calls.
 
-
-def validate_discovered_apps(settings: Settings) -> None:
-    """`validate_app_resources` over every App on disk — the form the boot
-    sequence calls. Kept separate from the pure function above so the rule can
-    be tested against hand-built manifests without touching `apps/`."""
+    Resolving and validating are ONE act on purpose: hand the caller a mapping
+    built by the same pass that would have rejected a bad value, so the numbers
+    the app serves with are provably the numbers the boot check approved. Two
+    passes could drift, and the one that drifts is the silent one."""
     from ..apps.catalog import discover_app_slugs
     from ..apps.manifest import load_app_manifest
 
-    validate_app_resources(settings, [load_app_manifest(slug) for slug in discover_app_slugs()])
+    manifests = [load_app_manifest(slug) for slug in discover_app_slugs()]
+    return {m.slug: resolve_app_limits(m, settings) for m in manifests}

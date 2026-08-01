@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as importlib_version
@@ -29,6 +29,7 @@ from ..kb.vlm import IVlm, VlmDescriber
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
+from ..quota.limits import ResourceLimits
 from ..resources import (
     AgentConfig,
     CheckRun,
@@ -303,6 +304,11 @@ def create_app(
     # user-facing upload/edit endpoints; threaded from
     # settings.filestore.workspace_quota.
     workspace_quota: int = 20 * 1024 * 1024 * 1024,
+    # Per-App resource ceilings, `slug -> ResourceLimits`, already resolved from
+    # app.json + config by `quota.limits` (threaded from `__main__` the way
+    # `workspace_quota` is). None / a slug that is absent ⇒ the sandbox backend's
+    # own configured defaults, i.e. exactly today's behaviour.
+    app_resources: Mapping[str, ResourceLimits] | None = None,
     # #245: blob-GC sweeper. `gc_interval` None ⇒ off; `gc_t1`/`gc_t2` are the
     # fresh-blob grace and quarantine dwell passed to `SpecStar.gc(reconcile)`.
     gc_interval: timedelta | None = timedelta(hours=1),
@@ -507,9 +513,24 @@ def create_app(
             "operation — durable write-back would silently no-op (data loss). Use "
             "sandbox.kind: http (with SANDBOX_HOST_NFS_ROOT on the host) or unset it."
         )
+    from ..apps.resolve import find_work_item
+
+    def _spec_for(item_id: str) -> SandboxSpec:
+        """This item's sandbox spec: its App's resolved ceilings, looked up when
+        the sandbox is actually created. The item→App lookup is a store read, but
+        it only happens on a COLD acquire (once per sandbox lifetime), which is
+        already the expensive path."""
+        if app_resources is None:
+            return SandboxSpec()
+        found = find_work_item(spec, item_id)
+        limits = app_resources.get(found[0]) if found is not None else None
+        if limits is None:
+            return SandboxSpec()
+        return SandboxSpec(cpu_cores=limits.cpu_cores, memory_bytes=limits.memory_bytes)
+
     registry = InvestigationRegistry(
         sandbox=sandbox,
-        default_spec=SandboxSpec(),
+        spec_for=_spec_for,
         sync=sync,
         activity=activity_store,
         address=address_store,

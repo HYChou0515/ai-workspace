@@ -22,19 +22,15 @@ from __future__ import annotations
 from .limits import (
     ResourceLimitError,
     ResourceLimits,
-    format_cgroup_size,
     parse_size,
     resolve_app_limits,
-    validate_app_resources,
-    validate_discovered_apps,
+    resolve_discovered_apps,
 )
 
 __all__ = [
     "ResourceLimitError",
     "ResourceLimits",
-    "format_cgroup_size",
     "parse_size",
     "resolve_app_limits",
-    "validate_app_resources",
-    "validate_discovered_apps",
+    "resolve_discovered_apps",
 ]

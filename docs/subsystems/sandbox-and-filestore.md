@@ -133,11 +133,11 @@ flowchart LR
 
 ## 與其他子系統的關係
 
-- **[API 與回合引擎](api-and-turns.md)** — `InvestigationRegistry`（`src/workspace_app/api/registry.py`）是本子系統的生命週期擁有者:`ensure_handle`(create+restore)、`peek_handle`(暖/冷路由的 liveness 查詢)、`flush`/`mirror_warm`/`kill_idle`/`close_all`(mirror 後視情況 kill)。它透過窄的 `_SyncHook` Protocol 呼叫 `SandboxSync`，並持有 `Sandbox` 與預設 `SandboxSpec`。
+- **[API 與回合引擎](api-and-turns.md)** — `InvestigationRegistry`（`src/workspace_app/api/registry.py`）是本子系統的生命週期擁有者:`ensure_handle`(create+restore)、`peek_handle`(暖/冷路由的 liveness 查詢)、`flush`/`mirror_warm`/`kill_idle`/`close_all`(mirror 後視情況 kill)。它透過窄的 `_SyncHook` Protocol 呼叫 `SandboxSync`，並持有 `Sandbox` 與 `spec_for`（依 item 取得該 App 的 `SandboxSpec`，含 cpu/memory 上限——見 `quota/limits.py`）。
 - **WorkspaceFiles facade**（API 檔案工具層）— 用 `peek_handle` 把 agent/人類的檔案操作路由 暖→sandbox / 冷→FileStore，並做 content-based CAS（edit_file/write_file），詳見 `docs/plan-sandbox-sot.md` P4。
 - **[工具套件與 Sandbox Host](tooling-and-sandbox-host.md)** — `HttpSandbox` 是 in-process 客戶端；host pod、`IsolatedProcessSandbox`、setpriv/cgroup 隔離、`/.tools` python-stack provisioning 與線上契約（[sandbox-host.md](../sandbox-host.md)、[sandbox-host-wire.md](../sandbox-host-wire.md)）都住那裡。`_exec_argv` 是連接兩者的 override 接縫。
 - **[資料層（specstar）](data-layer.md)** — `SpecstarFileStore` 存 `WorkspaceFile`/`_WorkspaceDirs` resource + Binary blob；`blob_gc` 驅動 `SpecStar.gc`；兩者冪等自註冊 model。與 KB（`SourceDoc`）和 wiki（`WikiPage`）共用同一 blob store。
-- **[啟動與組裝根](boot-and-config.md)** — `factories.get_sandbox` / config `SandboxSettings` 選後端（`local`/`http`/`docker`/`mock`）注入 `create_app`；`SandboxSpec.image`/`env`/`exposed_ports` 從 config 流入。
+- **[啟動與組裝根](boot-and-config.md)** — `factories.get_sandbox` / config `SandboxSettings` 選後端（`local`/`http`/`docker`/`mock`）注入 `create_app`；`SandboxSpec.image`/`env`/`exposed_ports` 從 config 流入；`cpu_cores`/`memory_bytes`/`pids_max` 則由 `quota.limits.resolve_discovered_apps` 從 app.json 的 `resources` ◇ `resources.per_app` ◇ `sandbox.isolation.*` 解析後，經 `create_app(app_resources=…)` 流入。
 - **[背景工作與擴展](jobs-and-scaling.md)** — mirror sweep（`mirror_warm`）、idle-kill 與 `blob_gc.run_blob_gc` 的排程器住那裡（本 pass 未讀其呼叫點）。
 - **[知識庫:攝取與索引](kb-ingest-index.md)** — `content_size` 索引 + `Schema(v2).step(None,...)` backfill 鏡像 `SourceDoc` 模式；操作員跑 `POST /{model}/migrate/execute` 為舊列重萃 `indexed_data`。
 

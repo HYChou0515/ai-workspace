@@ -15,7 +15,7 @@ import pytest
 
 from workspace_app.config.loader import load
 from workspace_app.config.schema import PerAppResources, ResourceAmounts, ResourceSettings, Settings
-from workspace_app.quota.limits import ResourceLimitError, validate_discovered_apps
+from workspace_app.quota.limits import ResourceLimitError, resolve_discovered_apps
 
 
 def test_resources_section_loads_from_yaml(tmp_path: Path):
@@ -70,7 +70,7 @@ def test_unknown_key_under_resources_is_rejected(tmp_path: Path):
 def test_bundled_apps_pass_the_boot_sweep():
     """Every App shipped in `apps/` resolves cleanly under bundled defaults —
     this is the check `__main__` runs before it serves traffic."""
-    validate_discovered_apps(Settings())  # no raise
+    resolve_discovered_apps(Settings())  # no raise
 
 
 def test_boot_sweep_fails_when_a_bundled_app_exceeds_the_ceiling():
@@ -82,4 +82,4 @@ def test_boot_sweep_fails_when_a_bundled_app_exceeds_the_ceiling():
         )
     )
     with pytest.raises(ResourceLimitError, match="cpu"):
-        validate_discovered_apps(settings)
+        resolve_discovered_apps(settings)

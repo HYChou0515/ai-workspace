@@ -58,10 +58,21 @@ class InvestigationSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+def _bare_spec(_item: str) -> SandboxSpec:
+    """The spec every item gets when nothing App-specific is wired — i.e. what
+    this registry handed out before per-App resources existed."""
+    return SandboxSpec()
+
+
 @dataclass
 class InvestigationRegistry:
     sandbox: Sandbox
-    default_spec: SandboxSpec
+    # The spec for ONE item, asked for at create time rather than fixed at
+    # construction: an item's ceilings come from its App (`quota.limits`), and
+    # the registry only learns which item it is serving when `_acquire` runs.
+    # One source, not a constant-plus-override pair — two ways to answer the
+    # same question is how they end up disagreeing.
+    spec_for: Callable[[str], SandboxSpec] = _bare_spec
     sync: _SyncHook | None = None
     # #345: global per-item activity heartbeat. When wired (shared-vol local
     # sandbox on multi-replica API), the idle reaper recycles a shared dir only
@@ -288,7 +299,7 @@ class InvestigationRegistry:
                     item,
                 )
                 raise
-        handle = await self.sandbox.create(self.default_spec, sandbox_id=item)
+        handle = await self.sandbox.create(self.spec_for(item), sandbox_id=item)
         logger.info(
             "registry: created sandbox handle %s for item %s (cold=%s)",
             handle.id,

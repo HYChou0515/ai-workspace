@@ -53,14 +53,14 @@ class _HttpStyleSandbox(MockSandbox):
 
 
 async def test_session_for_new_workspace_returns_session_with_no_handle():
-    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=MockSandbox())
     session = await registry.session("ws-1")
     assert session.investigation_id == "ws-1"
     assert session.handle is None
 
 
 async def test_same_investigation_id_returns_same_session_instance():
-    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=MockSandbox())
     a = await registry.session("ws-1")
     b = await registry.session("ws-1")
     assert a is b
@@ -71,7 +71,7 @@ async def test_resolve_io_handle_routes_to_shared_dir_then_session_handle_345():
     # even a pod with NO local session must route to the shared dir (id-derived
     # handle) — the facade falls back to the snapshot if it's cold — instead of a
     # stale snapshot. Once this pod warms a session, its handle is used.
-    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=MockSandbox())
     derived = await registry.resolve_io_handle("ws-1")
     assert derived is not None and derived.id == "ws-1"  # no session, still routable
     session = await registry.session("ws-1")
@@ -87,7 +87,7 @@ async def test_resolve_io_handle_is_none_when_no_handle_and_no_address_345():
         def handle_for_id(self, sandbox_id):
             return None
 
-    registry = InvestigationRegistry(sandbox=_NoIdSandbox(), default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=_NoIdSandbox())
     assert await registry.resolve_io_handle("ws-1") is None
 
 
@@ -104,8 +104,8 @@ async def test_resolve_io_handle_reads_the_shared_address_on_a_non_owning_pod_49
     register_sandbox_address(spec)
     addr = SpecstarAddressStore(spec)
     sandbox = _HttpStyleSandbox()
-    pod_a = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
-    pod_b = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
+    pod_a = InvestigationRegistry(sandbox=sandbox, address=addr)
+    pod_b = InvestigationRegistry(sandbox=sandbox, address=addr)
 
     # Nothing published yet ⇒ globally cold (¬P) ⇒ None (durable write is safe).
     assert await pod_b.resolve_io_handle("ws-1") is None
@@ -127,7 +127,7 @@ async def test_rebuild_io_handle_rebuilds_when_the_published_sandbox_was_reaped_
     register_sandbox_address(spec)
     addr = SpecstarAddressStore(spec)
     sandbox = _HttpStyleSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
+    registry = InvestigationRegistry(sandbox=sandbox, address=addr)
 
     h1 = await registry.ensure_handle(await registry.session("ws-1"))
     await sandbox.kill(h1)  # host reaps it → a later op would raise SandboxNotFound
@@ -139,7 +139,7 @@ async def test_rebuild_io_handle_rebuilds_when_the_published_sandbox_was_reaped_
 
 
 async def test_different_investigation_ids_return_distinct_sessions():
-    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=MockSandbox())
     a = await registry.session("ws-1")
     b = await registry.session("ws-2")
     assert a is not b
@@ -147,7 +147,7 @@ async def test_different_investigation_ids_return_distinct_sessions():
 
 async def test_ensure_handle_creates_sandbox_on_first_call():
     sandbox = MockSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     s = await registry.session("ws-1")
     assert s.handle is None
     handle = await registry.ensure_handle(s)
@@ -163,8 +163,8 @@ async def test_second_pod_does_not_re_restore_a_live_shared_sandbox_345():
     # defined below; resolved at call time.)
     sandbox = MockSandbox()  # one backing store shared by both registries
     sync_a, sync_b = _RecordingSync(), _RecordingSync()
-    pod_a = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync_a)
-    pod_b = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync_b)
+    pod_a = InvestigationRegistry(sandbox=sandbox, sync=sync_a)
+    pod_b = InvestigationRegistry(sandbox=sandbox, sync=sync_b)
 
     await pod_a.ensure_handle(await pod_a.session("ws-1"))
     assert sync_a.calls == [("restore", "ws-1")]  # cold → restored once
@@ -175,7 +175,7 @@ async def test_second_pod_does_not_re_restore_a_live_shared_sandbox_345():
 
 async def test_ensure_handle_reuses_same_handle_on_second_call():
     sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     s = await registry.session("ws-1")
     h1 = await registry.ensure_handle(s)
     h2 = await registry.ensure_handle(s)
@@ -193,7 +193,7 @@ async def test_concurrent_ensure_handle_calls_create_exactly_once():
             return SandboxHandle(id=f"h-{self.create_calls}")
 
     sandbox = _SlowSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     s = await registry.session("ws-1")
 
     handles = await asyncio.gather(*[registry.ensure_handle(s) for _ in range(8)])
@@ -205,7 +205,7 @@ async def test_kill_idle_kills_sessions_past_threshold():
     from datetime import UTC, datetime, timedelta
 
     sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     # Push the session's last_active 30 minutes into the past.
@@ -223,7 +223,7 @@ async def test_kill_idle_leaves_recent_sessions_alone():
     from datetime import timedelta
 
     sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
 
@@ -241,7 +241,7 @@ async def test_kill_idle_ignores_sessions_with_no_handle():
     from datetime import UTC, datetime, timedelta
 
     sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     s = await registry.session("ws-1")
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
 
@@ -298,7 +298,7 @@ async def test_kill_idle_survives_zombie_and_flaky_items_and_reaps_the_rest_366(
 
     sandbox = _ZombieKillSandbox()
     sync = _FlakyMirrorSync(boom={"ws-flaky"})
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     sessions = {}
     for wid in ("ws-zombie", "ws-flaky", "ws-live"):
         s = await registry.session(wid)
@@ -322,7 +322,7 @@ async def test_mirror_warm_survives_one_failing_item_366():
     # #366 P7: a mirror that errors on one item must not stop the sweep from
     # mirroring the others (one bad item ≠ a dead sweeper task).
     sync = _FlakyMirrorSync(boom={"ws-bad"})
-    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=MockSandbox(), sync=sync)
     for wid in ("ws-bad", "ws-good"):
         s = await registry.session(wid)
         await registry.ensure_handle(s)
@@ -356,7 +356,7 @@ async def test_kill_idle_spares_globally_active_shared_dir_345():
 
     sandbox = _CountingSandbox()
     activity = _FakeActivity()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), activity=activity)
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)  # bumps the global heartbeat
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)  # pod-local idle
@@ -374,7 +374,7 @@ async def test_kill_idle_recycles_globally_idle_shared_dir_345():
 
     sandbox = _CountingSandbox()
     activity = _FakeActivity()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), activity=activity)
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     await activity.forget("ws-1")  # heartbeat gone → globally idle
@@ -389,14 +389,14 @@ async def test_kill_idle_recycles_globally_idle_shared_dir_345():
 async def test_ensure_handle_bumps_global_activity_345():
     sandbox = _CountingSandbox()
     activity = _FakeActivity()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), activity=activity)
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
     await registry.ensure_handle(await registry.session("ws-1"))
     assert "ws-1" in activity.ms  # global heartbeat recorded
 
 
 async def test_close_all_kills_every_alive_handle():
     sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     s1 = await registry.session("ws-1")
     s2 = await registry.session("ws-2")
     await registry.session("ws-3")  # no handle ever created
@@ -431,7 +431,7 @@ class _RecordingSync:
 async def test_ensure_handle_calls_sync_restore_after_create():
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     assert sync.calls == [("restore", "ws-1")]
@@ -455,9 +455,7 @@ async def test_ensure_handle_forwards_on_progress_to_sync_restore_492():
         async def mirror(self, workspace_id, handle):
             return 0
 
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), sync=_ProgressSync()
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, sync=_ProgressSync())
     s = await registry.session("ws-1")
     ticks: list[tuple[int, int]] = []
     await registry.ensure_handle(s, on_progress=lambda d, t: ticks.append((d, t)))
@@ -470,7 +468,7 @@ async def test_ensure_handle_forwards_on_progress_to_sync_restore_492():
 async def test_ensure_handle_skips_restore_when_handle_already_alive():
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     await registry.ensure_handle(s)  # already alive
@@ -495,7 +493,7 @@ async def test_kill_idle_calls_mirror_before_sandbox_kill():
 
     sandbox = _RecordingSandbox()
     sync = _RecordingSyncWithLog()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
@@ -509,7 +507,7 @@ async def test_kill_idle_does_not_mirror_for_handleless_sessions():
 
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     s = await registry.session("ws-1")
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
 
@@ -532,7 +530,7 @@ async def test_close_all_mirrors_before_killing_each():
 
     sandbox = _RecordingSandbox()
     sync = _RecordingSyncWithLog()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     s1 = await registry.session("ws-1")
     s2 = await registry.session("ws-2")
     await registry.ensure_handle(s1)
@@ -573,7 +571,7 @@ async def test_close_session_mirrors_then_kills_then_evicts():
 
     sandbox = _RecordingSandbox()
     sync = _RecordingSyncWithLog()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
 
@@ -585,7 +583,7 @@ async def test_close_session_mirrors_then_kills_then_evicts():
 
 async def test_close_session_is_noop_for_unknown_workspace():
     sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     await registry.close_session("never-touched")
     assert sandbox.kill_calls == 0
 
@@ -595,7 +593,7 @@ async def test_close_session_skips_mirror_when_no_handle():
     to kill, no sync.mirror to run, but the session still gets evicted."""
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     s = await registry.session("ws-1")
     await registry.close_session("ws-1")
     assert sandbox.kill_calls == 0
@@ -608,7 +606,7 @@ async def test_close_session_without_sync_just_kills_handle():
     """When the registry was constructed without a sync hook, close_session
     still kills the handle — it just skips the mirror-sync step."""
     sandbox = _CountingSandbox()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     await registry.close_session("ws-1")
@@ -621,7 +619,7 @@ async def test_close_session_without_sync_just_kills_handle():
 async def test_flush_mirrors_a_warm_session_and_is_noop_when_cold():
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     await registry.flush("ws-1")  # no session → no-op
     s = await registry.session("ws-1")
     await registry.flush("ws-1")  # cold session → no-op
@@ -635,7 +633,7 @@ async def test_flush_mirrors_a_warm_session_and_is_noop_when_cold():
 async def test_mirror_warm_mirrors_only_warm_sessions():
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     warm = await registry.session("ws-warm")
     await registry.ensure_handle(warm)
     await registry.session("ws-cold")  # no handle
@@ -658,7 +656,7 @@ async def test_ensure_handle_restores_when_backend_not_id_addressable_345():
 
     sandbox = _NoIdSandbox()
     sync = _RecordingSync()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync)
     await registry.ensure_handle(await registry.session("ws-1"))
     assert sync.calls == [("restore", "ws-1")]
 
@@ -666,7 +664,7 @@ async def test_ensure_handle_restores_when_backend_not_id_addressable_345():
 async def test_close_session_forgets_global_activity_345():
     sandbox = _CountingSandbox()
     activity = _FakeActivity()
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), activity=activity)
+    registry = InvestigationRegistry(sandbox=sandbox, activity=activity)
     await registry.ensure_handle(await registry.session("ws-1"))
     assert "ws-1" in activity.ms
     await registry.close_session("ws-1")
@@ -688,8 +686,8 @@ async def test_two_http_pods_converge_on_one_address_366():
     register_sandbox_address(spec)
     addr = SpecstarAddressStore(spec)  # one shared address slot for both pods
     sandbox = _HttpStyleSandbox()  # one shared host backend
-    pod_a = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
-    pod_b = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
+    pod_a = InvestigationRegistry(sandbox=sandbox, address=addr)
+    pod_b = InvestigationRegistry(sandbox=sandbox, address=addr)
 
     ha = await pod_a.ensure_handle(await pod_a.session("ws-1"))
     hb = await pod_b.ensure_handle(await pod_b.session("ws-1"))
@@ -722,9 +720,7 @@ async def test_ensure_handle_kills_orphan_when_it_loses_the_claim_race_366():
             return None
 
     sandbox = _HttpStyleSandbox()
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), address=_RaceLostAddress()
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, address=_RaceLostAddress())
     h = await registry.ensure_handle(await registry.session("ws-1"))
 
     assert h == winner  # converged on the race winner
@@ -747,9 +743,7 @@ async def test_ensure_handle_reacquires_when_host_reaped_the_sandbox_366():
     spec = SpecStar()
     register_sandbox_address(spec)
     sandbox = _HttpStyleSandbox()
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), address=SpecstarAddressStore(spec)
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, address=SpecstarAddressStore(spec))
     s = await registry.session("ws-1")
     h1 = await registry.ensure_handle(s)
 
@@ -792,9 +786,7 @@ async def test_host_managed_ensure_handle_skips_app_side_restore_492():
     (tree / "ws-1" / "notes.md").write_bytes(b"hi")
     sandbox = _HostManagedSandbox(tree)
     sync = _RecordingSync()
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, host_managed_durable=True
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync, host_managed_durable=True)
     handle = await registry.ensure_handle(await registry.session("ws-1"))
     assert sync.calls == []  # no app-side restore in host-managed mode
     assert [e.path for e in (await sandbox.walk(handle, "/")).files] == [
@@ -806,9 +798,7 @@ async def test_host_managed_flush_persists_via_host_with_delete_492():
     # turn-end reconcile ⇒ persist(delete=True) through the host, NOT sync.mirror.
     sandbox = _PersistSandbox()
     sync = _RecordingSync()
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, host_managed_durable=True
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, sync=sync, host_managed_durable=True)
     s = await registry.session("ws-1")
     h = await registry.ensure_handle(s)
     await registry.flush("ws-1")
@@ -821,9 +811,7 @@ async def test_host_managed_mirror_warm_is_additive_checkpoint_492():
     # dir isn't quiesced, so it never reconciles deletions. Also proves the
     # write-back works with NO app-side sync wired (routed via `_has_durable`).
     sandbox = _PersistSandbox()
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
     s = await registry.session("ws-1")
     h = await registry.ensure_handle(s)
     mirrored = await registry.mirror_warm()
@@ -835,9 +823,7 @@ async def test_host_managed_kill_idle_persists_before_reap_492():
     from datetime import UTC, datetime, timedelta
 
     sandbox = _PersistSandbox()
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
     s = await registry.session("ws-1")
     h = await registry.ensure_handle(s)
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
@@ -850,9 +836,7 @@ async def test_host_managed_without_persist_method_is_a_noop_492():
     # Defensive: host-managed is set but the backend exposes no `persist`
     # (misconfig / non-http double) — write-back silently no-ops, never raises.
     sandbox = _CountingSandbox()  # MockSandbox: no persist method
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, host_managed_durable=True)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     await registry.flush("ws-1")  # must not raise
@@ -871,9 +855,7 @@ async def test_http_ensure_handle_reuses_live_handle_without_churn_366():
     spec = SpecStar()
     register_sandbox_address(spec)
     sandbox = _HttpStyleSandbox()
-    registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), address=SpecstarAddressStore(spec)
-    )
+    registry = InvestigationRegistry(sandbox=sandbox, address=SpecstarAddressStore(spec))
     s = await registry.session("ws-1")
     h1 = await registry.ensure_handle(s)
     h2 = await registry.ensure_handle(s)  # sandbox still alive → keep it
@@ -944,7 +926,6 @@ async def test_host_managed_wake_gives_the_sandbox_every_durable_file_492():
     sandbox = _HostManagedSandbox(tree)
     registry = InvestigationRegistry(
         sandbox=sandbox,
-        default_spec=SandboxSpec(),
         host_managed_durable=True,
         durable_backfill=files.backfill_workspace,
     )
@@ -974,7 +955,6 @@ async def test_host_managed_wake_refuses_to_build_a_sandbox_it_cannot_fill_492()
     sandbox = _HostManagedSandbox(Path(tempfile.mkdtemp()))
     registry = InvestigationRegistry(
         sandbox=sandbox,
-        default_spec=SandboxSpec(),
         host_managed_durable=True,
         durable_backfill=_explode,
     )
