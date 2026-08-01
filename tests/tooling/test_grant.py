@@ -509,9 +509,13 @@ def test_a_properly_signed_certificate_with_the_wrong_shape_inside(keys):
     import base64 as b64
 
     from cryptography.hazmat.primitives import serialization as ser
+    from cryptography.hazmat.primitives.asymmetric import ed25519
 
     private, public = keys
     key = ser.load_pem_private_key(private, password=None)
+    # `load_pem_private_key` returns a union of every key kind; narrow it the
+    # same way `issue` does, or `sign` is ambiguous.
+    assert isinstance(key, ed25519.Ed25519PrivateKey)
     payload = json.dumps({"tool": "t"}).encode()  # no max_bytes, no expires
     enc = lambda raw: b64.urlsafe_b64encode(raw).decode().rstrip("=")  # noqa: E731
 
