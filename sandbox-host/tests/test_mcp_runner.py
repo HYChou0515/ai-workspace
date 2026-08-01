@@ -416,3 +416,32 @@ def test_nothing_mounted_means_nobody_to_become(env, monkeypatch) -> None:
     )
 
     assert became == []
+
+
+def test_the_skill_explains_the_warning_this_runner_prints(env, capsys, monkeypatch) -> None:
+    """The skill turns what someone SEES into what they should DO, so the two
+    have to agree. Compared against what the runner actually PRINTS, not
+    against its source: the message is assembled at runtime, and a test
+    matching source text would pass while the wording drifted.
+
+    Nothing else would notice. The person would search the skill for their
+    error and find nothing."""
+    from pathlib import Path
+
+    from sandbox_host import mcp_runner
+
+    monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: True)
+    data = _bundle()
+
+    main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        hand_over=lambda _e: None,
+    )
+
+    warning = capsys.readouterr().err.splitlines()[-1]
+    # The distinctive half of the sentence, before the advice that follows it.
+    printed = warning.split(",")[0].removeprefix("warning: ")
+    skill = (Path(__file__).resolve().parents[2] / "tool-skill" / "SKILL.md").read_text("utf-8")
+
+    assert printed in skill, f"the skill does not explain what the runner prints: {printed!r}"

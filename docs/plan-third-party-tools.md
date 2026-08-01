@@ -1,7 +1,7 @@
 # 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上
 
 > Issue: [#674](https://github.com/HYChou0515/ai-workspace/issues/674)。
-> 狀態：**P1–P15 全部實作完成**（見 §7 每個 phase 的核對）。
+> 狀態：**P1–P16 全部實作完成**（見 §7 每個 phase 的核對）。
 
 **一句話**：讓不在我們 repo 裡的工具作者，把工具推上自己的 GitLab、跑我們提供的 CI，
 **下一個開起來的 sandbox 就自動帶上新版**——我們這邊不改 code、不重新部署。
@@ -478,6 +478,30 @@ registry 帳密），而且工程師會自動吃到新版。
 
 代價誠實列:第一次要抓 ~150MB（用 volume 攤成每版一次）、多一顆我們要發版的映像、
 工程師需要讀 artifact 的 token。air-gapped 機器需要另外想辦法。
+
+### P16 · 「什麼都不知道的人」怎麼開始:一個 skill
+
+**✅ 完成**(`tool-skill/SKILL.md`)。
+
+先走錯過一次:我假設入口是我們的網頁,做了一個產生設定的 API。但使用者手上有的是
+**那支工具的 GitLab repo 網址**——他不會、也沒理由先來我們的網頁。那個 API 已整個移除
+(連同它的設定 knob,避免留下沒人讀的死旋鈕)。
+
+改成:平台團隊發一份 skill,使用者做他本來就會的動作(裝 skill),然後把 repo 網址交給
+自己的 agent。**組裝交給 agent**——讀 repo、推出 artifact 網址、抓 manifest 取得工具名稱、
+寫設定、跑一次確認。
+
+四件事裡 skill 自己推得出三件;唯一推不出的是 runner image 位址,由平台團隊在發放前填入
+`<<RUNNER_IMAGE>>`。沒填就發出去的話,skill 會**停下來並說明**,而不是去 registry 上找一個
+看起來像的 image——有測試釘住。
+
+**一半的篇幅在講失敗**,因為照著做的人是一個人,而且失敗屬於三個不同的人:作者(builder
+不符、artifact 過期、description 太模糊)、平台團隊(權限、runner image)、他自己(docker、
+token、漏掛載)。其中最麻煩的是 GitLab 的 `404`——「artifact 過期」與「你看不到這個專案」
+回同一個東西,而兩者要找的人不同;skill 給了唯一能分辨的方法。
+
+防漂移的測試不是比對原始碼字串(訊息是執行時組出來的,那樣會在漂移時仍然通過),而是
+**真的跑一次 runner、抓它印到 stderr 的字**,再要求 skill 裡查得到。改了訊息沒改 skill 就會紅。
 
 ## 8. 這輪之外
 

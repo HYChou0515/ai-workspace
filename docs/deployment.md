@@ -636,6 +636,20 @@ docker build -f sandbox-host/mcp-runner.Dockerfile \
 `BUILDER_ID` 要和你給 `tool-builder`、`sandbox-host` 的**同一個值**——runner 會直接執行
 第三方 bundle，所以它跟 host 受同一條 ABI 規則約束。有測試釘住這三顆映像的錨點一致。
 
+#### 怎麼交到工程師手上
+
+**不要把下面那段設定貼給他們。** 他手上通常只有工具的 GitLab repo 網址，而要湊出一個能用的
+設定還缺工具名稱、artifact 網址、runner image 和一串 docker 參數——那是四件他沒理由知道的事。
+
+改成發 `tool-skill/` 裡的 skill：把 `SKILL.md` 的 `<<RUNNER_IMAGE>>` 換成你發布的 image
+位址，其餘不用動。他裝好 skill、把 repo 網址丟給自己的 agent，agent 就會去讀 repo、推出
+artifact 網址、寫設定、然後跑一次確認。
+
+skill 花了不少篇幅在講**失敗怎麼辦**，因為照著做的人是一個人，而且失敗會落在三個不同的人身上
+（作者／平台團隊／他自己）。細節見 `tool-skill/README.md`。
+
+下面這段是它會寫出來的東西，列在這裡供你排查用：
+
 工程師那邊一支工具一筆設定，差別只有最後那個網址:
 
 ```json

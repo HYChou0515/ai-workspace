@@ -375,6 +375,42 @@ check(
     "runner" in text("tool-starter/README.md") and "mcp-runner" in text("docs/deployment.md"),
 )
 
+# ---- P16: the skill someone installs to start from nothing ---------------
+skill = text("tool-skill/SKILL.md")
+check("P16", "the skill exists and names itself", "name: install-workspace-tool" in skill)
+check(
+    "P16",
+    "the one fact it cannot derive is a placeholder, and it refuses to guess",
+    "<<RUNNER_IMAGE>>" in skill and "do not guess" in skill.lower(),
+)
+check(
+    "P16",
+    "the ambiguous 404 is separated for the reader",
+    "expire_in: never" in skill and "browser" in skill.lower(),
+)
+check(
+    "P16",
+    "every failure names which of the three parties fixes it",
+    all(p in skill for p in ("tool's author", "platform team", "The person")),
+)
+check(
+    "P16",
+    "an install is not reported without being run",
+    "tools/list" in skill and "without step 3" in skill,
+)
+check(
+    "P16",
+    "what the runner prints is checked against the skill by running it",
+    "test_the_skill_explains_the_warning_this_runner_prints"
+    in text("sandbox-host/tests/test_mcp_runner.py"),
+)
+check(
+    "P16",
+    "the operator is told the one line to fill in",
+    "<<RUNNER_IMAGE>>" in text("tool-skill/README.md")
+    and "tool-skill" in text("docs/deployment.md"),
+)
+
 # ---- report ----------------------------------------------------------------
 failed = [(p, w) for p, ok, w in results if not ok]
 for phase, ok, what in results:
