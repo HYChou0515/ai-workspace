@@ -464,3 +464,46 @@ def test_the_workspace_owner_is_read_from_the_directory(tmp_path) -> None:
 
     assert _workspace_owner(str(tmp_path)) == (os.getuid(), os.getgid())
     assert _workspace_owner("/definitely/not/here") is None
+
+
+def test_the_tool_never_inherits_the_credential_that_fetched_it(tmp_path) -> None:
+    """The token reads the artifact store. The tool has no business with it,
+    and on the platform it never could: there the HOST fetches and the sandbox
+    only ever sees extracted files.
+
+    Here one process does both — it fetches, then becomes the tool — so
+    without this every tool an engineer runs locally is handed their GitLab
+    credential. Run for real, because `execv` passing the environment is the
+    behaviour under test."""
+    import subprocess
+    import sys
+    import textwrap
+
+    entry = tmp_path / "mcp"
+    entry.write_text("#!/bin/sh\nenv\n")
+    entry.chmod(0o755)
+
+    done = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent(f"""
+                import os
+                from pathlib import Path
+
+                os.environ["TOOL_ARTIFACT_TOKEN"] = "glpat-secret"
+                os.environ["KEEP_ME"] = "yes"
+                from sandbox_host.mcp_runner import _hand_over
+
+                _hand_over(Path({str(entry)!r}))
+            """),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "glpat-secret" not in done.stdout
+    # Everything else still arrives: the tool needs its environment, this is
+    # one name being withheld rather than a scrubbed process.
+    assert "KEEP_ME=yes" in done.stdout

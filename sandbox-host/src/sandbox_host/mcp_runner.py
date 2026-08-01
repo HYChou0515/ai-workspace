@@ -31,7 +31,7 @@ from pathlib import Path
 
 from sandbox_host.artifact import ArtifactError
 from sandbox_host.tool_cache import ToolCache
-from sandbox_host.tool_resolve import Fetcher, ToolResolver, _http_get
+from sandbox_host.tool_resolve import TOKEN_ENV, Fetcher, ToolResolver, _http_get
 
 _USAGE = (
     "usage: mcp-runner <tool-name> <url ending in tool.manifest.json>\n"
@@ -97,8 +97,15 @@ def _hand_over(entry: Path) -> None:  # pragma: no cover - replaces the process
 
     `execv`, not a subprocess: stdin and stdout are the transport, and every
     layer between the client and the tool is a layer that can buffer, mangle,
-    or outlive them."""
-    os.execv(str(entry), [str(entry)])
+    or outlive them.
+
+    Without the credential that fetched it. The token reads the artifact
+    store; the tool has no business with it, and on the platform it never
+    could — there the HOST fetches and the sandbox only ever sees extracted
+    files. Here one process does both, so it has to be taken out by hand or
+    every tool an engineer runs is handed their GitLab credential."""
+    environment = {name: value for name, value in os.environ.items() if name != TOKEN_ENV}
+    os.execve(str(entry), [str(entry)], environment)
 
 
 def main(
