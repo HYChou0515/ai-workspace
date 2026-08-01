@@ -104,6 +104,12 @@ class Manifest:
     arch: str
     bundle: BundleRef
     source: SourceRef | None
+    #: The signed certificate raising this tool's size limit, verbatim, or
+    #: ``None`` for the default limit. It rides with the artifact so the
+    #: platform checks the same certificate the author built against instead
+    #: of an operator having to go and ask for it. Optional and last, so a
+    #: manifest written before certificates existed still parses.
+    grant: str | None = None
 
 
 def parse_manifest(raw: bytes) -> Manifest:
@@ -144,6 +150,7 @@ def parse_manifest(raw: bytes) -> Manifest:
             arch=body["arch"],
             bundle=BundleRef(sha256=bundle["sha256"], size=bundle["size"]),
             source=SourceRef(git=src["git"], sha=src["sha"]) if src else None,
+            grant=body.get("grant"),
         )
     except (KeyError, TypeError) as exc:
         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
@@ -214,6 +221,8 @@ def render_manifest(manifest: Manifest) -> bytes:
     }
     if manifest.source is not None:
         body["source"] = {"git": manifest.source.git, "sha": manifest.source.sha}
+    if manifest.grant is not None:
+        body["grant"] = manifest.grant
     # Indented and newline-terminated: a manifest lands in CI logs and in
     # review diffs, where a single long line helps nobody.
     return (json.dumps(body, indent=2, sort_keys=True) + "\n").encode()

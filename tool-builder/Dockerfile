@@ -9,9 +9,16 @@
 # gamble. `tests/tooling/test_builder_image.py` fails if the two drift apart.
 #
 # It carries NO workspace-app dependencies: a build needs uv (already in the
-# base) and three stdlib-only modules, so an author's CI pulls a small image
-# rather than litellm and a data-science stack.
+# base), a handful of stdlib-only modules and one package, so an author's CI
+# pulls a small image rather than litellm and a data-science stack.
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+
+# The one package the build path imports: `tooling/grant.py` checks the
+# signature on a size-limit certificate, and an author's CI has to be able to
+# check its own before publishing something the platform would refuse.
+# `test_the_builder_image_installs_exactly_what_the_build_path_imports` keeps
+# this list equal to what the code actually imports, in both directions.
+RUN uv pip install --system --no-cache cryptography
 
 # The ABI anchor recorded into every manifest this image builds. The release
 # pipeline sets it to the published image reference; the platform refuses any

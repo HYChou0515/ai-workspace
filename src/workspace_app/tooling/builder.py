@@ -35,6 +35,7 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
+from workspace_app.tooling import grant as grant_policy
 from workspace_app.tooling.artifact import (
     ArtifactError,
     BundleRef,
@@ -60,6 +61,77 @@ DOCKERFILE_NAME = "mcp.Dockerfile"
 
 class BuildError(ArtifactError):
     """The source tree cannot be turned into a publishable artifact."""
+
+
+def _today():  # pragma: no cover - trivial, seamed so expiry is testable
+    from datetime import date
+
+    return date.today()
+
+
+def _du(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _heaviest(bundle: Path, count: int = 6) -> list[tuple[str, int]]:
+    """The entries that account for a bundle's weight, heaviest first.
+
+    "Too big" on its own sends an author to guess at their dependency tree.
+    The build has that tree in front of it, so it can name what to look at."""
+    weighed: list[tuple[str, int]] = []
+    interpreter = bundle / "python"
+    if interpreter.is_dir():
+        # Named, though it cannot be removed: seeing that half the bundle is
+        # the interpreter is what stops someone hunting for a package to cut
+        # that would not have helped.
+        weighed.append(("the bundled interpreter", _du(interpreter)))
+    for site in (bundle / ".venv" / "lib").glob("python*/site-packages"):
+        weighed += [
+            (entry.name, _du(entry))
+            for entry in site.iterdir()
+            if entry.is_dir() and not entry.name.endswith((".dist-info", "__pycache__"))
+        ]
+    # Only what accounts for the weight: an entry worth a fraction of a
+    # percent is noise, and a list of everything installed helps as little as
+    # no list at all. One percent of the total, heaviest first.
+    total = sum(size for _, size in weighed) or 1
+    ranked = sorted(weighed, key=lambda item: -item[1])
+    return [item for item in ranked if item[1] * 100 >= total][:count]
+
+
+def _mb(size: int) -> str:
+    return f"{size / 1024 / 1024:.1f}MB"
+
+
+def _read_grant(source: Path) -> str | None:
+    token = source / grant_policy.GRANT_FILE
+    return token.read_text().strip() if token.is_file() else None
+
+
+def _check_weight(*, name: str, bundle: Path, packed: int, token: str | None) -> None:
+    """Refuse a bundle heavier than this tool is allowed to be.
+
+    Measured on the compressed artifact, which is what every host downloads
+    and what the manifest records. The rule itself lives in `grant.check_size`
+    so this and the platform's gate cannot drift apart; what belongs here is
+    the part only a build can supply — which entries account for the weight."""
+    reason = grant_policy.check_size(
+        tool=name,
+        size=packed,
+        token=token,
+        public_keys=grant_policy.TRUSTED_KEYS,
+        today=_today(),
+    )
+    if reason is None:
+        return
+    largest = ", ".join(f"{what} {_mb(size)}" for what, size in _heaviest(bundle))
+    raise BuildError(
+        f"{reason}. Its weight is mostly: {largest}. "
+        "Keep what the tool needs at run time — dependencies used only by your "
+        "tests belong in `[dependency-groups] dev`, which the build already "
+        "leaves out. When the weight is real, send the tool to the platform "
+        "team for review and they can issue a certificate raising this limit."
+    )
 
 
 class SmokeFailed(ArtifactError):
@@ -261,6 +333,7 @@ def build_artifact(
     """Build an author's source tree into the artifact pair, and return the
     manifest that was published beside the bundle."""
     name, version = read_project(source)
+    token = _read_grant(source)
     out.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -269,6 +342,10 @@ def build_artifact(
         _inject_mcp(bundle)
         commands = read_commands(bundle)
         packed = pack_bundle(bundle)
+        # Inside the temp dir, and before anything is written to `out`: the
+        # diagnostic needs the tree, and a refusal must leave no dist behind
+        # for CI to publish.
+        _check_weight(name=name, bundle=bundle, packed=len(packed), token=token)
 
     manifest = Manifest(
         format_version=1,
@@ -280,6 +357,7 @@ def build_artifact(
         arch=arch or platform.machine(),
         bundle=BundleRef(sha256=hashlib.sha256(packed).hexdigest(), size=len(packed)),
         source=None,
+        grant=token,
     )
     (out / BUNDLE_NAME).write_bytes(packed)
     (out / MANIFEST_NAME).write_bytes(render_manifest(manifest))

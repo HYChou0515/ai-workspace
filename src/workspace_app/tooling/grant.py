@@ -137,7 +137,10 @@ def _signed_payload(token: str, public_keys: list[str] | tuple[str, ...]) -> byt
         raise GrantError("a certificate is two dot-separated parts; this is not one")
     try:
         payload, signature = _unb64(head), _unb64(tail)
-    except (ValueError, base64.binascii.Error) as exc:  # type: ignore[attr-defined]
+    except ValueError as exc:
+        # `binascii.Error`, which is what bad base64 actually raises, is a
+        # ValueError — so this covers it without reaching into a module
+        # `base64` happens to import.
         raise GrantError(f"the certificate is damaged: {exc}") from exc
 
     for candidate in public_keys:
@@ -184,17 +187,43 @@ def verify(
     return granted
 
 
-def limit_for(
+def _mb(size: int) -> str:
+    return f"{size / 1024 / 1024:.1f}MB"
+
+
+def check_size(
     *,
     tool: str,
+    size: int,
     token: str | None,
     public_keys: list[str] | tuple[str, ...] = TRUSTED_KEYS,
     today: date | None = None,
-) -> int:
-    """What this tool may weigh, in bytes."""
+) -> str | None:
+    """``None`` if a bundle this size is allowed, else a sentence saying why
+    not. The one place the rule lives: the author's build and the platform's
+    gate both call this, so neither can drift into being stricter.
+
+    **A certificate only matters above the default.** Below it there is
+    nothing to raise, so a lapsed or unreadable certificate is not consulted
+    and cannot fail a build — a tool that has since slimmed down, or whose
+    grant ran out while it no longer needed one, publishes normally."""
+    if size <= DEFAULT_MAX_BYTES:
+        return None
     if token is None:
-        return DEFAULT_MAX_BYTES
-    return verify(token, public_keys=public_keys, tool=tool, today=today or date.today()).max_bytes
+        return (
+            f"this bundle is {_mb(size)}, and a tool with no certificate may "
+            f"weigh {_mb(DEFAULT_MAX_BYTES)}"
+        )
+    try:
+        granted = verify(token, public_keys=public_keys, tool=tool, today=today or date.today())
+    except GrantError as exc:
+        return f"this bundle is {_mb(size)} and its certificate cannot be used: {exc}"
+    if size > granted.max_bytes:
+        return (
+            f"this bundle is {_mb(size)}, and the certificate for {tool!r} "
+            f"allows {_mb(granted.max_bytes)}"
+        )
+    return None
 
 
 # ─── the command the platform team runs ──────────────────────────────

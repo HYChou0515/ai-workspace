@@ -46,13 +46,72 @@ def test_the_builder_image_records_an_abi_anchor_for_every_build() -> None:
 
 
 def test_the_builder_image_carries_no_workspace_app_dependencies() -> None:
-    # An author's CI should pull a small image. The build path is stdlib-only
-    # (uv comes from the base), so installing the app would be pure weight —
-    # and would drag litellm and a data-science stack into a stranger's CI.
+    # An author's CI should pull a small image. Installing the app would be
+    # pure weight — and would drag litellm and a data-science stack into a
+    # stranger's CI.
     text = (_REPO / "tool-builder" / "Dockerfile").read_text("utf-8")
 
     assert "uv sync" not in text
     assert "pyproject.toml" not in text
+
+
+def _third_party_imports_reachable_from(entry: str) -> set[str]:
+    """Every non-stdlib package the build path imports, followed through the
+    tooling modules the image copies."""
+    import ast
+    import sys
+
+    root = _REPO / "src" / "workspace_app" / "tooling"
+    seen: set[str] = set()
+    queue = [entry]
+    third: set[str] = set()
+
+    def note(dotted: str) -> None:
+        top = dotted.split(".")[0]
+        if dotted.startswith("workspace_app.tooling."):
+            queue.append(dotted.split(".")[2])
+        elif top not in sys.stdlib_module_names and top != "workspace_app":
+            third.add(top)
+
+    while queue:
+        module = queue.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        source = root / f"{module}.py"
+        if not source.exists():
+            continue
+        for node in ast.walk(ast.parse(source.read_text("utf-8"))):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    note(alias.name)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                # `from workspace_app.tooling import grant` names the module
+                # in the aliases, not in `node.module`.
+                if node.module == "workspace_app.tooling":
+                    queue += [alias.name for alias in node.names]
+                else:
+                    note(node.module)
+    return third
+
+
+def test_the_builder_image_installs_exactly_what_the_build_path_imports() -> None:
+    """The image is what an author's CI runs, and it is assembled from a list
+    written by hand. An import added to any module `build-tool` reaches would
+    fail there rather than here — in a stranger's pipeline, on a build they
+    cannot debug.
+
+    Enforcing equality in both directions: a missing package breaks their
+    build, and a package nothing imports is weight in every author's CI."""
+    text = (_REPO / "tool-builder" / "Dockerfile").read_text("utf-8")
+    installed = {
+        package
+        for line in re.findall(r"uv pip install[^\n]*", text)
+        for package in line.split()[3:]
+        if not package.startswith("-")
+    }
+
+    assert installed == _third_party_imports_reachable_from("builder")
 
 
 def test_both_images_carry_the_same_abi_anchor_knob() -> None:

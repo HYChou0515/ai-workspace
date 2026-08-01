@@ -296,3 +296,115 @@ def test_bytes_that_do_not_match_the_published_sha_are_refused() -> None:
             arch="x86_64",
             fetch=_wire(manifest=_manifest(good), bundle=_bundle(commands=["trend", "extra"])),
         )
+
+
+# ─── weight (#674) ───────────────────────────────────────────────────
+
+
+@pytest.fixture
+def signing(monkeypatch):
+    """A signing key this deployment trusts, and a limit small enough that a
+    test bundle can exceed it. The real limit is pinned in test_grant.py."""
+    from workspace_app.tooling import grant as grant_mod
+
+    private, public = grant_mod.keypair()
+    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", (public,))
+    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 200)
+    return private
+
+
+def _token(private, *, tool="wafer-history", max_bytes=10_000_000, expires=None):
+    from workspace_app.tooling.grant import Grant, issue
+
+    return issue(Grant(tool=tool, max_bytes=max_bytes, expires=expires), private_key=private)
+
+
+def test_an_oversized_artifact_is_refused(signing) -> None:
+    """The gate. The author's CI checks this too, but that runner is theirs —
+    this is the check that decides what the platform accepts."""
+    data = _bundle()
+
+    with pytest.raises(VerifyFailed, match="limit"):
+        verify_artifact(
+            _MANIFEST_URL,
+            expected_name="wafer-history",
+            builder=_BUILDER,
+            arch="x86_64",
+            fetch=_wire(manifest=_manifest(data), bundle=data),
+        )
+
+
+def test_an_oversized_artifact_is_refused_without_downloading_it(signing) -> None:
+    """The size is in the manifest precisely so nobody has to fetch a
+    gigabyte to find out it is a gigabyte."""
+    data = _bundle()
+    asked: list[str] = []
+
+    def fetch(url: str) -> bytes:
+        asked.append(url)
+        return _manifest(data) if "manifest" in url else data
+
+    with pytest.raises(VerifyFailed):
+        verify_artifact(
+            _MANIFEST_URL,
+            expected_name="wafer-history",
+            builder=_BUILDER,
+            arch="x86_64",
+            fetch=fetch,
+        )
+
+    assert all("manifest" in url for url in asked), asked
+
+
+def test_a_certificate_in_the_manifest_raises_the_limit(signing) -> None:
+    data = _bundle()
+
+    report = verify_artifact(
+        _MANIFEST_URL,
+        expected_name="wafer-history",
+        builder=_BUILDER,
+        arch="x86_64",
+        fetch=_wire(manifest=_manifest(data, grant=_token(signing)), bundle=data),
+    )
+
+    assert report.name == "wafer-history"
+
+
+def test_a_certificate_issued_to_another_tool_is_not_accepted_here(signing) -> None:
+    """Certificates travel in a public manifest. One that raised any tool's
+    limit would be copied the day it was issued."""
+    data = _bundle()
+
+    with pytest.raises(VerifyFailed, match="pdf-extract"):
+        verify_artifact(
+            _MANIFEST_URL,
+            expected_name="wafer-history",
+            builder=_BUILDER,
+            arch="x86_64",
+            fetch=_wire(
+                manifest=_manifest(data, grant=_token(signing, tool="pdf-extract")), bundle=data
+            ),
+        )
+
+
+def test_an_expired_certificate_is_refused_at_the_gate(signing, monkeypatch) -> None:
+    """The author built while it was valid and published; the artifact stays
+    on the platform long after. The gate reads the certificate as of today."""
+    from datetime import date
+
+    from workspace_app.tooling import verify as verify_mod
+
+    data = _bundle()
+    monkeypatch.setattr(verify_mod, "_today", lambda: date(2026, 8, 1))
+
+    with pytest.raises(VerifyFailed, match="expired"):
+        verify_artifact(
+            _MANIFEST_URL,
+            expected_name="wafer-history",
+            builder=_BUILDER,
+            arch="x86_64",
+            fetch=_wire(
+                manifest=_manifest(data, grant=_token(signing, expires=date(2026, 1, 1))),
+                bundle=data,
+            ),
+        )

@@ -22,9 +22,9 @@ from workspace_app.tooling.grant import (
     DEFAULT_MAX_BYTES,
     Grant,
     GrantError,
+    check_size,
     issue,
     keypair,
-    limit_for,
     verify,
 )
 
@@ -157,24 +157,96 @@ def test_a_damaged_certificate_says_so_instead_of_crashing(bad, keys):
         verify(bad, public_keys=[public], tool="t", today=date(2026, 8, 1))
 
 
-# ─── what a caller actually asks ─────────────────────────────────────
+# ─── the rule both sides apply ───────────────────────────────────────
 
 
-def test_a_tool_with_no_certificate_gets_the_default_limit(keys):
+def test_a_bundle_within_the_default_needs_no_certificate(keys):
     _, public = keys
 
-    assert limit_for(tool="t", token=None, public_keys=[public], today=date(2026, 8, 1)) == (
-        DEFAULT_MAX_BYTES
-    )
+    assert check_size(tool="t", size=DEFAULT_MAX_BYTES, token=None, public_keys=[public]) is None
 
 
-def test_a_tool_with_a_certificate_gets_what_it_was_granted(keys):
+def test_a_bundle_over_the_default_with_no_certificate_is_refused(keys):
+    _, public = keys
+
+    reason = check_size(tool="t", size=DEFAULT_MAX_BYTES + 1, token=None, public_keys=[public])
+
+    assert reason is not None and "150.0MB" in reason
+
+
+def test_a_certificate_lets_a_bundle_weigh_what_it_grants(keys):
     private, public = keys
     token = issue(Grant(tool="t", max_bytes=300 * 1024 * 1024, expires=None), private_key=private)
 
-    limit = limit_for(tool="t", token=token, public_keys=[public], today=date(2026, 8, 1))
+    assert (
+        check_size(
+            tool="t",
+            size=300 * 1024 * 1024,
+            token=token,
+            public_keys=[public],
+            today=date(2026, 8, 1),
+        )
+        is None
+    )
 
-    assert limit == 300 * 1024 * 1024
+
+def test_a_bundle_over_even_its_certificate_is_refused(keys):
+    private, public = keys
+    token = issue(Grant(tool="t", max_bytes=300 * 1024 * 1024, expires=None), private_key=private)
+
+    reason = check_size(
+        tool="t",
+        size=400 * 1024 * 1024,
+        token=token,
+        public_keys=[public],
+        today=date(2026, 8, 1),
+    )
+
+    assert reason is not None and "300.0MB" in reason
+
+
+def test_a_lapsed_certificate_does_not_fail_a_tool_that_no_longer_needs_one(keys):
+    """Found by building for real: a 41MB bundle carrying a certificate the
+    platform could not read failed its build, for a reason that had nothing to
+    do with its weight.
+
+    Below the default there is nothing to raise, so the certificate is not
+    consulted. A tool that slimmed down, or whose grant ran out while it no
+    longer needed one, publishes normally."""
+    private, public = keys
+    stale = issue(Grant(tool="t", max_bytes=10, expires=date(2020, 1, 1)), private_key=private)
+
+    assert (
+        check_size(
+            tool="t",
+            size=40 * 1024 * 1024,
+            token=stale,
+            public_keys=[public],
+            today=date(2026, 8, 1),
+        )
+        is None
+    )
+
+
+def test_an_expired_certificate_is_reported_when_the_weight_needs_it(keys):
+    """Above the default the certificate is load-bearing again, and the reason
+    has to name the expiry — telling this author to delete dependencies would
+    send them to fix the wrong thing."""
+    private, public = keys
+    stale = issue(
+        Grant(tool="t", max_bytes=300 * 1024 * 1024, expires=date(2026, 1, 1)),
+        private_key=private,
+    )
+
+    reason = check_size(
+        tool="t",
+        size=200 * 1024 * 1024,
+        token=stale,
+        public_keys=[public],
+        today=date(2026, 8, 1),
+    )
+
+    assert reason is not None and "2026-01-01" in reason
 
 
 def test_the_default_limit_is_the_number_the_authoring_guide_quotes():
@@ -182,17 +254,6 @@ def test_the_default_limit_is_the_number_the_authoring_guide_quotes():
     If the enforced number were a different one, the sentence they plan
     against would be a lie."""
     assert DEFAULT_MAX_BYTES == 150 * 1024 * 1024
-
-
-def test_an_unusable_certificate_is_reported_rather_than_ignored(keys):
-    """Falling back to the default here would tell an author their bundle is
-    too big, when what actually happened is that their grant ran out. They
-    would go delete dependencies to fix a paperwork problem."""
-    private, public = keys
-    token = issue(Grant(tool="t", max_bytes=10, expires=date(2026, 1, 1)), private_key=private)
-
-    with pytest.raises(GrantError, match="2026-01-01"):
-        limit_for(tool="t", token=token, public_keys=[public], today=date(2026, 8, 1))
 
 
 # ─── the command the platform team runs (#674) ───────────────────────

@@ -13,7 +13,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import tarfile
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -48,12 +50,20 @@ def _source(tmp_path: Path, *, name: str = "wafer-history", version: str = "1.4.
     return src
 
 
-def _fake_bundle(commands: dict[str, str]):
+def _fake_bundle(commands: dict[str, str], *, packages: dict[str, int] | None = None):
     """Stand in for `prebuild.build_package`: lay down the bundle shape it
-    produces, without the venv it takes minutes to build."""
+    produces, without the venv it takes minutes to build.
+
+    `packages` installs site-packages entries of a given size, for the tests
+    about weight. The bytes are random so they survive compression — a bundle
+    of zeros would shrink to nothing and measure the wrong thing."""
 
     def build(*, name: str, source: Path, dst: Path) -> None:  # noqa: ARG001
         dst.mkdir(parents=True, exist_ok=True)
+        for package, size in (packages or {}).items():
+            installed = dst / ".venv" / "lib" / "python3.12" / "site-packages" / package
+            installed.mkdir(parents=True)
+            (installed / "data.bin").write_bytes(os.urandom(size))
         # A bundle always ships its own interpreter; the doubles model that
         # now, because the MCP entry point takes its version from it.
         (dst / "python" / "bin").mkdir(parents=True, exist_ok=True)
@@ -523,3 +533,171 @@ def test_the_build_emits_the_packaging_recipe_beside_the_bundle(tmp_path: Path) 
     assert "/tool/mcp" in recipe
     # It must build from the unpacked bundle this same run produced.
     assert "bundle/" in recipe
+
+
+# ─── what a bundle may weigh (#674) ──────────────────────────────────
+
+
+@pytest.fixture
+def signing(monkeypatch):
+    """A platform signing key that exists only for this test, wired in as the
+    one this build trusts."""
+    from workspace_app.tooling import grant as grant_mod
+
+    private, public = grant_mod.keypair()
+    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", (public,))
+    # Small enough that a few kilobytes of random bytes exceed it. The real
+    # number is pinned in test_grant.py, against the figure the guide quotes.
+    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 4096)
+    return private
+
+
+def _grant(private, *, tool="wafer-history", mb=1, expires=None):
+    from workspace_app.tooling.grant import Grant, issue
+
+    return issue(Grant(tool=tool, max_bytes=mb * 1024 * 1024, expires=expires), private_key=private)
+
+
+def test_a_bundle_over_the_limit_is_refused(tmp_path: Path, signing) -> None:
+    """The weight is the artifact every host downloads, so the build is where
+    it has to be caught: past this point it is published, cached, and pulled."""
+    out = tmp_path / "dist"
+
+    with pytest.raises(BuildError, match="limit"):
+        build_artifact(
+            source=_source(tmp_path),
+            out=out,
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_nothing_is_published_when_the_bundle_is_too_big(tmp_path: Path, signing) -> None:
+    """A dist holding a rejected bundle is worse than no dist: CI publishes
+    whatever it finds, and the refusal would reach a user instead of the
+    author."""
+    out = tmp_path / "dist"
+
+    with pytest.raises(BuildError):
+        build_artifact(
+            source=_source(tmp_path),
+            out=out,
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+            smoke_check=lambda _dist: None,
+        )
+
+    assert not (out / BUNDLE_NAME).exists()
+    assert not (out / MANIFEST_NAME).exists()
+
+
+def test_the_refusal_names_the_heaviest_things_so_the_author_knows_what_to_cut(
+    tmp_path: Path, signing
+) -> None:
+    """ "Too big" on its own sends someone to guess at their dependency tree.
+    The build has the tree in front of it and can say which entries account
+    for the weight."""
+    with pytest.raises(BuildError) as caught:
+        build_artifact(
+            source=_source(tmp_path),
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle(
+                {"trend": "t"}, packages={"pandas": 30_000, "pytest": 9_000, "tiny": 10}
+            ),
+            smoke_check=lambda _dist: None,
+        )
+
+    message = str(caught.value)
+    assert "pandas" in message
+    assert "pytest" in message
+    # Ordered heaviest first, and the trivia left out: a list of everything
+    # installed is the same problem as no list at all.
+    assert message.index("pandas") < message.index("pytest")
+    assert "tiny" not in message
+
+
+def test_a_certificate_raises_the_limit_for_the_tool_it_names(tmp_path: Path, signing) -> None:
+    source = _source(tmp_path)
+    (source / "tool-size-grant.token").write_text(_grant(signing))
+
+    manifest = build_artifact(
+        source=source,
+        out=tmp_path / "dist",
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert manifest.bundle.size > 4096
+
+
+def test_the_certificate_travels_in_the_manifest(tmp_path: Path, signing) -> None:
+    """So the platform checks the same certificate the author built against,
+    without an operator having to go and ask for it."""
+    source = _source(tmp_path)
+    token = _grant(signing)
+    (source / "tool-size-grant.token").write_text(token)
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=source,
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert parse_manifest((out / MANIFEST_NAME).read_bytes()).grant == token
+
+
+def test_a_tool_with_no_certificate_publishes_none(tmp_path: Path, signing) -> None:
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert parse_manifest((out / MANIFEST_NAME).read_bytes()).grant is None
+
+
+def test_a_certificate_issued_to_another_tool_does_not_raise_this_one(
+    tmp_path: Path, signing
+) -> None:
+    source = _source(tmp_path)  # this tool is "wafer-history"
+    (source / "tool-size-grant.token").write_text(_grant(signing, tool="pdf-extract"))
+
+    with pytest.raises(BuildError, match="pdf-extract"):
+        build_artifact(
+            source=source,
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_an_expired_certificate_says_it_expired_rather_than_too_big(
+    tmp_path: Path, signing, monkeypatch
+) -> None:
+    """The two failures need different actions: one is deleting dependencies,
+    the other is asking us. Reporting the wrong one costs an afternoon."""
+    from workspace_app.tooling import builder as mod
+
+    source = _source(tmp_path)
+    (source / "tool-size-grant.token").write_text(_grant(signing, expires=date(2026, 1, 1)))
+    monkeypatch.setattr(mod, "_today", lambda: date(2026, 8, 1))
+
+    with pytest.raises(BuildError, match="expired"):
+        build_artifact(
+            source=source,
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+            smoke_check=lambda _dist: None,
+        )

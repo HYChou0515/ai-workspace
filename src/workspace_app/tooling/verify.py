@@ -29,6 +29,7 @@ import tarfile
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from workspace_app.tooling import grant as grant_policy
 from workspace_app.tooling.artifact import (
     ArtifactError,
     check_compatible,
@@ -108,6 +109,11 @@ def verify_artifact(
     except ArtifactError as exc:
         raise VerifyFailed(str(exc)) from exc
 
+    # Before the bundle is fetched: the size is published in the manifest so
+    # that refusing an oversized artifact costs one small request, not the
+    # download of the thing being refused.
+    _check_weight(manifest)
+
     data = _fetch(fetch, bundle_at, "the bundle")
     try:
         verify_bundle(data, manifest.bundle)
@@ -121,6 +127,36 @@ def verify_artifact(
         sha=manifest.bundle.sha256,
         commands=tuple(c.name for c in manifest.commands),
     )
+
+
+def _today():  # pragma: no cover - trivial, seamed so expiry is testable
+    from datetime import date
+
+    return date.today()
+
+
+def _check_weight(manifest) -> None:
+    """Refuse an artifact heavier than its tool is allowed to be.
+
+    The author's build applies the same rule, on the same module. That check
+    runs on a machine the author owns, so it is there to tell them early; this
+    one is what the platform actually accepts.
+
+    Bound to the name in the manifest — the author's own project name, which
+    is what their certificate was issued against — rather than to the local
+    name we happen to be registering it under."""
+    reason = grant_policy.check_size(
+        tool=manifest.name,
+        size=manifest.bundle.size,
+        token=manifest.grant,
+        public_keys=grant_policy.TRUSTED_KEYS,
+        today=_today(),
+    )
+    if reason is not None:
+        raise VerifyFailed(
+            f"{reason} — either the tool sheds weight, or it is reviewed and "
+            "issued a certificate raising the limit"
+        )
 
 
 def _check_contents(data: bytes, manifest) -> None:
