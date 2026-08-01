@@ -155,7 +155,7 @@ class WorkspaceFiles:
         sandbox: Sandbox | None = None,
         handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
         rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
-        quota: int = 0,
+        quota: int | Callable[[str], int] = 0,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -163,7 +163,15 @@ class WorkspaceFiles:
         self._sb = sandbox
         # #538: bytes one workspace may occupy; 0 ⇒ unlimited (the default, so the
         # wiki-page stores and other non-workspace uses are never gated).
-        self._quota = quota
+        #
+        # A workspace's limit belongs to its App, so the real deployment passes a
+        # LOOKUP. A plain int is still accepted and means "the same number for
+        # every workspace" — it normalises to a lookup right here, so internally
+        # there is exactly ONE way to ask, and no pair of spellings that could
+        # ever answer differently.
+        self._quota_for: Callable[[str], int] = (
+            quota if callable(quota) else (lambda _ws, _q=quota: _q)
+        )
         # Async resolver: item → the handle its ONE live sandbox is reachable at,
         # or None when the item is globally cold (#492 same-source resolution).
         self._handle_for = handle_for
@@ -570,12 +578,13 @@ class WorkspaceFiles:
         `new - previous` into the measurement so a batch stays exact. ``None``
         when there is no quota and nothing was looked up; the caller then drops
         its measurement rather than guessing."""
-        if not self._quota:
+        quota = self._quota_for(workspace_id)
+        if not quota:
             return None
         used, old = await self._usage_and_size(workspace_id, path, warm)
         growth = new_size - old
-        if growth > 0 and used + growth > self._quota:
-            raise WorkspaceFull(used=used, quota=self._quota, attempted=new_size)
+        if growth > 0 and used + growth > quota:
+            raise WorkspaceFull(used=used, quota=quota, attempted=new_size)
         return old
 
     async def ensure_room_for(self, workspace_id: str, extra_bytes: int) -> None:
@@ -586,11 +595,12 @@ class WorkspaceFiles:
         between a clean refusal and a half-copied folder the user now has to
         clean up while over quota. Per-write gating alone can only fail in the
         middle."""
-        if not self._quota or extra_bytes <= 0:
+        quota = self._quota_for(workspace_id)
+        if not quota or extra_bytes <= 0:
             return
         used = await self.workspace_usage(workspace_id)
-        if used + extra_bytes > self._quota:
-            raise WorkspaceFull(used=used, quota=self._quota, attempted=extra_bytes)
+        if used + extra_bytes > quota:
+            raise WorkspaceFull(used=used, quota=quota, attempted=extra_bytes)
 
     async def _usage_and_size(
         self, workspace_id: str, path: str, warm: tuple[Sandbox, SandboxHandle] | None
@@ -615,12 +625,23 @@ class WorkspaceFiles:
         old = (await size(workspace_id, path) if size is not None else None) or 0
         return used, old
 
-    async def remaining_quota(self, workspace_id: str, path: str, quota: int) -> int | None:
-        """Bytes the file at `path` may occupy before the workspace hits `quota`
+    def quota_of(self, workspace_id: str) -> int:
+        """This workspace's byte ceiling (0 ⇒ unlimited) — its App's, resolved.
+
+        Public because the API has to SHOW the number, not just enforce it: the
+        507 body and the usage bar both name a limit, and naming a different one
+        from the gate would be a worse lie than not showing it at all."""
+        return self._quota_for(workspace_id)
+
+    async def remaining_quota(self, workspace_id: str, path: str) -> int | None:
+        """Bytes the file at `path` may occupy before the workspace hits its quota
         — the headroom the upload/edit endpoints gate on (#245). An overwrite is
         a *replace*: the existing file's size is credited back, so re-uploading a
-        same-size file never falsely rejects. `quota` of 0 disables the cap →
-        None (no limit). Measured against the **live** workspace (#538) — warm ⇒
+        same-size file never falsely rejects. A quota of 0 disables the cap →
+        None (no limit). The limit is read from the facade rather than passed in:
+        the caller holding its own copy is what let the route's rule drift from
+        `_ensure_headroom`'s, and drift here means refusing a shrink on a full
+        workspace. Measured against the **live** workspace (#538) — warm ⇒
         the sandbox, cold ⇒ the durable snapshot — so what a user is charged for
         is what the file tree shows them. The mirror still writes the raw store
         directly and stays ungated (#245 choice B: never lose work the agent has
@@ -636,6 +657,7 @@ class WorkspaceFiles:
         is what made the "an over-quota workspace can still be tidied" guarantee
         false on `PUT /files/{path}`, which IS the IDE save and the file-tree
         upload."""
+        quota = self._quota_for(workspace_id)
         if not quota:
             return None
         used, old = await self._usage_and_size(workspace_id, path, await self._warm(workspace_id))

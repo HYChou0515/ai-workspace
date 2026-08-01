@@ -18,8 +18,11 @@ from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxBusy, SandboxHandle, SandboxSpec
 
 
-def _files() -> WorkspaceFiles:
-    return WorkspaceFiles(MemoryFileStore())
+def _files(quota: int = 1000) -> WorkspaceFiles:
+    """The limit now lives ON the facade — `remaining_quota` reads it rather
+    than taking it as an argument, so a caller can no longer hold a copy of the
+    rule that drifts from the gate's."""
+    return WorkspaceFiles(MemoryFileStore(), quota=quota)
 
 
 class _WalkCountingSandbox(MockSandbox):
@@ -113,14 +116,14 @@ async def _warm(
 
 async def test_empty_workspace_has_full_headroom():
     files = _files()
-    assert await files.remaining_quota("ws1", "/a", quota=1000) == 1000
+    assert await files.remaining_quota("ws1", "/a") == 1000
 
 
 async def test_headroom_shrinks_by_existing_files():
     files = _files()
     await files.write("ws1", "/a", b"x" * 300)
     # a *new* path sees the workspace's used bytes subtracted
-    assert await files.remaining_quota("ws1", "/b", quota=1000) == 700
+    assert await files.remaining_quota("ws1", "/b") == 700
 
 
 async def test_overwrite_credits_back_the_old_size():
@@ -128,13 +131,13 @@ async def test_overwrite_credits_back_the_old_size():
     await files.write("ws1", "/a", b"x" * 300)
     await files.write("ws1", "/b", b"y" * 200)  # used = 500
     # overwriting /a: its 300 is credited back, headroom = 1000 - (500 - 300)
-    assert await files.remaining_quota("ws1", "/a", quota=1000) == 800
+    assert await files.remaining_quota("ws1", "/a") == 800
 
 
 async def test_quota_zero_disables_the_cap():
-    files = _files()
+    files = _files(quota=0)
     await files.write("ws1", "/a", b"x" * 300)
-    assert await files.remaining_quota("ws1", "/a", quota=0) is None
+    assert await files.remaining_quota("ws1", "/a") is None
 
 
 async def test_headroom_bottoms_out_at_the_file_s_current_size_when_already_over():
@@ -142,10 +145,14 @@ async def test_headroom_bottoms_out_at_the_file_s_current_size_when_already_over
     # refuse EVERY write to an over-quota workspace — including the shrinks the
     # user was being told to perform. The floor is the path's current size, so a
     # replace that doesn't grow the workspace always fits.
-    files = _files()
-    await files.write("ws1", "/a", b"x" * 1500)
-    assert await files.remaining_quota("ws1", "/b", quota=1000) == 0  # a new file: nothing fits
-    assert await files.remaining_quota("ws1", "/a", quota=1000) == 1500  # but /a may stay /a's size
+    # Seed straight into the store, which is how a workspace really goes over:
+    # the sandbox mirror writes the store directly and is deliberately ungated
+    # (#245 choice B — never lose work the agent already did).
+    store = MemoryFileStore()
+    await store.write("ws1", "/a", b"x" * 1500)
+    files = WorkspaceFiles(store, quota=1000)
+    assert await files.remaining_quota("ws1", "/b") == 0  # a new file: nothing fits
+    assert await files.remaining_quota("ws1", "/a") == 1500  # but /a may stay /a's size
 
 
 async def test_warm_usage_counts_bytes_the_agent_created_in_the_sandbox():
@@ -163,20 +170,20 @@ async def test_warm_overwrite_credits_the_size_the_sandbox_actually_holds():
     # halves of the subtraction disagree: warm-only bytes counted against the
     # workspace but credited back as 0, so re-uploading a file over itself ate
     # its own size twice.
-    files, _fs, _sb, _handle = await _warm()
+    files, _fs, _sb, _handle = await _warm(quota=1000)
     await files.write("ws1", "/a", b"x" * 300)  # lands in the sandbox only
-    assert await files.remaining_quota("ws1", "/a", quota=1000) == 1000
+    assert await files.remaining_quota("ws1", "/a") == 1000
 
 
 async def test_deleting_in_the_sandbox_frees_headroom_immediately():
     # #538 (1): the symptom users hit — clear out the workspace, still be told
     # "out of space". The durable snapshot kept charging for files the sandbox
     # no longer had until a mirror sweep reconciled the deletion.
-    files, _fs, _sb, _handle = await _warm()
+    files, _fs, _sb, _handle = await _warm(quota=1000)
     await files.write("ws1", "/big", b"x" * 900)
-    assert await files.remaining_quota("ws1", "/new", quota=1000) == 100
+    assert await files.remaining_quota("ws1", "/new") == 100
     await files.delete("ws1", "/big")
-    assert await files.remaining_quota("ws1", "/new", quota=1000) == 1000
+    assert await files.remaining_quota("ws1", "/new") == 1000
 
 
 async def test_a_write_past_the_quota_is_refused_and_lands_nothing():
@@ -432,8 +439,8 @@ class _NoUsageStore:
 
 
 async def test_store_without_usage_accounting_falls_back():
-    files = WorkspaceFiles(_NoUsageStore())  # ty: ignore[invalid-argument-type]
+    files = WorkspaceFiles(_NoUsageStore(), quota=1000)  # ty: ignore[invalid-argument-type]
     assert await files.workspace_usage("ws") == 0
     assert await files.file_size("ws", "/a") is None
     # remaining is then just the whole quota (nothing counted against it)
-    assert await files.remaining_quota("ws", "/a", quota=1000) == 1000
+    assert await files.remaining_quota("ws", "/a") == 1000

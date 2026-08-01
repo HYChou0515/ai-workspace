@@ -515,15 +515,29 @@ def create_app(
         )
     from ..apps.resolve import find_work_item
 
+    def _limits_for(item_id: str) -> ResourceLimits | None:
+        """This item's App's resolved ceilings, or None when the deploy passed
+        no per-App resources or the App declared none."""
+        if app_resources is None:
+            return None
+        found = find_work_item(spec, item_id)
+        return app_resources.get(found[0]) if found is not None else None
+
+    def _quota_for(item_id: str) -> int:
+        """Disk ceiling for one item: its App's, else the deploy-wide number.
+
+        The fallback is not cosmetic — an item whose App declares nothing, or an
+        id that resolves to no App at all (a wiki store, a half-deleted item),
+        must keep the deploy's limit rather than silently become unlimited."""
+        limits = _limits_for(item_id)
+        return workspace_quota if limits is None else limits.disk_bytes
+
     def _spec_for(item_id: str) -> SandboxSpec:
         """This item's sandbox spec: its App's resolved ceilings, looked up when
         the sandbox is actually created. The item→App lookup is a store read, but
         it only happens on a COLD acquire (once per sandbox lifetime), which is
         already the expensive path."""
-        if app_resources is None:
-            return SandboxSpec()
-        found = find_work_item(spec, item_id)
-        limits = app_resources.get(found[0]) if found is not None else None
+        limits = _limits_for(item_id)
         if limits is None:
             return SandboxSpec()
         return SandboxSpec(cpu_cores=limits.cpu_cores, memory_bytes=limits.memory_bytes)
@@ -556,7 +570,9 @@ def create_app(
         # #538: the quota lives in the facade, so EVERY way of growing a workspace
         # is refused by one rule — not just the upload endpoint that used to be
         # the only checker while the agent, workflows and copy/move went free.
-        quota=workspace_quota,
+        # The rule is now per-App (a data-analysis workspace is not a chat
+        # workspace), so what the facade holds is a LOOKUP, not a number.
+        quota=_quota_for,
     )
     kernels = KernelService()
     activity = ActivityLog()
@@ -1365,7 +1381,6 @@ def create_app(
         get_user_id=get_user_id,
         turn_engine=turn_engine,
         activity=activity,
-        workspace_quota=workspace_quota,
         max_file_size=max_file_size,
     )
 
