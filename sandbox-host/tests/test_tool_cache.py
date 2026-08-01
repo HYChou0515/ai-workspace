@@ -292,3 +292,43 @@ def test_a_bundle_with_a_venv_shaped_link_installs(tmp_path: Path) -> None:
 
     assert (installed / ".venv" / "bin" / "python").is_symlink()
     assert (installed / ".venv" / "bin" / "python").resolve().is_file()
+
+
+def test_an_installed_tool_can_be_entered_by_the_uid_that_will_run_it(tmp_path: Path) -> None:
+    """The staging directory comes from `mkdtemp`, which is 0700 — private,
+    correct while a tree is half-written, and wrong the moment it is renamed
+    into place.
+
+    Nothing downstream fixes it: the host only symlinks a tool into a
+    sandbox's view, and `_harden` clears write bits without granting the read
+    and traverse a runner needs. So a third-party tool installed here was
+    root-owned 0700, and the unprivileged uid a sandbox runs as could not
+    enter it — `PermissionError` on exec, which reads as a broken tool.
+
+    Found by dropping privileges in the MCP runner, where the same cache is
+    read by a non-root process."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+
+    installed = cache.ensure("a" * 64, _tar({"launch": b"#!/bin/sh\n"}))
+
+    mode = installed.stat().st_mode
+    assert mode & 0o055 == 0o055, oct(mode)
+
+
+def test_hardening_leaves_the_tree_enterable(tmp_path: Path) -> None:
+    """`_harden` runs as root on the host and removes what others may WRITE.
+    Removing what they may ENTER would stop every sandbox running the tool."""
+    root = tmp_path / "tree"
+    (root / "inner").mkdir(parents=True)
+    (root / "inner" / "launch").write_text("#!/bin/sh\n")
+    root.chmod(0o755)
+
+    try:
+        _harden(root)
+    except PermissionError:  # pragma: no cover - only root can chown
+        import pytest
+
+        pytest.skip("chown needs root")
+
+    assert root.stat().st_mode & 0o055 == 0o055
+    assert (root / "inner").stat().st_mode & 0o055 == 0o055

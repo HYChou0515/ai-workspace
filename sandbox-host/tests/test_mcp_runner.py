@@ -310,48 +310,95 @@ def test_a_mounted_workspace_says_nothing(env, capsys, monkeypatch) -> None:
     assert "lost" not in capsys.readouterr().err.lower()
 
 
-def test_writing_as_someone_other_than_the_workspace_owner_is_called_out(
-    env, capsys, monkeypatch
-) -> None:
-    """Forgetting `--user` leaves every file the tool produces owned by root,
-    in the engineer's own project, where they cannot edit or delete it. They
-    find out later, from a permission error, with nothing pointing back here.
+def test_the_runner_becomes_the_owner_of_the_workspace_it_was_given(env, monkeypatch) -> None:
+    """The config an engineer pastes must contain nothing about their machine.
 
-    The test is uid against the DIRECTORY's owner, not against zero: under
-    rootless docker the process is uid 0 and the files still land owned by the
-    person outside, so "you are root" would be a false alarm there."""
+    `--user "$(id -u):$(id -g)"` cannot be written in an MCP config — clients
+    expand environment variables at best, never command substitution — so
+    asking for it means every person edits the snippet with their own uid, and
+    whoever forgets gets root-owned files in their own project.
+
+    The runner already reads that uid to warn about it. Becoming it instead
+    removes the question, and matches the platform, where a tool runs as an
+    unprivileged uid rather than as root."""
     from sandbox_host import mcp_runner
 
     monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: False)
     monkeypatch.setattr(mcp_runner, "_workspace_owner", lambda _p: (1000, 1000))
     monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 0)
+    became: list[tuple[int, int]] = []
+    order: list[str] = []
     data = _bundle()
 
     main(
         ["wafer-history", _MANIFEST_URL],
         fetch=_Wire(manifest=_manifest(data), bundle=data),
+        become=lambda uid, gid: (became.append((uid, gid)), order.append("became")),
+        hand_over=lambda _e: order.append("handed over"),
+    )
+
+    assert became == [(1000, 1000)]
+    # Before the handover, which replaces the process: after it there is no
+    # "after".
+    assert order == ["became", "handed over"]
+
+
+def test_a_runner_already_running_as_a_person_stays_as_it_is(env, monkeypatch) -> None:
+    # Someone who passed `--user` themselves. Dropping again is not possible
+    # and not wanted.
+    from sandbox_host import mcp_runner
+
+    monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: False)
+    monkeypatch.setattr(mcp_runner, "_workspace_owner", lambda _p: (1000, 1000))
+    monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 1000)
+    became: list[tuple[int, int]] = []
+    data = _bundle()
+
+    main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        become=lambda uid, gid: became.append((uid, gid)),
         hand_over=lambda _e: None,
     )
 
-    err = capsys.readouterr().err
-    assert "--user" in err
-    assert "1000:1000" in err
+    assert became == []
 
 
-def test_matching_the_workspace_owner_says_nothing(env, capsys, monkeypatch) -> None:
-    """Both the `--user 1000:1000` case and rootless docker, where the process
-    is uid 0 and so is the mounted directory."""
+def test_a_workspace_owned_by_root_is_left_alone(env, monkeypatch) -> None:
+    """Rootless docker: the process is uid 0 and so is the mounted directory,
+    because the person outside maps to root inside. Files already land owned
+    by them, and dropping to 0 would be a no-op dressed up as a decision."""
     from sandbox_host import mcp_runner
 
     monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: False)
     monkeypatch.setattr(mcp_runner, "_workspace_owner", lambda _p: (0, 0))
     monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 0)
+    became: list[tuple[int, int]] = []
     data = _bundle()
 
     main(
         ["wafer-history", _MANIFEST_URL],
         fetch=_Wire(manifest=_manifest(data), bundle=data),
+        become=lambda uid, gid: became.append((uid, gid)),
         hand_over=lambda _e: None,
     )
 
-    assert "--user" not in capsys.readouterr().err
+    assert became == []
+
+
+def test_nothing_mounted_means_nobody_to_become(env, monkeypatch) -> None:
+    from sandbox_host import mcp_runner
+
+    monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: True)
+    monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 0)
+    became: list[tuple[int, int]] = []
+    data = _bundle()
+
+    main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        become=lambda uid, gid: became.append((uid, gid)),
+        hand_over=lambda _e: None,
+    )
+
+    assert became == []

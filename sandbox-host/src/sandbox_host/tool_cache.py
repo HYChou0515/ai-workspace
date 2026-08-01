@@ -103,6 +103,17 @@ class ToolCache:
                 # outside the tree, devices and setuid bits. Refusing is right:
                 # a bundle that needs any of those is not a bundle.
                 tar.extractall(staging, filter="data")
+            # `mkdtemp` gives 0700, which is right for a half-written tree and
+            # wrong for an installed one: the processes that run a tool are
+            # never this one. On the host a sandbox runs as an unprivileged
+            # per-item uid; in the MCP runner the process drops to whoever
+            # owns the workspace. Neither could enter a 0700 directory, and
+            # the failure arrives as `PermissionError` on exec — indis-
+            # tinguishable from a broken bundle.
+            #
+            # Set on the way in, before the rename, so nothing is ever visible
+            # under its sha with the staging mode.
+            staging.chmod(0o755)
             self._harden(staging)
             # Rename last, so a half-written tree is never visible under the
             # sha. A crash mid-unpack leaves a dot-prefixed directory to sweep,

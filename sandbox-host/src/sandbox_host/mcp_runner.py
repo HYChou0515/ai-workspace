@@ -81,6 +81,17 @@ def _unguarded(_root: Path) -> None:
     Keep the volume to one user, as its own permissions already imply."""
 
 
+def _become(uid: int, gid: int) -> None:  # pragma: no cover - needs real root
+    """Drop to the person whose workspace this is, irreversibly.
+
+    Groups first, then gid, then uid: after `setuid` the privilege to do the
+    other two is gone, and a half-applied drop would leave the tool running
+    with a root group."""
+    os.setgroups([])
+    os.setgid(gid)
+    os.setuid(uid)
+
+
 def _hand_over(entry: Path) -> None:  # pragma: no cover - replaces the process
     """Become the tool's MCP server.
 
@@ -94,6 +105,7 @@ def main(
     argv: list[str],
     *,
     fetch: Fetcher = _http_get,
+    become: Callable[[int, int], None] = _become,
     hand_over: Callable[[Path], None] = _hand_over,
 ) -> int:
     if len(argv) != 2:
@@ -158,18 +170,22 @@ def main(
             file=sys.stderr,
         )
     else:
-        # Compared against the DIRECTORY's owner rather than against uid 0:
-        # under rootless docker this process is root and the files still land
-        # owned by the person outside, so "you are running as root" would be a
-        # false alarm exactly where nothing is wrong.
+        # Become whoever owns the mounted workspace, so the files a tool
+        # produces belong to the person who asked for them.
+        #
+        # Done here rather than asked for as `--user "$(id -u):$(id -g)"`: an
+        # MCP config expands environment variables at best, never command
+        # substitution, so that flag would have to be hand-edited with a uid
+        # on every machine — and whoever forgot would find root-owned files in
+        # their own project.
+        #
+        # Keyed on the DIRECTORY's owner, not on being root. Under rootless
+        # docker this process is uid 0 and the directory is too, because the
+        # person outside maps to root inside; files already land owned by them
+        # and there is nothing to drop.
         owner = _workspace_owner(WORK_DIR)
-        if owner is not None and owner[0] != os.geteuid():
-            print(
-                f"warning: files this tool writes into {WORK_DIR} will be owned by "
-                f"uid {os.geteuid()}, but that directory belongs to uid {owner[0]} — "
-                f'they will not be editable. Add --user "{owner[0]}:{owner[1]}".',
-                file=sys.stderr,
-            )
+        if owner is not None and os.geteuid() == 0 and owner[0] != 0:
+            become(*owner)
 
     hand_over(cache.path_for(resolved.sha) / "mcp")
     return 0

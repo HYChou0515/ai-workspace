@@ -13,7 +13,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from my_tool.common import Retryable
+from my_tool.common import NeedsAction, Retryable
 
 # The model decides whether to call your tool from this sentence alone, and
 # gets the arguments right (or not) from the field descriptions. It is the
@@ -42,7 +42,18 @@ def run(args: Args) -> str:
         # one. Naming what was looked for is what makes that possible.
         raise Retryable(f"no such file in the workspace: {args.path}")
 
-    lines = target.read_text("utf-8", errors="replace").splitlines()
+    try:
+        text = target.read_text("utf-8", errors="replace")
+    except PermissionError as exc:
+        # Not the model's mistake, and calling again changes nothing — a
+        # person has to fix the permission. That distinction is the whole
+        # reason `NeedsAction` exists; naming the file is what lets them act.
+        raise NeedsAction(
+            f"cannot read {args.path}: it is not readable by this tool. "
+            "Change its permissions, then ask again."
+        ) from exc
+
+    lines = text.splitlines()
     if args.ignore_blank_lines:
         lines = [ln for ln in lines if ln.strip()]
 
