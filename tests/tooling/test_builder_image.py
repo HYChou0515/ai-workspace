@@ -392,3 +392,20 @@ def test_the_images_that_fetch_can_be_told_where_the_credential_may_go() -> None
         text = _REPO.joinpath(*rel).read_text("utf-8")
         assert "ARG ARTIFACT_HOSTS" in text, rel
         assert "TOOL_ARTIFACT_HOSTS=${ARTIFACT_HOSTS}" in text, rel
+
+
+def test_the_deployment_docs_separate_setup_from_per_tool_work() -> None:
+    """Reading the runbook, it was easy to take the one-time setup — keys, the
+    credential's allowed hosts, the images — as something to repeat for every
+    tool. It is five things done once and two done per tool, and a doc that
+    does not say so turns onboarding a tool into an afternoon."""
+    doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+    section = doc[doc.index("### 15.1") : doc.index("### 15.2")]
+
+    assert "不是**每支工具" in section
+    # The three that were previously undocumented or buried elsewhere.
+    assert "TOOL_ARTIFACT_HOSTS" in section
+    assert "grant keygen" in section
+    assert "mcp-runner" in section
+    # And what IS per tool, so the reader can tell them apart.
+    assert "每支工具要做的" in section

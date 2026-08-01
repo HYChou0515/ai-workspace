@@ -529,17 +529,26 @@ RCA 的 system prompt 是純 markdown，存在
 把 artifact 網址交給我們；**新的 sandbox 啟動時自動帶上**。作者面的說明在
 [寫一支工具（外部作者）](tool-authoring.md)，這裡只講我們要做的事。
 
-### 15.1 兩個必要的環境變數
+### 15.1 一次性設定（**不是**每支工具都要做）
 
-| 變數 | 在哪 | 沒設會怎樣 |
+下面這些做一次就好。做完之前，第一支第三方工具會被擋下來——訊息都寫得出原因，但先知道順序
+可以省一趟。
+
+| 做什麼 | 多常做 | 沒做會怎樣 |
 |---|---|---|
-| `TOOL_BUILDER_ID` | sandbox-host（image 已帶預設，發版時覆寫） | **整個第三方工具功能關閉**。沒有它就沒有 ABI 錨可比對，而不能比對就不該去抓——會掛上一個為別的底層 build 的 bundle，然後在使用者面前壞掉 |
-| `TOOL_ARTIFACT_TOKEN` | sandbox-host | private 的 GitLab project 抓不到（public 的仍可）。**只有 host 需要**，app 從不持有 |
+| `TOOL_BUILDER_ID` — 給 sandbox-host、tool-builder、mcp-runner **同一個值** | 每次發版 | **整個第三方功能關閉**。沒有 ABI 錨就沒得比對，而不能比對就不該去抓——會掛上一個為別的底層 build 的 bundle，然後在使用者面前壞掉 |
+| `TOOL_ARTIFACT_HOSTS` — 憑證能被送到哪些網域（逗號分隔），給 sandbox-host 與 mcp-runner 映像 | 一次（換 artifact store 才改） | 憑證**永遠不會被送出**，private 的 GitLab project 抓不到。這是刻意的預設，理由見 §15.7 |
+| `TOOL_ARTIFACT_TOKEN` — 讀 artifact 用 | 一次 | private 的抓不到（public 仍可）。**只有 host 需要**，app 從不持有 |
+| `grant keygen --as <代號>` → 公鑰進 `TRUSTED_KEYS` → 發版（§15.6） | **每人**一次 | `TRUSTED_KEYS` 是空的 ⇒ 任何憑證都驗不過 ⇒ **一支第三方工具都上不了架** |
+| 發布 mcp-runner 映像（§15.7） | 每次發版 | 工程師沒辦法在自己的編輯器裡用這些工具。平台本身不受影響 |
 
-`TOOL_BUILDER_ID` 必須跟 build 那些 artifact 的 builder image 是**同一個值**。
-兩邊不同步正是那道閘門存在的理由——它會擋下來，而不是讓它在執行期壞掉。
+`TOOL_BUILDER_ID` 三個映像必須同一個值。不同步正是那道閘門存在的理由——它會擋下來，
+而不是讓它在執行期壞掉；有測試釘住三顆映像都帶這個旋鈕。
 
-### 15.2 上架一支新工具
+**每支工具要做的**是另一回事，而且只有兩件：發一張憑證（§15.6），以及把名字和網址寫進
+`app.json` 再發版（§15.2）。
+
+### 15.2 上架一支新工具### 15.2 上架一支新工具
 
 ```sh
 # 1. 先驗（不會執行對方的程式碼，只做抓取 + 閘門 + 結構比對）
@@ -700,7 +709,7 @@ docker build -f sandbox-host/mcp-runner.Dockerfile \
     -t registry/ai-workspace/mcp-runner:<tag> .
 ```
 
-`ARTIFACT_HOSTS` 是**憑證能被送去的網域**（逗號分隔），host 映像也要給同一份。
+`ARTIFACT_HOSTS` 是**憑證能被送去的網域**（逗號分隔）。host 映像要給同一份——它列在 §15.1 的一次性設定裡。
 
 沒設的話 token 永遠不會被送出去——聽起來很嚴格，但反過來是災難:runner 抓 manifest 是發生在
 驗證**之前**的，所以只要有人讓工程師執行一個惡意網址，他的 GitLab token 就會被送過去，
