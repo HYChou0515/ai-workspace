@@ -31,6 +31,7 @@ signed — attribution and the off switch are the same mechanism.
 from __future__ import annotations
 
 import base64
+import csv
 import json
 from dataclasses import dataclass
 from datetime import date
@@ -69,6 +70,19 @@ TRUSTED_KEYS: dict[str, str] = {}
 GRANT_FILE = "tool-size-grant.token"
 
 _NEVER = "never"
+
+#: The reviewable record of which names have been handed out. Read when
+#: issuing, written by hand in the same change that registers the tool — the
+#: same shape as adding a key, and for the same reason: both are decisions
+#: worth seeing in a diff.
+#:
+#: It exists because a certificate binds a NAME, and certificates are public:
+#: they travel in manifests anyone can read. Two certificates for one name are
+#: two tools that can each pass as the other, and the second author can lift
+#: the first one's certificate straight out of a published manifest. Nothing
+#: else can catch it, because a name is not registered anywhere until after it
+#: has been issued.
+REGISTRY_FILE = "tool-registry.csv"
 
 
 class GrantError(Exception):
@@ -299,6 +313,7 @@ def check_size(
 _USAGE = """usage:
   python -m workspace_app.tooling.grant keygen --key <path> --as <handle>
   python -m workspace_app.tooling.grant issue --tool <name> --key <path>
+      [--registry <path to tool-registry.csv>]
       [--max-mb <n> --publish-until <YYYY-MM-DD|never>]  raise the size limit,
                                                         with a deadline to fix it"""
 
@@ -374,6 +389,29 @@ def _issue(flags: dict[str, str], out, err) -> int:
         return 2
 
     publish_until = _a_date(flags.get("--publish-until"))
+    tool = flags["--tool"]
+
+    registry = Path(flags.get("--registry", REGISTRY_FILE))
+    try:
+        rows = list(csv.DictReader(registry.read_text("utf-8").splitlines()))
+    except OSError as exc:
+        # Not "no name is taken" — the state where nothing is being checked.
+        print(
+            f"cannot read the issued-name registry at {registry}: {exc}. "
+            "Run this from the repository, or pass --registry.",
+            file=err,
+        )
+        return 2
+    taken = next((r for r in rows if r["tool"] == tool), None)
+    if taken is not None:
+        print(
+            f"{tool!r} is already issued to {taken['source']} "
+            f"(by {taken['issued_by']}, {taken['issued_on']}). Two certificates for one "
+            "name admit each other's tools — pick a different name.",
+            file=err,
+        )
+        return 2
+
     path = Path(flags["--key"])
     try:
         private = path.read_bytes()
@@ -386,12 +424,17 @@ def _issue(flags: dict[str, str], out, err) -> int:
     # and only one of them is routine.
     megabytes = int(flags["--max-mb"]) if "--max-mb" in flags else DEFAULT_MAX_BYTES // 1024 // 1024
     grant = Grant(
-        tool=flags["--tool"],
+        tool=tool,
         max_bytes=megabytes * 1024 * 1024,
         publish_until=publish_until,
     )
     # The certificate alone on stdout: it is about to be copied into a reply.
     print(issue(grant, private_key=private), file=out)
+    # The row to record, on stderr so it does not travel with the certificate.
+    print(
+        f"\nAdd to {registry.name}:\n  {tool},<their repo>,<you>,<today>",
+        file=err,
+    )
     return 0
 
 

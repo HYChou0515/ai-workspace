@@ -565,3 +565,76 @@ def test_an_expiry_that_is_not_a_date_is_reported(tmp_path, capsys):
 
     assert code == 2
     assert "soon" in err
+
+
+# ─── names have to stay unique ───────────────────────────────────────
+
+
+def _registry(tmp_path, *rows: str):
+    path = tmp_path / "tool-registry.csv"
+    path.write_text("tool,source,issued_by,issued_on\n" + "".join(r + "\n" for r in rows))
+    return str(path)
+
+
+def test_a_name_that_is_already_issued_is_refused(tmp_path, capsys):
+    """A certificate binds a NAME, and certificates are public — they ride in
+    manifests anyone can read. So two certificates for one name are two tools
+    that can each pass as the other, and one author can lift the other's
+    certificate out of a published manifest.
+
+    Uniqueness is therefore not tidiness; it is what makes a certificate mean
+    anything. Nothing else enforces it, because a name is not registered until
+    after it has been issued."""
+    key = tmp_path / "k.pem"
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
+    registry = _registry(tmp_path, "data-fetch,gitlab.example/rca,alice,2026-07-01")
+
+    code, _, err = _run(
+        ["issue", "--tool", "data-fetch", "--key", str(key), "--registry", registry], capsys
+    )
+
+    assert code == 2
+    assert "data-fetch" in err
+    assert "gitlab.example/rca" in err, "say WHICH tool already has the name"
+
+
+def test_a_fresh_name_is_issued_and_the_row_to_record_is_printed(tmp_path, capsys):
+    """Printed to stderr, never stdout: the certificate is about to be copied
+    out of stdout and a second line there would go with it."""
+    key = tmp_path / "k.pem"
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
+    registry = _registry(tmp_path, "data-fetch,gitlab.example/rca,alice,2026-07-01")
+
+    code, out, err = _run(
+        ["issue", "--tool", "pdf-extract", "--key", str(key), "--registry", registry], capsys
+    )
+
+    assert code == 0
+    assert len(out.strip().splitlines()) == 1
+    assert "pdf-extract" in err and "tool-registry.csv" in err
+
+
+def test_a_missing_registry_is_refused_rather_than_treated_as_empty(tmp_path, capsys):
+    """An absent file reads as "no name is taken", which is exactly wrong: it
+    is the state where nothing is being checked at all."""
+    key = tmp_path / "k.pem"
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
+
+    code, _, err = _run(
+        ["issue", "--tool", "t", "--key", str(key), "--registry", str(tmp_path / "nope.csv")],
+        capsys,
+    )
+
+    assert code == 2
+    assert "nope.csv" in err
+
+
+def test_the_repository_carries_the_registry():
+    """`issue` defaults to it, so it has to be there — and it is the reviewable
+    record of which names are taken."""
+    from pathlib import Path
+
+    registry = Path(__file__).resolve().parents[2] / "tool-registry.csv"
+
+    assert registry.is_file()
+    assert registry.read_text("utf-8").splitlines()[0] == "tool,source,issued_by,issued_on"
