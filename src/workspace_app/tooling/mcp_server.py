@@ -130,11 +130,28 @@ def handle(message: dict, tools: list[dict], invoke: Invoke | None) -> dict | No
     }
 
 
-def _launcher_invoke(launcher: Path) -> Invoke:
+#: How long a command may run before it is stopped, in seconds. The same
+#: figure the platform gives a tool, so an author who fits inside it there
+#: fits inside it here.
+TIMEOUT_SECONDS = 60.0
+
+
+def _launcher_invoke(launcher: Path, timeout: float = TIMEOUT_SECONDS) -> Invoke:
     def invoke(name: str, args_json: str) -> tuple[int, str, str]:
-        proc = subprocess.run(  # noqa: S603
-            [str(launcher), name, args_json], capture_output=True, text=True, check=False
-        )
+        try:
+            proc = subprocess.run(  # noqa: S603
+                [str(launcher), name, args_json],
+                capture_output=True,
+                text=True,
+                check=False,
+                # Without this a tool that blocks takes the agent with it, and
+                # `_GUIDANCE`'s entry for 124 could never be reached — the
+                # platform's number for "we stopped it", so the failure reads
+                # the same wherever somebody meets it.
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return 124, "", f"the tool ran past its {timeout:g}s time limit and was stopped"
         return proc.returncode, proc.stdout, proc.stderr
 
     return invoke

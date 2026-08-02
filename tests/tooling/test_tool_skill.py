@@ -115,3 +115,9 @@ def test_the_skill_takes_the_name_from_the_certificate(skill: str) -> None:
     about a certificate the reader never looked at."""
     assert "grant" in skill
     assert "not the manifest's own `name`" in skill
+
+
+def test_the_skill_says_a_hung_tool_is_stopped(skill: str) -> None:
+    """`124` reaches this path now, so whoever meets it has to be able to look
+    it up — otherwise it is a bare number in a transcript."""
+    assert "124" in skill or "time limit" in skill

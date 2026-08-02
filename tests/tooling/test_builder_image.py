@@ -243,10 +243,16 @@ def test_the_starter_never_reaches_into_the_platform() -> None:
     package, and that we cannot change ours without breaking theirs. The
     dispatcher in the starter is hand-written for exactly this reason — which
     is worth nothing if someone later "simplifies" it by importing ours."""
+    # Every file, not just `*.py`. The worst version of this coupling is one
+    # line in `pyproject.toml` — a dependency on our package — which no scan
+    # of the source would ever have seen.
     offenders = [
-        py.relative_to(_STARTER)
-        for py in _STARTER.rglob("*.py")
-        if ".venv" not in py.parts and "workspace_app" in py.read_text("utf-8")
+        path.relative_to(_STARTER)
+        for path in _STARTER.rglob("*")
+        if path.is_file()
+        and ".venv" not in path.parts
+        and path.name != "uv.lock"
+        and "workspace_app" in path.read_text("utf-8", errors="ignore")
     ]
 
     assert not offenders, f"the starter must stand alone, but these reach into ours: {offenders}"

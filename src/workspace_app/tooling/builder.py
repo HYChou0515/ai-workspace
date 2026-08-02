@@ -206,8 +206,26 @@ def pack_bundle(bundle: Path) -> bytes:
     with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=6) as tar:
         for path in sorted(bundle.rglob("*")):
             info = tar.gettarinfo(path, arcname=str(path.relative_to(bundle)))
-            if info.issym() and info.linkname.startswith("/"):
-                info.linkname = _relocatable_link(bundle, path, info.linkname)
+            if info.issym():
+                # Absolute links are rewritten if they can be; relative ones
+                # are checked, because a relative link can climb out just as
+                # well and used to pack cleanly — then be refused by the
+                # host's `data` filter, which is the failure this step exists
+                # to move from a stranger's machine to the author's build.
+                #
+                # Compared lexically, as the filter does. Resolving would
+                # follow the whole chain, and a real venv's `python3 ->
+                # python3.12 -> /usr/...` ends up outside while every link in
+                # it stays inside.
+                if info.linkname.startswith("/"):
+                    info.linkname = _relocatable_link(bundle, path, info.linkname)
+                elif not Path(os.path.normpath(path.parent / info.linkname)).is_relative_to(
+                    os.path.normpath(bundle)
+                ):
+                    raise BuildError(
+                        f"{path.relative_to(bundle)} points outside the bundle "
+                        f"({info.linkname}). No host will unpack that, so it fails here."
+                    )
             info.mtime = 0
             info.uid = info.gid = 0
             info.uname = info.gname = ""

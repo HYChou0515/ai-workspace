@@ -197,6 +197,13 @@ class ToolResolver:
         An artifact store outage should not take every workspace with it — but
         the answer is marked `stale` so nobody mistakes it for the latest."""
         remembered = self._recall().get(url)
+        if remembered is not None:
+            # The store being unreachable says nothing about whether this tool
+            # is still allowed to run, and the two must not be confused: an
+            # author can make their own project answer 404 whenever they like.
+            refusal = admit(tool=name, url=url, token=remembered.get("grant"))
+            if refusal is not None:
+                raise FetchError(f"{name} is no longer admitted: {refusal}") from cause
         if (
             not self._serve_last_known_good
             or remembered is None
@@ -232,6 +239,9 @@ class ToolResolver:
         known[url] = {
             "sha": manifest.bundle.sha256,
             "version": manifest.version,
+            # Kept so the fallback can ask again. Without it, an outage was a
+            # way around the only revocation this design has.
+            "grant": manifest.grant,
             "commands": [
                 {
                     "name": c.name,

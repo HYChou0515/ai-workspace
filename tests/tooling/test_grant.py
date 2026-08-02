@@ -907,3 +907,36 @@ def test_a_certificate_problem_is_an_artifact_error(keys):
     from workspace_app.tooling.artifact import ArtifactError
 
     assert issubclass(GrantError, ArtifactError)
+
+
+def test_a_source_does_not_match_a_longer_name_beside_it(keys):
+    """`startswith` on a bare prefix let `…/rca%2Fwafer` admit
+    `…/rca%2Fwafer-evil` — a project somebody else can create. The boundary
+    has to be a path separator, so a source names a place and not the start of
+    one."""
+    private, public = keys
+    token = issue(
+        Grant(tool="t", source="https://gitlab.example/api/v4/projects/rca%2Fwafer/", max_bytes=10),
+        private_key=private,
+    )
+    beside = "https://gitlab.example/api/v4/projects/rca%2Fwafer-evil/jobs/x/tool.manifest.json"
+
+    refusal = admit(tool="t", url=beside, token=token, public_keys=public)
+
+    assert refusal is not None
+
+
+def test_a_source_without_a_trailing_separator_is_refused(tmp_path, capsys):
+    """Because that is what makes the boundary. Accepting one and quietly
+    appending it would hide the decision in a place nobody looks."""
+    key = tmp_path / "k.pem"
+    _run(["keygen", "--key", str(key), "--as", "alice"], capsys)
+
+    code, _, err = _run(
+        ["issue", "--tool", "t", "--source", "https://gitlab.example/api/v4/projects/rca%2Fwafer"]
+        + ["--key", str(key), "--registry", _registry(tmp_path)],
+        capsys,
+    )
+
+    assert code == 2
+    assert "/" in err

@@ -171,6 +171,7 @@ nobody else has months later.
 | `warning: nothing is mounted at /work` | The config is missing `-v ${PWD}:/work`. Reads fail loudly; **writes succeed and vanish**. | **You** — add it. |
 | `cannot run …` on a machine that worked yesterday | The runner never serves a copy it could not confirm today, so this is a fetch failure, not a corrupted cache. Read the rest of the message. | See the fetch table above. |
 | `docker: command not found`, or the daemon is not running | — | **The person.** |
+| The tool answers with a time limit (`124`) | It ran past 60 seconds and was stopped — the same limit the platform gives it. | **The tool's author**, unless the request was unusually large; a smaller one may finish. |
 | The tool is listed, but the agent never calls it | Its description does not say when it should be used. | **The tool's author** — pass on which tool and what the person was trying to do. |
 
 ### Things not to do

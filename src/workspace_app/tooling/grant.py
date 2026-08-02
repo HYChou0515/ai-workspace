@@ -448,6 +448,15 @@ def _issue(flags: dict[str, str], out, err) -> int:
             file=err,
         )
         return 2
+    if not source.endswith("/"):
+        print(
+            f"--source must end in `/`: {source} would also admit anything whose "
+            "path merely STARTS with it — `…/rca%2Fwafer` matches "
+            "`…/rca%2Fwafer-evil`, which is a project somebody else can create. "
+            "The separator is the boundary.",
+            file=err,
+        )
+        return 2
     if urlsplit(source).path.strip("/") == "":
         print(
             f"--source names a server, not a place on it: {source} would admit "

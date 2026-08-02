@@ -62,9 +62,17 @@ def _harden(root: Path) -> None:
     mounted FROM must not be writable by that uid either — otherwise one
     sandbox could rewrite a tool that every other sandbox on the host runs."""
     for path in [root, *root.rglob("*")]:
-        os.chown(path, 0, 0)
-        mode = path.stat().st_mode
-        os.chmod(path, mode & ~0o022)
+        # `lchown`/`lstat`, never their following counterparts. The safe tar
+        # filter permits a dangling RELATIVE symlink — it refuses absolute
+        # paths and `..` escapes, not this — so following one means operating
+        # on something that is not there, and the `FileNotFoundError` leaves
+        # through `ensure`, which catches `TarError` and nothing else.
+        os.lchown(path, 0, 0)
+        if path.is_symlink():
+            # A symlink's own mode is not consulted on Linux, and chmod
+            # follows. There is nothing here to take away.
+            continue
+        os.chmod(path, path.lstat().st_mode & ~0o022)
 
 
 class ToolCache:
@@ -118,7 +126,16 @@ class ToolCache:
             # Rename last, so a half-written tree is never visible under the
             # sha. A crash mid-unpack leaves a dot-prefixed directory to sweep,
             # never a bundle that looks installed but is missing files.
-            staging.rename(installed)
+            try:
+                staging.rename(installed)
+            except OSError as exc:
+                # Two sandboxes opening the same tool at once. Identical bytes
+                # by construction — the sha is the name — so whoever landed
+                # first installed exactly what this one would have.
+                if not installed.is_dir():
+                    raise
+                logger.debug("bundle %s was installed by another caller (%s)", sha, exc)
+                shutil.rmtree(staging, ignore_errors=True)
         except tarfile.TarError as exc:
             shutil.rmtree(staging, ignore_errors=True)
             raise ToolCacheError(f"bundle {sha} could not be unpacked: {exc}") from exc

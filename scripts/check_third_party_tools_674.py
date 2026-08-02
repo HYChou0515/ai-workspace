@@ -112,7 +112,11 @@ c = text("sandbox-host/src/sandbox_host/tool_cache.py")
 check("P4", "content-addressed cache with a sha guard", "_SHA256" in c and "def ensure(" in c)
 check("P4", "extraction uses the safe tar filter", 'filter="data"' in c)
 check("P4", "install is atomic (staged, then renamed)", "staging.rename(installed)" in c)
-check("P4", "the tree is hardened root-owned", "os.chown(path, 0, 0)" in c)
+check(
+    "P4",
+    "the tree is hardened root-owned, without following a link",
+    "os.lchown(path, 0, 0)" in c and "os.chown(" not in c,
+)
 
 # ---- P5: builtin layout ----------------------------------------------------
 check("P5", "the layout constants exist", "BUILTIN_DIR" in c and "EXT_DIR" in c)

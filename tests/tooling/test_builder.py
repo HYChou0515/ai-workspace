@@ -723,3 +723,17 @@ def test_weighing_a_bundle_that_carries_no_interpreter(tmp_path: Path) -> None:
     (site / "data.bin").write_bytes(os.urandom(1000))
 
     assert builder_mod._heaviest(bundle) == [("pandas", 1000)]
+
+
+def test_a_relative_symlink_out_of_the_bundle_fails_the_build(tmp_path: Path) -> None:
+    """The check only looked at absolute links. A relative one that climbs out
+    packs fine and is then refused by the host's `data` filter — which is the
+    failure this whole step exists to move forward, from a stranger's machine
+    to the author's own build."""
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "launch").write_text("#!/bin/sh\n")
+    (bundle / "escape").symlink_to("../../../etc/passwd")
+
+    with pytest.raises(BuildError, match="escape"):
+        builder_mod.pack_bundle(bundle)

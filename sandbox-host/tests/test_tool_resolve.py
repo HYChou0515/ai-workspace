@@ -446,3 +446,38 @@ def test_the_credential_does_not_follow_a_redirect_to_another_host(monkeypatch) 
 
     assert got[0] == "glpat-secret", "the allowed host is meant to get it"
     assert got[1] is None, "the host it was redirected to is not on the list"
+
+
+def test_the_fallback_still_asks_whether_the_tool_is_admitted(tmp_path) -> None:
+    """Serving the last version that worked must not become a way around the
+    only revocation this design has.
+
+    `grant.py` says removing someone from `TRUSTED_KEYS` lapses everything
+    they signed. It did not: any HTTPError — 404 and 403 included — reaches
+    the fallback, which served the cached bundle without looking at a
+    certificate again. An author could trigger it themselves by making the
+    project private, and keep running for as long as the cache lived."""
+    from sandbox_host import grant as grant_mod
+    from sandbox_host.tool_cache import ToolCache
+    from sandbox_host.tool_resolve import FetchError, ToolResolver
+
+    data = _bundle()
+    cache = ToolCache(tmp_path / "cache", harden=lambda _p: None)
+    wire = _Wire(manifest=_manifest(data), bundle=data)
+    resolver = ToolResolver(
+        cache, builder_id=_BUILDER, arch="x86_64", fetch=wire, state_dir=tmp_path
+    )
+    assert resolver.resolve("wafer-history", _MANIFEST_URL).sha  # remembered
+
+    # The key that signed it is withdrawn, and the store stops answering.
+    import pytest
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(grant_mod, "TRUSTED_KEYS", {"someone-else": grant_mod.keypair()[1]})
+    try:
+        with pytest.raises(FetchError, match="no longer admitted"):
+            ToolResolver(
+                cache, builder_id=_BUILDER, arch="x86_64", fetch=_Wire(), state_dir=tmp_path
+            ).resolve("wafer-history", _MANIFEST_URL)
+    finally:
+        monkey.undo()

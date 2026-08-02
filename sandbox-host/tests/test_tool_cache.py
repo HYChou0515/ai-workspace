@@ -153,7 +153,9 @@ def test_hardening_makes_the_tree_root_owned_and_unwritable_by_anyone_else(
 
     owned: list[tuple[Path, int, int]] = []
     modes: dict[Path, int] = {}
-    monkeypatch.setattr(os, "chown", lambda p, u, g: owned.append((Path(p), u, g)))
+    # lchown, not chown: hardening must not follow a symlink, so it is the
+    # one it calls.
+    monkeypatch.setattr(os, "lchown", lambda p, u, g: owned.append((Path(p), u, g)))
     monkeypatch.setattr(os, "chmod", lambda p, m: modes.__setitem__(Path(p), m))
 
     _harden(tree)
@@ -332,3 +334,108 @@ def test_hardening_leaves_the_tree_enterable(tmp_path: Path) -> None:
 
     assert root.stat().st_mode & 0o055 == 0o055
     assert (root / "inner").stat().st_mode & 0o055 == 0o055
+
+
+def test_hardening_does_not_follow_a_dangling_symlink(tmp_path: Path, monkeypatch) -> None:
+    """`data` accepts a dangling RELATIVE symlink — it only refuses absolute
+    paths and `..` escapes. `_harden` then followed it: `chown` and `stat` both
+    do, so it operated on a path that is not there and raised
+    `FileNotFoundError` — out through `ensure`, which catches `TarError` and
+    nothing else.
+
+    This module says it is written as if the tarball is hostile. The one thing
+    the safe filter lets through is where that has to hold.
+
+    Only the privileged call is replaced. Leaving it real would stop the walk
+    at the root directory, as a non-root process, before it ever reached the
+    link — a test that passes without having looked."""
+    import os
+
+    import pytest
+
+    from sandbox_host.tool_cache import _harden
+
+    root = tmp_path / "tree"
+    root.mkdir()
+    (root / "dangling").symlink_to("nowhere")
+    monkeypatch.setattr(os, "chown", lambda *a, **k: None)
+    monkeypatch.setattr(os, "lchown", lambda *a, **k: None)
+
+    try:
+        _harden(root)
+    except FileNotFoundError:
+        pytest.fail("followed the dangling link instead of operating on the link itself")
+
+
+def test_a_dangling_symlink_is_refused_as_a_bad_bundle(tmp_path: Path) -> None:
+    """`data` accepts a dangling RELATIVE symlink — it only refuses absolute
+    paths and `..` escapes. `_harden` then followed it: `chown` and `stat` both
+    do, so the tree it was hardening was not the tree it read.
+
+    The result was a bare `FileNotFoundError` out of `ensure`, which catches
+    `TarError` and nothing else. This module says it is written as if the
+    tarball is hostile; a crash on the one thing the safe filter lets through
+    is where that has to hold."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("dangling")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "nowhere"
+        tar.addfile(info)
+        body = b"#!/bin/sh\n"
+        launch = tarfile.TarInfo("launch")
+        launch.size = len(body)
+        tar.addfile(launch, io.BytesIO(body))
+
+    cache = ToolCache(tmp_path)
+
+    # Hardening a real tree needs root; what matters is that it walks the
+    # dangling entry without following it.
+    try:
+        installed = cache.ensure("d" * 64, buf.getvalue())
+    except PermissionError:  # pragma: no cover - non-root cannot chown
+        import pytest
+
+        pytest.skip("chown needs root")
+
+    assert (installed / "dangling").is_symlink()
+
+
+def test_two_callers_installing_the_same_sha_do_not_fight(tmp_path: Path, monkeypatch) -> None:
+    """Two sandboxes open the same tool at once. The loser's rename lands on a
+    directory that is already there, and `ENOTEMPTY` came straight back out —
+    one turn failing because another turn succeeded.
+
+    The bytes are identical by construction: the sha is the name. So the loser
+    has nothing to do but use what the winner installed."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    data = _tar({"launch": b"#!/bin/sh\n"})
+    sha = "c" * 64
+    target = cache.path_for(sha)
+
+    def the_other_caller_got_there_first(self, dst):
+        Path(dst).mkdir(parents=True, exist_ok=True)
+        raise OSError(39, "Directory not empty")
+
+    monkeypatch.setattr(Path, "rename", the_other_caller_got_there_first)
+
+    assert cache.ensure(sha, data) == target
+
+
+def test_a_rename_that_failed_for_any_other_reason_still_raises(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Losing a race and a full disk look the same from here — one `OSError`.
+    They are told apart by whether the bundle is actually there afterwards.
+    Swallowing both would return a path to a directory that does not exist."""
+    import pytest
+
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+
+    def no_space(self, dst):  # noqa: ARG001
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "rename", no_space)
+
+    with pytest.raises(OSError, match="No space"):
+        cache.ensure("e" * 64, _tar({"launch": b"#!/bin/sh\n"}))

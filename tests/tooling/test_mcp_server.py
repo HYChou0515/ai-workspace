@@ -167,3 +167,43 @@ def test_the_real_invoker_runs_the_bundles_own_launcher(tmp_path: Path, monkeypa
 
     assert invoke("count", '{"path":"a"}') == (0, "ok", "")
     assert seen == [[str(tmp_path / "launch"), "count", '{"path":"a"}']]
+
+
+def test_a_tool_that_hangs_is_stopped_rather_than_hanging_the_agent(tmp_path: Path) -> None:
+    """`_GUIDANCE` has an entry for 124 — the platform's timeout — and on this
+    path nothing could ever produce one. A tool that blocks took the agent
+    with it, with no message and nothing to read.
+
+    The number is the platform's, so the failure reads the same wherever
+    somebody meets it."""
+    import sys
+
+    from workspace_app.tooling import mcp_server
+
+    entry = tmp_path / "launch"
+    entry.write_text(f"#!{sys.executable}\nimport time\ntime.sleep(30)\n")
+    entry.chmod(0o755)
+
+    invoke = mcp_server._launcher_invoke(entry, timeout=0.5)
+    code, _out, err = invoke("count", "{}")
+
+    assert code == 124
+    assert "time" in err.lower()
+
+
+def test_the_timeout_reaches_the_agent_as_the_platform_words_it(tmp_path: Path) -> None:
+    tools = load_tools(_bundle(tmp_path))
+
+    reply = handle(
+        {
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {"name": "count", "arguments": {}},
+        },
+        tools,
+        invoke=lambda *_: (124, "", "timed out"),
+    )
+
+    assert reply is not None
+    assert "time limit" in reply["result"]["content"][0]["text"]

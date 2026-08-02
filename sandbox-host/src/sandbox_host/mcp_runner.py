@@ -36,8 +36,8 @@ from sandbox_host.tool_resolve import TOKEN_ENV, Fetcher, ToolResolver, _http_ge
 _USAGE = (
     "usage: mcp-runner <tool-name> <url ending in tool.manifest.json>\n"
     "\n"
-    "The name is the one the tool publishes; it is checked against the "
-    "manifest so a URL cannot quietly start serving something else."
+    "The name is the platform's, and is checked against the certificate the "
+    "artifact carries — so a URL cannot quietly start serving something else."
 )
 
 #: Where bundles are unpacked. A volume in practice — that is what makes the
