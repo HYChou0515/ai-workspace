@@ -108,9 +108,12 @@ def _check_weight(*, name: str, bundle: Path, packed: int, token: str | None) ->
     Measured on the compressed artifact, which is what every host downloads
     and what the manifest records. The rule itself lives in `grant.check_size`
     so this and the platform's gate cannot drift apart; what belongs here is
-    the part only a build can supply — which entries account for the weight."""
+    the part only a build can supply — which entries account for the weight.
+
+    No name is passed, and none could be: the certificate carries the
+    platform's name for this tool, and a build only knows the one in
+    `[project.scripts]`."""
     reason = grant_policy.check_size(
-        tool=name,
         size=packed,
         token=token,
         public_keys=grant_policy.TRUSTED_KEYS,

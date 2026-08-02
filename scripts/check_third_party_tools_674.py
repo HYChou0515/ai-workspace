@@ -50,7 +50,7 @@ check(
     "the module is stdlib-only, so the builder can import it",
     not re.search(
         r"^from (?!__future__|dataclasses|collections|typing|urllib)\w"
-        r"|^import (?!hashlib|json|os)",
+        r"|^import (?!hashlib|json|os|urllib)",
         a,
         re.M,
     ),

@@ -18,11 +18,11 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from .conftest import certify
-
 from sandbox_host.artifact import ArtifactError, IncompatibleArtifact
 from sandbox_host.tool_cache import ToolCache
 from sandbox_host.tool_resolve import FetchError, ToolResolver, bundle_url
+
+from .conftest import certify
 
 _MANIFEST_URL = "https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build-tool"
 _BUILDER = "registry.example/tool-builder@sha256:beef"
@@ -88,6 +88,23 @@ def _resolver(tmp_path: Path, wire: _Wire) -> ToolResolver:
         fetch=wire,
         state_dir=tmp_path,
     )
+
+
+def _patch_opener(monkeypatch, respond):
+    """Replace what `_http_get` actually calls.
+
+    Not `urlopen`: the fetch goes through an opener carrying the redirect
+    handler that re-decides the credential on every hop, so a double wired to
+    `urlopen` would model a request path the code no longer takes."""
+    from sandbox_host import tool_resolve
+
+    class _Opener:
+        def open(self, request, timeout=None):  # noqa: ARG002
+            return respond(request)
+
+    # On the module that USES it:  bound the name at import, so
+    # patching it where it is defined would reach nothing.
+    monkeypatch.setattr(tool_resolve, "artifact_opener", _Opener)
 
 
 def test_resolve_installs_the_bundle_and_answers_with_what_the_model_needs(
@@ -232,9 +249,7 @@ def test_the_real_fetch_carries_the_hosts_token(monkeypatch) -> None:
     monkeypatch.setenv(TOKEN_ENV, "glpat-secret")
     # Where it is allowed to go. Unset, it goes nowhere — see the tests below.
     monkeypatch.setenv(HOSTS_ENV, "gitlab.example")
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response(b"ok")
-    )
+    _patch_opener(monkeypatch, lambda req: seen.append(req) or _Response(b"ok"))
 
     assert _http_get("https://gitlab.example/m") == b"ok"
     assert seen[0].get_header("Private-token") == "glpat-secret"
@@ -249,10 +264,10 @@ def test_a_404_says_the_thing_the_operator_actually_needs_to_hear(monkeypatch) -
 
     from sandbox_host.tool_resolve import _http_get
 
-    def boom(_req, timeout):
+    def boom(_req):
         raise urllib.error.HTTPError("https://g/m", 404, "Not Found", {}, None)
 
-    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    _patch_opener(monkeypatch, boom)
 
     with pytest.raises(FetchError) as exc:
         _http_get("https://gitlab.example/m")
@@ -281,9 +296,7 @@ def test_the_fetch_works_without_a_token_for_a_public_project(monkeypatch) -> No
 
     monkeypatch.delenv(TOKEN_ENV, raising=False)
     seen: list[urllib.request.Request] = []
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response(b"ok")
-    )
+    _patch_opener(monkeypatch, lambda req: seen.append(req) or _Response(b"ok"))
 
     assert _http_get("https://gitlab.example/m") == b"ok"
     assert seen[0].get_header("Private-token") is None
@@ -311,7 +324,6 @@ def test_the_grant_module_is_a_verbatim_copy_of_the_apps() -> None:
 
 def _sent(url: str, monkeypatch) -> dict[str, str]:
     """The headers a fetch of `url` would actually put on the wire."""
-    import urllib.request
 
     from sandbox_host import tool_resolve
 
@@ -327,11 +339,11 @@ def _sent(url: str, monkeypatch) -> dict[str, str]:
         def __exit__(self, *_):
             return False
 
-    def urlopen(request, timeout=None):  # noqa: ARG001
+    def urlopen(request):
         seen.update(request.headers)
         return _Response()
 
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    _patch_opener(monkeypatch, urlopen)
     tool_resolve._http_get(url)
     return seen
 
@@ -374,10 +386,63 @@ def test_a_refusal_says_the_credential_was_withheld(monkeypatch) -> None:
     monkeypatch.setenv("TOOL_ARTIFACT_TOKEN", "glpat-secret")
     monkeypatch.setenv("TOOL_ARTIFACT_HOSTS", "gitlab.example")
 
-    def urlopen(request, timeout=None):  # noqa: ARG001
+    def urlopen(request):
         raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
 
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
+    _patch_opener(monkeypatch, urlopen)
 
     with pytest.raises(FetchError, match="TOOL_ARTIFACT_HOSTS"):
         _http_get("https://elsewhere.example/x.json")
+
+
+def test_the_credential_does_not_follow_a_redirect_to_another_host(monkeypatch) -> None:
+    """urllib re-sends custom headers on redirect, across hosts and all. The
+    allowlist only ever guarded the FIRST request.
+
+    Not theoretical: GitLab's artifact download 302s to a presigned object-store
+    URL whenever `proxy_download` is off, which is an ordinary production
+    setting. So the token would arrive at a host nobody put on the list — and
+    a hostile URL only has to redirect."""
+    import http.server
+    import threading
+
+    from sandbox_host.tool_resolve import HOSTS_ENV, TOKEN_ENV, _http_get
+
+    got: list[str | None] = []
+
+    class _Second(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            got.append(self.headers.get("PRIVATE-TOKEN"))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    class _First(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            got.append(self.headers.get("PRIVATE-TOKEN"))
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{second.server_port}/x")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    second = http.server.HTTPServer(("127.0.0.1", 0), _Second)
+    first = http.server.HTTPServer(("localhost", 0), _First)
+    for srv in (second, first):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    monkeypatch.setenv(TOKEN_ENV, "glpat-secret")
+    monkeypatch.setenv(HOSTS_ENV, "localhost")
+    try:
+        _http_get(f"http://localhost:{first.server_port}/m")
+    finally:
+        first.shutdown()
+        second.shutdown()
+
+    assert got[0] == "glpat-secret", "the allowed host is meant to get it"
+    assert got[1] is None, "the host it was redirected to is not on the list"

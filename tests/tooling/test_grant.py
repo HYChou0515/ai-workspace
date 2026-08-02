@@ -115,7 +115,6 @@ def test_the_allowance_lasts_the_whole_of_its_last_day(keys):
 
     assert (
         check_size(
-            tool="t",
             size=300 * 1024 * 1024,
             token=token,
             public_keys=public,
@@ -207,13 +206,13 @@ def test_a_damaged_certificate_says_so_instead_of_crashing(bad, keys):
 def test_a_bundle_within_the_default_needs_no_certificate(keys):
     _, public = keys
 
-    assert check_size(tool="t", size=DEFAULT_MAX_BYTES, token=None, public_keys=public) is None
+    assert check_size(size=DEFAULT_MAX_BYTES, token=None, public_keys=public) is None
 
 
 def test_a_bundle_over_the_default_with_no_certificate_is_refused(keys):
     _, public = keys
 
-    reason = check_size(tool="t", size=DEFAULT_MAX_BYTES + 1, token=None, public_keys=public)
+    reason = check_size(size=DEFAULT_MAX_BYTES + 1, token=None, public_keys=public)
 
     assert reason is not None and "150.0MB" in reason
 
@@ -227,7 +226,6 @@ def test_a_certificate_lets_a_bundle_weigh_what_it_grants(keys):
 
     assert (
         check_size(
-            tool="t",
             size=300 * 1024 * 1024,
             token=token,
             public_keys=public,
@@ -244,7 +242,6 @@ def test_a_bundle_over_even_its_certificate_is_refused(keys):
     )
 
     reason = check_size(
-        tool="t",
         size=400 * 1024 * 1024,
         token=token,
         public_keys=public,
@@ -269,7 +266,6 @@ def test_a_lapsed_certificate_does_not_fail_a_tool_that_no_longer_needs_one(keys
 
     assert (
         check_size(
-            tool="t",
             size=40 * 1024 * 1024,
             token=stale,
             public_keys=public,
@@ -291,7 +287,6 @@ def test_an_expired_certificate_is_reported_when_the_weight_needs_it(keys):
     )
 
     reason = check_size(
-        tool="t",
         size=200 * 1024 * 1024,
         token=stale,
         public_keys=public,
@@ -865,3 +860,50 @@ def test_the_same_place_written_two_ways_still_matches(keys):
     encoded = "https://gitlab.example/api/v4/projects/rca%2Ftool/jobs/artifacts/main/raw/x.json"
 
     assert admit(tool="t", url=encoded, token=token, public_keys=public) is None
+
+
+# ─── one name, or none ───────────────────────────────────────────────
+
+
+def test_the_allowance_is_read_without_being_told_a_name(keys):
+    """The certificate carries the platform's name for the tool. An author's
+    build cannot know that name — it reads `[project.scripts]`, and the two are
+    allowed to differ — so anything the build checks must not depend on it.
+
+    It used to: `check_size` bound the name, the build passed the author's,
+    verification failed, and the `except GrantError` swallowed a 400MB
+    allowance back down to 150MB. Silently, which is the one thing GrantError
+    exists to prevent."""
+    private, public = keys
+    token = issue(
+        Grant(tool="wafer-history", source=_SOURCE, max_bytes=400 * 1024 * 1024),
+        private_key=private,
+    )
+
+    # Nobody says "wafer-history" here. The build has no way to.
+    assert (
+        check_size(size=300 * 1024 * 1024, token=token, public_keys=public, today=date(2026, 8, 1))
+        is None
+    )
+
+
+def test_only_admission_binds_a_name(keys):
+    """Which tool this is is one question with one asker. Two call sites
+    checking a certificate against two different names is how a certificate
+    can be simultaneously valid and refused."""
+    private, public = keys
+    token = issue(Grant(tool="wafer-history", source=_SOURCE, max_bytes=10), private_key=private)
+
+    assert admit(tool="wafer-history", url=_SOURCE + "x", token=token, public_keys=public) is None
+    refused = admit(tool="wafer_history_cli", url=_SOURCE + "x", token=token, public_keys=public)
+    assert refused is not None and "wafer-history" in refused
+
+
+def test_a_certificate_problem_is_an_artifact_error(keys):
+    """`verify`'s command catches `ArtifactError` and turns it into a refusal
+    a person can read. A `GrantError` outside that tree reached the top as a
+    traceback — and since every tool now needs a certificate, that was every
+    mismatched one."""
+    from workspace_app.tooling.artifact import ArtifactError
+
+    assert issubclass(GrantError, ArtifactError)

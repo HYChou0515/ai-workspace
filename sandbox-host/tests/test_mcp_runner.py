@@ -15,17 +15,17 @@ from __future__ import annotations
 
 import hashlib
 import io
-import os
 import json
+import os
 import tarfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pytest
 
-from .conftest import certify
-
 from sandbox_host.mcp_runner import main
+
+from .conftest import certify
 
 _MANIFEST_URL = "https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build-tool"
 _BUILDER = "registry.example/tool-builder@sha256:beef"

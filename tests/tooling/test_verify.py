@@ -96,6 +96,22 @@ def _wire(**pages: bytes):
     return fetch
 
 
+def _patch_opener(monkeypatch, respond):
+    """Replace what `_http_get` actually calls.
+
+    Not `urlopen`: the fetch goes through an opener carrying the redirect
+    handler that re-decides the credential on every hop, so a double wired to
+    `urlopen` would model a request path the code no longer takes. Patched on
+    the module that USES it — `verify` bound the name at import."""
+    from workspace_app.tooling import verify as verify_mod
+
+    class _Opener:
+        def open(self, request, timeout=None):  # noqa: ARG002
+            return respond(request)
+
+    monkeypatch.setattr(verify_mod, "artifact_opener", _Opener)
+
+
 def test_a_good_artifact_reports_what_would_be_registered() -> None:
     data = _bundle()
     report = verify_artifact(
@@ -242,9 +258,7 @@ def test_the_operators_fetch_carries_the_token_only_where_it_may_go(monkeypatch)
         def __exit__(self, *_):
             return False
 
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response()
-    )
+    _patch_opener(monkeypatch, lambda req: seen.append(req) or _Response())
     monkeypatch.setenv(TOKEN_ENV, "glpat-platform")
     monkeypatch.setenv(HOSTS_ENV, "gitlab.example")
 
@@ -262,9 +276,7 @@ def test_a_public_project_needs_no_token(monkeypatch) -> None:
 
     monkeypatch.delenv("TOOL_ARTIFACT_TOKEN", raising=False)
     seen: list[urllib.request.Request] = []
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response(b"ok")
-    )
+    _patch_opener(monkeypatch, lambda req: seen.append(req) or _Response(b"ok"))
 
     assert _http_get("https://gitlab.example/m") == b"ok"
     assert seen[0].get_header("Private-token") is None

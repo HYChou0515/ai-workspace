@@ -35,6 +35,7 @@ from .artifact import (
     ArtifactError,
     CommandSpec,
     IncompatibleArtifact,
+    artifact_opener,
     check_compatible,
     credential_for,
     parse_manifest,
@@ -86,7 +87,7 @@ def _http_get(url: str) -> bytes:
         # both personal and project access tokens.
         request.add_header("PRIVATE-TOKEN", token)
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+        with artifact_opener().open(request, timeout=120) as response:  # noqa: S310
             return response.read()
     except urllib.error.HTTPError as exc:
         hint = (

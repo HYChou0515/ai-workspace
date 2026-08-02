@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from workspace_app.tooling import grant as grant_policy
 from workspace_app.tooling.artifact import (
     ArtifactError,
+    artifact_opener,
     check_compatible,
     credential_for,
     parse_manifest,
@@ -79,7 +80,7 @@ def _http_get(url: str) -> bytes:
     token = credential_for(url)
     if token:
         request.add_header("PRIVATE-TOKEN", token)
-    with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+    with artifact_opener().open(request, timeout=120) as response:  # noqa: S310
         return response.read()
 
 
@@ -157,11 +158,10 @@ def _check_weight(manifest) -> None:
     runs on a machine the author owns, so it is there to tell them early; this
     one is what the platform actually accepts.
 
-    Bound to the name in the manifest — the author's own project name, which
-    is what their certificate was issued against — rather than to the local
-    name we happen to be registering it under."""
+    Nameless, like the author's build: which tool this is was settled by
+    `admit`, and asking a second time against a second name is how a
+    certificate ends up valid at one gate and refused at the next."""
     reason = grant_policy.check_size(
-        tool=manifest.name,
         size=manifest.bundle.size,
         token=manifest.grant,
         public_keys=grant_policy.TRUSTED_KEYS,
@@ -179,11 +179,7 @@ def _granted_by(manifest) -> str | None:
     certificate is known good by the time its issuer is read off it."""
     if manifest.grant is None:
         return None
-    return grant_policy.verify(
-        manifest.grant,
-        public_keys=grant_policy.TRUSTED_KEYS,
-        tool=manifest.name,
-    ).issued_by
+    return grant_policy.read(manifest.grant, public_keys=grant_policy.TRUSTED_KEYS).issued_by
 
 
 def _check_contents(data: bytes, manifest) -> None:

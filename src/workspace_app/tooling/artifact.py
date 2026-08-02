@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -67,6 +68,39 @@ def credential_for(url: str) -> str | None:
         return None
     allowed = {h.strip() for h in os.environ.get(HOSTS_ENV, "").split(",") if h.strip()}
     return token if urlsplit(url).hostname in allowed else None
+
+
+class _CredentialAwareRedirects(urllib.request.HTTPRedirectHandler):
+    """Re-decide the credential on every hop.
+
+    urllib copies a request's headers onto the redirected one, across hosts
+    and all — so a token added for the first host arrives at whatever the
+    first host names next, and the allowlist only ever guarded one request.
+
+    Not a theoretical hop: GitLab's artifact download 302s to a presigned
+    object-store URL whenever `proxy_download` is off, which is an ordinary
+    production setting. (`requests` strips Authorization across hosts; urllib
+    does not.)"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        following = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if following is None:
+            return None
+        following.headers = {
+            name: value
+            for name, value in following.headers.items()
+            if name.lower() != "private-token"
+        }
+        token = credential_for(newurl)
+        if token:
+            following.add_header("PRIVATE-TOKEN", token)
+        return following
+
+
+def artifact_opener() -> urllib.request.OpenerDirector:
+    """An opener that carries the artifact credential only where it may go —
+    on the first request and on every redirect after it."""
+    return urllib.request.build_opener(_CredentialAwareRedirects)
 
 
 class ArtifactError(Exception):

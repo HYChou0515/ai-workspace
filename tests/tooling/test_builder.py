@@ -667,23 +667,27 @@ def test_a_tool_with_no_certificate_publishes_none(tmp_path: Path, signing) -> N
     assert parse_manifest((out / MANIFEST_NAME).read_bytes()).grant is None
 
 
-def test_a_certificate_issued_to_another_tool_does_not_raise_this_one(
-    tmp_path: Path, signing
-) -> None:
-    source = _source(tmp_path)  # this tool is "wafer-history"
-    (source / "tool-certificate.token").write_text(_grant(signing, tool="pdf-extract"))
+def test_the_build_uses_whatever_certificate_it_was_given(tmp_path: Path, signing) -> None:
+    """It has nothing to check the certificate against. The name in one is the
+    PLATFORM's name for the tool, and a build only knows the one in
+    `[project.scripts]` — so binding here could never pass, and the attempt
+    silently cost the author their whole allowance.
 
-    # No longer "this certificate is not yours" — weight and admission are
-    # separate now, and a certificate that does not apply simply raises
-    # nothing. Admission is refused at the gate, where it can be acted on.
-    with pytest.raises(BuildError, match="may weigh"):
-        build_artifact(
-            source=source,
-            out=tmp_path / "dist",
-            builder_id=_BUILDER,
-            build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
-            smoke_check=lambda _dist: None,
-        )
+    Using it unchecked is safe because the author's runner was never a
+    boundary: `verify` and the host both refuse a certificate that names a
+    different tool, and they are the ones deciding what runs."""
+    source = _source(tmp_path)
+    (source / "tool-certificate.token").write_text(_grant(signing, tool="something-else", mb=1))
+
+    manifest = build_artifact(
+        source=source,
+        out=tmp_path / "dist",
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert manifest.bundle.size > 4096  # the 1MB allowance applied
 
 
 def test_an_expired_certificate_says_it_expired_rather_than_too_big(

@@ -41,6 +41,11 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+# Relative on purpose, and the only import here that has to be: this file is a
+# verbatim copy in two packages, and `artifact.py` is its sibling in both. An
+# absolute path would name one of them and break in the other.
+from .artifact import ArtifactError
+
 #: What a bundle may weigh with no certificate at all, measured on the
 #: compressed artifact — the number every host downloads, and the one the
 #: manifest already records. It matches the figure the authoring guide has
@@ -93,7 +98,7 @@ REGISTRY_FILE = "tool-registry.csv"
 MANIFEST_BASENAME = "tool.manifest.json"
 
 
-class GrantError(Exception):
+class GrantError(ArtifactError):
     """This certificate cannot be used, and the message says why.
 
     Always raised rather than quietly falling back to the default: an author
@@ -213,17 +218,18 @@ def _signed_payload(token: str, public_keys: dict[str, str]) -> tuple[bytes, str
     )
 
 
-def verify(token: str, *, public_keys: dict[str, str], tool: str) -> Grant:
-    """Read a certificate, or raise ``GrantError`` saying why it is not a
-    usable one for this tool.
+def read(token: str, *, public_keys: dict[str, str]) -> Grant:
+    """A certificate's contents, once a trusted key has vouched for them.
 
-    Says nothing about the expiry, which bounds only the size allowance —
-    `check_size` is what reads it. A tool does not stop being itself, or stop
-    being admitted, because a deadline for slimming down went by."""
+    Says nothing about WHICH tool the caller wanted — that binding belongs to
+    `admit`, and to nothing else. An author's build cannot make it: the
+    certificate carries the platform's name for the tool, and the build reads
+    `[project.scripts]`. Two call sites checking against two different names is
+    how a certificate ends up simultaneously valid and refused."""
     payload, issuer = _signed_payload(token, public_keys)
     try:
         body = json.loads(payload)
-        granted = Grant(
+        return Grant(
             tool=body["tool"],
             source=body["source"],
             max_bytes=int(body["max_bytes"]),
@@ -237,6 +243,11 @@ def verify(token: str, *, public_keys: dict[str, str], tool: str) -> Grant:
     except (ValueError, KeyError, TypeError) as exc:
         raise GrantError(f"the certificate is malformed at {exc}") from exc
 
+
+def verify(token: str, *, public_keys: dict[str, str], tool: str) -> Grant:
+    """`read`, plus the one binding that matters: this certificate is for the
+    tool the caller means."""
+    granted = read(token, public_keys=public_keys)
     # Named tools only. A certificate is not a secret and travels in a
     # manifest anyone can read, so an unnamed one would raise the ceiling for
     # every author who saw it.
@@ -267,9 +278,7 @@ def admit(
         )
     try:
         granted = verify(
-            token,
-            public_keys=TRUSTED_KEYS if public_keys is None else public_keys,
-            tool=tool,
+            token, public_keys=TRUSTED_KEYS if public_keys is None else public_keys, tool=tool
         )
     except GrantError as exc:
         return str(exc)
@@ -290,7 +299,6 @@ def _mb(size: int) -> str:
 
 def check_size(
     *,
-    tool: str,
     size: int,
     token: str | None,
     public_keys: dict[str, str] | None = None,
@@ -298,8 +306,12 @@ def check_size(
 ) -> str | None:
     """``None`` if a bundle this size may be PUBLISHED, else why not.
 
-    Weight only — whether the tool is admitted at all is `admit`'s question,
-    and mixing them would let a paperwork problem read as "too big".
+    Weight only, and deliberately nameless. The certificate carries the
+    platform's name for the tool; an author's build reads
+    `[project.scripts]`, and the two are allowed to differ — so a size check
+    that bound a name could never pass on their side, and the `except` around
+    it would swallow their whole allowance back down to the default. Which is
+    exactly what `GrantError` exists to stop.
 
     Applied where publishing happens: the author's build and the registration
     gate. Never by the host, on purpose. A raised allowance comes with a
@@ -310,32 +322,31 @@ def check_size(
     when = today or date.today()
     allowed = DEFAULT_MAX_BYTES
     lapsed: date | None = None
+    named = "this tool"
 
     if token is not None:
         try:
-            granted = verify(
-                token,
-                public_keys=TRUSTED_KEYS if public_keys is None else public_keys,
-                tool=tool,
-            )
+            granted = read(token, public_keys=TRUSTED_KEYS if public_keys is None else public_keys)
         except GrantError:
             # Unusable for some other reason — `admit` is what reports that.
             # Here it simply raises nothing, and the default applies.
             granted = None
-        if granted is not None and granted.max_bytes > allowed:
-            if granted.publish_until is None or when <= granted.publish_until:
-                allowed = granted.max_bytes
-            else:
-                lapsed = granted.publish_until
+        if granted is not None:
+            named = repr(granted.tool)
+            if granted.max_bytes > allowed:
+                if granted.publish_until is None or when <= granted.publish_until:
+                    allowed = granted.max_bytes
+                else:
+                    lapsed = granted.publish_until
 
     if size <= allowed:
         return None
     if lapsed is not None:
         return (
-            f"this bundle is {_mb(size)}. The larger allowance for {tool!r} was to "
+            f"this bundle is {_mb(size)}. The larger allowance for {named} was to "
             f"publish until {lapsed.isoformat()}, so {_mb(allowed)} applies again"
         )
-    return f"this bundle is {_mb(size)}, and {tool!r} may weigh {_mb(allowed)}"
+    return f"this bundle is {_mb(size)}, and {named} may weigh {_mb(allowed)}"
 
 
 # ─── the command the platform team runs ──────────────────────────────

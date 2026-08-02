@@ -14,7 +14,6 @@ from datetime import date
 
 import pytest
 
-
 from sandbox_host import grant as grant_mod
 
 _SOURCE = "https://gitlab.example/api/v4/projects/7/"

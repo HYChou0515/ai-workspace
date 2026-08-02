@@ -16,12 +16,12 @@ import json
 import tarfile
 from pathlib import Path
 
-from .conftest import certify
-
 from sandbox_host.local_process import LocalProcessSandbox
 from sandbox_host.protocol import SandboxSpec
 from sandbox_host.tool_cache import EXT_DIR, ToolCache
 from sandbox_host.tool_resolve import ToolResolver
+
+from .conftest import certify
 
 _URL = "https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build"
 _BUILDER = "registry.example/tool-builder@sha256:beef"
