@@ -802,6 +802,22 @@ export const messages = {
   // card proposal + clarification question the user may see, across collections.
   "review.title": { "zh-TW": "審核", en: "Review" },
   "resources.title": { "zh-TW": "我的資源", en: "My resources" },
+  "resources.heading": { "zh-TW": "我的資源使用", en: "My resource usage" },
+  "resources.loading": { "zh-TW": "載入中…", en: "Loading…" },
+  "resources.live.heading": { "zh-TW": "執行環境", en: "Live environments" },
+  "resources.live.empty": { "zh-TW": "目前沒有執行中的環境。", en: "No live environments." },
+  "resources.live.close": { "zh-TW": "關閉", en: "Close" },
+  "resources.live.count": { "zh-TW": "{n} 個", en: "{n}" },
+  "resources.live.cores": { "zh-TW": "{n} 核", en: "{n} cores" },
+  "resources.memory": { "zh-TW": "記憶體", en: "Memory" },
+  "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
+  "resources.disk.empty": { "zh-TW": "還沒有任何項目佔用空間。", en: "Nothing stored yet." },
+  // Says WHERE deleting happens, because it deliberately does not happen here:
+  // the item's own file list is the only place that shows what is being deleted.
+  "resources.disk.hint": {
+    "zh-TW": "要清出空間,開啟項目後在檔案清單中刪除 —— 刪除永遠不受額度限制。",
+    en: "To free space, open an item and delete from its file list — deleting is never blocked by a quota.",
+  },
   "review.subtitle": {
     "zh-TW": "跨所有知識庫的待審核項目：自動生成的卡片提案與待釐清的問題。只顯示你有權查看的項目。",
     en: "Everything awaiting review across your knowledge bases — auto-generated card proposals and open questions. Only items you're allowed to see are shown.",
@@ -950,6 +966,18 @@ export const messages = {
   // #538: the file tree's own upload failures, which were hardcoded English.
   // A full workspace is the one upload failure the user can act on, so its
   // message names the remedy rather than only the symptom.
+  // The person's TOTAL across every item they own is full — the space to free
+  // may well be in a different item, so the message must not point at this one.
+  "workspace.upload.userFull": {
+    "zh-TW": "「{name}」沒有上傳:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再重試。",
+    en: "{name} wasn't uploaded — you're out of space across all your items. Open My resources to see where it went, delete what you don't need, then try again.",
+  },
+  // Nothing to do with files at all: they are holding as many live environments
+  // as they may. Saying "the workspace is full" here would be simply untrue.
+  "workspace.upload.envFull": {
+    "zh-TW": "「{name}」沒有上傳:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再重試。",
+    en: "{name} wasn't uploaded — you're at your limit for live environments. Close one in My resources, then try again.",
+  },
   "workspace.upload.full": {
     "zh-TW": "「{name}」沒有上傳:工作區空間已滿。請先刪除不需要的檔案，再重新上傳。",
     en: "{name} wasn't uploaded — the workspace is full. Delete files you no longer need, then try again.",

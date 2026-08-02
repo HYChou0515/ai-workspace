@@ -181,13 +181,14 @@ class WorkspaceFiles:
         # rule inherits the same "shrinking and deleting always pass" guarantee
         # without restating it. Called as (workspace_id, its new size, growth).
         self._person_gate = person_gate
-        # Publishes a workspace's size whenever this facade has a fresh one.
-        # It has to fire on SHRINKS and DELETES too, not only on growth: a
-        # durable per-person total that only ever learns about writes would keep
-        # charging for bytes the user just deleted, which is #538's "clear the
-        # workspace, still be told you are out of space" all over again — this
-        # time across items, where the user cannot even see what is charging
-        # them.
+        # Publishes a workspace's size to whoever keeps the durable per-person
+        # total. Fired on DELETE — the act of someone at their cap trying to get
+        # back under it, which must be believed immediately rather than at the
+        # next sweep (#538's "clear the workspace, still be told you are out of
+        # space", in its cross-item form). Growth deliberately does NOT publish:
+        # the gate measures the item being written live, so its own number is
+        # already exact, and the sweep refreshes the row anyway — charging every
+        # write a durable round-trip would buy nothing.
         self._on_usage = on_usage
         # Async resolver: item → the handle its ONE live sandbox is reachable at,
         # or None when the item is globally cold (#492 same-source resolution).
@@ -522,6 +523,15 @@ class WorkspaceFiles:
             self._install(workspace_id, measured)
             return measured
 
+    def measured_usage(self, workspace_id: str) -> int | None:
+        """The size the last measurement produced, or None if there isn't one.
+
+        Deliberately does NOT measure: the caller (the mirror sweeper) wants the
+        number the walk it just finished produced, and asking for a fresh one
+        would trigger the traversal that `record_measurement` exists to avoid."""
+        measured = self._tree.get(workspace_id)
+        return None if measured is None else measured.total
+
     def record_measurement(self, workspace_id: str, total: int) -> None:
         """Install a size taken elsewhere — by the mirror sweep, which traverses
         every warm sandbox on its own cadence (#538 follow-up).
@@ -620,7 +630,6 @@ class WorkspaceFiles:
                 raise WorkspaceFull(used=used, quota=quota, attempted=new_size)
             if self._person_gate is not None:
                 await self._person_gate(workspace_id, used + growth, growth)
-        await self._publish_usage(workspace_id, used + growth)
         return old
 
     async def ensure_room_for(self, workspace_id: str, extra_bytes: int) -> None:

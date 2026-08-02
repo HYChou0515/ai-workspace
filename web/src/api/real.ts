@@ -14,7 +14,7 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { API_PREFIX, apiFetch, HttpError } from "./http";
+import { API_PREFIX, apiFetch, HttpError, errorCode } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -404,7 +404,11 @@ export const realApi: ApiClient = {
       { method: "PUT", body },
     );
     if (!resp.ok) {
-      throw new HttpError(resp.status, `write ${path} failed: ${resp.status}`);
+      throw new HttpError(
+        resp.status,
+        `write ${path} failed: ${resp.status}`,
+        await errorCode(resp),
+      );
     }
   },
 

@@ -225,14 +225,28 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
-    async def mirror_sweeper() -> None:
+    async def mirror_sweeper(app: FastAPI) -> None:
         """Throttle: every ~mirror_interval, persist any warm sandbox the agent
         wrote to since the last sweep into the FileStore snapshot. Coalesces a
-        burst of agent writes into one mirror; a crash loses at most a window."""
+        burst of agent writes into one mirror; a crash loses at most a window.
+
+        It then hands each mirrored workspace's freshly measured size to the
+        durable per-person ledger. That has to happen HERE and not inside the
+        mirror: `exec` writes straight into the sandbox and never touches the
+        files facade, so this sweep is the only thing that ever sees those bytes
+        — but a store round-trip per workspace inside the traversal is exactly
+        the cost the measurement cache exists to avoid. Best-effort per item: an
+        accounting write must never stop the next workspace being persisted."""
+        publish = getattr(app.state, "publish_workspace_usage", None)
         try:
             while True:
                 await asyncio.sleep(mirror_interval.total_seconds())
-                await registry.mirror_warm()
+                mirrored = await registry.mirror_warm()
+                if publish is None:
+                    continue
+                for item in mirrored:
+                    with contextlib.suppress(Exception):
+                        await publish(item)
         except asyncio.CancelledError:
             return
 
@@ -417,7 +431,7 @@ def build_lifespan(
         register_conversation_todos(spec)
         register_conversation_goal(spec)
         register_work_calendar(spec)  # #615 P1
-        bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
+        bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper(app))]
         if perf_trace.enabled():
             # Only ever sleeps, so any delay it observes beyond its own sleep is
             # time the loop could not run anything — evidence for blocking work

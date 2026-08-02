@@ -210,15 +210,24 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 | # | 條件 | 狀態 | 憑什麼 |
 |---|---|---|---|
-| 1 | 兩個 App 設不同 cpu / mem / disk 真的有差 | ✅ | `tests/quota/test_spec_plumbing.py`(cgroup 檔案內容)、`test_per_app_disk.py`(同樣大小一過一擋)。⚠️ **http 後端要重新部署 sandbox-host 才生效**;契約兩半各自有測試,但沒有在真 host 上跑過 |
+| 1 | 兩個 App 設不同 cpu / mem / disk 真的有差 | ✅ | `test_spec_plumbing.py`(cgroup 檔案內容)、`test_per_app_disk.py`(同樣大小一過一擋)、`test_review_regressions.py`(沒宣告就**不送**,別蓋掉 host 的設定)。⚠️ **http 後端要重新部署 sandbox-host 才生效**;契約兩半各自有測試,但沒有在真 host 上跑過 |
 | 2 | 開到上限被擋,且擋在 turn 送出前 | ✅ | `test_turn_gate.py` 斷言訊息**沒有**被寫進 store |
 | 3 | 被擋的人能自己在畫面上解決 | ✅ | 真服務 + 真瀏覽器實測(見 P8);`test_routes.py` 補端對端 |
 | 4 | 額度不會因 pod 猝死 / reap 漏掉而永久蒸發 | ✅ | `test_admission.py` 兩條:`forget` 後回來、**完全不呼叫任何清理**只等視窗過期也回來 |
 | 5 | app.json 超過天花板 → 開機失敗並指名 App | ✅ | `test_boot.py`、`test_limits.py` |
-| 6 | 什麼都不設的既有部署行為完全不變 | ✅ | 三層解析最底層就是今天的旋鈕;全套 5455 passed |
+| 6 | 什麼都不設的既有部署行為完全不變 | ✅ | `test_review_regressions.py` 釘住「一次寫檔最多一次 item 查詢、零筆帳本寫入」;全套 5461 passed |
 | 7 | ⚠️ #687 沒做之前以上全部可被繞過 | ❌ **仍成立** | `owner` 仍是誰都能 PATCH 的欄位 |
 
 **唯一沒有實機驗證的**:第 1 條的 http 後端那一半 —— 需要一個真的 sandbox-host 部署。程式碼兩側都有測試,但「重新部署後兩個 App 真的拿到不同 cgroup」這件事我沒有辦法在這裡證明。
+
+## 3.1 Review 揪出的四個缺口(已修)
+
+第一輪自評把第 1、6 條都判成通過,實際上兩條都是假的。四條都有實測數據,而且都落在「PR 宣稱不會發生」的那一格:
+
+1. **`kind: http` 會靜默蓋掉 `SANDBOX_HOST_*`。** 解析的最底層原本是 `sandbox.isolation.*`(永遠有值),所以每個 item 都送出具體 cpu/memory,host 自己的設定從此無效。兩邊預設都是 512M/1.0 所以測試看不出來;線上只要 host 被調高過,rollout 後每個 sandbox 都會掉回 512M 被 OOM kill。**修法**:cpu/memory 沒人宣告就解析成 `None` —— 這兩個維度的**執行者是後端**,預設本來就該由它決定;disk 由本 app 執行,才該解析成具體數字。副作用要知道:per-user 的 cpu/memory 上限只對「有宣告成本」的 App 生效,`count` 不受影響。
+2. **帳本收不到 sandbox 裡產生的位元組。** mirror sweep 的 `on_measured` 只寫記憶體快取。agent 用 `exec` 跑 `pip install` / `git clone` 產出的位元組**永遠**不會進 owner 的總量(不是「落後一次量測」)。**修法**:sweeper 在每輪 mirror 後把量到的數字餵給帳本。注意 `on_measured` 本身要維持同步 —— 第一次修改把它改成 awaitable,結果把耐久 I/O 塞進 mirror 的走訪迴圈,整個測試套件卡死。
+3. **每次寫檔多 4 次阻塞式 specstar 查詢 + 1 次耐久寫,即使一個額度都沒設。** **修法**:item→(slug, owner) 加 5 秒 memo(對齊量測本來就有的落後視窗);帳本只在「這個人真的被設了 disk 上限」時才寫。實測回到「一次寫檔 ≤1 次查詢、零筆帳本寫入」。
+4. **前端把三種 507 都渲染成「這個工作區滿了」。** 後端刻意分成三種錯誤碼、handler 註解也寫明理由,但 FE 只 branch 在 status。**修法**:`HttpError` 帶上 `code`,訊息選擇抽成純函式 `uploadFailureKey` 並各自有訊息(在這裡刪 / 去別的 item 刪 / 去關環境);順帶把 `MyResourcesPage` 的硬寫中文全部接上 i18n。
 
 **不在本計畫範圍**:owner 轉移 UI(= #687)。
 

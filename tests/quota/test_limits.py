@@ -83,11 +83,13 @@ def _manifest(slug: str = "demo", **sandbox) -> AppManifest:
     )
 
 
-def test_unconfigured_app_inherits_todays_knobs_unchanged():
-    """The zero-change guarantee: an app.json with no `resources` block and a
-    config with no `resources` section must reproduce exactly what the deploy
-    runs today — `sandbox.isolation.*` for cpu/memory, `filestore.workspace_quota`
-    for disk."""
+def test_an_undeclared_cpu_or_memory_is_left_to_the_sandbox_backend():
+    """The dimension's ENFORCER owns its default. `sandbox.isolation.*` is the
+    LOCAL backend's own config and the host has `SANDBOX_HOST_*`; restating
+    either here means the app ships a number no operator chose. Over the http
+    wire that silently replaced the host's configured ceiling — invisible while
+    both defaults happened to be 512M/1.0, and an OOM-kill on a host tuned
+    upward. Only `disk`, which THIS app enforces, resolves to a number."""
     settings = Settings(
         sandbox=SandboxSettings(
             isolation=SandboxIsolationSettings(cpu_cores=1.5, memory_max="768M")
@@ -95,10 +97,10 @@ def test_unconfigured_app_inherits_todays_knobs_unchanged():
         filestore=FilestoreSettings(workspace_quota=7 * 1024**3),
     )
     got = resolve_app_limits(_manifest(), settings)
-    assert got == ResourceLimits(cpu_cores=1.5, memory_bytes=768 * 1024**2, disk_bytes=7 * 1024**3)
+    assert got == ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=7 * 1024**3)
 
 
-def test_config_default_overrides_todays_knobs():
+def test_config_default_states_what_the_backend_would_otherwise_decide():
     settings = Settings(
         sandbox=SandboxSettings(
             isolation=SandboxIsolationSettings(cpu_cores=1.5, memory_max="768M")
@@ -132,6 +134,15 @@ def test_app_manifest_overrides_are_per_dimension():
     )
     got = resolve_app_limits(_manifest(memory="4G"), settings)
     assert got == ResourceLimits(cpu_cores=2, memory_bytes=4 * 1024**3, disk_bytes=9 * 1024**3)
+
+
+def test_an_undeclared_dimension_is_not_clamped_by_the_ceiling():
+    """There is nothing to clamp: what the backend applies is the operator's own
+    configured choice, not an App asking for something."""
+    settings = Settings(
+        resources=ResourceSettings(per_app=PerAppResources(max=ResourceAmounts(cpu=1)))
+    )
+    assert resolve_app_limits(_manifest(), settings).cpu_cores is None
 
 
 def test_an_app_can_opt_out_of_a_size_limit_the_deploy_set():

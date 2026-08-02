@@ -14,6 +14,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
+import { useT } from "../lib/i18n";
+
 import { type MyResourcesApi, myResourcesApi } from "../api/myResources";
 import { qk } from "../api/queryKeys";
 
@@ -46,6 +48,7 @@ function Meter({ used, limit }: { used: number; limit: number }) {
 }
 
 export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResourcesApi }) {
+  const t = useT();
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: qk.myResources,
@@ -57,32 +60,32 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
   });
 
-  if (isLoading || !data) return <p>載入中…</p>;
+  if (isLoading || !data) return <p>{t("resources.loading")}</p>;
 
   const { limits } = data;
   return (
     <div className="page">
-      <h1>我的資源使用</h1>
+      <h1>{t("resources.heading")}</h1>
 
       <section aria-labelledby="live-heading">
-        <h2 id="live-heading">執行環境</h2>
+        <h2 id="live-heading">{t("resources.live.heading")}</h2>
         <p className="summary">
-          {formatAgainstLimit(data.live.length, limits.count, (n) => `${n} 個`)}
+          {formatAgainstLimit(data.live.length, limits.count, (n) => t("resources.live.count", { n }))}
           {limits.cpu ? ` · CPU ${formatAgainstLimit(data.cpu_in_use, limits.cpu, (n) => `${n}`)}` : ""}
           {limits.memory_bytes
-            ? ` · 記憶體 ${formatAgainstLimit(data.memory_in_use, limits.memory_bytes, formatBytes)}`
+            ? ` · ${t("resources.memory")} ${formatAgainstLimit(data.memory_in_use, limits.memory_bytes, formatBytes)}`
             : ""}
         </p>
         <Meter used={data.live.length} limit={limits.count} />
         {data.live.length === 0 ? (
-          <p className="empty">目前沒有執行中的環境。</p>
+          <p className="empty">{t("resources.live.empty")}</p>
         ) : (
           <ul>
             {data.live.map((env) => (
               <li key={env.item_id}>
                 <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
                 <span className="detail">
-                  {env.cpu_cores ? `${env.cpu_cores} 核` : ""}
+                  {env.cpu_cores ? t("resources.live.cores", { n: env.cpu_cores }) : ""}
                   {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
                 </span>
                 <button
@@ -90,7 +93,7 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
                   onClick={() => close.mutate(env.item_id)}
                   disabled={close.isPending}
                 >
-                  關閉
+                  {t("resources.live.close")}
                 </button>
               </li>
             ))}
@@ -99,13 +102,13 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
       </section>
 
       <section aria-labelledby="disk-heading">
-        <h2 id="disk-heading">儲存空間</h2>
+        <h2 id="disk-heading">{t("resources.disk.heading")}</h2>
         <p className="summary">
           {formatAgainstLimit(data.disk_in_use, limits.disk_bytes, formatBytes)}
         </p>
         <Meter used={data.disk_in_use} limit={limits.disk_bytes} />
         {data.workspaces.length === 0 ? (
-          <p className="empty">還沒有任何項目佔用空間。</p>
+          <p className="empty">{t("resources.disk.empty")}</p>
         ) : (
           <ul>
             {data.workspaces.map((ws) => (
@@ -119,9 +122,7 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
             ))}
           </ul>
         )}
-        <p className="hint">
-          要清出空間,開啟項目後在檔案清單中刪除 —— 刪除永遠不受額度限制。
-        </p>
+        <p className="hint">{t("resources.disk.hint")}</p>
       </section>
     </div>
   );

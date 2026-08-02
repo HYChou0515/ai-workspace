@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
@@ -96,6 +97,12 @@ from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
 
 logger = logging.getLogger(__name__)
+
+# How long an item's (slug, owner) stays memoised on the quota path. Matches the
+# window the usage measurement already trails by, so the limits are never more
+# stale than the numbers they compare against.
+_ITEM_FACT_TTL_S = 5.0
+_ITEM_FACT_MAX = 4096
 
 
 def resolve_durable_backfill(
@@ -478,6 +485,7 @@ def create_app(
     # lands in the same sink as the agent/LLM traces. The trace-processor is
     # registered a few lines down once the app-level wiring is complete.
     monitor = monitor if monitor is not None else InMemoryMonitor()
+
     # #538: the mirror sweep already walks every warm sandbox every few seconds,
     # so it hands the sizes it saw to the quota — that is what keeps the walk off
     # the request path. `files` is built further down and the sweep only runs once
@@ -530,13 +538,35 @@ def create_app(
         )
     from ..apps.resolve import find_work_item
 
+    # item -> (slug, owner), memoised. `find_work_item` is a store round-trip,
+    # and its own docstring warns the call COUNT is the latency. Without this the
+    # quota closures alone turned one file write into five of them (once for the
+    # per-App disk limit, once for the person gate, once to record usage, twice
+    # more inside the registry's heartbeat) — the #657 / #667 shape, on the
+    # hottest path there is. Slug never changes; owner does, so the entry ages
+    # out on the same window the usage measurement already trails by.
+    _item_facts: dict[str, tuple[float, str, str]] = {}
+
+    def _facts_of(item_id: str) -> tuple[str, str]:
+        """`(slug, owner)` for an item — one lookup, not one per question."""
+        now = time.monotonic()
+        hit = _item_facts.get(item_id)
+        if hit is not None and now - hit[0] < _ITEM_FACT_TTL_S:
+            return hit[1], hit[2]
+        found = find_work_item(spec, item_id)
+        slug, owner = (found[0], found[1].owner) if found is not None else ("", "")
+        if len(_item_facts) > _ITEM_FACT_MAX:  # bounded: this is a cache, not a map
+            _item_facts.clear()
+        _item_facts[item_id] = (now, slug, owner)
+        return slug, owner
+
     def _limits_for(item_id: str) -> ResourceLimits | None:
         """This item's App's resolved ceilings, or None when the deploy passed
         no per-App resources or the App declared none."""
         if app_resources is None:
             return None
-        found = find_work_item(spec, item_id)
-        return app_resources.get(found[0]) if found is not None else None
+        slug, _owner = _facts_of(item_id)
+        return app_resources.get(slug) if slug else None
 
     disk_ledger = DiskLedger(spec)
     user_limits = UserLimits(spec, per_user_resources or PerUserResources())
@@ -558,8 +588,15 @@ def create_app(
             return
         limit = parse_size((await user_limits.for_user(owner)).disk)
         if not limit:
-            return
+            return  # nobody capped this person's disk — no ledger, no reads
         others = await disk_ledger.total_for(owner, exclude=item_id)
+        # Record only once we know this person IS capped. A deploy with no
+        # per-user disk limit must not pay a durable write per file write for an
+        # answer nobody asked for; a capped one needs the row current, or their
+        # next write in a different item would be judged against a stale total.
+        # It lands before the bytes do, so a write that then fails over-counts
+        # until the next mirror sweep — which now genuinely corrects it.
+        await disk_ledger.record(item_id, owner, new_size)
         if others + new_size > limit:
             raise UserDiskFull(
                 owner=owner,
@@ -568,9 +605,35 @@ def create_app(
                 attempted=growth,
             )
 
+    async def _publish_measured(item_id: str) -> None:
+        """Hand the freshly measured size of one workspace to the ledger.
+
+        Called by the mirror sweeper right after a sweep, so it reads the number
+        that walk produced rather than asking for a fresh one — measuring again
+        here would be the traversal the measurement cache exists to avoid. No
+        measurement (the item was cold, or the sweep skipped it) ⇒ nothing to
+        say, and saying 0 would wrongly credit the owner back their bytes."""
+        total = files.measured_usage(item_id)
+        if total is not None:
+            await _record_usage(item_id, total)
+
     async def _record_usage(item_id: str, total: int) -> None:
-        """The ledger's single writer: every fresh measurement this facade takes,
-        whichever direction it moved."""
+        """Land a fresh measurement in the per-person ledger.
+
+        Called from TWO places, for two different reasons:
+
+        * the mirror sweep, which is the only thing that ever sees bytes the
+          agent produced with `exec` (a `pip install`, a clone, a generated
+          file) — those never pass through this facade, so without the sweep
+          they would never reach the owner's total AT ALL, not merely late;
+        * a delete, because that is what someone at their cap does, and making
+          them wait for the next sweep to be believed is the cross-item version
+          of #538's "clear the workspace, still be told you are out of space".
+
+        Deliberately NOT on every write: the gate measures the item being
+        written LIVE, so its own number is always exact, and charging every PUT
+        a durable round-trip to refresh a row the sweep will refresh anyway is
+        cost with no answer attached."""
         owner = _owner_of(item_id)
         if owner:
             await disk_ledger.record(item_id, owner, total)
@@ -601,8 +664,7 @@ def create_app(
         product treats as "whose item is this", and #687 is what makes it
         trustworthy — until it lands, this is charged to a field anyone with
         write access can rewrite."""
-        found = find_work_item(spec, item_id)
-        return found[1].owner if found is not None else None
+        return _facts_of(item_id)[1] or None
 
     registry = InvestigationRegistry(
         sandbox=sandbox,
@@ -639,6 +701,7 @@ def create_app(
         person_gate=_person_disk_gate,
         on_usage=_record_usage,
     )
+
     admission = AdmissionGate(
         activity_store,
         user_limits.for_user,
@@ -1096,6 +1159,14 @@ def create_app(
     )
     # Exposed for introspection / tests of the #43 broadcast stream (the shared
     # per-investigation pub/sub lives on the engine).
+    # Exposed so a test can drive the sweep's measurement hook — the ONLY path
+    # by which bytes the agent produced with `exec` reach the per-person total.
+    # The sweeper feeds the durable per-person ledger with what the mirror just
+    # measured — the ONLY path by which bytes the agent produced with `exec`
+    # (a pip install, a clone) reach an owner's total. Exposed here rather than
+    # awaited inside the mirror so the store round-trip stays out of the walk.
+    app.state.publish_workspace_usage = _publish_measured
+    app.state.workspace_files = files
     app.state.turn_engine = turn_engine
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`

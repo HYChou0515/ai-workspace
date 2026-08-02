@@ -131,8 +131,12 @@ class AdmissionGate:
         incoming: ResourceLimits | None,
         lim: PerUserResources,
     ) -> None:
-        add_cpu = incoming.cpu_cores if incoming else 0.0
-        add_mem = incoming.memory_bytes if incoming else 0
+        # An undeclared dimension contributes nothing to the sum, because there
+        # is no honest number to add: the backend's own default is not the App's
+        # statement. That is why a per-user cpu/memory cap only binds for Apps
+        # whose cost is actually stated (`quota.limits` module docstring).
+        add_cpu = (incoming.cpu_cores or 0.0) if incoming else 0.0
+        add_mem = (incoming.memory_bytes or 0) if incoming else 0
         checks: tuple[tuple[str, float, float], ...] = (
             ("sandboxes", len(live) + 1, float(lim.count)),
             ("cpu", sum(s.cpu_milli for s in live) / 1000 + add_cpu, lim.cpu),

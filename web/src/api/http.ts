@@ -41,8 +41,32 @@ export class HttpError extends Error {
   constructor(
     public status: number,
     message: string,
+    /**
+     * The server's machine-readable reason, when it sent one
+     * (`{"detail": {"error": "..."}}`).
+     *
+     * A status alone is not always enough to say what happened: three different
+     * limits answer 507 — this workspace is full, YOUR total across every item
+     * is full, and you are holding as many live environments as you may. They
+     * need three different remedies (delete here / delete somewhere else /
+     * close something), and the backend deliberately distinguishes them. Without
+     * carrying the code, the UI can only guess, and its guess sends people to
+     * look in the wrong place.
+     */
+    public code?: string,
   ) {
     super(message);
     this.name = "HttpError";
+  }
+}
+
+/** Read the structured error code out of a JSON error body, if there is one. */
+export async function errorCode(resp: Response): Promise<string | undefined> {
+  try {
+    const body = await resp.clone().json();
+    const detail = body?.detail;
+    return typeof detail?.error === "string" ? detail.error : undefined;
+  } catch {
+    return undefined; // not JSON, or no body — the status is all we have
   }
 }
