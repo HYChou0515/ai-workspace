@@ -255,3 +255,50 @@ def test_the_vocabulary_pass_reports_what_it_did(caplog):
     assert "entit" in text.lower() or "link" in text.lower(), (
         f"the log says the pass ran but not what it produced: {text!r}"
     )
+
+
+def test_a_failed_pass_names_itself_and_keeps_its_traceback(caplog, monkeypatch):
+    """A pass that DIES has to say which one it was, and leave a stack behind.
+
+    The queue that runs this keeps only ``str(e)`` (specstar
+    ``message_queue/simple.py``), so whatever reconcile does not log itself is
+    gone: an operator saw "starting the vocabulary pass over the whole corpus"
+    and then one bare sentence, with no way to tell which of the four passes had
+    produced it.
+
+    The double here models the real failure — a database error raised from deep
+    inside a pass, carrying the offending statement on its cursor the way
+    psycopg2 does. For a planner-level error the statement IS the diagnosis, and
+    nothing downstream keeps it.
+    """
+    import logging
+
+    import pytest
+
+    from workspace_app.kb.graph import link as link_mod
+
+    class _Cursor:
+        query = b"SELECT ... WHERE (a, b, c) IN (('r1','v1','s'),('r2','v2','s'))"
+
+    class _PgError(Exception):
+        cursor = _Cursor()
+
+    def _boom(_spec: SpecStar) -> int:
+        raise _PgError("stack depth limit exceeded")
+
+    monkeypatch.setattr(link_mod, "name_predicates", _boom)
+    spec = make_spec(default_user=lambda: "bob")
+
+    with caplog.at_level(logging.INFO, logger="workspace_app.kb.graph.link"):
+        with pytest.raises(_PgError):
+            reconcile_vocabulary(spec)
+
+    failed = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert failed, "a pass died and the log said nothing about it"
+    record = failed[0]
+    message = record.getMessage()
+    assert "name_predicates" in message, (
+        f"the log does not say WHICH pass died, which is the whole point: {message!r}"
+    )
+    assert record.exc_info is not None, "the traceback was not captured"
+    assert "IN (('r1'" in message, f"the failing statement never reached the log: {message!r}"

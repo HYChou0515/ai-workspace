@@ -14,6 +14,8 @@ whole two-layer split rests on.
 from __future__ import annotations
 
 import logging
+import time
+from collections.abc import Callable
 
 import msgspec
 from specstar import QB, SpecStar
@@ -449,6 +451,46 @@ def _count_entities(spec: SpecStar) -> int:
     return sum(1 for _ in rm.list_resources(QB.all().build()))
 
 
+def _step(name: str, run: Callable[[], int]) -> int:
+    """Run one pass of the reconcile, and make sure it says so either way.
+
+    The queue that drives this keeps only ``str(e)`` — specstar's
+    ``message_queue/simple.py`` records the message on the job row and drops the
+    traceback — so anything not logged HERE is gone. In production that turned a
+    real failure into one bare sentence after "starting the vocabulary pass over
+    the whole corpus", with nothing to say which of the four passes had produced
+    it, and the passes only logged on success, so the "starting" line was left
+    dangling.
+
+    The failing statement is pulled off the exception because for a
+    planner-level database error (``stack depth limit exceeded``) the Python
+    traceback only points at ``list_resources`` — it is the SQL that identifies
+    the problem, and psycopg2 hangs it on the cursor where nothing downstream
+    looks.
+    """
+    started = time.perf_counter()
+    try:
+        count = run()
+    except Exception as exc:
+        sql = getattr(getattr(exc, "cursor", None), "query", None)
+        if isinstance(sql, bytes):
+            sql = sql.decode("utf-8", errors="replace")
+        _LOGGER.exception(
+            "graph reconcile: FAILED in %s after %.1fs%s",
+            name,
+            time.perf_counter() - started,
+            # Truncated because a statement built from one row-constructor per
+            # row can run to hundreds of KB, which is the very defect being
+            # diagnosed — the head of it is enough to recognise the shape.
+            f" — the statement was: {sql[:4000]}" if sql else " (no statement on the error)",
+        )
+        raise
+    _LOGGER.info(
+        "graph reconcile: %s -> %d (%.1fs)", name, count, time.perf_counter() - started
+    )
+    return count
+
+
 def reconcile_vocabulary(spec: SpecStar, llm: ILlm | None = None) -> None:
     """Bring the vocabulary up to date with the evidence.
 
@@ -463,11 +505,15 @@ def reconcile_vocabulary(spec: SpecStar, llm: ILlm | None = None) -> None:
     # tables empty. A corpus can extract for weeks with no entity page and
     # nothing anywhere saying so, which is what this reports.
     _LOGGER.info("graph reconcile: starting the vocabulary pass over the whole corpus")
-    identical = link_identical_mentions(spec)
-    predicates = name_predicates(spec)
-    aliases = link_declared_aliases(spec)
-    proposed = link_resembling_entities(spec, llm) if llm is not None else 0
-    entities = _count_entities(spec)
+    identical = _step("link_identical_mentions", lambda: link_identical_mentions(spec))
+    predicates = _step("name_predicates", lambda: name_predicates(spec))
+    aliases = _step("link_declared_aliases", lambda: link_declared_aliases(spec))
+    proposed = (
+        _step("link_resembling_entities", lambda: link_resembling_entities(spec, llm))
+        if llm is not None
+        else 0
+    )
+    entities = _step("count_entities", lambda: _count_entities(spec))
     _LOGGER.info(
         "graph reconcile: done — %d entities now exist; links: %d identical, "
         "%d predicate, %d declared-alias; %d merges proposed%s",
