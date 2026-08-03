@@ -30,10 +30,11 @@ produced the bug above. `count` binds regardless.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from ..apps.manifest import AppManifest, AppResources
-from ..config.schema import ResourceAmounts, Settings
+from ..config.schema import PerUserResources, ResourceAmounts, Settings
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,20 @@ def parse_size(text: str) -> int:
 
 
 @dataclass(frozen=True)
+class _SummedDimension:
+    """One per-person dimension that is a SUM over live sandboxes, and therefore
+    depends on Apps having declared what they cost.
+
+    Both halves live together on purpose. The previous shape read the configured
+    value from one place and the declared value from an `if dimension == "cpu"
+    else memory` further down — so a third dimension would silently have been
+    treated as memory, and nothing would have said so."""
+
+    configured: Callable[[PerUserResources], float]
+    stated: Callable[[ResourceLimits], float | int | None]
+
+
+@dataclass(frozen=True)
 class ResourceLimits:
     """The resolved limits for one item. Byte counts, not friendly strings —
     every consumer wants to compare numbers, and doing the parse once here means
@@ -90,6 +105,14 @@ class ResourceLimits:
     cpu_cores: float | None
     memory_bytes: int | None
     disk_bytes: int
+
+
+# The dimensions a per-person cap SUMS. `count` is absent on purpose: counting
+# sandboxes needs nobody to have declared anything, so it can never be inert.
+_SUMMED_DIMENSIONS: dict[str, _SummedDimension] = {
+    "cpu": _SummedDimension(lambda u: u.cpu, lambda lim: lim.cpu_cores),
+    "memory": _SummedDimension(lambda u: parse_size(u.memory), lambda lim: lim.memory_bytes),
+}
 
 
 def _pick_cpu(manifest: AppResources | None, cfg: ResourceAmounts) -> float | None:
@@ -197,17 +220,19 @@ def warn_unenforceable_dimensions(
     `count` is never affected: counting sandboxes needs nobody to declare
     anything. Not fatal — the config is not wrong, it is waiting for an App to
     say what it costs.
+
+    A deploy with NO Apps at all reports nothing: every dimension is vacuously
+    complete, and there is no workload for a cap to bind against either.
     """
     per_user = settings.resources.per_user
-    wanted = (("cpu", per_user.cpu), ("memory", parse_size(per_user.memory)))
     messages: list[str] = []
-    for name, configured in wanted:
-        if not configured:
+    for name, dim in _SUMMED_DIMENSIONS.items():
+        if not dim.configured(per_user):
             continue
-        silent = sorted(slug for slug, lim in limits.items() if _stated(lim, name) is None)
+        silent = sorted(slug for slug, lim in limits.items() if dim.stated(lim) is None)
         if not silent:
             continue  # every App states this dimension — the sum is complete
-        where = f"app.json `resources`, or resources.per_app.{name}"
+        where = f"app.json `resources`, or resources.per_app.default.{name}"
         if len(silent) == len(limits):
             messages.append(
                 f"resources.per_user.{name} is set, but no App states a {name} "
@@ -224,10 +249,6 @@ def warn_unenforceable_dimensions(
     for message in messages:
         logger.warning("quota: %s", message)
     return messages
-
-
-def _stated(limits: ResourceLimits, dimension: str) -> float | int | None:
-    return limits.cpu_cores if dimension == "cpu" else limits.memory_bytes
 
 
 def resolve_discovered_apps(settings: Settings) -> dict[str, ResourceLimits]:

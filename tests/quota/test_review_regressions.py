@@ -10,6 +10,7 @@ should have fired was simply never wired to anything a test observed.
 from __future__ import annotations
 
 import contextlib
+import re
 from collections.abc import Iterator
 
 from specstar import SpecStar
@@ -25,6 +26,7 @@ from workspace_app.config.schema import (
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.quota.disk_ledger import DiskLedger
 from workspace_app.quota.limits import (
+    _SUMMED_DIMENSIONS,
     ResourceLimits,
     resolve_discovered_apps,
     warn_unenforceable_dimensions,
@@ -258,3 +260,49 @@ async def test_the_usage_panel_says_untracked_rather_than_zero():
     )
     with ApiTestClient(app2) as client:
         assert client.get("/me/resources").json()["disk_tracked"] is True
+
+
+# ─── 6. the warning must not send people to a key that does not exist ────
+
+
+def test_the_warning_names_a_config_key_that_really_exists():
+    """It was pointing at `resources.per_app.cpu`; the key is
+    `resources.per_app.default.cpu`.
+
+    Asserted by RESOLVING the path against the settings dataclasses rather than
+    by matching the string, so a future rename fails here too. A message whose
+    whole subject is a knob that does not take effect has no business naming a
+    knob that does not exist."""
+    import dataclasses
+
+    settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4, memory="8G")))
+    messages = warn_unenforceable_dimensions(settings, _limits(rca=(None, None, 0)))
+    assert len(messages) == 2
+
+    for message in messages:
+        for path in re.findall(r"resources\.[a-z_.]+[a-z]", message):
+            node: object = settings
+            for part in path.split("."):
+                fields = {f.name for f in dataclasses.fields(node)}  # ty: ignore[invalid-argument-type]
+                assert part in fields, f"{path!r} in the warning: no field {part!r}"
+                node = getattr(node, part)
+
+
+def test_every_summed_dimension_is_declared_in_one_table():
+    """`cpu` and `memory` are the dimensions a per-person cap SUMS, so both the
+    "did the operator set it?" and "did the App declare it?" halves come from
+    one entry. The previous shape read the second from an `if dimension ==
+    "cpu" else memory`, which would have silently treated a third dimension as
+    memory. `count` is absent on purpose — counting needs no declaration."""
+    assert set(_SUMMED_DIMENSIONS) == {"cpu", "memory"}
+    lim = ResourceLimits(cpu_cores=2.0, memory_bytes=99, disk_bytes=0)
+    assert _SUMMED_DIMENSIONS["cpu"].stated(lim) == 2.0
+    assert _SUMMED_DIMENSIONS["memory"].stated(lim) == 99
+
+
+def test_a_deploy_with_no_apps_says_nothing():
+    """Vacuously complete: no App can fail to declare a cost when there are no
+    Apps, and no workload exists for the cap to bind against either. Pinned so
+    the silence reads as a decision rather than an oversight."""
+    settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
+    assert warn_unenforceable_dimensions(settings, {}) == []
