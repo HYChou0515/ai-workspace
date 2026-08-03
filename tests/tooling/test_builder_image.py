@@ -415,3 +415,18 @@ def test_the_deployment_docs_separate_setup_from_per_tool_work() -> None:
     assert "mcp-runner" in section
     # And what IS per tool, so the reader can tell them apart.
     assert "每支工具要做的" in section
+
+
+def test_the_runner_cache_is_sticky() -> None:
+    """World-writable so a dropped process can use it, and sticky so that is
+    all it can do to somebody else's entry.
+
+    Removing or renaming an entry is governed by write permission on the
+    PARENT, not by who owns the entry. Without `+t`, dropping root only moved
+    the attack from overwriting a tool's file to replacing its directory —
+    and `ensure` hands back an installed sha without reading its bytes again,
+    so the substitute would simply be executed."""
+    text = (_REPO / "sandbox-host" / "mcp-runner.Dockerfile").read_text("utf-8")
+
+    assert "chmod 1777 /cache" in text
+    assert "chmod 0777 /cache" not in text

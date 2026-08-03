@@ -59,9 +59,24 @@ RUN uv sync --frozen --no-dev
 # directory, and a fresh named volume (which inherits this path's mode)
 # could not be written either.
 #
-# 0777 is safe because this cache has one consumer. Give each person their own
-# volume, as the docs say; it is not a shared tree like the host's.
-RUN mkdir -p /cache && chmod 0777 /cache
+# STICKY, not merely 0777. On Unix, removing or renaming an entry is governed
+# by write permission on the PARENT directory, not by who owns the entry — so
+# without `+t` a tool running as `nobody` could rename another tool's
+# `/cache/<sha>` away, put its own directory under that name, and be executed
+# as that tool on its next start, because `ensure` returns an installed sha
+# without reading its bytes again.
+#
+# Dropping root moved that attack from "overwrite the file" to "replace the
+# directory entry"; the sticky bit is what closes it, and is the thing it was
+# invented for. It is what `/tmp` has, for this reason.
+#
+# World-writable at all so the runner works after dropping privileges. One
+# case it cannot cover: an engineer who passes `--user` themselves makes the
+# unpacking process and the running tool the same uid, and a uid may always
+# touch what it created. That is their own account, and the platform — where
+# tools genuinely belong to different people — hardens the tree to root
+# instead (`tool_cache._harden`).
+RUN mkdir -p /cache && chmod 1777 /cache
 
 # Tools resolve relative paths against the working directory, exactly as they
 # do on the platform, where it is the user's workspace. Mount the project here.

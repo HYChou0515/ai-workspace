@@ -767,8 +767,12 @@ skill 花了不少篇幅在講**失敗怎麼辦**，因為照著做的人是一�
   誤降。映像裡的 `/cache` 是 0777,就是為了讓降權後仍寫得進去。
 - **沒掛 `/work` 的話,寫檔是靜默丟失。** 讀檔會大聲失敗,寫檔卻會「成功」然後隨容器消失。
   runner 啟動時會在 stderr 提醒。
-- **快取 volume 請一個人用一個。** host 端會把工具樹 chown 成 root，因為那裡是多個
-  不同 uid 的 sandbox 共用一棵樹;runner 的快取只有掛載它的人在讀，所以不做這件事。
+- **快取 volume 請一個人用一個**，而且映像裡的 `/cache` 是 **1777**(sticky)不是 0777。
+  在 Unix 上，能不能刪掉／改名一個項目看的是**父目錄**的寫入權，不是那個項目的擁有者——
+  所以少了 sticky，一支工具可以把另一支工具的 `/cache/<sha>` 整個換掉，而 `ensure` 命中
+  時不會重讀 bytes，下次就直接執行被換掉的東西。降權只是把手法從「覆寫檔案」變成
+  「替換目錄項目」;sticky 才是關掉它的東西(那也是 `/tmp` 用它的原因)。
+  host 端不走這條:那裡是多個不同 uid 的 sandbox 共用一棵樹，所以整棵 chown 成 root。
 - **叫他們用 named volume，不要 bind mount 主機目錄。** 容器以 root 執行（和 host 一樣），
   bind mount 的快取會變成 root 所有，使用者之後刪不掉;named volume 用
   `docker volume rm` 就清得掉。
