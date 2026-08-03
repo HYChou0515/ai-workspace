@@ -950,7 +950,20 @@ button.ev-card__status:focus-visible {
   left: 0;
   z-index: 1;
 }
+.ev-gantt__lane-caret {
+  display: inline-block;
+  width: 1em;
+  color: var(--text-paper-d);
+}
 .ev-gantt__lane-label {
+  /* it is a <button> now (collapse), so undo the browser's chrome */
+  appearance: none;
+  background: none;
+  border: 0;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
   display: flex;
   align-items: center;
   font-family: var(--font-mono);

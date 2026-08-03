@@ -96,6 +96,10 @@ export type ViewConfig = {
 
 export type EntityViewProps = {
   spec: ViewSpec;
+  /** #690 P4 — identifies this view for per-user, per-view UI state kept in the
+   * browser (which groups are collapsed). Not in the view FILE: where somebody
+   * is looking is not a decision to make for the rest of the project. */
+  viewKey?: string;
   /** The entity type from the catalog — supplies field roles + the create form.
    * `null` while the catalog is still loading (renders records read-only). */
   type: EntityType | null;

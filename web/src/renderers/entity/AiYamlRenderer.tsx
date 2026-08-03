@@ -280,6 +280,9 @@ export function AiYamlRenderer({ path }: { path: string }) {
     <>
       <EntityViewBody
         spec={effectiveSpec}
+        // #690 P4 — per project, per view: the collapse state lives in this
+        // person's browser, and two views must not collapse each other.
+        viewKey={`${itemId}:${path}`}
         type={type}
         entities={list?.entities ?? []}
         invalid={list?.invalid ?? []}

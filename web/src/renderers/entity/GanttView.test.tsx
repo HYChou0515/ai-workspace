@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { GanttView } from "./GanttView";
@@ -494,5 +494,74 @@ describe("GanttView colour source", () => {
     );
 
     expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("alice").bg);
+  });
+});
+
+describe("collapsible groups (#690 P4)", () => {
+  const span = "2026-01-10/2026-01-20";
+  const grouped = {
+    view: "gantt" as const,
+    entity: "issue",
+    span: "span",
+    label: "title",
+    group_by: "assignee",
+  };
+
+  beforeEach(() => window.localStorage.clear());
+
+  it("hides a group's rows when its header is clicked", () => {
+    render(
+      <GanttView
+        {...props({
+          spec: grouped,
+          entities: [rec(1, { title: "A", span, assignee: "alice" }), rec(2, { title: "B", span, assignee: "bob" })],
+          users,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Alice Chen/ }));
+
+    expect(screen.queryByTestId("bar-1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("bar-2")).toBeInTheDocument(); // the other lane is untouched
+  });
+
+  it("remembers what this person collapsed, per view", () => {
+    // Kept out of the view file on purpose: where somebody is LOOKING is not a
+    // decision to make for the rest of the project. The key carries the view
+    // so two boards do not collapse each other's lanes.
+    const { unmount } = render(
+      <GanttView
+        {...props({ spec: grouped, entities: [rec(1, { title: "A", span, assignee: "alice" })], users, viewKey: "v1" })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Alice Chen/ }));
+    unmount();
+
+    render(
+      <GanttView
+        {...props({ spec: grouped, entities: [rec(1, { title: "A", span, assignee: "alice" })], users, viewKey: "v1" })}
+      />,
+    );
+
+    expect(screen.queryByTestId("bar-1")).not.toBeInTheDocument();
+  });
+
+  it("does not carry one view's collapse into another", () => {
+    const { unmount } = render(
+      <GanttView
+        {...props({ spec: grouped, entities: [rec(1, { title: "A", span, assignee: "alice" })], users, viewKey: "v1" })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Alice Chen/ }));
+    unmount();
+
+    render(
+      <GanttView
+        {...props({ spec: grouped, entities: [rec(1, { title: "A", span, assignee: "alice" })], users, viewKey: "v2" })}
+      />,
+    );
+
+    expect(screen.getByTestId("bar-1")).toBeInTheDocument();
   });
 });

@@ -50,6 +50,7 @@ import {
 } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
+import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { selectColor } from "./selectColor";
 import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
@@ -130,6 +131,7 @@ export function GanttView({
   onOpenRecord,
   canWrite = true,
   busy,
+  viewKey,
 }: EntityViewProps) {
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
@@ -138,6 +140,10 @@ export function GanttView({
   // #690 P2 — which field decides a bar's colour. Absent ⇒ bars keep the
   // single default colour they have always had, so no existing view changes
   // appearance the day this ships.
+  // #690 P4 — collapsed lanes, per person and per view. In the browser rather
+  // than the view file: the colour source is what the chart is ASKING, which
+  // the project shares, and this is where one person is LOOKING.
+  const collapsed = usePersistentSet(`gantt-collapsed:${viewKey ?? spec.entity}`);
   const colorField = spec.color_by;
   const colorSpec = colorField ? roleOf(type, colorField) : undefined;
   const barColor = (e: EntityInstance): string | undefined => {
@@ -351,11 +357,23 @@ export function GanttView({
             {lanes.map((lane) => (
               <div key={lane.key}>
                 {grouped && (
-                  <div className="ev-gantt__lane-label" style={{ height: LANE_H }}>
-                    {lane.label}
-                  </div>
+                  <button
+                    type="button"
+                    className="ev-gantt__lane-label"
+                    style={{ height: LANE_H }}
+                    aria-expanded={!collapsed.has(lane.key)}
+                    onClick={() => collapsed.toggle(lane.key)}
+                  >
+                    {/* The arrow is its own node so the label stays one piece —
+                        a caller looking the lane up by its text should not have
+                        to know a chevron was put in front of it. */}
+                    <span aria-hidden="true" className="ev-gantt__lane-caret">
+                      {collapsed.has(lane.key) ? "\u25b8" : "\u25be"}
+                    </span>
+                    <span>{lane.label}</span>
+                  </button>
                 )}
-                {lane.rows.map((row) => (
+                {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => (
                   <GutterRow key={row.e.number} number={row.e.number} enabled={manualReorder}>
                     {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
                   </GutterRow>
@@ -397,7 +415,7 @@ export function GanttView({
             {lanes.map((lane) => (
               <div key={lane.key}>
                 {grouped && <div className="ev-gantt__lane-band" style={{ height: LANE_H }} />}
-                {lane.rows.map((row) => {
+                {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => {
                   const ps = previewSpan(row);
                   const left = xOf(ps.start);
                   // Both ends of the range are coloured (barColumns) — the clamp
