@@ -144,3 +144,25 @@ per-user,存瀏覽器。key 要含 item + view,否則兩個專案會互相干擾
 | R2 | sticky 表頭 + 多列軸會吃掉垂直空間,在筆電上可能只剩幾列 issue。P7 要實測而不是憑感覺 |
 | R3 | 「能上色的欄位」清單若含 `ref`(milestone),要解析顯示值才配得出顏色。P3 先只做 select + actor,ref 留待有需求 |
 | R4 | happy-dom 量不到版面(既有經驗),P7 的驗收要用真瀏覽器 |
+
+### R4 的結果:**真瀏覽器抓到 P7 根本沒生效**
+
+在 chromium 上量(1280×800,60 列的 harness,捲到底 1164px):
+
+| | 修正前 | 修正後 |
+|---|---|---|
+| 捲動後 axis 的 y | **-1164**(整條跟著跑掉) | **0** |
+| 表頭高度 | 44px | 44px |
+| 表頭下方看得到幾列 | — | **18 列**(R2 的答案) |
+
+真因:`position: sticky; top: 0` 被我加在既有的 `position: relative` **上面**,同一個 rule
+內後面的宣告勝出,所以 sticky 從來沒有生效。而 `GanttView.test.tsx` 裡那條「axis 是捲動容器
+的子孫且帶 sticky 類別」的結構斷言**全程是綠的** —— happy-dom 不做版面,也不會替你解這種
+同區塊覆蓋。
+
+補上的守門是 `ganttAxisSticky.test.ts`:直接讀 `entity-views.css`,取 `.ev-gantt__axis` 區塊
+裡**最後一次** `position` 宣告來斷言。它證明不了版面,但它擋得住這個真正發生過的缺陷類別
+(以及背景透明、z-index 太低、捲動容器沒有高度上限這三個會讓 sticky 形同虛設的鄰居)。
+
+R2 一併有了答案:800px 高的視窗,`max-height: 70vh` 的捲動區扣掉 44px 表頭,還剩 18 列
+issue。可接受,不需要再壓縮軸的列數。

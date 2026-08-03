@@ -360,6 +360,7 @@ export function GanttView({
                   <button
                     type="button"
                     className="ev-gantt__lane-label"
+                    title={lane.label ?? undefined}
                     style={{ height: LANE_H }}
                     aria-expanded={!collapsed.has(lane.key)}
                     onClick={() => collapsed.toggle(lane.key)}
@@ -374,7 +375,12 @@ export function GanttView({
                   </button>
                 )}
                 {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => (
-                  <GutterRow key={row.e.number} number={row.e.number} enabled={manualReorder}>
+                  <GutterRow
+                    key={row.e.number}
+                    number={row.e.number}
+                    enabled={manualReorder}
+                    title={fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
+                  >
                     {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
                   </GutterRow>
                 ))}
@@ -484,7 +490,19 @@ export function GanttView({
 /** A gantt gutter row: the left label doubles as a drag SOURCE + drop TARGET for
  * manual reorder (#GH-projects) — no grip, the label itself drags up/down. When
  * disabled (a sort is active / busy) it's an inert label. */
-function GutterRow({ number, enabled, children }: { number: number; enabled: boolean; children: React.ReactNode }) {
+function GutterRow({
+  number,
+  enabled,
+  title,
+  children,
+}: {
+  number: number;
+  enabled: boolean;
+  /** The whole label. The column ellipsises, and without this the only way to
+   * read a cut-off title was to open the record. */
+  title?: string;
+  children: React.ReactNode;
+}) {
   const { attributes, listeners, setNodeRef: setDrag } = useDraggable({ id: number, disabled: !enabled });
   const { setNodeRef: setDrop, isOver } = useDroppable({ id: number, disabled: !enabled });
   return (
@@ -494,6 +512,7 @@ function GutterRow({ number, enabled, children }: { number: number; enabled: boo
         setDrop(el);
       }}
       className="ev-gantt__row-label"
+      title={title}
       style={{ height: ROW_H }}
       data-drag={enabled ? "" : undefined}
       data-over={enabled && isOver ? "" : undefined}

@@ -931,7 +931,13 @@ button.ev-card__status:focus-visible {
   font-weight: 600;
 }
 .ev-gantt__scroll {
-  overflow-x: auto;
+  /* Both axes, and a ceiling: the axis row sticks to the nearest scrolling
+   * ancestor, so the chart has to be the thing that scrolls vertically or
+   * `top: 0` has nothing to stick to. Bounded here rather than by making
+   * `.ev-panel` a full-height flex column, which would change the table and
+   * board too. */
+  overflow: auto;
+  max-height: 70vh;
   /* fill the pane — the canvas stretches its dated grid to match (max(pane,
    * content)), so a short project fills the width and a long one scrolls. */
   width: 100%;
@@ -1018,9 +1024,21 @@ button.ev-card__status:focus-visible {
   pointer-events: none;
 }
 .ev-gantt__axis {
-  position: relative;
-  z-index: 1;
+  /* #690 P7 — dates stay readable when you scroll down a long project. It
+   * costs the height it occupies, permanently, which is why the axis rows are
+   * counted rather than added freely.
+   *
+   * `sticky` REPLACES the `relative` that used to be here rather than joining
+   * it: both are positioned, so the absolutely-placed bands inside still lay
+   * out against this box, and a `relative` left below would have quietly won
+   * the cascade — which is exactly what it did until a browser was pointed at
+   * it (see ganttAxisSticky.test.ts). */
+  position: sticky;
+  top: 0;
+  /* Above the bars it now overlaps. */
+  z-index: 2;
   border-bottom: 1px solid var(--paper-3);
+  /* Opaque, or the bars scroll through the dates. */
   background: var(--paper-2);
 }
 /* two-tier axis: a coarse context band (month / year) over the fine tick row */

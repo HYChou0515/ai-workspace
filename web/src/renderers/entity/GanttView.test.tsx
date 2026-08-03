@@ -565,3 +565,61 @@ describe("collapsible groups (#690 P4)", () => {
     expect(screen.getByTestId("bar-1")).toBeInTheDocument();
   });
 });
+
+describe("long labels (#690 P6)", () => {
+  const span = "2026-01-10/2026-01-20";
+  const long = "Qualify the new photoresist on line 3 before the August shutdown";
+
+  it("carries the whole title on the row even though the column truncates it", () => {
+    // The column is ellipsised, and until now the only way to read a cut-off
+    // title was to open the record — a double-click to answer "which one is
+    // this".
+    // The FIRST COLUMN specifically. The bar carries the same text and already
+    // has a title of its own — the date range — which this must not take.
+    const { container } = render(<GanttView {...props({ entities: [rec(1, { title: long, span })] })} />);
+
+    expect(container.querySelector(".ev-gantt__row-label")).toHaveAttribute("title", long);
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-01-10/2026-01-20");
+  });
+
+  it("carries the whole group name too", () => {
+    // Lane labels truncate in the same column, for the same reason.
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", group_by: "assignee" },
+          entities: [rec(1, { title: "A", span, assignee: "alice" })],
+          users,
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Alice Chen/ })).toHaveAttribute("title", "Alice Chen");
+  });
+});
+
+describe("sticky axis (#690 P7)", () => {
+  it("keeps the axis pinned inside the chart's own scroller", () => {
+    // happy-dom does not lay out, so this pins the CONTRACT the CSS relies on:
+    // the axis must be a sticky-positioned child of the element that scrolls,
+    // and the scroller must be the gantt's own — not the page — or `top: 0`
+    // has nothing to stick to.
+    //
+    // It does NOT show that the axis stays put — nothing without layout can,
+    // and this exact assertion passed while the header scrolled away, because
+    // a later `position: relative` in the same CSS rule was winning. That was
+    // caught in a real browser and is now guarded by ganttAxisSticky.test.ts;
+    // the measurement is in docs/plan-pm-gantt-urgency-and-axis.md §7.
+    const { container } = render(
+      <GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-10/2026-01-20" })] })} />,
+    );
+
+    const scroller = container.querySelector(".ev-gantt__scroll");
+    const axis = container.querySelector(".ev-gantt__axis");
+
+    expect(scroller).toBeTruthy();
+    expect(axis).toBeTruthy();
+    expect(scroller!.contains(axis!)).toBe(true);
+    expect(axis!.className).toContain("ev-gantt__axis");
+  });
+});
