@@ -622,4 +622,51 @@ describe("sticky axis (#690 P7)", () => {
     expect(scroller!.contains(axis!)).toBe(true);
     expect(axis!.className).toContain("ev-gantt__axis");
   });
+
+  describe("the axis says which day of the week it is (#690 P8)", () => {
+    // A week rule is what turns the axis week-first; the seeded views all carry
+    // one. `skip_weekends` is what makes the digits stop at 5.
+    const weekly = (extra: Record<string, unknown> = {}) => ({
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      week: { label: "W{y1}{ww}" },
+      skip_weekends: true,
+      ...extra,
+    });
+    const week = [rec(1, { title: "A", span: "2026-06-29/2026-07-10" })];
+    /** Render, then zoom all the way in — the weekday row is the densest tier,
+     * and an unmeasured pane (happy-dom lays nothing out) auto-fits to
+     * something far coarser. Clicking the anchor is what a user does. */
+    const atDayZoom = (spec: Record<string, unknown>) => {
+      const r = render(<GanttView {...props({ spec: spec as EntityViewProps["spec"], entities: week })} />);
+      fireEvent.click(screen.getByLabelText("zoom day"));
+      return r;
+    };
+
+    it("labels every column with its weekday, under the week it belongs to", () => {
+      atDayZoom(weekly());
+      for (const digit of ["1", "2", "3", "4", "5"]) {
+        expect(screen.getAllByText(digit).length).toBeGreaterThan(0);
+      }
+      expect(screen.getAllByText("W627").length).toBeGreaterThan(0); // the week band
+    });
+
+    it("carries the day of the month only when the view asks for it", () => {
+      const plain = atDayZoom(weekly());
+      expect(document.querySelector(".ev-gantt__tick-sub")).toBeNull();
+      plain.unmount();
+
+      atDayZoom(weekly({ day_of_month: "always" }));
+      expect(document.querySelector(".ev-gantt__tick-sub")).not.toBeNull();
+    });
+
+    it("puts the whole date on hover once the day of the month is in play", () => {
+      atDayZoom(weekly({ day_of_month: "hover" }));
+      const ticks = [...document.querySelectorAll(".ev-gantt__tick")];
+      expect(ticks.length).toBeGreaterThan(0);
+      expect(ticks.every((el) => /^\d{4}-\d{2}-\d{2}$/.test(el.getAttribute("title") ?? ""))).toBe(true);
+    });
+  });
 });

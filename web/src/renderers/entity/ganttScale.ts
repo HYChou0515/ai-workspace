@@ -144,13 +144,49 @@ export function spanValue(span: Span): string {
 // "MM-DD every 28px" overlap. All positions are day-offsets from minDate; the
 // view multiplies by px-per-day.
 
-export type FineTick = { day: number; label: string };
+/** One label on the fine row. `sub` is a second, smaller line under it (the day
+ * of the month, when the view asks for it); `title` is what hovering shows. Both
+ * are absent unless a setting turns them on — an axis row costs vertical space
+ * permanently, and the sticky header already spends some. */
+export type FineTick = { day: number; label: string; sub?: string; title?: string };
 export type CoarseBand = { day: number; days: number; label: string };
 export type Axis = { unit: Zoom; fine: FineTick[]; coarse: CoarseBand[] };
 
 /** Horizontal room (px) reserved per fine-tier label. A fine step is only
  * chosen if `stepDays * ppd` clears this, so labels never touch. */
 export const AXIS_MIN_LABEL_PX = 36;
+
+/** How the days of the week are written. Digits are the default because that is
+ * how the user's shop floor writes them; the names are there for everyone else. */
+export type WeekdayFormat = "number" | "short";
+
+/** Whether the day of the month rides along under the weekday: not at all, as a
+ * second line, or only when you hover. */
+export type DayOfMonth = "hidden" | "always" | "hover";
+
+/** Per-view axis settings, read straight off the view file. Every one has a
+ * default, so an axis built without them is the one the platform ships. */
+export type AxisOptions = {
+  always_week?: boolean;
+  weekday?: WeekdayFormat;
+  day_of_month?: DayOfMonth;
+};
+
+/** Room ONE weekday label needs. A digit is far narrower than the `MM-DD` the
+ * fine row used to carry, which is what makes a label-per-day affordable at all;
+ * spelling the day out costs more, so that choice moves the density at which the
+ * row appears rather than letting names overprint. */
+export const AXIS_WEEKDAY_PX: Record<WeekdayFormat, number> = { number: 16, short: 26 };
+
+/** Room the day-of-month line needs under it — two digits, so wider than one. */
+export const AXIS_DAY_OF_MONTH_PX = 20;
+
+/** The narrowest column this axis will label per day, given what the view asked
+ * to see in it. Below this the axis is a week axis instead. */
+function weekdayTickPx(opts: AxisOptions): number {
+  const dayOfMonth = (opts.day_of_month ?? "hidden") === "always" ? AXIS_DAY_OF_MONTH_PX : 0;
+  return Math.max(AXIS_WEEKDAY_PX[opts.weekday ?? "number"], dayOfMonth);
+}
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** ppd at/above which the axis shows within-month detail (days/weeks) rather
@@ -166,6 +202,17 @@ function firstOfMonth(y: number, m: number): string {
   return `${y}-${String(m + 1).padStart(2, "0")}-01`;
 }
 
+/** Where a band ends: clipped to the window, and ALWAYS past where it started.
+ *
+ * The clamp is a backstop, not the fix — a band that does not advance means the
+ * column arithmetic has contradicted itself, and the loop that walks these
+ * bands would spin until the tab dies. One wrong label is a defect; a frozen
+ * browser is not something to leave reachable from bad arithmetic. The
+ * arithmetic itself is fixed in {@link dateAtColumn}. */
+function advance(cursor: number, end: number, visibleDays: number): number {
+  return Math.max(cursor + 1, Math.min(end, visibleDays));
+}
+
 /** Calendar-month bands clipped to [0, visibleDays), in COLUMN offsets from
  * minDate (working-day columns when `skip`, else calendar days). A band opening
  * before minDate is clamped to column 0. */
@@ -175,7 +222,7 @@ function monthBands(minDate: string, visibleDays: number, skip: boolean): Coarse
   while (cursor < visibleDays) {
     const { y, m } = ymd(dateAtColumn(minDate, cursor, skip));
     const nextStart = firstOfMonth(m === 11 ? y + 1 : y, m === 11 ? 0 : m + 1);
-    const bandEnd = Math.min(columnOf(minDate, nextStart, skip), visibleDays);
+    const bandEnd = advance(cursor, columnOf(minDate, nextStart, skip), visibleDays);
     bands.push({ day: cursor, days: bandEnd - cursor, label: `${MONTHS[m]} ${y}` });
     cursor = bandEnd;
   }
@@ -188,7 +235,7 @@ function yearBands(minDate: string, visibleDays: number, skip: boolean): CoarseB
   let cursor = 0;
   while (cursor < visibleDays) {
     const { y } = ymd(dateAtColumn(minDate, cursor, skip));
-    const bandEnd = Math.min(columnOf(minDate, `${y + 1}-01-01`, skip), visibleDays);
+    const bandEnd = advance(cursor, columnOf(minDate, `${y + 1}-01-01`, skip), visibleDays);
     bands.push({ day: cursor, days: bandEnd - cursor, label: String(y) });
     cursor = bandEnd;
   }
@@ -232,14 +279,35 @@ function monthTicks(minDate: string, visibleDays: number, ppd: number, skip: boo
  * CODES at week starts (e.g. `W627`) instead of day numbers — `today` feeds the
  * `by_today` cross-year boundary. Zoomed all the way out (month zone) still
  * shows months, since a week code per column would be far too dense there. */
-export function axisFor(minDate: string, visibleDays: number, ppd: number, week?: WeekRule, today = "", skip = false): Axis {
+export function axisFor(
+  minDate: string,
+  visibleDays: number,
+  ppd: number,
+  week?: WeekRule,
+  today = "",
+  skip = false,
+  opts: AxisOptions = {},
+): Axis {
+  // Densest: every column is one day, so the fine row can say WHICH day of the
+  // week it is and the band above it can name the week. Needs a week rule —
+  // without one there is no code to head the band with, and the axis stays the
+  // month-banded one it has always been.
+  if (week && ppd >= weekdayTickPx(opts)) {
+    return {
+      unit: "day",
+      fine: weekdayTicks(minDate, visibleDays, week, skip, opts),
+      coarse: weekBands(minDate, visibleDays, week, today, skip),
+    };
+  }
   if (ppd >= DETAIL_PPD) {
     const step = [1, 2, 5, 7, 14].find((s) => s * ppd >= AXIS_MIN_LABEL_PX) ?? 14;
-    // With a week rule, week codes are a MIDDLE tier: once the day labels would
-    // thin past every other day (step ≥ 5) the row switches to week codes;
-    // zoomed in tighter than that it stays on day numbers (dates). So dragging
-    // day → week visibly flips dates into week codes.
-    if (week && step >= 5) {
+    // The middle tier. With a week rule this is ALWAYS week codes: the tier
+    // above already answers "which day", so a row of day-of-month numbers here
+    // would only repeat it more thinly and in a different unit. Which tier you
+    // are in is decided by `weekdayTickPx` above, not by this step — the step
+    // is what keeps the codes from touching. Without a week rule there is no
+    // code to show and the row stays day numbers, as it always was.
+    if (week) {
       return { unit: "week", fine: weekTicks(minDate, visibleDays, ppd, week, today, skip), coarse: monthBands(minDate, visibleDays, skip) };
     }
     const fine: FineTick[] = [];
@@ -249,6 +317,17 @@ export function axisFor(minDate: string, visibleDays: number, ppd: number, week?
       if (col + step < visibleDays) d = shiftWorkingDays(d, step, skip);
     }
     return { unit: step >= 7 ? "week" : "day", fine, coarse: monthBands(minDate, visibleDays, skip) };
+  }
+  // Sparsest. Months over years, unless the view says the week is what it wants
+  // to read — then the week codes stay and simply thin out further. This is the
+  // ONLY end the setting has anything to say about: the two denser tiers are
+  // showing weeks already.
+  if (week && opts.always_week) {
+    return {
+      unit: "week",
+      fine: weekTicks(minDate, visibleDays, ppd, week, today, skip),
+      coarse: yearBands(minDate, visibleDays, skip),
+    };
   }
   return { unit: "month", fine: monthTicks(minDate, visibleDays, ppd, skip), coarse: yearBands(minDate, visibleDays, skip) };
 }
@@ -329,7 +408,17 @@ export function dateAtColumn(minDate: string, col: number, skip: boolean): strin
   if (!skip) return shiftDate(minDate, col);
   const dir = col >= 0 ? 1 : -1;
   let remaining = Math.abs(col);
+  // A weekend origin is NOT a column of its own: `columnOf` already puts a
+  // Saturday, a Sunday and the following Monday on the same column, so the
+  // date AT that column has to be the Monday. Counting from the Saturday
+  // instead made the two functions disagree by one, which `monthBands` turned
+  // into a zero-width band and an endless loop — a frozen tab for any project
+  // whose earliest date falls on a weekend. Normalising here changes nothing
+  // `columnOf` reports (weekend days contribute no working days, so measuring
+  // from the Saturday or from the Monday gives the same answer for every date
+  // at or after it) — it only makes this function its true inverse.
   let d = minDate;
+  while (isWeekend(d)) d = shiftDate(d, 1);
   while (remaining > 0) {
     d = shiftDate(d, dir);
     if (!isWeekend(d)) remaining--;
@@ -438,6 +527,54 @@ export function formatWeekLabel(n: WeekNumber, template = "{yyyy}-W{ww}"): strin
  * Convenience over {@link weekNumberOf} + {@link formatWeekLabel}. */
 export function weekLabelOf(date: string, rule: WeekRule, today: string): string {
   return formatWeekLabel(weekNumberOf(date, rule, today), rule.label);
+}
+
+const SHORT_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Which day of its week a date is, 1-based, counted from the day the week rule
+ * starts on. Monday-start weeks read 1–7 Mon→Sun; with weekends skipped only
+ * 1–5 ever reach the axis, which is the `1 2 3 4 5` the user asked for. */
+function weekdayNumber(date: string, start: Weekday): number {
+  return ((weekdayOf(date) - WEEKDAY_INDEX[start] + 7) % 7) + 1;
+}
+
+/** One fine tick per column, saying which day of the week that column is. No
+ * thinning: this tier is only chosen when every column has room for a label, so
+ * skipping some would leave gaps for no reason. */
+function weekdayTicks(minDate: string, visibleDays: number, week: WeekRule, skip: boolean, opts: AxisOptions): FineTick[] {
+  const start = week.start ?? "monday";
+  const format = opts.weekday ?? "number";
+  const dayOfMonth = opts.day_of_month ?? "hidden";
+  const ticks: FineTick[] = [];
+  let d = dateAtColumn(minDate, 0, skip);
+  for (let col = 0; col < visibleDays; col += 1) {
+    const tick: FineTick = {
+      day: col,
+      label: format === "short" ? SHORT_DAYS[weekdayOf(d)] : String(weekdayNumber(d, start)),
+    };
+    if (dayOfMonth === "always") tick.sub = String(ymd(d).d);
+    // The whole date, not just the day — a tooltip has the room, and "which
+    // month am I in" is the question a week-first axis makes you ask.
+    if (dayOfMonth !== "hidden") tick.title = d;
+    ticks.push(tick);
+    d = shiftWorkingDays(d, 1, skip);
+  }
+  return ticks;
+}
+
+/** Week bands — the coarse row under the densest zoom, where a month band would
+ * span more screen than anyone can see at once. */
+function weekBands(minDate: string, visibleDays: number, week: WeekRule, today: string, skip: boolean): CoarseBand[] {
+  const start = week.start ?? "monday";
+  const bands: CoarseBand[] = [];
+  let cursor = 0;
+  while (cursor < visibleDays) {
+    const ws = weekStart(dateAtColumn(minDate, cursor, skip), start);
+    const bandEnd = advance(cursor, columnOf(minDate, shiftDate(ws, 7), skip), visibleDays);
+    bands.push({ day: cursor, days: bandEnd - cursor, label: weekLabelOf(ws, week, today) });
+    cursor = bandEnd;
+  }
+  return bands;
 }
 
 /** Fine ticks at week starts, labelled with the custom week code and thinned to

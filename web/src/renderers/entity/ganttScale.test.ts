@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyDrag,
+  AXIS_DAY_OF_MONTH_PX,
   AXIS_MIN_LABEL_PX,
+  AXIS_WEEKDAY_PX,
   axisFor,
   canvasWidthFor,
   clampPpd,
@@ -126,10 +128,15 @@ describe("axisFor", () => {
     expect(axis.coarse.map((b) => b.label)).toContain("Jul 2026");
   });
 
-  it("zoomed IN (day density), a week rule shows DATES (day numbers), not week codes — the week↔date transition", () => {
+  it("zoomed IN (day density), a week rule shows the days of the week, not week codes — the week↔date transition", () => {
+    // #690 P8 SUPERSEDED what these digits mean. They used to be days of the
+    // MONTH thinned to fit; the ask was an axis whose subject is the week, so
+    // at this density they are now every day, numbered WITHIN the week. Still
+    // one-or-two digits, still not week codes — the transition this test was
+    // written for is intact; what changed is the requirement behind it.
     const axis = axisFor("2026-06-29", 40, PPD_ANCHORS.day, WW, "2026-08-01");
     expect(axis.unit).toBe("day");
-    expect(axis.fine.every((t) => /^\d{1,2}$/.test(t.label))).toBe(true); // day-of-month, not W…
+    expect(axis.fine.every((t) => /^\d{1,2}$/.test(t.label))).toBe(true);
   });
 
   it("week-code fine labels never overlap at week/month density (thinned to whole weeks)", () => {
@@ -190,6 +197,115 @@ describe("axisFor", () => {
     }
     const last = axis.coarse[axis.coarse.length - 1];
     expect(last.day + last.days).toBe(120);
+  });
+});
+
+describe("axisFor — the week is the subject of the axis (#690 P8)", () => {
+  const WW: WeekRule = { label: "W{y1}{ww}" }; // monday / jan1, as the views use
+  const MON = "2026-06-29"; // a Monday, so column 0 opens a week
+
+  it("at day density, the fine row is the days of the WEEK under week-code bands", () => {
+    // The point of the redesign: at the densest zoom you read "which week, and
+    // which day of it" — not a day-of-month number whose month is a band away.
+    const axis = axisFor(MON, 14, PPD_ANCHORS.day, WW, "2026-08-01");
+    expect(axis.fine.map((t) => t.label).slice(0, 9)).toEqual(["1", "2", "3", "4", "5", "6", "7", "1", "2"]);
+    expect(axis.coarse[0].label).toBe("W627");
+    expect(axis.coarse.map((b) => b.label)).toContain("W628");
+  });
+
+  it("every column is labelled at that density — no thinning, because a digit fits where a date did not", () => {
+    const axis = axisFor(MON, 14, PPD_ANCHORS.day, WW, "2026-08-01");
+    expect(axis.fine.map((t) => t.day)).toEqual([...Array(14).keys()]);
+  });
+
+  it("runs 1–5 when weekends are skipped and 1–7 when they are not", () => {
+    const skip = axisFor(MON, 10, PPD_ANCHORS.day, WW, "2026-08-01", true);
+    expect(skip.fine.map((t) => t.label)).toEqual(["1", "2", "3", "4", "5", "1", "2", "3", "4", "5"]);
+    const cal = axisFor(MON, 7, PPD_ANCHORS.day, WW, "2026-08-01", false);
+    expect(cal.fine.map((t) => t.label)).toEqual(["1", "2", "3", "4", "5", "6", "7"]);
+  });
+
+  it("counts from whatever day the week rule starts on, not from Monday", () => {
+    // A sunday-start week must read 1 on Sunday, or the digits disagree with
+    // the week code sitting above them.
+    const sun = axisFor("2026-06-28", 7, PPD_ANCHORS.day, { ...WW, start: "sunday" }, "2026-08-01");
+    expect(sun.fine[0].label).toBe("1"); // 2026-06-28 is a Sunday
+    expect(sun.fine[1].label).toBe("2");
+  });
+
+  it("can spell the weekday out instead — which needs more room, so it engages later", () => {
+    const named = axisFor(MON, 14, PPD_ANCHORS.day, WW, "2026-08-01", false, { weekday: "short" });
+    expect(named.fine.slice(0, 3).map((t) => t.label)).toEqual(["Mon", "Tue", "Wed"]);
+    // Between the two widths: digits still fit here, names do not, so the axis
+    // falls back to week codes rather than overprinting.
+    const tight = (AXIS_WEEKDAY_PX.number + AXIS_WEEKDAY_PX.short) / 2;
+    expect(axisFor(MON, 40, tight, WW, "2026-08-01").fine[0].label).toBe("1");
+    expect(axisFor(MON, 40, tight, WW, "2026-08-01", false, { weekday: "short" }).fine[0].label).toBe("W627");
+  });
+
+  it("shows the day of the month too, or only on hover, or not at all", () => {
+    const hidden = axisFor(MON, 3, PPD_ANCHORS.day, WW, "2026-08-01");
+    expect(hidden.fine[0].sub).toBeUndefined();
+    expect(hidden.fine[0].title).toBeUndefined();
+
+    const always = axisFor(MON, 3, PPD_ANCHORS.day, WW, "2026-08-01", false, { day_of_month: "always" });
+    expect(always.fine.map((t) => t.sub)).toEqual(["29", "30", "1"]); // crosses into July
+    expect(always.fine[0].title).toBe("2026-06-29"); // the whole date is free once you are hovering
+
+    const hover = axisFor(MON, 3, PPD_ANCHORS.day, WW, "2026-08-01", false, { day_of_month: "hover" });
+    expect(hover.fine.map((t) => t.sub)).toEqual([undefined, undefined, undefined]);
+    expect(hover.fine[0].title).toBe("2026-06-29");
+  });
+
+  it("a second row of numbers needs room of its own — so it also engages later", () => {
+    const tight = (AXIS_WEEKDAY_PX.number + AXIS_DAY_OF_MONTH_PX) / 2;
+    expect(axisFor(MON, 40, tight, WW, "2026-08-01").fine[0].label).toBe("1");
+    expect(axisFor(MON, 40, tight, WW, "2026-08-01", false, { day_of_month: "always" }).fine[0].label).toBe("W627");
+  });
+
+  it("week bands tile the window with no gaps and no band of zero width", () => {
+    for (const [from, skip] of [[MON, false], ["2026-07-04", false], ["2026-07-04", true]] as const) {
+      const axis = axisFor(from, 30, PPD_ANCHORS.day, WW, "2026-08-01", skip);
+      expect(axis.coarse[0].day).toBe(0);
+      for (const b of axis.coarse) expect(b.days).toBeGreaterThan(0);
+      for (let i = 1; i < axis.coarse.length; i++) {
+        expect(axis.coarse[i].day).toBe(axis.coarse[i - 1].day + axis.coarse[i - 1].days);
+      }
+      const last = axis.coarse.at(-1)!;
+      expect(last.day + last.days).toBe(30);
+    }
+  });
+
+  it("zoomed out one step it is week codes over months, exactly as before", () => {
+    const axis = axisFor(MON, 60, PPD_ANCHORS.week, WW, "2026-08-01");
+    expect(axis.unit).toBe("week");
+    expect(axis.fine[0].label).toBe("W627");
+    expect(axis.coarse.map((b) => b.label)).toContain("Jul 2026");
+  });
+
+  it("zoomed all the way out it drops to months over years", () => {
+    const axis = axisFor("2026-01-01", 400, PPD_ANCHORS.month, WW, "2026-08-01");
+    expect(axis.unit).toBe("month");
+    expect(axis.fine.some((t) => t.label === "Feb")).toBe(true);
+  });
+
+  it("unless the view says to always show the week — then it keeps skip-labelling weeks", () => {
+    // The setting only has anything to say at this end: the two denser tiers
+    // are showing weeks already.
+    const axis = axisFor("2026-01-01", 400, PPD_ANCHORS.month, WW, "2026-08-01", false, { always_week: true });
+    expect(axis.unit).toBe("week");
+    expect(axis.fine.every((t) => /^W\d{3}$/.test(t.label))).toBe(true);
+    expect(axis.coarse.map((b) => b.label)).toEqual(expect.arrayContaining(["2026", "2027"]));
+    // Thinned, or it would be a solid smear of week codes at 3px a day.
+    for (let i = 1; i < axis.fine.length; i++) {
+      expect((axis.fine[i].day - axis.fine[i - 1].day) * PPD_ANCHORS.month).toBeGreaterThanOrEqual(AXIS_MIN_LABEL_PX);
+    }
+  });
+
+  it("changes nothing without a week rule — there is no week code to head the bands with", () => {
+    const axis = axisFor(MON, 40, PPD_ANCHORS.day, undefined, "", false, { always_week: true, day_of_month: "always" });
+    expect(axis.coarse.map((b) => b.label)).toContain("Jul 2026");
+    expect(axis.fine.every((t) => t.sub === undefined)).toBe(true);
   });
 });
 
@@ -280,6 +396,42 @@ describe("working-day columns (skip weekends)", () => {
     expect(isWeekend("2026-07-04")).toBe(true); // Sat
     expect(isWeekend("2026-07-05")).toBe(true); // Sun
     expect(isWeekend("2026-07-03")).toBe(false); // Fri
+  });
+});
+
+describe("working-day columns — a weekend origin (found by #690 P8)", () => {
+  // A chart's origin is the earliest date in the data, and nothing stops an
+  // issue starting on a Saturday. With weekends skipped, that used to make
+  // `columnOf` and `dateAtColumn` disagree by one — and `monthBands`, which
+  // walks the window by asking one for a date and the other for a column, then
+  // produced a band of zero width and looped FOREVER. Not a wrong label: a
+  // frozen tab.
+  const SAT = "2026-07-04"; // Saturday; Mon 07-06 is the working day it collapses onto
+
+  it("dateAtColumn is the inverse of columnOf even from a weekend", () => {
+    for (let col = 0; col < 12; col++) {
+      expect(columnOf(SAT, dateAtColumn(SAT, col, true), true)).toBe(col);
+    }
+  });
+
+  it("column 0 is the working day the weekend collapses onto, not the weekend itself", () => {
+    // `columnOf` already says Sat, Sun and Monday are all column 0; asking for
+    // the date AT column 0 has to give the same answer back.
+    expect(dateAtColumn(SAT, 0, true)).toBe("2026-07-06");
+    expect(columnOf(SAT, "2026-07-06", true)).toBe(0);
+  });
+
+  it("walks backwards from a weekend too", () => {
+    expect(dateAtColumn(SAT, -1, true)).toBe("2026-07-03"); // the Friday before
+    expect(columnOf(SAT, "2026-07-03", true)).toBe(-1);
+  });
+
+  it("a month axis over a weekend origin terminates", () => {
+    // The regression this whole block exists for. It cannot fail loudly — a
+    // spin has no assertion to break — so keep the inverse tests above, which
+    // do.
+    const axis = axisFor(SAT, 30, PPD_ANCHORS.day, undefined, "", true);
+    expect(axis.coarse.length).toBeGreaterThan(0);
   });
 });
 

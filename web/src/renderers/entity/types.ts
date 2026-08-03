@@ -7,7 +7,7 @@
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
-import type { WeekRule } from "./ganttScale";
+import type { DayOfMonth, WeekdayFormat, WeekRule } from "./ganttScale";
 import type { ScheduleFields } from "./schedule";
 import type { RefIndex } from "./refTraversal";
 
@@ -45,6 +45,12 @@ export type ViewSpec = {
   /** gantt only — a custom (non-ISO) week-numbering rule for the time axis.
    * Read verbatim off the view file; omit to keep plain day/month labels. */
   week?: WeekRule;
+  /** Axis settings (#690 P8). They live on the view rather than in the app's
+   * manifest for the same reason `color_by` does: they answer "what is this
+   * tab for", and the people sharing a project share the answer. */
+  always_week?: boolean;
+  weekday?: WeekdayFormat;
+  day_of_month?: DayOfMonth;
   /** gantt only — collapse Saturdays/Sundays so the timeline shows only working
    * days (bars, axis, drag all count Mon–Fri). Default off. */
   skip_weekends?: boolean;

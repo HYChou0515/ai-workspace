@@ -67,8 +67,11 @@ function reportText(r: ScheduleReport): string {
 
 const GUTTER = 150;
 const COARSE_H = 18; // top context band (month / year)
-const FINE_H = 20; // fine tick row (day numbers / week starts / months)
-const AXIS_H = COARSE_H + FINE_H;
+const FINE_H = 20; // fine tick row (weekdays / week codes / months)
+/** What a second line under the fine row costs. Charged only when a tick
+ * actually carries one — the axis is permanently in the way now that it sticks,
+ * so it does not reserve room it is not using. */
+const SUB_H = 11;
 const LANE_H = 24;
 const ROW_H = 26;
 const ZOOMS: Zoom[] = ["day", "week", "month"];
@@ -310,7 +313,13 @@ export function GanttView({
   // `today` also feeds the week axis's `by_today` cross-year boundary, so it is
   // computed before the axis. The clock is read here (the view shell) and
   // injected into the pure scale math — never read inside it.
-  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip);
+  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip, {
+    always_week: spec.always_week,
+    weekday: spec.weekday,
+    day_of_month: spec.day_of_month,
+  });
+  const fineH = FINE_H + (axis.fine.some((t) => t.sub) ? SUB_H : 0);
+  const axisH = COARSE_H + fineH;
 
   const todayOffset = columnOf(minDate, today, skip);
   const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
@@ -353,7 +362,7 @@ export function GanttView({
         <div className="ev-gantt__grid" style={{ minWidth: GUTTER + canvasWidth }}>
           {/* left gutter: axis spacer + lane headers + row labels */}
           <div className="ev-gantt__gutter" style={{ width: GUTTER }}>
-            <div style={{ height: AXIS_H }} />
+            <div style={{ height: axisH }} />
             {lanes.map((lane) => (
               <div key={lane.key}>
                 {grouped && (
@@ -393,7 +402,7 @@ export function GanttView({
             {axis.fine.map((t) => (
               <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * ppd }} />
             ))}
-            <div className="ev-gantt__axis" style={{ height: AXIS_H }}>
+            <div className="ev-gantt__axis" style={{ height: axisH }}>
               <div className="ev-gantt__axis-coarse" style={{ height: COARSE_H }}>
                 {axis.coarse.map((b) => (
                   <span
@@ -405,10 +414,11 @@ export function GanttView({
                   </span>
                 ))}
               </div>
-              <div className="ev-gantt__axis-fine" style={{ height: FINE_H }}>
+              <div className="ev-gantt__axis-fine" style={{ height: fineH }}>
                 {axis.fine.map((t) => (
-                  <span key={`fine-${t.day}`} className="ev-gantt__tick" style={{ left: t.day * ppd }}>
+                  <span key={`fine-${t.day}`} className="ev-gantt__tick" style={{ left: t.day * ppd }} title={t.title}>
                     {t.label}
+                    {t.sub && <span className="ev-gantt__tick-sub">{t.sub}</span>}
                   </span>
                 ))}
               </div>
