@@ -134,3 +134,48 @@ def test_a_milestone_may_state_only_when_it_starts():
         json={"args": {"title": "M1", "span": "2026-07-01/"}},
     ).json()
     assert made["fields"]["span"] == "2026-07-01/"
+
+
+def test_an_issue_can_carry_how_urgent_it_is_but_need_not():
+    """Urgency exists to be SEEN — the Gantt colours bars by it — so it has to
+    be a select with pinned colours rather than free text, and the order of
+    the values has to be the order of the urgency so it sorts and so the
+    palette can run hot to cold.
+
+    Optional on purpose. Most issues are ordinary, and a required field would
+    make every one of them a decision about how much of an emergency it is
+    not."""
+    c = _client()
+    item = c.post("/api/a/pm/items", json={"title": "P"}).json()["resource_id"]
+
+    plain = c.post(
+        f"/api/a/pm/items/{item}/entities/issue", json={"args": {"title": "Ordinary"}}
+    ).json()
+    urgent = c.post(
+        f"/api/a/pm/items/{item}/entities/issue",
+        json={"args": {"title": "Line down", "urgency": "critical"}},
+    ).json()
+
+    assert plain["fields"].get("urgency") in (None, "")
+    assert urgent["fields"]["urgency"] == "critical"
+
+
+def test_the_urgency_scale_runs_hot_to_cold_with_pinned_colours():
+    """Hash-assigned colours would put `low` on red as readily as `critical`.
+    A scale only reads as a scale if the palette agrees with it."""
+    import yaml
+
+    from workspace_app.apps.profiles import _profiles_root
+
+    schema = yaml.safe_load(
+        (_profiles_root("pm") / "default" / ".entity" / "issue" / "schema.yaml").read_text("utf-8")
+    )
+    urgency = schema["fields"]["urgency"]
+
+    assert urgency["values"] == ["critical", "high", "medium", "low"]
+    assert urgency["colors"] == {
+        "critical": "red",
+        "high": "amber",
+        "medium": "blue",
+        "low": "slate",
+    }
