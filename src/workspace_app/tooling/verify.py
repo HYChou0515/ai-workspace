@@ -33,12 +33,12 @@ from workspace_app.tooling import grant as grant_policy
 from workspace_app.tooling.artifact import (
     ArtifactError,
     artifact_opener,
+    bundle_url,
     check_compatible,
     credential_for,
     parse_manifest,
     verify_bundle,
 )
-from workspace_app.tooling.builder import BUNDLE_NAME, MANIFEST_NAME
 
 Fetcher = Callable[[str], bytes]
 
@@ -60,14 +60,6 @@ class VerifyReport:
     #: certificate bore on the decision. Read from the KEY that signed, so it
     #: is the one thing about a certificate nobody can assert about themselves.
     granted_by: str | None = None
-
-
-def _bundle_url(manifest_url: str) -> str:
-    head, _, tail = manifest_url.partition("?")
-    if not head.endswith(MANIFEST_NAME):
-        raise VerifyFailed(f"a tool URL must point at {MANIFEST_NAME}: {manifest_url}")
-    swapped = head[: -len(MANIFEST_NAME)] + BUNDLE_NAME
-    return f"{swapped}?{tail}" if tail else swapped
 
 
 def _http_get(url: str) -> bytes:
@@ -104,7 +96,10 @@ def verify_artifact(
     # Shape first, before any network: telling an operator "that is not a
     # manifest URL" beats making them wait for a fetch that was never going
     # to work and then reporting it as unreachable.
-    bundle_at = _bundle_url(manifest_url)
+    try:
+        bundle_at = bundle_url(manifest_url)
+    except ArtifactError as exc:
+        raise VerifyFailed(str(exc)) from exc
     raw = _fetch(fetch, manifest_url, "the manifest")
     try:
         manifest = parse_manifest(raw)
@@ -199,10 +194,16 @@ def _check_contents(data: bytes, manifest) -> None:
         raise VerifyFailed(f"the bundle could not be read: {exc}") from exc
 
     published = [c.name for c in manifest.commands]
-    if in_bundle != published:
+    # As sets. Order is not part of this contract, and comparing lists made it
+    # one — reporting "the schemas were frozen from a different build", which
+    # is a real failure and would send someone looking for it.
+    if set(in_bundle) != set(published):
+        missing = sorted(set(published) - set(in_bundle))
+        extra = sorted(set(in_bundle) - set(published))
         raise VerifyFailed(
-            f"the bundle contains {in_bundle} but its manifest publishes {published} — "
-            "the schemas were frozen from a different build"
+            f"the manifest publishes {missing} that the bundle does not contain"
+            if missing
+            else f"the bundle contains {extra} that its manifest does not publish"
         )
 
 

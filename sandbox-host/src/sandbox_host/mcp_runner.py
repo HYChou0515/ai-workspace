@@ -45,6 +45,12 @@ _USAGE = (
 CACHE_ENV = "TOOL_CACHE_DIR"
 DEFAULT_CACHE = "/cache"
 
+#: Who a tool runs as when there is no workspace to take ownership from. The
+#: conventional unprivileged id; what matters is that it is not root, because
+#: the cache is shared with every other tool this person runs and `ensure`
+#: hands back an installed sha without re-checking its bytes.
+NOBODY = 65534
+
 #: The working directory, and therefore what a tool's relative paths mean.
 #: Meant to be the engineer's project, mounted in.
 WORK_DIR = "/work"
@@ -178,6 +184,12 @@ def main(
             "on your own files.",
             file=sys.stderr,
         )
+        # Nobody to become, but still not root. The cache is world-writable so
+        # that a dropped process can use it, which also means a tool left as
+        # root could rewrite another tool's installed bundle — and `ensure`
+        # returns an installed sha without reading its bytes again.
+        if os.geteuid() == 0:
+            become(NOBODY, NOBODY)
     else:
         # Become whoever owns the mounted workspace, so the files a tool
         # produces belong to the person who asked for them.

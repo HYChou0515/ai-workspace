@@ -177,18 +177,15 @@ def _install(cache: ToolCache, sha: str, body: bytes = b"x") -> Path:
     return cache.ensure(sha, _tar({"launch": body}))
 
 
-def test_with_no_ceiling_nothing_unreferenced_is_kept(tmp_path: Path) -> None:
-    # Nothing bounds growth without a ceiling, so the cache cannot also serve
-    # as a rollback shelf.
+def test_a_ceiling_is_what_makes_the_reaper_reclaim(tmp_path: Path) -> None:
+    """The other half of the default's meaning: eviction is opt-in, and asking
+    for it is naming a number. Until then the cache only grows, which is the
+    trade this repo makes for every other limit — unset is unlimited."""
     cache = ToolCache(tmp_path, harden=lambda _p: None)
-    keep, drop = "a" * 64, "b" * 64
-    _install(cache, keep)
-    _install(cache, drop)
+    cache.ensure("b" * 64, _tar({"launch": b"x" * 400}))
 
-    removed = cache.sweep(in_use={keep})
-
-    assert removed == [drop]
-    assert cache.has(keep) and not cache.has(drop)
+    assert cache.sweep(in_use=set()) == []  # no ceiling: kept
+    assert cache.sweep(in_use=set(), max_bytes=1) == ["b" * 64]  # a ceiling: reclaimed
 
 
 def test_an_unreferenced_bundle_is_kept_while_there_is_room(tmp_path: Path) -> None:
@@ -439,3 +436,24 @@ def test_a_rename_that_failed_for_any_other_reason_still_raises(
 
     with pytest.raises(OSError, match="No space"):
         cache.ensure("e" * 64, _tar({"launch": b"#!/bin/sh\n"}))
+
+
+def test_no_ceiling_keeps_everything(tmp_path: Path) -> None:
+    """`None` meant "keep nothing", which is backwards twice over.
+
+    It contradicted its caller — the sweeper's comment says unreferenced
+    bundles are kept while there is room, because that is what makes a
+    rollback a remount instead of a 150MB download — and it was the DEFAULT,
+    so on an unconfigured deployment a bundle vanished within minutes of its
+    sandbox being reaped and rollback was never a remount.
+
+    It also inverted this repo's convention everywhere else: unset means no
+    limit (`filestore.workspace_quota`, the cgroup `max`). One mental model
+    flipping in one place is the next person's afternoon."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    kept = cache.ensure("a" * 64, _tar({"launch": b"#!/bin/sh\n"}))
+
+    removed = cache.sweep(in_use=set())
+
+    assert removed == []
+    assert kept.is_dir()

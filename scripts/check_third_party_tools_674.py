@@ -209,7 +209,11 @@ v = text("src/workspace_app/tooling/verify.py")
 check(
     "P9",
     "verify checks shape, gate, integrity and contents",
-    all(s in v for s in ("_bundle_url", "check_compatible", "verify_bundle", "_check_contents")),
+    # `bundle_url` moved into the shared contract: `verify` and the host used
+    # to disagree about what a manifest URL is, which is how an operator got
+    # `accepted:` and then a release where every resolve failed.
+    all(s in v for s in ("bundle_url", "admit", "verify_bundle", "_check_contents"))
+    and "def bundle_url(" in a,
 )
 check("P9", "the builder id cannot be passed as a flag", 'os.environ.get("TOOL_BUILDER_ID")' in v)
 check(

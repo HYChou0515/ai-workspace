@@ -940,3 +940,35 @@ def test_a_source_without_a_trailing_separator_is_refused(tmp_path, capsys):
 
     assert code == 2
     assert "/" in err
+
+
+def test_a_certificate_whose_source_is_useless_is_refused_when_used(keys):
+    """The three rules about `--source` lived only in the CLI. A certificate
+    is verified offline and cannot be recalled, so one signed before those
+    rules existed — or by anything that did not go through the CLI — was
+    accepted forever. A rule that only one side applies is not a rule."""
+    private, public = keys
+
+    for bad in (
+        "https://gitlab.example/",  # a server, not a place on it
+        "https://gitlab.example/x/tool.manifest.json",  # one artifact
+        "https://gitlab.example/api/v4/projects/rca%2Fwafer",  # no boundary
+    ):
+        token = issue(Grant(tool="t", source=bad, max_bytes=10), private_key=private)
+        refusal = admit(tool="t", url=bad + "/anything", token=token, public_keys=public)
+        assert refusal is not None, bad
+
+
+def test_a_url_that_climbs_out_of_its_source_is_refused(keys):
+    """`startswith` on an unnormalised path let `…/rca/wafer/../evil/x` pass:
+    the server resolves the `..`, the comparison here does not. The URL comes
+    from a place an operator controls today, so this is depth rather than a
+    hole — but binding to a source means not trusting who typed the URL."""
+    private, public = keys
+    token = issue(
+        Grant(tool="t", source="https://gitlab.example/p/rca%2Fwafer/", max_bytes=10),
+        private_key=private,
+    )
+    climbing = "https://gitlab.example/p/rca%2Fwafer/../rca%2Fevil/dist/tool.manifest.json"
+
+    assert admit(tool="t", url=climbing, token=token, public_keys=public) is not None

@@ -37,7 +37,7 @@ import os
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 #: The only manifest layout this platform understands. A newer artifact is
 #: refused rather than parsed on a guess.
@@ -50,6 +50,30 @@ FORMAT_VERSION = 1
 #: a secret may go is not one to keep three copies of.
 TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
 HOSTS_ENV = "TOOL_ARTIFACT_HOSTS"
+
+
+#: The two file names an author's CI publishes. The platform is given the
+#: manifest's URL and derives the bundle's, so these are contract.
+MANIFEST_NAME = "tool.manifest.json"
+BUNDLE_NAME = "tool.tar.gz"
+
+
+def bundle_url(manifest_url: str) -> str:
+    """The bundle that sits beside a manifest.
+
+    Swaps the last path SEGMENT — not a suffix. `…/wafertool.manifest.json`
+    ends with the right characters and is a different file; accepting it in
+    one place and refusing it in another is how an operator gets `accepted:`,
+    registers the URL, releases, and then watches every resolve fail.
+
+    Only the path: GitLab's artifact endpoint carries the job name in a query
+    parameter, so replacing across the whole URL would corrupt it the moment a
+    job is named after the file."""
+    parts = urlsplit(manifest_url)
+    head, _, tail = parts.path.rpartition("/")
+    if tail != MANIFEST_NAME:
+        raise ManifestError(f"a tool URL must point at {MANIFEST_NAME}, this one ends in {tail!r}")
+    return urlunsplit(parts._replace(path=f"{head}/{BUNDLE_NAME}"))
 
 
 def credential_for(url: str) -> str | None:

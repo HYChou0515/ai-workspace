@@ -161,8 +161,12 @@ class ToolCache:
         everything left is in use and the cache is still over, that is a host
         that needs more disk, and it says so rather than breaking something.
 
-        With no ceiling there is nothing to bound growth, so nothing
-        unreferenced is kept."""
+        No ceiling means no eviction — the same thing "unset" means for every
+        other limit here (`filestore.workspace_quota`, the cgroup's `max`).
+        It used to mean the opposite, and since it was also the DEFAULT, an
+        unconfigured host emptied its cache minutes after each sandbox was
+        reaped: rollback was never the remount this docstring promises, and
+        every reopen paid ~150MB again."""
         if not self._root.is_dir():
             return []
         installed = [p for p in self._root.iterdir() if p.is_dir() and _SHA256.match(p.name)]
@@ -171,11 +175,7 @@ class ToolCache:
         installed.sort(key=lambda p: p.stat().st_mtime)
 
         if max_bytes is None:
-            removed = [p.name for p in installed if p.name not in in_use]
-            for path in installed:
-                if path.name not in in_use:
-                    shutil.rmtree(path, ignore_errors=True)
-            return removed
+            return []
 
         total = sum(self._size_of(p) for p in installed)
         removed: list[str] = []

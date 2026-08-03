@@ -410,11 +410,13 @@ def test_a_workspace_owned_by_root_is_left_alone(env, monkeypatch) -> None:
     assert became == []
 
 
-def test_nothing_mounted_means_nobody_to_become(env, monkeypatch) -> None:
+def test_a_runner_already_unprivileged_stays_as_it_is(env, monkeypatch) -> None:
+    """Someone passed `--user` themselves, and there is no workspace to take
+    ownership from. Nothing to drop to, and nothing to drop from."""
     from sandbox_host import mcp_runner
 
     monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: True)
-    monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 1000)
     became: list[tuple[int, int]] = []
     data = _bundle()
 
@@ -507,3 +509,28 @@ def test_the_tool_never_inherits_the_credential_that_fetched_it(tmp_path) -> Non
     # Everything else still arrives: the tool needs its environment, this is
     # one name being withheld rather than a scrubbed process.
     assert "KEEP_ME=yes" in done.stdout
+
+
+def test_a_tool_runs_unprivileged_even_with_no_workspace_mounted(env, monkeypatch) -> None:
+    """Dropping only when there was a workspace to take ownership from left
+    the other branch running as root — sharing a 0777 cache with every other
+    tool, and `ensure` returns an installed sha without re-checking it. So one
+    tool could rewrite another's cached bundle and the next run would `execve`
+    it.
+
+    There is no owner to become here, so it becomes nobody."""
+    from sandbox_host import mcp_runner
+
+    monkeypatch.setattr(mcp_runner, "_nothing_mounted_at", lambda _p: True)
+    monkeypatch.setattr(mcp_runner.os, "geteuid", lambda: 0)
+    became: list[tuple[int, int]] = []
+    data = _bundle()
+
+    main(
+        ["wafer-history", _MANIFEST_URL],
+        fetch=_Wire(manifest=_manifest(data), bundle=data),
+        become=lambda uid, gid: became.append((uid, gid)),
+        hand_over=lambda _e: None,
+    )
+
+    assert became == [(mcp_runner.NOBODY, mcp_runner.NOBODY)]

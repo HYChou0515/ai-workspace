@@ -33,9 +33,10 @@ from __future__ import annotations
 import base64
 import csv
 import json
+import posixpath
 from dataclasses import dataclass
 from datetime import date
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
@@ -96,6 +97,29 @@ REGISTRY_FILE = "tool-registry.csv"
 #: What a manifest URL ends in — a `--source` ending here is one artifact,
 #: not the place they live.
 MANIFEST_BASENAME = "tool.manifest.json"
+
+
+def _useless_source(source: str) -> str | None:
+    """Why this `source` protects nothing, or None if it does.
+
+    Applied where a certificate is USED, not only where one is issued. A
+    certificate is verified offline and cannot be recalled, so one signed
+    before these rules existed — or by anything that did not go through the
+    CLI — would otherwise be honoured forever. The CLI asks the same question
+    early; that is all it does."""
+    if MANIFEST_BASENAME in source:
+        return (
+            f"{source} names a single manifest rather than a place, so rolling "
+            "back to an older build would be refused"
+        )
+    if not source.endswith("/"):
+        return (
+            f"{source} has no trailing `/`, so it also matches anything whose path "
+            "merely starts with it — `…/rca%2Fwafer` matches `…/rca%2Fwafer-evil`"
+        )
+    if urlsplit(source).path.strip("/") == "":
+        return f"{source} names a server, not a place on it"
+    return None
 
 
 class GrantError(ArtifactError):
@@ -282,15 +306,31 @@ def admit(
         )
     except GrantError as exc:
         return str(exc)
-    # Compared with percent-encoding undone on both sides. GitLab's API form
-    # writes the project as `rca%2Fwafer-history` and its web form as
-    # `rca/wafer-history`; the same place written two ways has to match.
-    if not unquote(url).startswith(unquote(granted.source)):
+    useless = _useless_source(granted.source)
+    if useless is not None:
+        return f"the certificate for {tool!r} names a source that protects nothing: {useless}"
+    # Compared with percent-encoding undone on both sides, and with the path
+    # normalised. GitLab's API form writes the project as
+    # `rca%2Fwafer-history` and its web form as `rca/wafer-history`; the same
+    # place written two ways has to match. And `…/wafer/../evil/` is resolved
+    # by the server but not by `startswith`, so it is resolved here too.
+    if not _canonical(url).startswith(_canonical(granted.source)):
         return (
             f"the certificate for {tool!r} is good for artifacts under "
             f"{granted.source}, and this one came from {url}"
         )
     return None
+
+
+def _canonical(url: str) -> str:
+    """A URL in the one spelling this comparison is allowed to see."""
+    parts = urlsplit(unquote(url))
+    # `normpath` drops a trailing separator, and that separator IS the
+    # boundary — without it `…/rca/wafer` matches `…/rca/wafer-evil` again.
+    path = posixpath.normpath(parts.path)
+    if parts.path.endswith("/") and not path.endswith("/"):
+        path += "/"
+    return urlunsplit(parts._replace(path=path))
 
 
 def _mb(size: int) -> str:
@@ -439,31 +479,9 @@ def _issue(flags: dict[str, str], out, err) -> int:
         )
         return 2
     source = flags["--source"]
-    if MANIFEST_BASENAME in source:
-        print(
-            f"--source is a prefix, not one artifact: {source} names a single "
-            "manifest, so rolling back to an older build — which is a different "
-            "URL under the same project — would be refused. Cut it back to the "
-            "project.",
-            file=err,
-        )
-        return 2
-    if not source.endswith("/"):
-        print(
-            f"--source must end in `/`: {source} would also admit anything whose "
-            "path merely STARTS with it — `…/rca%2Fwafer` matches "
-            "`…/rca%2Fwafer-evil`, which is a project somebody else can create. "
-            "The separator is the boundary.",
-            file=err,
-        )
-        return 2
-    if urlsplit(source).path.strip("/") == "":
-        print(
-            f"--source names a server, not a place on it: {source} would admit "
-            "anything published anywhere on that host under this name. Include "
-            "the project path.",
-            file=err,
-        )
+    useless = _useless_source(source)
+    if useless is not None:
+        print(f"--source protects nothing: {useless}.", file=err)
         return 2
 
     publish_until = _a_date(flags.get("--publish-until"))

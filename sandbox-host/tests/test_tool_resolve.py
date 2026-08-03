@@ -197,7 +197,12 @@ def test_an_unreachable_store_with_nothing_cached_says_which_tool_failed(
 
 
 def test_a_url_that_is_not_a_manifest_is_rejected_with_the_reason() -> None:
-    with pytest.raises(FetchError, match="tool.manifest.json"):
+    #  since the rule moved into the shared contract — the same
+    # one  applies, so the two gates cannot disagree about what a tool
+    # URL is. Both are , which is what callers handle.
+    from sandbox_host.artifact import ManifestError
+
+    with pytest.raises(ManifestError, match="tool.manifest.json"):
         bundle_url("https://gitlab.example/raw/dist/tool.tar.gz?job=build-tool")
 
 

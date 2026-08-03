@@ -18,6 +18,7 @@ import tarfile
 
 import pytest
 
+from workspace_app.tooling.artifact import ArtifactError
 from workspace_app.tooling.verify import VerifyFailed, verify_artifact
 
 _SOURCE = "https://gitlab.example/raw/"
@@ -159,7 +160,9 @@ def test_a_bundle_whose_contents_disagree_with_its_manifest_is_caught() -> None:
             fetch=_wire(manifest=_manifest(data), bundle=data),
         )
 
-    assert "drift" in str(exc.value)
+    # Names what is actually missing, rather than a word for the category —
+    # the reader has to know WHICH command to go and ask about.
+    assert "trend" in str(exc.value)
     assert "trend" in str(exc.value)
 
 
@@ -503,3 +506,47 @@ def test_every_accepted_artifact_names_who_admitted_it(signing) -> None:
     )
 
     assert report.granted_by == "alice"
+
+
+def test_both_gates_agree_on_what_a_manifest_url_is() -> None:
+    """A suffix is not a segment. `…/wafertool.manifest.json` ends with the
+    right characters and is a different file — accepted by one rule, refused
+    by the other. An operator would see `accepted:`, register the URL,
+    release, and then watch every resolve fail. Which is the failure `verify`
+    exists to prevent.
+
+    One implementation now, in the contract both packages carry."""
+    from workspace_app.tooling import verify as verify_mod
+    from workspace_app.tooling.artifact import bundle_url
+
+    assert verify_mod.bundle_url is bundle_url
+
+    with pytest.raises(ArtifactError, match="ends in"):
+        bundle_url("https://gl/jobs/artifacts/main/raw/wafertool.manifest.json")
+
+
+def test_the_same_commands_in_a_different_order_are_the_same_commands(signing) -> None:
+    """A list comparison made order part of the contract it never was, and
+    said "the schemas were frozen from a different build" — which is a real
+    thing that happens, and would send someone looking for it."""
+    data = _bundle(["trend", "compare"])
+
+    report = verify_artifact(
+        _MANIFEST_URL,
+        expected_name="wafer-history",
+        builder=_BUILDER,
+        arch="x86_64",
+        fetch=_wire(
+            manifest=_manifest(
+                data,
+                grant=_certify(max_bytes=10_000_000),
+                commands=[
+                    {"name": n, "description": "d", "params_json_schema": _SCHEMA}
+                    for n in ("compare", "trend")
+                ],
+            ),
+            bundle=data,
+        ),
+    )
+
+    assert sorted(report.commands) == ["compare", "trend"]

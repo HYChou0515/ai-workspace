@@ -27,7 +27,7 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from .artifact import (
     HOSTS_ENV,
@@ -36,6 +36,7 @@ from .artifact import (
     CommandSpec,
     IncompatibleArtifact,
     artifact_opener,
+    bundle_url,
     check_compatible,
     credential_for,
     parse_manifest,
@@ -63,19 +64,6 @@ Fetcher = Callable[[str], bytes]
 class FetchError(ArtifactError):
     """The artifact could not be retrieved. Distinct from "retrieved and
     refused" because the operator's next move is completely different."""
-
-
-def bundle_url(manifest_url: str) -> str:
-    """The bundle that sits beside a manifest.
-
-    Swaps the last path segment only. GitLab's artifact endpoint carries the
-    job name in a query parameter, so replacing the filename across the whole
-    URL would corrupt it the moment a job is named after the file."""
-    parts = urlsplit(manifest_url)
-    head, _, tail = parts.path.rpartition("/")
-    if tail != MANIFEST_NAME:
-        raise FetchError(f"a tool URL must point at {MANIFEST_NAME}, this one ends in {tail!r}")
-    return urlunsplit(parts._replace(path=f"{head}/{BUNDLE_NAME}"))
 
 
 def _http_get(url: str) -> bytes:

@@ -37,6 +37,8 @@ from pathlib import Path
 
 from workspace_app.tooling import grant as grant_policy
 from workspace_app.tooling.artifact import (
+    BUNDLE_NAME,
+    MANIFEST_NAME,
     ArtifactError,
     BundleRef,
     CommandSpec,
@@ -46,11 +48,9 @@ from workspace_app.tooling.artifact import (
     verify_bundle,
 )
 
-#: The two file names an author's CI publishes. The platform is given the
-#: manifest's URL and derives the bundle's by swapping the basename, so these
-#: are contract, not convention.
-MANIFEST_NAME = "tool.manifest.json"
-BUNDLE_NAME = "tool.tar.gz"
+# The two names an author's CI publishes live in the contract both packages
+# carry, beside the rule that derives one URL from the other. Re-exported here
+# because this is where they are written.
 
 
 class BuildError(ArtifactError):
