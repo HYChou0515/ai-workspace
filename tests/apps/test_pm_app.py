@@ -179,3 +179,68 @@ def test_the_urgency_scale_runs_hot_to_cold_with_pinned_colours():
         "medium": "blue",
         "low": "slate",
     }
+
+
+def _gantt_views() -> dict[str, dict]:
+    import yaml
+
+    from workspace_app.apps.profiles import _profiles_root
+
+    views = _profiles_root("pm") / "default" / "views"
+    loaded = {p.stem: yaml.safe_load(p.read_text("utf-8")) for p in views.glob("*.ai.yaml")}
+    return {name: spec for name, spec in loaded.items() if spec.get("view") == "gantt"}
+
+
+def test_every_gantt_view_reads_the_same_calendar():
+    """Timeline and Workload showed the same issues on different time axes,
+    because each view file started from a blank sheet and only one of them had
+    the week numbering and the working-day collapse.
+
+    The axis is the calendar, not the entity — a date range that is one width
+    on one tab and another width on the next is the complaint. So this holds
+    across every gantt view, including the roadmap over milestones."""
+    axis = {
+        name: {k: spec.get(k) for k in ("week", "skip_weekends")}
+        for name, spec in _gantt_views().items()
+    }
+    first = next(iter(axis.values()))
+    for name, got in axis.items():
+        assert got == first, f"{name} draws a different time axis from the other gantt views"
+
+
+def test_gantt_views_over_one_entity_differ_only_by_grouping():
+    """Where they chart the same records, the only thing a second view is FOR
+    is asking a different question of them. Anything else that differs is
+    drift — which is what Workload was.
+
+    Scoped to one entity because `schedule` and `assignee` name issue fields,
+    and the roadmap charts milestones, which have neither."""
+    for entity in {spec["entity"] for spec in _gantt_views().values()}:
+        same = {
+            name: {k: v for k, v in spec.items() if k not in {"title", "group_by"}}
+            for name, spec in _gantt_views().items()
+            if spec["entity"] == entity
+        }
+        first = next(iter(same.values()))
+        for name, got in same.items():
+            assert got == first, (
+                f"{name} differs from the other {entity} gantts by more than its grouping"
+            )
+
+
+def test_the_check_covers_whatever_gantt_views_exist():
+    """The guard has to outlive these two files. It reads the profile rather
+    than naming Timeline and Workload, so a third gantt view added tomorrow is
+    under the rule the moment it lands — and if it forgets the axis, this goes
+    red instead of shipping a third way for the same issues to look.
+
+    Deliberately a check rather than an inheritance mechanism. Two files did
+    not justify inventing one, the seeder is app-agnostic and PM's week
+    numbering is not, and a view file that says everything is a view file the
+    gear panel can keep editing in place."""
+    from workspace_app.apps.profiles import _profiles_root
+
+    on_disk = {p.stem for p in (_profiles_root("pm") / "default" / "views").glob("*.ai.yaml")}
+
+    assert set(_gantt_views()) <= on_disk
+    assert "gantt.ai" in _gantt_views() and "workload.ai" in _gantt_views()

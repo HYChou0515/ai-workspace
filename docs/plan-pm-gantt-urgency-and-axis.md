@@ -96,10 +96,25 @@
 
 per-user,存瀏覽器。key 要含 item + view,否則兩個專案會互相干擾。
 
-### P5 · Workload 與 Timeline 對齊 + 甘特預設收斂
+### P5 · Workload 與 Timeline 對齊(**做法與原計畫不同,理由如下**)
 
-先把 Workload 補成「只差 `group_by`」,再把甘特的呈現預設收到一處,view 檔只寫要覆寫的。
-**測試要釘住「新增第三個甘特 view 不必重抄設定」**,否則這個 phase 等於只是複製貼上。
+原計畫是「把甘特預設收到一處,view 檔只寫要覆寫的」。實作時放棄了繼承機制,改成**用測試
+擋住漂移**:
+
+- FE 拿 app manifest 要穿好幾層 prop;而在 seeder 合併是**特例化一個 app-agnostic 的元件**
+  (PM 的週別編碼不是每個 app 都要的)。
+- 兩個檔案不足以正當化一套繼承。
+- view 檔「看到什麼就是什麼」有價值——使用者是透過齒輪面板在改它們。
+
+改成兩條 glob 全部 gantt view 的檢查,所以新增第四個 view 時它一旦少抄就會紅。**這是攔截而
+不是杜絕**,誠實記在這裡。
+
+過程中測試自己找出**第三個** gantt view(`roadmap`,charting milestone),於是規則拆成兩層:
+
+- **時間軸**(`week` / `skip_weekends`)全部一致——那是日曆不是實體;同一段日期在兩個分頁
+  上寬度不同,正是被抱怨的那件事。
+- **其餘設定**只在同一個 entity 的 view 之間一致——`schedule` / `assignee` 指的是 issue 的
+  欄位,milestone 沒有。
 
 ### P6 · 第一欄完整標題
 
