@@ -96,10 +96,11 @@ class ItemLocator:
 
     def env_vars_of(self, item_id: str) -> dict[str, str]:
         """The item's user-set environment variables (``WorkItemBase.env_vars``)
-        — rendered into the sandbox's infra area each turn so the tool launchers
-        can export them. Empty when the id maps to no registered App's item (the
-        delivery file is then written empty, which is also how a user's last
-        deleted variable stops reaching the tools)."""
+        — read fresh per turn and named on the ``exec`` that dispatches each tool
+        (#673), which is what makes an edit between turns take effect. Empty when
+        the id maps to no registered App's item; empty is also how a user's last
+        deleted variable stops reaching the tools, since nothing is stored
+        anywhere for a stale copy to survive in."""
         found = find_work_item(self._spec, item_id)
         return dict(found[1].env_vars) if found is not None else {}
 
