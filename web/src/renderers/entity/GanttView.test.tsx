@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { GanttView } from "./GanttView";
+import { selectColor } from "./selectColor";
 import { pxPerDay } from "./ganttScale";
 import { buildRefIndex } from "./refTraversal";
 import type { EntityViewProps } from "./types";
@@ -24,9 +25,17 @@ const type: EntityType = {
     { name: "span", role: "daterange" },
     { name: "milestone", role: "ref", to: "milestone" },
     { name: "assignee", role: "actor" },
+    {
+      name: "urgency",
+      role: "status",
+      values: ["critical", "high", "medium", "low"],
+      colors: { critical: "red", high: "amber", medium: "blue", low: "slate" },
+    },
+    { name: "status", role: "status", values: ["open", "done"], colors: { open: "blue", done: "green" } },
   ],
   form: [],
 };
+const urgencySpec = type.fields.find((f) => f.name === "urgency");
 const users = [
   { id: "alice", name: "Alice Chen", section: "", email: "", photo_url: "" },
   { id: "bob", name: "Bob Liu", section: "", email: "", photo_url: "" },
@@ -429,5 +438,61 @@ describe("GanttView", () => {
     fireEvent.pointerMove(window, { clientX: ppd * 3 });
     fireEvent.pointerUp(window, { clientX: ppd * 3 });
     expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-08/2026-01-10" });
+  });
+});
+
+describe("GanttView colour source", () => {
+  const span = "2026-01-10/2026-01-20";
+
+  it("leaves bars uncoloured until a source is chosen", () => {
+    // The default has to stay what it was, or every existing view changes
+    // appearance the day this ships.
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span, urgency: "critical" })] })} />);
+
+    expect(screen.getByTestId("bar-1").style.background).toBe("");
+  });
+
+  it("colours a bar from the field the view was told to use", () => {
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", color_by: "urgency" },
+          entities: [rec(1, { title: "A", span, urgency: "critical" })],
+        })}
+      />,
+    );
+
+    // The same palette the chips use — a second one would put `critical` on
+    // two different colours in two places on the same screen.
+    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("critical", urgencySpec).bg);
+  });
+
+  it("gives a record with nothing set the neutral slot rather than a hashed colour", () => {
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", color_by: "urgency" },
+          entities: [rec(1, { title: "A", span })],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("", urgencySpec).bg);
+  });
+
+  it("can colour by who is doing the work, not only by a select", () => {
+    // "by 不同東西做顏色 (status or 緊急度, assignee, etc)" — an actor field is
+    // one of the things people want to see at a glance.
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", color_by: "assignee" },
+          entities: [rec(1, { title: "A", span, assignee: "alice" })],
+          users,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("alice").bg);
   });
 });

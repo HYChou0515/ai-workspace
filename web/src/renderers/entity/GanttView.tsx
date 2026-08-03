@@ -50,6 +50,7 @@ import {
 } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
+import { selectColor } from "./selectColor";
 import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
 
@@ -134,6 +135,17 @@ export function GanttView({
   const labelField = spec.label ?? "title";
   const assigneeField = spec.assignee;
   const assigneeDisplay = spec.assignee_display ?? "avatar";
+  // #690 P2 — which field decides a bar's colour. Absent ⇒ bars keep the
+  // single default colour they have always had, so no existing view changes
+  // appearance the day this ships.
+  const colorField = spec.color_by;
+  const colorSpec = colorField ? roleOf(type, colorField) : undefined;
+  const barColor = (e: EntityInstance): string | undefined => {
+    if (!colorField) return undefined;
+    // The palette the chips already use. A second one would put one `status`
+    // value on two different colours in two places on the same screen.
+    return selectColor(fieldText(e.fields[colorField]) ?? "", colorSpec).bg;
+  };
   // null ⇒ auto-fit the whole project to the measured pane (fills the width on
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
   const [manualPpd, setManualPpd] = useState<number | null>(null);
@@ -408,7 +420,7 @@ export function GanttView({
                         // arrive; and a zero-day drag commits nothing, so the two
                         // presses underneath write no span.
                         onDoubleClick={() => onOpenRecord?.(row.e.number)}
-                        style={{ left, width }}
+                        style={{ left, width, background: barColor(row.e) }}
                       >
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}

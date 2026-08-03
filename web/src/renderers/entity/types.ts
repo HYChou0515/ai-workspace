@@ -27,6 +27,10 @@ export type ViewSpec = {
    * the choice survives a reload (the standalone Columns toggle was ephemeral). */
   hidden_fields?: string[];
   group_by?: string;
+  /** #690 — which field decides a bar's colour. Absent ⇒ bars keep the single
+   * default colour, so adding this changed no existing view's appearance.
+   * Written back when the user picks one in the toolbar, like sort. */
+  color_by?: string;
   /** #GH-projects — the multi-level sort. Empty / absent ⇒ manual `rank` order
    * (drag-to-reorder). A non-empty list takes over and disables manual drag. */
   sort?: SortRule[];
