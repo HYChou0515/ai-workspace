@@ -93,6 +93,8 @@ class _CreateBody(BaseModel):
     cpu_cores: float | None = None
     memory_bytes: int | None = None
     pids_max: int | None = None
+    # #674: this turn's third-party bundles, {local name: bundle sha}.
+    tools: dict[str, str] | None = None
 
 
 class _PersistBody(BaseModel):
@@ -444,6 +446,7 @@ def make_host_app(
             image=body.image,
             env=body.env,
             exposed_ports=tuple(body.exposed_ports),
+            tools=body.tools,
             cpu_cores=body.cpu_cores,
             memory_bytes=body.memory_bytes,
             pids_max=body.pids_max,
