@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 
 import { type FileService, FileServiceProvider, investigationFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
@@ -350,11 +351,15 @@ describe("<FileTree /> upload target", () => {
   }
   function renderWith(svc: FileService, files: FileInfo[]) {
     render(
-      <FileServiceProvider value={svc}>
-        <DialogProvider>
-          <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} />
-        </DialogProvider>
-      </FileServiceProvider>,
+      // An upload refused by a resource limit routes the user to /my-resources
+      // (#692), so the tree renders a real router link.
+      <MemoryRouter>
+        <FileServiceProvider value={svc}>
+          <DialogProvider>
+            <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} />
+          </DialogProvider>
+        </FileServiceProvider>
+      </MemoryRouter>,
     );
   }
   const filesInput = () =>
@@ -383,8 +388,6 @@ describe("<FileTree /> upload target", () => {
    */
   it("does not blame the size limit for a failure that has nothing to do with size", async () => {
     const user = userEvent.setup();
-    const alertSpy = vi.fn();
-    vi.stubGlobal("alert", alertSpy);
     const writeFile = vi.fn(async () => {
       throw Object.assign(new Error("403"), { status: 403 });
     });
@@ -392,9 +395,8 @@ describe("<FileTree /> upload target", () => {
     await user.click(screen.getByText("mydir"));
     fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
 
-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
-    expect(String(alertSpy.mock.calls[0]![0])).not.toContain("大小上限");
-    vi.unstubAllGlobals();
+    const notice = await screen.findByTestId("upload-problems");
+    expect(notice).not.toHaveTextContent("大小上限");
   });
 
   // Resolving an inconclusive failure against the file list now lives at the
@@ -403,8 +405,6 @@ describe("<FileTree /> upload target", () => {
   // is only to report it without inventing a reason.
   it("still reports a cut connection that really did lose the file", async () => {
     const user = userEvent.setup();
-    const alertSpy = vi.fn();
-    vi.stubGlobal("alert", alertSpy);
     const writeFile = vi.fn(async () => {
       throw Object.assign(new Error("network error"), { status: 0 });
     });
@@ -413,8 +413,73 @@ describe("<FileTree /> upload target", () => {
     await user.click(screen.getByText("mydir"));
     fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
 
-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+    expect(await screen.findByTestId("upload-problems")).toHaveTextContent("up.md");
+  });
+
+  /**
+   * #692: the report used to be an OS `alert()`. An alert interrupts, cannot be
+   * re-read once dismissed, is the one piece of UI that cannot say which part of
+   * the app it belongs to — and it cannot hold a link, which is what a refusal
+   * pointing at /my-resources needs. The composer stopped using one for exactly
+   * this in #245; the tree never followed.
+   */
+  it("reports a refusal in the tree, with the remedy pressable, and no OS alert", async () => {
+    const user = userEvent.setup();
+    const alertSpy = vi.fn();
+    vi.stubGlobal("alert", alertSpy);
+    const writeFile = vi.fn(async () => {
+      throw Object.assign(new Error("507"), { status: 507, code: "user_quota_exceeded" });
+    });
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    await user.click(screen.getByText("mydir"));
+    fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
+
+    const notice = await screen.findByTestId("upload-problems");
+    expect(notice).toHaveTextContent("up.md");
+    expect(within(notice).getByRole("link", { name: "我的資源" })).toHaveAttribute(
+      "href",
+      "/my-resources",
+    );
+    expect(alertSpy).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
+  });
+
+  it("names every file that failed, and stays until dismissed", async () => {
+    const user = userEvent.setup();
+    const writeFile = vi.fn(async (path: string) => {
+      if (path !== "/mydir/ok.md") throw Object.assign(new Error("507"), { status: 507 });
+    });
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    await user.click(screen.getByText("mydir"));
+    fireEvent.change(filesInput(), {
+      target: {
+        files: [new File(["x"], "one.md"), new File(["y"], "ok.md"), new File(["z"], "two.md")],
+      },
+    });
+
+    const notice = await screen.findByTestId("upload-problems");
+    await waitFor(() => expect(notice).toHaveTextContent("two.md"));
+    expect(notice).toHaveTextContent("one.md");
+    expect(notice).not.toHaveTextContent("ok.md"); // that one landed
+
+    await user.click(within(notice).getByRole("button", { name: "知道了" }));
+    expect(screen.queryByTestId("upload-problems")).toBeNull();
+  });
+
+  it("a fresh upload replaces the previous report rather than piling up", async () => {
+    const user = userEvent.setup();
+    let fail = true;
+    const writeFile = vi.fn(async () => {
+      if (fail) throw Object.assign(new Error("507"), { status: 507 });
+    });
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    await user.click(screen.getByText("mydir"));
+    fireEvent.change(filesInput(), { target: { files: [new File(["x"], "bad.md")] } });
+    await screen.findByTestId("upload-problems");
+
+    fail = false;
+    fireEvent.change(filesInput(), { target: { files: [new File(["y"], "good.md")] } });
+    await waitFor(() => expect(screen.queryByTestId("upload-problems")).toBeNull());
   });
 
   it("a folder's context menu uploads files into that folder", async () => {
@@ -447,9 +512,7 @@ describe("<FileTree /> upload target", () => {
     expect(writeFile.mock.calls[0]![0]).toBe("/big.bin");
   });
 
-  it("alerts and keeps going when the server rejects an upload (#219)", async () => {
-    const alertSpy = vi.fn();
-    vi.stubGlobal("alert", alertSpy);
+  it("reports and keeps going when the server rejects an upload (#219)", async () => {
     const writeFile = vi.fn(async () => {
       // A real rejection carries its STATUS (the client throws HttpError); a
       // message that merely reads "413" is not a 413, and the size message is
@@ -459,17 +522,13 @@ describe("<FileTree /> upload target", () => {
     renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
     const file = new File(["x"], "up.md", { type: "text/markdown" });
     fireEvent.change(filesInput(), { target: { files: [file] } });
-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
-    expect(alertSpy.mock.calls[0]![0]).toMatch(/大小上限/);
-    vi.unstubAllGlobals();
+    expect(await screen.findByTestId("upload-problems")).toHaveTextContent("大小上限");
   });
 
   it("a full workspace (507) tells the user to delete files, in their language (#538)", async () => {
     // The out-of-space message was hardcoded English and said only that the
     // workspace was out of space. Being full is the one upload failure the user
     // can actually fix, so the message has to name the remedy — and be readable.
-    const alertSpy = vi.fn();
-    vi.stubGlobal("alert", alertSpy);
     const writeFile = vi.fn(async () => {
       throw Object.assign(new Error("507"), { status: 507 });
     });
@@ -477,12 +536,13 @@ describe("<FileTree /> upload target", () => {
     fireEvent.change(filesInput(), {
       target: { files: [new File(["x"], "up.md", { type: "text/markdown" })] },
     });
-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
-    const msg = alertSpy.mock.calls[0]![0] as string;
-    expect(msg).toContain("up.md");
-    expect(msg).toContain("空間已滿");
-    expect(msg).toContain("刪除");
-    vi.unstubAllGlobals();
+    const notice = await screen.findByTestId("upload-problems");
+    expect(notice).toHaveTextContent("up.md");
+    expect(notice).toHaveTextContent("空間已滿");
+    expect(notice).toHaveTextContent("刪除");
+    // This item's own workspace: the files to delete are right here, so there is
+    // nowhere else to send them.
+    expect(within(notice).queryByRole("link")).toBeNull();
   });
 });
 

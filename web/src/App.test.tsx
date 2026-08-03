@@ -5,6 +5,8 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AppRoutes } from "./App";
+import { MY_RESOURCES_PATH } from "./components/ResourceLinkText";
+import { translate } from "./lib/i18n";
 import { QueryWrap } from "./test/queryWrapper";
 
 afterEach(cleanup);
@@ -40,6 +42,17 @@ describe("AppRoutes", () => {
   it("renders the item workspace at /a/:slug/:itemId", () => {
     renderAt("/a/rca/rca-investigation%2F1");
     expect(screen.getByTestId("page-app-workspace")).toBeTruthy();
+  });
+
+  // #692: every resource refusal now links here. The link spells the path via
+  // MY_RESOURCES_PATH; this is the assertion that the path still resolves to
+  // the page — otherwise the refusals would route people to the catch-all.
+  it("renders My resources at the path every refusal links to", () => {
+    renderAt(MY_RESOURCES_PATH);
+    expect(screen.getByText(translate("zh-TW", "resources.loading"))).toBeTruthy();
+    // An unknown path bounces to the launcher, so this is what tells the two
+    // outcomes apart.
+    expect(screen.queryByTestId("page-launcher")).toBeNull();
   });
 
   it("falls back to the launcher for unknown paths", () => {

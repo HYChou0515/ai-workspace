@@ -11,6 +11,7 @@ import { type FileCaps, type FileService, useOptionalFileService } from "../../a
 import type { FileInfo } from "../../api/types";
 import { useOptionalDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { useT } from "../../lib/i18n";
 import { buildFileTree, pruneTree, type TreeNode } from "./fileTree";
@@ -166,6 +167,10 @@ export function FileTree({
   // A force-open (filter) ancestor counts as expanded for navigation order too.
   const order = visibleOrder(tree, (p) => collapsed.has(p) && !expand.has(p));
   const [rootDrop, setRootDrop] = useState(false);
+  // #692: what went wrong with the last upload, one line per file, shown in the
+  // tree until dismissed — see the note on the notice below for why this stopped
+  // being an alert().
+  const [uploadProblems, setUploadProblems] = useState<string[]>([]);
   const [uploadMenu, setUploadMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Set by the folder context menu just before it opens the file picker, so the
@@ -209,6 +214,11 @@ export function FileTree({
   const upload = async (fileList: FileList | File[] | null, targetDir: string = createDir) => {
     if (!fileList || fileList.length === 0) return;
     const existing = new Set(files.map((f) => f.path));
+    // A new attempt reports on itself: the previous report described files the
+    // user has already dealt with (or re-dropped), so keeping it would leave
+    // them reading stale failures next to fresh ones.
+    setUploadProblems([]);
+    const problems: string[] = [];
     let firstPath: string | null = null;
     for (const f of Array.from(fileList)) {
       // #219: no client-side size cap — the upload streams to a blob store, so
@@ -241,7 +251,12 @@ export function FileTree({
         const status = (err as { status?: number }).status;
         const code = (err as { code?: string }).code;
         const key = uploadFailureKey(status, code);
-        alert(
+        // #692: reported in the tree rather than through an OS alert(). An alert
+        // interrupts, cannot be re-read once dismissed, cannot say which part of
+        // the app it belongs to — and cannot hold a link, which is precisely
+        // what a refusal that points at /my-resources needs. Dropping ten files
+        // also meant ten modal dialogs to click through, one at a time.
+        problems.push(
           key === "workspace.upload.error"
             ? t(key, {
                 name: f.name,
@@ -253,6 +268,7 @@ export function FileTree({
       }
       firstPath ??= path;
     }
+    setUploadProblems(problems);
     refresh();
     if (firstPath) onOpen(firstPath, { preview: false });
   };
@@ -630,6 +646,40 @@ export function FileTree({
           style={{ display: "none" }}
         />
       </div>
+
+      {/* #692: what the last upload refused, next to the tree it was dropped on
+          — re-readable, one line per file, and (when the remedy is another page)
+          carrying the link that an alert() could never hold. */}
+      {uploadProblems.length > 0 && (
+        <div
+          data-testid="upload-problems"
+          role="status"
+          style={{
+            margin: "0 10px 6px 14px",
+            padding: 8,
+            border: "1px solid var(--err)",
+            borderRadius: "var(--radius-card)",
+            color: "var(--err)",
+            fontSize: pxToRem(11),
+            display: "flex",
+            flexDirection: "column",
+            gap: 4,
+          }}
+        >
+          {uploadProblems.map((problem, i) => (
+            <span key={i}>
+              <ResourceLinkText text={problem} />
+            </span>
+          ))}
+          <button
+            type="button"
+            onClick={() => setUploadProblems([])}
+            style={{ alignSelf: "flex-start", color: "var(--text-paper-d)" }}
+          >
+            {t("workspace.upload.dismiss")}
+          </button>
+        </div>
+      )}
 
       {/* Tree body — also the root drop zone (move/copy to root). Only the
           genuine empty area highlights, so dragging a file no longer tints
