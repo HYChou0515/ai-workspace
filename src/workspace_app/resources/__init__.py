@@ -744,15 +744,31 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # shape as a claim, so the same mirror and the same scope. `norm_surface` /
     # `norm_kind` are indexed because the vocabulary layer groups on them, and
     # they are derived state, so they are versioned like the claim keys are.
+    #
+    # `surface` / `kind` / `occurrences` are indexed for a different reason: they
+    # are the ONLY other things the vocabulary pass reads, and it reads every
+    # mention in the corpus. Without them the pass had to materialise each row
+    # through the resource store — one decode per mention, twice over — to reach
+    # three scalars. With them the whole walk is a metadata scan and the blobs
+    # are never touched. They are raw surfaces, not derived keys, so nothing here
+    # can drift; the projection is the trade (cf. `SourceDoc.status_detail`).
+    # Bumped v1 → v2 with a no-op reindex step: specstar extracts indexed_data at
+    # WRITE time and never backfills, so rows written before this carry none of
+    # the three until `POST /graph-mention/migrate/execute` runs. The reader
+    # falls back to the blob for those rather than reading an absent cell as an
+    # empty name, so the migrate is a speed-up, never a correctness gate.
     spec.add_model(
-        Schema(GraphMention, "v1").step(
-            None, _renormalize_mention, to="v1", source_type=GraphMention
-        ),
+        Schema(GraphMention, "v2")
+        .step(None, _renormalize_mention, to="v1", source_type=GraphMention)
+        .step("v1", _reindex_only, to="v2", source_type=GraphMention),
         indexed_fields=[
             "collection_id",
             "source_doc_id",
             IndexableField("norm_surface", str),
             IndexableField("norm_kind", str),
+            IndexableField("surface", str),
+            IndexableField("kind", str),
+            IndexableField("occurrences", int),
             IndexableField("declared_same_as", list),
             IndexableField("collection_visibility", str),
             IndexableField("collection_read_meta", list),

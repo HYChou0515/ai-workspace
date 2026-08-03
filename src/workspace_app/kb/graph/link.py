@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from typing import NamedTuple
 
 import msgspec
 from specstar import QB, SpecStar
@@ -96,19 +97,81 @@ def _set_kind(spec: SpecStar, entity_id: str, kind_id: str) -> None:
         rm.update(entity_id, msgspec.structs.replace(entity, kind_id=kind_id))
 
 
-def _mention_collection(spec: SpecStar, mention_id: str) -> list[str]:
-    """Where a mention's evidence lives, for the link that points at it."""
-    rm = spec.get_resource_manager(GraphMention)
-    mention = rm.get(mention_id).data
-    assert isinstance(mention, GraphMention)
-    return [mention.collection_id]
+class _Mention(NamedTuple):
+    """The whole of what the vocabulary pass reads about one mention.
+
+    Named rather than passing the stored record around, because the difference
+    matters: these six are indexed and arrive with the metadata search, and the
+    rest of ``GraphMention`` — the permission mirror, the chunk ids, the declared
+    quote — is not read here at all. A partially-populated ``GraphMention`` would
+    have said the same thing while inviting the next reader to reach for a field
+    that is silently empty.
+    """
+
+    id: str
+    norm_surface: str
+    surface: str
+    norm_kind: str
+    kind: str
+    occurrences: int
+    collection_id: str
 
 
-def _link(spec: SpecStar, entity_id: str, mention_id: str) -> bool:
+def _mentions(mrm) -> Iterator[_Mention]:
+    """Every mention, read from the INDEX rather than the stored row.
+
+    A listing materialises each row through the resource store; a metadata search
+    does not, and every field below is indexed precisely so this walk never has
+    to. Over a whole corpus that is the difference between one decode per mention
+    and none.
+
+    Rows written before those fields were indexed carry none of them — specstar
+    extracts ``indexed_data`` at write time and does not backfill — and reading an
+    absent cell would hand the pass an empty surface and zero occurrences, which
+    it would then store as an identity's display name. So they are collected and
+    read from their blobs instead, in bounded pages. That list is empty once
+    ``POST /graph-mention/migrate/execute`` has run, which is what makes the
+    migrate a speed-up rather than a correctness gate.
+    """
+    stale: list[str] = []
+    for meta in mrm.iter_all(QB.all().build(), batch_size=_PAGE):
+        indexed = meta.indexed_data or {}
+        if "surface" not in indexed:
+            stale.append(meta.resource_id)
+            continue
+        yield _Mention(
+            id=meta.resource_id,
+            norm_surface=str(indexed.get("norm_surface") or ""),
+            surface=str(indexed.get("surface") or ""),
+            norm_kind=str(indexed.get("norm_kind") or ""),
+            kind=str(indexed.get("kind") or ""),
+            occurrences=int(indexed.get("occurrences") or 0),
+            collection_id=str(indexed.get("collection_id") or ""),
+        )
+    for start in range(0, len(stale), _PAGE):
+        for r in mrm.list_resources((QB.resource_id() << stale[start : start + _PAGE]).build()):
+            row = r.data
+            assert isinstance(row, GraphMention)
+            yield _Mention(
+                id=r.info.resource_id,
+                norm_surface=row.norm_surface,
+                surface=row.surface,
+                norm_kind=row.norm_kind,
+                kind=row.kind,
+                occurrences=row.occurrences,
+                collection_id=row.collection_id,
+            )
+
+
+def _link(spec: SpecStar, entity_id: str, mention_id: str, collection_id: str) -> bool:
     """Record that a mention belongs to an identity. Returns whether it was new.
 
     Never duplicated on a re-run: one mention belongs to one identity by this
     basis, so an existing link means there is nothing to do.
+
+    The collection is passed in rather than looked up. Reading it back off the
+    mention meant one point-read per mention on a pass that had already read
+    every one of them — the caller is holding the answer.
     """
     rm = spec.get_resource_manager(GraphEntityLink)
     existing = rm.list_resources((QB["mention_id"] == mention_id).build())
@@ -121,7 +184,7 @@ def _link(spec: SpecStar, entity_id: str, mention_id: str) -> bool:
             basis="identical",
             evidence="norm_surface",
             state="active",
-            collection_ids=_mention_collection(spec, mention_id),
+            collection_ids=[collection_id],
         )
     )
     return True
@@ -137,15 +200,11 @@ def link_identical_mentions(spec: SpecStar) -> int:
     mrm = spec.get_resource_manager(GraphMention)
     # Group the evidence first: the display name should be the surface the corpus
     # actually used most, and that is only knowable once every mention is in hand.
-    by_key: dict[str, list[GraphMention]] = {}
-    ids_by_key: dict[str, list[str]] = {}
-    for r in _walk(mrm):
-        mention = r.data
-        assert isinstance(mention, GraphMention)
+    by_key: dict[str, list[_Mention]] = {}
+    for mention in _mentions(mrm):
         if not mention.norm_surface:
             continue
         by_key.setdefault(mention.norm_surface, []).append(mention)
-        ids_by_key.setdefault(mention.norm_surface, []).append(r.info.resource_id)  # ty: ignore[unresolved-attribute]
 
     kind_ids: dict[str, str] = {}
     for mentions in by_key.values():
@@ -167,8 +226,8 @@ def link_identical_mentions(spec: SpecStar) -> int:
         kinds = {m.norm_kind for m in mentions if m.norm_kind}
         if len(kinds) == 1:
             _set_kind(spec, entity_id, kind_ids[next(iter(kinds))])
-        for mention_id in ids_by_key[key]:
-            created += _link(spec, entity_id, mention_id)
+        for mention in mentions:
+            created += _link(spec, entity_id, mention.id, mention.collection_id)
     return created
 
 
@@ -411,7 +470,7 @@ def _live_entities(spec: SpecStar) -> list[tuple[str, GraphEntity]]:
         entity = r.data
         assert isinstance(entity, GraphEntity)
         if entity.collection_ids:  # an absorbed identity holds no evidence
-            out.append((r.info.resource_id, entity))  # ty: ignore[unresolved-attribute]
+            out.append((r.info.resource_id, entity))
     return out
 
 

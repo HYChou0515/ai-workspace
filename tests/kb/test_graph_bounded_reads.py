@@ -116,10 +116,11 @@ def test_reconcile_pages_every_table_it_walks(capped: None) -> None:
     from workspace_app.resources.graph import GraphEntity
 
     erm = spec.get_resource_manager(GraphEntity)
-    names = {
-        r.data.canonical_name
-        for r in erm.list_resources(QB["norm_keys"].contains("thing-000").build())
-    }
+    names = set()
+    for r in erm.list_resources(QB["norm_keys"].contains("thing-000").build()):
+        entity = r.data
+        assert isinstance(entity, GraphEntity)
+        names.add(entity.canonical_name)
     assert names == {"thing-000"}, "the pass ran without building the vocabulary"
 
 

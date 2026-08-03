@@ -289,9 +289,11 @@ def test_a_failed_pass_names_itself_and_keeps_its_traceback(caplog, monkeypatch)
     monkeypatch.setattr(link_mod, "name_predicates", _boom)
     spec = make_spec(default_user=lambda: "bob")
 
-    with caplog.at_level(logging.INFO, logger="workspace_app.kb.graph.link"):
-        with pytest.raises(_PgError):
-            reconcile_vocabulary(spec)
+    with (
+        caplog.at_level(logging.INFO, logger="workspace_app.kb.graph.link"),
+        pytest.raises(_PgError),
+    ):
+        reconcile_vocabulary(spec)
 
     failed = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert failed, "a pass died and the log said nothing about it"
