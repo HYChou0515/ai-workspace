@@ -4,9 +4,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentEvent } from "../events";
 import { eventSeq, isTerminal } from "../events";
 import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
+import { type QuotaKind, quotaKind } from "../lib/quotaFailure";
 import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
+import { useT } from "../lib/i18n";
 import { STORE_POLL_MS, useStorePollFallback } from "./useStorePollFallback";
+
+/** A quota refusal is the one send failure the user can do something about, so
+ *  the composer names which limit and where to go rather than echoing a status.
+ *  Three rules answer 507 and the remedies are three different places. */
+const CHAT_QUOTA_KEY = {
+  workspace: "chat.send.workspaceFull",
+  user: "chat.send.userFull",
+  environment: "chat.send.envFull",
+} as const satisfies Record<NonNullable<QuotaKind>, string>;
 
 export { STORE_POLL_MS };
 export type { ChatThread };
@@ -121,6 +132,7 @@ export function useChatSession(
   pollMs: number = STORE_POLL_MS,
 ): ChatSession {
   const qc = useQueryClient();
+  const t = useT();
   const currentUser = useCurrentUser();
   // Epoch ms of the last live event (or send) — gates the #202 store-poll so a
   // healthy same-pod stream is never polled over.
@@ -391,11 +403,19 @@ export function useChatSession(
           lastEventAtRef.current = Date.now(); // give the poll a grace cycle
           return;
         }
-        const msg = err instanceof Error ? err.message : String(err);
+        // A quota refusal is the one send failure the user can act on, so it
+        // names which limit and where to go. Everything else keeps reporting
+        // what actually happened rather than guessing.
+        const kind = quotaKind(status, (err as { code?: string } | null)?.code);
+        const msg = kind
+          ? t(CHAT_QUOTA_KEY[kind])
+          : err instanceof Error
+            ? err.message
+            : String(err);
         setLog((prev) => ({ ...prev, streaming: false, error: msg }));
       }
     },
-    [transport],
+    [transport, t],
   );
 
   const cancel = useCallback(() => {

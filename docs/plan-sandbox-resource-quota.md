@@ -184,7 +184,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 1. 改某人的額度,**只有他**改變
 2. 沒有覆寫記錄 = 吃全站預設
-3. 改完**不用重啟**就生效
+3. 改完**不用重啟**就生效 —— 精確地說:下 PUT 的那個 pod 立即生效,其他 replica 最多 5 秒(memo TTL,沒有跨 pod 失效廣播)
 
 ### P8 — 「我的資源使用」畫面 ✅ 已完成
 

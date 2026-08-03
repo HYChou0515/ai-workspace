@@ -178,43 +178,56 @@ def _enforce_ceiling(slug: str, limits: ResourceLimits, ceiling: ResourceAmounts
 def warn_unenforceable_dimensions(
     settings: Settings, limits: dict[str, ResourceLimits]
 ) -> list[str]:
-    """Name any per-person dimension the deploy set that cannot currently bind.
+    """Name any per-person dimension the deploy set that cannot fully bind.
 
     A per-user `cpu` / `memory` cap sums what each live sandbox is ALLOWED to
-    consume. When no App states a cost, every term of that sum is unknown and
-    the cap silently never fires — the operator sees their number in the config
-    dump and nothing enforcing it, which is the dead-knob failure this codebase
-    treats as a defect rather than a nuance. `count` is unaffected: counting
-    sandboxes needs nobody to have declared anything.
+    consume. An App that states no cost contributes a zero term, so the cap is
+    only as real as the Apps that declared something. Two shapes matter, and the
+    second is the nastier one:
 
-    Returns the messages (also logged) so a caller can surface them; not fatal,
-    because the config is not WRONG — it is just waiting for an App to declare
-    what it costs."""
+    * **nobody declared** — the cap never fires at all;
+    * **some declared** — the cap fires against a partial sum, so the same limit
+      binds or not depending on which Apps a person happens to be using. That
+      one LOOKS like it is working, which is exactly why it needs saying.
+
+    Checked PER DIMENSION. Sharing one "did anyone state anything?" answer
+    across cpu and memory meant an App declaring only `memory` silenced the
+    `cpu` warning while `cpu` still could not bind.
+
+    `count` is never affected: counting sandboxes needs nobody to declare
+    anything. Not fatal — the config is not wrong, it is waiting for an App to
+    say what it costs.
+    """
     per_user = settings.resources.per_user
-    wanted = [
-        name
-        for name, value in (("cpu", per_user.cpu), ("memory", parse_size(per_user.memory)))
-        if value
-    ]
-    if not wanted:
-        return []
-    stated = sorted(
-        slug
-        for slug, lim in limits.items()
-        if lim.cpu_cores is not None or lim.memory_bytes is not None
-    )
-    if stated:
-        return []
-    messages = [
-        f"resources.per_user.{name} is set, but no App states a {name} cost "
-        f"(app.json `resources`, or resources.per_app.default), so the limit "
-        f"cannot bind — a sum over undeclared costs has no terms. "
-        f"resources.per_user.count still applies."
-        for name in wanted
-    ]
+    wanted = (("cpu", per_user.cpu), ("memory", parse_size(per_user.memory)))
+    messages: list[str] = []
+    for name, configured in wanted:
+        if not configured:
+            continue
+        silent = sorted(slug for slug, lim in limits.items() if _stated(lim, name) is None)
+        if not silent:
+            continue  # every App states this dimension — the sum is complete
+        where = f"app.json `resources`, or resources.per_app.{name}"
+        if len(silent) == len(limits):
+            messages.append(
+                f"resources.per_user.{name} is set, but no App states a {name} "
+                f"cost ({where}), so the sum has no terms and this limit never "
+                f"fires. resources.per_user.count still applies."
+            )
+        else:
+            messages.append(
+                f"resources.per_user.{name} is set, but these Apps state no "
+                f"{name} cost: {', '.join(silent)} ({where}). Their sandboxes "
+                f"count as zero, so the limit binds against a partial sum — it "
+                f"will fire or not depending on which Apps a person is using."
+            )
     for message in messages:
         logger.warning("quota: %s", message)
     return messages
+
+
+def _stated(limits: ResourceLimits, dimension: str) -> float | int | None:
+    return limits.cpu_cores if dimension == "cpu" else limits.memory_bytes
 
 
 def resolve_discovered_apps(settings: Settings) -> dict[str, ResourceLimits]:

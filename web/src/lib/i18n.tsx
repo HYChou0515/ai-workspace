@@ -803,6 +803,20 @@ export const messages = {
   "review.title": { "zh-TW": "審核", en: "Review" },
   // The terminal's own wording for the three limits. It wakes a sandbox, so it
   // is one of only two surfaces where the live-environment limit can appear.
+  // Sending a message is the primary interface and the other place the
+  // live-environment limit appears, so it gets its own wording too.
+  "chat.send.envFull": {
+    "zh-TW": "沒有送出:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再送一次。",
+    en: "Not sent — you're at your limit for live environments. Close one in My resources, then send again.",
+  },
+  "chat.send.userFull": {
+    "zh-TW": "沒有送出:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再送一次。",
+    en: "Not sent — you're out of space across all your items. Open My resources to see where it went, then send again.",
+  },
+  "chat.send.workspaceFull": {
+    "zh-TW": "沒有送出:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
+    en: "Not sent — this item's workspace is full. Delete files you no longer need first.",
+  },
   "terminal.envFull": {
     "zh-TW": "沒有執行:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再試一次。",
     en: "Not run — you're at your limit for live environments. Close one in My resources, then try again.",
@@ -825,6 +839,10 @@ export const messages = {
   "resources.live.cores": { "zh-TW": "{n} 核", en: "{n} cores" },
   "resources.memory": { "zh-TW": "記憶體", en: "Memory" },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
+  "resources.disk.untracked": {
+    "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",
+    en: "This deployment sets no personal storage limit, so usage isn't tracked.",
+  },
   "resources.disk.empty": { "zh-TW": "還沒有任何項目佔用空間。", en: "Nothing stored yet." },
   // Says WHERE deleting happens, because it deliberately does not happen here:
   // the item's own file list is the only place that shows what is being deleted.

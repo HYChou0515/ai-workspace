@@ -44,6 +44,10 @@ export type MyResources = {
   cpu_in_use: number;
   memory_in_use: number;
   disk_in_use: number;
+  /** False when this deploy caps nobody's disk, so nothing is being tallied.
+   *  `disk_in_use: 0` then means "not measured", not "nothing stored" — and
+   *  rendering the second would be a lie on a page everyone can open. */
+  disk_tracked: boolean;
 };
 
 export type MyResourcesApi = {

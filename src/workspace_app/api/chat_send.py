@@ -67,7 +67,7 @@ if TYPE_CHECKING:
     from .schemas import _MessageBody
     from .subagent_bridge import SubagentBridge
     from .turn_context import TurnContextBuilder
-from .turns import ChatTurnEngine, TurnMessage
+    from .turns import ChatTurnEngine, TurnMessage
 
 logger = logging.getLogger(__name__)
 

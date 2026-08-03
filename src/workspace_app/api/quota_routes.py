@@ -66,6 +66,15 @@ class _MyResources(BaseModel):
     cpu_in_use: float = 0.0
     memory_in_use: int = 0
     disk_in_use: int = 0
+    disk_tracked: bool = True
+    """Whether the disk figures above mean anything.
+
+    The ledger is only written for people who actually have a disk cap — a
+    deploy with none should not pay a durable write per file write for an answer
+    nobody asked for. The cost is that `disk_in_use` is then 0 and `workspaces`
+    empty, which is NOT the same statement as "you are using nothing", and the
+    panel is visible to everyone by design. So say which of the two it is rather
+    than let the UI render a number that happens to be false."""
 
 
 class _SetLimits(BaseModel):
@@ -123,6 +132,7 @@ def register_quota_routes(
             owned.append(_OwnedWorkspace(item_id=item_id, slug=slug, title=title, bytes_used=used))
         return _MyResources(
             owner=owner,
+            disk_tracked=bool(parse_size(limits.disk)),
             limits=_Limits(
                 count=limits.count,
                 cpu=limits.cpu,

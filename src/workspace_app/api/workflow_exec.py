@@ -45,7 +45,7 @@ if TYPE_CHECKING:
     from .locator import ItemLocator
     from .registry import InvestigationRegistry
     from .turn_context import TurnContextBuilder
-from .turns import ChatTurnEngine, TurnMessage
+    from .turns import ChatTurnEngine, TurnMessage
 
 # The generic sub-agent bridge callable shape (purpose, payload, sink, origin_id, ...).
 RunSubagent = Callable[..., Awaitable[tuple[str, list]]]

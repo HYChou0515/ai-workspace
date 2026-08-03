@@ -35,6 +35,7 @@ function data(over: Partial<MyResources> = {}): MyResources {
     cpu_in_use: 2,
     memory_in_use: 512,
     disk_in_use: 800,
+    disk_tracked: true,
     ...over,
   };
 }

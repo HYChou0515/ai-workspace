@@ -6,8 +6,11 @@ path is `override ◇ deploy default`, with only the second layer populated unti
 an operator sets the first.
 
 Resolved per CHECK rather than captured at boot, so raising someone's allowance
-takes effect on their next turn instead of at the next restart. That costs one
-point read on the path that was already about to query the ledger.
+takes effect within seconds instead of at the next restart. The read is memoised
+for `ttl_s`; a write clears the memo on the pod that served it, so the bound is
+"immediate there, at most `ttl_s` on the other replicas" — there is no
+cross-pod invalidation, and claiming instant would be claiming something this
+deployment shape cannot deliver.
 
 An override is per DIMENSION: setting only `count` leaves cpu/memory/disk on the
 deploy default, the same fall-through the per-App limits use, so an exception
@@ -111,9 +114,12 @@ class UserLimits:
 
     async def set_for(self, user_id: str, limits: PerUserResources) -> None:
         await asyncio.to_thread(self._set_sync, user_id, limits)
-        # An admin raising someone's allowance expects the very next turn to
-        # honour it — "takes effect without a restart" must not quietly mean
-        # "within five seconds".
+        # Drop the memo on THIS pod, so the admin who just made the change sees
+        # it on the very next check. Other replicas keep their copy until the
+        # TTL expires — this app is multi-replica by design (#345 / #366), and
+        # there is no invalidation broadcast. So the honest guarantee is: at most
+        # `ttl_s` anywhere, immediate where the change was made. Not "instant",
+        # which is what a reader would otherwise take from this line.
         self._cache.pop(user_id, None)
 
     def _set_sync(self, user_id: str, limits: PerUserResources) -> None:

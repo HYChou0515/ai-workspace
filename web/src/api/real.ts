@@ -557,7 +557,14 @@ export const realApi: ApiClient = {
       },
     );
     if (!resp.ok) {
-      throw new HttpError(resp.status, `messages failed: ${resp.status}`);
+      // Sending a message is the OTHER place a `sandbox_quota_exceeded` comes
+      // from, and it is the primary interface — a bare "messages failed: 507"
+      // is a status with no remedy attached.
+      throw new HttpError(
+        resp.status,
+        `messages failed: ${resp.status}`,
+        await errorCode(resp),
+      );
     }
   },
 

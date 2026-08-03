@@ -103,11 +103,19 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
 
       <section aria-labelledby="disk-heading">
         <h2 id="disk-heading">{t("resources.disk.heading")}</h2>
-        <p className="summary">
-          {formatAgainstLimit(data.disk_in_use, limits.disk_bytes, formatBytes)}
-        </p>
-        <Meter used={data.disk_in_use} limit={limits.disk_bytes} />
-        {data.workspaces.length === 0 ? (
+        {!data.disk_tracked ? (
+          // Not "0 B" — this deploy caps nobody's disk, so nothing is measured.
+          // Reporting zero would state something false on a page anyone can open.
+          <p className="empty">{t("resources.disk.untracked")}</p>
+        ) : (
+          <>
+            <p className="summary">
+              {formatAgainstLimit(data.disk_in_use, limits.disk_bytes, formatBytes)}
+            </p>
+            <Meter used={data.disk_in_use} limit={limits.disk_bytes} />
+          </>
+        )}
+        {!data.disk_tracked ? null : data.workspaces.length === 0 ? (
           <p className="empty">{t("resources.disk.empty")}</p>
         ) : (
           <ul>
@@ -122,7 +130,7 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
             ))}
           </ul>
         )}
-        <p className="hint">{t("resources.disk.hint")}</p>
+        {data.disk_tracked ? <p className="hint">{t("resources.disk.hint")}</p> : null}
       </section>
     </div>
   );
