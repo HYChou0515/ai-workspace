@@ -23,6 +23,7 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ...resources.graph import GraphEntity
+from .link import indexed_rows
 from .normalize import display_value, norm_surface
 from .review import EntityPage, entity_page
 
@@ -140,18 +141,21 @@ def _candidates(spec: SpecStar, key: str, *, as_user: str) -> list[str]:
         return []
     erm = spec.get_resource_manager(GraphEntity)
     out: list[str] = []
-    for r in erm.list_resources(QB.all().build()):
-        entity = r.data
-        assert isinstance(entity, GraphEntity)
-        if entity.merged_into or not entity.collection_ids:
+    # Paged, and read from the index. This runs on every lookup that MISSES — the
+    # common case for a name the corpus does not know — and it used to ask for
+    # every identity in one request, which is the shape that stops a large corpus
+    # dead (see `link.walk_rows`). Nothing below the `entity_page` check needs the
+    # stored record either; all four fields are indexed.
+    for rid, values in indexed_rows(erm, ("canonical_name", "norm_keys", "merged_into")):
+        if values.get("merged_into") or not values.get("collection_ids"):
             continue
-        if not _close(key, entity.norm_keys):
+        if not _close(key, [str(k) for k in values.get("norm_keys") or []]):
             continue
         try:
-            entity_page(spec, r.info.resource_id, as_user=as_user)  # ty: ignore[unresolved-attribute]
+            entity_page(spec, rid, as_user=as_user)
         except ResourceIDNotFoundError:
             continue  # unreadable — must not be hinted either
-        out.append(entity.canonical_name)
+        out.append(str(values.get("canonical_name") or ""))
         if len(out) >= _MAX_CANDIDATES:
             break
     return out

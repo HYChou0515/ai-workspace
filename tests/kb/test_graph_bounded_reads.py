@@ -74,7 +74,7 @@ def capped(monkeypatch: pytest.MonkeyPatch) -> None:
         return rows
 
     monkeypatch.setattr(ResourceManager, "list_resources", refusing)
-    monkeypatch.setattr(link_mod, "_PAGE", PAGE)
+    monkeypatch.setattr(link_mod, "PAGE", PAGE)
 
 
 def _corpus(spec: SpecStar) -> None:
@@ -136,7 +136,7 @@ def test_absorbing_moves_every_link_even_past_one_page(monkeypatch: pytest.Monke
     """
     from workspace_app.resources.graph import GraphEntity, GraphEntityLink
 
-    monkeypatch.setattr(link_mod, "_PAGE", 3)
+    monkeypatch.setattr(link_mod, "PAGE", 3)
     spec = make_spec(default_user=lambda: "bob")
     erm = spec.get_resource_manager(GraphEntity)
     lrm = spec.get_resource_manager(GraphEntityLink)
@@ -162,3 +162,53 @@ def test_the_double_would_catch_the_regression(capped: None) -> None:
 
     with pytest.raises(RuntimeError, match="stack depth limit exceeded"):
         mrm.list_resources(QB.all().build())
+
+
+def test_walk_rows_returns_everything_across_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Paging is only correct if the caller still sees every row.
+
+    The failure mode it replaces was loud (the database refused the statement);
+    the failure mode it could introduce is silent — a walk that stops at the
+    first page returns a prefix and every caller treats it as the whole table.
+    """
+    from workspace_app.kb.graph.link import walk_rows
+
+    monkeypatch.setattr(link_mod, "PAGE", 7)
+    spec = make_spec(default_user=lambda: "bob")
+    _corpus(spec)
+    mrm = spec.get_resource_manager(GraphMention)
+
+    walked = [r.info.resource_id for r in walk_rows(mrm)]
+
+    assert len(walked) == ROWS, f"the walk stopped early: {len(walked)} of {ROWS}"
+    assert len(set(walked)) == ROWS, "a page boundary repeated rows"
+
+
+def test_a_did_you_mean_list_is_bounded_and_skips_the_unrelated() -> None:
+    """The near-miss hint walks the whole vocabulary on every lookup that MISSES,
+    which is the common case for a name the corpus does not know — so it pages
+    like the rest, stops at the cap, and never offers a name that shares nothing
+    with what was asked."""
+    from workspace_app.kb.graph.lookup import entity_card
+    from workspace_app.resources.graph import GraphEntity
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    erm = spec.get_resource_manager(GraphEntity)
+    for i in range(8):  # more near misses than the hint is allowed to print
+        erm.create(
+            GraphEntity(
+                canonical_name=f"reflow oven {i}",
+                norm_keys=[f"reflow oven {i}"],
+                collection_ids=[cid],
+            )
+        )
+    erm.create(
+        GraphEntity(canonical_name="錫膏", norm_keys=["錫膏"], collection_ids=[cid])
+    )  # shares nothing with the asked name
+
+    card = entity_card(spec, "reflow oven", as_user="bob")
+
+    assert "Entity not found" in card
+    assert "錫膏" not in card, "an unrelated name was offered as a near miss"
+    assert card.count("reflow oven") <= 6, "the hint printed more candidates than its cap"

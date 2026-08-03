@@ -190,3 +190,72 @@ def _names(erm, surface: str) -> list[str]:
         assert isinstance(entity, GraphEntity)
         out.append(entity.canonical_name)
     return out
+
+
+def test_a_second_reconcile_reads_no_stored_row_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every walk in the pass reads the index — mentions, relationships, links.
+
+    Stated on the SECOND run, where the pass is idempotent and has nothing to
+    write, so what is left is exactly the reading. Anything that still decodes a
+    stored row there is scanning a table through the resource store, which is the
+    cost this slice removes and the shape that stopped the pass running at all.
+
+    ``graph-entity`` is deliberately not asserted to zero: the vocabulary is
+    read-modify-written (widen the collection list, set the kind), which is a
+    point read per IDENTITY. That grows with the vocabulary, not with the corpus,
+    and it is a write path rather than a walk.
+    """
+    from collections import Counter
+
+    from specstar.resource_manager.core import ResourceManager
+
+    from workspace_app.kb.graph.link import reconcile_vocabulary
+    from workspace_app.resources.graph import GraphRelationship
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+    rrm = spec.get_resource_manager(GraphRelationship)
+    with rrm.using("bob"):
+        for i in range(4):
+            rrm.create(
+                GraphRelationship(
+                    collection_id=cid,
+                    source_doc_id=f"deck-{i}",
+                    subject=f"Reflow Oven {i}",
+                    predicate="造成" if i % 2 else "leads to",
+                    object="cold joint",
+                    norm_subject=norm_surface(f"Reflow Oven {i}"),
+                    norm_predicate=norm_surface("造成" if i % 2 else "leads to"),
+                    norm_object=norm_surface("cold joint"),
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                    doc_visibility="public",
+                )
+            )
+    reconcile_vocabulary(spec, llm=None)  # first run does the writing
+
+    reads: Counter[str] = Counter()
+    real_list = ResourceManager.list_resources
+    real_get = ResourceManager.get
+
+    def listing(self, query=None, *args, **kwargs):  # noqa: ANN001, ANN202
+        rows = real_list(self, query, *args, **kwargs)
+        reads[self.resource_name] += len(rows)
+        return rows
+
+    def one(self, resource_id, *args, **kwargs):  # noqa: ANN001, ANN202
+        reads[self.resource_name] += 1
+        return real_get(self, resource_id, *args, **kwargs)
+
+    monkeypatch.setattr(ResourceManager, "list_resources", listing)
+    monkeypatch.setattr(ResourceManager, "get", one)
+
+    reconcile_vocabulary(spec, llm=None)
+
+    walked = {name: reads[name] for name in ("graph-mention", "graph-relationship")}
+    assert walked == {"graph-mention": 0, "graph-relationship": 0}, (
+        f"the pass still materialises rows it only scans: {walked}"
+    )
+    assert reads["graph-entity-link"] == 0, (
+        f"the link table is scanned through the resource store: {reads['graph-entity-link']}"
+    )

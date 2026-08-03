@@ -34,10 +34,10 @@ _LOGGER = logging.getLogger(__name__)
 #: Rows fetched per request while walking a whole table. Bounds the SIZE OF THE
 #: REQUEST, not the amount of data — the reconcile genuinely needs every row,
 #: because it groups across the whole corpus.
-_PAGE = 500
+PAGE = 500
 
 
-def _walk(rm, cond=None):
+def walk_rows(rm, cond=None):
     """Every row matching ``cond``, fetched a page at a time.
 
     ``list_resources(QB.all())`` asks the store for the whole table in ONE
@@ -55,13 +55,13 @@ def _walk(rm, cond=None):
     base = QB.all() if cond is None else cond
     offset = 0
     while True:
-        page = rm.list_resources(base.limit(_PAGE).offset(offset).build())
+        page = rm.list_resources(base.limit(PAGE).offset(offset).build())
         if not page:
             return
         yield from page
-        if len(page) < _PAGE:
+        if len(page) < PAGE:
             return
-        offset += _PAGE
+        offset += PAGE
 
 
 def _find_or_create_entity(spec: SpecStar, key: str, display: str) -> str:
@@ -72,8 +72,10 @@ def _find_or_create_entity(spec: SpecStar, key: str, display: str) -> str:
     there instead of starting a second one beside it.
     """
     rm = spec.get_resource_manager(GraphEntity)
-    for r in rm.list_resources((QB["norm_keys"].contains(key)).build()):
-        return r.info.resource_id  # ty: ignore[unresolved-attribute]
+    # Metas, not resources: the answer is an id, and materialising the record to
+    # read one off it is a decode per distinct key in the corpus.
+    for meta in rm.search_resources((QB["norm_keys"].contains(key)).limit(1).build()):
+        return meta.resource_id
     return rm.create(GraphEntity(canonical_name=display, norm_keys=[key])).resource_id
 
 
@@ -117,50 +119,49 @@ class _Mention(NamedTuple):
     collection_id: str
 
 
-def _mentions(mrm) -> Iterator[_Mention]:
-    """Every mention, read from the INDEX rather than the stored row.
+def indexed_rows(rm, fields: tuple[str, ...], cond=None) -> Iterator[tuple[str, dict]]:
+    """``(resource_id, values)`` for every matching row, read from the INDEX.
 
     A listing materialises each row through the resource store; a metadata search
-    does not, and every field below is indexed precisely so this walk never has
-    to. Over a whole corpus that is the difference between one decode per mention
-    and none.
+    does not. Every field the reconcile reads is indexed precisely so these walks
+    never have to — over a whole corpus that is the difference between one decode
+    per row and none.
 
-    Rows written before those fields were indexed carry none of them — specstar
-    extracts ``indexed_data`` at write time and does not backfill — and reading an
-    absent cell would hand the pass an empty surface and zero occurrences, which
-    it would then store as an identity's display name. So they are collected and
-    read from their blobs instead, in bounded pages. That list is empty once
-    ``POST /graph-mention/migrate/execute`` has run, which is what makes the
-    migrate a speed-up rather than a correctness gate.
+    Rows written before a field was indexed do not carry it — specstar extracts
+    ``indexed_data`` at write time and does not backfill — and reading an absent
+    cell would quietly yield an empty name or a zero count, which the pass would
+    then store as an identity's display name. So those rows are collected and
+    read from their blobs instead, in bounded pages. That list is empty once the
+    model's migrate route has run, which is what makes the migrate a speed-up
+    rather than a correctness gate: no deploy has to be ordered against it.
     """
     stale: list[str] = []
-    for meta in mrm.iter_all(QB.all().build(), batch_size=_PAGE):
+    for meta in rm.iter_all((QB.all() if cond is None else cond).build(), batch_size=PAGE):
         indexed = meta.indexed_data or {}
-        if "surface" not in indexed:
+        if any(field not in indexed for field in fields):
             stale.append(meta.resource_id)
             continue
+        yield meta.resource_id, indexed
+    for start in range(0, len(stale), PAGE):
+        for r in rm.list_resources((QB.resource_id() << stale[start : start + PAGE]).build()):
+            yield r.info.resource_id, msgspec.structs.asdict(r.data)
+
+
+_MENTION_FIELDS = ("norm_surface", "surface", "norm_kind", "kind", "occurrences", "collection_id")
+
+
+def _mentions(mrm) -> Iterator[_Mention]:
+    """Every mention, as the six values the vocabulary pass reads."""
+    for rid, values in indexed_rows(mrm, _MENTION_FIELDS):
         yield _Mention(
-            id=meta.resource_id,
-            norm_surface=str(indexed.get("norm_surface") or ""),
-            surface=str(indexed.get("surface") or ""),
-            norm_kind=str(indexed.get("norm_kind") or ""),
-            kind=str(indexed.get("kind") or ""),
-            occurrences=int(indexed.get("occurrences") or 0),
-            collection_id=str(indexed.get("collection_id") or ""),
+            id=rid,
+            norm_surface=str(values.get("norm_surface") or ""),
+            surface=str(values.get("surface") or ""),
+            norm_kind=str(values.get("norm_kind") or ""),
+            kind=str(values.get("kind") or ""),
+            occurrences=int(values.get("occurrences") or 0),
+            collection_id=str(values.get("collection_id") or ""),
         )
-    for start in range(0, len(stale), _PAGE):
-        for r in mrm.list_resources((QB.resource_id() << stale[start : start + _PAGE]).build()):
-            row = r.data
-            assert isinstance(row, GraphMention)
-            yield _Mention(
-                id=r.info.resource_id,
-                norm_surface=row.norm_surface,
-                surface=row.surface,
-                norm_kind=row.norm_kind,
-                kind=row.kind,
-                occurrences=row.occurrences,
-                collection_id=row.collection_id,
-            )
 
 
 def _link(spec: SpecStar, entity_id: str, mention_id: str, collection_id: str) -> bool:
@@ -174,8 +175,8 @@ def _link(spec: SpecStar, entity_id: str, mention_id: str, collection_id: str) -
     every one of them — the caller is holding the answer.
     """
     rm = spec.get_resource_manager(GraphEntityLink)
-    existing = rm.list_resources((QB["mention_id"] == mention_id).build())
-    if any(existing):
+    # An existence check needs no stored row, and this runs once per mention.
+    if rm.search_resources((QB["mention_id"] == mention_id).limit(1).build()):
         return False
     rm.create(
         GraphEntityLink(
@@ -253,12 +254,11 @@ def name_predicates(spec: SpecStar) -> int:
     rrm = spec.get_resource_manager(GraphRelationship)
     by_key: dict[str, list[tuple[str, int]]] = {}
     where: dict[str, set[str]] = {}
-    for r in _walk(rrm):
-        rel = r.data
-        assert isinstance(rel, GraphRelationship)
-        if rel.norm_predicate:
-            by_key.setdefault(rel.norm_predicate, []).append((rel.predicate, 1))
-            where.setdefault(rel.norm_predicate, set()).add(rel.collection_id)
+    for _rid, values in indexed_rows(rrm, ("norm_predicate", "predicate", "collection_id")):
+        key = str(values.get("norm_predicate") or "")
+        if key:
+            by_key.setdefault(key, []).append((str(values.get("predicate") or ""), 1))
+            where.setdefault(key, set()).add(str(values.get("collection_id") or ""))
     created = 0
     for key, surfaces in by_key.items():
         existed = _entity_for_key(spec, key)
@@ -290,11 +290,29 @@ def link_declared_aliases(spec: SpecStar) -> int:
     """
     mrm = spec.get_resource_manager(GraphMention)
     applied = 0
-    for r in _walk(mrm, QB["declared_same_as"].is_not_null()):
+    # Two steps, because `is_not_null()` on a list is true of an EMPTY list too:
+    # the filter matched every mention in the corpus, so the pass materialised all
+    # of them to discover that almost none had declared anything. The index says
+    # which ones did; only those are worth a stored row, and they need one — the
+    # quote that makes the equivalence checkable is the pass's whole point and is
+    # deliberately not indexed (it is a sentence, not a key).
+    declared: list[str] = []
+    for rid, values in indexed_rows(
+        mrm, ("declared_same_as",), QB["declared_same_as"].is_not_null()
+    ):
+        if values.get("declared_same_as"):
+            declared.append(rid)
+    for start in range(0, len(declared), PAGE):
+        page = mrm.list_resources((QB.resource_id() << declared[start : start + PAGE]).build())
+        applied += _apply_declarations(spec, page)
+    return applied
+
+
+def _apply_declarations(spec: SpecStar, page) -> int:
+    applied = 0
+    for r in page:
         mention = r.data
         assert isinstance(mention, GraphMention)
-        if not mention.declared_same_as:
-            continue
         host = _entity_for_key(spec, mention.norm_surface)
         if host is None:
             continue
@@ -314,8 +332,8 @@ def link_declared_aliases(spec: SpecStar) -> int:
 
 def _entity_for_key(spec: SpecStar, key: str) -> str | None:
     rm = spec.get_resource_manager(GraphEntity)
-    for r in rm.list_resources((QB["norm_keys"].contains(key)).build()):
-        return r.info.resource_id  # ty: ignore[unresolved-attribute]
+    for meta in rm.search_resources((QB["norm_keys"].contains(key)).limit(1).build()):
+        return meta.resource_id
     return None
 
 
@@ -347,7 +365,7 @@ def _absorb(spec: SpecStar, host_id: str, other_id: str, *, evidence: str) -> No
     # as many links as it had just moved, and the absorption would silently only
     # half happen. Asking for the first page until none is left is correct under
     # that mutation, and terminates because every row it returns stops matching.
-    while page := lrm.list_resources((QB["entity_id"] == other_id).limit(_PAGE).build()):
+    while page := lrm.list_resources((QB["entity_id"] == other_id).limit(PAGE).build()):
         for r in page:
             link = r.data
             assert isinstance(link, GraphEntityLink)
@@ -387,8 +405,8 @@ def link_resembling_entities(spec: SpecStar, llm: ILlm) -> int:
         return 0
     seen = _existing_proposals(spec)
     by_name: dict[str, list[str]] = {}
-    for entity_id, entity in entities:
-        by_name.setdefault(entity.canonical_name, []).append(entity_id)
+    for entity_id, name in entities:
+        by_name.setdefault(name, []).append(entity_id)
     proposed = 0
     for batch in _batches(entities, _NAMES_PER_CALL):
         for group, why in _group(llm, batch):
@@ -430,8 +448,8 @@ _GROUP_PROMPT = (
 )
 
 
-def _batches(entities: list[tuple[str, GraphEntity]], size: int) -> list[list[str]]:
-    names = sorted({e.canonical_name for _, e in entities})
+def _batches(entities: list[tuple[str, str]], size: int) -> list[list[str]]:
+    names = sorted({name for _, name in entities})
     return [names[i : i + size] for i in range(0, len(names), size)]
 
 
@@ -463,14 +481,18 @@ def _group(llm: ILlm, names: list[str]) -> list[tuple[list[str], str]]:
     return out
 
 
-def _live_entities(spec: SpecStar) -> list[tuple[str, GraphEntity]]:
+def _live_entities(spec: SpecStar) -> list[tuple[str, str]]:
+    """Every identity that still holds evidence, as ``(id, display name)``.
+
+    The name is the only field the caller reads — it groups the vocabulary by it
+    and hands the list to the model — so this returns that rather than the whole
+    record, and reads it from the index like every other walk here.
+    """
     rm = spec.get_resource_manager(GraphEntity)
-    out: list[tuple[str, GraphEntity]] = []
-    for r in _walk(rm):
-        entity = r.data
-        assert isinstance(entity, GraphEntity)
-        if entity.collection_ids:  # an absorbed identity holds no evidence
-            out.append((r.info.resource_id, entity))
+    out: list[tuple[str, str]] = []
+    for rid, values in indexed_rows(rm, ("canonical_name", "collection_ids")):
+        if values.get("collection_ids"):  # an absorbed identity holds no evidence
+            out.append((rid, str(values.get("canonical_name") or "")))
     return out
 
 
@@ -485,11 +507,10 @@ def _existing_proposals(spec: SpecStar) -> set[tuple[str, str]]:
     """
     rm = spec.get_resource_manager(GraphEntityLink)
     out: set[tuple[str, str]] = set()
-    for r in _walk(rm):
-        link = r.data
-        assert isinstance(link, GraphEntityLink)
-        if link.proposed_from:
-            out.add((link.entity_id, link.proposed_from))
+    for _rid, values in indexed_rows(rm, ("entity_id", "proposed_from")):
+        proposed_from = str(values.get("proposed_from") or "")
+        if proposed_from:
+            out.add((str(values.get("entity_id") or ""), proposed_from))
     return out
 
 
@@ -508,7 +529,7 @@ def _propose(spec: SpecStar, host_id: str, other_id: str, *, why: str) -> int:
     # Paged by offset, unlike `_absorb`: this reads the other identity's links
     # and writes NEW ones onto the host, so the result set it is walking does not
     # change underneath it.
-    for r in _walk(lrm, QB["entity_id"] == other_id):
+    for r in walk_rows(lrm, QB["entity_id"] == other_id):
         link = r.data
         assert isinstance(link, GraphEntityLink)
         if link.state != "active":

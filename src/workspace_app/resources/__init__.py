@@ -787,9 +787,16 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # lives and is what the scope reads: identity is shared across collections, so
     # it cannot inherit one, and an access scope cannot ask another table what the
     # caller may see. Empty ⇒ invisible (a bare name can leak).
+    # `canonical_name` is indexed for the same reason the mention's surfaces are:
+    # the vocabulary pass reads the display name of every identity in the corpus
+    # and nothing else off the record, so indexing it turns that walk into a scan.
+    # v1 with a no-op reindex step, so rows written before it can be backfilled by
+    # `POST /graph-entity/migrate/execute`; until then the reader falls back to
+    # their blobs rather than reading an absent cell as a blank name.
     spec.add_model(
-        GraphEntity,
+        Schema(GraphEntity, "v1").step(None, _reindex_only, to="v1", source_type=GraphEntity),
         indexed_fields=[
+            IndexableField("canonical_name", str),
             IndexableField("norm_keys", list),
             IndexableField("kind_id", str),
             IndexableField("collection_ids", list),
@@ -802,12 +809,18 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # The link's own visibility rides its entity (cascade Ref): a link to an entity
     # you cannot see is not reachable, and its basis/evidence say nothing on their
     # own. `state` indexed so the review queue is a query.
+    # `proposed_from` is indexed so "which pairs have already been put to a
+    # person" is a metadata scan: the reconcile asks that about every link in the
+    # corpus before it spends the model, and it reads nothing else off the row.
     spec.add_model(
-        GraphEntityLink,
+        Schema(GraphEntityLink, "v1").step(
+            None, _reindex_only, to="v1", source_type=GraphEntityLink
+        ),
         indexed_fields=[
             "entity_id",
             "mention_id",
             IndexableField("state", str),
+            IndexableField("proposed_from", str),
             IndexableField("collection_ids", list),
         ],
         access_scope=graph_entity_access_scope(
@@ -817,13 +830,20 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #534 B: the connections. Evidence like a mention — same mirror, same scope,
     # same "the document goes, its rows go" lifecycle. The ends are surfaces, not
     # entity ids: resolving them is the vocabulary's job and changes as it learns.
+    # `predicate` (the verbatim surface) is indexed beside its key: naming the
+    # predicates reads both from every relationship in the corpus and nothing
+    # else, so with it the walk never materialises a row. v1 + reindex step, same
+    # backfill story as the other three.
     spec.add_model(
-        GraphRelationship,
+        Schema(GraphRelationship, "v1").step(
+            None, _reindex_only, to="v1", source_type=GraphRelationship
+        ),
         indexed_fields=[
             "collection_id",
             "source_doc_id",
             IndexableField("norm_subject", str),
             IndexableField("norm_predicate", str),
+            IndexableField("predicate", str),
             IndexableField("norm_object", str),
             IndexableField("collection_visibility", str),
             IndexableField("collection_read_meta", list),
