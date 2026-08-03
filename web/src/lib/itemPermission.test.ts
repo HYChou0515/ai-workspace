@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { canChangeItemPermission, canWriteItem, itemVisibility, parseItemPermission } from "./itemPermission";
+import {
+  canChangeItemPermission,
+  canWriteItem,
+  canWriteItemMeta,
+  itemVisibility,
+  parseItemPermission,
+} from "./itemPermission";
 
 const OWNER = "owner1";
 const ME = "me1";
@@ -25,6 +31,48 @@ describe("canWriteItem (mirrors backend perm/authorize for a write verb)", () =>
   });
   it("restricted + not granted → read-only", () => {
     expect(canWriteItem({ visibility: "restricted", edit_content: ["user:someone"] }, ME, OWNER, false)).toBe(false);
+  });
+});
+
+describe("canWriteItemMeta (mirrors the backend's ITEM-FIELD write gate: write_meta)", () => {
+  // The reason this is not `canWriteItem`: the PATCH that stores env_vars /
+  // attached_tool_prefs / attached_skill_prefs is checked against write_meta
+  // ALONE. A content editor passes the 3-verb union and is still refused 403.
+  it("a content editor is NOT a field editor — the union would have said yes", () => {
+    const perm = { visibility: "restricted" as const, edit_content: ["user:me1"] };
+    expect(canWriteItem(perm, ME, OWNER, false)).toBe(true);
+    expect(canWriteItemMeta(perm, ME, OWNER, false)).toBe(false);
+  });
+  it("a Participant (read_meta/read_chat/read_content/converse) cannot", () => {
+    expect(
+      canWriteItemMeta(
+        {
+          visibility: "restricted",
+          read_meta: ["user:me1"],
+          read_content: ["user:me1"],
+          converse: ["user:me1"],
+        },
+        ME,
+        OWNER,
+        false,
+      ),
+    ).toBe(false);
+  });
+  it("restricted + write_meta granted, directly or via a group", () => {
+    expect(canWriteItemMeta({ visibility: "restricted", write_meta: ["user:me1"] }, ME, OWNER, false)).toBe(true);
+    expect(canWriteItemMeta({ visibility: "restricted", write_meta: ["all"] }, ME, OWNER, false)).toBe(true);
+    expect(
+      canWriteItemMeta({ visibility: "restricted", write_meta: ["group:eng"] }, ME, OWNER, false, ["eng"]),
+    ).toBe(true);
+  });
+  it("owner, superuser, and absent ≡ public all pass — the server accepts them", () => {
+    expect(canWriteItemMeta({ visibility: "private" }, OWNER, OWNER, false)).toBe(true);
+    expect(canWriteItemMeta({ visibility: "private" }, ME, OWNER, true)).toBe(true);
+    expect(canWriteItemMeta(undefined, ME, OWNER, false)).toBe(true);
+    expect(canWriteItemMeta({ visibility: "public" }, ME, OWNER, false)).toBe(true);
+  });
+  it("private + non-owner is refused even when a grant lists them", () => {
+    expect(canWriteItemMeta({ visibility: "private", write_meta: ["user:me1"] }, ME, OWNER, false)).toBe(false);
   });
 });
 

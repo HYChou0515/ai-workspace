@@ -34,6 +34,7 @@ import {
   canReadChat,
   canReadItemContent,
   canWriteItem,
+  canWriteItemMeta,
   isDiscoverableOnly,
   parseItemPermission,
 } from "../lib/itemPermission";
@@ -49,6 +50,10 @@ export type ItemAccess = {
   canConverse: boolean;
   /** Write entity records / edit files (`edit_content` family). */
   canWrite: boolean;
+  /** Store a field ON the item — env vars, tool/skill prefs, the details form
+   * (`write_meta`). Narrower than {@link canWrite} on purpose: the item PATCH
+   * accepts write_meta alone, so an editor who passes canWrite is still refused. */
+  canWriteMeta: boolean;
   /** Sees it exists but cannot enter — the 🔒 list row offering "request access". */
   isDiscoverableOnly: boolean;
 };
@@ -63,6 +68,7 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
       canSeeFiles: true,
       canConverse: true,
       canWrite: true,
+      canWriteMeta: true,
       isDiscoverableOnly: false,
     };
   }
@@ -75,6 +81,7 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
     canSeeFiles: canReadItemContent(perm, me, owner, isSuperuser, groups),
     canConverse: canConverse(perm, me, owner, isSuperuser, groups),
     canWrite: canWriteItem(perm, me, owner, isSuperuser, groups),
+    canWriteMeta: canWriteItemMeta(perm, me, owner, isSuperuser, groups),
     isDiscoverableOnly: isDiscoverableOnly(perm, me, owner, isSuperuser, groups),
   };
 }
