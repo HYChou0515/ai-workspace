@@ -153,7 +153,9 @@ def test_hardening_makes_the_tree_root_owned_and_unwritable_by_anyone_else(
 
     owned: list[tuple[Path, int, int]] = []
     modes: dict[Path, int] = {}
-    monkeypatch.setattr(os, "chown", lambda p, u, g: owned.append((Path(p), u, g)))
+    # lchown, not chown: hardening must not follow a symlink, so it is the
+    # one it calls.
+    monkeypatch.setattr(os, "lchown", lambda p, u, g: owned.append((Path(p), u, g)))
     monkeypatch.setattr(os, "chmod", lambda p, m: modes.__setitem__(Path(p), m))
 
     _harden(tree)
@@ -175,18 +177,15 @@ def _install(cache: ToolCache, sha: str, body: bytes = b"x") -> Path:
     return cache.ensure(sha, _tar({"launch": body}))
 
 
-def test_with_no_ceiling_nothing_unreferenced_is_kept(tmp_path: Path) -> None:
-    # Nothing bounds growth without a ceiling, so the cache cannot also serve
-    # as a rollback shelf.
+def test_a_ceiling_is_what_makes_the_reaper_reclaim(tmp_path: Path) -> None:
+    """The other half of the default's meaning: eviction is opt-in, and asking
+    for it is naming a number. Until then the cache only grows, which is the
+    trade this repo makes for every other limit — unset is unlimited."""
     cache = ToolCache(tmp_path, harden=lambda _p: None)
-    keep, drop = "a" * 64, "b" * 64
-    _install(cache, keep)
-    _install(cache, drop)
+    cache.ensure("b" * 64, _tar({"launch": b"x" * 400}))
 
-    removed = cache.sweep(in_use={keep})
-
-    assert removed == [drop]
-    assert cache.has(keep) and not cache.has(drop)
+    assert cache.sweep(in_use=set()) == []  # no ceiling: kept
+    assert cache.sweep(in_use=set(), max_bytes=1) == ["b" * 64]  # a ceiling: reclaimed
 
 
 def test_an_unreferenced_bundle_is_kept_while_there_is_room(tmp_path: Path) -> None:
@@ -268,3 +267,193 @@ def test_sweeping_a_host_that_has_never_installed_anything_is_a_no_op(tmp_path: 
     # The reaper ticks from the moment a host starts, long before any app has
     # asked for a third-party tool.
     assert ToolCache(tmp_path / "never-created").sweep(in_use=set()) == []
+
+
+def test_a_bundle_with_a_venv_shaped_link_installs(tmp_path: Path) -> None:
+    """#674 follow-up: the guard that refuses links OUT of the tree must not
+    also refuse the ordinary ones a real bundle is full of — `uv` leaves over a
+    thousand of them. The first version of this feature could not unpack a
+    single real bundle, and no test said so because every double wrote plain
+    files only."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+
+    def build(tar: tarfile.TarFile) -> None:
+        body = b"#!/bin/sh\n"
+        info = tarfile.TarInfo("python/bin/python3.12")
+        info.size = len(body)
+        tar.addfile(info, io.BytesIO(body))
+        link = tarfile.TarInfo(".venv/bin/python")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "../../python/bin/python3.12"
+        tar.addfile(link)
+
+    installed = cache.ensure(_SHA, _tar_raw(build))
+
+    assert (installed / ".venv" / "bin" / "python").is_symlink()
+    assert (installed / ".venv" / "bin" / "python").resolve().is_file()
+
+
+def test_an_installed_tool_can_be_entered_by_the_uid_that_will_run_it(tmp_path: Path) -> None:
+    """The staging directory comes from `mkdtemp`, which is 0700 — private,
+    correct while a tree is half-written, and wrong the moment it is renamed
+    into place.
+
+    Nothing downstream fixes it: the host only symlinks a tool into a
+    sandbox's view, and `_harden` clears write bits without granting the read
+    and traverse a runner needs. So a third-party tool installed here was
+    root-owned 0700, and the unprivileged uid a sandbox runs as could not
+    enter it — `PermissionError` on exec, which reads as a broken tool.
+
+    Found by dropping privileges in the MCP runner, where the same cache is
+    read by a non-root process."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+
+    installed = cache.ensure("a" * 64, _tar({"launch": b"#!/bin/sh\n"}))
+
+    mode = installed.stat().st_mode
+    assert mode & 0o055 == 0o055, oct(mode)
+
+
+def test_hardening_leaves_the_tree_enterable(tmp_path: Path) -> None:
+    """`_harden` runs as root on the host and removes what others may WRITE.
+    Removing what they may ENTER would stop every sandbox running the tool."""
+    root = tmp_path / "tree"
+    (root / "inner").mkdir(parents=True)
+    (root / "inner" / "launch").write_text("#!/bin/sh\n")
+    root.chmod(0o755)
+
+    try:
+        _harden(root)
+    except PermissionError:  # pragma: no cover - only root can chown
+        import pytest
+
+        pytest.skip("chown needs root")
+
+    assert root.stat().st_mode & 0o055 == 0o055
+    assert (root / "inner").stat().st_mode & 0o055 == 0o055
+
+
+def test_hardening_does_not_follow_a_dangling_symlink(tmp_path: Path, monkeypatch) -> None:
+    """`data` accepts a dangling RELATIVE symlink — it only refuses absolute
+    paths and `..` escapes. `_harden` then followed it: `chown` and `stat` both
+    do, so it operated on a path that is not there and raised
+    `FileNotFoundError` — out through `ensure`, which catches `TarError` and
+    nothing else.
+
+    This module says it is written as if the tarball is hostile. The one thing
+    the safe filter lets through is where that has to hold.
+
+    Only the privileged call is replaced. Leaving it real would stop the walk
+    at the root directory, as a non-root process, before it ever reached the
+    link — a test that passes without having looked."""
+    import os
+
+    import pytest
+
+    from sandbox_host.tool_cache import _harden
+
+    root = tmp_path / "tree"
+    root.mkdir()
+    (root / "dangling").symlink_to("nowhere")
+    monkeypatch.setattr(os, "chown", lambda *a, **k: None)
+    monkeypatch.setattr(os, "lchown", lambda *a, **k: None)
+
+    try:
+        _harden(root)
+    except FileNotFoundError:
+        pytest.fail("followed the dangling link instead of operating on the link itself")
+
+
+def test_a_dangling_symlink_is_refused_as_a_bad_bundle(tmp_path: Path) -> None:
+    """`data` accepts a dangling RELATIVE symlink — it only refuses absolute
+    paths and `..` escapes. `_harden` then followed it: `chown` and `stat` both
+    do, so the tree it was hardening was not the tree it read.
+
+    The result was a bare `FileNotFoundError` out of `ensure`, which catches
+    `TarError` and nothing else. This module says it is written as if the
+    tarball is hostile; a crash on the one thing the safe filter lets through
+    is where that has to hold."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        info = tarfile.TarInfo("dangling")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "nowhere"
+        tar.addfile(info)
+        body = b"#!/bin/sh\n"
+        launch = tarfile.TarInfo("launch")
+        launch.size = len(body)
+        tar.addfile(launch, io.BytesIO(body))
+
+    cache = ToolCache(tmp_path)
+
+    # Hardening a real tree needs root; what matters is that it walks the
+    # dangling entry without following it.
+    try:
+        installed = cache.ensure("d" * 64, buf.getvalue())
+    except PermissionError:  # pragma: no cover - non-root cannot chown
+        import pytest
+
+        pytest.skip("chown needs root")
+
+    assert (installed / "dangling").is_symlink()
+
+
+def test_two_callers_installing_the_same_sha_do_not_fight(tmp_path: Path, monkeypatch) -> None:
+    """Two sandboxes open the same tool at once. The loser's rename lands on a
+    directory that is already there, and `ENOTEMPTY` came straight back out —
+    one turn failing because another turn succeeded.
+
+    The bytes are identical by construction: the sha is the name. So the loser
+    has nothing to do but use what the winner installed."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    data = _tar({"launch": b"#!/bin/sh\n"})
+    sha = "c" * 64
+    target = cache.path_for(sha)
+
+    def the_other_caller_got_there_first(self, dst):
+        Path(dst).mkdir(parents=True, exist_ok=True)
+        raise OSError(39, "Directory not empty")
+
+    monkeypatch.setattr(Path, "rename", the_other_caller_got_there_first)
+
+    assert cache.ensure(sha, data) == target
+
+
+def test_a_rename_that_failed_for_any_other_reason_still_raises(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Losing a race and a full disk look the same from here — one `OSError`.
+    They are told apart by whether the bundle is actually there afterwards.
+    Swallowing both would return a path to a directory that does not exist."""
+    import pytest
+
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+
+    def no_space(self, dst):  # noqa: ARG001
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "rename", no_space)
+
+    with pytest.raises(OSError, match="No space"):
+        cache.ensure("e" * 64, _tar({"launch": b"#!/bin/sh\n"}))
+
+
+def test_no_ceiling_keeps_everything(tmp_path: Path) -> None:
+    """`None` meant "keep nothing", which is backwards twice over.
+
+    It contradicted its caller — the sweeper's comment says unreferenced
+    bundles are kept while there is room, because that is what makes a
+    rollback a remount instead of a 150MB download — and it was the DEFAULT,
+    so on an unconfigured deployment a bundle vanished within minutes of its
+    sandbox being reaped and rollback was never a remount.
+
+    It also inverted this repo's convention everywhere else: unset means no
+    limit (`filestore.workspace_quota`, the cgroup `max`). One mental model
+    flipping in one place is the next person's afternoon."""
+    cache = ToolCache(tmp_path, harden=lambda _p: None)
+    kept = cache.ensure("a" * 64, _tar({"launch": b"#!/bin/sh\n"}))
+
+    removed = cache.sweep(in_use=set())
+
+    assert removed == []
+    assert kept.is_dir()

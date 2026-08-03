@@ -4,6 +4,10 @@
 # the platform needs is in those two files; nothing else about your repository
 # is read.
 #
+# Those same two files are also what an engineer's own agent runs over MCP —
+# the platform team's runner image fetches them from this URL. There is no
+# second job to add, and no container image of your own to publish.
+#
 # See docs/tool-authoring.md for the full contract.
 
 build-tool:

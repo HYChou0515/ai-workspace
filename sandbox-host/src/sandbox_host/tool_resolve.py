@@ -27,15 +27,22 @@ import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 from .artifact import (
+    HOSTS_ENV,
+    TOKEN_ENV,
     ArtifactError,
     CommandSpec,
+    IncompatibleArtifact,
+    artifact_opener,
+    bundle_url,
     check_compatible,
+    credential_for,
     parse_manifest,
     verify_bundle,
 )
+from .grant import admit
 from .tool_cache import ToolCache
 
 logger = logging.getLogger(__name__)
@@ -47,7 +54,7 @@ BUNDLE_NAME = "tool.tar.gz"
 
 #: Where the artifact store's credential comes from. One token for the whole
 #: host; per-project tokens are a later problem than the first tool.
-TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
+
 
 # A seam for the network: the default performs the real GET; tests inject a
 # stand-in so the rest of the behaviour is exercised without a server.
@@ -59,28 +66,16 @@ class FetchError(ArtifactError):
     refused" because the operator's next move is completely different."""
 
 
-def bundle_url(manifest_url: str) -> str:
-    """The bundle that sits beside a manifest.
-
-    Swaps the last path segment only. GitLab's artifact endpoint carries the
-    job name in a query parameter, so replacing the filename across the whole
-    URL would corrupt it the moment a job is named after the file."""
-    parts = urlsplit(manifest_url)
-    head, _, tail = parts.path.rpartition("/")
-    if tail != MANIFEST_NAME:
-        raise FetchError(f"a tool URL must point at {MANIFEST_NAME}, this one ends in {tail!r}")
-    return urlunsplit(parts._replace(path=f"{head}/{BUNDLE_NAME}"))
-
-
 def _http_get(url: str) -> bytes:
     request = urllib.request.Request(url)  # noqa: S310 - https URLs from config
-    token = os.environ.get(TOKEN_ENV)
+    token = credential_for(url)
+    withheld = bool(os.environ.get(TOKEN_ENV)) and token is None
     if token:
         # GitLab accepts either header; PRIVATE-TOKEN is the one that works for
         # both personal and project access tokens.
         request.add_header("PRIVATE-TOKEN", token)
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:  # noqa: S310
+        with artifact_opener().open(request, timeout=120) as response:  # noqa: S310
             return response.read()
     except urllib.error.HTTPError as exc:
         hint = (
@@ -89,6 +84,13 @@ def _http_get(url: str) -> bytes:
             if exc.code == 404
             else ""
         )
+        if withheld:
+            # Otherwise a 401 on a URL they can open in a browser is
+            # unexplainable, and the explanation is a setting they can see.
+            hint += (
+                f" — the artifact credential was NOT sent: {urlsplit(url).hostname} is "
+                f"not in {HOSTS_ENV}"
+            )
         raise FetchError(f"{url} answered {exc.code} {exc.reason}{hint}") from exc
     except OSError as exc:
         raise FetchError(f"{url} is unreachable: {exc}") from exc
@@ -119,6 +121,7 @@ class ToolResolver:
         arch: str,
         fetch: Fetcher = _http_get,
         state_dir: Path,
+        serve_last_known_good: bool = True,
     ) -> None:
         self._cache = cache
         #: Exposed so the host's sweeper can reclaim what nothing is running.
@@ -127,6 +130,17 @@ class ToolResolver:
         self._arch = arch
         self._fetch = fetch
         self._state = state_dir / "last-known-good.json"
+        #: The host serves a remembered version through an outage, because one
+        #: artifact store being unreachable should not stop every workspace.
+        #:
+        #: A single-user runner turns this OFF, and the reason is revocation:
+        #: access to a tool is managed where the artifact lives, so taking
+        #: someone's read access away has to stop them running it. A resolver
+        #: that fell back would keep serving the copy it already had for as
+        #: long as that machine lived, somewhere nothing we do can reach.
+        #: The status code cannot make the decision instead — GitLab answers
+        #: 404 both for an expired artifact and for a project you may not see.
+        self._serve_last_known_good = serve_last_known_good
 
     def resolve(self, name: str, manifest_url: str) -> ResolvedTool:
         """Install (or confirm) the tool at this URL and describe it.
@@ -141,7 +155,15 @@ class ToolResolver:
             # the one case we built a last-known-good copy to survive.
             return self._fall_back(name, manifest_url, exc)
 
-        check_compatible(manifest, expected_name=name, builder=self._builder_id, arch=self._arch)
+        check_compatible(manifest, builder=self._builder_id, arch=self._arch)
+
+        # Every third-party tool needs a certificate the platform signed, and
+        # it is what says which tool this is — so a URL cannot be admitted by
+        # having been pasted somewhere, and two authors' identically-named
+        # commands do not collide.
+        refusal = admit(tool=name, url=manifest_url, token=manifest.grant)
+        if refusal is not None:
+            raise IncompatibleArtifact(refusal)
 
         if not self._cache.has(manifest.bundle.sha256):
             data = self._fetch(bundle_url(manifest_url))
@@ -163,7 +185,18 @@ class ToolResolver:
         An artifact store outage should not take every workspace with it — but
         the answer is marked `stale` so nobody mistakes it for the latest."""
         remembered = self._recall().get(url)
-        if remembered is None or not self._cache.has(remembered["sha"]):
+        if remembered is not None:
+            # The store being unreachable says nothing about whether this tool
+            # is still allowed to run, and the two must not be confused: an
+            # author can make their own project answer 404 whenever they like.
+            refusal = admit(tool=name, url=url, token=remembered.get("grant"))
+            if refusal is not None:
+                raise FetchError(f"{name} is no longer admitted: {refusal}") from cause
+        if (
+            not self._serve_last_known_good
+            or remembered is None
+            or not self._cache.has(remembered["sha"])
+        ):
             raise FetchError(f"cannot resolve {name}: {cause}") from cause
         logger.warning("tool %s: serving last known good %s (%s)", name, remembered["sha"], cause)
         return ResolvedTool(
@@ -194,6 +227,9 @@ class ToolResolver:
         known[url] = {
             "sha": manifest.bundle.sha256,
             "version": manifest.version,
+            # Kept so the fallback can ask again. Without it, an outage was a
+            # way around the only revocation this design has.
+            "grant": manifest.grant,
             "commands": [
                 {
                     "name": c.name,

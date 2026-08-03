@@ -43,6 +43,10 @@ def main() -> None:
             print(f"  ⏭  skipping {name}: source dir missing ({source})")
             continue
         print(f"  ▶  building {name} from {source} …")
+        # Straight to `build_package`, with no size limit — deliberately
+        # (#674 Q18). The 150MB ceiling and its certificates exist for
+        # tools built outside this repo, where the only thing anyone can
+        # review is an artifact URL. These are reviewed as source, here.
         build_package(name=name, source=source, dst=PREBUILT_DIR / name, force=args.force)
     print("Done. Run `uv run python -m workspace_app`.")
 

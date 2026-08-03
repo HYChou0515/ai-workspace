@@ -10,6 +10,10 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.30",
     "pydantic>=2",
+    # #674: the host verifies the certificate that admits a third-party tool,
+    # on every resolve. It is the only thing that can — pasting a URL into an
+    # app is not approval, and a manifest can claim any name for itself.
+    "cryptography>=44",
 ]
 
 [build-system]

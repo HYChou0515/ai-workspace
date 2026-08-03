@@ -35,7 +35,10 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
+from workspace_app.tooling import grant as grant_policy
 from workspace_app.tooling.artifact import (
+    BUNDLE_NAME,
+    MANIFEST_NAME,
     ArtifactError,
     BundleRef,
     CommandSpec,
@@ -45,15 +48,87 @@ from workspace_app.tooling.artifact import (
     verify_bundle,
 )
 
-#: The two file names an author's CI publishes. The platform is given the
-#: manifest's URL and derives the bundle's by swapping the basename, so these
-#: are contract, not convention.
-MANIFEST_NAME = "tool.manifest.json"
-BUNDLE_NAME = "tool.tar.gz"
+# The two names an author's CI publishes live in the contract both packages
+# carry, beside the rule that derives one URL from the other. Re-exported here
+# because this is where they are written.
 
 
 class BuildError(ArtifactError):
     """The source tree cannot be turned into a publishable artifact."""
+
+
+def _today():  # pragma: no cover - trivial, seamed so expiry is testable
+    from datetime import date
+
+    return date.today()
+
+
+def _du(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+
+
+def _heaviest(bundle: Path, count: int = 6) -> list[tuple[str, int]]:
+    """The entries that account for a bundle's weight, heaviest first.
+
+    "Too big" on its own sends an author to guess at their dependency tree.
+    The build has that tree in front of it, so it can name what to look at."""
+    weighed: list[tuple[str, int]] = []
+    interpreter = bundle / "python"
+    if interpreter.is_dir():
+        # Named, though it cannot be removed: seeing that half the bundle is
+        # the interpreter is what stops someone hunting for a package to cut
+        # that would not have helped.
+        weighed.append(("the bundled interpreter", _du(interpreter)))
+    for site in (bundle / ".venv" / "lib").glob("python*/site-packages"):
+        weighed += [
+            (entry.name, _du(entry))
+            for entry in site.iterdir()
+            if entry.is_dir() and not entry.name.endswith((".dist-info", "__pycache__"))
+        ]
+    # Only what accounts for the weight: an entry worth a fraction of a
+    # percent is noise, and a list of everything installed helps as little as
+    # no list at all. One percent of the total, heaviest first.
+    total = sum(size for _, size in weighed) or 1
+    ranked = sorted(weighed, key=lambda item: -item[1])
+    return [item for item in ranked if item[1] * 100 >= total][:count]
+
+
+def _mb(size: int) -> str:
+    return f"{size / 1024 / 1024:.1f}MB"
+
+
+def _read_grant(source: Path) -> str | None:
+    token = source / grant_policy.GRANT_FILE
+    return token.read_text().strip() if token.is_file() else None
+
+
+def _check_weight(*, name: str, bundle: Path, packed: int, token: str | None) -> None:
+    """Refuse a bundle heavier than this tool is allowed to be.
+
+    Measured on the compressed artifact, which is what every host downloads
+    and what the manifest records. The rule itself lives in `grant.check_size`
+    so this and the platform's gate cannot drift apart; what belongs here is
+    the part only a build can supply — which entries account for the weight.
+
+    No name is passed, and none could be: the certificate carries the
+    platform's name for this tool, and a build only knows the one in
+    `[project.scripts]`."""
+    reason = grant_policy.check_size(
+        size=packed,
+        token=token,
+        public_keys=grant_policy.TRUSTED_KEYS,
+        today=_today(),
+    )
+    if reason is None:
+        return
+    largest = ", ".join(f"{what} {_mb(size)}" for what, size in _heaviest(bundle))
+    raise BuildError(
+        f"{reason}. Its weight is mostly: {largest}. "
+        "Keep what the tool needs at run time — dependencies used only by your "
+        "tests belong in `[dependency-groups] dev`, which the build already "
+        "leaves out. When the weight is real, send the tool to the platform "
+        "team for review and they can issue a certificate raising this limit."
+    )
 
 
 class SmokeFailed(ArtifactError):
@@ -131,6 +206,26 @@ def pack_bundle(bundle: Path) -> bytes:
     with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=6) as tar:
         for path in sorted(bundle.rglob("*")):
             info = tar.gettarinfo(path, arcname=str(path.relative_to(bundle)))
+            if info.issym():
+                # Absolute links are rewritten if they can be; relative ones
+                # are checked, because a relative link can climb out just as
+                # well and used to pack cleanly — then be refused by the
+                # host's `data` filter, which is the failure this step exists
+                # to move from a stranger's machine to the author's build.
+                #
+                # Compared lexically, as the filter does. Resolving would
+                # follow the whole chain, and a real venv's `python3 ->
+                # python3.12 -> /usr/...` ends up outside while every link in
+                # it stays inside.
+                if info.linkname.startswith("/"):
+                    info.linkname = _relocatable_link(bundle, path, info.linkname)
+                elif not Path(os.path.normpath(path.parent / info.linkname)).is_relative_to(
+                    os.path.normpath(bundle)
+                ):
+                    raise BuildError(
+                        f"{path.relative_to(bundle)} points outside the bundle "
+                        f"({info.linkname}). No host will unpack that, so it fails here."
+                    )
             info.mtime = 0
             info.uid = info.gid = 0
             info.uname = info.gname = ""
@@ -140,6 +235,76 @@ def pack_bundle(bundle: Path) -> bytes:
             else:
                 tar.addfile(info)
     return buf.getvalue()
+
+
+def _relocatable_link(bundle: Path, link: Path, target: str) -> str:
+    """Turn an absolute symlink into one that survives being moved.
+
+    `uv venv` leaves `.venv/bin/python` pointing at the ABSOLUTE path of the
+    interpreter it built against — a path on the build machine, meaningless
+    anywhere the bundle is going. It has always been dangling once relocated;
+    it only went unnoticed because the launcher invokes the bundle's own
+    interpreter directly and never follows it. Packing is where a bundle stops
+    being a directory on one machine and becomes bytes for another, so it is
+    where the link has to be made honest.
+
+    A target that already lives inside the bundle is simply rewritten as
+    relative. An interpreter outside it is repointed at the one the bundle
+    ships. Anything else is refused: a bundle that links out of itself is not
+    self-contained, and the safe tar filter on the other side would reject it
+    anyway — better to fail the author's build than to publish something no
+    host will unpack."""
+    inside = Path(target)
+    if inside.is_relative_to(bundle):
+        return os.path.relpath(inside, link.parent)
+
+    shipped = bundle / "python" / "bin" / Path(target).name
+    if shipped.exists():
+        return os.path.relpath(shipped, link.parent)
+
+    raise BuildError(
+        f"{link.relative_to(bundle)} links to {target}, which is outside the bundle — "
+        "a bundle must carry everything it needs, and nothing that unpacks it will "
+        "follow a link off its own tree"
+    )
+
+
+#: The MCP entry point injected into every bundle. It mirrors the tool
+#: launcher's preamble — `readlink -f` so a symlinked shim still finds the
+#: bundle, and the explicit dynamic loader — then runs the adapter on the
+#: interpreter the bundle ships. Falling back to a bare exec when no loader is
+#: found keeps it working outside the jail the loader trick exists for.
+_MCP_LAUNCH = """\
+#!/bin/sh
+self=$(readlink -f "$0" 2>/dev/null || echo "$0")
+here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
+py="$here/python/bin/python{ver}"
+ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
+if [ -n "$ld" ]; then
+  exec "$ld" "$py" "$here/mcp_server.py" "$here"
+fi
+exec "$py" "$here/mcp_server.py" "$here"
+"""
+
+
+def _inject_mcp(bundle: Path) -> None:
+    """Give the bundle its MCP face.
+
+    Injected rather than written by the author: the 3-stage contract already
+    carries everything MCP asks for, so one adapter serves every tool and
+    nobody has to learn a second protocol to publish one."""
+    shutil.copy2(Path(__file__).with_name("mcp_server.py"), bundle / "mcp_server.py")
+
+    # The bundle ships exactly one minor version; take it from the interpreter
+    # that is actually there rather than from ours, which may differ.
+    interpreters = sorted((bundle / "python" / "bin").glob("python3.*"))
+    if not interpreters:
+        raise BuildError("the bundle carries no interpreter — the build did not complete")
+    version = interpreters[0].name.removeprefix("python")
+
+    entry = bundle / "mcp"
+    entry.write_text(_MCP_LAUNCH.format(ver=version))
+    entry.chmod(0o755)
 
 
 def build_artifact(
@@ -155,13 +320,19 @@ def build_artifact(
     """Build an author's source tree into the artifact pair, and return the
     manifest that was published beside the bundle."""
     name, version = read_project(source)
+    token = _read_grant(source)
     out.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
         bundle = Path(tmp) / name
         build_bundle(name=name, source=source, dst=bundle)
+        _inject_mcp(bundle)
         commands = read_commands(bundle)
         packed = pack_bundle(bundle)
+        # Inside the temp dir, and before anything is written to `out`: the
+        # diagnostic needs the tree, and a refusal must leave no dist behind
+        # for CI to publish.
+        _check_weight(name=name, bundle=bundle, packed=len(packed), token=token)
 
     manifest = Manifest(
         format_version=1,
@@ -173,6 +344,7 @@ def build_artifact(
         arch=arch or platform.machine(),
         bundle=BundleRef(sha256=hashlib.sha256(packed).hexdigest(), size=len(packed)),
         source=None,
+        grant=token,
     )
     (out / BUNDLE_NAME).write_bytes(packed)
     (out / MANIFEST_NAME).write_bytes(render_manifest(manifest))

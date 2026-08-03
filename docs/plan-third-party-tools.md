@@ -1,7 +1,7 @@
 # 第三方 tool 散布：作者跑自己的 CI，新 sandbox 自動帶上
 
 > Issue: [#674](https://github.com/HYChou0515/ai-workspace/issues/674)。
-> 狀態：**P1–P12 全部實作完成**（見 §7 每個 phase 的核對）。
+> 狀態：**P1–P18 全部實作完成**（見 §7 每個 phase 的核對）。
 
 **一句話**：讓不在我們 repo 裡的工具作者，把工具推上自己的 GitLab、跑我們提供的 CI，
 **下一個開起來的 sandbox 就自動帶上新版**——我們這邊不改 code、不重新部署。
@@ -55,6 +55,7 @@
 | Q16 | 上架前平台要不要先驗一次？ | **要，但是人工執行的指令**（`python -m workspace_app.tooling.verify <url> --name <本地名>`），不是自動閘。貼進 `app.json` 之前跑它 |
 | Q16b | verify 要不要真的把 bundle 跑起來？ | **不要**（實作時改的，P9）：作者的 build 已經在**正確的 base** 裡強制跑過 smoke（Q15），而在維運者的機器上執行陌生人的程式碼是錯的地方、錯的環境、學到的還更少。verify 改做「抓 + 閘門 + 結構比對（bundle 內容是否與 manifest 一致）」 |
 | Q17 | app 開機要不要 resolve 第三方、當 readiness 條件？ | **不要**。開機只做 best-effort 預熱；GitLab 掛掉不能讓 app 起不來（跟第一方 `discover_packages` 的 fail-loud 刻意不同，`__main__.py:149`） |
+| Q18 | bundle 要不要設體積上限？逃生門長什麼樣？ | **要**：壓縮後 150MB（等於作者文件一直在講的數字）。逃生門是**平台簽發的憑證**：線下 review 後簽一行，內含 tool id / 放寬到多少 / 到期日（或 `never`）。作者端與上架閘門跑同一份規則；憑證跟著 manifest 走。**代價**：憑證離線驗章，發出去在到期前收不回來，要全面失效只能輪替金鑰。**只管第三方**：第一方 `sample-tools`（`scripts/prebuild_tools.py` 直接呼叫 `build_package`，不經過 `build_artifact`）刻意不納入——這是決定，不是漏掉 |
 
 ### Q2 為什麼一定要 builder image，不能是裸腳本
 
@@ -305,7 +306,7 @@ url 指的是「latest」，所以平時會跟著作者走。要**釘回舊版**
 
 ## 7. Phases
 
-> **逐條核對**：`python3 scripts/check_third_party_tools_674.py` —— 45 條可執行檢查，全過。
+> **逐條核對**：`python3 scripts/check_third_party_tools_674.py` —— 60 條可執行檢查，全過。
 > 那份腳本自己也做過變異測試（故意破壞受檢的性質，確認它會變紅）。
 
 > 一個 phase 一個 commit，flat integer。每個 phase 都要有**會紅的新測試**。
@@ -429,6 +430,114 @@ jail 內只看得到這次授權的工具；換 sha 後**下一個** sandbox 拿
 的註解是今天的依據）。
 
 ---
+
+### P13 · dev 相依不再被打包
+
+**✅ 完成**（`tooling/prebuild.py`）。
+
+`uv sync` 預設會裝 `dev` 群組，所以把 pytest 正確放在 `[dependency-groups] dev` 的作者，
+**還是會被打包進去**——我們自己的 `sample-tools/csv-column-summary` 就帶著 pytest 9.0.3。
+作者從自己的檔案看不出這件事，因為他的檔案是對的。
+
+修法是 `uv sync` 補 `--no-dev`。測試分兩層：unit 釘 argv，integration **真的 build 一顆
+bundle 再進去翻**——受測的行為是 uv 的，我們傳的旗標若 uv 不再認得就毫無意義。
+
+### P14 · 體積上限與例外憑證
+
+**✅ 完成**（`tooling/grant.py`、`tooling/builder.py`、`tooling/verify.py`、`tool-builder/Dockerfile`）。
+
+- **規則只有一份**：`grant.check_size`，作者的 build 與我們的 `verify` 都呼叫它。
+- **作者端**：`build-tool` 量壓縮後的 tar.gz，超標時列出 bundle 裡佔比 ≥1% 的最重項目，
+  作者不必猜要砍哪個。那次檢查跑在作者自己的 runner 上，作用是早點發現；閘門是我們這道。
+- **平台端**：`verify` **在抓 bundle 之前**就用 manifest 的 `bundle.size` 判斷——體積寫在
+  manifest 裡就是為了不必下載一 GB 才知道它是一 GB。
+- **憑證**：ed25519，一行可貼進信件；綁 tool id（憑證是公開的，不綁就等於誰都能用）。
+  `TRUSTED_KEYS` 是列表，可輪替。`keygen` 用 `O_EXCL` + `0600` 建私鑰，拒絕覆寫。
+- **真的建一次才發現的設計錯誤**：41MB 的 bundle 帶著一張平台看不懂的憑證，整個 build 失敗——
+  理由和它的體積無關。改成**憑證只在超過預設上限時才被查閱**。
+- builder image 加了 `cryptography`（build path 唯一的第三方 import）。有測試從 import graph
+  推出這份清單並要求 Dockerfile 裝的**恰好等於它**，雙向：少裝會壞在別人的 pipeline，
+  多裝是每個作者 CI 的負擔。
+
+### P15 · MCP 改成單一 runner image + artifact URL
+
+**✅ 完成**（`sandbox-host/src/sandbox_host/mcp_runner.py`、`sandbox-host/mcp-runner.Dockerfile`）。
+**取代**原本「每支工具烤一顆 image」的做法（P14 之前的版本，未曾上線）。
+
+原本的做法有兩個問題。一是 bundle 被存兩次:artifact store 裡已經有一份，每支工具
+× 每個版本再烤進 registry 一份。二是**烤進去的 image 在執行時什麼都不驗**——複製進去的
+是什麼就跑什麼，ABI 是否正確全靠 CI 有沒有傳對 `--build-arg`，而沒有人檢查那個值。
+
+現在:一顆 runner image，工具靠網址帶進來，跑的是和 host **同一個 `ToolResolver`**——
+同樣的 builder 閘門、同樣的 sha 驗證、同樣的 content-addressed 快取、同樣的
+last-known-good 退回。連帶好處是作者的 CI 少一整個 job（不再需要 docker:dind 和
+registry 帳密），而且工程師會自動吃到新版。
+
+實測（真的建映像、真的用 HTTP 端 artifact）:兩次啟動共 **0 次 bundle 下載、2 次 manifest
+請求**，`tools/call` 對掛進去的 workspace 檔案回出正確結果。
+
+代價誠實列:第一次要抓 ~150MB（用 volume 攤成每版一次）、多一顆我們要發版的映像、
+工程師需要讀 artifact 的 token。air-gapped 機器需要另外想辦法。
+
+### P16 · 「什麼都不知道的人」怎麼開始:一個 skill
+
+**✅ 完成**(`tool-skill/SKILL.md`)。
+
+先走錯過一次:我假設入口是我們的網頁,做了一個產生設定的 API。但使用者手上有的是
+**那支工具的 GitLab repo 網址**——他不會、也沒理由先來我們的網頁。那個 API 已整個移除
+(連同它的設定 knob,避免留下沒人讀的死旋鈕)。
+
+改成:平台團隊發一份 skill,使用者做他本來就會的動作(裝 skill),然後把 repo 網址交給
+自己的 agent。**組裝交給 agent**——讀 repo、推出 artifact 網址、抓 manifest 取得工具名稱、
+寫設定、跑一次確認。
+
+四件事裡 skill 自己推得出三件;唯一推不出的是 runner image 位址,由平台團隊在發放前填入
+`<<RUNNER_IMAGE>>`。沒填就發出去的話,skill 會**停下來並說明**,而不是去 registry 上找一個
+看起來像的 image——有測試釘住。
+
+**一半的篇幅在講失敗**,因為照著做的人是一個人,而且失敗屬於三個不同的人:作者(builder
+不符、artifact 過期、description 太模糊)、平台團隊(權限、runner image)、他自己(docker、
+token、漏掛載)。其中最麻煩的是 GitLab 的 `404`——「artifact 過期」與「你看不到這個專案」
+回同一個東西,而兩者要找的人不同;skill 給了唯一能分辨的方法。
+
+防漂移的測試不是比對原始碼字串(訊息是執行時組出來的,那樣會在漂移時仍然通過),而是
+**真的跑一次 runner、抓它印到 stderr 的字**,再要求 skill 裡查得到。改了訊息沒改 skill 就會紅。
+
+### P17 · 憑證變成准入,身分不再是作者取的名字
+
+**✅ 完成**。**每一支第三方工具都要一張平台簽的憑證**,host 每次 resolve 都驗。把網址貼進
+`app.json` 不算核准——簽章才算。
+
+連帶解掉命名衝突:身分是**我們給的 tool id**,作者的 command 叫什麼都行,兩個 `data-fetch`
+各拿各的。`check_compatible` 不再比對名字(那個檢查讓我們的名字只能是作者名字的複本,
+而且 manifest 本來就可以自稱任何名字)。
+
+**期限只有一種,而且是作者的。** 走過一次彎路:我一度讓准入也會過期,並把作者的期限搬到
+一個我發明的欄位。使用者沒要求過,而且那會因為作者拖延就把工具從使用者手上拿走。現在叫
+`publish_until`——名字說的就是過期會發生什麼:**他發不出新的超標版本**,已經在跑的不受影響,
+host 根本不讀它。
+
+**唯一性由發證端守。** 憑證是公開的(跟著 manifest 走),同一個名字發兩張,那兩張就互相通用,
+而且第二個作者可以直接把第一張從別人的 manifest 抄走。`tool-registry.csv` 是那份紀錄,
+`issue` 讀它擋重複;列由人在登記工具的那次改動一起加,和加金鑰同一個形狀。
+
+**憑證綁來源前綴。** 抄到別人的 manifest 就不過。綁前綴不綁完整網址,因為回滾是指向某次 build
+的 artifact——綁死網址會擋住出事時的修復動作。比對前先還原百分號編碼(API 形式寫 `%2F`、
+網頁形式寫 `/`)。兩種寫壞的前綴會被擋:含 `tool.manifest.json`(太窄)、只有網域(太寬)。
+
+### P18 · 憑證只送去我們指定的 host
+
+**✅ 完成**(`artifact.credential_for`,三個 fetcher 共用)。
+
+問「runner 那條路有什麼後果」時查出來的:**憑證擋不住這個**,因為它是從 manifest 讀出來的,
+等到有東西可以驗,那個請求早就發出去了。所以把 runner 指向惡意網址就是一個收集工程師
+GitLab token 的辦法,而且對他而言長得像一次安裝失敗。
+
+`TOOL_ARTIFACT_HOSTS` 烤進兩顆會抓 artifact 的映像(builder 不抓,所以沒有)。沒設就永遠不送。
+實測:同一台機器兩個名字,允許的那個 `PRIVATE-TOKEN=PRESENT`、另一個 `absent`。
+
+同一輪還修掉 `execv` 讓每支本機工具繼承工程師 token 的問題——平台端不會這樣,因為那裡是
+host 抓、sandbox 只拿到解開的檔案。
 
 ## 8. 這輪之外
 

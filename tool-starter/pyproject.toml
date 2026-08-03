@@ -1,0 +1,25 @@
+[project]
+name = "my-tool"
+# Required. This is the version a human says out loud when something breaks.
+version = "0.1.0"
+description = "A starting point for a tool. Rename everything and delete this sentence."
+requires-python = ">=3.12"
+# Your dependencies. They are locked (uv.lock) and shipped inside the bundle,
+# so the platform runs exactly these versions — but every one of them adds to
+# a ~150MB artifact that every machine downloads. Add what you need, no more.
+dependencies = ["pydantic>=2"]
+
+[project.scripts]
+# EXACTLY ONE. This name is what the bundle's launcher runs, and renaming it
+# renames your tool. Multiple commands live in `commands/`, not here.
+my-tool = "my_tool.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/my_tool"]
+
+[dependency-groups]
+dev = ["pytest>=8"]

@@ -22,6 +22,8 @@ from sandbox_host.artifact import ArtifactError, IncompatibleArtifact
 from sandbox_host.tool_cache import ToolCache
 from sandbox_host.tool_resolve import FetchError, ToolResolver, bundle_url
 
+from .conftest import certify
+
 _MANIFEST_URL = "https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build-tool"
 _BUILDER = "registry.example/tool-builder@sha256:beef"
 
@@ -51,6 +53,9 @@ def _manifest(data: bytes, **over: object) -> bytes:
         "python": "3.12",
         "arch": "x86_64",
         "bundle": {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)},
+        # Certified, because that is what an artifact is: a tool the
+        # platform admitted. Tests that want a refusal pass `grant=None`.
+        "grant": certify("wafer-history"),
     }
     body.update(over)
     return json.dumps(body).encode()
@@ -83,6 +88,23 @@ def _resolver(tmp_path: Path, wire: _Wire) -> ToolResolver:
         fetch=wire,
         state_dir=tmp_path,
     )
+
+
+def _patch_opener(monkeypatch, respond):
+    """Replace what `_http_get` actually calls.
+
+    Not `urlopen`: the fetch goes through an opener carrying the redirect
+    handler that re-decides the credential on every hop, so a double wired to
+    `urlopen` would model a request path the code no longer takes."""
+    from sandbox_host import tool_resolve
+
+    class _Opener:
+        def open(self, request, timeout=None):  # noqa: ARG002
+            return respond(request)
+
+    # On the module that USES it:  bound the name at import, so
+    # patching it where it is defined would reach nothing.
+    monkeypatch.setattr(tool_resolve, "artifact_opener", _Opener)
 
 
 def test_resolve_installs_the_bundle_and_answers_with_what_the_model_needs(
@@ -175,7 +197,12 @@ def test_an_unreachable_store_with_nothing_cached_says_which_tool_failed(
 
 
 def test_a_url_that_is_not_a_manifest_is_rejected_with_the_reason() -> None:
-    with pytest.raises(FetchError, match="tool.manifest.json"):
+    #  since the rule moved into the shared contract — the same
+    # one  applies, so the two gates cannot disagree about what a tool
+    # URL is. Both are , which is what callers handle.
+    from sandbox_host.artifact import ManifestError
+
+    with pytest.raises(ManifestError, match="tool.manifest.json"):
         bundle_url("https://gitlab.example/raw/dist/tool.tar.gz?job=build-tool")
 
 
@@ -221,13 +248,13 @@ class _Response:
 def test_the_real_fetch_carries_the_hosts_token(monkeypatch) -> None:
     import urllib.request
 
-    from sandbox_host.tool_resolve import TOKEN_ENV, _http_get
+    from sandbox_host.tool_resolve import HOSTS_ENV, TOKEN_ENV, _http_get
 
     seen: list[urllib.request.Request] = []
     monkeypatch.setenv(TOKEN_ENV, "glpat-secret")
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response(b"ok")
-    )
+    # Where it is allowed to go. Unset, it goes nowhere — see the tests below.
+    monkeypatch.setenv(HOSTS_ENV, "gitlab.example")
+    _patch_opener(monkeypatch, lambda req: seen.append(req) or _Response(b"ok"))
 
     assert _http_get("https://gitlab.example/m") == b"ok"
     assert seen[0].get_header("Private-token") == "glpat-secret"
@@ -242,10 +269,10 @@ def test_a_404_says_the_thing_the_operator_actually_needs_to_hear(monkeypatch) -
 
     from sandbox_host.tool_resolve import _http_get
 
-    def boom(_req, timeout):
+    def boom(_req):
         raise urllib.error.HTTPError("https://g/m", 404, "Not Found", {}, None)
 
-    monkeypatch.setattr(urllib.request, "urlopen", boom)
+    _patch_opener(monkeypatch, boom)
 
     with pytest.raises(FetchError) as exc:
         _http_get("https://gitlab.example/m")
@@ -274,9 +301,188 @@ def test_the_fetch_works_without_a_token_for_a_public_project(monkeypatch) -> No
 
     monkeypatch.delenv(TOKEN_ENV, raising=False)
     seen: list[urllib.request.Request] = []
-    monkeypatch.setattr(
-        urllib.request, "urlopen", lambda req, timeout: seen.append(req) or _Response(b"ok")
-    )
+    _patch_opener(monkeypatch, lambda req: seen.append(req) or _Response(b"ok"))
 
     assert _http_get("https://gitlab.example/m") == b"ok"
     assert seen[0].get_header("Private-token") is None
+
+
+def test_the_grant_module_is_a_verbatim_copy_of_the_apps() -> None:
+    """Like `artifact.py`: the rule that admits a tool must mean the same
+    thing where an artifact is built, where it is registered, and where it
+    runs. Two copies that drift are three different platforms."""
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[2]
+    app = repo / "src" / "workspace_app" / "tooling" / "grant.py"
+    host = repo / "sandbox-host" / "src" / "sandbox_host" / "grant.py"
+
+    assert host.read_bytes() == app.read_bytes(), (
+        "sandbox-host/src/sandbox_host/grant.py has drifted from the app's copy — "
+        "copy it across; it depends only on the stdlib and cryptography exactly "
+        "so this can stay a verbatim copy"
+    )
+
+
+# ─── where the credential may go (#674) ──────────────────────────────
+
+
+def _sent(url: str, monkeypatch) -> dict[str, str]:
+    """The headers a fetch of `url` would actually put on the wire."""
+
+    from sandbox_host import tool_resolve
+
+    seen: dict[str, str] = {}
+
+    class _Response:
+        def read(self) -> bytes:
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def urlopen(request):
+        seen.update(request.headers)
+        return _Response()
+
+    _patch_opener(monkeypatch, urlopen)
+    tool_resolve._http_get(url)
+    return seen
+
+
+def test_the_credential_goes_only_where_the_deployment_says(monkeypatch) -> None:
+    """The certificate cannot protect this. It is read from the manifest, and
+    the manifest is what the request was for — so by the time there is
+    anything to verify, the token has already been sent.
+
+    Which makes pointing a runner at a hostile URL a way to collect somebody's
+    GitLab token, and it presents as a failed install."""
+    monkeypatch.setenv("TOOL_ARTIFACT_TOKEN", "glpat-secret")
+    monkeypatch.setenv("TOOL_ARTIFACT_HOSTS", "gitlab.example")
+
+    ours = _sent("https://gitlab.example/api/v4/projects/7/x.json", monkeypatch)
+    theirs = _sent("https://evil.example/x.json", monkeypatch)
+
+    assert ours.get("Private-token") == "glpat-secret"
+    assert "Private-token" not in theirs
+    assert "glpat-secret" not in str(theirs)
+
+
+def test_no_configured_host_means_the_credential_is_never_sent(monkeypatch) -> None:
+    """Not knowing where it may go is not a reason to send it everywhere. The
+    result is a 401 that names the setting, which is diagnosable; the
+    alternative is a token on a stranger's server, which is not."""
+    monkeypatch.setenv("TOOL_ARTIFACT_TOKEN", "glpat-secret")
+    monkeypatch.delenv("TOOL_ARTIFACT_HOSTS", raising=False)
+
+    assert "Private-token" not in _sent("https://gitlab.example/x.json", monkeypatch)
+
+
+def test_a_refusal_says_the_credential_was_withheld(monkeypatch) -> None:
+    """Otherwise "401" on a URL you can open in a browser is unexplainable."""
+    import urllib.error
+    import urllib.request
+
+    from sandbox_host.tool_resolve import FetchError, _http_get
+
+    monkeypatch.setenv("TOOL_ARTIFACT_TOKEN", "glpat-secret")
+    monkeypatch.setenv("TOOL_ARTIFACT_HOSTS", "gitlab.example")
+
+    def urlopen(request):
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, None)
+
+    _patch_opener(monkeypatch, urlopen)
+
+    with pytest.raises(FetchError, match="TOOL_ARTIFACT_HOSTS"):
+        _http_get("https://elsewhere.example/x.json")
+
+
+def test_the_credential_does_not_follow_a_redirect_to_another_host(monkeypatch) -> None:
+    """urllib re-sends custom headers on redirect, across hosts and all. The
+    allowlist only ever guarded the FIRST request.
+
+    Not theoretical: GitLab's artifact download 302s to a presigned object-store
+    URL whenever `proxy_download` is off, which is an ordinary production
+    setting. So the token would arrive at a host nobody put on the list — and
+    a hostile URL only has to redirect."""
+    import http.server
+    import threading
+
+    from sandbox_host.tool_resolve import HOSTS_ENV, TOKEN_ENV, _http_get
+
+    got: list[str | None] = []
+
+    class _Second(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            got.append(self.headers.get("PRIVATE-TOKEN"))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    class _First(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            got.append(self.headers.get("PRIVATE-TOKEN"))
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{second.server_port}/x")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    second = http.server.HTTPServer(("127.0.0.1", 0), _Second)
+    first = http.server.HTTPServer(("localhost", 0), _First)
+    for srv in (second, first):
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    monkeypatch.setenv(TOKEN_ENV, "glpat-secret")
+    monkeypatch.setenv(HOSTS_ENV, "localhost")
+    try:
+        _http_get(f"http://localhost:{first.server_port}/m")
+    finally:
+        first.shutdown()
+        second.shutdown()
+
+    assert got[0] == "glpat-secret", "the allowed host is meant to get it"
+    assert got[1] is None, "the host it was redirected to is not on the list"
+
+
+def test_the_fallback_still_asks_whether_the_tool_is_admitted(tmp_path) -> None:
+    """Serving the last version that worked must not become a way around the
+    only revocation this design has.
+
+    `grant.py` says removing someone from `TRUSTED_KEYS` lapses everything
+    they signed. It did not: any HTTPError — 404 and 403 included — reaches
+    the fallback, which served the cached bundle without looking at a
+    certificate again. An author could trigger it themselves by making the
+    project private, and keep running for as long as the cache lived."""
+    from sandbox_host import grant as grant_mod
+    from sandbox_host.tool_cache import ToolCache
+    from sandbox_host.tool_resolve import FetchError, ToolResolver
+
+    data = _bundle()
+    cache = ToolCache(tmp_path / "cache", harden=lambda _p: None)
+    wire = _Wire(manifest=_manifest(data), bundle=data)
+    resolver = ToolResolver(
+        cache, builder_id=_BUILDER, arch="x86_64", fetch=wire, state_dir=tmp_path
+    )
+    assert resolver.resolve("wafer-history", _MANIFEST_URL).sha  # remembered
+
+    # The key that signed it is withdrawn, and the store stops answering.
+    import pytest
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(grant_mod, "TRUSTED_KEYS", {"someone-else": grant_mod.keypair()[1]})
+    try:
+        with pytest.raises(FetchError, match="no longer admitted"):
+            ToolResolver(
+                cache, builder_id=_BUILDER, arch="x86_64", fetch=_Wire(), state_dir=tmp_path
+            ).resolve("wafer-history", _MANIFEST_URL)
+    finally:
+        monkey.undo()

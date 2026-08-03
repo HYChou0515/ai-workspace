@@ -20,6 +20,7 @@ from ..files import WorkspaceFiles, WorkspaceFull, rel_path
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
+from .exit_codes import explain
 from .output_cap import cap_tool_outputs, truncate_middle
 from .shown_files import (
     declare_shown_files,
@@ -51,7 +52,14 @@ def _format_exec(
     error the user saw stream live doesn't vanish from the final tool
     card. The default (LLM) still drops success-stderr as noise."""
     stdout = r.stdout.decode("utf-8", errors="replace")
+    # #674: some codes carry a cause the output cannot show — a limit WE set,
+    # a bundle that never started, a crash that means the wrong build. The
+    # number alone is unactionable, so the sentence rides on the header where
+    # the model reads it before the body.
+    note = explain(r.exit_code)
     header = f"Tool `{name}` returned (exit_code={r.exit_code}):"
+    if note:
+        header = f"Tool `{name}` returned (exit_code={r.exit_code}) — {note}"
     # On failure stderr is where the error lives — always show it. On
     # success it's by convention noise (progress logs, deprecation
     # warnings) that misleads small models, so the LLM-facing form drops

@@ -21,6 +21,8 @@ from sandbox_host.protocol import SandboxSpec
 from sandbox_host.tool_cache import EXT_DIR, ToolCache
 from sandbox_host.tool_resolve import ToolResolver
 
+from .conftest import certify
+
 _URL = "https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build"
 _BUILDER = "registry.example/tool-builder@sha256:beef"
 
@@ -45,6 +47,8 @@ def _published(version: str, says: str) -> tuple[bytes, bytes]:
             "python": "3.12",
             "arch": "x86_64",
             "bundle": {"sha256": hashlib.sha256(bundle).hexdigest(), "size": len(bundle)},
+            # Certified: an artifact is a tool the platform admitted.
+            "grant": certify("wafer-history"),
         }
     ).encode()
     return manifest, bundle

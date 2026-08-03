@@ -32,6 +32,9 @@ class SandboxHostSettings:
     exec_timeout: float = 60.0
     log_timeout: float = 60.0
     tools_dir: str | None = None
+    # None = no ceiling, so nothing unreferenced is evicted. Unset means no
+    # limit here as it does everywhere else in this repo; set a number to make
+    # the reaper reclaim disk, oldest-unreferenced first.
     tool_cache_max_bytes: int | None = None
     """#674: how much disk third-party bundles may hold. None ⇒ no ceiling,
     and then nothing unreferenced is kept at all — with no bound, the cache

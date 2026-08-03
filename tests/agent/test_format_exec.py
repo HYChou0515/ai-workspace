@@ -140,3 +140,22 @@ def test_format_exec_truncation_keeps_the_failure_stderr_at_the_tail():
     )
     out = _format_exec("exec", r, max_chars=1500)
     assert "FATAL: out of memory" in out
+
+
+def test_a_code_the_platform_understands_is_explained_to_the_model():
+    """#674: a bare number is not guidance. `-9` is what a tool gets for
+    exceeding a memory limit it was never told about, and the model can only
+    act on that if we say so."""
+    out = _format_exec("wafer-history", ExecResult(exit_code=-9, stdout=b"", stderr=b""))
+
+    assert out.startswith("Tool `wafer-history` returned (exit_code=-9)")
+    assert "memory limit" in out
+
+
+def test_an_ordinary_failure_gains_no_extra_words():
+    # The output already carries it, and a note on every failure is spent
+    # context on every turn.
+    out = _format_exec("wafer-history", ExecResult(exit_code=1, stdout=b"", stderr=b"boom"))
+
+    assert out.startswith("Tool `wafer-history` returned (exit_code=1):")
+    assert "boom" in out

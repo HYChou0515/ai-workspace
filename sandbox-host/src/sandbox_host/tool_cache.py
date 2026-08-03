@@ -62,9 +62,17 @@ def _harden(root: Path) -> None:
     mounted FROM must not be writable by that uid either — otherwise one
     sandbox could rewrite a tool that every other sandbox on the host runs."""
     for path in [root, *root.rglob("*")]:
-        os.chown(path, 0, 0)
-        mode = path.stat().st_mode
-        os.chmod(path, mode & ~0o022)
+        # `lchown`/`lstat`, never their following counterparts. The safe tar
+        # filter permits a dangling RELATIVE symlink — it refuses absolute
+        # paths and `..` escapes, not this — so following one means operating
+        # on something that is not there, and the `FileNotFoundError` leaves
+        # through `ensure`, which catches `TarError` and nothing else.
+        os.lchown(path, 0, 0)
+        if path.is_symlink():
+            # A symlink's own mode is not consulted on Linux, and chmod
+            # follows. There is nothing here to take away.
+            continue
+        os.chmod(path, path.lstat().st_mode & ~0o022)
 
 
 class ToolCache:
@@ -103,11 +111,31 @@ class ToolCache:
                 # outside the tree, devices and setuid bits. Refusing is right:
                 # a bundle that needs any of those is not a bundle.
                 tar.extractall(staging, filter="data")
+            # `mkdtemp` gives 0700, which is right for a half-written tree and
+            # wrong for an installed one: the processes that run a tool are
+            # never this one. On the host a sandbox runs as an unprivileged
+            # per-item uid; in the MCP runner the process drops to whoever
+            # owns the workspace. Neither could enter a 0700 directory, and
+            # the failure arrives as `PermissionError` on exec — indis-
+            # tinguishable from a broken bundle.
+            #
+            # Set on the way in, before the rename, so nothing is ever visible
+            # under its sha with the staging mode.
+            staging.chmod(0o755)
             self._harden(staging)
             # Rename last, so a half-written tree is never visible under the
             # sha. A crash mid-unpack leaves a dot-prefixed directory to sweep,
             # never a bundle that looks installed but is missing files.
-            staging.rename(installed)
+            try:
+                staging.rename(installed)
+            except OSError as exc:
+                # Two sandboxes opening the same tool at once. Identical bytes
+                # by construction — the sha is the name — so whoever landed
+                # first installed exactly what this one would have.
+                if not installed.is_dir():
+                    raise
+                logger.debug("bundle %s was installed by another caller (%s)", sha, exc)
+                shutil.rmtree(staging, ignore_errors=True)
         except tarfile.TarError as exc:
             shutil.rmtree(staging, ignore_errors=True)
             raise ToolCacheError(f"bundle {sha} could not be unpacked: {exc}") from exc
@@ -133,8 +161,12 @@ class ToolCache:
         everything left is in use and the cache is still over, that is a host
         that needs more disk, and it says so rather than breaking something.
 
-        With no ceiling there is nothing to bound growth, so nothing
-        unreferenced is kept."""
+        No ceiling means no eviction — the same thing "unset" means for every
+        other limit here (`filestore.workspace_quota`, the cgroup's `max`).
+        It used to mean the opposite, and since it was also the DEFAULT, an
+        unconfigured host emptied its cache minutes after each sandbox was
+        reaped: rollback was never the remount this docstring promises, and
+        every reopen paid ~150MB again."""
         if not self._root.is_dir():
             return []
         installed = [p for p in self._root.iterdir() if p.is_dir() and _SHA256.match(p.name)]
@@ -143,11 +175,7 @@ class ToolCache:
         installed.sort(key=lambda p: p.stat().st_mtime)
 
         if max_bytes is None:
-            removed = [p.name for p in installed if p.name not in in_use]
-            for path in installed:
-                if path.name not in in_use:
-                    shutil.rmtree(path, ignore_errors=True)
-            return removed
+            return []
 
         total = sum(self._size_of(p) for p in installed)
         removed: list[str] = []

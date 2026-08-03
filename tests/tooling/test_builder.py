@@ -13,7 +13,9 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import tarfile
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,8 @@ from workspace_app.tooling.builder import (
     smoke,
 )
 
+_SOURCE = "https://gitlab.example/api/v4/projects/rca%2Fwafer-history/"
+
 _BUILDER = "registry.example/tool-builder@sha256:beef"
 
 
@@ -47,12 +51,24 @@ def _source(tmp_path: Path, *, name: str = "wafer-history", version: str = "1.4.
     return src
 
 
-def _fake_bundle(commands: dict[str, str]):
+def _fake_bundle(commands: dict[str, str], *, packages: dict[str, int] | None = None):
     """Stand in for `prebuild.build_package`: lay down the bundle shape it
-    produces, without the venv it takes minutes to build."""
+    produces, without the venv it takes minutes to build.
+
+    `packages` installs site-packages entries of a given size, for the tests
+    about weight. The bytes are random so they survive compression — a bundle
+    of zeros would shrink to nothing and measure the wrong thing."""
 
     def build(*, name: str, source: Path, dst: Path) -> None:  # noqa: ARG001
         dst.mkdir(parents=True, exist_ok=True)
+        for package, size in (packages or {}).items():
+            installed = dst / ".venv" / "lib" / "python3.12" / "site-packages" / package
+            installed.mkdir(parents=True)
+            (installed / "data.bin").write_bytes(os.urandom(size))
+        # A bundle always ships its own interpreter; the doubles model that
+        # now, because the MCP entry point takes its version from it.
+        (dst / "python" / "bin").mkdir(parents=True, exist_ok=True)
+        (dst / "python" / "bin" / "python3.12").write_text("#!/bin/sh\n")
         (dst / "launch").write_text("#!/bin/sh\n")
         (dst / "launch").chmod(0o755)
         (dst / "commands.json").write_text(
@@ -362,3 +378,362 @@ def test_a_failing_local_smoke_is_also_a_red_exit(tmp_path, monkeypatch, capsys)
 
     assert main(["smoke", str(tmp_path / "dist")]) == 1
     assert "exited 3" in capsys.readouterr().err
+
+
+def _venv_shaped_bundle(commands: dict[str, str], *, interpreter: str):
+    """A bundle shaped like the one `prebuild` really produces.
+
+    The earlier doubles wrote only regular files, which is why nothing caught
+    that a real build cannot be unpacked: `uv venv` leaves `.venv/bin/python`
+    pointing at the ABSOLUTE path of the interpreter it was built with, and
+    that path does not exist anywhere the bundle is going.
+    """
+    plain = _fake_bundle(commands)
+
+    def build(*, name: str, source: Path, dst: Path) -> None:
+        plain(name=name, source=source, dst=dst)
+        (dst / "python" / "bin").mkdir(parents=True, exist_ok=True)
+        (dst / "python" / "bin" / "python3.12").write_text("#!/bin/sh\n")
+        (dst / "python" / "bin" / "python3.12").chmod(0o755)
+        venv = dst / ".venv" / "bin"
+        venv.mkdir(parents=True)
+        (venv / "python").symlink_to(interpreter)
+        (venv / "python3").symlink_to("python")
+
+    return build
+
+
+def test_a_bundle_built_by_uv_can_actually_be_unpacked(tmp_path: Path) -> None:
+    """The build machine's interpreter path is meaningless anywhere else, so a
+    bundle carrying it is not relocatable — and the safe tar filter both this
+    build and the host use refuses an absolute link outright. Packing repoints
+    it at the interpreter the bundle ships with."""
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_venv_shaped_bundle(
+            {"trend": "t"}, interpreter="/home/someone/.local/share/uv/python/x/bin/python3.12"
+        ),
+        smoke_check=lambda _dist: None,
+    )
+
+    with tarfile.open(fileobj=io.BytesIO((out / BUNDLE_NAME).read_bytes())) as tar:
+        links = {m.name: m.linkname for m in tar.getmembers() if m.issym()}
+
+    assert not any(t.startswith("/") for t in links.values()), (
+        f"a relocatable bundle cannot carry an absolute link: {links}"
+    )
+    # And it points at something real inside the bundle.
+    assert links[".venv/bin/python"] == "../../python/bin/python3.12"
+
+
+def test_a_link_pointing_out_of_the_bundle_fails_the_authors_build(tmp_path: Path) -> None:
+    # Not something to quietly rewrite: a bundle that reaches outside itself is
+    # not self-contained, and no host would unpack it. Better a red build than
+    # an artifact nothing can install.
+    out = tmp_path / "dist"
+
+    with pytest.raises(BuildError, match="outside the bundle"):
+        build_artifact(
+            source=_source(tmp_path),
+            out=out,
+            builder_id=_BUILDER,
+            build_bundle=_venv_shaped_bundle({"trend": "t"}, interpreter="/etc/passwd"),
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_an_absolute_link_into_the_bundle_becomes_relative(tmp_path: Path) -> None:
+    # Same target, honest spelling. The path was correct on the build machine
+    # and correct nowhere else; relative, it is correct everywhere.
+    out = tmp_path / "dist"
+    src = _source(tmp_path)
+
+    def build(*, name: str, source: Path, dst: Path) -> None:  # noqa: ARG001
+        _fake_bundle({"trend": "t"})(name=name, source=source, dst=dst)
+        (dst / "lib").mkdir()
+        (dst / "lib" / "real.so").write_text("x")
+        (dst / "lib" / "alias.so").symlink_to(dst / "lib" / "real.so")
+
+    build_artifact(
+        source=src,
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=build,
+        smoke_check=lambda _dist: None,
+    )
+
+    with tarfile.open(fileobj=io.BytesIO((out / BUNDLE_NAME).read_bytes())) as tar:
+        links = {m.name: m.linkname for m in tar.getmembers() if m.issym()}
+
+    assert links["lib/alias.so"] == "real.so"
+
+
+def test_every_bundle_gains_an_mcp_entry_point(tmp_path: Path) -> None:
+    """#674: the same tool, reachable by an engineer's own agent. The adapter
+    is generic, so it is injected rather than written — an author publishing a
+    tool gets the MCP face without knowing MCP exists."""
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    with tarfile.open(fileobj=io.BytesIO((out / BUNDLE_NAME).read_bytes())) as tar:
+        names = {m.name: m for m in tar.getmembers()}
+
+    assert "mcp_server.py" in names
+    assert names["mcp"].mode & 0o111, "the entry point has to be runnable"
+
+
+def test_a_bundle_without_an_interpreter_fails_the_build(tmp_path: Path) -> None:
+    # The MCP entry point runs on the interpreter the bundle ships, so its
+    # absence means the build did not finish — better to say so than to write
+    # an entry point that names a python that is not there.
+    def build(*, name: str, source: Path, dst: Path) -> None:  # noqa: ARG001
+        dst.mkdir(parents=True, exist_ok=True)
+        (dst / "commands.json").write_text("[]")
+        (dst / "schemas").mkdir()
+
+    with pytest.raises(BuildError, match="no interpreter"):
+        build_artifact(
+            source=_source(tmp_path),
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=build,
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_the_build_publishes_the_two_files_and_nothing_else(tmp_path: Path) -> None:
+    """A tool used to ship a second artifact — a Dockerfile, for an image per
+    tool. That image stored the bundle a second time and, having it baked in,
+    had nothing left to verify at run time.
+
+    One runner image now fetches any tool from its URL through the same
+    resolver the platform uses, so a build publishes only what the platform
+    consumes."""
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert sorted(p.name for p in out.iterdir()) == sorted([BUNDLE_NAME, MANIFEST_NAME])
+
+
+# ─── what a bundle may weigh (#674) ──────────────────────────────────
+
+
+@pytest.fixture
+def signing(monkeypatch):
+    """A platform signing key that exists only for this test, wired in as the
+    one this build trusts."""
+    from workspace_app.tooling import grant as grant_mod
+
+    private, public = grant_mod.keypair()
+    monkeypatch.setattr(grant_mod, "TRUSTED_KEYS", {"alice": public})
+    # Small enough that a few kilobytes of random bytes exceed it. The real
+    # number is pinned in test_grant.py, against the figure the guide quotes.
+    monkeypatch.setattr(grant_mod, "DEFAULT_MAX_BYTES", 4096)
+    return private
+
+
+def _grant(private, *, tool="wafer-history", mb=1, publish_until=None):
+    from workspace_app.tooling.grant import Grant, issue
+
+    return issue(
+        Grant(source=_SOURCE, tool=tool, max_bytes=mb * 1024 * 1024, publish_until=publish_until),
+        private_key=private,
+    )
+
+
+def test_a_bundle_over_the_limit_is_refused(tmp_path: Path, signing) -> None:
+    """The weight is the artifact every host downloads, so the build is where
+    it has to be caught: past this point it is published, cached, and pulled."""
+    out = tmp_path / "dist"
+
+    with pytest.raises(BuildError, match="limit"):
+        build_artifact(
+            source=_source(tmp_path),
+            out=out,
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_nothing_is_published_when_the_bundle_is_too_big(tmp_path: Path, signing) -> None:
+    """A dist holding a rejected bundle is worse than no dist: CI publishes
+    whatever it finds, and the refusal would reach a user instead of the
+    author."""
+    out = tmp_path / "dist"
+
+    with pytest.raises(BuildError):
+        build_artifact(
+            source=_source(tmp_path),
+            out=out,
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+            smoke_check=lambda _dist: None,
+        )
+
+    assert not (out / BUNDLE_NAME).exists()
+    assert not (out / MANIFEST_NAME).exists()
+
+
+def test_the_refusal_names_the_heaviest_things_so_the_author_knows_what_to_cut(
+    tmp_path: Path, signing
+) -> None:
+    """ "Too big" on its own sends someone to guess at their dependency tree.
+    The build has the tree in front of it and can say which entries account
+    for the weight."""
+    with pytest.raises(BuildError) as caught:
+        build_artifact(
+            source=_source(tmp_path),
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle(
+                {"trend": "t"}, packages={"pandas": 30_000, "pytest": 9_000, "tiny": 10}
+            ),
+            smoke_check=lambda _dist: None,
+        )
+
+    message = str(caught.value)
+    assert "pandas" in message
+    assert "pytest" in message
+    # Ordered heaviest first, and the trivia left out: a list of everything
+    # installed is the same problem as no list at all.
+    assert message.index("pandas") < message.index("pytest")
+    assert "tiny" not in message
+
+
+def test_a_certificate_raises_the_limit_for_the_tool_it_names(tmp_path: Path, signing) -> None:
+    source = _source(tmp_path)
+    (source / "tool-certificate.token").write_text(_grant(signing))
+
+    manifest = build_artifact(
+        source=source,
+        out=tmp_path / "dist",
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert manifest.bundle.size > 4096
+
+
+def test_the_certificate_travels_in_the_manifest(tmp_path: Path, signing) -> None:
+    """So the platform checks the same certificate the author built against,
+    without an operator having to go and ask for it."""
+    source = _source(tmp_path)
+    token = _grant(signing)
+    (source / "tool-certificate.token").write_text(token)
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=source,
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert parse_manifest((out / MANIFEST_NAME).read_bytes()).grant == token
+
+
+def test_a_tool_with_no_certificate_publishes_none(tmp_path: Path, signing) -> None:
+    out = tmp_path / "dist"
+
+    build_artifact(
+        source=_source(tmp_path),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert parse_manifest((out / MANIFEST_NAME).read_bytes()).grant is None
+
+
+def test_the_build_uses_whatever_certificate_it_was_given(tmp_path: Path, signing) -> None:
+    """It has nothing to check the certificate against. The name in one is the
+    PLATFORM's name for the tool, and a build only knows the one in
+    `[project.scripts]` — so binding here could never pass, and the attempt
+    silently cost the author their whole allowance.
+
+    Using it unchecked is safe because the author's runner was never a
+    boundary: `verify` and the host both refuse a certificate that names a
+    different tool, and they are the ones deciding what runs."""
+    source = _source(tmp_path)
+    (source / "tool-certificate.token").write_text(_grant(signing, tool="something-else", mb=1))
+
+    manifest = build_artifact(
+        source=source,
+        out=tmp_path / "dist",
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert manifest.bundle.size > 4096  # the 1MB allowance applied
+
+
+def test_an_expired_certificate_says_it_expired_rather_than_too_big(
+    tmp_path: Path, signing, monkeypatch
+) -> None:
+    """Past the deadline the allowance is gone, so the build refuses again —
+    and says the allowance ran out rather than "too big", because the two need
+    different actions: one is deleting dependencies, the other is asking us."""
+    from workspace_app.tooling import builder as mod
+
+    source = _source(tmp_path)
+    (source / "tool-certificate.token").write_text(_grant(signing, publish_until=date(2026, 1, 1)))
+    monkeypatch.setattr(mod, "_today", lambda: date(2026, 8, 1))
+
+    with pytest.raises(BuildError, match="publish until"):
+        build_artifact(
+            source=source,
+            out=tmp_path / "dist",
+            builder_id=_BUILDER,
+            build_bundle=_fake_bundle({"trend": "t"}, packages={"pandas": 20_000}),
+            smoke_check=lambda _dist: None,
+        )
+
+
+def test_weighing_a_bundle_that_carries_no_interpreter(tmp_path: Path) -> None:
+    """`_heaviest` runs on whatever the build produced, including a tree that
+    never got its interpreter because the build failed earlier. It reports
+    what is there rather than raising on what is not — a diagnostic that dies
+    while explaining a failure explains nothing."""
+    bundle = tmp_path / "b"
+    site = bundle / ".venv" / "lib" / "python3.12" / "site-packages" / "pandas"
+    site.mkdir(parents=True)
+    (site / "data.bin").write_bytes(os.urandom(1000))
+
+    assert builder_mod._heaviest(bundle) == [("pandas", 1000)]
+
+
+def test_a_relative_symlink_out_of_the_bundle_fails_the_build(tmp_path: Path) -> None:
+    """The check only looked at absolute links. A relative one that climbs out
+    packs fine and is then refused by the host's `data` filter — which is the
+    failure this whole step exists to move forward, from a stranger's machine
+    to the author's own build."""
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "launch").write_text("#!/bin/sh\n")
+    (bundle / "escape").symlink_to("../../../etc/passwd")
+
+    with pytest.raises(BuildError, match="escape"):
+        builder_mod.pack_bundle(bundle)

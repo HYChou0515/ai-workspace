@@ -46,7 +46,7 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # them here and put them back as the last thing before exec. Reading them at the
 # bottom instead reads OUR value, not the user's.
 for ue_name in ${{SANDBOX_USER_ENV_KEYS:-}}; do
-  eval "ue_keep_$ue_name=\${{$ue_name-}}"
+  eval "ue_keep_$ue_name=\\${{$ue_name-}}"
 done
 # HOME (caches + any `pip --user` fallback) goes to a per-sandbox dir the exec
 # path passes as SANDBOX_HOME — NOT a shared /tmp. The unset fallback is a
@@ -93,7 +93,7 @@ export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
 # whose name is not a valid identifier must not take the whole command down —
 # `export` is a special builtin, so an unguarded failure exits the shell.
 for ue_name in ${{SANDBOX_USER_ENV_KEYS:-}}; do
-  eval "export \"$ue_name=\${{ue_keep_$ue_name-}}\"" 2>/dev/null || :
+  eval "export \"$ue_name=\\${{ue_keep_$ue_name-}}\"" 2>/dev/null || :
 done
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
@@ -137,7 +137,7 @@ esac
 # them here and put them back as the last thing before exec. Reading them at the
 # bottom instead reads OUR value, not the user's.
 for ue_name in ${{SANDBOX_USER_ENV_KEYS:-}}; do
-  eval "ue_keep_$ue_name=\${{$ue_name-}}"
+  eval "ue_keep_$ue_name=\\${{$ue_name-}}"
 done
 # HOME (caches + any `pip --user` install fallback) → a per-sandbox dir the exec
 # path passes as SANDBOX_HOME. A user's `pip install --break-system-packages X`
@@ -187,7 +187,7 @@ export PYTHONPATH="$mine:$bundled${{PYTHONPATH:+:$PYTHONPATH}}"
 # whose name is not a valid identifier must not take the whole command down —
 # `export` is a special builtin, so an unguarded failure exits the shell.
 for ue_name in ${{SANDBOX_USER_ENV_KEYS:-}}; do
-  eval "export \"$ue_name=\${{ue_keep_$ue_name-}}\"" 2>/dev/null || :
+  eval "export \"$ue_name=\\${{ue_keep_$ue_name-}}\"" 2>/dev/null || :
 done
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$@"
@@ -271,6 +271,9 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
     # `--reinstall-package`/`--refresh-package` defeat uv's version-keyed
     # wheel cache for the local package so edited-but-same-version source
     # is rebuilt from disk (#64), not restored stale from cache.
+    # `--no-dev` because uv installs the `dev` group by default: without it a
+    # tool that correctly declares pytest as a dev dependency ships it anyway,
+    # and the author cannot tell from their own pyproject that it happened.
     env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv.resolve())}
     logger.debug("prebuild: uv sync --frozen for %s (dist=%s)", name, dist_name)
     subprocess.run(
@@ -279,6 +282,7 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
             "sync",
             "--frozen",
             "--no-editable",
+            "--no-dev",
             "--reinstall-package",
             dist_name,
             "--refresh-package",

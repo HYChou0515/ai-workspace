@@ -33,12 +33,98 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 #: The only manifest layout this platform understands. A newer artifact is
 #: refused rather than parsed on a guess.
 FORMAT_VERSION = 1
+
+
+#: The environment names that decide whether a fetch may carry a credential.
+#: Here rather than beside either fetcher because there are three of them —
+#: the host, the runner, and the operator's `verify` — and a rule about where
+#: a secret may go is not one to keep three copies of.
+TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
+HOSTS_ENV = "TOOL_ARTIFACT_HOSTS"
+
+
+#: The two file names an author's CI publishes. The platform is given the
+#: manifest's URL and derives the bundle's, so these are contract.
+MANIFEST_NAME = "tool.manifest.json"
+BUNDLE_NAME = "tool.tar.gz"
+
+
+def bundle_url(manifest_url: str) -> str:
+    """The bundle that sits beside a manifest.
+
+    Swaps the last path SEGMENT — not a suffix. `…/wafertool.manifest.json`
+    ends with the right characters and is a different file; accepting it in
+    one place and refusing it in another is how an operator gets `accepted:`,
+    registers the URL, releases, and then watches every resolve fail.
+
+    Only the path: GitLab's artifact endpoint carries the job name in a query
+    parameter, so replacing across the whole URL would corrupt it the moment a
+    job is named after the file."""
+    parts = urlsplit(manifest_url)
+    head, _, tail = parts.path.rpartition("/")
+    if tail != MANIFEST_NAME:
+        raise ManifestError(f"a tool URL must point at {MANIFEST_NAME}, this one ends in {tail!r}")
+    return urlunsplit(parts._replace(path=f"{head}/{BUNDLE_NAME}"))
+
+
+def credential_for(url: str) -> str | None:
+    """The artifact credential, if this URL is somewhere it may be sent.
+
+    A certificate cannot protect this: it is read FROM the manifest, so by the
+    time there is anything to verify, the request has been made. Pointing a
+    fetch at a hostile URL would otherwise be a way to collect the token, and
+    it would present as a failed install.
+
+    No configured host means no credential. Not knowing where it may go is not
+    a reason to send it anywhere; the resulting 401 names a setting, which a
+    token on a stranger's server does not."""
+    token = os.environ.get(TOKEN_ENV)
+    if not token:
+        return None
+    allowed = {h.strip() for h in os.environ.get(HOSTS_ENV, "").split(",") if h.strip()}
+    return token if urlsplit(url).hostname in allowed else None
+
+
+class _CredentialAwareRedirects(urllib.request.HTTPRedirectHandler):
+    """Re-decide the credential on every hop.
+
+    urllib copies a request's headers onto the redirected one, across hosts
+    and all — so a token added for the first host arrives at whatever the
+    first host names next, and the allowlist only ever guarded one request.
+
+    Not a theoretical hop: GitLab's artifact download 302s to a presigned
+    object-store URL whenever `proxy_download` is off, which is an ordinary
+    production setting. (`requests` strips Authorization across hosts; urllib
+    does not.)"""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        following = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if following is None:
+            return None
+        following.headers = {
+            name: value
+            for name, value in following.headers.items()
+            if name.lower() != "private-token"
+        }
+        token = credential_for(newurl)
+        if token:
+            following.add_header("PRIVATE-TOKEN", token)
+        return following
+
+
+def artifact_opener() -> urllib.request.OpenerDirector:
+    """An opener that carries the artifact credential only where it may go —
+    on the first request and on every redirect after it."""
+    return urllib.request.build_opener(_CredentialAwareRedirects)
 
 
 class ArtifactError(Exception):
@@ -104,6 +190,12 @@ class Manifest:
     arch: str
     bundle: BundleRef
     source: SourceRef | None
+    #: The signed certificate raising this tool's size limit, verbatim, or
+    #: ``None`` for the default limit. It rides with the artifact so the
+    #: platform checks the same certificate the author built against instead
+    #: of an operator having to go and ask for it. Optional and last, so a
+    #: manifest written before certificates existed still parses.
+    grant: str | None = None
 
 
 def parse_manifest(raw: bytes) -> Manifest:
@@ -144,16 +236,22 @@ def parse_manifest(raw: bytes) -> Manifest:
             arch=body["arch"],
             bundle=BundleRef(sha256=bundle["sha256"], size=bundle["size"]),
             source=SourceRef(git=src["git"], sha=src["sha"]) if src else None,
+            grant=body.get("grant"),
         )
     except (KeyError, TypeError) as exc:
         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
 
 
-def check_compatible(manifest: Manifest, *, expected_name: str, builder: str, arch: str) -> None:
-    """Refuse an artifact this deployment cannot run, or is not asking for.
+def check_compatible(manifest: Manifest, *, builder: str, arch: str) -> None:
+    """Refuse an artifact this deployment cannot RUN — wrong build base, wrong
+    architecture. Raises ``IncompatibleArtifact``; returns None when the bytes
+    could at least execute here.
 
-    Raises ``IncompatibleArtifact``; returns None when the artifact may be
-    mounted. Called before a single byte of the bundle is trusted."""
+    Says nothing about whether they are ALLOWED to. Identity and admission
+    come from the certificate the platform signed (`grant.admit`), not from
+    the name an author happened to give their command — which is what let two
+    authors' `data-fetch` collide, and what a manifest can claim for itself
+    anyway."""
     if manifest.builder != builder:
         raise IncompatibleArtifact(
             f"{manifest.name!r} was built against {manifest.builder!r}, "
@@ -162,11 +260,6 @@ def check_compatible(manifest: Manifest, *, expected_name: str, builder: str, ar
     if manifest.arch != arch:
         raise IncompatibleArtifact(
             f"{manifest.name!r} was built for {manifest.arch!r}, this host is {arch!r}"
-        )
-    if manifest.name != expected_name:
-        raise IncompatibleArtifact(
-            f"artifact declares itself {manifest.name!r} but is registered here as "
-            f"{expected_name!r} — the URL points at a different tool"
         )
 
 
@@ -214,6 +307,8 @@ def render_manifest(manifest: Manifest) -> bytes:
     }
     if manifest.source is not None:
         body["source"] = {"git": manifest.source.git, "sha": manifest.source.sha}
+    if manifest.grant is not None:
+        body["grant"] = manifest.grant
     # Indented and newline-terminated: a manifest lands in CI logs and in
     # review diffs, where a single long line helps nobody.
     return (json.dumps(body, indent=2, sort_keys=True) + "\n").encode()

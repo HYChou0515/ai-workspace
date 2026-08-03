@@ -1,5 +1,11 @@
 # 寫一支工具給這個平台（給外部工具作者）
 
+!!! tip "先拿 `tool-starter/`"
+
+    那個資料夾**本身就是一支能動的工具**：範例 command、可以直接跑的測試、CI 檔、
+    以及一份 `CLAUDE.md`（讓 agent 先問清楚你要做什麼、再開始寫）。
+    複製走、改名、換掉範例，就是你的工具。這一頁是它的背景說明。
+
 你不需要我們 repo 的權限，也不用等我們發版。你在**自己的 GitLab** 寫工具、跑一個 CI job，
 把產出的 artifact 網址給我們一次；之後你每推一版，**下一個開起來的 sandbox 就自動用新版**。
 
@@ -96,6 +102,57 @@ docker run --rm -v "$PWD/dist:/dist" \
 `smoke` 會把 bundle 解開、**在平台真正執行工具的那個底層裡**跑一遍三段式契約。
 所以「我這邊會動」跟「平台上會動」是同一件事，不是碰運氣。
 
+## 4b. 在真的 sandbox 裡跑（不用 push）
+
+`smoke` 只確認你的工具**會自我介紹**（列出 command、吐 schema）。它不會帶著參數真的執行，
+也不會重現平台實際給你的環境。要驗那件事，在自己機器上跑一個**真的** sandbox host：
+
+```sh
+export SANDBOX_HOST_IMAGE=<平台團隊給你的 image>
+export TOOL_BUILDER_ID=<跟部署一致的值>
+docker compose -f compose.tool-dev.yaml up -d
+```
+
+然後把平台的 `sandbox.kind` 設成 `http`、`base_url` 指到 `http://127.0.0.1:8000`，
+把你的工具掛上去跑。**改一行、重跑、看結果，不用 commit、不用 push、不用等 CI。**
+
+!!! warning "為什麼一定要 `privileged: true`"
+
+    沒有它，核心會拒絕建立 jail，而 host **不會報錯**——它會安靜地退回沒有 jail 的模式，
+    那裡的 `/.tools` 是 symlink 而不是唯讀掛載。於是「往自己旁邊寫檔案」的工具**在這裡會過、
+    上線會壞**，正好是這個環境存在的理由。（實測：預設 docker 與
+    `--security-opt seccomp=unconfined` 都不夠，要 `--privileged`。）
+
+**它重現什麼**：command 怎麼被呼叫、cwd、`HOME`、`PATH`、bundle 唯讀、降權 uid、
+時間上限、輸出上限——也就是 §6、§7 那兩張表裡的東西。
+
+**它不重現什麼**：你的**網路位置**。你的機器不在正式環境的 nginx 後面，所以那裡自動加上的
+header 這裡沒有，某些端點你這邊可能根本連不到。**會連外的工具，第一次遇到真實情況仍然是在正式環境**——
+這條路關掉的是另外那一大半（環境與呼叫方式），不是全部。
+
+## 4c. 失敗要回哪個 exit code（**契約**）
+
+平台用 exit code 決定**告訴模型下一步怎麼走**：號碼是指引，訊息是細節。
+
+| 你回 | 意思 | 模型會被告知 |
+|---|---|---|
+| `0` | 成功 | stdout 就是答案 |
+| `2` | **再叫一次可能會成功**——參數可修、逾時、上游剛好不通 | 「可以再試一次；訊息若指出參數有問題，先改參數」 |
+| `3` | **要有人先做一件事**——缺憑證、缺權限 | 「照原樣再叫也一樣會失敗，請告訴使用者要做什麼」。訊息請**指名**是哪個變數 |
+| `1` | 其他失敗 | 照你的訊息回報 |
+
+**`2` 是給模型的許可，不是平台自動重跑**——工具可能有副作用，平台不會替你重來。
+`tool-starter/src/my_tool/common.py` 提供 `Retryable` / `NeedsAction` / `ToolError`，raise 就好。
+
+平台自己也會產生幾個 code，你不用宣告，看到時知道意思即可：
+
+| | |
+|---|---|
+| `124` | 逾時（總時限或閒置） |
+| `-9` | 被沙箱砍掉——幾乎都是記憶體上限 |
+| `-11` | segfault——通常代表 bundle 是為別的環境 build 的 |
+| `126` / `127` | launcher 沒能啟動——bundle 壞了或沒掛上 |
+
 ## 5. 交給我們的，就一串網址
 
 ```
@@ -106,7 +163,15 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 
 ---
 
-## 6. 平台**會擋**什麼
+## 5b. 同一份 artifact，工程師也能用
+
+你發布的那兩個檔案，同時就是別人可以透過 MCP 使用的東西——**CI 不必多跑一個 job，你也不必
+發自己的 container image**。平台團隊發一顆 runner image，工程師拿它加上你的 artifact 網址，
+就能用自己的 agent 呼叫你的工具;轉接器由 builder 注入 bundle，你不用寫任何程式。
+
+設定範例見 `tool-starter/README.md` §5c。
+
+## 6. 必須通過的檢查
 
 這些不是建議，是有程式在擋的：
 
@@ -117,6 +182,8 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 | **smoke 沒過** | **build 失敗，而且不留下任何 artifact**（免得 CI 把壞的傳上去） |
 | 不是在 builder image 裡 build 的 | 平台拒絕掛載 |
 | `[project.scripts]` 不是剛好一個 / 沒有 `version` | build 失敗 |
+| **bundle 壓縮後超過 150MB** | build 失敗，並列出最重的幾樣；平台上架時也擋 |
+| **沒有平台憑證** | 平台拒絕執行——`tool-certificate.token` 是上架的前提，不只是體積的例外 |
 | manifest 裡的名字跟我們登記的不一樣 | 平台拒絕——代表這個網址指到了別支工具 |
 
 還有兩件**不是拒絕、但一定會發生**的事，不知道就會出事：
@@ -126,7 +193,21 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 - **執行有時間上限。** 預設整體 60 秒、閒置 60 秒（沒有輸出就算閒置）。長時間的工作要嘛
   切小，要嘛持續印進度。
 
-## 7. 平台**不會擋**，但你該知道
+### 體積上限與例外憑證
+
+量的是**壓縮後**的 `tool.tar.gz`，也就是每台 host 實際下載的東西。空模板本身就約 40MB
+（bundle 自帶的 python 直譯器），剩下的額度給你的相依。
+
+只有測試用得到的套件請放 `[dependency-groups] dev`——build 會略過它們（`uv sync
+--no-dev`）；寫在 `[project.dependencies]` 的一律打包。
+
+真的需要更大的額度：把工具寄給平台團隊 review，通過後會收到一行憑證，存成 repo 根目錄的
+`tool-certificate.token` 並提交。憑證綁定**工具名字**、寫明**放寬到多少**與**到哪天為止**
+（或 `never`），並且跟著 manifest 一起發布，所以平台驗的和你 build 時用的是同一張。
+
+憑證只在超過 150MB 時起作用，所以工具瘦下來之後，憑證過期不會擋到發版。
+
+## 7. 你自己要顧好的部分
 
 - **description 要好好寫。** AI 會不會用你的工具、參數填不填得對，幾乎完全取決於
   command 和參數的 description——它們會被原封不動放進 AI 的提示裡。名字取得再好，
