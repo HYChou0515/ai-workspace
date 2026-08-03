@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { type Locale, LocaleProvider, translate } from "../lib/i18n";
-import { RESOURCE_LINK_KEYS, ResourceLinkText } from "./ResourceLinkText";
+import { MY_RESOURCES_PATH, RESOURCE_LINK_KEYS, ResourceLinkText } from "./ResourceLinkText";
 
 afterEach(cleanup);
 
@@ -46,6 +47,24 @@ describe("<ResourceLinkText /> (#692)", () => {
     } finally {
       localStorage.removeItem("ws.locale");
     }
+  });
+
+  // An href is not the claim being made — #692 is that the person can GET
+  // there. Press it and land.
+  it("actually navigates to the page when pressed", async () => {
+    render(
+      <MemoryRouter initialEntries={["/a/rca/items/it1"]}>
+        <Routes>
+          <Route
+            path="/a/rca/items/it1"
+            element={<ResourceLinkText text={translate("zh-TW", "chat.send.userFull")} />}
+          />
+          <Route path={MY_RESOURCES_PATH} element={<p>資源頁</p>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    await userEvent.click(screen.getByRole("link"));
+    expect(await screen.findByText("資源頁")).toBeInTheDocument();
   });
 
   it("leaves a message that names no destination exactly as it was", () => {
