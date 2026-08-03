@@ -1025,6 +1025,9 @@ export const messages = {
   // A failure we could not attribute. Report WHAT happened rather than guessing
   // WHY: blaming the size limit for a dropped connection sends the user after a
   // setting that was never involved.
+  // #692: the tree's upload report is re-readable, so it needs a way to be put
+  // away — which an alert() got for free and this has to say out loud.
+  "workspace.upload.dismiss": { "zh-TW": "知道了", en: "Dismiss" },
   "workspace.upload.error": {
     "zh-TW": "「{name}」上傳失敗:{reason}",
     en: "{name} failed to upload: {reason}",
