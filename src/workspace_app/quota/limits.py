@@ -117,6 +117,13 @@ def _pick_size(declared: str, cfg: str, fallback: int | None) -> int | None:
     return fallback
 
 
+def _pick_disk(declared: str, cfg: str, fallback: int) -> int:
+    """`_pick_size` for the one dimension whose fallback is always a number."""
+    got = _pick_size(declared, cfg, fallback)
+    assert got is not None  # fallback is an int, so the chain cannot end in None
+    return got
+
+
 def resolve_app_limits(manifest: AppManifest, settings: Settings) -> ResourceLimits:
     """The three-layer resolution for one App, validated against the deploy's
     ceiling. Raises `ResourceLimitError` if the resolved value exceeds
@@ -132,8 +139,10 @@ def resolve_app_limits(manifest: AppManifest, settings: Settings) -> ResourceLim
         # None ⇒ the sandbox backend keeps its own configured memory ceiling.
         memory_bytes=_pick_size(declared.memory if declared else "", per_app.default.memory, None),
         # The pre-existing per-item disk knob. It is already a byte count and
-        # already spells unlimited as 0, so it needs no translation.
-        disk_bytes=_pick_size(
+        # already spells unlimited as 0, so it needs no translation. The
+        # fallback is an int, so this branch can never yield None — disk is the
+        # dimension THIS app enforces and always has a number for.
+        disk_bytes=_pick_disk(
             declared.disk if declared else "",
             per_app.default.disk,
             settings.filestore.workspace_quota,

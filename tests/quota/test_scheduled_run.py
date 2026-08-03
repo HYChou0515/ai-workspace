@@ -45,6 +45,7 @@ async def test_a_refused_scheduled_run_ends_visible_and_says_why():
     # makes scheduled work untrustworthy.
     assert data.status is RunStatus.ERROR
     assert data.ended
+    assert data.result is not None  # a terminal run always carries one
     reason = data.result["error"]
     # The message has to be readable by whoever finds it tomorrow: who was over,
     # on what, and by how much.

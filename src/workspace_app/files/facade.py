@@ -171,9 +171,12 @@ class WorkspaceFiles:
         # every workspace" — it normalises to a lookup right here, so internally
         # there is exactly ONE way to ask, and no pair of spellings that could
         # ever answer differently.
-        self._quota_for: Callable[[str], int] = (
-            quota if callable(quota) else (lambda _ws, _q=quota: _q)
-        )
+        self._quota_for: Callable[[str], int]
+        if isinstance(quota, int):
+            flat = quota  # bound now, so the lambda cannot capture a later value
+            self._quota_for = lambda _ws: flat
+        else:
+            self._quota_for = quota
         # The SECOND gate: this workspace's owner may also have a total across
         # every item they own. Injected as a callback rather than implemented
         # here — the facade knows about workspaces, not about people — and only

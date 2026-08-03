@@ -50,11 +50,7 @@ def _app(user_disk: str) -> Iterator[tuple[ApiTestClient, SpecStar]]:
 
 
 def _mk(spec: SpecStar, model, owner: str) -> str:
-    return (
-        spec.get_resource_manager(model)
-        .create(model(title="t", owner=owner))  # ty: ignore[invalid-argument-type]
-        .resource_id
-    )
+    return spec.get_resource_manager(model).create(model(title="t", owner=owner)).resource_id
 
 
 def test_a_persons_items_are_summed_across_apps():

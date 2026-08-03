@@ -50,11 +50,7 @@ def _no_runner():
 
 
 def _mk(spec: SpecStar, model) -> str:
-    return (
-        spec.get_resource_manager(model)
-        .create(model(title="t", owner="u"))  # ty: ignore[invalid-argument-type]
-        .resource_id
-    )
+    return spec.get_resource_manager(model).create(model(title="t", owner="u")).resource_id
 
 
 def test_the_same_write_is_refused_in_one_app_and_allowed_in_the_other():

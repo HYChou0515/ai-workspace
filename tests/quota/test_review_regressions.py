@@ -41,7 +41,7 @@ class _SpySandbox(MockSandbox):
 def _mk(spec: SpecStar, owner: str = "alice") -> str:
     return (
         spec.get_resource_manager(RcaInvestigation)
-        .create(RcaInvestigation(title="t", owner=owner))  # ty: ignore[invalid-argument-type]
+        .create(RcaInvestigation(title="t", owner=owner))
         .resource_id
     )
 

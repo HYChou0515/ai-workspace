@@ -52,7 +52,7 @@ def _app(
 def _mk(spec: SpecStar, owner: str) -> str:
     return (
         spec.get_resource_manager(RcaInvestigation)
-        .create(RcaInvestigation(title="my item", owner=owner))  # ty: ignore[invalid-argument-type]
+        .create(RcaInvestigation(title="my item", owner=owner))
         .resource_id
     )
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from specstar import SpecStar
 
@@ -79,7 +79,7 @@ class _SetLimits(BaseModel):
 
 
 def register_quota_routes(
-    app: FastAPI,
+    app: APIRouter,
     *,
     spec: SpecStar,
     locator: ItemLocator,

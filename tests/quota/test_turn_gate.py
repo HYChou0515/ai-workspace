@@ -51,7 +51,7 @@ def _app(limits: PerUserResources) -> Iterator[tuple[ApiTestClient, SpecStar]]:
 def _mk(spec: SpecStar, owner: str) -> str:
     return (
         spec.get_resource_manager(RcaInvestigation)
-        .create(RcaInvestigation(title="t", owner=owner))  # ty: ignore[invalid-argument-type]
+        .create(RcaInvestigation(title="t", owner=owner))
         .resource_id
     )
 
