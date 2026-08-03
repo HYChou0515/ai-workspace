@@ -30,6 +30,38 @@ from ..llm import ILlm
 
 _LOGGER = logging.getLogger(__name__)
 
+#: Rows fetched per request while walking a whole table. Bounds the SIZE OF THE
+#: REQUEST, not the amount of data — the reconcile genuinely needs every row,
+#: because it groups across the whole corpus.
+_PAGE = 500
+
+
+def _walk(rm, cond=None):
+    """Every row matching ``cond``, fetched a page at a time.
+
+    ``list_resources(QB.all())`` asks the store for the whole table in ONE
+    request, and specstar's postgres resource store turns that into a single
+    statement carrying one row-constructor per key. The SQL therefore grows with
+    the corpus until the database refuses it: measured on Postgres 16, 40k rows
+    is a 937 KB statement answered with ``stack depth limit exceeded``. The
+    weekly reconcile then stops running entirely, and — before the logging this
+    ships beside — said nothing about why.
+
+    Paging cannot be left to the caller's own ``limit``: specstar's default is a
+    sentinel meaning "no limit", so a query without one asks for everything by
+    construction rather than by accident.
+    """
+    base = QB.all() if cond is None else cond
+    offset = 0
+    while True:
+        page = rm.list_resources(base.limit(_PAGE).offset(offset).build())
+        if not page:
+            return
+        yield from page
+        if len(page) < _PAGE:
+            return
+        offset += _PAGE
+
 
 def _find_or_create_entity(spec: SpecStar, key: str, display: str) -> str:
     """The entity whose keys already contain ``key``, or a new one.
@@ -107,7 +139,7 @@ def link_identical_mentions(spec: SpecStar) -> int:
     # actually used most, and that is only knowable once every mention is in hand.
     by_key: dict[str, list[GraphMention]] = {}
     ids_by_key: dict[str, list[str]] = {}
-    for r in mrm.list_resources(QB.all().build()):
+    for r in _walk(mrm):
         mention = r.data
         assert isinstance(mention, GraphMention)
         if not mention.norm_surface:
@@ -162,7 +194,7 @@ def name_predicates(spec: SpecStar) -> int:
     rrm = spec.get_resource_manager(GraphRelationship)
     by_key: dict[str, list[tuple[str, int]]] = {}
     where: dict[str, set[str]] = {}
-    for r in rrm.list_resources(QB.all().build()):
+    for r in _walk(rrm):
         rel = r.data
         assert isinstance(rel, GraphRelationship)
         if rel.norm_predicate:
@@ -199,7 +231,7 @@ def link_declared_aliases(spec: SpecStar) -> int:
     """
     mrm = spec.get_resource_manager(GraphMention)
     applied = 0
-    for r in mrm.list_resources((QB["declared_same_as"].is_not_null()).build()):
+    for r in _walk(mrm, QB["declared_same_as"].is_not_null()):
         mention = r.data
         assert isinstance(mention, GraphMention)
         if not mention.declared_same_as:
@@ -249,13 +281,23 @@ def _absorb(spec: SpecStar, host_id: str, other_id: str, *, evidence: str) -> No
         ),
     )
     lrm = spec.get_resource_manager(GraphEntityLink)
-    for r in lrm.list_resources((QB["entity_id"] == other_id).build()):
-        link = r.data
-        assert isinstance(link, GraphEntityLink)
-        lrm.update(
-            r.info.resource_id,  # ty: ignore[unresolved-attribute]
-            msgspec.structs.replace(link, entity_id=host_id, basis="declared", evidence=evidence),
-        )
+    # Drained, not paged by offset. A popular identity carries one link per
+    # mention, so this list is corpus-sized and has to be bounded like the rest —
+    # but the loop REWRITES the very field it selects on, so each page empties
+    # the result set behind it. An advancing offset would then step over exactly
+    # as many links as it had just moved, and the absorption would silently only
+    # half happen. Asking for the first page until none is left is correct under
+    # that mutation, and terminates because every row it returns stops matching.
+    while page := lrm.list_resources((QB["entity_id"] == other_id).limit(_PAGE).build()):
+        for r in page:
+            link = r.data
+            assert isinstance(link, GraphEntityLink)
+            lrm.update(
+                r.info.resource_id,  # ty: ignore[unresolved-attribute]
+                msgspec.structs.replace(
+                    link, entity_id=host_id, basis="declared", evidence=evidence
+                ),
+            )
     rm.update(
         other_id,
         msgspec.structs.replace(other, norm_keys=[], collection_ids=[], merged_into=host_id),
@@ -365,7 +407,7 @@ def _group(llm: ILlm, names: list[str]) -> list[tuple[list[str], str]]:
 def _live_entities(spec: SpecStar) -> list[tuple[str, GraphEntity]]:
     rm = spec.get_resource_manager(GraphEntity)
     out: list[tuple[str, GraphEntity]] = []
-    for r in rm.list_resources(QB.all().build()):
+    for r in _walk(rm):
         entity = r.data
         assert isinstance(entity, GraphEntity)
         if entity.collection_ids:  # an absorbed identity holds no evidence
@@ -384,7 +426,7 @@ def _existing_proposals(spec: SpecStar) -> set[tuple[str, str]]:
     """
     rm = spec.get_resource_manager(GraphEntityLink)
     out: set[tuple[str, str]] = set()
-    for r in rm.list_resources(QB.all().build()):
+    for r in _walk(rm):
         link = r.data
         assert isinstance(link, GraphEntityLink)
         if link.proposed_from:
@@ -404,7 +446,10 @@ def _propose(spec: SpecStar, host_id: str, other_id: str, *, why: str) -> int:
     """
     lrm = spec.get_resource_manager(GraphEntityLink)
     made = 0
-    for r in lrm.list_resources((QB["entity_id"] == other_id).build()):
+    # Paged by offset, unlike `_absorb`: this reads the other identity's links
+    # and writes NEW ones onto the host, so the result set it is walking does not
+    # change underneath it.
+    for r in _walk(lrm, QB["entity_id"] == other_id):
         link = r.data
         assert isinstance(link, GraphEntityLink)
         if link.state != "active":
@@ -448,7 +493,7 @@ def _count_entities(spec: SpecStar) -> int:
     actually wants, since the per-basis counts are links created THIS run and
     say nothing about the state that resulted."""
     rm = spec.get_resource_manager(GraphEntity)
-    return sum(1 for _ in rm.list_resources(QB.all().build()))
+    return rm.count_resources(QB.all().build())
 
 
 def _step(name: str, run: Callable[[], int]) -> int:
@@ -485,9 +530,7 @@ def _step(name: str, run: Callable[[], int]) -> int:
             f" — the statement was: {sql[:4000]}" if sql else " (no statement on the error)",
         )
         raise
-    _LOGGER.info(
-        "graph reconcile: %s -> %d (%.1fs)", name, count, time.perf_counter() - started
-    )
+    _LOGGER.info("graph reconcile: %s -> %d (%.1fs)", name, count, time.perf_counter() - started)
     return count
 
 
