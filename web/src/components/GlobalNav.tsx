@@ -139,6 +139,15 @@ function Switcher() {
           {showGroups && (
             <FixedLink to="/groups" icon="users" label="Groups" pathname={pathname} />
           )}
+          {/* Visible to everyone, not gated behind superuser: it is where a
+              person goes after being refused, so hiding it would leave them
+              with a 507 and nowhere to act on it. */}
+          <FixedLink
+            to="/my-resources"
+            icon="layers"
+            label={t("resources.title")}
+            pathname={pathname}
+          />
           {isSuperuser && (
             <FixedLink
               to="/work-calendar"

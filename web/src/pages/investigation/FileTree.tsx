@@ -18,6 +18,7 @@ import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
 import { folderState, toggleSubtree } from "./treeCheckbox";
 import { extractClipboardFiles, readTransferEntries } from "./transfer";
+import { uploadFailureKey } from "../../lib/uploadFailure";
 import { pxToRem } from "../../lib/pxToRem";
 import { relPath } from "../../lib/relPath";
 
@@ -231,16 +232,22 @@ export function FileTree({
         // An inconclusive failure (the connection was cut after the body went
         // out) has already been resolved against the file list by the service
         // boundary — if it reaches here, the write really did not land.
+        // #538 + the resource limits: THREE different rules answer 507, and
+        // they need three different remedies — delete here / delete in another
+        // item you own / close a live environment. The server distinguishes
+        // them in the body precisely so this does not have to guess; reporting
+        // them all as "this workspace is full" sends two thirds of the people
+        // who hit them to look in a place where there is nothing to fix.
         const status = (err as { status?: number }).status;
+        const code = (err as { code?: string }).code;
+        const key = uploadFailureKey(status, code);
         alert(
-          status === 507
-            ? t("workspace.upload.full", { name: f.name })
-            : status === 413
-              ? t("workspace.upload.failed", { name: f.name })
-              : t("workspace.upload.error", {
-                  name: f.name,
-                  reason: err instanceof Error ? err.message : String(err),
-                }),
+          key === "workspace.upload.error"
+            ? t(key, {
+                name: f.name,
+                reason: err instanceof Error ? err.message : String(err),
+              })
+            : t(key, { name: f.name }),
         );
         continue;
       }

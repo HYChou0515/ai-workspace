@@ -212,6 +212,13 @@ class HttpSandbox:
                 # #674: the third-party bundles this turn resolved, `{name: sha}`.
                 # An older host ignores the extra field and simply mounts none.
                 "tools": spec.tools,
+                # This item's App-resolved ceilings. `None` means "not stated",
+                # and the host then applies its own `SANDBOX_HOST_*` defaults —
+                # which is exactly what an OLDER host does with fields it does
+                # not know, so the two agree and the rollout order is free.
+                "cpu_cores": spec.cpu_cores,
+                "memory_bytes": spec.memory_bytes,
+                "pids_max": spec.pids_max,
             },
         )
         resp.raise_for_status()

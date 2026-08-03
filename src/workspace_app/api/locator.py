@@ -103,6 +103,12 @@ class ItemLocator:
         found = find_work_item(self._spec, item_id)
         return dict(found[1].env_vars) if found is not None else {}
 
+    def owner_of(self, item_id: str) -> str | None:
+        """The item's `owner` field — who its resources are charged to (#687).
+        Deliberately not specstar's `created_by`; see `quota.admission`."""
+        found = find_work_item(self._spec, item_id)
+        return found[1].owner if found is not None else None
+
     def slug_of(self, item_id: str) -> str | None:
         """The App slug owning an item — pairs with `profile_of` so the
         runner can read the profile's `.skill/` dir. None for an unknown id."""

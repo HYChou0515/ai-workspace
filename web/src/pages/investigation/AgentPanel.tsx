@@ -38,6 +38,7 @@ import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnsFromEntry } from "./agentLog";
+import type { QuotaKind } from "../../lib/quotaFailure";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
@@ -77,6 +78,14 @@ const hdrBtn: React.CSSProperties = {
   flexShrink: 0,
   whiteSpace: "nowrap",
 };
+
+/** Which "out of space" line an attach rejection deserves. `workspace` keeps
+ *  the pre-existing #245 message; the other two point somewhere else entirely. */
+function overQuotaKey(kind: QuotaKind) {
+  if (kind === "user") return "workspace.overQuota.user" as const;
+  if (kind === "environment") return "workspace.overQuota.env" as const;
+  return "workspace.overQuota" as const;
+}
 
 export function AgentPanel({
   investigationId,
@@ -292,12 +301,14 @@ export function AgentPanel({
         composerRef.current?.focus();
       }
       // #245: an over-quota (507) rejection is its own line so the user sees
-      // "out of space", not a vague size error.
+      // "out of space", not a vague size error — and WHICH quota, because the
+      // remedies are different places (this item / another of yours / close an
+      // environment). One message for all three is what the review found.
       // An OS alert() interrupts, cannot be re-read, and is the one piece of UI
       // that cannot say WHICH message it belongs to. Keep the report in the
       // composer, next to the box the files were dropped on.
       const problems = [
-        ...res.overQuota.map((p) => `${p} — ${t("workspace.overQuota", { names: p })}`),
+        ...res.overQuota.map((p) => `${p} — ${t(overQuotaKey(res.overQuotaKind), { names: p })}`),
         // Don't assert WHOSE limit: a 413 can come from a proxy in front of the
         // app (ingress-nginx defaults to 1 MB) as easily as from the app's own
         // cap, and "exceeds the size limit" on a 3 MB file sends the user hunting
@@ -344,7 +355,9 @@ export function AgentPanel({
       }));
       if (fresh.length) setImageChips((prev) => [...prev, ...fresh]);
       if (res.overQuota.length) {
-        setComposerHint(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
+        setComposerHint(
+          t(overQuotaKey(res.overQuotaKind), { names: res.overQuota.join(", ") }),
+        );
       }
       const problems = [
         ...res.tooLarge.map((p) => `${p} — 伺服器拒收（檔案過大，或代理設定的上限較低）`),

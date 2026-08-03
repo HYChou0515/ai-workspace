@@ -224,6 +224,12 @@ class SandboxSync:
         # Only publish a measurement of a COMPLETE sandbox: a not-yet-ready one is
         # mid-restore, so its file set is partial and would under-report.
         if ready_before and self._on_measured is not None:
+            # Stays SYNCHRONOUS on purpose. This runs inside the mirror's walk of
+            # a workspace; giving it durable I/O to await would put a store
+            # round-trip per workspace inside the traversal this whole mechanism
+            # exists to keep cheap. The durable per-person ledger is fed from the
+            # SWEEPER instead (`lifecycle.mirror_sweeper`), which already has the
+            # freshly measured numbers and a place where blocking is fine.
             self._on_measured(workspace_id, total)
         # #407: n_files = the whole (non-ignored) file count in the workspace —
         # the per-workspace cardinality signal; n_uploaded/n_deleted/bytes are

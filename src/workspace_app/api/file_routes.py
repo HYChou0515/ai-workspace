@@ -32,6 +32,7 @@ from ..files.zip_download import (
 )
 from ..filestore.protocol import FileExists, FileNotFound
 from ..kernels import KernelService
+from ..quota.admission import AdmissionGate
 from ..sandbox.protocol import Sandbox
 from .activity import ActivityLog
 from .events import CellEvent, FileChanged, to_sse
@@ -82,21 +83,21 @@ async def _stream_upload_to_store(
     request: Request,
     files: WorkspaceFiles,
     max_file_size: int,
-    workspace_quota: int = 0,
 ) -> None:
     """Stream the request body to a staging file on disk, enforcing the
     single-file cap (#219) and the per-workspace quota (#245) as bytes arrive,
     then hand the file to the store. The staging file means a multi-GB upload
     never sits whole in RAM; both caps are checked mid-stream so an over-limit
     upload is rejected without buffering it all. ``max_file_size`` of 0 disables
-    the single-file cap; ``workspace_quota`` of 0 disables the total quota.
+    the single-file cap; the workspace quota comes from the facade (this item's
+    App), and 0 there disables it.
 
     The quota credits back the bytes of the file being overwritten (a replace,
     not an add), so re-uploading a same-size file never trips it."""
     # Headroom for this path, fetched once up front; an overwrite is a replace.
     # None ⇒ quota disabled. Computed against the durable store, so the sandbox
     # mirror (which writes the store directly, not via this endpoint) isn't gated.
-    remaining = await files.remaining_quota(workspace_id, path, workspace_quota)
+    remaining = await files.remaining_quota(workspace_id, path)
     fd, name = tempfile.mkstemp(prefix="ws-upload-")
     tmp = Path(name)
     try:
@@ -114,11 +115,13 @@ async def _stream_upload_to_store(
                     raise HTTPException(status_code=413, detail="file exceeds the size limit")
                 if remaining is not None and size > remaining:
                     used = await files.workspace_usage(workspace_id)
+                    # The item's OWN ceiling — the same number the gate used.
+                    quota = files.quota_of(workspace_id)
                     logger.warning(
                         "file_routes: upload to %s exceeds quota (used=%s quota=%s attempted=%d)",
                         path,
                         used,
-                        workspace_quota,
+                        quota,
                         size,
                     )
                     raise HTTPException(
@@ -126,7 +129,7 @@ async def _stream_upload_to_store(
                         detail={
                             "error": "workspace_quota_exceeded",
                             "used": used,
-                            "quota": workspace_quota,
+                            "quota": quota,
                             "attempted": size,
                         },
                     )
@@ -147,8 +150,8 @@ def register_file_routes(
     get_user_id: Callable[[], str],
     turn_engine: ChatTurnEngine,
     activity: ActivityLog,
-    workspace_quota: int,
     max_file_size: int,
+    admission: AdmissionGate | None = None,
 ) -> None:
     """Mount the workspace file / notebook / shell routes onto ``app``."""
 
@@ -239,7 +242,7 @@ def register_file_routes(
         investigation_id = locator.require_access(slug, item_id, "read_content")
         return _WorkspaceUsage(
             used=await files.workspace_usage(investigation_id),
-            quota=workspace_quota,
+            quota=files.quota_of(investigation_id),
         )
 
     @app.get("/a/{slug}/items/{item_id}/tree")
@@ -344,9 +347,7 @@ def register_file_routes(
         # enforcing the single-file cap as bytes arrive, then stream it into the
         # store. `files.write_from_path` routes warm→sandbox / cold→blob.
         # #245: also gate the per-workspace total quota mid-stream.
-        await _stream_upload_to_store(
-            investigation_id, norm, request, files, max_file_size, workspace_quota
-        )
+        await _stream_upload_to_store(investigation_id, norm, request, files, max_file_size)
         activity.record(
             "file_written",
             f"Wrote {rel_path(norm)}",
@@ -657,6 +658,11 @@ def register_file_routes(
         investigation_id = locator.require_access(slug, item_id, "execute")
         if not body.cmd:
             raise HTTPException(status_code=422, detail="cmd must be non-empty")
+        # The human shell wakes a sandbox exactly like an agent turn does, so it
+        # passes the same per-person gate. Leaving it out would make the terminal
+        # the way around the limit.
+        if admission is not None:
+            await admission.check(investigation_id)
         try:
             session = await registry.session(investigation_id)
             handle = await registry.ensure_handle(session)

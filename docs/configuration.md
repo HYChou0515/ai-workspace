@@ -81,6 +81,8 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **把 job runner 拆出 API** | `server.run_consumers: false`，另跑 worker pod（[§8 訊息佇列](#8-訊息佇列-message-queue)） |
 | **設管理員（能讀所有 collection）** | `server.superusers: ["alice@example.com"]` |
 | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
+| **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**） |
+| **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上） |
 | **換嵌入模型** | `kb.embedder.model` + 設 `KB_EMBED_DIM` 或 `KB_EMBED_MODEL`（**改維度＝要重建索引**） |
 | **調 KB 檢索深度（recall vs 延遲）** | `kb.retrieval.enhancements`（`expand` / `hyde` / `rerank`） |
 | **關掉 KB 的 multi-query/HyDE/rerank** | `kb.retrieval_llm: null` |

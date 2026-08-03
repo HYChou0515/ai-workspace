@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
-from datetime import timedelta
+import time
+from collections.abc import Awaitable, Callable, Mapping
+from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as importlib_version
 from pathlib import Path
@@ -14,7 +15,7 @@ from fastapi.responses import JSONResponse
 from specstar import SpecStar
 
 from ..agent.config_catalog import AgentConfigCatalog
-from ..config.schema import EnhancementSettings, OffHoursSettings
+from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
 from ..files import WorkspaceFiles, WorkspaceFull
 from ..filestore.protocol import FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
@@ -29,6 +30,10 @@ from ..kb.vlm import IVlm, VlmDescriber
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
+from ..quota.admission import AdmissionGate, SandboxQuotaExceeded
+from ..quota.disk_ledger import DiskLedger, UserDiskFull, register_disk_ledger
+from ..quota.limits import ResourceLimits, parse_size
+from ..quota.user_limits import UserLimits, register_user_quota
 from ..resources import (
     AgentConfig,
     CheckRun,
@@ -74,11 +79,12 @@ from .locator import ItemLocator
 from .mention import MentionService
 from .meta_routes import register_meta_routes
 from .notifications import register_notification_routes
+from .quota_routes import register_quota_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
 from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
-from .sandbox_activity import IActivityStore, SpecstarActivityStore
+from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
 from .sandbox_address import IAddressStore, SpecstarAddressStore
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
@@ -91,6 +97,12 @@ from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
 
 logger = logging.getLogger(__name__)
+
+# How long an item's (slug, owner) stays memoised on the quota path. Matches the
+# window the usage measurement already trails by, so the limits are never more
+# stale than the numbers they compare against.
+_ITEM_FACT_TTL_S = 5.0
+_ITEM_FACT_MAX = 4096
 
 
 def resolve_durable_backfill(
@@ -303,6 +315,15 @@ def create_app(
     # user-facing upload/edit endpoints; threaded from
     # settings.filestore.workspace_quota.
     workspace_quota: int = 20 * 1024 * 1024 * 1024,
+    # Per-App resource ceilings, `slug -> ResourceLimits`, already resolved from
+    # app.json + config by `quota.limits` (threaded from `__main__` the way
+    # `workspace_quota` is). None / a slug that is absent ⇒ the sandbox backend's
+    # own configured defaults, i.e. exactly today's behaviour.
+    app_resources: Mapping[str, ResourceLimits] | None = None,
+    # What ONE person may hold across every item they own, in live sandboxes.
+    # None ⇒ no per-person limit at all (today's behaviour). Threaded from
+    # `__main__` as `settings.resources.per_user`.
+    per_user_resources: PerUserResources | None = None,
     # #245: blob-GC sweeper. `gc_interval` None ⇒ off; `gc_t1`/`gc_t2` are the
     # fresh-blob grace and quarantine dwell passed to `SpecStar.gc(reconcile)`.
     gc_interval: timedelta | None = timedelta(hours=1),
@@ -464,6 +485,7 @@ def create_app(
     # lands in the same sink as the agent/LLM traces. The trace-processor is
     # registered a few lines down once the app-level wiring is complete.
     monitor = monitor if monitor is not None else InMemoryMonitor()
+
     # #538: the mirror sweep already walks every warm sandbox every few seconds,
     # so it hands the sizes it saw to the quota — that is what keeps the walk off
     # the request path. `files` is built further down and the sweep only runs once
@@ -474,16 +496,23 @@ def create_app(
         monitor=monitor,
         on_measured=lambda ws, total: files.record_measurement(ws, total),
     )
-    # #345: only the local process sandbox keeps an item's working dir on a
-    # shared volume across pods, so only it needs the GLOBAL activity heartbeat
-    # that lets the idle reaper recycle a dir solely when no pod is using it.
-    # Other backends (mock/http) own their own per-pod lifecycle → no heartbeat.
+    # #345 wired this for the local process sandbox only: it is the one backend
+    # that keeps an item's working dir on a shared volume, so it is the one whose
+    # idle reaper must ask "is ANY pod using this?" before recycling.
+    #
+    # The heartbeat now carries a second job — it IS the per-person cpu/memory
+    # ledger — and that job belongs to every backend. Leaving it local-only would
+    # mean the limits silently never bind in production, which runs `kind: http`:
+    # the tally would be empty, every check would pass, and nothing would look
+    # broken. A knob that is off exactly where it matters is worse than no knob.
+    #
+    # The reaper reading it on the other backends too is a strict improvement,
+    # not a side effect to tolerate: with #366 all pods converge on ONE http
+    # sandbox per item, so reaping on pod-local idleness could already tear down
+    # an environment a peer is actively serving.
     from ..sandbox.http_client import HttpSandbox
-    from ..sandbox.local_process import LocalProcessSandbox
 
-    activity_store: IActivityStore | None = (
-        SpecstarActivityStore(spec) if isinstance(sandbox, LocalProcessSandbox) else None
-    )
+    activity_store: IActivityStore = SpecstarActivityStore(spec)
     # #366: the HTTP sandbox-host mints a per-pod uuid handle on every `create`
     # (it does NOT reattach by item id), so two pods diverge into two sandboxes
     # for one item. The shared per-item address store makes them converge on ONE
@@ -507,9 +536,147 @@ def create_app(
             "operation — durable write-back would silently no-op (data loss). Use "
             "sandbox.kind: http (with SANDBOX_HOST_NFS_ROOT on the host) or unset it."
         )
+    from ..apps.resolve import find_work_item
+
+    # item -> (slug, owner), memoised. `find_work_item` is a store round-trip,
+    # and its own docstring warns the call COUNT is the latency. Without this the
+    # quota closures alone turned one file write into five of them (once for the
+    # per-App disk limit, once for the person gate, once to record usage, twice
+    # more inside the registry's heartbeat) — the #657 / #667 shape, on the
+    # hottest path there is. Slug never changes; owner does, so the entry ages
+    # out on the same window the usage measurement already trails by.
+    _item_facts: dict[str, tuple[float, str, str]] = {}
+
+    def _facts_of(item_id: str) -> tuple[str, str]:
+        """`(slug, owner)` for an item — one lookup, not one per question."""
+        now = time.monotonic()
+        hit = _item_facts.get(item_id)
+        if hit is not None and now - hit[0] < _ITEM_FACT_TTL_S:
+            return hit[1], hit[2]
+        found = find_work_item(spec, item_id)
+        slug, owner = (found[0], found[1].owner) if found is not None else ("", "")
+        if len(_item_facts) > _ITEM_FACT_MAX:  # bounded: this is a cache, not a map
+            _item_facts.clear()
+        _item_facts[item_id] = (now, slug, owner)
+        return slug, owner
+
+    def _limits_for(item_id: str) -> ResourceLimits | None:
+        """This item's App's resolved ceilings, or None when the deploy passed
+        no per-App resources or the App declared none."""
+        if app_resources is None:
+            return None
+        slug, _owner = _facts_of(item_id)
+        return app_resources.get(slug) if slug else None
+
+    disk_ledger = DiskLedger(spec)
+    user_limits = UserLimits(spec, per_user_resources or PerUserResources())
+
+    async def _person_disk_gate(item_id: str, new_size: int, growth: int) -> None:
+        """The per-person disk total, checked only on GROWTH.
+
+        `new_size` is this workspace's LIVE size (measured on the write path, so
+        exact); the ledger supplies the other items' last measured sizes. The
+        item being written is excluded from the sum so its stale row and the
+        fresh number cannot both be counted.
+
+        This only DECIDES. Recording is `_record_usage` below, wired as the
+        facade's usage publisher so that shrinks and deletes update the ledger
+        too — a total that only learned about growth would keep charging for
+        bytes the user just deleted."""
+        owner = _owner_of(item_id)
+        if not owner:
+            return
+        limit = parse_size((await user_limits.for_user(owner)).disk)
+        if not limit:
+            return  # nobody capped this person's disk — no ledger, no reads
+        others = await disk_ledger.total_for(owner, exclude=item_id)
+        if others + new_size > limit:
+            # Refused — and deliberately NOT recorded. Charging a write that did
+            # not happen leaves the owner over-counted, and the mirror sweep only
+            # visits WARM items, so a cold one would carry that phantom size
+            # indefinitely.
+            raise UserDiskFull(
+                owner=owner,
+                used=others + new_size - growth,
+                quota=limit,
+                attempted=growth,
+            )
+        # Allowed: keep the row current so this person's next write in a
+        # DIFFERENT item is judged against a total that includes this one.
+        # Only reached when they are actually capped — an uncapped deploy pays
+        # no durable write for an answer nobody asked for.
+        await disk_ledger.record(item_id, owner, new_size)
+
+    async def _publish_measured(item_id: str) -> None:
+        """Hand the freshly measured size of one workspace to the ledger.
+
+        Called by the mirror sweeper right after a sweep, so it reads the number
+        that walk produced rather than asking for a fresh one — measuring again
+        here would be the traversal the measurement cache exists to avoid. No
+        measurement (the item was cold, or the sweep skipped it) ⇒ nothing to
+        say, and saying 0 would wrongly credit the owner back their bytes."""
+        total = files.measured_usage(item_id)
+        if total is not None:
+            await _record_usage(item_id, total)
+
+    async def _record_usage(item_id: str, total: int) -> None:
+        """Land a fresh measurement in the per-person ledger.
+
+        Called from TWO places, for two different reasons:
+
+        * the mirror sweep, which is the only thing that ever sees bytes the
+          agent produced with `exec` (a `pip install`, a clone, a generated
+          file) — those never pass through this facade, so without the sweep
+          they would never reach the owner's total AT ALL, not merely late;
+        * a delete, because that is what someone at their cap does, and making
+          them wait for the next sweep to be believed is the cross-item version
+          of #538's "clear the workspace, still be told you are out of space".
+
+        Deliberately NOT on every write: the gate measures the item being
+        written LIVE, so its own number is always exact, and charging every PUT
+        a durable round-trip to refresh a row the sweep will refresh anyway is
+        cost with no answer attached.
+
+        Skipped entirely when this person has no disk cap — the same rule the
+        growth path applies. A ledger nobody reads is pure cost, and having two
+        writers disagree about when to write is how one of them ends up wrong."""
+        owner = _owner_of(item_id)
+        if not owner or not parse_size((await user_limits.for_user(owner)).disk):
+            return
+        await disk_ledger.record(item_id, owner, total)
+
+    def _quota_for(item_id: str) -> int:
+        """Disk ceiling for one item: its App's, else the deploy-wide number.
+
+        The fallback is not cosmetic — an item whose App declares nothing, or an
+        id that resolves to no App at all (a wiki store, a half-deleted item),
+        must keep the deploy's limit rather than silently become unlimited."""
+        limits = _limits_for(item_id)
+        return workspace_quota if limits is None else limits.disk_bytes
+
+    def _spec_for(item_id: str) -> SandboxSpec:
+        """This item's sandbox spec: its App's resolved ceilings, looked up when
+        the sandbox is actually created. The item→App lookup is a store read, but
+        it only happens on a COLD acquire (once per sandbox lifetime), which is
+        already the expensive path."""
+        limits = _limits_for(item_id)
+        if limits is None:
+            return SandboxSpec()
+        return SandboxSpec(cpu_cores=limits.cpu_cores, memory_bytes=limits.memory_bytes)
+
+    def _owner_of(item_id: str) -> str | None:
+        """The debtor for an item's resources: its `owner` field (#687).
+
+        Deliberately NOT specstar's `created_by`. `owner` is the field the
+        product treats as "whose item is this", and #687 is what makes it
+        trustworthy — until it lands, this is charged to a field anyone with
+        write access can rewrite."""
+        return _facts_of(item_id)[1] or None
+
     registry = InvestigationRegistry(
         sandbox=sandbox,
-        default_spec=SandboxSpec(),
+        spec_for=_spec_for,
+        owner_of=_owner_of,
         sync=sync,
         activity=activity_store,
         address=address_store,
@@ -535,8 +702,26 @@ def create_app(
         # #538: the quota lives in the facade, so EVERY way of growing a workspace
         # is refused by one rule — not just the upload endpoint that used to be
         # the only checker while the agent, workflows and copy/move went free.
-        quota=workspace_quota,
+        # The rule is now per-App (a data-analysis workspace is not a chat
+        # workspace), so what the facade holds is a LOOKUP, not a number.
+        quota=_quota_for,
+        person_gate=_person_disk_gate,
+        on_usage=_record_usage,
     )
+
+    admission = AdmissionGate(
+        activity_store,
+        user_limits.for_user,
+        owner_of=_owner_of,
+        has_live_sandbox=registry.has_live_sandbox,
+        # The window over which a heartbeat still counts as a live sandbox. It is
+        # the reaper's idle threshold on purpose: shorter under-counts a
+        # live-but-idle sandbox that is still holding memory, longer keeps
+        # charging for one already reclaimed.
+        window_ms=int(idle_timeout.total_seconds() * 1000),
+        now_ms=lambda: int(datetime.now(UTC).timestamp() * 1000),
+    )
+
     kernels = KernelService()
     activity = ActivityLog()
     # Feed the monitor (resolved above) from the OpenAI Agents SDK's own tracing
@@ -639,6 +824,45 @@ def create_app(
                     "used": exc.used,
                     "quota": exc.quota,
                     "attempted": exc.attempted,
+                }
+            },
+        )
+
+    @app.exception_handler(UserDiskFull)
+    async def _user_disk_full(_request: Request, exc: UserDiskFull) -> JSONResponse:
+        """The per-person sibling of the full-workspace 507. Reported separately
+        because the remedy is different: the space to free may be in a completely
+        different item, so an FE that said "this workspace is full" would send
+        the user looking in the wrong place."""
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "error": "user_quota_exceeded",
+                    "used": exc.used,
+                    "quota": exc.quota,
+                    "attempted": exc.attempted,
+                }
+            },
+        )
+
+    @app.exception_handler(SandboxQuotaExceeded)
+    async def _sandbox_quota(_request: Request, exc: SandboxQuotaExceeded) -> JSONResponse:
+        """The cpu/memory sibling of the full-workspace 507. Same reasoning for
+        registering it centrally: a gate added at a new entry point should be
+        reported the same way without anyone remembering to convert it.
+
+        507 rather than 429: this is not "slow down", it is "you are holding as
+        much as you may hold" — the fix is to close something, and the body says
+        which dimension bound so the FE can point at the right list."""
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "error": "sandbox_quota_exceeded",
+                    "dimension": exc.dimension,
+                    "used": exc.used,
+                    "limit": exc.limit,
                 }
             },
         )
@@ -821,6 +1045,16 @@ def create_app(
     with boot_step("apply spec to backend (DB schema)"):
         spec.apply(app, router=api, auto_include=False)
 
+    # Registered HERE — immediately post-`apply`, so its CRUD routes are never
+    # emitted (an internal coordination row, not an API resource) but the model
+    # exists for every caller, not only for an app whose lifespan was entered.
+    # It used to be registered in the lifespan, which was fine while it was
+    # wired for one backend; now that it is also the per-person ledger, a
+    # sandbox wake on a bare test client would hit an unregistered model.
+    register_sandbox_activity(spec)
+    register_disk_ledger(spec)
+    register_user_quota(spec)
+
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
     # collection with the same name).
@@ -930,6 +1164,12 @@ def create_app(
         replay_buffer_events=turn_replay_buffer_events,
         event_bus=event_bus,
     )
+    # The sweeper feeds the durable per-person ledger with what the mirror just
+    # measured — the ONLY path by which bytes the agent produced with `exec`
+    # (a pip install, a clone) reach an owner's total. Exposed here rather than
+    # awaited inside the mirror so the store round-trip stays out of the walk.
+    app.state.publish_workspace_usage = _publish_measured
+    app.state.workspace_files = files
     # Exposed for introspection / tests of the #43 broadcast stream (the shared
     # per-investigation pub/sub lives on the engine).
     app.state.turn_engine = turn_engine
@@ -1140,6 +1380,7 @@ def create_app(
     # release / notify-failure hooks all bind ``create_app``'s services through one
     # adapter. The orchestrator wiring + capability routes call its methods.
     workflow_executor = WorkflowExecutor(
+        admission=admission,
         spec=spec,
         files=files,
         registry=registry,
@@ -1245,6 +1486,7 @@ def create_app(
     )
 
     chat_send_svc = ChatSendService(
+        admission=admission,
         spec=spec,
         locator=locator,
         # #615: the after-hours budget + window the turn-end driver reads to
@@ -1334,6 +1576,21 @@ def create_app(
         workflow_executor=workflow_executor,
     )
 
+    register_quota_routes(
+        api,
+        spec=spec,
+        locator=locator,
+        registry=registry,
+        files=files,
+        activity=activity_store,
+        disk_ledger=disk_ledger,
+        user_limits=user_limits,
+        get_user_id=get_user_id,
+        idle_window_ms=int(idle_timeout.total_seconds() * 1000),
+        now_ms=lambda: int(datetime.now(UTC).timestamp() * 1000),
+        superusers=superusers,
+    )
+
     register_file_routes(
         api,
         files=files,
@@ -1344,8 +1601,8 @@ def create_app(
         get_user_id=get_user_id,
         turn_engine=turn_engine,
         activity=activity,
-        workspace_quota=workspace_quota,
         max_file_size=max_file_size,
+        admission=admission,
     )
 
     # #419: file-first entity CRUD. Opt-in — an item with no `.entity/` schema

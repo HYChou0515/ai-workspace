@@ -83,6 +83,26 @@ class SandboxSpec:
     deployment's, not the author's — it is what the sandbox sees at
     `/.tools/<name>`. Backends without an artifact store ignore it."""
 
+    cpu_cores: float | None = None
+    memory_bytes: int | None = None
+    pids_max: int | None = None
+    """Resource ceilings for THIS sandbox, resolved from the App's declaration
+    and the deploy's config (see `quota.limits`). They travel with `create`
+    because a backend that caps by cgroup has to know them at provision time.
+
+    `None` means "not stated" — the backend applies whatever it was configured
+    with, which is what every pre-existing caller (a bare `SandboxSpec()`) gets.
+    **0 is a different answer**: it means explicitly unbounded, the way
+    `filestore.workspace_quota: 0` and a cgroup's `max` already spell it. The
+    two must not collapse into one sentinel here, or an App that deliberately
+    lifts a limit would silently inherit the deploy's instead.
+
+    `memory_bytes` is a resolved BYTE COUNT, not a friendly string: parsing
+    belongs at the config edge, so a typo is a boot error rather than something
+    a sandbox discovers at create time. Backends with no resource control (mock,
+    the plain local process sandbox) ignore these — the fields are a request, and
+    an unenforcing backend is not lying about anything it claimed."""
+
     exposed_ports: tuple[int, ...] = ()
     """In-sandbox TCP ports that must be reachable from the backend, declared
     **up front** because some backends (Docker) can't publish a port on an

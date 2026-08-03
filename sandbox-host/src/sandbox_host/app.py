@@ -87,6 +87,12 @@ class _CreateBody(BaseModel):
     # archive, create restores `{nfs_root}/{item_id}` into the fresh sandbox and
     # later persists it back. Optional (older clients omit it ⇒ no archive).
     item_id: str | None = None
+    # This sandbox's resource ceilings, resolved by the app from the item's App.
+    # Absent / null ⇒ this host's own configured defaults, which is also what an
+    # older app (sending neither field) gets.
+    cpu_cores: float | None = None
+    memory_bytes: int | None = None
+    pids_max: int | None = None
 
 
 class _PersistBody(BaseModel):
@@ -434,7 +440,14 @@ def make_host_app(
             # Draining (SIGTERM): stop taking new sandboxes; existing ones run
             # on until idle or the pod's termination grace deadline.
             return JSONResponse(status_code=503, content={"error": "draining"})
-        spec = SandboxSpec(image=body.image, env=body.env, exposed_ports=tuple(body.exposed_ports))
+        spec = SandboxSpec(
+            image=body.image,
+            env=body.env,
+            exposed_ports=tuple(body.exposed_ports),
+            cpu_cores=body.cpu_cores,
+            memory_bytes=body.memory_bytes,
+            pids_max=body.pids_max,
+        )
         handle = await controller.create(spec, body.item_id)
         return JSONResponse(_CreateReply(pod_url=advertise_url, remote_id=handle.id).model_dump())
 

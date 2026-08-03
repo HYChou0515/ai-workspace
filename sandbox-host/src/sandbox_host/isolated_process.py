@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import os
 import shlex
 import subprocess
@@ -45,6 +46,12 @@ def _parse_size(text: str) -> str:
     if unit is None:
         return str(int(text))
     return str(int(text[:-1]) * unit)
+
+
+def _fmt_bytes(nbytes: int) -> str:
+    """A resolved byte count → what cgroup v2's `memory.max` wants. 0 means
+    unbounded and must reach the cgroup as `max`."""
+    return "max" if nbytes <= 0 else str(nbytes)
 
 
 def _cpu_max(cores: float) -> str:
@@ -95,12 +102,27 @@ class _CgroupManager:
         self._cpu_max = _cpu_max(cpu_cores)
         self._pids_max = str(pids_max)
 
-    def create(self, name: str) -> Path:
+    def create(
+        self,
+        name: str,
+        *,
+        cpu_cores: float | None = None,
+        memory_bytes: int | None = None,
+        pids_max: int | None = None,
+    ) -> Path:
         cg = self._root / name
         cg.mkdir(parents=True, exist_ok=False)
-        (cg / "memory.max").write_text(self._memory_max)
-        (cg / "cpu.max").write_text(self._cpu_max)
-        (cg / "pids.max").write_text(self._pids_max)
+        # Per-sandbox ceilings from the request; `None` falls back to this
+        # host's configured default PER DIMENSION, so a spec stating only memory
+        # keeps the host's cpu and pids. 0 is not None — it means explicitly
+        # unbounded, and `_fmt_bytes` turns it into the cgroup's own `max`
+        # (writing a literal 0 would OOM-kill every process instantly).
+        memory = self._memory_max if memory_bytes is None else _fmt_bytes(memory_bytes)
+        cpu = self._cpu_max if cpu_cores is None else _cpu_max(cpu_cores)
+        pids = self._pids_max if pids_max is None else str(pids_max)
+        (cg / "memory.max").write_text(memory)
+        (cg / "cpu.max").write_text(cpu)
+        (cg / "pids.max").write_text(pids)
         return cg
 
     def remove(self, cg: Path) -> None:
@@ -213,7 +235,15 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             handle = await super().create(spec)
             uid, gid = self._pool.alloc()
             ws = self._workspace(handle)
-            cgroup = await asyncio.to_thread(self._cgroups.create, handle.id)
+            cgroup = await asyncio.to_thread(
+                functools.partial(
+                    self._cgroups.create,
+                    handle.id,
+                    cpu_cores=spec.cpu_cores,
+                    memory_bytes=spec.memory_bytes,
+                    pids_max=spec.pids_max,
+                )
+            )
             await asyncio.to_thread(self._provision, ws, uid)
             self._identities[handle.id] = _Identity(uid=uid, gid=gid, cgroup=cgroup)
             return handle

@@ -319,6 +319,7 @@ async def test_a_send_survives_its_request_being_cancelled():
     service = object.__new__(ChatSendService)  # the protection, not the wiring
     service._inflight = set()
     service._files = _RoomAlways()
+    service._admission = None  # no per-person limit configured
 
     async def _slow(*_a, **_k) -> None:  # noqa: ANN002, ANN003
         started.set()
@@ -344,6 +345,7 @@ async def test_a_send_still_reports_its_own_failure_to_a_live_request():
     service = object.__new__(ChatSendService)
     service._inflight = set()
     service._files = _RoomAlways()
+    service._admission = None  # no per-person limit configured
 
     async def _boom(*_a, **_k) -> None:  # noqa: ANN002, ANN003
         raise RuntimeError("bad request")

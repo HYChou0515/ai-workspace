@@ -53,10 +53,14 @@ from .schema import (
     MessageQueueSettings,
     ObservabilitySettings,
     OffHoursSettings,
+    PerAppResources,
+    PerUserResources,
     Preset,
     PresetLlmSettings,
     RabbitmqSettings,
     ReadFileSettings,
+    ResourceAmounts,
+    ResourceSettings,
     RetrievalLlmRef,
     RetrievalSettings,
     RunnerSettings,
@@ -409,6 +413,13 @@ _TOP_SCHEMA: dict[str, Any] = {
     "sandbox_host": _dataclass_keys(SandboxHostSettings),
     "tools": _dataclass_keys(ToolsSettings),
     "filestore": _dataclass_keys(FilestoreSettings),
+    "resources": {
+        "per_app": {
+            "default": _dataclass_keys(ResourceAmounts),
+            "max": _dataclass_keys(ResourceAmounts),
+        },
+        "per_user": _dataclass_keys(PerUserResources),
+    },
     "runner": _dataclass_keys(RunnerSettings),
     "llm": _dataclass_keys(LlmSettings),
     "read_file": _dataclass_keys(ReadFileSettings),
@@ -741,6 +752,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         sandbox_host=_build(SandboxHostSettings, d["sandbox_host"]),
         tools=_build(ToolsSettings, d["tools"]),
         filestore=_build(FilestoreSettings, d["filestore"]),
+        resources=_build_resources(d.get("resources", {})),
         runner=_build(RunnerSettings, d["runner"]),
         llm=_build(LlmSettings, d["llm"]),
         read_file=_build(ReadFileSettings, d["read_file"]),
@@ -801,6 +813,21 @@ def _build(cls, sub: dict[str, Any]):
     names (validated upstream). Extra fields → schema validator caught;
     missing fields → dataclass default applies."""
     return cls(**sub)
+
+
+def _build_resources(d: dict[str, Any]) -> ResourceSettings:
+    """`resources` nests two levels (`per_app.default` / `per_app.max`), so it
+    needs its own builder — `_build` only handles a flat leaf. An absent section
+    (or an absent half) yields the all-zero defaults, which mean "inherit /
+    unlimited", so today's deploys are unaffected."""
+    per_app = d.get("per_app", {})
+    return ResourceSettings(
+        per_app=PerAppResources(
+            default=_build(ResourceAmounts, per_app.get("default", {})),
+            max=_build(ResourceAmounts, per_app.get("max", {})),
+        ),
+        per_user=_build(PerUserResources, d.get("per_user", {})),
+    )
 
 
 def _build_sandbox(d: dict[str, Any]) -> SandboxSettings:

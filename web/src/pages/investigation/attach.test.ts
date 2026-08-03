@@ -116,6 +116,41 @@ describe("runAttach (#198)", () => {
     expect(res.overQuota).toEqual(["uploads/big.bin"]);
     expect(res.tooLarge).toEqual([]);
     expect(res.uploaded).toEqual(["uploads/ok.csv"]);
+    // No code on the wire ⇒ the pre-existing per-workspace meaning.
+    expect(res.overQuotaKind).toBe("workspace");
+  });
+
+  it("reports WHICH quota refused, so the composer can name the remedy", () => {
+    // Three rules answer 507 and the fixes are three different places: delete
+    // here / delete in another item you own / close a live environment. One
+    // message for all three sends most people somewhere with nothing to fix.
+    return Promise.all(
+      (
+        [
+          ["user_quota_exceeded", "user"],
+          ["sandbox_quota_exceeded", "environment"],
+          ["workspace_quota_exceeded", "workspace"],
+        ] as const
+      ).map(async ([code, kind]) => {
+        const res = await runAttach({
+          files: [new File(["x"], "big.bin")],
+          uploadDir: "uploads",
+          upload: vi.fn(async () => {
+            throw Object.assign(new Error("full"), { status: 507, code });
+          }),
+        });
+        expect(res.overQuotaKind).toBe(kind);
+      }),
+    );
+  });
+
+  it("leaves the kind null when nothing was refused for quota", async () => {
+    const res = await runAttach({
+      files: [new File(["y"], "ok.csv")],
+      uploadDir: "uploads",
+      upload: vi.fn(async () => {}),
+    });
+    expect(res.overQuotaKind).toBeNull();
   });
 
   it("routes a non-413 error to failed and keeps going", async () => {

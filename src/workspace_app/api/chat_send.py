@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from ..filestore.protocol import FileStore
     from ..kb.llm import ILlm
     from ..kb.retriever import Enhancements
+    from ..quota.admission import AdmissionGate
     from ..resources.kb import Citation
     from ..users import UserDirectory
     from .activity import ActivityLog
@@ -67,7 +68,6 @@ if TYPE_CHECKING:
     from .subagent_bridge import SubagentBridge
     from .turn_context import TurnContextBuilder
     from .turns import ChatTurnEngine, TurnMessage
-
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +135,7 @@ class ChatSendService:
         goal_max_rounds: int = 3,
         offhours: OffHoursSettings | None = None,
         flush_item: Callable[[str], Awaitable[None]],
+        admission: AdmissionGate | None = None,
         send_await_timeout: float = 25.0,
     ) -> None:
         self._spec = spec
@@ -164,6 +165,9 @@ class ChatSendService:
         # #492: flush this item's live sandbox to durable at turn-end (guarantee
         # (2)'s Y=1 turn) — a no-op when the item is cold.
         self._flush_item = flush_item
+        # The cpu/memory sibling of the workspace-full gate below. None ⇒ no
+        # per-person limits configured, so nothing to check.
+        self._admission = admission
         # #493 symptom 1 (504): how long the POST awaits its own turn before
         # DETACHING it to the background. Snappy turns finish within this and the
         # POST returns after the reply is persisted (the historical behaviour every
@@ -216,6 +220,12 @@ class ChatSendService:
         that will never come; clearing space needs no agent, because deleting
         from the file tree is never quota-gated."""
         await self._files.ensure_room_for(investigation_id, 1)
+        # …and the same reasoning for cpu/memory: if this turn would need a NEW
+        # sandbox its owner may not have, refuse here rather than let the agent
+        # discover it when it first reaches for `exec` — by then the turn is
+        # already spent. Both gates sit before the user's message is persisted.
+        if self._admission is not None:
+            await self._admission.check(investigation_id)
         task = asyncio.create_task(
             self._send(
                 investigation_id,

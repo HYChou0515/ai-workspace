@@ -224,6 +224,63 @@ class FilestoreSettings:
     gc_t2: str = "24h"
 
 
+# ─── resources ──────────────────────────────────────────────────────────
+@dataclass(frozen=True)
+class ResourceAmounts:
+    """One point in the (cpu, memory, disk) space. Every dimension is optional
+    and falls through on its own — 0 / "" means "not stated here", never
+    "zero allowed" (a zero-core sandbox is not a thing anyone configures)."""
+
+    cpu: float = 0.0  # cores
+    memory: str = ""  # "512M" / "2G"
+    disk: str = ""  # one item's workspace quota
+
+
+@dataclass(frozen=True)
+class PerAppResources:
+    """The deploy's half of the per-App bargain (k8s ``LimitRange``).
+
+    ``default`` is what an App gets when its app.json states nothing; ``max`` is
+    the ceiling an App may not exceed. Exceeding it is a BOOT failure, not a
+    silent trim: a config that reads "4 cores" while the pod hands out 2 is the
+    dead-knob class this codebase refuses to ship."""
+
+    default: ResourceAmounts = field(default_factory=ResourceAmounts)
+    max: ResourceAmounts = field(default_factory=ResourceAmounts)
+
+
+@dataclass(frozen=True)
+class PerUserResources:
+    """What ONE person may hold across every App and every item they own.
+
+    Charged to the item's ``owner`` (#687 — that field is the debtor, and it is
+    the reason #687 must land before this is genuinely enforceable). Four
+    dimensions, k8s ``ResourceQuota`` shape; 0 ⇒ that dimension is unlimited.
+
+    ``count`` / ``cpu`` / ``memory`` bound LIVE sandboxes only — they are
+    reclaimed when a sandbox is reaped, so the tally is derived from what is
+    alive, never from a counter someone has to remember to decrement. ``disk``
+    is the odd one out: it persists, so it is a sum over the owner's workspaces
+    and only ever blocks GROWTH (shrinking and deleting always pass, or a person
+    at their cap could never get back under it)."""
+
+    count: int = 0  # concurrently live sandboxes
+    cpu: float = 0.0  # summed cores of those live sandboxes
+    memory: str = ""  # summed memory of those live sandboxes
+    disk: str = ""  # summed workspace bytes across every item they own
+
+
+@dataclass(frozen=True)
+class ResourceSettings:
+    """Resource limits, per App and per person. An empty section (the default)
+    reproduces today's behaviour exactly: `per_app` falls through to
+    `sandbox.isolation.*` + `filestore.workspace_quota`, and `per_user` is all
+    zeros ⇒ unlimited, i.e. no admission control at all."""
+
+    per_app: PerAppResources = field(default_factory=PerAppResources)
+    per_user: PerUserResources = field(default_factory=PerUserResources)
+
+
 # ─── runner ─────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class RunnerSettings:
@@ -1231,6 +1288,7 @@ class Settings:
     sandbox_host: SandboxHostSettings = field(default_factory=SandboxHostSettings)
     tools: ToolsSettings = field(default_factory=ToolsSettings)
     filestore: FilestoreSettings = field(default_factory=FilestoreSettings)
+    resources: ResourceSettings = field(default_factory=ResourceSettings)
     runner: RunnerSettings = field(default_factory=RunnerSettings)
     llm: LlmSettings = field(default_factory=LlmSettings)
     read_file: ReadFileSettings = field(default_factory=ReadFileSettings)

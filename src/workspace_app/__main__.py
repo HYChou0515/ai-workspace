@@ -56,6 +56,7 @@ from workspace_app.factories import (
 from workspace_app.monitor import SpecstarMonitor
 from workspace_app.observability.boot import boot_step
 from workspace_app.observability.setup import install_llm_logging
+from workspace_app.quota.limits import resolve_discovered_apps, warn_unenforceable_dimensions
 from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
 from workspace_app.tooling.registry import discover_packages
 
@@ -108,6 +109,19 @@ def main() -> None:
     # masked) and write the full real-value copy next to config.yaml (0600).
     # Best-effort — never blocks boot.
     emit_config_dump(settings, provenance, config_dir=config_dir, stream=sys.stdout)
+    # Resource limits: resolve every App's ceilings ONCE, here. It doubles as
+    # the config check — an app.json above `resources.per_app.max` raises, and it
+    # has to raise HERE, because a ceiling that silently trimmed would leave the
+    # dump above printing one number while the pod hands out another. The mapping
+    # this returns is what `create_app` serves with, so the numbers in force are
+    # provably the ones this check approved.
+    app_resources = resolve_discovered_apps(settings)
+    # A per-person cpu/memory cap sums what each live sandbox is allowed to use;
+    # with no App stating a cost there is nothing to sum and the number in the
+    # dump above would enforce nothing. Say so out loud rather than let it read
+    # as configured.
+    for _warning in warn_unenforceable_dimensions(settings, app_resources):
+        print(f"  ⚠ resources: {_warning}")
     # Single current-user seam, threaded into BOTH get_spec (so specstar stamps
     # `created_by`) and create_app (access layer + KB doc-id minting) so they
     # never diverge — a divergence silently breaks KB cross-ref links for any
@@ -217,6 +231,8 @@ def main() -> None:
             max_file_size=settings.filestore.max_file_size,
             # #245: per-workspace total-size quota (protects the shared disk root).
             workspace_quota=settings.filestore.workspace_quota,
+            app_resources=app_resources,
+            per_user_resources=settings.resources.per_user,
             # #345: scratch-vol soft cap — the idle reaper recycles any item whose
             # working dir grows past this (0 ⇒ off), so one runaway workspace can't
             # fill the shared scratch volume the whole fleet shares.
