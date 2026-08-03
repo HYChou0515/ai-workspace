@@ -76,6 +76,14 @@ export type ViewConfig = {
    * shows a "Working days" section; toggling persists straight to the view file. */
   skipWeekends?: boolean;
   onToggleSkipWeekends?: (next: boolean) => void;
+  /** gantt only — which field a bar's colour means. "" = off, the single
+   * default colour bars had before. Present ⇒ the panel shows a "Colour"
+   * section; changing it persists to the view file, because what the chart is
+   * ASKING is a thing the project shares. (Where somebody is LOOKING — which
+   * groups they collapsed — deliberately does not go here; see GanttView.) */
+  colorBy?: string;
+  colorByOptions?: { name: string; label: string }[];
+  onSetColorBy?: (field: string) => void;
   /** gantt only — how each bar shows its assignee (avatar | name | none). Present
    * ⇒ the panel shows a "People" section; changing it persists to the view file. */
   assigneeDisplay?: string;

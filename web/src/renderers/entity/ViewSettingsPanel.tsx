@@ -160,6 +160,25 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
             </section>
           )}
 
+          {config.onSetColorBy && (
+            <section className="ev-viewpanel__sec">
+              <div className="ev-viewpanel__label">Colour</div>
+              <select
+                className="ev-select"
+                aria-label="colour by"
+                value={config.colorBy ?? ""}
+                onChange={(e) => config.onSetColorBy?.(e.target.value)}
+              >
+                <option value="">Off</option>
+                {config.colorByOptions?.map((o) => (
+                  <option key={o.name} value={o.name}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </section>
+          )}
+
           {config.onSetAssigneeDisplay && (
             <section className="ev-viewpanel__sec">
               <label className="ev-viewpanel__label" htmlFor="ev-people">

@@ -155,3 +155,55 @@ describe("ViewSettingsPanel", () => {
     expect(onReset).toHaveBeenCalled();
   });
 });
+
+describe("colour source (#690 P3)", () => {
+  it("offers no colour section to a view that cannot use one", () => {
+    // Table and board colour their chips from the field itself; only the gantt
+    // has a bar with one colour to spend.
+    render(<ViewSettingsPanel config={config()} />);
+    open();
+
+    expect(screen.queryByLabelText("colour by")).not.toBeInTheDocument();
+  });
+
+  it("lets the user pick what the colour means, and persists it", () => {
+    const onSetColorBy = vi.fn();
+    render(
+      <ViewSettingsPanel
+        config={config({
+          colorBy: "",
+          colorByOptions: [
+            { name: "status", label: "status" },
+            { name: "urgency", label: "urgency" },
+          ],
+          onSetColorBy,
+        })}
+      />,
+    );
+    open();
+
+    fireEvent.change(screen.getByLabelText("colour by"), { target: { value: "urgency" } });
+
+    expect(onSetColorBy).toHaveBeenCalledWith("urgency");
+  });
+
+  it("offers turning it off again", () => {
+    // The one colour bars had before is a real answer, not an absence — a view
+    // that cannot get back to it is a one-way door.
+    const onSetColorBy = vi.fn();
+    render(
+      <ViewSettingsPanel
+        config={config({
+          colorBy: "urgency",
+          colorByOptions: [{ name: "urgency", label: "urgency" }],
+          onSetColorBy,
+        })}
+      />,
+    );
+    open();
+
+    fireEvent.change(screen.getByLabelText("colour by"), { target: { value: "" } });
+
+    expect(onSetColorBy).toHaveBeenCalledWith("");
+  });
+});
