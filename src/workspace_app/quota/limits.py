@@ -29,10 +29,13 @@ produced the bug above. `count` binds regardless.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from ..apps.manifest import AppManifest, AppResources
 from ..config.schema import ResourceAmounts, Settings
+
+logger = logging.getLogger(__name__)
 
 _SIZE_UNITS = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 
@@ -170,6 +173,48 @@ def _enforce_ceiling(slug: str, limits: ResourceLimits, ceiling: ResourceAmounts
                 f"resources.per_app.max.{name}={cap}. Lower the app's "
                 f"`resources` block in app.json, or raise the ceiling."
             )
+
+
+def warn_unenforceable_dimensions(
+    settings: Settings, limits: dict[str, ResourceLimits]
+) -> list[str]:
+    """Name any per-person dimension the deploy set that cannot currently bind.
+
+    A per-user `cpu` / `memory` cap sums what each live sandbox is ALLOWED to
+    consume. When no App states a cost, every term of that sum is unknown and
+    the cap silently never fires — the operator sees their number in the config
+    dump and nothing enforcing it, which is the dead-knob failure this codebase
+    treats as a defect rather than a nuance. `count` is unaffected: counting
+    sandboxes needs nobody to have declared anything.
+
+    Returns the messages (also logged) so a caller can surface them; not fatal,
+    because the config is not WRONG — it is just waiting for an App to declare
+    what it costs."""
+    per_user = settings.resources.per_user
+    wanted = [
+        name
+        for name, value in (("cpu", per_user.cpu), ("memory", parse_size(per_user.memory)))
+        if value
+    ]
+    if not wanted:
+        return []
+    stated = sorted(
+        slug
+        for slug, lim in limits.items()
+        if lim.cpu_cores is not None or lim.memory_bytes is not None
+    )
+    if stated:
+        return []
+    messages = [
+        f"resources.per_user.{name} is set, but no App states a {name} cost "
+        f"(app.json `resources`, or resources.per_app.default), so the limit "
+        f"cannot bind — a sum over undeclared costs has no terms. "
+        f"resources.per_user.count still applies."
+        for name in wanted
+    ]
+    for message in messages:
+        logger.warning("quota: %s", message)
+    return messages
 
 
 def resolve_discovered_apps(settings: Settings) -> dict[str, ResourceLimits]:

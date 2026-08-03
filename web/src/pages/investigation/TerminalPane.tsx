@@ -13,6 +13,7 @@ import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { useT } from "../../lib/i18n";
 import { modCombo } from "../../lib/platform";
+import { quotaKind } from "../../lib/quotaFailure";
 import { pxToRem } from "../../lib/pxToRem";
 
 type Entry = {
@@ -65,6 +66,14 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
       setHistory((h) => h.map((e) => (e === entry ? { ...e, result } : e)));
     } catch (err) {
       const aborted = err instanceof DOMException && err.name === "AbortError";
+      // The terminal wakes a sandbox, so it is one of the two places a person
+      // meets their live-environment limit. Reporting the raw "exec failed:
+      // 507" would be the same failure the review found on the upload path:
+      // a status with no remedy attached.
+      const kind = quotaKind(
+        (err as { status?: number }).status,
+        (err as { code?: string }).code,
+      );
       setHistory((h) =>
         h.map((e) =>
           e === entry
@@ -72,7 +81,17 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
                 ...e,
                 result: {
                   kind: "error",
-                  message: aborted ? t("terminal.aborted") : err instanceof Error ? err.message : String(err),
+                  message: aborted
+                    ? t("terminal.aborted")
+                    : kind === "environment"
+                      ? t("terminal.envFull")
+                      : kind === "user"
+                        ? t("terminal.userFull")
+                        : kind === "workspace"
+                          ? t("terminal.workspaceFull")
+                          : err instanceof Error
+                            ? err.message
+                            : String(err),
                 },
               }
             : e,

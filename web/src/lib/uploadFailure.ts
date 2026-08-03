@@ -11,6 +11,7 @@
  * Pure, so the choice is testable without driving an `alert`.
  */
 import type { MsgKey } from "./i18n";
+import { quotaKind } from "./quotaFailure";
 
 /** The five outcomes this can name — typed so a renamed message key is a
  *  compile error rather than a silently missing string. */
@@ -27,11 +28,13 @@ export function uploadFailureKey(
   status: number | undefined,
   code: string | undefined,
 ): UploadFailureKey {
-  if (status === 507) {
-    if (code === "user_quota_exceeded") return "workspace.upload.userFull";
-    if (code === "sandbox_quota_exceeded") return "workspace.upload.envFull";
-    return "workspace.upload.full"; // this workspace — the #245/#538 case
-  }
+  const kind = quotaKind(status, code);
+  if (kind === "user") return "workspace.upload.userFull";
+  // `environment` is not reachable from an upload — the write path never asks
+  // the sandbox admission gate — but mapping it keeps this total rather than
+  // relying on that staying true.
+  if (kind === "environment") return "workspace.upload.envFull";
+  if (kind === "workspace") return "workspace.upload.full";
   if (status === 413) return "workspace.upload.failed";
   // Anything else reports WHAT happened rather than guessing WHY: blaming the
   // size cap for a dropped connection sends the user after a limit that was

@@ -801,6 +801,20 @@ export const messages = {
   // #481: the global 審核 review inbox — one filterable table over every pending
   // card proposal + clarification question the user may see, across collections.
   "review.title": { "zh-TW": "審核", en: "Review" },
+  // The terminal's own wording for the three limits. It wakes a sandbox, so it
+  // is one of only two surfaces where the live-environment limit can appear.
+  "terminal.envFull": {
+    "zh-TW": "沒有執行:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再試一次。",
+    en: "Not run — you're at your limit for live environments. Close one in My resources, then try again.",
+  },
+  "terminal.userFull": {
+    "zh-TW": "沒有執行:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再試一次。",
+    en: "Not run — you're out of space across all your items. Open My resources to see where it went, then try again.",
+  },
+  "terminal.workspaceFull": {
+    "zh-TW": "沒有執行:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
+    en: "Not run — this item's workspace is full. Delete files you no longer need first.",
+  },
   "resources.title": { "zh-TW": "我的資源", en: "My resources" },
   "resources.heading": { "zh-TW": "我的資源使用", en: "My resource usage" },
   "resources.loading": { "zh-TW": "載入中…", en: "Loading…" },
@@ -958,6 +972,14 @@ export const messages = {
   "workspace.usage.full": {
     "zh-TW": "空間已滿——請先刪除一些檔案再上傳。",
     en: "Storage is full — delete some files before uploading more.",
+  },
+  "workspace.overQuota.user": {
+    "zh-TW": "{names} 沒有附上:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再試一次。",
+    en: "{names} wasn't attached — you're out of space across all your items. Open My resources to see where it went, then try again.",
+  },
+  "workspace.overQuota.env": {
+    "zh-TW": "{names} 沒有附上:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再試一次。",
+    en: "{names} wasn't attached — you're at your limit for live environments. Close one in My resources, then try again.",
   },
   "workspace.overQuota": {
     "zh-TW": "空間不足，未能上傳:{names}",

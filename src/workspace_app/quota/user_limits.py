@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 
 from msgspec import Struct
 from specstar import SpecStar
@@ -32,6 +33,10 @@ from specstar.types import (
 from ..config.schema import PerUserResources
 
 logger = logging.getLogger(__name__)
+
+# Matches the item-facts memo in `create_app` and the usage measurement window.
+_TTL_S = 5.0
+_CACHE_MAX = 4096
 
 
 class _UserQuota(Struct):
@@ -57,15 +62,32 @@ def register_user_quota(spec: SpecStar) -> None:
 class UserLimits:
     """Resolves one person's effective limits, and records overrides."""
 
-    def __init__(self, spec: SpecStar, default: PerUserResources) -> None:
+    def __init__(self, spec: SpecStar, default: PerUserResources, *, ttl_s: float = _TTL_S) -> None:
         self._spec = spec
         self._default = default
+        # Overrides are rare and change by an admin action, but this is read on
+        # a path that runs per gated write. Memoised for the same window the
+        # usage measurement already trails by, so an allowance is never more
+        # stale than the numbers it is compared against.
+        self._ttl = ttl_s
+        self._cache: dict[str, tuple[float, PerUserResources]] = {}
 
     @property
     def default(self) -> PerUserResources:
         return self._default
 
     async def for_user(self, user_id: str) -> PerUserResources:
+        now = time.monotonic()
+        hit = self._cache.get(user_id)
+        if hit is not None and now - hit[0] < self._ttl:
+            return hit[1]
+        resolved = await self._resolve(user_id)
+        if len(self._cache) > _CACHE_MAX:  # bounded: a cache, not a registry
+            self._cache.clear()
+        self._cache[user_id] = (now, resolved)
+        return resolved
+
+    async def _resolve(self, user_id: str) -> PerUserResources:
         override = await asyncio.to_thread(self._read_sync, user_id)
         if override is None:
             return self._default
@@ -89,6 +111,10 @@ class UserLimits:
 
     async def set_for(self, user_id: str, limits: PerUserResources) -> None:
         await asyncio.to_thread(self._set_sync, user_id, limits)
+        # An admin raising someone's allowance expects the very next turn to
+        # honour it — "takes effect without a restart" must not quietly mean
+        # "within five seconds".
+        self._cache.pop(user_id, None)
 
     def _set_sync(self, user_id: str, limits: PerUserResources) -> None:
         rm = self._spec.get_resource_manager(_UserQuota)
@@ -115,6 +141,7 @@ class UserLimits:
     async def clear_for(self, user_id: str) -> None:
         """Drop an override so the person falls back to the deploy default."""
         await asyncio.to_thread(self._clear_sync, user_id)
+        self._cache.pop(user_id, None)
 
     def _clear_sync(self, user_id: str) -> None:
         rm = self._spec.get_resource_manager(_UserQuota)

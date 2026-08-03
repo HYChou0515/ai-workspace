@@ -7,6 +7,7 @@
  * logic (path derivation, draft text, upload orchestration with progress) so the UI
  * in AgentPanel stays thin and the behaviour is unit-testable.
  */
+import { type QuotaKind, quotaKind } from "../../lib/quotaFailure";
 import { isInconclusive } from "../../api/writeVerified";
 import { mapWithConcurrency } from "../../api/concurrency";
 
@@ -64,9 +65,15 @@ export interface AttachResult {
   uploaded: string[];
   /** Paths the server rejected for exceeding the single-file size cap (413). */
   tooLarge: string[];
-  /** Paths the server rejected because the workspace is over its total quota
-   * (507, #245) — distinct from `tooLarge` so the UI can say "out of space". */
+  /** Paths the server rejected because a quota is full (507) — distinct from
+   * `tooLarge` so the UI can say "out of space". */
   overQuota: string[];
+  /** WHICH limit refused them. Three rules answer 507 and the remedies differ
+   * (delete here / delete in another item / close an environment), so the
+   * composer must not render one message for all three — that was the review's
+   * finding on the file-tree path, and this is the same mistake one surface
+   * over. `null` when nothing was refused for quota. */
+  overQuotaKind: QuotaKind;
   /** Paths that failed for any other reason. */
   failed: string[];
 }
@@ -114,6 +121,7 @@ export async function runAttach(opts: {
   const uploaded: (string | null)[] = new Array(totalFiles).fill(null);
   const tooLarge: (string | null)[] = new Array(totalFiles).fill(null);
   const overQuota: (string | null)[] = new Array(totalFiles).fill(null);
+  let overQuotaKind: QuotaKind = null;
   const failed: (string | null)[] = new Array(totalFiles).fill(null);
 
   await mapWithConcurrency(files, concurrency, async (file, i) => {
@@ -127,8 +135,12 @@ export async function runAttach(opts: {
       uploaded[i] = path;
     } catch (err) {
       const status = (err as { status?: number }).status;
+      const code = (err as { code?: string }).code;
       if (status === 413) tooLarge[i] = path;
-      else if (status === 507) overQuota[i] = path;
+      else if (status === 507) {
+        overQuota[i] = path;
+        overQuotaKind = quotaKind(status, code);
+      }
       else if (isInconclusive(err) && verify) {
         // The request was cut, not refused — go and look before accusing it.
         // A definite rejection (413/507) is never second-guessed: asking would
@@ -148,6 +160,7 @@ export async function runAttach(opts: {
     uploaded: drop(uploaded),
     tooLarge: drop(tooLarge),
     overQuota: drop(overQuota),
+    overQuotaKind,
     failed: drop(failed),
   };
 }

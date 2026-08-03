@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { quotaKind } from "./quotaFailure";
 import { uploadFailureKey } from "./uploadFailure";
 
 describe("uploadFailureKey", () => {
@@ -22,5 +23,26 @@ describe("uploadFailureKey", () => {
     expect(uploadFailureKey(413, undefined)).toBe("workspace.upload.failed");
     expect(uploadFailureKey(403, undefined)).toBe("workspace.upload.error");
     expect(uploadFailureKey(undefined, undefined)).toBe("workspace.upload.error");
+  });
+});
+
+describe("quotaKind", () => {
+  it("names which of the three limits answered", () => {
+    // The review's finding: three rules share 507 and need three remedies —
+    // delete here / delete in another item / close an environment.
+    expect(quotaKind(507, "workspace_quota_exceeded")).toBe("workspace");
+    expect(quotaKind(507, "user_quota_exceeded")).toBe("user");
+    expect(quotaKind(507, "sandbox_quota_exceeded")).toBe("environment");
+  });
+
+  it("treats a code-less 507 as the per-workspace one", () => {
+    // An older backend, or a non-JSON body: fall back to what 507 meant before
+    // the other two limits existed.
+    expect(quotaKind(507, undefined)).toBe("workspace");
+  });
+
+  it("is null for anything that is not a quota", () => {
+    expect(quotaKind(413, undefined)).toBeNull();
+    expect(quotaKind(undefined, "user_quota_exceeded")).toBeNull();
   });
 });

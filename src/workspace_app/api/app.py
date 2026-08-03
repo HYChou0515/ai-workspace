@@ -590,20 +590,22 @@ def create_app(
         if not limit:
             return  # nobody capped this person's disk — no ledger, no reads
         others = await disk_ledger.total_for(owner, exclude=item_id)
-        # Record only once we know this person IS capped. A deploy with no
-        # per-user disk limit must not pay a durable write per file write for an
-        # answer nobody asked for; a capped one needs the row current, or their
-        # next write in a different item would be judged against a stale total.
-        # It lands before the bytes do, so a write that then fails over-counts
-        # until the next mirror sweep — which now genuinely corrects it.
-        await disk_ledger.record(item_id, owner, new_size)
         if others + new_size > limit:
+            # Refused — and deliberately NOT recorded. Charging a write that did
+            # not happen leaves the owner over-counted, and the mirror sweep only
+            # visits WARM items, so a cold one would carry that phantom size
+            # indefinitely.
             raise UserDiskFull(
                 owner=owner,
                 used=others + new_size - growth,
                 quota=limit,
                 attempted=growth,
             )
+        # Allowed: keep the row current so this person's next write in a
+        # DIFFERENT item is judged against a total that includes this one.
+        # Only reached when they are actually capped — an uncapped deploy pays
+        # no durable write for an answer nobody asked for.
+        await disk_ledger.record(item_id, owner, new_size)
 
     async def _publish_measured(item_id: str) -> None:
         """Hand the freshly measured size of one workspace to the ledger.
@@ -633,10 +635,15 @@ def create_app(
         Deliberately NOT on every write: the gate measures the item being
         written LIVE, so its own number is always exact, and charging every PUT
         a durable round-trip to refresh a row the sweep will refresh anyway is
-        cost with no answer attached."""
+        cost with no answer attached.
+
+        Skipped entirely when this person has no disk cap — the same rule the
+        growth path applies. A ledger nobody reads is pure cost, and having two
+        writers disagree about when to write is how one of them ends up wrong."""
         owner = _owner_of(item_id)
-        if owner:
-            await disk_ledger.record(item_id, owner, total)
+        if not owner or not parse_size((await user_limits.for_user(owner)).disk):
+            return
+        await disk_ledger.record(item_id, owner, total)
 
     def _quota_for(item_id: str) -> int:
         """Disk ceiling for one item: its App's, else the deploy-wide number.
@@ -1157,16 +1164,14 @@ def create_app(
         replay_buffer_events=turn_replay_buffer_events,
         event_bus=event_bus,
     )
-    # Exposed for introspection / tests of the #43 broadcast stream (the shared
-    # per-investigation pub/sub lives on the engine).
-    # Exposed so a test can drive the sweep's measurement hook — the ONLY path
-    # by which bytes the agent produced with `exec` reach the per-person total.
     # The sweeper feeds the durable per-person ledger with what the mirror just
     # measured — the ONLY path by which bytes the agent produced with `exec`
     # (a pip install, a clone) reach an owner's total. Exposed here rather than
     # awaited inside the mirror so the store round-trip stays out of the walk.
     app.state.publish_workspace_usage = _publish_measured
     app.state.workspace_files = files
+    # Exposed for introspection / tests of the #43 broadcast stream (the shared
+    # per-investigation pub/sub lives on the engine).
     app.state.turn_engine = turn_engine
     # KB chat runs through a wiki-aware runner that routes each turn across
     # chunk-RAG / wiki / both (#50 P5). It's a pure pass-through to `runner`
