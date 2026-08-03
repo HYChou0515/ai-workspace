@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { ExecResult } from "../../api/types";
 import { Icon } from "../../components/Icon";
+import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { useT } from "../../lib/i18n";
@@ -254,8 +255,13 @@ function EntryView({ entry }: { entry: Entry }) {
       {!isRunning && !isError && "stderr" in entry.result && entry.result.stderr && (
         <pre style={{ ...preStyle, color: "var(--err)" }}>{entry.result.stderr}</pre>
       )}
+      {/* #692: a refusal that names /my-resources gets that name rendered as
+          the link to it. The line stays where it happened, in scrollback next
+          to the command that was refused — no separate banner to correlate. */}
       {isError && "message" in entry.result && (
-        <pre style={{ ...preStyle, color: "var(--err)" }}>{entry.result.message}</pre>
+        <pre style={{ ...preStyle, color: "var(--err)" }}>
+          <ResourceLinkText text={entry.result.message} />
+        </pre>
       )}
     </div>
   );
