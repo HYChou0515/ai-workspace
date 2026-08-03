@@ -90,6 +90,17 @@ export type ViewConfig = {
   colorBy?: string;
   colorByOptions?: { name: string; label: string }[];
   onSetColorBy?: (field: string) => void;
+  /** gantt only, and only with a week rule — the three time-axis settings.
+   * Present ⇒ the panel shows a "Time axis" section. Without a week rule the
+   * axis has no week code to show, so these would be knobs wired to nothing
+   * and the section stays away. All three persist to the view file: what the
+   * axis is measuring in is a property of the tab, not of the reader. */
+  alwaysWeek?: boolean;
+  onToggleAlwaysWeek?: (next: boolean) => void;
+  weekday?: string;
+  onSetWeekday?: (format: string) => void;
+  dayOfMonth?: string;
+  onSetDayOfMonth?: (mode: string) => void;
   /** gantt only — how each bar shows its assignee (avatar | name | none). Present
    * ⇒ the panel shows a "People" section; changing it persists to the view file. */
   assigneeDisplay?: string;

@@ -179,6 +179,40 @@ export function ViewSettingsPanel({ config }: { config: ViewConfig }) {
             </section>
           )}
 
+          {config.onSetWeekday && (
+            <section className="ev-viewpanel__sec">
+              <div className="ev-viewpanel__label">Time axis</div>
+              <label className="ev-viewpanel__field">
+                <input
+                  type="checkbox"
+                  aria-label="always show week"
+                  checked={config.alwaysWeek ?? false}
+                  onChange={() => config.onToggleAlwaysWeek?.(!config.alwaysWeek)}
+                />
+                Always show the week
+              </label>
+              <select
+                className="ev-select"
+                aria-label="weekday format"
+                value={config.weekday ?? "number"}
+                onChange={(e) => config.onSetWeekday?.(e.target.value)}
+              >
+                <option value="number">Weekdays as 1 2 3</option>
+                <option value="short">Weekdays as Mon Tue</option>
+              </select>
+              <select
+                className="ev-select"
+                aria-label="day of month"
+                value={config.dayOfMonth ?? "hidden"}
+                onChange={(e) => config.onSetDayOfMonth?.(e.target.value)}
+              >
+                <option value="hidden">No date</option>
+                <option value="always">Date under the day</option>
+                <option value="hover">Date on hover</option>
+              </select>
+            </section>
+          )}
+
           {config.onSetAssigneeDisplay && (
             <section className="ev-viewpanel__sec">
               <label className="ev-viewpanel__label" htmlFor="ev-people">

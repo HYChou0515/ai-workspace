@@ -206,4 +206,57 @@ describe("colour source (#690 P3)", () => {
 
     expect(onSetColorBy).toHaveBeenCalledWith("");
   });
+
+  describe("Time axis (#690 P9)", () => {
+    // Present only for a gantt whose view carries a week rule — without one the
+    // axis has no week to show and these three would be knobs wired to nothing.
+    const axis = (over = {}) => ({
+      alwaysWeek: false,
+      onToggleAlwaysWeek: vi.fn(),
+      weekday: "number",
+      onSetWeekday: vi.fn(),
+      dayOfMonth: "hidden",
+      onSetDayOfMonth: vi.fn(),
+      ...over,
+    });
+
+    it("is absent when the view has no week rule to show", () => {
+      render(<ViewSettingsPanel config={config()} />);
+      open();
+      expect(screen.queryByLabelText("always show week")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("weekday format")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("day of month")).not.toBeInTheDocument();
+    });
+
+    it("keeps the week visible at the widest zoom when asked", () => {
+      const a = axis();
+      render(<ViewSettingsPanel config={config(a)} />);
+      open();
+      const cb = screen.getByRole("checkbox", { name: "always show week" });
+      expect(cb).not.toBeChecked();
+      fireEvent.click(cb);
+      expect(a.onToggleAlwaysWeek).toHaveBeenCalledWith(true);
+    });
+
+    it("writes the weekday as digits or as names, digits being the default", () => {
+      const a = axis();
+      render(<ViewSettingsPanel config={config(a)} />);
+      open();
+      const sel = screen.getByLabelText("weekday format") as HTMLSelectElement;
+      expect(sel.value).toBe("number");
+      fireEvent.change(sel, { target: { value: "short" } });
+      expect(a.onSetWeekday).toHaveBeenCalledWith("short");
+    });
+
+    it("offers the day of the month as a second line, on hover, or not at all", () => {
+      const a = axis({ dayOfMonth: "hover" });
+      render(<ViewSettingsPanel config={config(a)} />);
+      open();
+      const sel = screen.getByLabelText("day of month") as HTMLSelectElement;
+      expect(sel.value).toBe("hover");
+      expect([...sel.options].map((o) => o.value)).toEqual(["hidden", "always", "hover"]);
+      fireEvent.change(sel, { target: { value: "always" } });
+      expect(a.onSetDayOfMonth).toHaveBeenCalledWith("always");
+    });
+  });
 });

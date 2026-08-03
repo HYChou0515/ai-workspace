@@ -268,6 +268,20 @@ export function AiYamlRenderer({ path }: { path: string }) {
             colorBy: spec.color_by ?? "",
             colorByOptions,
             onSetColorBy: (field) => persistGantt(setViewScalar(entry.text, "color_by", field || null)),
+            // The time-axis settings only appear WITH a week rule: without one
+            // the axis has no week code to show or keep, so all three would be
+            // knobs wired to nothing.
+            ...(spec.week
+              ? {
+                  alwaysWeek: spec.always_week ?? false,
+                  onToggleAlwaysWeek: (next: boolean) =>
+                    persistGantt(setViewScalar(entry.text, "always_week", next ? "true" : null)),
+                  weekday: spec.weekday ?? "number",
+                  onSetWeekday: (format: string) => persistGantt(setViewScalar(entry.text, "weekday", format)),
+                  dayOfMonth: spec.day_of_month ?? "hidden",
+                  onSetDayOfMonth: (mode: string) => persistGantt(setViewScalar(entry.text, "day_of_month", mode)),
+                }
+              : {}),
             assigneeDisplay: spec.assignee_display ?? "avatar",
             onSetAssigneeDisplay: (mode) => persistGantt(setViewScalar(entry.text, "assignee_display", mode)),
             dirty: false,
