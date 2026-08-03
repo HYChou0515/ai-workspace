@@ -2,6 +2,7 @@
 title: {{arg.title}}
 status: open
 assignee: {{arg.assignee?}}
+urgency: {{arg.urgency?}}
 due: {{arg.due?}}
 span: {{arg.span?}}
 exp_days: {{arg.exp_days?}}

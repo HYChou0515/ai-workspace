@@ -6,6 +6,18 @@ fields:
     values: [open, in_progress, blocked, done]
     colors: { open: blue, in_progress: amber, blocked: red, done: green }
   assignee: { role: actor }
+  # How much of an emergency this is. Optional: most issues are ordinary, and a
+  # required field would make every one of them a decision about how much of an
+  # emergency it is not.
+  #
+  # The values are in urgency order, and the palette runs with them — a scale
+  # only reads as a scale if the colours agree with it. Left to the hash the
+  # chip palette uses for unknown values, `low` would be as likely to come out
+  # red as `critical`.
+  urgency:
+    role: status
+    values: [critical, high, medium, low]
+    colors: { critical: red, high: amber, medium: blue, low: slate }
   due: { role: date }
   span: { role: daterange }
   # How long the work takes, and in whose days. The unit is per issue on

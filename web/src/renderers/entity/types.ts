@@ -7,7 +7,7 @@
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
-import type { WeekRule } from "./ganttScale";
+import type { DayOfMonth, WeekdayFormat, WeekRule } from "./ganttScale";
 import type { ScheduleFields } from "./schedule";
 import type { RefIndex } from "./refTraversal";
 
@@ -27,6 +27,10 @@ export type ViewSpec = {
    * the choice survives a reload (the standalone Columns toggle was ephemeral). */
   hidden_fields?: string[];
   group_by?: string;
+  /** #690 — which field decides a bar's colour. Absent ⇒ bars keep the single
+   * default colour, so adding this changed no existing view's appearance.
+   * Written back when the user picks one in the toolbar, like sort. */
+  color_by?: string;
   /** #GH-projects — the multi-level sort. Empty / absent ⇒ manual `rank` order
    * (drag-to-reorder). A non-empty list takes over and disables manual drag. */
   sort?: SortRule[];
@@ -41,6 +45,12 @@ export type ViewSpec = {
   /** gantt only — a custom (non-ISO) week-numbering rule for the time axis.
    * Read verbatim off the view file; omit to keep plain day/month labels. */
   week?: WeekRule;
+  /** Axis settings (#690 P8). They live on the view rather than in the app's
+   * manifest for the same reason `color_by` does: they answer "what is this
+   * tab for", and the people sharing a project share the answer. */
+  always_week?: boolean;
+  weekday?: WeekdayFormat;
+  day_of_month?: DayOfMonth;
   /** gantt only — collapse Saturdays/Sundays so the timeline shows only working
    * days (bars, axis, drag all count Mon–Fri). Default off. */
   skip_weekends?: boolean;
@@ -72,6 +82,25 @@ export type ViewConfig = {
    * shows a "Working days" section; toggling persists straight to the view file. */
   skipWeekends?: boolean;
   onToggleSkipWeekends?: (next: boolean) => void;
+  /** gantt only — which field a bar's colour means. "" = off, the single
+   * default colour bars had before. Present ⇒ the panel shows a "Colour"
+   * section; changing it persists to the view file, because what the chart is
+   * ASKING is a thing the project shares. (Where somebody is LOOKING — which
+   * groups they collapsed — deliberately does not go here; see GanttView.) */
+  colorBy?: string;
+  colorByOptions?: { name: string; label: string }[];
+  onSetColorBy?: (field: string) => void;
+  /** gantt only, and only with a week rule — the three time-axis settings.
+   * Present ⇒ the panel shows a "Time axis" section. Without a week rule the
+   * axis has no week code to show, so these would be knobs wired to nothing
+   * and the section stays away. All three persist to the view file: what the
+   * axis is measuring in is a property of the tab, not of the reader. */
+  alwaysWeek?: boolean;
+  onToggleAlwaysWeek?: (next: boolean) => void;
+  weekday?: string;
+  onSetWeekday?: (format: string) => void;
+  dayOfMonth?: string;
+  onSetDayOfMonth?: (mode: string) => void;
   /** gantt only — how each bar shows its assignee (avatar | name | none). Present
    * ⇒ the panel shows a "People" section; changing it persists to the view file. */
   assigneeDisplay?: string;
@@ -84,6 +113,10 @@ export type ViewConfig = {
 
 export type EntityViewProps = {
   spec: ViewSpec;
+  /** #690 P4 — identifies this view for per-user, per-view UI state kept in the
+   * browser (which groups are collapsed). Not in the view FILE: where somebody
+   * is looking is not a decision to make for the rest of the project. */
+  viewKey?: string;
   /** The entity type from the catalog — supplies field roles + the create form.
    * `null` while the catalog is still loading (renders records read-only). */
   type: EntityType | null;

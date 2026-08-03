@@ -1,10 +1,11 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { GanttView } from "./GanttView";
+import { selectColor } from "./selectColor";
 import { pxPerDay } from "./ganttScale";
 import { buildRefIndex } from "./refTraversal";
 import type { EntityViewProps } from "./types";
@@ -24,9 +25,17 @@ const type: EntityType = {
     { name: "span", role: "daterange" },
     { name: "milestone", role: "ref", to: "milestone" },
     { name: "assignee", role: "actor" },
+    {
+      name: "urgency",
+      role: "status",
+      values: ["critical", "high", "medium", "low"],
+      colors: { critical: "red", high: "amber", medium: "blue", low: "slate" },
+    },
+    { name: "status", role: "status", values: ["open", "done"], colors: { open: "blue", done: "green" } },
   ],
   form: [],
 };
+const urgencySpec = type.fields.find((f) => f.name === "urgency");
 const users = [
   { id: "alice", name: "Alice Chen", section: "", email: "", photo_url: "" },
   { id: "bob", name: "Bob Liu", section: "", email: "", photo_url: "" },
@@ -429,5 +438,235 @@ describe("GanttView", () => {
     fireEvent.pointerMove(window, { clientX: ppd * 3 });
     fireEvent.pointerUp(window, { clientX: ppd * 3 });
     expect(onPatch).toHaveBeenCalledWith(1, { span: "2026-01-08/2026-01-10" });
+  });
+});
+
+describe("GanttView colour source", () => {
+  const span = "2026-01-10/2026-01-20";
+
+  it("leaves bars uncoloured until a source is chosen", () => {
+    // The default has to stay what it was, or every existing view changes
+    // appearance the day this ships.
+    render(<GanttView {...props({ entities: [rec(1, { title: "A", span, urgency: "critical" })] })} />);
+
+    expect(screen.getByTestId("bar-1").style.background).toBe("");
+  });
+
+  it("colours a bar from the field the view was told to use", () => {
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", color_by: "urgency" },
+          entities: [rec(1, { title: "A", span, urgency: "critical" })],
+        })}
+      />,
+    );
+
+    // The same palette the chips use — a second one would put `critical` on
+    // two different colours in two places on the same screen.
+    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("critical", urgencySpec).bg);
+  });
+
+  it("gives a record with nothing set the neutral slot rather than a hashed colour", () => {
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", color_by: "urgency" },
+          entities: [rec(1, { title: "A", span })],
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("", urgencySpec).bg);
+  });
+
+  it("can colour by who is doing the work, not only by a select", () => {
+    // "by 不同東西做顏色 (status or 緊急度, assignee, etc)" — an actor field is
+    // one of the things people want to see at a glance.
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", color_by: "assignee" },
+          entities: [rec(1, { title: "A", span, assignee: "alice" })],
+          users,
+        })}
+      />,
+    );
+
+    expect(screen.getByTestId("bar-1").style.background).toBe(selectColor("alice").bg);
+  });
+});
+
+describe("collapsible groups (#690 P4)", () => {
+  const span = "2026-01-10/2026-01-20";
+  const grouped = {
+    view: "gantt" as const,
+    entity: "issue",
+    span: "span",
+    label: "title",
+    group_by: "assignee",
+  };
+
+  beforeEach(() => window.localStorage.clear());
+
+  it("hides a group's rows when its header is clicked", () => {
+    render(
+      <GanttView
+        {...props({
+          spec: grouped,
+          entities: [rec(1, { title: "A", span, assignee: "alice" }), rec(2, { title: "B", span, assignee: "bob" })],
+          users,
+        })}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Alice Chen/ }));
+
+    expect(screen.queryByTestId("bar-1")).not.toBeInTheDocument();
+    expect(screen.getByTestId("bar-2")).toBeInTheDocument(); // the other lane is untouched
+  });
+
+  it("remembers what this person collapsed, per view", () => {
+    // Kept out of the view file on purpose: where somebody is LOOKING is not a
+    // decision to make for the rest of the project. The key carries the view
+    // so two boards do not collapse each other's lanes.
+    const { unmount } = render(
+      <GanttView
+        {...props({ spec: grouped, entities: [rec(1, { title: "A", span, assignee: "alice" })], users, viewKey: "v1" })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Alice Chen/ }));
+    unmount();
+
+    render(
+      <GanttView
+        {...props({ spec: grouped, entities: [rec(1, { title: "A", span, assignee: "alice" })], users, viewKey: "v1" })}
+      />,
+    );
+
+    expect(screen.queryByTestId("bar-1")).not.toBeInTheDocument();
+  });
+
+  it("does not carry one view's collapse into another", () => {
+    const { unmount } = render(
+      <GanttView
+        {...props({ spec: grouped, entities: [rec(1, { title: "A", span, assignee: "alice" })], users, viewKey: "v1" })}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Alice Chen/ }));
+    unmount();
+
+    render(
+      <GanttView
+        {...props({ spec: grouped, entities: [rec(1, { title: "A", span, assignee: "alice" })], users, viewKey: "v2" })}
+      />,
+    );
+
+    expect(screen.getByTestId("bar-1")).toBeInTheDocument();
+  });
+});
+
+describe("long labels (#690 P6)", () => {
+  const span = "2026-01-10/2026-01-20";
+  const long = "Qualify the new photoresist on line 3 before the August shutdown";
+
+  it("carries the whole title on the row even though the column truncates it", () => {
+    // The column is ellipsised, and until now the only way to read a cut-off
+    // title was to open the record — a double-click to answer "which one is
+    // this".
+    // The FIRST COLUMN specifically. The bar carries the same text and already
+    // has a title of its own — the date range — which this must not take.
+    const { container } = render(<GanttView {...props({ entities: [rec(1, { title: long, span })] })} />);
+
+    expect(container.querySelector(".ev-gantt__row-label")).toHaveAttribute("title", long);
+    expect(screen.getByTestId("bar-1")).toHaveAttribute("title", "2026-01-10/2026-01-20");
+  });
+
+  it("carries the whole group name too", () => {
+    // Lane labels truncate in the same column, for the same reason.
+    render(
+      <GanttView
+        {...props({
+          spec: { view: "gantt", entity: "issue", span: "span", label: "title", group_by: "assignee" },
+          entities: [rec(1, { title: "A", span, assignee: "alice" })],
+          users,
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Alice Chen/ })).toHaveAttribute("title", "Alice Chen");
+  });
+});
+
+describe("sticky axis (#690 P7)", () => {
+  it("keeps the axis pinned inside the chart's own scroller", () => {
+    // happy-dom does not lay out, so this pins the CONTRACT the CSS relies on:
+    // the axis must be a sticky-positioned child of the element that scrolls,
+    // and the scroller must be the gantt's own — not the page — or `top: 0`
+    // has nothing to stick to.
+    //
+    // It does NOT show that the axis stays put — nothing without layout can,
+    // and this exact assertion passed while the header scrolled away, because
+    // a later `position: relative` in the same CSS rule was winning. That was
+    // caught in a real browser and is now guarded by ganttAxisSticky.test.ts;
+    // the measurement is in docs/plan-pm-gantt-urgency-and-axis.md §7.
+    const { container } = render(
+      <GanttView {...props({ entities: [rec(1, { title: "A", span: "2026-01-10/2026-01-20" })] })} />,
+    );
+
+    const scroller = container.querySelector(".ev-gantt__scroll");
+    const axis = container.querySelector(".ev-gantt__axis");
+
+    expect(scroller).toBeTruthy();
+    expect(axis).toBeTruthy();
+    expect(scroller!.contains(axis!)).toBe(true);
+    expect(axis!.className).toContain("ev-gantt__axis");
+  });
+
+  describe("the axis says which day of the week it is (#690 P8)", () => {
+    // A week rule is what turns the axis week-first; the seeded views all carry
+    // one. `skip_weekends` is what makes the digits stop at 5.
+    const weekly = (extra: Record<string, unknown> = {}) => ({
+      view: "gantt" as const,
+      entity: "issue",
+      span: "span",
+      label: "title",
+      week: { label: "W{y1}{ww}" },
+      skip_weekends: true,
+      ...extra,
+    });
+    const week = [rec(1, { title: "A", span: "2026-06-29/2026-07-10" })];
+    /** Render, then zoom all the way in — the weekday row is the densest tier,
+     * and an unmeasured pane (happy-dom lays nothing out) auto-fits to
+     * something far coarser. Clicking the anchor is what a user does. */
+    const atDayZoom = (spec: Record<string, unknown>) => {
+      const r = render(<GanttView {...props({ spec: spec as EntityViewProps["spec"], entities: week })} />);
+      fireEvent.click(screen.getByLabelText("zoom day"));
+      return r;
+    };
+
+    it("labels every column with its weekday, under the week it belongs to", () => {
+      atDayZoom(weekly());
+      for (const digit of ["1", "2", "3", "4", "5"]) {
+        expect(screen.getAllByText(digit).length).toBeGreaterThan(0);
+      }
+      expect(screen.getAllByText("W627").length).toBeGreaterThan(0); // the week band
+    });
+
+    it("carries the day of the month only when the view asks for it", () => {
+      const plain = atDayZoom(weekly());
+      expect(document.querySelector(".ev-gantt__tick-sub")).toBeNull();
+      plain.unmount();
+
+      atDayZoom(weekly({ day_of_month: "always" }));
+      expect(document.querySelector(".ev-gantt__tick-sub")).not.toBeNull();
+    });
+
+    it("puts the whole date on hover once the day of the month is in play", () => {
+      atDayZoom(weekly({ day_of_month: "hover" }));
+      const ticks = [...document.querySelectorAll(".ev-gantt__tick")];
+      expect(ticks.length).toBeGreaterThan(0);
+      expect(ticks.every((el) => /^\d{4}-\d{2}-\d{2}$/.test(el.getAttribute("title") ?? ""))).toBe(true);
+    });
   });
 });

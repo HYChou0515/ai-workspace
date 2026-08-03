@@ -58,6 +58,31 @@ week:
 # false → keep calendar days, weekends included (the default if this key is absent).
 skip_weekends: true
 
+# ── Time axis (週別為主的時間軸) ──────────────────────────────────────────────
+# What the axis says at each zoom. Only meaningful alongside the `week:` block
+# above — without one there is no week code to show, and these are ignored.
+#
+#   always_week:  at the WIDEST zoom the axis normally drops to months over
+#                 years. true keeps the week codes there instead, thinned out.
+#                 The two closer zooms show weeks either way, so this is the
+#                 only place it changes anything. (default: false)
+#
+#   weekday:      how the days of the week are written at the CLOSEST zoom.
+#                 number  1 2 3 4 5   ← we use this
+#                 short   Mon Tue Wed  (needs more room, so it appears at a
+#                                       wider zoom than the digits do)
+#                 (default: number)
+#
+#   day_of_month: whether the date rides along with the weekday.
+#                 hidden  not at all                                ← we use this
+#                 always  a second, smaller line under the weekday
+#                 hover   only in the tooltip
+#                 A second line costs axis height permanently, and the axis now
+#                 stays on screen as you scroll. (default: hidden)
+always_week: false
+weekday: number
+day_of_month: hidden
+
 # ── Automatic scheduling ─────────────────────────────────────────────────────
 # Naming these fields turns the Timeline from a drawing of dates into a
 # schedule: a "Recalculate" button appears, and pressing it lays the work out.

@@ -50,6 +50,8 @@ import {
 } from "./ganttScale";
 import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
+import { usePersistentSet } from "../../hooks/usePersistentSet";
+import { selectColor } from "./selectColor";
 import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
 
@@ -65,8 +67,11 @@ function reportText(r: ScheduleReport): string {
 
 const GUTTER = 150;
 const COARSE_H = 18; // top context band (month / year)
-const FINE_H = 20; // fine tick row (day numbers / week starts / months)
-const AXIS_H = COARSE_H + FINE_H;
+const FINE_H = 20; // fine tick row (weekdays / week codes / months)
+/** What a second line under the fine row costs. Charged only when a tick
+ * actually carries one — the axis is permanently in the way now that it sticks,
+ * so it does not reserve room it is not using. */
+const SUB_H = 11;
 const LANE_H = 24;
 const ROW_H = 26;
 const ZOOMS: Zoom[] = ["day", "week", "month"];
@@ -129,11 +134,27 @@ export function GanttView({
   onOpenRecord,
   canWrite = true,
   busy,
+  viewKey,
 }: EntityViewProps) {
   const spanField = spec.span ?? "span";
   const labelField = spec.label ?? "title";
   const assigneeField = spec.assignee;
   const assigneeDisplay = spec.assignee_display ?? "avatar";
+  // #690 P2 — which field decides a bar's colour. Absent ⇒ bars keep the
+  // single default colour they have always had, so no existing view changes
+  // appearance the day this ships.
+  // #690 P4 — collapsed lanes, per person and per view. In the browser rather
+  // than the view file: the colour source is what the chart is ASKING, which
+  // the project shares, and this is where one person is LOOKING.
+  const collapsed = usePersistentSet(`gantt-collapsed:${viewKey ?? spec.entity}`);
+  const colorField = spec.color_by;
+  const colorSpec = colorField ? roleOf(type, colorField) : undefined;
+  const barColor = (e: EntityInstance): string | undefined => {
+    if (!colorField) return undefined;
+    // The palette the chips already use. A second one would put one `status`
+    // value on two different colours in two places on the same screen.
+    return selectColor(fieldText(e.fields[colorField]) ?? "", colorSpec).bg;
+  };
   // null ⇒ auto-fit the whole project to the measured pane (fills the width on
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
   const [manualPpd, setManualPpd] = useState<number | null>(null);
@@ -292,7 +313,13 @@ export function GanttView({
   // `today` also feeds the week axis's `by_today` cross-year boundary, so it is
   // computed before the axis. The clock is read here (the view shell) and
   // injected into the pure scale math — never read inside it.
-  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip);
+  const axis = axisFor(minDate, visibleDays, ppd, spec.week, today, skip, {
+    always_week: spec.always_week,
+    weekday: spec.weekday,
+    day_of_month: spec.day_of_month,
+  });
+  const fineH = FINE_H + (axis.fine.some((t) => t.sub) ? SUB_H : 0);
+  const axisH = COARSE_H + fineH;
 
   const todayOffset = columnOf(minDate, today, skip);
   const todayInRange = todayOffset >= 0 && todayOffset < visibleDays;
@@ -335,16 +362,34 @@ export function GanttView({
         <div className="ev-gantt__grid" style={{ minWidth: GUTTER + canvasWidth }}>
           {/* left gutter: axis spacer + lane headers + row labels */}
           <div className="ev-gantt__gutter" style={{ width: GUTTER }}>
-            <div style={{ height: AXIS_H }} />
+            <div style={{ height: axisH }} />
             {lanes.map((lane) => (
               <div key={lane.key}>
                 {grouped && (
-                  <div className="ev-gantt__lane-label" style={{ height: LANE_H }}>
-                    {lane.label}
-                  </div>
+                  <button
+                    type="button"
+                    className="ev-gantt__lane-label"
+                    title={lane.label ?? undefined}
+                    style={{ height: LANE_H }}
+                    aria-expanded={!collapsed.has(lane.key)}
+                    onClick={() => collapsed.toggle(lane.key)}
+                  >
+                    {/* The arrow is its own node so the label stays one piece —
+                        a caller looking the lane up by its text should not have
+                        to know a chevron was put in front of it. */}
+                    <span aria-hidden="true" className="ev-gantt__lane-caret">
+                      {collapsed.has(lane.key) ? "\u25b8" : "\u25be"}
+                    </span>
+                    <span>{lane.label}</span>
+                  </button>
                 )}
-                {lane.rows.map((row) => (
-                  <GutterRow key={row.e.number} number={row.e.number} enabled={manualReorder}>
+                {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => (
+                  <GutterRow
+                    key={row.e.number}
+                    number={row.e.number}
+                    enabled={manualReorder}
+                    title={fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
+                  >
                     {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
                   </GutterRow>
                 ))}
@@ -357,7 +402,7 @@ export function GanttView({
             {axis.fine.map((t) => (
               <div key={`grid-${t.day}`} className="ev-gantt__gridline" style={{ left: t.day * ppd }} />
             ))}
-            <div className="ev-gantt__axis" style={{ height: AXIS_H }}>
+            <div className="ev-gantt__axis" style={{ height: axisH }}>
               <div className="ev-gantt__axis-coarse" style={{ height: COARSE_H }}>
                 {axis.coarse.map((b) => (
                   <span
@@ -369,10 +414,11 @@ export function GanttView({
                   </span>
                 ))}
               </div>
-              <div className="ev-gantt__axis-fine" style={{ height: FINE_H }}>
+              <div className="ev-gantt__axis-fine" style={{ height: fineH }}>
                 {axis.fine.map((t) => (
-                  <span key={`fine-${t.day}`} className="ev-gantt__tick" style={{ left: t.day * ppd }}>
+                  <span key={`fine-${t.day}`} className="ev-gantt__tick" style={{ left: t.day * ppd }} title={t.title}>
                     {t.label}
+                    {t.sub && <span className="ev-gantt__tick-sub">{t.sub}</span>}
                   </span>
                 ))}
               </div>
@@ -385,7 +431,7 @@ export function GanttView({
             {lanes.map((lane) => (
               <div key={lane.key}>
                 {grouped && <div className="ev-gantt__lane-band" style={{ height: LANE_H }} />}
-                {lane.rows.map((row) => {
+                {(collapsed.has(lane.key) ? [] : lane.rows).map((row) => {
                   const ps = previewSpan(row);
                   const left = xOf(ps.start);
                   // Both ends of the range are coloured (barColumns) — the clamp
@@ -408,7 +454,7 @@ export function GanttView({
                         // arrive; and a zero-day drag commits nothing, so the two
                         // presses underneath write no span.
                         onDoubleClick={() => onOpenRecord?.(row.e.number)}
-                        style={{ left, width }}
+                        style={{ left, width, background: barColor(row.e) }}
                       >
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
@@ -454,7 +500,19 @@ export function GanttView({
 /** A gantt gutter row: the left label doubles as a drag SOURCE + drop TARGET for
  * manual reorder (#GH-projects) — no grip, the label itself drags up/down. When
  * disabled (a sort is active / busy) it's an inert label. */
-function GutterRow({ number, enabled, children }: { number: number; enabled: boolean; children: React.ReactNode }) {
+function GutterRow({
+  number,
+  enabled,
+  title,
+  children,
+}: {
+  number: number;
+  enabled: boolean;
+  /** The whole label. The column ellipsises, and without this the only way to
+   * read a cut-off title was to open the record. */
+  title?: string;
+  children: React.ReactNode;
+}) {
   const { attributes, listeners, setNodeRef: setDrag } = useDraggable({ id: number, disabled: !enabled });
   const { setNodeRef: setDrop, isOver } = useDroppable({ id: number, disabled: !enabled });
   return (
@@ -464,6 +522,7 @@ function GutterRow({ number, enabled, children }: { number: number; enabled: boo
         setDrop(el);
       }}
       className="ev-gantt__row-label"
+      title={title}
       style={{ height: ROW_H }}
       data-drag={enabled ? "" : undefined}
       data-over={enabled && isOver ? "" : undefined}

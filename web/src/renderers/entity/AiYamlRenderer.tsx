@@ -187,6 +187,12 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const groupOptions = fields
     .filter((f) => f.role === "status" || f.role === "actor" || f.role === "ref")
     .map((f) => ({ name: f.name, label: f.name }));
+  // #690 P3 — what a bar's colour may mean. Select-ish fields and people:
+  // both give `selectColor` a stable string to work from. `ref` is left out
+  // until it can resolve its display value (plan §7 R3).
+  const colorByOptions = fields
+    .filter((f) => f.role === "status" || f.role === "actor")
+    .map((f) => ({ name: f.name, label: f.name }));
   const sortOptions = fields
     .filter((f) => f.role !== "rank" && f.role !== "backref")
     .map((f) => ({ name: f.name, label: f.name }));
@@ -259,6 +265,23 @@ export function AiYamlRenderer({ path }: { path: string }) {
             onSetSort: (rules) => persistGantt(setViewScalar(entry.text, "sort", rules.length ? JSON.stringify(rules) : null)),
             skipWeekends: spec.skip_weekends ?? false,
             onToggleSkipWeekends: (next) => persistGantt(setViewScalar(entry.text, "skip_weekends", String(next))),
+            colorBy: spec.color_by ?? "",
+            colorByOptions,
+            onSetColorBy: (field) => persistGantt(setViewScalar(entry.text, "color_by", field || null)),
+            // The time-axis settings only appear WITH a week rule: without one
+            // the axis has no week code to show or keep, so all three would be
+            // knobs wired to nothing.
+            ...(spec.week
+              ? {
+                  alwaysWeek: spec.always_week ?? false,
+                  onToggleAlwaysWeek: (next: boolean) =>
+                    persistGantt(setViewScalar(entry.text, "always_week", next ? "true" : null)),
+                  weekday: spec.weekday ?? "number",
+                  onSetWeekday: (format: string) => persistGantt(setViewScalar(entry.text, "weekday", format)),
+                  dayOfMonth: spec.day_of_month ?? "hidden",
+                  onSetDayOfMonth: (mode: string) => persistGantt(setViewScalar(entry.text, "day_of_month", mode)),
+                }
+              : {}),
             assigneeDisplay: spec.assignee_display ?? "avatar",
             onSetAssigneeDisplay: (mode) => persistGantt(setViewScalar(entry.text, "assignee_display", mode)),
             dirty: false,
@@ -271,6 +294,9 @@ export function AiYamlRenderer({ path }: { path: string }) {
     <>
       <EntityViewBody
         spec={effectiveSpec}
+        // #690 P4 — per project, per view: the collapse state lives in this
+        // person's browser, and two views must not collapse each other.
+        viewKey={`${itemId}:${path}`}
         type={type}
         entities={list?.entities ?? []}
         invalid={list?.invalid ?? []}

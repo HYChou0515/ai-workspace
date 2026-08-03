@@ -332,4 +332,65 @@ describe("AiYamlRenderer", () => {
     expect(await screen.findByText("boom")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /issue #2/ })).not.toBeInTheDocument();
   });
+
+  describe("the gantt gear's Time axis section (#690 P9)", () => {
+    const mountGantt = (text: string) => {
+      mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+      mock.list.mockResolvedValue({
+        entities: [{ number: 1, type_name: "issue", fields: { title: "A", span: "2026-06-29/2026-07-10" }, body: "", diagnostics: [] }],
+        invalid: [],
+      });
+      const path = "/views/gantt.ai.yaml";
+      const store = new FileBufferStore({
+        readFile: vi.fn(async () => ({ kind: "text" as const, path, size: text.length, text, encoding: "utf-8" as const })),
+        writeFile: vi.fn(async () => {}),
+      });
+      store.ensureLoaded(path);
+      const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+      const svc = { ...investigationFileService("pm", "item1"), writeFile };
+      render(
+        <QueryWrap>
+          <WorkspaceSlugProvider value="pm">
+            <FileServiceProvider value={svc}>
+              <EditModeProvider>
+                <FileBufferProvider store={store}>
+                  <AiYamlRenderer path={path} />
+                </FileBufferProvider>
+              </EditModeProvider>
+            </FileServiceProvider>
+          </WorkspaceSlugProvider>
+        </QueryWrap>,
+      );
+      return writeFile;
+    };
+
+    it("is absent on a gantt with no week rule — the settings would have no week to act on", async () => {
+      mountGantt(GANTT);
+      fireEvent.click(await screen.findByRole("button", { name: "view settings" }));
+      expect(screen.queryByLabelText("always show week")).not.toBeInTheDocument();
+    });
+
+    it("persists each setting to the view file, comments and all", async () => {
+      const writeFile = mountGantt(`${GANTT}# the shop-floor week\nweek:\n  label: W{y1}{ww}\n`);
+      fireEvent.click(await screen.findByRole("button", { name: "view settings" }));
+
+      // One at a time, each waiting for the write to land: a gear edit builds on
+      // the file the last one produced, so firing them back to back would have
+      // each start from the same stale text and the last would win alone.
+      fireEvent.click(screen.getByLabelText("always show week"));
+      await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(1));
+      fireEvent.change(screen.getByLabelText("weekday format"), { target: { value: "short" } });
+      await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(2));
+      fireEvent.change(screen.getByLabelText("day of month"), { target: { value: "always" } });
+      await waitFor(() => expect(writeFile).toHaveBeenCalledTimes(3));
+
+      const yaml = String(writeFile.mock.calls.at(-1)?.[1]);
+      expect(yaml).toMatch(/always_week:\s*true/);
+      expect(yaml).toMatch(/weekday:\s*short/);
+      expect(yaml).toMatch(/day_of_month:\s*always/);
+      // The `week:` block is why these are written as targeted text edits and
+      // not a YAML re-dump — a re-dump eats the comment above it.
+      expect(yaml).toContain("# the shop-floor week");
+    });
+  });
 });
