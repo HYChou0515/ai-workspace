@@ -520,6 +520,25 @@ RCA 的 system prompt 是純 markdown，存在
 
   pg_trgm 擴充與該 GIN 由 specstar 開機時自動確保存在，不需手動建。細節與
   回填前後的行為對照見 [資料遷移](migrations.md) §6。
+- **索引回填（知識圖譜 reconcile，升級後一次性，不擋部署）**：每週的詞彙 pass
+  以前要整張表撈回來才讀得到 mention 的 `surface` / `kind` / `occurrences`，
+  以及 relationship 的 `predicate`、entity 的 `canonical_name`、link 的
+  `proposed_from`。這六個欄位現在都建了索引，pass 因此只掃 metadata、完全不碰
+  blob；四個 model 分別升到 `GraphMention v2`、`GraphEntity / GraphEntityLink /
+  GraphRelationship v1`。
+
+  ```bash
+  uv run python scripts/run_migrate.py --dry-run graph-mention
+  uv run python scripts/run_migrate.py graph-mention
+  uv run python scripts/run_migrate.py graph-entity
+  uv run python scripts/run_migrate.py graph-entity-link
+  uv run python scripts/run_migrate.py graph-relationship
+  ```
+
+  **跟上面兩條不一樣的是:這次不跑也不會有錯的結果。** 讀取端發現某列的索引
+  沒帶這些欄位時,會退回去讀它的 blob——因為把「沒有這個索引格」當成「名字是
+  空字串」,會讓舊列被拿去當實體的顯示名稱,那是安靜的錯而不是大聲的失敗。
+  所以遷移只是把那條退路關掉、換回全速,**部署順序不需要跟它對齊**。
 
 ---
 

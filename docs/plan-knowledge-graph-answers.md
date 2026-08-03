@@ -319,6 +319,19 @@ entity 上維護一個旗標。
 - **屬性名稱帶贅字** — 模型回「使用的 POR recipe」而非「POR recipe」,
   同一屬性在不同句式下會分裂成不同 key。這是 LLM 的自然變異,不做白名單就
   只能接受;若成為實際問題,屬於抽取品質 eval 的範疇。
+- ~~**reconcile 在語料長大後就跑不動了**~~ — 已修。詞彙 pass 的每一趟走訪
+  都是 `list_resources(QB.all())`,而 specstar 的 postgres resource store 會把
+  一列一個 row constructor 全部塞進同一句 SQL,所以那句 SQL 的長度等於表的
+  列數。**Postgres 16 實測:4 萬列 = 937 KB 的 SQL = `ERROR: stack depth
+  limit exceeded`。** 那不是變慢,是資料庫直接拒絕,所以每週的 pass 從某個
+  規模起就完全沒有再跑過。當時看不出來,因為 job queue 只留 `str(e)`
+  (specstar `message_queue/simple.py`),traceback 和那句 SQL 都沒留下。修法
+  分三層:(1) 每個 pass 各自記錄結果,失敗時連 traceback 與 psycopg2 掛在
+  cursor 上的那句 SQL 一起寫進 log;(2) 所有走訪分頁,**吸收(`_absorb`)改
+  用 drain 而非 offset 分頁** —— 它會改寫自己拿來篩選的欄位,offset 會剛好
+  跳過剛搬走的那批,留下半途吸收的身分指著墓碑;(3) pass 讀的每個欄位都建
+  索引,走訪改成只掃 metadata,**完全不再解 blob**。舊列沒有這些索引格時
+  退回讀 blob,所以 migrate 是加速而非正確性閘門(部署順序不必對齊)。
 
 ---
 
