@@ -21,6 +21,7 @@ import { useMinWidth } from "../hooks/useMediaQuery";
 import { useAppItems, useApps } from "../hooks/useResources";
 import { BREAKPOINTS } from "../lib/breakpoints";
 import { ShareChatDialog } from "./ShareChatDialog";
+import { UserChip } from "./UserChip";
 
 // Platform destinations that live behind the menu (App-agnostic — the App
 // switcher is data-driven from useApps, these are the fixed platform surfaces).
@@ -30,6 +31,14 @@ const PLATFORM_LINKS: { to: string; label: string }[] = [
   { to: "/diagnostics", label: "Diagnostics" },
   { to: "/help", label: "Help" },
 ];
+
+type Tab = "mine" | "shared";
+
+/** The tab the chat you're in belongs to — "Shared with me" iff it's one of
+ * theirs. With no chat open (the App home) that's "My chats". */
+function defaultTab(shared: AppItem[], currentId: string): Tab {
+  return shared.some((it) => it.resource_id === currentId) ? "shared" : "mine";
+}
 
 export function ChatListRail({
   slug,
@@ -66,9 +75,19 @@ export function ChatListRail({
     setCollapsed(!railFits);
   }, [railFits]);
   // #chat-private: split my chats from ones shared with me (owner !== me).
-  const [tab, setTab] = useState<"mine" | "shared">("mine");
   const mine = items.filter((it) => it.owner === me);
   const shared = items.filter((it) => it.owner !== me);
+  // Which tab is open FOLLOWS the chat you are in; a click only overrides it for
+  // as long as you stay in that chat. It cannot be plain `useState("mine")`:
+  // this rail is destroyed on every navigation — `AppWorkspaceInner` renders
+  // "Loading…" in place of the whole workspace until the item query answers,
+  // which is every first visit to a chat — so a seeded tab meant opening
+  // something from "Shared with me" dropped you back on "My chats", with the
+  // chat you were now reading absent from the list you were looking at. Derived,
+  // it survives that remount, and a reload, without persisting anything.
+  const [picked, setPicked] = useState<{ chat: string; tab: Tab } | null>(null);
+  const tab = picked?.chat === currentId ? picked.tab : defaultTab(shared, currentId);
+  const setTab = (next: Tab) => setPicked({ chat: currentId, tab: next });
   const shown = tab === "mine" ? mine : shared;
   const closeMenu = () => setMenuOpen(false);
 
@@ -251,9 +270,17 @@ function ChatRailItem({
         title={title}
       >
         <span className="chat-rail__item-title">{title}</span>
+        {/* Whose chat this is. A shared row is otherwise indistinguishable from
+            one of my own once it's in my rail, and the owner IS the person who
+            shared it — Share is an owner-only action (below). */}
+        {shared && (
+          <span className="chat-rail__item-by">
+            Shared by <UserChip userId={item.owner} nameOnly />
+          </span>
+        )}
       </Link>
-      {/* Rename / Share / Delete only for chats I own; a shared-with-me chat just
-          shows the "shared" tag (the backend would 403 those actions anyway). */}
+      {/* Rename / Share / Delete only for chats I own — the backend would 403
+          those actions anyway; the "Shared by" line above carries the rest. */}
       {!shared && (
         <>
           <button
