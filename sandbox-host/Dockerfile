@@ -69,6 +69,7 @@ ARG ARTIFACT_HOSTS=
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PATH="/host/.venv/bin:$PATH" \
+    PYTHONPATH=/host/src \
     NODE_PATH=/usr/local/lib/node_modules \
     SANDBOX_HOST_BIND=0.0.0.0:8000 \
     SANDBOX_HOST_TOOLS_DIR=/opt/tools \

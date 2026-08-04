@@ -471,3 +471,19 @@ def test_the_images_install_their_package_rather_than_linking_to_source() -> Non
             if "--no-install-project" in stripped:
                 continue
             assert "--no-editable" in stripped, f"{rel}: {stripped}"
+
+
+def test_the_images_can_import_their_package_however_it_was_installed() -> None:
+    """`uv sync` installs nothing at all when a tree sets `[tool.uv] package =
+    false` — uv calls that a virtual project, and a deployment that treats
+    services as not-distributable sets it as a matter of house style.
+
+    The image then starts an interpreter that cannot import the package
+    sitting beside it, and says `No module named sandbox_host`: the same
+    sentence three different causes produce, which is why this is pinned
+    rather than left to whichever install path happens to be in use."""
+    for rel, root in (
+        (("sandbox-host", "mcp-runner.Dockerfile"), "/runner"),
+        (("sandbox-host", "Dockerfile"), "/host"),
+    ):
+        assert f"PYTHONPATH={root}/src" in _REPO.joinpath(*rel).read_text("utf-8"), rel
