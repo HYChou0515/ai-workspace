@@ -451,3 +451,23 @@ def test_the_images_start_their_own_interpreter_by_absolute_path() -> None:
 
         assert f'["{interpreter}"' in text or f'["{interpreter}",' in text, rel
         assert '["python"' not in text, rel
+
+
+def test_the_images_install_their_package_rather_than_linking_to_source() -> None:
+    """An editable install leaves a `.pth` pointing at ./src instead of the
+    package itself, so a shipped image depends on that tree surviving beside
+    it and on `.pth` processing being on.
+
+    When either slips the interpreter reports `No module named sandbox_host`
+    — which sends whoever reads it looking at packaging, while the real
+    package is sitting right there in the layer."""
+    for rel in (("sandbox-host", "mcp-runner.Dockerfile"), ("sandbox-host", "Dockerfile")):
+        for line in _REPO.joinpath(*rel).read_text("utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("RUN uv sync"):
+                continue
+            # `--no-install-project` lines only build the dependency layer;
+            # there is no project in them to install either way.
+            if "--no-install-project" in stripped:
+                continue
+            assert "--no-editable" in stripped, f"{rel}: {stripped}"

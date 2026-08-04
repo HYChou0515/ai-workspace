@@ -45,6 +45,8 @@ check(
     "gates raise distinct, catchable errors",
     all(f"class {n}(" in a for n in ("ManifestError", "IncompatibleArtifact", "ChecksumMismatch")),
 )
+
+
 def _non_stdlib_imports(source: str) -> set[str]:
     """What this module imports that does not ship with python.
 

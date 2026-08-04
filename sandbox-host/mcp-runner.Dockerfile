@@ -41,7 +41,12 @@ WORKDIR /runner
 COPY sandbox-host/pyproject.toml sandbox-host/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY sandbox-host/src/ ./src/
-RUN uv sync --frozen --no-dev
+# `--no-editable`: install the package INTO site-packages rather than
+# leaving a `.pth` that points back at ./src. An editable install makes a
+# shipped image depend on a source tree surviving beside it and on `.pth`
+# processing being on — and when either slips the error is
+# `No module named sandbox_host`, which names the wrong culprit.
+RUN uv sync --frozen --no-dev --no-editable
 
 # Bundles land here, keyed by sha. Mounting a named volume is what makes the
 # download a once-per-version cost rather than a once-per-start one; running
