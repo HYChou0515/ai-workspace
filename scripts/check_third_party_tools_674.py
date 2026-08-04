@@ -45,15 +45,30 @@ check(
     "gates raise distinct, catchable errors",
     all(f"class {n}(" in a for n in ("ManifestError", "IncompatibleArtifact", "ChecksumMismatch")),
 )
+def _non_stdlib_imports(source: str) -> set[str]:
+    """What this module imports that does not ship with python.
+
+    Derived from `sys.stdlib_module_names` rather than compared against a
+    written-out list of the imports it happened to have: a list has to be
+    edited every time a stdlib import is added, and the edit is a rule
+    restated in a second place — so the check fails for a module that is
+    still perfectly stdlib-only, and whoever hits it learns to widen the
+    list rather than to read it."""
+    import ast
+
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            found.add(node.module.split(".")[0])
+    return {m for m in found if m != "__future__"} - set(sys.stdlib_module_names)
+
+
 check(
     "P1",
     "the module is stdlib-only, so the builder can import it",
-    not re.search(
-        r"^from (?!__future__|dataclasses|collections|typing|urllib)\w"
-        r"|^import (?!hashlib|json|os|urllib)",
-        a,
-        re.M,
-    ),
+    not _non_stdlib_imports(a),
 )
 check(
     "P1",

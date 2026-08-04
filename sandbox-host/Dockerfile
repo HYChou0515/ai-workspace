@@ -98,4 +98,6 @@ COPY docker/profile.d/sandbox-jailbin.sh /etc/profile.d/sandbox-jailbin.sh
 EXPOSE 8000
 # The host needs root (setuid/chown to foreign uids) + a delegated cgroup v2
 # subtree; it fails loud at boot / on /readyz if cgroup v2 isn't available.
-CMD ["python", "-m", "sandbox_host"]
+# Absolute, for the reason spelled out in mcp-runner.Dockerfile: a bare
+# `python` is whatever PATH says, and PATH is not ours alone to set.
+CMD ["/host/.venv/bin/python", "-m", "sandbox_host"]

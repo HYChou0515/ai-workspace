@@ -430,3 +430,24 @@ def test_the_runner_cache_is_sticky() -> None:
 
     assert "chmod 1777 /cache" in text
     assert "chmod 0777 /cache" not in text
+
+
+def test_the_images_start_their_own_interpreter_by_absolute_path() -> None:
+    """A bare `python` is whatever PATH says, and PATH is not ours alone.
+
+    Both images install into a venv and put it first on PATH, which holds
+    right up until something puts itself in front — a shared CI build
+    template appending its own `ENV PATH`, a base image change, a
+    `docker run -e PATH=...`. The container then starts, finds the system
+    interpreter, and dies with `No module named sandbox_host`: a message
+    that points at packaging when the packaging is fine.
+
+    Naming the interpreter takes the whole class away."""
+    for rel, interpreter in (
+        (("sandbox-host", "mcp-runner.Dockerfile"), "/runner/.venv/bin/python"),
+        (("sandbox-host", "Dockerfile"), "/host/.venv/bin/python"),
+    ):
+        text = _REPO.joinpath(*rel).read_text("utf-8")
+
+        assert f'["{interpreter}"' in text or f'["{interpreter}",' in text, rel
+        assert '["python"' not in text, rel

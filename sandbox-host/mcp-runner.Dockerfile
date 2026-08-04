@@ -82,4 +82,8 @@ RUN mkdir -p /cache && chmod 1777 /cache
 # do on the platform, where it is the user's workspace. Mount the project here.
 WORKDIR /work
 
-ENTRYPOINT ["python", "-m", "sandbox_host.mcp_runner"]
+# The venv's interpreter by absolute path, not a bare `python` off PATH.
+# A base image, a CI template or a `docker run -e PATH=...` can all put
+# something else first, and the failure is `No module named sandbox_host`
+# from an interpreter that was never meant to run this.
+ENTRYPOINT ["/runner/.venv/bin/python", "-m", "sandbox_host.mcp_runner"]
