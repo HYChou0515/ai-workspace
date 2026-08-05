@@ -42,9 +42,23 @@ export function normalizeStringList(raw: unknown): string[] | undefined {
 }
 
 /** Parse a `views/*.ai.yaml` doc into a `ViewSpec`, or `null` when it isn't a
- * well-formed view (bad YAML, missing/unknown `view`, or — for the record-bound
- * kinds — no `entity`). The cross-type `health` view needs no `entity`. Never
- * throws — the container degrades to the raw text editor on `null` (§E). */
+ * view file at all (bad YAML, or no `view:` naming a kind). Never throws — the
+ * container degrades to the structured YAML tree on `null` (§E).
+ *
+ * This answers ONE question — "is this a view file?" — and nothing else (#698).
+ * It deliberately does NOT decide:
+ *
+ *   - whether the kind EXISTS. That is the registry's business; an unknown kind
+ *     parses fine so the dispatcher can render "Unsupported view kind: x". The
+ *     old hardcoded whitelist here made the registry's documented fallback
+ *     unreachable, and meant a second-party kind could never load.
+ *   - whether an `entity:` is REQUIRED. That is a property of the kind
+ *     (`ViewRenderer.needsEntity`), enforced by the dispatcher. A plug-in kind
+ *     that reads workspace files has no entity, and the old rule — required for
+ *     everything except a hardcoded `health` — made that unrepresentable.
+ *
+ * Unknown top-level keys ride through verbatim (the spread below), which is how
+ * a plug-in reads its own config, e.g. `source: /data/wafer.csv`. */
 export function parseViewSpec(text: string): ViewSpec | null {
   let doc: unknown;
   try {
@@ -55,14 +69,13 @@ export function parseViewSpec(text: string): ViewSpec | null {
   if (!doc || typeof doc !== "object") return null;
   const o = doc as Record<string, unknown>;
   const { view, entity } = o;
-  if (view !== "table" && view !== "board" && view !== "gantt" && view !== "health") return null;
-  if (view !== "health" && (typeof entity !== "string" || !entity)) return null;
+  if (typeof view !== "string" || !view) return null;
   const sort = normalizeSort(o.sort);
   const hidden_fields = normalizeStringList(o.hidden_fields);
   return {
     ...(o as ViewSpec),
     view: view as ViewKind,
-    entity: (entity as string) ?? "",
+    entity: typeof entity === "string" ? entity : "",
     sort,
     hidden_fields,
   };

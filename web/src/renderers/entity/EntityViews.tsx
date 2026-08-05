@@ -181,12 +181,20 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   const canWrite = props.canWrite !== false; // omitted ≡ writable (§E)
   const renderer = resolveViewRenderer(spec.view);
   const { Component } = renderer;
-  const showEmpty = entities.length === 0 && !renderer.ownsEmptyState;
+  // #698 — the kind declares whether it draws entity records; the parser no
+  // longer decides. A kind that needs one and wasn't given one is a MALFORMED
+  // view, so say so — it used to fall out of the parser as `null` and silently
+  // become a raw YAML tree, which reads as "this file is not a view".
+  const missingEntity = !!renderer.needsEntity && !spec.entity;
+  // The generic placeholder is about entity records, so only an entity-bound
+  // kind can be "empty" in that sense — a plug-in reading files is never empty
+  // just because the item has no entities.
+  const showEmpty = !!renderer.needsEntity && entities.length === 0 && !renderer.ownsEmptyState;
   return (
     <div className="ev-panel">
       <div className="ev-panel__head">
         <h3 className="ev-panel__title">
-          {spec.title ?? spec.entity}
+          {spec.title || spec.entity || spec.view}
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
         <div className="ev-panel__actions">
@@ -224,7 +232,16 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           </div>
         </div>
       )}
-      {showEmpty ? (
+      {missingEntity ? (
+        <div role="status" className="ev-banner">
+          <span className="ev-banner__icon" aria-hidden>
+            ⚠
+          </span>
+          <div className="ev-banner__body">
+            The <code>{spec.view}</code> view needs an <code>entity:</code> naming which records to draw.
+          </div>
+        </div>
+      ) : showEmpty ? (
         <div className="ev-empty">
           <span className="ev-empty__icon" aria-hidden>
             ◇

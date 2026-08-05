@@ -11,7 +11,12 @@ import type { DayOfMonth, WeekdayFormat, WeekRule } from "./ganttScale";
 import type { ScheduleFields } from "./schedule";
 import type { RefIndex } from "./refTraversal";
 
-export type ViewKind = "table" | "board" | "gantt" | "health";
+/** The kinds this repo ships, for reference and for docs. NOT a gate: which
+ * kinds exist is the registry's business (#698), so a second-party kind is just
+ * another string. A closed union here used to make a plug-in fail to compile. */
+export const BUILTIN_VIEW_KINDS = ["table", "board", "gantt", "health"] as const;
+
+export type ViewKind = string;
 
 export type SortDir = "asc" | "desc";
 /** One tier of a multi-level sort (#GH-projects). Ties fall through to the next
@@ -60,6 +65,11 @@ export type ViewSpec = {
    * this renderer serves every app's entity types. */
   schedule?: ScheduleFields;
   card?: { title?: string; badges?: string[] };
+  /** #698 — a plug-in kind's OWN keys ride along verbatim (`parseViewSpec`
+   * spreads the whole document), e.g. `source: /data/wafer.csv`. Typed as
+   * `unknown` so a plug-in narrows what it reads instead of reaching for `any`;
+   * the named fields above keep their exact types. */
+  [key: string]: unknown;
 };
 
 /** The View settings panel's model (#GH-projects P3) — the effective, locally

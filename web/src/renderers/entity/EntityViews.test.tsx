@@ -45,11 +45,27 @@ describe("parseViewSpec", () => {
   it("rejects malformed YAML", () => {
     expect(parseViewSpec("view: [unclosed")).toBeNull();
   });
-  it("rejects an unknown view kind", () => {
-    expect(parseViewSpec("view: pie\nentity: issue\n")).toBeNull();
+  // #698 — the parser answers "is this a view file?" and nothing else. It used
+  // to also own the list of kinds and the entity rule; both moved to the
+  // registry, so a second-party kind can exist. The two cases below assert the
+  // parser now KEEPS what it used to reject; that the user still gets told
+  // (unsupported-kind notice / missing-entity banner) is asserted end-to-end in
+  // viewKindPlugin.test.tsx, which goes through the file, not this function.
+  it("rejects a doc with no view kind at all — that is not a view file", () => {
+    expect(parseViewSpec("just: data\ncount: 3\n")).toBeNull();
+    expect(parseViewSpec("view: ''\nentity: issue\n")).toBeNull();
   });
-  it("rejects a record-bound spec with no entity", () => {
-    expect(parseViewSpec("view: table\n")).toBeNull();
+  it("keeps an unregistered view kind, leaving 'which kinds exist' to the registry (#698)", () => {
+    expect(parseViewSpec("view: pie\nentity: issue\n")).toMatchObject({ view: "pie", entity: "issue" });
+  });
+  it("keeps a spec with no entity, leaving 'is an entity required' to the kind (#698)", () => {
+    expect(parseViewSpec("view: table\n")).toMatchObject({ view: "table", entity: "" });
+  });
+  it("passes a plug-in's own top-level keys through verbatim (#698)", () => {
+    expect(parseViewSpec("view: acme-wafer\nsource: /data/wafer.csv\n")).toMatchObject({
+      view: "acme-wafer",
+      source: "/data/wafer.csv",
+    });
   });
   it("normalises multi-level sort rules, defaulting dir + dropping malformed (#GH-projects)", () => {
     const spec = parseViewSpec(
