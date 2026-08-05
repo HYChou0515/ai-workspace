@@ -376,3 +376,96 @@ def test_the_same_evidence_twice_produces_the_same_graph():
         )
 
     assert msgspec.json.encode(run()) == msgspec.json.encode(run())
+
+
+def test_a_things_kind_always_resolves_to_an_identity_that_still_holds_evidence():
+    """A kind label can ALSO be a name some document declared equivalent to
+    another. The declaration folds one key into the other and leaves a tombstone
+    behind — and a tombstone holds no evidence, which the access scope reads as
+    invisible to everyone. A kind pointing at one would vanish from every page
+    that shows it, silently, and only for the corpora where a document happened
+    to write 「機台,又稱設備」."""
+    from workspace_app.kb.graph.build import build_vocabulary
+
+    quote = "機台(又稱設備)"
+    vocab = build_vocabulary(
+        [
+            # the label is the side the declaration ABSORBS (the host is the
+            # smaller key, which is 機台 here) — so this is the ordering that
+            # leaves the kind pointing at what is left behind
+            _mention("deck-A", "回焊爐", kind="設備"),
+            _mention("deck-B", "機台", same_as=["設備"], quote=quote),
+            _mention("deck-B", "設備", same_as=["機台"], quote=quote),
+        ],
+        [],
+    )
+
+    thing = next(e for e in vocab.entities.values() if e.canonical_name == "回焊爐")
+    assert thing.kind_id, "the thing lost its kind"
+    kind = vocab.entities[thing.kind_id]
+    assert kind.collection_ids, "the kind resolves to a tombstone — invisible on every page"
+    assert not kind.merged_into
+
+
+def test_a_declaration_naming_something_no_document_mentioned_is_ignored():
+    """Nothing vouches for that name, so there is nothing to join — and minting an
+    identity for it would put a name in the vocabulary no document ever said."""
+    from workspace_app.kb.graph.build import build_vocabulary
+
+    vocab = build_vocabulary(
+        [_mention("deck-A", "回焊爐", same_as=["熱風爐"], quote="回焊爐,又稱熱風爐")], []
+    )
+
+    assert [e.canonical_name for e in vocab.entities.values()] == ["回焊爐"]
+    assert [link.basis for link in vocab.links] == ["identical"]
+
+
+def test_the_same_pair_is_only_ever_proposed_once():
+    """A batch can name the same two identities twice — the proposal queue is read
+    by a person, and asking them the same question twice is how a queue stops
+    being read."""
+    from workspace_app.kb.graph.build import build_vocabulary
+
+    llm = _FakeLlm(
+        '{"groups": ['
+        '{"names": ["回焊爐", "Reflow Oven"], "why": "the oven"},'
+        '{"names": ["Reflow Oven", "回焊爐"], "why": "the oven again"}]}'
+    )
+    vocab = build_vocabulary(
+        [_mention("deck-A", "回焊爐"), _mention("deck-B", "Reflow Oven")], [], llm=llm
+    )
+    assert len([link for link in vocab.links if link.state == "pending"]) == 1
+
+
+def test_an_unreadable_grouping_reply_asks_nobody_anything():
+    """This path can only ADD work for a person, so a confused answer should
+    produce no work at all."""
+    from workspace_app.kb.graph.build import build_vocabulary
+
+    evidence = [_mention("deck-A", "回焊爐"), _mention("deck-B", "Reflow Oven")]
+    for reply in (
+        "I could not group anything.",  # no JSON object at all
+        '{"groups": [ }',  # malformed
+        '{"groups": ["回焊爐", 42]}',  # entries that are not groups
+        '{"groups": [{"names": ["回焊爐"], "why": "alone"}]}',  # a group of one
+    ):
+        vocab = build_vocabulary(evidence, [], llm=_FakeLlm(reply))
+        assert [link for link in vocab.links if link.state == "pending"] == [], reply
+
+
+def test_evidence_with_no_comparison_key_is_not_an_identity():
+    """A surface that normalises to nothing names nothing, and a connecting word
+    that does is not a connection anyone can group on. Both would otherwise mint
+    an identity keyed on the empty string, which every other empty one would then
+    join."""
+    from workspace_app.kb.graph.build import RelationEvidence, build_vocabulary
+
+    vocab = build_vocabulary(
+        [_mention("deck-A", "回焊爐"), _mention("deck-A", "   ")],
+        [
+            _relationship("deck-A", "回焊爐", "造成", "冷焊"),
+            RelationEvidence(norm_predicate="", predicate="  ", collection_id="c1"),
+        ],
+    )
+
+    assert sorted(e.canonical_name for e in vocab.entities.values()) == ["回焊爐", "造成"]

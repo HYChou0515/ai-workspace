@@ -771,6 +771,17 @@ export const messages = {
     "zh-TW": "尚未開啟知識圖譜",
     en: "Knowledge graph is off",
   },
+  "kb.graphGuidance.label": { "zh-TW": "什麼算一個實體", en: "What counts as a thing" },
+  "kb.graphGuidance.help": {
+    "zh-TW":
+      "用你們自己的說法寫下這批文件裡「什麼東西值得被記下來」,例如機台、製程、材料、缺陷、參數、料號。留空的話,系統會把文件提到的每個名詞都收進來。改完要重新抽取才會生效。",
+    en: "Say, in your own words, what is worth recording in THIS corpus — machines, processes, materials, defects, parameters, part numbers. Left blank, every noun a document mentions is kept. Re-extract for a change to take effect.",
+  },
+  "kb.graphGuidance.placeholder": {
+    "zh-TW": "例如:只收機台、製程、材料、缺陷、製程參數與料號;數值本身不算一個東西。",
+    en: "e.g. keep machines, processes, materials, defects, process parameters and part numbers; a measured value is not a thing.",
+  },
+  "kb.graphGuidance.save": { "zh-TW": "儲存", en: "Save" },
   "kb.autoDigest.label": { "zh-TW": "自動生成卡片", en: "Auto-generate cards" },
   "kb.autoDigest.help": {
     "zh-TW": "文件索引完成後，自動草擬卡片並提出待釐清的問題。",

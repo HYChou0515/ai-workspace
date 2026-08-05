@@ -159,6 +159,27 @@ def test_patch_can_set_use_graph():
     assert row["use_graph"] is True
 
 
+def test_patch_can_set_the_graph_extraction_criterion():
+    """#697: what deserves to BE a thing in this corpus, in the owner's words.
+
+    On the same PATCH as `use_graph`, because it is the same person's decision
+    about the same corpus. A field the FE cannot read back is a criterion nobody
+    can see or revise — and the whole point is that it is revised, repeatedly,
+    until the graph stops filling with generic nouns."""
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    assert client.get(f"/collection/{cid}").json()["data"]["graph_guidance"] == ""
+
+    criterion = "只收機台、製程、材料、缺陷、參數與料號;數值本身不算一個東西。"
+    assert client.patch(f"/collection/{cid}", json={"graph_guidance": criterion}).status_code == 200
+    assert client.get(f"/collection/{cid}").json()["data"]["graph_guidance"] == criterion
+    # …and it reaches the list the settings panel actually reads — the same
+    # response-model drop the `use_graph` test above guards against.
+    row = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert row["graph_guidance"] == criterion
+
+
 def test_patch_cannot_rewire_permission_without_change_permission():
     """write_meta lets a member edit fields, but NOT rewrite the access-control
     object — a PATCH that names `permission` needs change_permission (403)."""

@@ -366,6 +366,13 @@ def build_vocabulary(
     entities: dict[str, GraphEntity] = {}
     links: list[GraphEntityLink] = []
 
+    # Which key each key now answers to. A declaration folds one into another and
+    # leaves the absorbed one a tombstone, so EVERY reference to a key has to go
+    # through this — a reference to an absorbed key points at a row holding no
+    # evidence, which the access scope reads as invisible to everyone.
+    groups = _declared_groups(by_key)
+    host_of = {key: host for host, keys in groups.items() for key in keys}
+
     # Kinds first, so a thing can point at one. A kind whose label some document
     # ALSO mentions as a thing lands on the same id — the key is the same, so the
     # same mechanism unifies them, which is the point of not giving kinds a
@@ -373,7 +380,7 @@ def build_vocabulary(
     kinds: dict[str, list[MentionEvidence]] = {}
     for mention in mentions:
         if mention.norm_kind:
-            kinds.setdefault(mention.norm_kind, []).append(mention)
+            kinds.setdefault(host_of.get(mention.norm_kind, mention.norm_kind), []).append(mention)
     for kind_key in sorted(kinds):
         labelled = kinds[kind_key]
         entities[entity_id(kind_key)] = GraphEntity(
@@ -385,10 +392,10 @@ def build_vocabulary(
             collection_ids=sorted({m.collection_id for m in labelled}),
         )
 
-    for host_key, keys in sorted(_declared_groups(by_key).items()):
+    for host_key, keys in sorted(groups.items()):
         group = [m for key in keys for m in by_key[key]]
         eid = entity_id(host_key)
-        labels = {m.norm_kind for m in group if m.norm_kind}
+        labels = {host_of.get(m.norm_kind, m.norm_kind) for m in group if m.norm_kind}
         entities[eid] = GraphEntity(
             canonical_name=_display_name([(m.surface, m.occurrences) for m in group]),
             norm_keys=keys,
@@ -443,7 +450,11 @@ def build_vocabulary(
     predicates: dict[str, list[RelationEvidence]] = {}
     for rel in relationships:
         if rel.norm_predicate:
-            predicates.setdefault(rel.norm_predicate, []).append(rel)
+            # Through the same resolution: a predicate word a document declared
+            # equivalent to another must not be minted at the absorbed key.
+            predicates.setdefault(host_of.get(rel.norm_predicate, rel.norm_predicate), []).append(
+                rel
+            )
     for key in sorted(predicates):
         using = predicates[key]
         eid = entity_id(key)
@@ -514,10 +525,12 @@ def _proposals(
     by_name: dict[str, list[str]] = {}
     for eid, entity in live.items():
         by_name.setdefault(entity.canonical_name, []).append(eid)
+    # Everything built so far is active by construction — a proposal is what
+    # THIS function produces, and it produces them into its own list. A state
+    # filter here would be a branch no input can take.
     active: dict[str, list[GraphEntityLink]] = {}
     for link in links:
-        if link.state == "active":
-            active.setdefault(link.entity_id, []).append(link)
+        active.setdefault(link.entity_id, []).append(link)
 
     names = sorted(by_name)
     out: list[GraphEntityLink] = []

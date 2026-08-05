@@ -73,6 +73,12 @@ export type KbCollection = {
    * wiki answers. Blank ⇒ the bundled prompt is used as-is. */
   wiki_maintainer_guidance: string;
   wiki_reader_guidance: string;
+  /** #697: what deserves to BE a thing in this corpus, in the owner's words.
+   * Folded into the extraction prompt, which otherwise asks for "anything a
+   * reader would consider a distinct thing" — not a criterion, since every noun
+   * passes it. Blank ⇒ the prompt exactly as it was. Optional on the wire (the
+   * real BE always sends it, defaulting to ""); absent ⇒ treat as "". */
+  graph_guidance?: string;
   /** #105: the per-collection quality rubric — what makes a doc a good/bad
    * knowledge source + which dimensions to assess. Blank ⇒ the collection is
    * not scored and its search ranking is unaffected. Optional on the wire (the
@@ -669,6 +675,8 @@ export interface KbApi {
       auto_digest?: boolean;
       /** #534: opt in to knowledge-graph metric extraction. */
       use_graph?: boolean;
+      /** #697: the corpus's own criterion for what deserves to be a thing. */
+      graph_guidance?: string;
       wiki_maintainer_guidance?: string;
       wiki_reader_guidance?: string;
       /** #105: the per-collection quality rubric (what makes a doc a good/bad

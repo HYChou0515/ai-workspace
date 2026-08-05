@@ -304,3 +304,54 @@ def test_a_failed_pass_names_itself_and_keeps_its_traceback(caplog, monkeypatch)
     )
     assert record.exc_info is not None, "the traceback was not captured"
     assert "IN (('r1'" in message, f"the failing statement never reached the log: {message!r}"
+
+
+def test_evidence_that_is_gone_takes_its_identity_with_it():
+    """The vocabulary is a reconcile to what the evidence now supports, not an
+    accumulation. A deck deleted (or re-extracted under a criterion that no longer
+    names something) must not leave an identity standing that nothing vouches for
+    — a name alone can leak, and a page holding no evidence is a page nobody can
+    check."""
+    from workspace_app.kb.graph.persist import wipe_doc_graph
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    _mention(spec, cid, "deck-A", "回焊爐")
+    _mention(spec, cid, "deck-B", "錫膏")
+    reconcile_vocabulary(spec, llm=None)
+    assert len(_entities(spec)) == 2
+
+    wipe_doc_graph(spec, "deck-B")
+    reconcile_vocabulary(spec, llm=None)
+
+    assert [e.canonical_name for e in _entities(spec)] == ["回焊爐"]
+    lrm = spec.get_resource_manager(GraphEntityLink)
+    assert len(list(lrm.list_resources(QB.all().build()))) == 1
+
+
+def test_a_failure_carrying_no_statement_still_names_its_stage(caplog, monkeypatch):
+    """Most exceptions are not database errors and carry no SQL. The log has to
+    stay useful for those too — the stage name and the traceback are the whole
+    point, and the statement is a bonus when there is one."""
+    import logging
+
+    import pytest
+
+    from workspace_app.kb.graph import link as link_mod
+
+    def _boom(_spec: SpecStar) -> list:
+        raise RuntimeError("something ordinary broke")
+
+    monkeypatch.setattr(link_mod, "read_relation_evidence", _boom)
+    spec = make_spec(default_user=lambda: "bob")
+
+    with (
+        caplog.at_level(logging.INFO, logger="workspace_app.kb.graph.link"),
+        pytest.raises(RuntimeError),
+    ):
+        reconcile_vocabulary(spec)
+
+    (failed,) = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert "read_evidence" in failed.getMessage()
+    assert "no statement on the error" in failed.getMessage()
+    assert failed.exc_info is not None

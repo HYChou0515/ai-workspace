@@ -154,6 +154,10 @@ class CollectionOut(BaseModel):
     # visits collections where this is True, so the settings panel has to be able
     # to read it back — without it the toggle can be written but never reflected.
     use_graph: bool = False
+    # #697: the corpus's own criterion for what deserves to BE a thing, so the
+    # settings panel can prefill it. A criterion the FE cannot read back is one
+    # nobody can revise — and it only earns its keep by being revised.
+    graph_guidance: str = ""
     # Issue #90: per-collection wiki guidance, so the editor can prefill the
     # current values. Blank ⇒ the bundled wiki prompt is used verbatim.
     wiki_maintainer_guidance: str = ""
@@ -878,6 +882,7 @@ def register_kb_routes(
             is_global=data.is_global,
             auto_digest=data.auto_digest,
             use_graph=data.use_graph,
+            graph_guidance=data.graph_guidance,
             wiki_maintainer_guidance=data.wiki_maintainer_guidance,
             wiki_reader_guidance=data.wiki_reader_guidance,
             quality_rubric=data.quality_rubric,

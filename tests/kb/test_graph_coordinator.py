@@ -27,10 +27,27 @@ class _FakeLlm(ILlm):
         )
 
 
-def _mk_collection(spec, name: str, *, use_graph: bool, docs: list[tuple[str, str]]) -> str:
+class _CapturingLlm(ILlm):
+    """Answers like ``_FakeLlm`` but keeps every prompt it was handed.
+
+    ``list.append`` is atomic, so this stays usable under the parallel batch jobs
+    the stateless fake exists for.
+    """
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        self.prompts.append(prompt)
+        yield '{"mentions": [{"surface": "回焊爐", "kind": "機台"}]}', False
+
+
+def _mk_collection(
+    spec, name: str, *, use_graph: bool, docs: list[tuple[str, str]], guidance: str = ""
+) -> str:
     coll_id = (
         spec.get_resource_manager(Collection)
-        .create(Collection(name=name, use_graph=use_graph))
+        .create(Collection(name=name, use_graph=use_graph, graph_guidance=guidance))
         .resource_id
     )
     drm = spec.get_resource_manager(SourceDoc)
@@ -350,3 +367,91 @@ async def test_split_sizes_jobs_by_chunk_count_not_document_count():
         cost = sum(chunks_of[d] for d in docs)
         assert cost <= 4, f"batch {docs} costs {cost} extractions, over the budget of 4"
     assert sorted(d for b in batches for d in b) == ["fat-B", "small-A", "small-C"]
+
+
+# ── the corpus's own criterion travels with the corpus ────────────────
+#
+# The extraction prompt's own description of what to pull out — "anything a
+# reader would consider a distinct thing" — admits every noun, so a capable
+# model fills the vocabulary with 「系統」/「問題」/「資料」 and every label a
+# table happened to carry. What deserves to exist is domain knowledge, and it
+# lives with the people who own the collection, which is where the graph gate
+# `use_graph` already lives. These tests fix that the text they wrote actually
+# reaches the model, and that a collection which wrote none is untouched.
+
+
+async def test_the_collections_guidance_reaches_the_extraction_prompt():
+    spec = make_spec()
+    _mk_collection(
+        spec,
+        "fab",
+        use_graph=True,
+        docs=[("deck-A", "回焊爐 245°C"), ("deck-B", "SPI 檢查")],
+        guidance="只收機台、製程、缺陷、參數與料號。",
+    )
+
+    llm = _CapturingLlm()
+    coord = GraphCoordinator(spec, llm, chunk_budget=10)
+    coord.enqueue_dispatch()
+    coord.start_consuming()
+    await coord.aclose()
+
+    extractions = [p for p in llm.prompts if "Passage:" in p]
+    assert extractions, "the extractor was never called"
+    # EVERY passage, not just the first: the criterion is a property of the
+    # corpus, so a document that happened to land in a later batch must not be
+    # extracted under the permissive default.
+    assert all("只收機台、製程、缺陷、參數與料號。" in p for p in extractions)
+
+
+async def test_a_collection_with_no_guidance_is_extracted_exactly_as_before():
+    """The knob ships empty, so its OFF state is where every existing collection
+    already is — nothing may change for them."""
+    spec = make_spec()
+    _mk_collection(spec, "fab", use_graph=True, docs=[("deck-A", "回焊爐 245°C")])
+
+    llm = _CapturingLlm()
+    coord = GraphCoordinator(spec, llm, chunk_budget=10)
+    coord.enqueue_dispatch()
+    coord.start_consuming()
+    await coord.aclose()
+
+    assert llm.prompts
+    assert all("follow this" not in p.lower() for p in llm.prompts)
+
+
+async def test_one_collections_guidance_does_not_leak_into_another():
+    """Two opted-in collections are extracted by the same coordinator; the
+    criterion is per-corpus, so it must be read per corpus rather than once."""
+    spec = make_spec()
+    _mk_collection(
+        spec, "fab", use_graph=True, docs=[("deck-A", "回焊爐")], guidance="ONLY machines."
+    )
+    _mk_collection(
+        spec, "finance", use_graph=True, docs=[("deck-B", "營收")], guidance="ONLY metrics."
+    )
+
+    llm = _CapturingLlm()
+    coord = GraphCoordinator(spec, llm, chunk_budget=10)
+    coord.enqueue_dispatch()
+    coord.start_consuming()
+    await coord.aclose()
+
+    machines = [p for p in llm.prompts if "ONLY machines." in p]
+    metrics = [p for p in llm.prompts if "ONLY metrics." in p]
+    assert len(machines) == 1 and len(metrics) == 1
+    assert "回焊爐" in machines[0] and "營收" in metrics[0]
+
+
+async def test_a_collection_deleted_mid_pass_extracts_under_the_default():
+    """A batch is queued by an earlier job, so the collection can be gone by the
+    time it runs. One vanished collection must not fail the batch its neighbours
+    ride in — the same rule a vanished document already gets."""
+    spec = make_spec()
+    cid = _mk_collection(
+        spec, "fab", use_graph=True, docs=[("deck-A", "回焊爐")], guidance="ONLY machines."
+    )
+    coord = GraphCoordinator(spec, _CapturingLlm(), chunk_budget=10)
+    spec.get_resource_manager(Collection).permanently_delete(cid)
+
+    assert coord._collection_guidance(cid) == ""

@@ -330,3 +330,20 @@ def test_guidance_does_not_disturb_the_passage_or_the_json_contract():
     prompt = llm.prompts[0]
     assert prompt.endswith("Passage:\n回焊爐溫度 245°C")
     assert '{"mentions": [{"surface": ..., "kind": ...}]' in prompt
+
+
+def test_a_list_entry_that_is_not_an_object_is_skipped_not_fatal():
+    """Every one of the four lists is written by a model, and a model that drifts
+    puts a bare string where an object belongs. One malformed entry must cost the
+    entry, not the passage — and never the batch the passage rides in."""
+    llm = _FakeLlm(
+        '{"mentions": ["回焊爐", {"surface": "SPI", "kind": "機台"}],'
+        ' "aliases": ["nope", {"a": "SPI", "b": "錫膏檢查機", "quote": "SPI(錫膏檢查機)"}],'
+        ' "relationships": [42, {"subject": "SPI", "predicate": "檢查", "object": "錫膏"}],'
+        ' "attributes": [null, {"subject": "SPI", "attribute": "良率", "value": "99"}]}'
+    )
+    got = extract_entities(llm, "SPI(錫膏檢查機)")
+    assert [m.surface for m in got.mentions] == ["SPI"]
+    assert [a.b for a in got.aliases] == ["錫膏檢查機"]
+    assert [r.predicate for r in got.relationships] == ["檢查"]
+    assert [c.attribute for c in got.attributes] == ["良率"]

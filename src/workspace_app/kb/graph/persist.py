@@ -29,12 +29,7 @@ from ...resources.graph import (
     relationship_id,
 )
 from .build import DocGraph, Vocabulary
-
-# Rows per request when walking a whole table. `list_resources(QB.all())` asks
-# the store for everything in ONE statement, which specstar's postgres store
-# builds with a row-constructor per key: 40k rows is a 937 KB statement the
-# database answers with `stack depth limit exceeded` (#689).
-PAGE = 500
+from .paging import PAGE
 
 # Every model keyed on the document that produced it. A re-extraction clears the
 # document's rows across ALL of them, so the three layers can never disagree

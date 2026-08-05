@@ -171,7 +171,7 @@ def test_walk_rows_returns_everything_across_pages(monkeypatch: pytest.MonkeyPat
     the failure mode it could introduce is silent — a walk that stops at the
     first page returns a prefix and every caller treats it as the whole table.
     """
-    from workspace_app.kb.graph.link import walk_rows
+    from workspace_app.kb.graph.paging import walk_rows
 
     monkeypatch.setattr(link_mod, "PAGE", 7)
     spec = make_spec(default_user=lambda: "bob")

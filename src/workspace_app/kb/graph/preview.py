@@ -16,6 +16,16 @@ persistence and calls nothing that could. Reading is the only thing it knows how
 to do — which is also what makes it safe to point at an environment that has
 data in it.
 
+**One difference, stated rather than hidden.** The identities here are built
+from THIS collection's evidence alone, while production builds them over the
+whole corpus — identity is shared across collections, which is the point of the
+layer. So the extraction half (what the model named, and what kind of thing it
+said each was) is exactly what production would produce; the vocabulary half is
+what this collection alone supports, and two identities that would meet
+another corpus's evidence will not have met it here. The tool exists to tune the
+EXTRACTION criterion, which is per-collection, so that is the right scope — but
+it is a difference, and a difference nobody was told about is a lie.
+
 The summary is the part that gets read most. Whether a criterion is working is a
 question about SHAPE — how many distinct names one document yields, what sorts of
 thing the model decided it was seeing — and nobody answers that by scrolling
@@ -31,16 +41,13 @@ from typing import Any
 
 import msgspec
 from specstar import QB, SpecStar
+from specstar.types import ResourceIDNotFoundError
 
 from ...resources.kb import Collection, DocChunk
 from ..doc_permission import doc_mirror_fields
 from ..llm import ILlm
 from .build import DocSource, Graph, build_graph
-
-# Rows per request while walking a collection's chunks. `list_resources` with no
-# limit asks for the whole table in one statement, which the database refuses
-# once a corpus is large enough (#689).
-PAGE = 500
+from .paging import walk_rows
 
 
 def read_collection_sources(spec: SpecStar, collection_id: str) -> tuple[str, list[DocSource]]:
@@ -56,28 +63,20 @@ def read_collection_sources(spec: SpecStar, collection_id: str) -> tuple[str, li
 
     krm = spec.get_resource_manager(DocChunk)
     chunks: dict[str, list[tuple[str, str]]] = {}
-    offset = 0
-    while True:
-        page = krm.list_resources(
-            (QB["collection_id"] == collection_id).limit(PAGE).offset(offset).build()
-        )
-        if not page:
-            break
-        for r in page:
-            chunk = r.data
-            assert isinstance(chunk, DocChunk)
-            chunks.setdefault(chunk.source_doc_id, []).append(
-                (r.info.resource_id, chunk.text)  # ty: ignore[unresolved-attribute]
-            )
-        if len(page) < PAGE:
-            break
-        offset += PAGE
+    for r in walk_rows(krm, QB["collection_id"] == collection_id):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        chunks.setdefault(chunk.source_doc_id, []).append((r.info.resource_id, chunk.text))
 
     docs: list[DocSource] = []
     for doc_id in sorted(chunks):
         try:
             mirror = doc_mirror_fields(spec, doc_id)
-        except Exception:  # noqa: BLE001 — a vanished deck is not previewable
+        except ResourceIDNotFoundError:
+            # Chunks outlive their deck (#104 made a chunk content-addressed), and
+            # a vanished deck has no permission to inherit. Narrow on purpose: a
+            # bare `except` here would swallow a real fault and quietly preview a
+            # subset, which is the one way this tool could lie.
             continue
         docs.append(DocSource(doc_id=doc_id, chunks=chunks[doc_id], mirror=mirror))
     return collection.graph_guidance, docs
@@ -134,6 +133,10 @@ def summarise(graph: Graph, docs: list[DocSource]) -> dict[str, Any]:
         # What the model thought it was looking at, commonest first. "值" / "數值"
         # / "value" near the top is the extractor treating measurements as things.
         "kinds": dict(Counter(m.kind for m in graph.mentions if m.kind).most_common()),
+        # Said in the output, not only in a docstring: production groups
+        # identities over the WHOLE corpus, and a reader comparing these numbers
+        # against the live graph deserves to know which of the two they hold.
+        "identity_scope": "this collection only (production groups across the whole corpus)",
     }
 
 

@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 
 import { kbApi, type KbApi, type KbCollection } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
@@ -40,6 +41,20 @@ export function GraphToggle({
     mutationFn: () => client.rebuildGraph(collection.resource_id),
   });
 
+  // #697: the corpus's own criterion for what deserves to be a thing. The
+  // prompt's own description ("anything a reader would consider a distinct
+  // thing") is not a criterion — every noun passes it — and which things matter
+  // is domain knowledge, so it is typed here by the people who own the corpus
+  // rather than guessed by whoever wrote the prompt.
+  const stored = collection.graph_guidance ?? "";
+  const [criterion, setCriterion] = useState(stored);
+  useEffect(() => setCriterion(stored), [stored]);
+  const saveCriterion = useMutation({
+    mutationFn: () =>
+      client.updateCollection(collection.resource_id, { graph_guidance: criterion }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
+  });
+
   return (
     <SettingRow
       icon="branch"
@@ -70,6 +85,57 @@ export function GraphToggle({
               : t("kb.useGraph.rebuildQueued", { n: rebuild.data.queued })}
           </span>
         )}
+      </div>
+      <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+        <label
+          htmlFor="kb-graph-guidance"
+          style={{ fontSize: pxToRem(12), fontWeight: 600, color: "var(--text-paper)" }}
+        >
+          {t("kb.graphGuidance.label")}
+        </label>
+        <p
+          style={{
+            margin: 0,
+            fontSize: pxToRem(11.5),
+            lineHeight: 1.45,
+            color: "var(--text-paper-d)",
+          }}
+        >
+          {t("kb.graphGuidance.help")}
+        </p>
+        <textarea
+          id="kb-graph-guidance"
+          data-testid="kb-graph-guidance"
+          value={criterion}
+          onChange={(e) => setCriterion(e.target.value)}
+          placeholder={t("kb.graphGuidance.placeholder")}
+          rows={4}
+          style={{
+            width: "100%",
+            resize: "vertical",
+            padding: "8px 10px",
+            borderRadius: 8,
+            border: "1px solid var(--paper-3)",
+            background: "var(--paper)",
+            font: "inherit",
+            fontSize: pxToRem(13),
+            lineHeight: 1.5,
+            boxSizing: "border-box",
+          }}
+        />
+        <div>
+          <button
+            type="button"
+            className="kb-btn"
+            data-testid="kb-graph-guidance-save"
+            // Dirty-gated: specstar writes a revision per update, so an
+            // accidental press should not add a version that changed nothing.
+            disabled={criterion === stored || saveCriterion.isPending}
+            onClick={() => saveCriterion.mutate()}
+          >
+            {t("kb.graphGuidance.save")}
+          </button>
+        </div>
       </div>
     </SettingRow>
   );

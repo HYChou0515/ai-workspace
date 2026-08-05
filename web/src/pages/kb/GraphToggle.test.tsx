@@ -112,3 +112,40 @@ describe("GraphToggle", () => {
     });
   });
 });
+
+describe("the corpus's own extraction criterion (#697)", () => {
+  // The prompt's own description of what to pull out — "anything a reader would
+  // consider a distinct thing" — admits every noun, so a capable model fills the
+  // graph with generic words and every label a table carried. What deserves to
+  // exist is domain knowledge, and it belongs to whoever owns the collection —
+  // which means they have to be able to type it somewhere.
+
+  it("shows the collection's criterion so its owner can read what is in force", () => {
+    render(<GraphToggle collection={coll({ use_graph: true, graph_guidance: "只收機台與缺陷。" })} client={client()} />);
+    expect(screen.getByTestId("kb-graph-guidance")).toHaveValue("只收機台與缺陷。");
+  });
+
+  it("saves an edited criterion onto the collection", async () => {
+    const updateCollection = vi.fn(async () => ({}));
+    render(
+      <GraphToggle
+        collection={coll({ use_graph: true, graph_guidance: "" })}
+        client={client({ updateCollection } as unknown as Partial<KbApi>)}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("kb-graph-guidance"), {
+      target: { value: "只收機台、製程、缺陷、參數與料號。" },
+    });
+    fireEvent.click(screen.getByTestId("kb-graph-guidance-save"));
+    await waitFor(() =>
+      expect(updateCollection).toHaveBeenCalledWith("c1", {
+        graph_guidance: "只收機台、製程、缺陷、參數與料號。",
+      }),
+    );
+  });
+
+  it("cannot be saved until it differs, so an accidental press writes no revision", () => {
+    render(<GraphToggle collection={coll({ use_graph: true, graph_guidance: "abc" })} client={client()} />);
+    expect(screen.getByTestId("kb-graph-guidance-save")).toBeDisabled();
+  });
+});

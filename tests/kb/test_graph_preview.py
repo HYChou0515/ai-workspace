@@ -149,6 +149,9 @@ def test_the_summary_answers_the_question_the_tool_was_built_for(tmp_path):
     assert summary["mentions_per_document"] == 2.0
     # the histogram that shows a corpus filling up with values or generic nouns
     assert summary["kinds"] == {"機台": 2, "缺陷": 2}
+    # and the one way the preview differs from production, said out loud rather
+    # than left for a reader to discover by disagreeing with the live graph
+    assert "whole corpus" in summary["identity_scope"]
 
 
 def test_the_collections_own_criterion_is_what_the_preview_runs_with(tmp_path):
@@ -163,3 +166,56 @@ def test_the_collections_own_criterion_is_what_the_preview_runs_with(tmp_path):
     # the permission mirror rides along, so a previewed row is the row that would
     # have been stored — including whether anyone could have seen it
     assert all(d.mirror.get("collection_visibility") == "public" for d in docs)
+
+
+def test_a_document_whose_deck_is_gone_is_left_out_rather_than_previewed():
+    """Chunks outlive their deck (#104 made a chunk content-addressed). A deck
+    that has gone has no permission to inherit, so its rows could only be born
+    invisible — previewing them would show a graph nobody could ever see."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+    spec.get_resource_manager(SourceDoc).permanently_delete("deck-B")
+
+    _, docs = read_collection_sources(spec, cid)
+
+    assert [d.doc_id for d in docs] == ["deck-A"]
+
+
+def test_a_collection_larger_than_one_page_is_read_whole(monkeypatch):
+    """`list_resources` with no limit asks the store for everything in one
+    statement, which the database refuses once a corpus is large enough (#689).
+    Paging is what avoids that, and a paging bug loses documents SILENTLY — the
+    preview would simply show a smaller corpus."""
+    from workspace_app.kb.graph import paging as paging_mod
+
+    monkeypatch.setattr(paging_mod, "PAGE", 2)
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+    krm = spec.get_resource_manager(DocChunk)
+    for seq in range(1, 6):
+        krm.create(
+            DocChunk(
+                collection_id=cid, source_doc_id="deck-A", seq=seq, start=0, end=1, text=f"t{seq}"
+            )
+        )
+
+    _, docs = read_collection_sources(spec, cid)
+
+    by_doc = {d.doc_id: d for d in docs}
+    assert len(by_doc["deck-A"].chunks) == 6  # 1 original + 5, across three pages
+    assert len(by_doc["deck-B"].chunks) == 1
+
+
+def test_a_run_over_an_empty_collection_still_writes_readable_files(tmp_path):
+    """Zero documents must not become a division by zero on the one number the
+    tool is read for."""
+    spec = make_spec(default_user=lambda: "bob")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(Collection(name="empty", use_graph=True)).resource_id
+
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path)
+
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["documents"] == 0
+    assert summary["mentions_per_document"] == 0.0

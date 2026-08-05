@@ -92,6 +92,11 @@ def main() -> None:
     top = list(summary["kinds"].items())[:8]
     print(f"  kinds (top {len(top)}): {', '.join(f'{k}×{n}' for k, n in top)}", file=sys.stderr)
     print(f"  identities: {len(graph.entities)}", file=sys.stderr)
+    print(
+        "  note: identities are grouped over THIS collection only; production "
+        "groups across the whole corpus",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ import asyncio
 import logging
 
 from specstar import QB, Count, Schema, SpecStar
-from specstar.types import TaskStatus
+from specstar.types import ResourceIDNotFoundError, TaskStatus
 
 from ...perm import Permission
 from ...resources import Collection, DocChunk
@@ -207,6 +207,12 @@ class GraphCoordinator:
 
     def _batch(self, payload: GraphJobPayload) -> None:
         cid = payload.collection_id
+        # #697: what deserves to BE a thing in this corpus, in its owner's words.
+        # Read once per batch and from the COLLECTION — it is a property of the
+        # corpus, so a batch must not inherit whatever the last one was told, and
+        # a document that happened to land in a later batch must not be extracted
+        # under the permissive default the prompt falls back to.
+        guidance = self._collection_guidance(cid)
         for doc_id in payload.doc_ids:
             # #630 P4: ONE model call per chunk feeds both layers — the things
             # the passage talks about and what it states about them come out of
@@ -218,7 +224,22 @@ class GraphCoordinator:
                 collection_id=cid,
                 source_doc_id=doc_id,
                 chunks=self._doc_chunks(doc_id),
+                guidance=guidance,
             )
+
+    def _collection_guidance(self, collection_id: str) -> str:
+        """The collection's extraction criterion, or ``""`` when it has none.
+
+        A collection deleted between the split and the batch extracts under the
+        default rather than failing the batch its neighbours ride in — the same
+        rule a vanished document gets.
+        """
+        try:
+            collection = self._collection_rm.get(collection_id).data
+        except ResourceIDNotFoundError:
+            return ""
+        assert isinstance(collection, Collection)
+        return collection.graph_guidance
 
     # ── helpers ──────────────────────────────────────────────────────
     def _opted_in_collection_ids(self) -> list[str]:
