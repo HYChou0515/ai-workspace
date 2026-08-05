@@ -612,7 +612,7 @@ def test_a_kind_a_person_merged_is_still_what_its_things_point_at():
             _mention("deck-B", "SPI", kind="tool", collection="c2"),
         ],
         [],
-        decisions=Decisions(accepted=frozenset({(machine, tool)})),
+        decisions=Decisions(accepted=frozenset({(machine, tool, "alice")})),
     )
 
     kinds = {e.kind_id for e in vocab.entities.values() if e.kind_id}
@@ -622,3 +622,9 @@ def test_a_kind_a_person_merged_is_still_what_its_things_point_at():
     kind = vocab.entities[kind_id]
     assert kind.collection_ids == ["c1", "c2"], "the merged kind lost the evidence for it"
     assert set(kind.norm_keys) == {"機台", "tool"}
+    # The absorbed label keeps a tombstone too. Nothing MENTIONS a kind, so it
+    # used to fall outside the loop that writes them — and an id someone still
+    # holds then 404s instead of saying where its evidence went.
+    absorbed = (entity_id("機台"), entity_id("tool"))
+    (gone,) = [eid for eid in absorbed if eid != kind_id]
+    assert vocab.entities[gone].merged_into == kind_id

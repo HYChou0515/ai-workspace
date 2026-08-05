@@ -124,33 +124,50 @@ def test_reconcile_pages_every_table_it_walks(capped: None) -> None:
     assert names == {"thing-000"}, "the pass ran without building the vocabulary"
 
 
-def test_absorbing_moves_every_link_even_past_one_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Absorption is drained, not paged by offset — and the difference is silent.
-
-    A popular identity carries one link per mention, so that list is corpus-sized
-    and has to be bounded like every other. But the loop REWRITES ``entity_id``,
-    the field it selects on, so every row it handles leaves the result set. An
-    advancing offset would then skip exactly as many links as it had just moved,
-    and the leftovers would keep pointing at a tombstone: a half-absorbed
-    identity, with nothing raised anywhere.
+def test_a_merge_moves_every_mention_even_past_one_page() -> None:
+    """A popular identity carries one link per mention, so a merge touches a
+    corpus-sized list. It used to be applied by hand, by a loop that rewrote the
+    very field it selected on — the hazard then was an offset skipping exactly
+    the rows it had just moved, leaving a half-absorbed identity and raising
+    nothing. The merge is now DERIVED instead of applied, which removes that
+    hazard by construction; this holds the outcome the old loop existed for.
     """
-    from workspace_app.resources.graph import GraphEntity, GraphEntityLink
+    from workspace_app.kb.graph.link import reconcile_vocabulary
+    from workspace_app.kb.graph.review import accept_proposal, entity_page
+    from workspace_app.resources.graph import GraphEntity, GraphMention, entity_id, mention_id
+    from workspace_app.resources.kb import Collection
 
-    monkeypatch.setattr(link_mod, "PAGE", 3)
     spec = make_spec(default_user=lambda: "bob")
-    erm = spec.get_resource_manager(GraphEntity)
-    lrm = spec.get_resource_manager(GraphEntityLink)
-    host = erm.create(GraphEntity(canonical_name="host", norm_keys=["host"])).resource_id
-    other = erm.create(GraphEntity(canonical_name="other", norm_keys=["other"])).resource_id
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(Collection(name="c")).resource_id
+    mrm = spec.get_resource_manager(GraphMention)
     for i in range(10):  # comfortably more than one page
-        lrm.create(GraphEntityLink(entity_id=other, mention_id=f"m{i}", basis="identical"))
+        for surface in ("host", "other"):
+            with mrm.using("bob"):
+                mrm.create(
+                    GraphMention(
+                        collection_id=cid,
+                        source_doc_id=f"deck-{i}",
+                        surface=surface,
+                        norm_surface=surface,
+                        occurrences=1,
+                        collection_visibility="public",
+                        collection_created_by="bob",
+                        doc_visibility="public",
+                    ),
+                    resource_id=mention_id(f"deck-{i}", surface),
+                )
+    reconcile_vocabulary(spec, llm=None)
 
-    link_mod._absorb(spec, host, other, evidence="the deck said so")
+    accept_proposal(spec, entity_id("host"), entity_id("other"), by="amy")
 
-    moved = lrm.list_resources((QB["entity_id"] == host).build())
-    left = lrm.list_resources((QB["entity_id"] == other).build())
-    assert len(moved) == 10, f"only {len(moved)} of 10 links were absorbed"
-    assert not left, "links were left pointing at the tombstone"
+    page = entity_page(spec, entity_id("host"), as_user="bob")
+    assert len(page.mentions) == 20, f"only {len(page.mentions)} of 20 mentions landed on the merge"
+    erm = spec.get_resource_manager(GraphEntity)
+    gone = erm.get(entity_id("other")).data
+    assert isinstance(gone, GraphEntity)
+    assert gone.merged_into == entity_id("host")
 
 
 def test_the_double_would_catch_the_regression(capped: None) -> None:

@@ -99,10 +99,13 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
     writes — accepting or rejecting a merge proposal — so leaving an existing row
     alone is what keeps that decision from being recomputed away the same night.
 
-    Entities go in before the links that point at them, and out only after those
-    links are gone, because a link's ``entity_id`` is a cascade Ref: creating a
-    link first would dangle it, and removing an entity first would take live
-    links with it.
+    Entities go in before the links that point at them, because the ref
+    validator refuses a link whose entity is not there yet. On the way out they
+    go last for a different reason than the one written here before:
+    ``permanently_delete`` fires no cascade, so an entity removed while a link
+    still points at it leaves that link DANGLING rather than taking it along.
+    That is why a preserved decision whose subject the evidence no longer
+    supports is dropped here rather than left pointing at nothing.
     """
     erm = spec.get_resource_manager(GraphEntity)
     lrm = spec.get_resource_manager(GraphEntityLink)
@@ -130,7 +133,20 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
         # evidence and cannot be recomputed, and they are the input that keeps
         # the merge from being re-proposed; deleting them asks the same question
         # again next week with the answer filed against a row nobody looks up.
-        if str(stored_links[rid].get("state") or "active") in _PERSON_ANSWERED:
+        state = str(stored_links[rid].get("state") or "active")
+        if state in _PERSON_ANSWERED and _subject_survives(stored_links[rid], vocabulary):
+            continue
+        if state in _PERSON_ANSWERED and not _subject_survives(stored_links[rid], vocabulary):
+            # The identities it was about are gone, so there is no merge left to
+            # re-derive and nothing for the answer to apply to. Kept, it would
+            # dangle: `permanently_delete` fires no cascade.
+            lrm.permanently_delete(rid)
+            continue
+        if state == "pending" and not vocabulary.proposed:
+            # Nobody asked the model this time, so "no proposals" is not an
+            # answer about these rows — it is silence. Deleting them would empty
+            # a review queue every time the pass runs without a model, which is
+            # what recording a decision does.
             continue
         lrm.permanently_delete(rid)
     for rid in stored_entities.keys() - vocabulary.entities.keys():
@@ -143,6 +159,14 @@ _ENTITY_FIELDS = ("canonical_name", "norm_keys", "kind_id", "collection_ids", "m
 #: Link states a PERSON wrote. The computation never produces them, so they
 #: would otherwise look exactly like rows it no longer produces.
 _PERSON_ANSWERED = frozenset({"settled", "rejected"})
+
+
+def _subject_survives(indexed: dict, vocabulary: Vocabulary) -> bool:
+    """Whether the identities a recorded answer was about still exist."""
+    return all(
+        str(indexed.get(field) or "") in vocabulary.entities
+        for field in ("entity_id", "proposed_from")
+    )
 
 
 def _stored(rm) -> dict[str, dict]:

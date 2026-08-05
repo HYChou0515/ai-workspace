@@ -22,6 +22,7 @@ from ...resources.graph import (
     GraphEntityLink,
     GraphMention,
     GraphRelationship,
+    link_id,
 )
 
 
@@ -213,16 +214,22 @@ def _kind_name(erm, entity: GraphEntity) -> str:
 
 
 def accept_proposal(spec: SpecStar, entity_id: str, proposed_from: str, *, by: str) -> None:
-    """Apply a proposal a person agreed with.
+    """Record that a person agreed, then let the one implementation apply it.
 
-    The links become ``approved`` and record WHO agreed — the basis a later
-    re-run treats as settled, and the answer to "why are these one thing" being a
-    person's name rather than a model's impression.
+    The answer is written down — the links become ``approved`` and name WHO
+    agreed — and the merge itself is DERIVED from it by the vocabulary pass, the
+    same pass that will run again next week. Applying it by hand as well was a
+    second implementation of the same rule, and the two disagreed in three ways
+    that all lost data: it re-pointed links in place so they no longer matched
+    their own content address and the recompute could never correct them (the
+    merged identity then held half its evidence); it rewrote EVERY link on the
+    absorbed side regardless of state, so answering one question silently
+    rewrote another still waiting to be asked, and overwrote a recorded
+    rejection's author; and its host was chosen by a different rule than the
+    recompute's, so the two picked different sides for about half of all pairs.
     """
-    from .link import _absorb  # noqa: PLC0415 — one merge implementation, not two
-
-    _absorb(spec, entity_id, proposed_from, evidence=by)
     lrm = spec.get_resource_manager(GraphEntityLink)
+    marked = 0
     for r in lrm.list_resources((QB["state"] == "pending").build()):
         link = r.data
         assert isinstance(link, GraphEntityLink)
@@ -232,15 +239,36 @@ def accept_proposal(spec: SpecStar, entity_id: str, proposed_from: str, *, by: s
             r.info.resource_id,  # ty: ignore[unresolved-attribute]
             msgspec.structs.replace(link, state="settled", basis="approved", evidence=by),
         )
-    for r in lrm.list_resources((QB["entity_id"] == entity_id).build()):
-        link = r.data
-        assert isinstance(link, GraphEntityLink)
-        if link.state != "active":
-            continue
-        lrm.update(
-            r.info.resource_id,  # ty: ignore[unresolved-attribute]
-            msgspec.structs.replace(link, basis="approved", evidence=by),
+        marked += 1
+    if not marked:
+        # Nothing proposed this pair — a person said it themselves. The DECISION
+        # is the durable fact either way, and it has to exist as a row or the
+        # next pass has nothing to re-derive the merge from.
+        erm = spec.get_resource_manager(GraphEntity)
+        where: set[str] = set()
+        for side in (entity_id, proposed_from):
+            entity = erm.get(side).data
+            assert isinstance(entity, GraphEntity)
+            where |= set(entity.collection_ids)
+        lrm.create(
+            GraphEntityLink(
+                entity_id=entity_id,
+                mention_id="",
+                basis="approved",
+                evidence=by,
+                state="settled",
+                proposed_from=proposed_from,
+                # Fail-closed: a row vouched for by nothing is invisible to
+                # everyone, this decision included.
+                collection_ids=sorted(where),
+            ),
+            resource_id=link_id(entity_id, "", "approved", proposed_from),
         )
+    # Now re-derive. This is what makes the decision take effect, and the only
+    # thing that makes it take effect the way the weekly pass will.
+    from .link import reconcile_vocabulary  # noqa: PLC0415 — circular at module level
+
+    reconcile_vocabulary(spec, llm=None)
 
 
 def reject_proposal(spec: SpecStar, entity_id: str, proposed_from: str, *, by: str) -> None:

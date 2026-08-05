@@ -77,6 +77,10 @@ class Graph:
     relationships: list[GraphRelationship] = field(default_factory=list)
     entities: dict[str, GraphEntity] = field(default_factory=dict)
     links: list[GraphEntityLink] = field(default_factory=list)
+    #: Whether the merge-proposal pass actually RAN. "The model proposed nothing"
+    #: and "nobody asked the model" produce the same empty list, and a store told
+    #: the first when the second is true deletes a review queue nobody answered.
+    proposed: bool = False
 
 
 def build_graph(
@@ -361,11 +365,17 @@ class Decisions:
     therefore stable across re-runs.
     """
 
-    accepted: frozenset[tuple[str, str]] = frozenset()
+    #: ``(entity, other, who)`` — the pair, and the person who said so. The name
+    #: travels with the decision because the link it produces has to say that a
+    #: PERSON approved this, not that a document declared it: "declared" points at
+    #: a sentence a doubter can go and read, and after an accepted merge there is
+    #: no sentence.
+    accepted: frozenset[tuple[str, str, str]] = frozenset()
     rejected: frozenset[tuple[str, str]] = frozenset()
 
     def decided(self, a: str, b: str) -> bool:
-        return (a, b) in self.accepted | self.rejected or (b, a) in self.accepted | self.rejected
+        pairs = {(x, y) for x, y, _ in self.accepted} | set(self.rejected)
+        return (a, b) in pairs or (b, a) in pairs
 
 
 @dataclass(frozen=True)
@@ -380,6 +390,10 @@ class Vocabulary:
 
     entities: dict[str, GraphEntity] = field(default_factory=dict)
     links: list[GraphEntityLink] = field(default_factory=list)
+    #: Whether the merge-proposal pass actually RAN. "The model proposed nothing"
+    #: and "nobody asked the model" produce the same empty list, and a store told
+    #: the first when the second is true deletes a review queue nobody answered.
+    proposed: bool = False
 
 
 def build_vocabulary(
@@ -423,10 +437,26 @@ def build_vocabulary(
     # A decision naming an identity whose evidence is gone is dropped: there is
     # nothing left to merge, and re-inventing the key would put a name in the
     # vocabulary that no document says.
-    pairs += [
-        (key_of[a], key_of[b]) for a, b in sorted(decisions.accepted) if a in key_of and b in key_of
-    ]
-    groups = _key_groups(all_keys, pairs)
+    approved_by: dict[str, str] = {}
+    preferred: set[str] = set()
+    for a, b, who in sorted(decisions.accepted):
+        # A pair a person ALSO rejected is not merged. The two answers contradict
+        # each other and nothing here can tell which came last, so it takes the
+        # side this module always takes when it cannot be sure: it may fail to
+        # merge, it may never merge wrongly.
+        if a not in key_of or b not in key_of:
+            continue
+        if (a, b) in decisions.rejected or (b, a) in decisions.rejected:
+            continue
+        pairs.append((key_of[a], key_of[b]))
+        # The side the person ACTED ON. A merged group otherwise takes the
+        # smallest key as its host, which is unrelated to what anyone was
+        # looking at — so the page they had open became a tombstone the moment
+        # they pressed accept, and the identity turned up under a different id.
+        preferred.add(key_of[a])
+        approved_by.setdefault(key_of[a], who)
+        approved_by.setdefault(key_of[b], who)
+    groups = _key_groups(all_keys, pairs, preferred)
     host_of = {key: host for host, keys in groups.items() for key in keys}
 
     # Kinds first, so a thing can point at one. A kind whose label some document
@@ -469,37 +499,28 @@ def build_vocabulary(
                 | set(entities[eid].collection_ids if eid in entities else ())
             ),
         )
-        # Each absorbed key keeps a tombstone saying where it went. It holds no
-        # evidence, so the scope already makes it invisible; what it buys is that
-        # an id someone still has resolves to an explanation instead of a 404,
-        # and that the merge can be read as a decision rather than a gap.
-        for absorbed in keys:
-            if absorbed == host_key:
-                continue
-            absorbed_mentions = by_key.get(absorbed, ())
-            entities[entity_id(absorbed)] = GraphEntity(
-                canonical_name=_display_name(
-                    [(m.surface, m.occurrences) for m in absorbed_mentions]
-                )
-                if absorbed_mentions
-                else absorbed,
-                norm_keys=[],
-                collection_ids=[],
-                merged_into=eid,
-            )
-
         quote = next((m.declared_quote for m in group if m.declared_quote), "")
+        # An identity a PERSON approved says so, on every link. "declared" means
+        # a document stated it and the link quotes the sentence; after an
+        # accepted merge there is no sentence, and recording one anyway leaves a
+        # citation with nothing after the colon.
+        approver = next((approved_by[key] for key in keys if key in approved_by), "")
         links.extend(
             GraphEntityLink(
                 entity_id=eid,
                 mention_id=m.id,
                 # A mention that IS this identity by its own key rests on the
-                # rule; one the declaration brought in rests on the sentence, and
+                # rule; one a declaration brought in rests on the sentence, and
                 # the link carries it so a doubter can go and read it.
-                basis="identical" if m.norm_surface == host_key else "declared",
-                evidence="norm_surface"
-                if m.norm_surface == host_key
-                else f"{m.source_doc_id}: {m.declared_quote or quote}",
+                basis="approved"
+                if approver
+                else ("identical" if m.norm_surface == host_key else "declared"),
+                evidence=approver
+                or (
+                    "norm_surface"
+                    if m.norm_surface == host_key
+                    else f"{m.source_doc_id}: {m.declared_quote or quote}"
+                ),
                 state="active",
                 collection_ids=[m.collection_id],
             )
@@ -538,9 +559,31 @@ def build_vocabulary(
             ),
         )
 
+    # Each absorbed key keeps a tombstone saying where it went. Outside the
+    # mention loop, because a kind or a connecting word is an identity nothing
+    # MENTIONS — only a person can merge one — and leaving those without a
+    # tombstone means the id a person still holds 404s instead of saying where
+    # its evidence moved to.
+    for host_key, keys in sorted(groups.items()):
+        host_eid = entity_id(host_key)
+        if host_eid not in entities:
+            continue
+        for absorbed in keys:
+            if absorbed == host_key:
+                continue
+            named = by_key.get(absorbed, ())
+            entities[entity_id(absorbed)] = GraphEntity(
+                canonical_name=_display_name([(m.surface, m.occurrences) for m in named])
+                if named
+                else absorbed,
+                norm_keys=[],
+                collection_ids=[],
+                merged_into=host_eid,
+            )
+
     if llm is not None:
-        links.extend(_proposals(llm, entities, links, decisions))
-    return Vocabulary(entities=entities, links=links)
+        links.extend(_proposals(llm, entities, links, decisions, key_of))
+    return Vocabulary(entities=entities, links=links, proposed=llm is not None)
 
 
 # How many names go into one adjudication call. Bounded by the model's context,
@@ -576,6 +619,7 @@ def _proposals(
     entities: dict[str, GraphEntity],
     links: list[GraphEntityLink],
     decisions: Decisions,
+    key_of: dict[str, str],
 ) -> list[GraphEntityLink]:
     """Ask the model which names denote one thing, and record the answer as
     PENDING links that change nothing.
@@ -607,12 +651,17 @@ def _proposals(
     for start in range(0, len(names), _NAMES_PER_CALL):
         batch = names[start : start + _NAMES_PER_CALL]
         for group, why in _group(llm, batch):
-            # Ordered by ID, not by the order the names came in. An id is
-            # content-addressed on the identity's key, which no amount of new
-            # evidence changes; the display name is whichever surface the corpus
-            # used MOST, so one new document reorders the pair and the proposal
-            # becomes a different question from the one a person already answered.
-            ids = sorted({eid for name in group for eid in by_name.get(name, [])})
+            # Ordered by the identity's KEY — the same rule the grouping uses
+            # to pick a merged group's host. Two orderings meant the side a
+            # person accepted ON was not the side the merge landed on, so the id
+            # they had just answered about became a tombstone and its page went
+            # empty. Not the display name either: that is whichever surface the
+            # corpus used MOST, so one new document reorders the pair and the
+            # proposal becomes a different question from the one already answered.
+            ids = sorted(
+                {eid for name in group for eid in by_name.get(name, [])},
+                key=lambda eid: key_of.get(eid, eid),
+            )
             host, rest = ids[0], ids[1:]
             for other in rest:
                 if (host, other) in seen or (other, host) in seen:
@@ -704,7 +753,9 @@ def _display_name(candidates: list[tuple[str, int]]) -> str:
     return max(candidates, key=lambda pair: (pair[1], pair[0]))[0]
 
 
-def _key_groups(all_keys: set[str], pairs: list[tuple[str, str]]) -> dict[str, list[str]]:
+def _key_groups(
+    all_keys: set[str], pairs: list[tuple[str, str]], preferred: set[str] | None = None
+) -> dict[str, list[str]]:
     """Fold every pair of keys that should be one identity into one group each.
 
     Returns ``host key -> every key that resolves there``. The host is the
@@ -731,7 +782,18 @@ def _key_groups(all_keys: set[str], pairs: list[tuple[str, str]]) -> dict[str, l
         if a != b:
             parent[min(a, b)], parent[max(a, b)] = min(a, b), min(a, b)
 
-    groups: dict[str, list[str]] = {}
+    collected: dict[str, list[str]] = {}
     for key in all_keys:
-        groups.setdefault(find(key), []).append(key)
-    return {host: sorted(keys) for host, keys in groups.items()}
+        collected.setdefault(find(key), []).append(key)
+
+    # The host is the smallest key — arbitrary, but fixed, so two runs over the
+    # same evidence produce the same ids. A key a person acted on WINS that
+    # choice: the merge has to land where they were looking, or the page they
+    # just pressed accept on becomes a tombstone.
+    wanted = preferred or set()
+    groups: dict[str, list[str]] = {}
+    for keys in collected.values():
+        members = sorted(keys)
+        chosen = sorted(wanted & set(members))
+        groups[chosen[0] if chosen else members[0]] = members
+    return groups

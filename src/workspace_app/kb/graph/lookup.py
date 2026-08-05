@@ -146,7 +146,9 @@ def _candidates(spec: SpecStar, key: str, *, as_user: str) -> list[str]:
     # every identity in one request, which is the shape that stops a large corpus
     # dead (see `link.walk_rows`). Nothing below the `entity_page` check needs the
     # stored record either; all four fields are indexed.
-    for rid, values in indexed_rows(erm, ("canonical_name", "norm_keys", "merged_into")):
+    for rid, values in indexed_rows(
+        erm, ("canonical_name", "norm_keys", "merged_into", "collection_ids")
+    ):
         if values.get("merged_into") or not values.get("collection_ids"):
             continue
         if not _close(key, [str(k) for k in values.get("norm_keys") or []]):

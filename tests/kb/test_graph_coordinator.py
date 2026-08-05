@@ -455,3 +455,22 @@ async def test_a_collection_deleted_mid_pass_extracts_under_the_default():
     spec.get_resource_manager(Collection).permanently_delete(cid)
 
     assert coord._collection_guidance(cid) == ""
+
+
+async def test_the_extractor_sees_a_documents_chunks_in_order():
+    """Same reason the preview orders them: passage order decides which kind and
+    declared quote a mention keeps, and the order statements are written in. The
+    two have to agree, or the preview stops being a preview."""
+    spec = make_spec()
+    cid = _mk_collection(spec, "fab", use_graph=True, docs=[])
+    krm = spec.get_resource_manager(DocChunk)
+    for seq in (2, 0, 3, 1):
+        krm.create(
+            DocChunk(
+                collection_id=cid, source_doc_id="deck-A", seq=seq, start=0, end=1, text=f"t{seq}"
+            )
+        )
+
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
+
+    assert [text for _, text in coord._doc_chunks("deck-A")] == ["t0", "t1", "t2", "t3"]

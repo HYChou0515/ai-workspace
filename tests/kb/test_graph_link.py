@@ -426,3 +426,84 @@ def test_a_rejected_pair_stays_rejected_when_the_model_rewords_its_reason():
     decided = [link for link in _links(spec) if link.proposed_from]
     assert [link.state for link in decided] == ["rejected"], "the answer itself was deleted"
     assert [link.evidence for link in decided] == ["alice"]
+
+
+def test_an_accepted_merge_keeps_every_mention_it_was_supposed_to_unify():
+    """The point of accepting is that both documents' evidence lands on one
+    identity. Verified on the PAGE a reader actually gets, not on the entity row:
+    the row can look merged while the links still point at the tombstone, and
+    then the merged identity quietly holds half its evidence."""
+    from workspace_app.kb.graph.review import accept_proposal, entity_page, list_proposals
+
+    spec = make_spec(default_user=lambda: "bob")
+    _pair(spec)
+    reconcile_vocabulary(spec, llm=_Judge())
+    (proposal,) = list_proposals(spec)
+    accept_proposal(spec, proposal.entity_id, proposal.proposed_from, by="alice")
+    reconcile_vocabulary(spec, llm=_Judge())
+
+    (host,) = [e for e in _entities(spec) if e.collection_ids]
+    host_ids: list[str] = []
+    for r in spec.get_resource_manager(GraphEntity).list_resources(QB.all().build()):
+        entity = r.data
+        assert isinstance(entity, GraphEntity)
+        if entity.collection_ids:
+            host_ids.append(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+    (host_id,) = host_ids
+    page = entity_page(spec, host_id, as_user="bob")
+    assert sorted(m.surface for m in page.mentions) == ["Reflow Oven", "回焊爐"], (
+        "the merged identity lost the evidence the merge was for"
+    )
+    assert host.canonical_name in {"Reflow Oven", "回焊爐"}
+
+
+def test_accepting_one_proposal_leaves_another_pending_one_alone():
+    """A run can propose two merges that share a side. Answering one must not
+    rewrite the other's question — nor overwrite the reason it was asked, which
+    is the only thing telling the reviewer what they are being asked about."""
+    from workspace_app.kb.graph.review import accept_proposal, list_proposals
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _collection(spec)
+    for doc, surface in (("d0", "w0"), ("d1", "w1"), ("d2", "w2")):
+        _mention(spec, cid, doc, surface)
+
+    class _TwoGroups(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield (
+                '{"groups": ['
+                '{"names": ["w0", "w1"], "why": "the first pair"},'
+                '{"names": ["w0", "w2"], "why": "the second pair"}]}',
+                False,
+            )
+
+    reconcile_vocabulary(spec, llm=_TwoGroups())
+    before = {(p.entity_id, p.proposed_from, p.why) for p in list_proposals(spec)}
+    assert len(before) == 2
+
+    target = next(iter(before))
+    accept_proposal(spec, target[0], target[1], by="carol")
+
+    survivors = {(p.entity_id, p.proposed_from, p.why) for p in list_proposals(spec)}
+    assert survivors == before - {target}, "answering one question rewrote another"
+
+
+def test_a_rejection_still_holds_once_the_other_side_gains_new_evidence():
+    """The stable address alone suppresses a re-proposal only while nothing about
+    the pair changes. A new document naming one side changes its display name and
+    its evidence — and then only the recorded ANSWER keeps the question from
+    being asked again."""
+    from workspace_app.kb.graph.review import list_proposals, reject_proposal
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _pair(spec)
+    reconcile_vocabulary(spec, llm=_Judge())
+    (proposal,) = list_proposals(spec)
+    reject_proposal(spec, proposal.entity_id, proposal.proposed_from, by="alice")
+
+    # a later deck writes the same key far more often, changing what the model is
+    # shown and what the identity is called
+    _mention(spec, cid, "deck-C", "REFLOW OVEN", n=99)
+    reconcile_vocabulary(spec, llm=_Judge())
+
+    assert list_proposals(spec) == [], "the answer stopped holding once evidence moved"

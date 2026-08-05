@@ -257,3 +257,37 @@ def test_the_preview_reads_as_the_person_it_was_told_to_read_as(tmp_path):
 
     _, theirs = read_collection_sources(spec, cid, as_user="mallory")
     assert theirs == [], "an outsider was handed the contents of a private collection"
+
+
+def test_chunks_reach_the_extractor_in_the_documents_own_order():
+    """Nothing orders the store's answer, and passage order decides which kind and
+    which declared quote a mention keeps (first non-empty wins) as well as the
+    order every statement is written in. Read unordered, a re-run that changed
+    nothing still produces a different graph."""
+    spec = make_spec(default_user=lambda: "bob")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(Collection(name="c", use_graph=True)).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    with drm.using("bob"):
+        drm.create(
+            SourceDoc(
+                collection_id=cid,
+                path="d.pptx",
+                content=Binary(data=b"x"),
+                collection_visibility="public",
+                collection_created_by="bob",
+            ),
+            resource_id="deck-A",
+        )
+    krm = spec.get_resource_manager(DocChunk)
+    for seq in (2, 0, 3, 1):  # written out of order, as a re-index leaves them
+        krm.create(
+            DocChunk(
+                collection_id=cid, source_doc_id="deck-A", seq=seq, start=0, end=1, text=f"t{seq}"
+            )
+        )
+
+    _, (doc,) = read_collection_sources(spec, cid)
+
+    assert [text for _, text in doc.chunks] == ["t0", "t1", "t2", "t3"]

@@ -27,7 +27,6 @@ import msgspec
 from specstar import QB, SpecStar
 
 from ...resources.graph import (
-    GraphEntity,
     GraphEntityLink,
     GraphMention,
     GraphRelationship,
@@ -69,6 +68,7 @@ def indexed_rows(rm, fields: tuple[str, ...], cond=None) -> Iterator[tuple[str, 
 
 
 _MENTION_FIELDS = (
+    "source_doc_id",
     "norm_surface",
     "surface",
     "norm_kind",
@@ -145,14 +145,15 @@ def read_decisions(spec: SpecStar) -> Decisions:
     scratch without losing — or half-applying — a decision a person made.
     """
     rm = spec.get_resource_manager(GraphEntityLink)
-    accepted: set[tuple[str, str]] = set()
+    accepted: set[tuple[str, str, str]] = set()
     rejected: set[tuple[str, str]] = set()
     # `entity_id` is REQUESTED, not merely read: `indexed_rows` falls back to
     # the blob only for rows missing a field it was asked for, so reading a
     # field off the side means a row written before that index silently
     # yields nothing — and a decision that reads as absent is a decision
     # asked again next week.
-    for _, values in indexed_rows(rm, ("entity_id", "state", "proposed_from")):
+    settled: list[str] = []
+    for rid, values in indexed_rows(rm, ("entity_id", "state", "proposed_from")):
         other = str(values.get("proposed_from") or "")
         if not other:
             continue
@@ -160,9 +161,17 @@ def read_decisions(spec: SpecStar) -> Decisions:
         if not pair[0]:
             continue
         if values.get("state") == "settled":
-            accepted.add(pair)
+            settled.append(rid)
         elif values.get("state") == "rejected":
             rejected.add(pair)
+    # WHO agreed is on `evidence`, which is not indexed — it is read by nobody
+    # else and would cost an index on every link to serve the few a person has
+    # answered. So those rows, and only those, are fetched properly.
+    for start in range(0, len(settled), PAGE):
+        for r in rm.list_resources((QB.resource_id() << settled[start : start + PAGE]).build()):
+            link = r.data
+            assert isinstance(link, GraphEntityLink)
+            accepted.add((link.entity_id, link.proposed_from, link.evidence))
     return Decisions(accepted=frozenset(accepted), rejected=frozenset(rejected))
 
 
@@ -177,50 +186,6 @@ def read_relation_evidence(spec: SpecStar) -> list[RelationEvidence]:
         )
         for _, values in indexed_rows(rm, _RELATION_FIELDS)
     ]
-
-
-def _absorb(spec: SpecStar, host_id: str, other_id: str, *, evidence: str) -> None:
-    """Move another identity's keys, evidence-locations and links onto the host.
-
-    The mentions themselves are untouched — only the LINKS move, carrying their
-    new basis and the words to go and check. The absorbed identity keeps no
-    evidence, which the access scope already reads as invisible, so nothing has to
-    be deleted and the absorption can be undone by moving the links back.
-    """
-    rm = spec.get_resource_manager(GraphEntity)
-    host = rm.get(host_id).data
-    other = rm.get(other_id).data
-    assert isinstance(host, GraphEntity) and isinstance(other, GraphEntity)
-    rm.update(
-        host_id,
-        msgspec.structs.replace(
-            host,
-            norm_keys=sorted(set(host.norm_keys) | set(other.norm_keys)),
-            collection_ids=sorted(set(host.collection_ids) | set(other.collection_ids)),
-        ),
-    )
-    lrm = spec.get_resource_manager(GraphEntityLink)
-    # Drained, not paged by offset. A popular identity carries one link per
-    # mention, so this list is corpus-sized and has to be bounded like the rest —
-    # but the loop REWRITES the very field it selects on, so each page empties
-    # the result set behind it. An advancing offset would then step over exactly
-    # as many links as it had just moved, and the absorption would silently only
-    # half happen. Asking for the first page until none is left is correct under
-    # that mutation, and terminates because every row it returns stops matching.
-    while page := lrm.list_resources((QB["entity_id"] == other_id).limit(PAGE).build()):
-        for r in page:
-            link = r.data
-            assert isinstance(link, GraphEntityLink)
-            lrm.update(
-                r.info.resource_id,  # ty: ignore[unresolved-attribute]
-                msgspec.structs.replace(
-                    link, entity_id=host_id, basis="declared", evidence=evidence
-                ),
-            )
-    rm.update(
-        other_id,
-        msgspec.structs.replace(other, norm_keys=[], collection_ids=[], merged_into=host_id),
-    )
 
 
 def _step(name: str, run: Callable[[], int]) -> int:
