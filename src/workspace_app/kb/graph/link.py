@@ -147,7 +147,12 @@ def read_decisions(spec: SpecStar) -> Decisions:
     rm = spec.get_resource_manager(GraphEntityLink)
     accepted: set[tuple[str, str]] = set()
     rejected: set[tuple[str, str]] = set()
-    for _, values in indexed_rows(rm, ("state", "proposed_from")):
+    # `entity_id` is REQUESTED, not merely read: `indexed_rows` falls back to
+    # the blob only for rows missing a field it was asked for, so reading a
+    # field off the side means a row written before that index silently
+    # yields nothing — and a decision that reads as absent is a decision
+    # asked again next week.
+    for _, values in indexed_rows(rm, ("entity_id", "state", "proposed_from")):
         other = str(values.get("proposed_from") or "")
         if not other:
             continue
