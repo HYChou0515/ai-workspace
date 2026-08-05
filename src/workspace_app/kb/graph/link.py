@@ -33,7 +33,7 @@ from ...resources.graph import (
     GraphRelationship,
 )
 from ..llm import ILlm
-from .build import MentionEvidence, RelationEvidence, build_vocabulary
+from .build import Decisions, MentionEvidence, RelationEvidence, build_vocabulary
 from .paging import PAGE
 from .persist import persist_vocabulary
 
@@ -130,6 +130,35 @@ def read_mention_evidence(spec: SpecStar) -> list[MentionEvidence]:
                 declared_quote=mention.declared_quote,
             )
     return list(out.values())
+
+
+def read_decisions(spec: SpecStar) -> Decisions:
+    """What people have already answered about pairs of identities.
+
+    Read off the INDEX (`state` and `proposed_from` are both indexed), because
+    this asks one question about every link in the corpus and reads nothing else
+    off the row.
+
+    `accept_proposal` marks the pair `settled` and `reject_proposal` marks it
+    `rejected`; both keep `proposed_from`, which is what makes the pair
+    recoverable. Feeding them back is what lets the vocabulary be recomputed from
+    scratch without losing — or half-applying — a decision a person made.
+    """
+    rm = spec.get_resource_manager(GraphEntityLink)
+    accepted: set[tuple[str, str]] = set()
+    rejected: set[tuple[str, str]] = set()
+    for _, values in indexed_rows(rm, ("state", "proposed_from")):
+        other = str(values.get("proposed_from") or "")
+        if not other:
+            continue
+        pair = (str(values.get("entity_id") or ""), other)
+        if not pair[0]:
+            continue
+        if values.get("state") == "settled":
+            accepted.add(pair)
+        elif values.get("state") == "rejected":
+            rejected.add(pair)
+    return Decisions(accepted=frozenset(accepted), rejected=frozenset(rejected))
 
 
 def read_relation_evidence(spec: SpecStar) -> list[RelationEvidence]:
@@ -244,17 +273,20 @@ def reconcile_vocabulary(spec: SpecStar, llm: ILlm | None = None) -> None:
     _LOGGER.info("graph reconcile: starting the vocabulary pass over the whole corpus")
     mentions: list[MentionEvidence] = []
     relationships: list[RelationEvidence] = []
+    decisions = Decisions()
 
     def _read() -> int:
+        nonlocal decisions
         mentions.extend(read_mention_evidence(spec))
         relationships.extend(read_relation_evidence(spec))
+        decisions = read_decisions(spec)
         return len(mentions) + len(relationships)
 
     vocabulary = build_vocabulary([], [])
 
     def _build() -> int:
         nonlocal vocabulary
-        vocabulary = build_vocabulary(mentions, relationships, llm=llm)
+        vocabulary = build_vocabulary(mentions, relationships, llm=llm, decisions=decisions)
         return len(vocabulary.entities)
 
     counts: list[int] = []

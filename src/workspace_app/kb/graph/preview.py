@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -43,33 +44,64 @@ import msgspec
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from ...resources.kb import Collection, DocChunk
+from ...resources.kb import Collection, DocChunk, SourceDoc
 from ..doc_permission import doc_mirror_fields
 from ..llm import ILlm
 from .build import DocSource, Graph, build_graph
 from .paging import walk_rows
 
 
-def read_collection_sources(spec: SpecStar, collection_id: str) -> tuple[str, list[DocSource]]:
+def read_collection_sources(
+    spec: SpecStar, collection_id: str, *, as_user: str | None = None
+) -> tuple[str, list[DocSource]]:
     """The collection's criterion and one :class:`DocSource` per document.
+
+    ``as_user`` reads AS that person, with access scopes applied, so the preview
+    shows the corpus THEY can see. Setting the spec's default user is not the
+    same thing and does not do it: that decides who a write is attributed to, not
+    what a read may return — so a tool offering the option without the scope
+    would be handing out an assurance it was not giving. ``None`` reads with
+    whatever the spec was built with, which is the operator's own view.
 
     The permission mirror is read here, exactly as the extractor reads it, so a
     previewed row is the row that would have been stored — including whether
-    anyone could have seen it. A document that has since vanished is skipped
-    rather than previewed against a mirror nobody could compute.
+    anyone could have seen it. A document that has since vanished, or that this
+    reader may not open, is skipped rather than previewed against a mirror nobody
+    could compute.
     """
-    collection = spec.get_resource_manager(Collection).get(collection_id).data
+    with ExitStack() as scope:
+        if as_user is not None:
+            for model in (Collection, DocChunk, SourceDoc):
+                scope.enter_context(
+                    spec.get_resource_manager(model).using(as_user, apply_access_scope=True)  # ty: ignore[unknown-argument]
+                )
+        return _read_sources(spec, collection_id)
+
+
+def _read_sources(spec: SpecStar, collection_id: str) -> tuple[str, list[DocSource]]:
+    try:
+        collection = spec.get_resource_manager(Collection).get(collection_id).data
+    except ResourceIDNotFoundError:
+        # Unreadable is indistinguishable from absent, by design — the scope
+        # hides the row rather than refusing it, and a preview must not become
+        # the one channel that says a collection exists.
+        return "", []
     assert isinstance(collection, Collection)
 
     krm = spec.get_resource_manager(DocChunk)
-    chunks: dict[str, list[tuple[str, str]]] = {}
+    chunks: dict[str, list[tuple[int, str, str]]] = {}
     for r in walk_rows(krm, QB["collection_id"] == collection_id):
         chunk = r.data
         assert isinstance(chunk, DocChunk)
-        chunks.setdefault(chunk.source_doc_id, []).append((r.info.resource_id, chunk.text))
+        chunks.setdefault(chunk.source_doc_id, []).append(
+            (chunk.seq, r.info.resource_id, chunk.text)
+        )
 
     docs: list[DocSource] = []
     for doc_id in sorted(chunks):
+        # The document's own order. Nothing orders the chunk read, and passage
+        # order decides the order every statement and connection is written in.
+        chunks[doc_id].sort()
         try:
             mirror = doc_mirror_fields(spec, doc_id)
         except ResourceIDNotFoundError:
@@ -78,7 +110,13 @@ def read_collection_sources(spec: SpecStar, collection_id: str) -> tuple[str, li
             # bare `except` here would swallow a real fault and quietly preview a
             # subset, which is the one way this tool could lie.
             continue
-        docs.append(DocSource(doc_id=doc_id, chunks=chunks[doc_id], mirror=mirror))
+        docs.append(
+            DocSource(
+                doc_id=doc_id,
+                chunks=[(cid, text) for _, cid, text in chunks[doc_id]],
+                mirror=mirror,
+            )
+        )
     return collection.graph_guidance, docs
 
 
@@ -90,6 +128,7 @@ def preview_collection(
     out_dir: Path,
     guidance: str | None = None,
     propose_with: ILlm | None = None,
+    as_user: str | None = None,
 ) -> Graph:
     """Build ``collection_id``'s graph in memory and write it to ``out_dir``.
 
@@ -97,7 +136,7 @@ def preview_collection(
     tried BEFORE anyone commits it to the collection — the whole point of the
     loop. Omitted, the preview runs what production would run today.
     """
-    stored_guidance, docs = read_collection_sources(spec, collection_id)
+    stored_guidance, docs = read_collection_sources(spec, collection_id, as_user=as_user)
     graph = build_graph(
         llm,
         docs,
@@ -141,7 +180,13 @@ def summarise(graph: Graph, docs: list[DocSource]) -> dict[str, Any]:
 
 
 def write_preview(graph: Graph, docs: list[DocSource], *, out_dir: Path) -> None:
-    """One file per layer, plus the summary. Sorted, so two runs diff cleanly."""
+    """One file per layer, plus the summary.
+
+    Every list is in a deterministic order — mentions and identities by their
+    comparison key, statements and connections in document then chunk order — so
+    two runs either side of a criterion change diff to the change and not to
+    whatever order the store felt like returning.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     _dump(out_dir / "summary.json", summarise(graph, docs))
     _dump(out_dir / "mentions.json", [msgspec.structs.asdict(m) for m in graph.mentions])

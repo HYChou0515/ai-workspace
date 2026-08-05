@@ -81,22 +81,27 @@ def test_the_same_thing_on_several_slides_is_one_row_with_a_count():
     assert got["錫膏"].occurrences == 1
 
 
-def test_surface_variants_land_on_one_row_and_keep_the_first_spelling():
-    """The key merges typing noise; the row keeps a readable surface. Which one it
-    keeps is arbitrary — what matters is that it is one of the ones the document
-    actually used, never a normalised form nobody wrote."""
+def test_surface_variants_land_on_one_row_and_keep_the_spelling_used_most():
+    """The key merges typing noise; the row keeps a readable surface — one the
+    document actually used, never a normalised form nobody wrote.
+
+    WHICH one is not arbitrary. Nothing orders the chunk read, so "the first we
+    saw" makes the stored form follow whatever order the store returned, and a
+    re-extraction that changed nothing rewrites the row. It is the spelling the
+    document used MOST, ties broken on the spelling itself."""
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
     llm = _FakeLlm(
-        '[{"surface": "Reflow Oven", "kind": "tool"},'
-        ' {"surface": "  reflow   oven ", "kind": "tool"}]'
+        '[{"surface": "  reflow   oven ", "kind": "tool"},'
+        ' {"surface": "Reflow Oven", "kind": "tool"},'
+        ' {"surface": "Reflow Oven", "kind": "tool"}]'
     )
     write_doc_graph(
         spec, llm, collection_id="c1", source_doc_id="deck-A", chunks=[("deck-A#0", "t")]
     )
     (got,) = _mentions(spec, "deck-A")
-    assert got.occurrences == 2
-    assert got.surface == "Reflow Oven"
+    assert got.occurrences == 3
+    assert got.surface == "Reflow Oven"  # 2 uses against 1, whatever order they arrived in
 
 
 def test_re_extraction_replaces_rather_than_accumulates():

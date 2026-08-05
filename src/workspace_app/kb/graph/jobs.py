@@ -2,7 +2,7 @@
 
 One ``GraphJob`` JobType, a ``kind`` field discriminating the stages (like
 ``IndexJob`` #227 / ``EvalJob`` #535) — but SIMPLER: no finalize / CAS join,
-because each doc's ``write_doc_claims`` is independent and idempotent, so there
+because each doc's ``write_doc_graph`` is independent and idempotent, so there
 is nothing to aggregate. The cronjob POSTs one ``kind="dispatch"``; it fans out
 per opted-in collection (``split``), each of which fans out per batch of docs
 (``batch``), and ends by queueing one ``kind="reconcile"`` — the pass that turns

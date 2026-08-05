@@ -13,10 +13,13 @@ recorded as and a rebuild would throw them away.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from specstar import QB, SpecStar
 
 from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_surface
+from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphEntity, GraphEntityLink, GraphMention, mention_id
 from workspace_app.resources.kb import Collection
@@ -355,3 +358,71 @@ def test_a_failure_carrying_no_statement_still_names_its_stage(caplog, monkeypat
     assert "read_evidence" in failed.getMessage()
     assert "no statement on the error" in failed.getMessage()
     assert failed.exc_info is not None
+
+
+# ── a person's answer has to outlive the recompute ───────────────────
+#
+# The vocabulary is recomputed from the evidence every week. A decision a PERSON
+# made is not in the evidence, so unless it is fed back IN, the recompute either
+# throws it away or — worse — half-applies it: the merge comes apart into a live
+# duplicate holding no evidence, the host loses the keys the merge gave it, and
+# the pair can never be raised again because the settled row still occupies its
+# address. All three were reproduced before these tests existed.
+
+
+class _Judge(ILlm):
+    """A model that groups whatever it is told to, with a given reason."""
+
+    def __init__(self, why: str = "one thing") -> None:
+        self._why = why
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        yield (
+            f'{{"groups": [{{"names": ["回焊爐", "Reflow Oven"], "why": "{self._why}"}}]}}',
+            False,
+        )
+
+
+def _pair(spec: SpecStar):
+    cid = _collection(spec)
+    _mention(spec, cid, "deck-A", "回焊爐")
+    _mention(spec, cid, "deck-B", "Reflow Oven")
+    return cid
+
+
+def test_a_merge_a_person_accepted_survives_the_next_reconcile():
+    from workspace_app.kb.graph.review import accept_proposal, list_proposals
+
+    spec = make_spec(default_user=lambda: "bob")
+    _pair(spec)
+    reconcile_vocabulary(spec, llm=_Judge())
+    (proposal,) = list_proposals(spec)
+    accept_proposal(spec, proposal.entity_id, proposal.proposed_from, by="alice")
+
+    reconcile_vocabulary(spec, llm=_Judge())
+
+    live = [e for e in _entities(spec) if e.collection_ids]
+    assert len(live) == 1, "the accepted merge came apart into two identities again"
+    (host,) = live
+    assert set(host.norm_keys) == {"回焊爐", "reflow oven"}, (
+        "the host lost the key the merge gave it, so that name resolves nowhere"
+    )
+    # …and nothing was resurrected as a live, empty duplicate
+    assert all(e.norm_keys == [] for e in _entities(spec) if e.merged_into)
+
+
+def test_a_rejected_pair_stays_rejected_when_the_model_rewords_its_reason():
+    from workspace_app.kb.graph.review import list_proposals, reject_proposal
+
+    spec = make_spec(default_user=lambda: "bob")
+    _pair(spec)
+    reconcile_vocabulary(spec, llm=_Judge("the oven that melts solder paste"))
+    (proposal,) = list_proposals(spec)
+    reject_proposal(spec, proposal.entity_id, proposal.proposed_from, by="alice")
+
+    reconcile_vocabulary(spec, llm=_Judge("the reflow oven machine"))
+
+    assert list_proposals(spec) == [], "the pair was put to a person again"
+    decided = [link for link in _links(spec) if link.proposed_from]
+    assert [link.state for link in decided] == ["rejected"], "the answer itself was deleted"
+    assert [link.evidence for link in decided] == ["alice"]

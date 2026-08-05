@@ -99,17 +99,16 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
     writes — accepting or rejecting a merge proposal — so leaving an existing row
     alone is what keeps that decision from being recomputed away the same night.
 
-    Links go before entities on the way in and after them on the way out, because
-    a link's ``entity_id`` is a cascade Ref: an entity removed while a link still
-    points at it would take that link with it.
+    Entities go in before the links that point at them, and out only after those
+    links are gone, because a link's ``entity_id`` is a cascade Ref: creating a
+    link first would dangle it, and removing an entity first would take live
+    links with it.
     """
     erm = spec.get_resource_manager(GraphEntity)
     lrm = spec.get_resource_manager(GraphEntityLink)
 
     target_links = {
-        link_id(
-            link.entity_id, link.mention_id, link.basis, link.proposed_from, link.evidence
-        ): link
+        link_id(link.entity_id, link.mention_id, link.basis, link.proposed_from): link
         for link in vocabulary.links
     }
     stored_entities = _stored(erm)
@@ -126,6 +125,13 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
             lrm.create(link, resource_id=lid)
 
     for rid in stored_links.keys() - target_links.keys():
+        # A link the computation no longer produces goes — UNLESS it carries a
+        # person's answer. `settled` and `rejected` are not derived from the
+        # evidence and cannot be recomputed, and they are the input that keeps
+        # the merge from being re-proposed; deleting them asks the same question
+        # again next week with the answer filed against a row nobody looks up.
+        if str(stored_links[rid].get("state") or "active") in _PERSON_ANSWERED:
+            continue
         lrm.permanently_delete(rid)
     for rid in stored_entities.keys() - vocabulary.entities.keys():
         erm.permanently_delete(rid)
@@ -133,6 +139,10 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
 
 
 _ENTITY_FIELDS = ("canonical_name", "norm_keys", "kind_id", "collection_ids", "merged_into")
+
+#: Link states a PERSON wrote. The computation never produces them, so they
+#: would otherwise look exactly like rows it no longer produces.
+_PERSON_ANSWERED = frozenset({"settled", "rejected"})
 
 
 def _stored(rm) -> dict[str, dict]:

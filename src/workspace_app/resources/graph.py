@@ -243,13 +243,7 @@ class GraphEntity(Struct):  # → resource "graph-entity"
     merged_into: str = ""
 
 
-def link_id(
-    entity_id: str,
-    mention_id: str,
-    basis: str,
-    proposed_from: str = "",
-    evidence: str = "",
-) -> str:
+def link_id(entity_id: str, mention_id: str, basis: str, proposed_from: str = "") -> str:
     """The id of a link — content-addressed on what it joins and what it rests on.
 
     Derived so the vocabulary can be brought to a computed state rather than torn
@@ -258,15 +252,17 @@ def link_id(
     empty in between. ``basis`` and ``proposed_from`` are part of the address
     because "the rule says so" and "the model suggested it" are different claims
     about the same pair, and a page that cannot tell them apart is one nobody can
-    audit. ``evidence`` joins them so a link whose sentence changed becomes a new
-    row rather than an old row quietly citing something it no longer rests on.
+    audit.
 
-    ``state`` is deliberately NOT part of it. That is the field a person writes,
-    and addressing the row by it would make every accepted or rejected proposal
-    look like a row the computation never produced — deleted, then proposed again
-    the following week.
+    ``evidence`` and ``state`` are deliberately NOT part of it, for the same
+    reason: the row is a QUESTION about a pair, and neither the words the model
+    chose to describe the pair nor the answer a person gave changes which pair it
+    is. Addressing by either makes a reworded reason — or an answer — look like a
+    row the computation never produced, so it is deleted and the same question is
+    asked again next week, with the answer already given filed against a row
+    nobody will look up.
     """
-    parts = "\x00".join([entity_id, mention_id, basis, proposed_from, evidence])
+    parts = "\x00".join([entity_id, mention_id, basis, proposed_from])
     return f"l{hashlib.blake2b(parts.encode(), digest_size=16).hexdigest()}"
 
 

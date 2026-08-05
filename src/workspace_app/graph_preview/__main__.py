@@ -49,9 +49,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--as-user",
         default=None,
-        help="read as this user (default: the configured default user). Access scopes apply, "
-        "so a preview shows the corpus THIS user can see — say so rather than quietly "
-        "previewing a subset",
+        help="read AS this user, with access scopes applied, so the preview shows the "
+        "corpus THEY can see. Omitted, the reads are unscoped — the operator's own view "
+        "of the whole collection",
     )
     p.add_argument(
         "--propose-merges",
@@ -95,6 +95,7 @@ def main() -> None:
         out_dir=args.out_dir,
         guidance=guidance,
         propose_with=llm if args.propose_merges else None,
+        as_user=args.as_user,
     )
     summary = json.loads((args.out_dir / "summary.json").read_text())
     print(f"wrote {args.out_dir}/ — nothing was stored", file=sys.stderr)

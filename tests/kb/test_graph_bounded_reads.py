@@ -171,9 +171,13 @@ def test_walk_rows_returns_everything_across_pages(monkeypatch: pytest.MonkeyPat
     the failure mode it could introduce is silent — a walk that stops at the
     first page returns a prefix and every caller treats it as the whole table.
     """
+    from workspace_app.kb.graph import paging as paging_mod
     from workspace_app.kb.graph.paging import walk_rows
 
-    monkeypatch.setattr(link_mod, "PAGE", 7)
+    # `paging`, not `link`: `walk_rows` moved, and patching the name it used to
+    # live under leaves the real PAGE at 500, so a 60-row corpus fits in one page
+    # and the test passes whether or not anything pages at all.
+    monkeypatch.setattr(paging_mod, "PAGE", 7)
     spec = make_spec(default_user=lambda: "bob")
     _corpus(spec)
     mrm = spec.get_resource_manager(GraphMention)
@@ -212,3 +216,24 @@ def test_a_did_you_mean_list_is_bounded_and_skips_the_unrelated() -> None:
     assert "Entity not found" in card
     assert "錫膏" not in card, "an unrelated name was offered as a near miss"
     assert card.count("reflow oven") <= 6, "the hint printed more candidates than its cap"
+
+
+def test_walk_rows_never_asks_for_more_than_one_page(
+    capped: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The guard for the failure #689 exists to prevent, on the walk that is left.
+
+    The reconcile moved to specstar's own `iter_all`, which the result cap never
+    sees, so nothing was left holding `walk_rows` to its contract: replacing its
+    body with a single unbounded `list_resources` kept every test in this package
+    green. Under the cap, that rewrite is exactly what raises.
+    """
+    from workspace_app.kb.graph import paging as paging_mod
+    from workspace_app.kb.graph.paging import walk_rows
+
+    monkeypatch.setattr(paging_mod, "PAGE", PAGE)
+    spec = make_spec(default_user=lambda: "bob")
+    _corpus(spec)
+    mrm = spec.get_resource_manager(GraphMention)
+
+    assert len(list(walk_rows(mrm))) == ROWS

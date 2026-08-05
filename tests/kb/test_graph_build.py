@@ -469,3 +469,156 @@ def test_evidence_with_no_comparison_key_is_not_an_identity():
     )
 
     assert sorted(e.canonical_name for e in vocab.entities.values()) == ["回焊爐", "造成"]
+
+
+def test_a_declared_alias_keeps_its_keys_when_the_host_is_also_a_predicate():
+    """The predicate pass runs after the grouping and writes the identity at the
+    same id. Writing `norm_keys=[key]` there throws away the keys the declaration
+    just merged in, and the absorbed name then lives on NO row: the tombstone
+    holds none and the host lost it. Everything that resolves a name — the
+    agent's `lookup_entity`, the review queue, an entity's claims — misses it."""
+    from workspace_app.kb.graph.build import build_vocabulary
+    from workspace_app.resources.graph import entity_id
+
+    quote = "導致(又稱造成)"
+    vocab = build_vocabulary(
+        [
+            _mention("deck-A", "導致", same_as=["造成"], quote=quote),
+            _mention("deck-A", "造成", same_as=["導致"], quote=quote),
+        ],
+        [_relationship("deck-B", "回焊爐", "造成", "冷焊")],
+    )
+
+    host = vocab.entities[entity_id("導致")]
+    assert host.norm_keys == ["導致", "造成"], "the predicate pass discarded the merged key"
+    # and no live identity may hold the absorbed key twice
+    live = [e for e in vocab.entities.values() if e.collection_ids]
+    assert sum("造成" in e.norm_keys for e in live) == 1
+
+
+def _proposed_pairs(vocab):
+    return {(link.entity_id, link.proposed_from) for link in vocab.links if link.state == "pending"}
+
+
+def test_a_proposal_names_the_same_pair_however_the_model_words_its_reason():
+    """The pair is the question put to a person. If the reason is part of the
+    proposal's identity, a model that rewords it next week asks the same question
+    again — and the answer already given is filed against a row nobody looks up."""
+    from workspace_app.kb.graph.build import build_vocabulary
+
+    evidence = [_mention("deck-A", "回焊爐"), _mention("deck-B", "Reflow Oven")]
+    proposals = []
+    for why in ("the oven that melts solder paste", "the reflow oven machine"):
+        vocab = build_vocabulary(
+            evidence,
+            [],
+            llm=_FakeLlm(f'{{"groups": [{{"names": ["回焊爐", "Reflow Oven"], "why": "{why}"}}]}}'),
+        )
+        (link,) = [x for x in vocab.links if x.state == "pending"]
+        proposals.append(link)
+
+    first, second = proposals
+    assert first.evidence != second.evidence, "the reason did not change; this proves nothing"
+    # Everything that says WHICH pair is being asked about is identical …
+    assert (first.entity_id, first.mention_id, first.basis, first.proposed_from) == (
+        second.entity_id,
+        second.mention_id,
+        second.basis,
+        second.proposed_from,
+    )
+
+
+def test_which_side_of_a_proposal_is_the_host_does_not_follow_the_display_name():
+    """The display name is whatever surface the corpus used MOST, so one new
+    document flips it. If the host follows it, the pair's identity changes under
+    a decision already recorded against the old one."""
+    from workspace_app.kb.graph.build import build_vocabulary
+
+    reply = '{"groups": [{"names": ["%s", "%s"], "why": "one thing"}]}'
+    first = build_vocabulary(
+        [_mention("deck-A", "Alpha", occurrences=9), _mention("deck-B", "Beta")],
+        [],
+        llm=_FakeLlm(reply % ("Alpha", "Beta")),
+    )
+    # A later deck writes the SAME normalised key ("alpha") under a surface used
+    # more often, so the display name changes — and with it the alphabetical
+    # order of the two names — while both KEYS, and both ids, are untouched.
+    second = build_vocabulary(
+        [
+            _mention("deck-A", "Alpha", occurrences=9),
+            _mention("deck-C", "aLPHA", occurrences=99),
+            _mention("deck-B", "Beta"),
+        ],
+        [],
+        llm=_FakeLlm(reply % ("aLPHA", "Beta")),
+    )
+    assert [e.canonical_name for e in second.entities.values() if e.canonical_name == "aLPHA"], (
+        "the display name did not change, so this test is not exercising the flip"
+    )
+    assert _proposed_pairs(first) == _proposed_pairs(second)
+
+
+def test_which_surface_is_stored_does_not_depend_on_the_order_chunks_arrive():
+    """Nothing orders the chunk read, so "the first surface wins" means the
+    stored display form follows whatever order the store happened to return —
+    and a re-extraction that changes it makes a diff of two previews show churn
+    that is not a change in the extraction at all."""
+    llm_a = _FakeLlm(
+        '{"mentions": [{"surface": "Reflow Oven"}]}', '{"mentions": [{"surface": "reflow  oven"}]}'
+    )
+    llm_b = _FakeLlm(
+        '{"mentions": [{"surface": "reflow  oven"}]}', '{"mentions": [{"surface": "Reflow Oven"}]}'
+    )
+    forwards = build_doc_graph(
+        llm_a, DocSource(doc_id="d", chunks=[("c1", "x"), ("c2", "y")]), collection_id="c"
+    )
+    backwards = build_doc_graph(
+        llm_b, DocSource(doc_id="d", chunks=[("c1", "x"), ("c2", "y")]), collection_id="c"
+    )
+    assert [m.surface for m in forwards.mentions] == [m.surface for m in backwards.mentions]
+
+
+def test_two_surfaces_used_equally_often_settle_deterministically():
+    """The tie-break is what the docstring says exists "so a re-run cannot
+    shuffle the name". Without it the winner is whichever `max` saw first, which
+    is dict order — stable within a process, not across a re-extraction."""
+    from workspace_app.kb.graph.build import build_vocabulary
+
+    forwards = build_vocabulary(
+        [_mention("deck-A", "Reflow Oven"), _mention("deck-B", "reflow  oven")], []
+    )
+    backwards = build_vocabulary(
+        [_mention("deck-B", "reflow  oven"), _mention("deck-A", "Reflow Oven")], []
+    )
+    names = {e.canonical_name for e in forwards.entities.values()}
+    assert names == {e.canonical_name for e in backwards.entities.values()}
+    assert len(names) == 1
+
+
+def test_a_kind_a_person_merged_is_still_what_its_things_point_at():
+    """Two kind labels — 「機台」 and "tool" — are identities with no mentions of
+    their own: things are LABELLED with them, nothing names them. So the only way
+    they ever merge is a person accepting the proposal, and that merge has to
+    reach the kind pass. If it does not, the kind is minted at the absorbed key
+    while every thing points at the host, and `kind_id` resolves to nothing at
+    all."""
+    from workspace_app.kb.graph.build import Decisions, build_vocabulary
+    from workspace_app.resources.graph import entity_id
+
+    machine, tool = entity_id("機台"), entity_id("tool")
+    vocab = build_vocabulary(
+        [
+            _mention("deck-A", "回焊爐", kind="機台", collection="c1"),
+            _mention("deck-B", "SPI", kind="tool", collection="c2"),
+        ],
+        [],
+        decisions=Decisions(accepted=frozenset({(machine, tool)})),
+    )
+
+    kinds = {e.kind_id for e in vocab.entities.values() if e.kind_id}
+    assert len(kinds) == 1, "the two labels did not become one kind"
+    (kind_id,) = kinds
+    assert kind_id in vocab.entities, "every thing points at a kind that does not exist"
+    kind = vocab.entities[kind_id]
+    assert kind.collection_ids == ["c1", "c2"], "the merged kind lost the evidence for it"
+    assert set(kind.norm_keys) == {"機台", "tool"}

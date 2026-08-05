@@ -205,11 +205,15 @@ def _mentions(
 ) -> list[GraphMention]:
     """Fold every passage's mentions into one row per comparison key.
 
-    The FIRST surface the document used is kept as the display form — never a
-    normalised string nobody wrote — and the first non-empty kind wins, so a
-    later passage that omitted the kind does not erase what an earlier one said.
+    The display form is the surface the DOCUMENT used most, ties broken on the
+    surface itself — never a normalised string nobody wrote, and never "whichever
+    passage came first", because nothing orders the chunk read: that would make
+    the stored form follow the store's mood, and a diff of two previews would
+    show churn that is not a change in the extraction at all. The first non-empty
+    kind still wins, so a later passage that omitted it does not erase what an
+    earlier one said.
     """
-    surfaces: dict[str, str] = {}
+    seen_surfaces: dict[str, dict[str, int]] = {}
     kinds: dict[str, str] = {}
     counts: dict[str, int] = {}
     chunk_ids: dict[str, list[str]] = {}
@@ -218,7 +222,8 @@ def _mentions(
     for chunk_id, extraction in extracted:
         for mention in extraction.mentions:
             key = norm_surface(mention.surface)
-            surfaces.setdefault(key, mention.surface)
+            tally = seen_surfaces.setdefault(key, {})
+            tally[mention.surface] = tally.get(mention.surface, 0) + 1
             if mention.kind and not kinds.get(key):
                 kinds[key] = mention.kind
             counts[key] = counts.get(key, 0) + 1
@@ -235,8 +240,8 @@ def _mentions(
         for alias in extraction.aliases:
             for name, other in ((alias.a, alias.b), (alias.b, alias.a)):
                 key = norm_surface(name)
-                if key not in surfaces:
-                    surfaces[key] = name
+                if key not in seen_surfaces:
+                    seen_surfaces[key] = {name: 1}
                     counts[key] = 1
                     chunk_ids[key] = [chunk_id]
                 same_as.setdefault(key, set()).add(norm_surface(other))
@@ -255,7 +260,9 @@ def _mentions(
             declared_quote=quotes.get(key, ""),
             **doc.mirror,
         )
-        for key, surface in surfaces.items()
+        for key, surface in sorted(
+            (key, _display_name(list(tally.items()))) for key, tally in seen_surfaces.items()
+        )
     ]
 
 
@@ -338,6 +345,30 @@ def relation_evidence_of(rel: GraphRelationship) -> RelationEvidence:
 
 
 @dataclass(frozen=True)
+class Decisions:
+    """What a PERSON has already said about a pair of identities.
+
+    The vocabulary is recomputed from the evidence every run, and a person's
+    answer is not in the evidence. Unless it is fed back in, the recompute either
+    throws it away or half-applies it — the merge comes apart into a live
+    duplicate holding nothing, the host loses the keys the merge gave it, and the
+    pair can never be raised again because the settled row still occupies its
+    address. All three were observed before this existed.
+
+    So a decision is an INPUT, and the merge is re-derived every run rather than
+    stored as a mutation somebody has to remember not to overwrite. Pairs are
+    unordered pairs of ENTITY IDS, which are content-addressed on keys and
+    therefore stable across re-runs.
+    """
+
+    accepted: frozenset[tuple[str, str]] = frozenset()
+    rejected: frozenset[tuple[str, str]] = frozenset()
+
+    def decided(self, a: str, b: str) -> bool:
+        return (a, b) in self.accepted | self.rejected or (b, a) in self.accepted | self.rejected
+
+
+@dataclass(frozen=True)
 class Vocabulary:
     """The identities the evidence supports, and what vouches for each.
 
@@ -356,8 +387,10 @@ def build_vocabulary(
     relationships: list[RelationEvidence],
     *,
     llm: ILlm | None = None,
+    decisions: Decisions | None = None,
 ) -> Vocabulary:
     """Group the evidence into identities. No store, no queries, no writes."""
+    decisions = decisions or Decisions()
     by_key: dict[str, list[MentionEvidence]] = {}
     for mention in mentions:
         if mention.norm_surface:
@@ -366,11 +399,34 @@ def build_vocabulary(
     entities: dict[str, GraphEntity] = {}
     links: list[GraphEntityLink] = []
 
-    # Which key each key now answers to. A declaration folds one into another and
-    # leaves the absorbed one a tombstone, so EVERY reference to a key has to go
-    # through this — a reference to an absorbed key points at a row holding no
-    # evidence, which the access scope reads as invisible to everyone.
-    groups = _declared_groups(by_key)
+    # EVERY key the vocabulary knows, not only the ones something mentions: a
+    # kind label and a connecting word are identities too, and a person can have
+    # merged one of those.
+    all_keys = (
+        set(by_key)
+        | {m.norm_kind for m in mentions if m.norm_kind}
+        | {r.norm_predicate for r in relationships if r.norm_predicate}
+    )
+    key_of = {entity_id(key): key for key in all_keys}
+
+    # Which key each key now answers to. A merge — declared by a document, or
+    # accepted by a person — folds one into another and leaves the absorbed one a
+    # tombstone, so EVERY reference to a key has to go through this: a reference
+    # to an absorbed key points at a row holding no evidence, which the access
+    # scope reads as invisible to everyone.
+    pairs = [
+        (mention.norm_surface, other)
+        for group in by_key.values()
+        for mention in group
+        for other in mention.declared_same_as
+    ]
+    # A decision naming an identity whose evidence is gone is dropped: there is
+    # nothing left to merge, and re-inventing the key would put a name in the
+    # vocabulary that no document says.
+    pairs += [
+        (key_of[a], key_of[b]) for a, b in sorted(decisions.accepted) if a in key_of and b in key_of
+    ]
+    groups = _key_groups(all_keys, pairs)
     host_of = {key: host for host, keys in groups.items() for key in keys}
 
     # Kinds first, so a thing can point at one. A kind whose label some document
@@ -385,7 +441,10 @@ def build_vocabulary(
         labelled = kinds[kind_key]
         entities[entity_id(kind_key)] = GraphEntity(
             canonical_name=_display_name([(m.kind, m.occurrences) for m in labelled]),
-            norm_keys=[kind_key],
+            # The WHOLE group, always. Every pass writes the identity at the same
+            # id, so any one of them writing only its own key silently drops the
+            # keys a merge folded in — and the absorbed name then lives on no row.
+            norm_keys=groups.get(kind_key, [kind_key]),
             # A kind's evidence is the mentions carrying the label. Without it the
             # kind holds no collections, and the scope hides an identity nothing
             # vouches for — so it would be invisible on every page.
@@ -393,7 +452,9 @@ def build_vocabulary(
         )
 
     for host_key, keys in sorted(groups.items()):
-        group = [m for key in keys for m in by_key[key]]
+        group = [m for key in keys for m in by_key.get(key, ())]
+        if not group:
+            continue  # a kind- or predicate-only identity; those passes own it
         eid = entity_id(host_key)
         labels = {host_of.get(m.norm_kind, m.norm_kind) for m in group if m.norm_kind}
         entities[eid] = GraphEntity(
@@ -415,10 +476,13 @@ def build_vocabulary(
         for absorbed in keys:
             if absorbed == host_key:
                 continue
+            absorbed_mentions = by_key.get(absorbed, ())
             entities[entity_id(absorbed)] = GraphEntity(
                 canonical_name=_display_name(
-                    [(m.surface, m.occurrences) for m in by_key[absorbed]]
-                ),
+                    [(m.surface, m.occurrences) for m in absorbed_mentions]
+                )
+                if absorbed_mentions
+                else absorbed,
                 norm_keys=[],
                 collection_ids=[],
                 merged_into=eid,
@@ -463,7 +527,11 @@ def build_vocabulary(
             canonical_name=known.canonical_name
             if known
             else _display_name([(r.predicate, 1) for r in using]),
-            norm_keys=[key],
+            # The WHOLE group. Writing just this key throws away the keys a
+            # merge folded in, and the absorbed name then lives on no row at all
+            # (the tombstone holds none either), so every lookup by name misses
+            # it — including the agent's own `lookup_entity`.
+            norm_keys=groups.get(key, [key]),
             kind_id=known.kind_id if known else "",
             collection_ids=sorted(
                 {r.collection_id for r in using} | set(known.collection_ids if known else ())
@@ -471,7 +539,7 @@ def build_vocabulary(
         )
 
     if llm is not None:
-        links.extend(_proposals(llm, entities, links))
+        links.extend(_proposals(llm, entities, links, decisions))
     return Vocabulary(entities=entities, links=links)
 
 
@@ -507,6 +575,7 @@ def _proposals(
     llm: ILlm,
     entities: dict[str, GraphEntity],
     links: list[GraphEntityLink],
+    decisions: Decisions,
 ) -> list[GraphEntityLink]:
     """Ask the model which names denote one thing, and record the answer as
     PENDING links that change nothing.
@@ -538,11 +607,19 @@ def _proposals(
     for start in range(0, len(names), _NAMES_PER_CALL):
         batch = names[start : start + _NAMES_PER_CALL]
         for group, why in _group(llm, batch):
-            ids = [eid for name in group for eid in by_name.get(name, [])]
+            # Ordered by ID, not by the order the names came in. An id is
+            # content-addressed on the identity's key, which no amount of new
+            # evidence changes; the display name is whichever surface the corpus
+            # used MOST, so one new document reorders the pair and the proposal
+            # becomes a different question from the one a person already answered.
+            ids = sorted({eid for name in group for eid in by_name.get(name, [])})
             host, rest = ids[0], ids[1:]
             for other in rest:
                 if (host, other) in seen or (other, host) in seen:
                     continue
+                if decisions.decided(host, other):
+                    continue  # a person already answered this; asking again is how
+                    # a review queue stops being read
                 seen.add((host, other))
                 out.extend(_propose(host, other, live[other], active.get(other, []), why))
     return out
@@ -627,19 +704,19 @@ def _display_name(candidates: list[tuple[str, int]]) -> str:
     return max(candidates, key=lambda pair: (pair[1], pair[0]))[0]
 
 
-def _declared_groups(by_key: dict[str, list[MentionEvidence]]) -> dict[str, list[str]]:
-    """Fold the keys a document DECLARED equivalent into one identity each.
+def _key_groups(all_keys: set[str], pairs: list[tuple[str, str]]) -> dict[str, list[str]]:
+    """Fold every pair of keys that should be one identity into one group each.
 
     Returns ``host key -> every key that resolves there``. The host is the
     smallest key in the group, chosen for no reason but determinism: it fixes
     which id the identity gets, so two runs over the same evidence produce the
     same rows and a diff of two JSON dumps shows what the change did.
 
-    A declaration naming a key that no mention produced is ignored. Nothing
-    vouches for that name, so there is nothing to join — and inventing an
-    identity for it would put a name in the vocabulary that no document said.
+    A pair naming a key nothing produced is ignored. Nothing vouches for that
+    name, so there is nothing to join — and inventing an identity for it would
+    put a name in the vocabulary that no document said.
     """
-    parent: dict[str, str] = {key: key for key in by_key}
+    parent: dict[str, str] = {key: key for key in all_keys}
 
     def find(key: str) -> str:
         while parent[key] != key:
@@ -647,16 +724,14 @@ def _declared_groups(by_key: dict[str, list[MentionEvidence]]) -> dict[str, list
             key = parent[key]
         return key
 
-    for key, group in by_key.items():
-        for mention in group:
-            for other in mention.declared_same_as:
-                if other not in parent:
-                    continue
-                a, b = find(key), find(other)
-                if a != b:
-                    parent[min(a, b)], parent[max(a, b)] = min(a, b), min(a, b)
+    for left, right in pairs:
+        if left not in parent or right not in parent:
+            continue
+        a, b = find(left), find(right)
+        if a != b:
+            parent[min(a, b)], parent[max(a, b)] = min(a, b), min(a, b)
 
     groups: dict[str, list[str]] = {}
-    for key in by_key:
+    for key in all_keys:
         groups.setdefault(find(key), []).append(key)
     return {host: sorted(keys) for host, keys in groups.items()}

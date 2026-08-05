@@ -219,3 +219,41 @@ def test_a_run_over_an_empty_collection_still_writes_readable_files(tmp_path):
     summary = json.loads((tmp_path / "summary.json").read_text())
     assert summary["documents"] == 0
     assert summary["mentions_per_document"] == 0.0
+
+
+def test_the_preview_reads_as_the_person_it_was_told_to_read_as(tmp_path):
+    """The flag is `--as-user`, and its help promises the preview shows the
+    corpus THAT user can see. Setting the spec's default user alone does not do
+    that — `default_user` decides who a write is attributed to, not what a read
+    may return — so without the scope the flag reads as an assurance the tool was
+    not giving."""
+    from workspace_app.perm import Permission
+
+    spec = make_spec(default_user=lambda: "alice")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("alice"):
+        cid = crm.create(
+            Collection(name="secret", use_graph=True, permission=Permission(visibility="private"))
+        ).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    krm = spec.get_resource_manager(DocChunk)
+    with drm.using("alice"):
+        drm.create(
+            SourceDoc(
+                collection_id=cid,
+                path="secret.pptx",
+                content=Binary(data=b"x"),
+                collection_visibility="private",
+                collection_created_by="alice",
+            ),
+            resource_id="deck-S",
+        )
+    krm.create(
+        DocChunk(collection_id=cid, source_doc_id="deck-S", seq=0, start=0, end=1, text="機密製程")
+    )
+
+    _, mine = read_collection_sources(spec, cid, as_user="alice")
+    assert [d.doc_id for d in mine] == ["deck-S"]
+
+    _, theirs = read_collection_sources(spec, cid, as_user="mallory")
+    assert theirs == [], "an outsider was handed the contents of a private collection"

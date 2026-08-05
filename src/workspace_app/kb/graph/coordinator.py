@@ -263,11 +263,16 @@ class GraphCoordinator:
         return [(r.key, int(r.n)) for r in rows if r.key]
 
     def _doc_chunks(self, doc_id: str) -> list[tuple[str, str]]:
-        out: list[tuple[str, str]] = []
+        # Read in the DOCUMENT's order. Nothing orders the store's answer, and
+        # passage order decides the order this document's statements and
+        # connections are written in — so without this a re-extraction that
+        # changed nothing still rewrites rows in a different order.
+        ordered: list[tuple[int, str, str]] = []
         for r in self._chunk_rm.list_resources((QB["source_doc_id"] == doc_id).build()):
             data = r.data
             assert isinstance(data, DocChunk)
-            out.append((r.info.resource_id, data.text))  # ty: ignore[unresolved-attribute]
+            ordered.append((data.seq, r.info.resource_id, data.text))  # ty: ignore[unresolved-attribute]
+        out: list[tuple[str, str]] = [(cid, text) for _, cid, text in sorted(ordered)]
         return out
 
     # ── consumption machinery (mirrors sanity / index / eval) ────────
