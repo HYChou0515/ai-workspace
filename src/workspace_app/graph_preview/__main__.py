@@ -18,9 +18,10 @@ import json
 import sys
 from pathlib import Path
 
-from ..config.loader import load
+from ..config.loader import _resolve_config_path, load
 from ..factories import get_kb_llm, get_spec
 from ..kb.graph.preview import preview_collection
+from . import unusable_config
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -63,7 +64,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
+    # Say which file is in force BEFORE anything reads it. `load()` falls back
+    # to `./config.yaml` in the CURRENT directory and then to bundled defaults,
+    # so the same command run from two directories reads two different corpora
+    # with nothing on screen to say so.
+    import os
+
+    resolved = _resolve_config_path(args.config, os.environ)
+    print(f"config: {resolved if resolved else '(none — bundled defaults)'}", file=sys.stderr)
     settings = load(config_path=args.config)
+    refusal = unusable_config(settings, resolved)
+    if refusal:
+        raise SystemExit(f"graph_preview: {refusal}")
     spec = get_spec(settings, (lambda: args.as_user) if args.as_user else None)
     llm = get_kb_llm(settings)
     if llm is None:
