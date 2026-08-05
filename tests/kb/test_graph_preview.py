@@ -1,0 +1,165 @@
+"""#697 — look at what the graph WOULD be, without changing anything.
+
+The point of the tool is to make the extraction criterion tunable: write a
+criterion, run this, read the JSON, adjust. That only works if running it is
+free — if it wrote, every experiment would alter the corpus being judged, and
+you could only run it where the data is.
+
+So it reads, computes, and writes JSON to a local directory. The computation is
+the one production runs (``build_graph``), which is what makes the JSON a
+preview rather than a second opinion.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+
+import msgspec
+from specstar import QB, SpecStar
+from specstar.types import Binary
+
+from workspace_app.kb.graph.preview import preview_collection, read_collection_sources
+from workspace_app.kb.llm import ILlm
+from workspace_app.resources import make_spec
+from workspace_app.resources.graph import (
+    GraphClaim,
+    GraphEntity,
+    GraphEntityLink,
+    GraphMention,
+    GraphRelationship,
+)
+from workspace_app.resources.kb import Collection, DocChunk, SourceDoc
+
+_REPLY = (
+    '{"mentions": [{"surface": "回焊爐", "kind": "機台"}, {"surface": "冷焊", "kind": "缺陷"}],'
+    ' "relationships": [{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"}],'
+    ' "attributes": [{"subject": "回焊爐", "attribute": "良率", "value": "98.7", "unit": "%"}]}'
+)
+
+
+class _FakeLlm(ILlm):
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        yield _REPLY, False
+
+
+def _corpus(spec: SpecStar, *, guidance: str = "") -> str:
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(
+            Collection(name="fab", use_graph=True, graph_guidance=guidance)
+        ).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    krm = spec.get_resource_manager(DocChunk)
+    for doc_id, text in (("deck-A", "回焊爐造成冷焊"), ("deck-B", "回焊爐良率 98.7%")):
+        with drm.using("bob"):
+            drm.create(
+                SourceDoc(
+                    collection_id=cid,
+                    path=f"{doc_id}.pptx",
+                    content=Binary(data=b"x"),
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                ),
+                resource_id=doc_id,
+            )
+        krm.create(
+            DocChunk(collection_id=cid, source_doc_id=doc_id, seq=0, start=0, end=1, text=text)
+        )
+    return cid
+
+
+_MODELS = (
+    GraphMention,
+    GraphClaim,
+    GraphRelationship,
+    GraphEntity,
+    GraphEntityLink,
+    Collection,
+    SourceDoc,
+    DocChunk,
+)
+
+
+def _snapshot(spec: SpecStar) -> dict[str, list[tuple[str, bytes]]]:
+    """Every row of every model the tool could conceivably touch."""
+    out: dict[str, list[tuple[str, bytes]]] = {}
+    for model in _MODELS:
+        rm = spec.get_resource_manager(model)
+        out[model.__name__] = sorted(
+            (r.info.resource_id, msgspec.json.encode(r.data))  # ty: ignore[unresolved-attribute]
+            for r in rm.list_resources(QB.all().build())
+        )
+    return out
+
+
+def test_a_preview_run_changes_nothing_in_the_database(tmp_path):
+    """The acceptance criterion the whole tool exists for. Asserted over every
+    model it reads AND every model the graph writes — a tool that only promised
+    not to write would be a promise, and this is the check that it holds."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+    before = _snapshot(spec)
+
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path)
+
+    assert _snapshot(spec) == before
+
+
+def test_the_preview_writes_the_graph_as_json(tmp_path):
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path)
+
+    mentions = json.loads((tmp_path / "mentions.json").read_text())
+    assert {m["surface"] for m in mentions} == {"回焊爐", "冷焊"}
+    assert {m["source_doc_id"] for m in mentions} == {"deck-A", "deck-B"}
+
+    entities = json.loads((tmp_path / "entities.json").read_text())
+    assert {e["canonical_name"] for e in entities} == {"回焊爐", "冷焊", "機台", "缺陷", "造成"}
+
+    claims = json.loads((tmp_path / "claims.json").read_text())
+    assert [(c["subject"], c["attribute"], c["value"]) for c in claims] == [
+        ("回焊爐", "良率", "98.7"),
+        ("回焊爐", "良率", "98.7"),
+    ]
+
+    relationships = json.loads((tmp_path / "relationships.json").read_text())
+    assert {(r["subject"], r["predicate"], r["object"]) for r in relationships} == {
+        ("回焊爐", "造成", "冷焊")
+    }
+
+
+def test_the_summary_answers_the_question_the_tool_was_built_for(tmp_path):
+    """Whether the criterion is working is a question about SHAPE, not about any
+    one row: how many distinct names a document yields, and what sorts of thing
+    the model decided it was seeing. Reading that off a list of thousands is not
+    something anyone does, so the numbers are computed here."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path)
+
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["documents"] == 2
+    assert summary["chunks"] == 2
+    assert summary["mentions"] == 4  # two names in each of two documents
+    assert summary["distinct_names"] == 2
+    assert summary["mentions_per_document"] == 2.0
+    # the histogram that shows a corpus filling up with values or generic nouns
+    assert summary["kinds"] == {"機台": 2, "缺陷": 2}
+
+
+def test_the_collections_own_criterion_is_what_the_preview_runs_with(tmp_path):
+    """Otherwise the tool would preview something nobody is going to run."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec, guidance="只收機台與缺陷。")
+
+    guidance, docs = read_collection_sources(spec, cid)
+
+    assert guidance == "只收機台與缺陷。"
+    assert sorted(d.doc_id for d in docs) == ["deck-A", "deck-B"]
+    # the permission mirror rides along, so a previewed row is the row that would
+    # have been stored — including whether anyone could have seen it
+    assert all(d.mirror.get("collection_visibility") == "public" for d in docs)
