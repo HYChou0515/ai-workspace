@@ -39,7 +39,9 @@
 | `web/src/api/queryKeys.ts` | 中央階層式 query-key 註冊（`qk.*`）。一處真理源，讓 `useQuery` 的讀鍵與 mutation 後 `invalidateQueries` 永遠一致；絕不行內寫死鍵陣列。 |
 | `web/src/api/queryClient.ts` | 唯一的 TanStack `QueryClient`（retry 1、`refetchOnWindowFocus` false、staleTime 30s）。工具型 App 的預設，非即時儀表板。 |
 | `web/src/api/fileService.ts` | `FileService` 接縫 + React context（#87）：檔案樹 IDE 跑在注入的 `FileService` 上（`investigationFileService` vs `kbFileService`），用 `FileCaps` 能力結構讓樹隱藏不支援的操作。 |
-| `web/src/renderers/registry.ts` | 檔案預覽註冊表——**唯一**把 path → renderer Component + flags（`editToggle`/`rawEditor`/`outline`）的表。新增預覽型別 = 一個 entry。 |
+| `web/src/renderers/registry.ts` | 檔案預覽註冊表——**唯一**把 path → renderer Component + flags（`editToggle`/`rawEditor`/`outline`）的表。新增預覽型別 = 一個 entry。**尚未開放第二方註冊**（仍是 const 陣列，順序即語意）。 |
+| `web/src/renderers/entity/viewKindRegistry.tsx` | view-kind 註冊表——`*.ai.yaml` 的 `view:` → Component。**唯一**知道有哪些 kind 的地方（`parseViewSpec` 不再持有副本）；`registerViewKind` 開放第二方在 `web/src/ext/` 註冊（#698）。內建 kind 走同一個函式，沒有特權路徑。 |
+| `web/src/renderers/entity/public.ts` | 第二方 view kind 的**唯一**入口面（註冊 + 檔案存取 + 繪圖 helper）。`src/ext/**` 只能從這裡 import，由 `src/ext/imports.test.ts` 強制。 |
 | `web/src/renderers/kbCite.tsx` | 共用 `[n]→citation` 渲染：`buildByMarker`、`kbCiteUrlTransform`（讓 `kb-cite:` scheme 穿過 react-markdown sanitizer）、`kbCiteAnchor`（可點行內 pill）、`renderCitedText`（純文字 `<pre>` 拆分）。把 marker 解析規則集中一處。 |
 | `web/src/renderers/report/remarkKbCitation.ts` | remark plugin，把 `[N]` 改寫成 `kb-cite:N` 連結，讓 markdown renderer 能轉成可點的引用 pill。 |
 | `web/src/lib/i18n.tsx` | 手刻型別化 i18n（#160）：中央訊息目錄（zh-TW + en，缺翻譯 = 型別錯誤）、`LocaleProvider` + `useT()`/`translate()`、navigator 偵測 + localStorage 黏著。逐步採用。 |
@@ -63,6 +65,7 @@
 | `ApiClient` | TS interface | `web/src/api/types.ts` | `realApi`（`web/src/api/real.ts`）、`mockApi`（`web/src/api/mock.ts`） |
 | `FileService` | TS interface + React context | `web/src/api/fileService.ts` | `investigationFileService`、`kbFileService`（`web/src/api/kbFileService.ts`）、`wikiFileService`（`web/src/api/wikiFileService.ts`） |
 | `RendererDef` 註冊表 | 資料驅動 dispatch table | `web/src/renderers/registry.ts` | `Markdown`/`Report`/`Notebook`/`Csv`/`Html`/`Pdf`/`Image`/`Text` renderer |
+| `ViewRenderer` 註冊表（可註冊） | 開放式 dispatch table + plug-in seam | `web/src/renderers/entity/viewKindRegistry.tsx` | 內建 `table`/`board`/`gantt`；第二方 `web/src/ext/*`（範例 `csv-table`） |
 | `AgentEvent`/`WorkflowEvent`/`CellEvent` 聯集 | TS discriminated union（後端鏡像） | `web/src/events.ts` | 由 `reduceAgent`（`agentLog.ts`）摺疊；由後端 `src/workspace_app/api/events.py` 產生 |
 | `AgentState` | TS type（共用 chat-hook 契約） | `web/src/hooks/useAgent.tsx` | `useAgentInternal`、`useItemChat`（KB chat 用較窄的 `UseKbChat`） |
 | Message catalog / `Locale` | 型別化 i18n 表 + context | `web/src/lib/i18n.tsx` | `LocaleProvider` + 各元件的 `useT` 消費者 |

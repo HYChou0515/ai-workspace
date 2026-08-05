@@ -14,6 +14,11 @@ Tool 這一面還多一條路（#674）:**dev 不一定要是我們**。外部�
 在自己的 CI 用我們提供的 builder image build,把 artifact 的網址交給我們——不需要我們 repo 的
 權限,也不用等我們發版。細節見 [寫一支工具（外部作者）](tool-authoring.md)。
 
+第四個擴充面是 **view kind**（#698）。它跟上面三個不同——不是讓 agent 變強,而是讓**畫面**變多:
+一種新的資料呈現方式,由 workspace 裡的 `*.ai.yaml` 檔案指名使用。它同樣有「dev 可以不是我們」
+的性質,但走的是另一條路:程式碼放進**我們 repo** 的 `web/src/ext/`,跟平台一起編譯。細節見
+[寫一個 View Kind（維運方）](view-kind-authoring.md)。
+
 這篇是把三個面向 × 兩種作者排成同一張表的**總覽**;每個面向的細節文件在各段末尾連出去。
 
 ## 一眼看懂：誰能建什麼
@@ -23,6 +28,7 @@ Tool 這一面還多一條路（#674）:**dev 不一定要是我們**。外部�
 | **Tool** | ✅ Python tool-package——**vendor 進 repo**（`sample-tools/`）**或外部作者自己的 repo + CI**（#674） | ❌ **無**——安全考量,見下 |
 | **Skill** | ✅ `sample-skills/` + `SHARED_SKILLS` 註冊 | ✅ `author-skill` + `save_skill` → `.skill/`（#298） |
 | **Workflow** | ✅ Python `run.py`（圖靈完備） | ✅ `workflow.json` **降階 DSL**（#323）——**最難的一塊** |
+| **View Kind** | ✅ React 元件 + `web/src/ext/` 一行註冊（#698）——**dev 可以是維運方** | ❌ **無**——會執行任意前端程式碼 |
 
 三個 user 自建路徑刻意共用同一套模型（照搬 #298 的 skill 流程）:**跟 AI 共創 → 存進
 workspace 的點開頭資料夾 → 側邊面板列出／下載／匯入 → dev 把它 commit 進 profile 就升格成
@@ -463,6 +469,41 @@ interpreter 也跑 package 端的 `workflow.json`)——步驟見下面
 
 底層是**同一批 step primitive、同一套 filesystem-journal + input-hash 執行模型**;只是 authoring
 的**表面**天差地遠——一邊是任意 Python,一邊是受限資料。
+
+---
+
+## View Kind（#698）——維運方自建的畫面
+
+一個 view kind 是一個名字,workspace 裡的 `*.ai.yaml` 用 `view:` 指名它:
+
+```yaml
+view: csv-table
+title: Wafer yield
+source: /data/wafer.csv     # 這個 key 是那個 kind 自己的
+```
+
+平台內建 `table` / `board` / `gantt` / `health`;維運方自建的放 `web/src/ext/`,寫一個吃
+`EntityViewProps` 的 React 元件 + 一行 `registerViewKind({ kind, Component })`。
+`web/src/main.tsx` 有一行 `import "./ext";` 把它們掛上去,**不需要動 `ext/` 以外的檔案**。
+
+三件跟其他擴充面不同、值得記住的事:
+
+- **不綁 entity。** 一個 kind 可以完全不碰 entity,只讀 workspace 檔案（`useFileBuffer` /
+  `useFileService`）——這是主要用法。要畫 entity 紀錄才宣告 `needsEntity: true`,那時 view 檔
+  就必須寫 `entity:`。所以一個**完全沒有 `.entity/` 的 app**（rca）照樣用得上。
+- **`ext/` 只能從 `renderers/entity/public` import**,由 `web/src/ext/imports.test.ts` 守著。
+  這不是潔癖:它讓「動了這個介面會影響誰」在改的當下就看得見。
+- **沒有版號、不承諾介面不變。** 因為程式碼在同一個 repo、同一次 CI 編譯,改壞了會在編譯期
+  就紅,而不是等使用者打開畫面。這是同 repo 換來的保護。
+
+註冊撞名會直接丟例外(開機就爆),不會靜默覆蓋——兩個元件搶同一個 `view:` 沒有正確答案,
+而靜默的勝負取決於 import 順序。
+
+作法見 [寫一個 View Kind（維運方）](view-kind-authoring.md)。範例 kind 與其測試在
+`web/src/ext/CsvTableView.tsx`。
+
+**尚未開放**:檔案預覽層（`web/src/renderers/registry.ts`,決定 `.csv` / `.md` 這類副檔名用哪個
+renderer）還不能第二方註冊,#698 刻意只開 view kind 這一層。
 
 ---
 

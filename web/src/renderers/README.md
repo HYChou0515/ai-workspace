@@ -70,3 +70,35 @@ all pick it up. Add a case to `registry.test.ts` to lock the routing.
 
 (Image MIME types live in `../pages/investigation/renderer.ts::imageMime` — add
 a `case` there too if your type is a new image format.)
+
+Note: `RENDERERS` is a const array and **is not open to second-party
+registration**. Order is semantics here (first match wins, catch-all last), and
+two authors can claim the same extension, so opening it needs an ordering rule
+that view kinds don't need. `KbDocBody.tsx` and `WorkspaceShell.tsx` also branch
+on the renderer key, so "one entry, no other file changes" isn't quite true yet
+either. #698 deliberately opened only the view-kind layer below.
+
+## Add a view kind (`*.ai.yaml`)
+
+A different extension point: `entity/viewKindRegistry.tsx` maps a `view:` name to
+a component. `registerViewKind({ kind, Component })` is a plain call and the
+built-ins go through it too, so a second-party kind takes the same path the app
+exercises on every startup.
+
+A view kind does **not** have to be entity-bound. Declare `needsEntity: true`
+only if you draw entity records (the dispatcher then insists the view file names
+an `entity:`); otherwise your component reads whatever workspace files it wants
+via `useFileBuffer` / `useFileService`, and the entity props arrive empty.
+
+`parseViewSpec` answers only "is this a view file?" (does it name a kind). It
+does not know which kinds exist and does not enforce `entity:` — both moved to
+the registry, so adding a kind touches neither the parser nor a TS union.
+
+Maintainer-authored kinds live in `../../ext/`, import solely from
+`entity/public.ts` (enforced by `../../ext/imports.test.ts`), and are registered
+from `../../ext/index.ts`, which `main.tsx` imports for its side effects.
+Guide: `docs/view-kind-authoring.md`. Example: `../../ext/CsvTableView.tsx`.
+
+Test a new kind through the **file**, like `entity/viewKindPlugin.test.tsx` does
+— not by calling `resolveViewRenderer` directly. That shortcut is why the
+unsupported-kind fallback sat unreachable behind a green test for so long.
