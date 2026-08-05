@@ -23,7 +23,7 @@ from __future__ import annotations
 import pytest
 from specstar import QB, SpecStar
 
-from workspace_app.kb.graph.link import link_identical_mentions
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_surface
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphEntity, GraphMention, mention_id
@@ -96,7 +96,7 @@ def test_the_identical_pass_never_materialises_a_mention(blob_reads: list[str]) 
     spec = make_spec(default_user=lambda: "bob")
     _corpus(spec)
 
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     assert blob_reads == [], (
         f"{len(blob_reads)} mention rows were decoded from the resource store; "
@@ -110,7 +110,7 @@ def test_it_still_picks_the_name_the_corpus_wrote_most(blob_reads: list[str]) ->
     spec = make_spec(default_user=lambda: "bob")
     _corpus(spec)
 
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     erm = spec.get_resource_manager(GraphEntity)
     assert _names(erm, "Reflow Oven 0") == ["Reflow Oven 0"], (
@@ -169,7 +169,7 @@ def test_rows_written_before_the_index_are_read_from_their_blob(
     spec = make_spec(default_user=lambda: "bob", backend=backend)
     blob_reads.clear()
 
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     assert blob_reads, "a pre-migrate row was read out of an index it is not in"
     erm = spec.get_resource_manager(GraphEntity)

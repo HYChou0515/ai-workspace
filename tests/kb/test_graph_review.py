@@ -11,7 +11,7 @@ from collections.abc import Iterator
 
 from specstar import QB, SpecStar
 
-from workspace_app.kb.graph.link import link_identical_mentions, link_resembling_entities
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_surface
 from workspace_app.kb.graph.review import (
     accept_proposal,
@@ -68,9 +68,9 @@ def _two_proposed(spec: SpecStar) -> tuple[str, str]:
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐", n=4)
     _mention(spec, cid, "deck-B", "回焊機")
-    link_identical_mentions(spec)
-    link_resembling_entities(
-        spec, _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(
+        spec, llm=_Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
     )
     (proposal,) = list_proposals(spec)
     return proposal.entity_id, proposal.proposed_from
@@ -128,7 +128,7 @@ def test_a_rejected_pair_is_never_proposed_again():
     host, other = _two_proposed(spec)
     reject_proposal(spec, host, other, by="amy")
     judge = _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
-    assert link_resembling_entities(spec, judge) == 0
+    reconcile_vocabulary(spec, llm=judge)
     assert list_proposals(spec) == []
 
 
@@ -137,7 +137,7 @@ def test_an_accepted_pair_is_never_proposed_again():
     host, other = _two_proposed(spec)
     accept_proposal(spec, host, other, by="amy")
     judge = _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
-    assert link_resembling_entities(spec, judge) == 0
+    reconcile_vocabulary(spec, llm=judge)
     assert list_proposals(spec) == []
 
 
@@ -148,7 +148,7 @@ def test_an_entity_page_gathers_the_evidence_across_documents():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐", n=4)
     _mention(spec, cid, "deck-B", "回焊爐", n=1)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     erm = spec.get_resource_manager(GraphEntity)
     (row,) = list(erm.list_resources(QB.all().build()))
     page = entity_page(spec, row.info.resource_id, as_user="bob")  # ty: ignore[unresolved-attribute]
@@ -177,7 +177,7 @@ def test_a_reader_sees_only_the_evidence_they_may_read():
     secret_cid = _private_collection(spec)
     _mention(spec, open_cid, "deck-A", "回焊爐", n=2)
     _mention(spec, secret_cid, "deck-S", "回焊爐", n=9, private=True)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     erm = spec.get_resource_manager(GraphEntity)
     (row,) = list(erm.list_resources(QB.all().build()))
     eid = row.info.resource_id  # ty: ignore[unresolved-attribute]
@@ -199,7 +199,7 @@ def test_an_entity_with_no_readable_evidence_is_not_a_page_at_all():
     spec = make_spec(default_user=lambda: "bob")
     secret_cid = _private_collection(spec)
     _mention(spec, secret_cid, "deck-S", "機密製程", private=True)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     erm = spec.get_resource_manager(GraphEntity)
     (row,) = list(erm.list_resources(QB.all().build()))
     eid = row.info.resource_id  # ty: ignore[unresolved-attribute]
@@ -219,7 +219,7 @@ def test_a_link_is_hidden_from_someone_who_cannot_read_its_evidence():
     spec = make_spec(default_user=lambda: "bob")
     secret_cid = _private_collection(spec)
     _mention(spec, secret_cid, "deck-S", "機密製程", private=True)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     lrm = spec.get_resource_manager(GraphEntityLink)
     (row,) = list(lrm.list_resources(QB.all().build()))
     lid = row.info.resource_id  # ty: ignore[unresolved-attribute]
@@ -273,7 +273,7 @@ def test_the_page_shows_what_the_thing_connects_to():
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-A", "空洞")
     _relationship(spec, cid, "deck-A", "回焊爐", "造成", "空洞")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     page = entity_page(spec, _entity_id_named(spec, "回焊爐"), as_user="bob")
     (rel,) = page.related
@@ -288,7 +288,7 @@ def test_the_other_end_sees_the_same_connection_pointing_back():
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-A", "空洞")
     _relationship(spec, cid, "deck-A", "回焊爐", "造成", "空洞")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     page = entity_page(spec, _entity_id_named(spec, "空洞"), as_user="bob")
     (rel,) = page.related
@@ -305,7 +305,7 @@ def test_a_connection_written_in_another_language_lands_on_the_same_page():
     _mention(spec, cid, "deck-B", "Reflow Oven")
     _mention(spec, cid, "deck-B", "void")
     _relationship(spec, cid, "deck-B", "Reflow Oven", "causes", "void")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     # the vocabulary learns the two names are one thing
     host = _entity_id_named(spec, "回焊爐")
     other = _entity_id_named(spec, "Reflow Oven")
@@ -321,7 +321,7 @@ def test_a_connection_from_an_unreadable_document_never_appears():
     secret_cid = _private_collection(spec)
     _mention(spec, open_cid, "deck-A", "回焊爐")
     _relationship(spec, secret_cid, "deck-S", "回焊爐", "造成", "機密缺陷", private=True)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     eid = _entity_id_named(spec, "回焊爐")
     assert entity_page(spec, eid, as_user="bob").related != []
     assert entity_page(spec, eid, as_user="alice").related == []
@@ -359,7 +359,7 @@ def test_a_predicate_the_vocabulary_has_not_reached_still_reads():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
     _relationship(spec, cid, "deck-A", "回焊爐", "造成", "空洞")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     page = entity_page(spec, _entity_id_named(spec, "回焊爐"), as_user="bob")
     assert [r.predicate for r in page.related] == ["造成"]
 
@@ -389,10 +389,10 @@ def test_a_proposal_carries_what_each_side_actually_looked_like():
             )
     _mention(spec, cid, "deck-C", "錫膏印刷機")
     _mention(spec, cid, "deck-D", "SPI")
-    link_identical_mentions(spec)
-    link_resembling_entities(
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(
         spec,
-        _Judge(
+        llm=_Judge(
             '{"groups": [{"names": ["SPI", "錫膏印刷機"], "why": "a machine that prints paste"}]}'
         ),
     )
@@ -413,10 +413,10 @@ def test_the_queue_can_be_narrowed_to_one_collection():
     _mention(spec, mine, "deck-B", "回焊機")
     _mention(spec, theirs, "deck-C", "錫膏印刷機")
     _mention(spec, theirs, "deck-D", "錫膏印刷")
-    link_identical_mentions(spec)
-    link_resembling_entities(
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(
         spec,
-        _Judge(
+        llm=_Judge(
             '{"groups": ['
             '{"names": ["回焊爐", "回焊機"], "why": "同一台爐"},'
             '{"names": ["錫膏印刷機", "錫膏印刷"], "why": "同一台印刷機"}]}'
@@ -450,9 +450,9 @@ def test_a_proposal_says_what_kind_each_side_is():
                 ),
                 resource_id=mention_id(doc, surface),
             )
-    link_identical_mentions(spec)
-    link_resembling_entities(
-        spec, _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "同一台爐"}]}')
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(
+        spec, llm=_Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "同一台爐"}]}')
     )
     (proposal,) = list_proposals(spec, as_user="bob")
     assert proposal.kind == "機台"

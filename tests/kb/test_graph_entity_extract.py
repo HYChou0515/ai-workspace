@@ -267,3 +267,66 @@ def test_the_prompt_never_gates_on_the_value_being_a_number():
     # ("part numbers" legitimately appears in the mention section — the word to
     # watch is the one that GATES on the value's type, not the word "number".)
     assert "verbatim" in prompt
+
+
+# ── the corpus's own criterion ────────────────────────────────────────
+#
+# "anything a reader would consider a distinct thing" is not a criterion: every
+# noun passes it. A capable model follows it exactly and exhaustively, so the
+# stronger the model the more the vocabulary fills with 「系統」/「問題」/「資料」
+# and with everything a table happened to label. Nothing downstream ever
+# disagrees — the extractor drops only empty surfaces, the writer keeps every
+# distinct key, and the vocabulary mints an identity per key.
+#
+# The missing piece is a statement of what deserves to be a thing HERE, and that
+# is domain knowledge: a manufacturing corpus wants machines, processes,
+# materials, defects, parameters and part numbers, while the same words are
+# noise in a finance corpus. Every criterion invented from outside a corpus in
+# this module has been wrong within a corpus or two, so it is not invented — it
+# is supplied by whoever owns the collection, and these tests fix how it travels.
+
+
+def test_the_corpus_guidance_reaches_the_model_verbatim():
+    """Whatever the owner wrote is what the model is told — not a paraphrase."""
+    llm = _FakeLlm("{}")
+    extract_entities(llm, "t", guidance="只收機台、製程、缺陷、參數與料號。")
+    assert "只收機台、製程、缺陷、參數與料號。" in llm.prompts[0]
+
+
+def test_the_guidance_overrides_the_general_description():
+    """It has to WIN, and be told to.
+
+    Guidance that merely sits beside "anything a reader would consider a distinct
+    thing" leaves the model with two rules and no way to choose, and the general
+    one is the permissive one — so the block says out loud which governs, and it
+    comes after the sentence it qualifies rather than before it.
+    """
+    llm = _FakeLlm("{}")
+    extract_entities(llm, "t", guidance="ONLY machines.")
+    prompt = llm.prompts[0]
+    assert prompt.index("distinct thing") < prompt.index("ONLY machines.")
+    assert prompt.index("ONLY machines.") < prompt.index("For each, give")
+    assert "follow this" in prompt.lower()
+
+
+def test_no_guidance_leaves_the_prompt_exactly_as_it_was():
+    """A collection that never set one must behave identically to today.
+
+    The knob ships with nothing in it, so its OFF state is the state every
+    existing collection is in: empty guidance must not leave scaffolding, an
+    empty heading, or a blank the model will try to interpret.
+    """
+    plain, blank = _FakeLlm("{}"), _FakeLlm("{}")
+    extract_entities(plain, "t")
+    extract_entities(blank, "t", guidance="   \n  ")
+    assert plain.prompts[0] == blank.prompts[0]
+    assert "follow this" not in plain.prompts[0].lower()
+
+
+def test_guidance_does_not_disturb_the_passage_or_the_json_contract():
+    """The block is inserted, not spliced through the rest of the prompt."""
+    llm = _FakeLlm("{}")
+    extract_entities(llm, "回焊爐溫度 245°C", guidance="ONLY machines.")
+    prompt = llm.prompts[0]
+    assert prompt.endswith("Passage:\n回焊爐溫度 245°C")
+    assert '{"mentions": [{"surface": ..., "kind": ...}]' in prompt

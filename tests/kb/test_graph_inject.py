@@ -12,7 +12,7 @@ from __future__ import annotations
 from specstar import SpecStar
 
 from workspace_app.kb.graph.inject import entity_block
-from workspace_app.kb.graph.link import link_identical_mentions
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.name_index import NameIndex
 from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.perm import Permission
@@ -92,7 +92,7 @@ def test_a_named_thing_with_facts_arrives_with_them():
     _mention(spec, cid, "回焊爐", kind="機台")
     _claim(spec, cid, "回焊爐", "良率", "98.7", unit="%", period="Q3")
     _claim(spec, cid, "回焊爐", "POR recipe", "PPOOIXUX")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     block = entity_block(spec, _index(spec), "回焊爐是什麼?", as_user="alice")
 
@@ -108,7 +108,7 @@ def test_a_name_with_nothing_to_say_is_not_injected():
     spec = make_spec()
     cid = _collection(spec)
     _mention(spec, cid, "機台", kind="")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     assert entity_block(spec, _index(spec), "這台機台怎麼了?", as_user="alice") == ""
 
@@ -118,7 +118,7 @@ def test_a_question_naming_nothing_produces_nothing():
     cid = _collection(spec)
     _mention(spec, cid, "回焊爐", kind="機台")
     _claim(spec, cid, "回焊爐", "良率", "98.7")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     assert entity_block(spec, _index(spec), "今天天氣如何?", as_user="alice") == ""
 
@@ -129,7 +129,7 @@ def test_facts_beyond_the_per_entity_limit_are_counted_not_dropped_quietly():
     _mention(spec, cid, "回焊爐", kind="機台")
     for i in range(20):
         _claim(spec, cid, "回焊爐", f"參數{i}", str(i))
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     block = entity_block(spec, _index(spec), "回焊爐?", as_user="alice", max_facts=5)
 
@@ -144,7 +144,7 @@ def test_an_unreadable_thing_never_rides_along():
     cid = _collection(spec, private=True)
     _mention(spec, cid, "回焊爐", kind="機台", private=True)
     _claim(spec, cid, "回焊爐", "良率", "98.7", private=True)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     idx = _index(spec)
 
     assert entity_block(spec, idx, "回焊爐?", as_user="alice") == ""
@@ -162,7 +162,7 @@ def test_an_ambiguous_name_says_so_rather_than_picking_one():
     for suffix in ("a", "b"):
         _mention(spec, cid, "PPOO", doc=f"deck-{suffix}")
         _claim(spec, cid, "PPOO", "維護單位", f"部門{suffix}", doc=f"deck-{suffix}")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     # force the ambiguity the vocabulary layer would normally prevent
     with erm.using("bob"):
         ids.append(

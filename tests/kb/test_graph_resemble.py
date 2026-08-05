@@ -14,11 +14,7 @@ from collections.abc import Iterator
 
 from specstar import QB, SpecStar
 
-from workspace_app.kb.graph.link import (
-    link_identical_mentions,
-    link_resembling_entities,
-    reconcile_vocabulary,
-)
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_surface
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
@@ -78,12 +74,12 @@ def test_an_accepted_resemblance_is_proposed_never_applied():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-B", "回焊機")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     judge = _Judge(
         '{"groups": [{"names": ["回焊爐", "回焊機"], "why": "both name the reflow equipment"}]}'
     )
-    assert link_resembling_entities(spec, judge) == 1
+    reconcile_vocabulary(spec, llm=judge)
     pending = _links(spec, "pending")
     assert len(pending) == 1
     assert pending[0].basis == "resembles"
@@ -97,8 +93,8 @@ def test_a_refused_resemblance_leaves_nothing_behind():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-B", "回焊機")
-    link_identical_mentions(spec)
-    assert link_resembling_entities(spec, _Judge('{"groups": []}')) == 0
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(spec, llm=_Judge('{"groups": []}'))
     assert _links(spec, "pending") == []
 
 
@@ -112,9 +108,9 @@ def test_the_whole_vocabulary_costs_one_call_not_one_per_pair():
     cid = _collection(spec)
     for i, name in enumerate(["回焊爐", "回焊機", "錫膏印刷", "SPI", "空洞", "假焊"]):
         _mention(spec, cid, f"deck-{i}", name)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     judge = _Judge('{"groups": []}')
-    link_resembling_entities(spec, judge)
+    reconcile_vocabulary(spec, llm=judge)
     assert len(judge.asked) == 1
 
 
@@ -125,9 +121,10 @@ def test_a_group_naming_something_nobody_wrote_is_ignored():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-B", "回焊機")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     judge = _Judge('{"groups": [{"names": ["回焊爐", "熱風爐"], "why": "made up"}]}')
-    assert link_resembling_entities(spec, judge) == 0
+    reconcile_vocabulary(spec, llm=judge)
+    assert _links(spec, "pending") == []
 
 
 def test_terms_that_differ_only_by_a_number_are_the_model_s_call_now():
@@ -139,9 +136,9 @@ def test_terms_that_differ_only_by_a_number_are_the_model_s_call_now():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "第2型糖尿病")
     _mention(spec, cid, "deck-B", "第二型糖尿病")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     judge = _Judge('{"groups": [{"names": ["第2型糖尿病", "第二型糖尿病"], "why": "同一個疾病"}]}')
-    assert link_resembling_entities(spec, judge) == 1
+    reconcile_vocabulary(spec, llm=judge)
     assert len(_links(spec, "pending")) == 1
 
 
@@ -150,11 +147,11 @@ def test_proposing_the_same_pair_twice_changes_nothing():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-B", "回焊機")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     judge = _Judge('{"groups": [{"names": ["回焊爐", "回焊機"], "why": "same equipment"}]}')
-    link_resembling_entities(spec, judge)
+    reconcile_vocabulary(spec, llm=judge)
     before = len(_links(spec, "pending"))
-    link_resembling_entities(spec, judge)
+    reconcile_vocabulary(spec, llm=judge)
     assert len(_links(spec, "pending")) == before
 
 
@@ -176,7 +173,7 @@ def test_a_kind_can_be_proposed_even_though_nothing_mentions_it():
     and a kind has none: nothing mentions "機台", things are labelled with it. So
     kinds could never be proposed at all, and the taxonomy stayed split by
     language while the design said otherwise."""
-    from workspace_app.kb.graph.link import name_predicates
+    from workspace_app.kb.graph.link import reconcile_vocabulary
     from workspace_app.kb.graph.review import list_proposals
 
     spec = make_spec(default_user=lambda: "bob")
@@ -198,10 +195,10 @@ def test_a_kind_can_be_proposed_even_though_nothing_mentions_it():
                 ),
                 resource_id=mention_id(doc, surface),
             )
-    link_identical_mentions(spec)
-    name_predicates(spec)
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(spec, llm=None)
     judge = _Judge('{"groups": [{"names": ["機台", "tool"], "why": "同一個類型的中英文"}]}')
-    assert link_resembling_entities(spec, judge) == 1
+    reconcile_vocabulary(spec, llm=judge)
     (proposal,) = list_proposals(spec)
     assert {proposal.name, proposal.other_name} == {"機台", "tool"}
 
@@ -232,7 +229,7 @@ def test_a_kind_proposal_is_visible_to_someone_who_can_read_its_evidence():
                 ),
                 resource_id=mention_id(doc, surface),
             )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     judge = _Judge('{"groups": [{"names": ["機台", "tool"], "why": "同一個類型"}]}')
-    link_resembling_entities(spec, judge)
+    reconcile_vocabulary(spec, llm=judge)
     assert len(list_proposals(spec, as_user="bob")) == 1

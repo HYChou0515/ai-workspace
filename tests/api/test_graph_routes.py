@@ -14,7 +14,7 @@ from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.graph.link import link_identical_mentions
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
@@ -67,7 +67,7 @@ def _seed(spec: SpecStar, *, private: bool = False) -> str:
                 ),
                 resource_id=mention_id(doc, "回焊爐"),
             )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     erm = spec.get_resource_manager(GraphEntity)
     for r in erm.list_resources(QB.all().build()):
         assert isinstance(r.data, GraphEntity)
@@ -191,10 +191,10 @@ def test_the_aliases_shown_are_words_someone_wrote():
             ),
             resource_id=mention_id("deck-B", "Reflow Oven"),
         )
-    from workspace_app.kb.graph.link import link_identical_mentions
+    from workspace_app.kb.graph.link import reconcile_vocabulary
     from workspace_app.kb.graph.review import accept_proposal
 
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     eid = _entity_id(spec, "回焊爐")
     accept_proposal(spec, eid, _entity_id(spec, "Reflow Oven"), by="amy")
     aliases = client.get(f"/kb/graph/entities/{eid}").json()["aliases"]
@@ -304,7 +304,7 @@ def test_the_entity_response_reads_the_statement_table_from_both_ends():
                 doc_visibility="public",
             )
         )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     rid = _entity_id(spec, "PPOOIXUX")
     body = client.get(f"/kb/graph/entities/{rid}").json()

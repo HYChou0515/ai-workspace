@@ -138,6 +138,18 @@ def mention_id(source_doc_id: str, surface: str) -> str:
     return f"m{digest}"
 
 
+def entity_id(key: str) -> str:
+    """The id of an identity — content-addressed on the key it was created from.
+
+    Derived rather than random for the same reason a mention's is (#697): the
+    vocabulary is COMPUTED from the evidence, so a re-run has to land on the same
+    rows or every link would point at a stranger. An identity that later absorbs
+    another keeps the id of its primary key; the absorbed one's keys move to it,
+    which is a change of membership rather than of identity.
+    """
+    return f"e{hashlib.blake2b(key.encode(), digest_size=16).hexdigest()}"
+
+
 class GraphMention(Struct):  # → resource "graph-mention"
     """One thing a document mentions — the primary layer (#534 B).
 
@@ -229,6 +241,33 @@ class GraphEntity(Struct):  # → resource "graph-entity"
     # a dead end, and an empty identity with no explanation looks like corruption
     # to whoever finds it next. Empty collections already make it invisible.
     merged_into: str = ""
+
+
+def link_id(
+    entity_id: str,
+    mention_id: str,
+    basis: str,
+    proposed_from: str = "",
+    evidence: str = "",
+) -> str:
+    """The id of a link — content-addressed on what it joins and what it rests on.
+
+    Derived so the vocabulary can be brought to a computed state rather than torn
+    down and rebuilt: the same decision keeps the same row, a decision that no
+    longer follows from the evidence is the one that goes, and the table is never
+    empty in between. ``basis`` and ``proposed_from`` are part of the address
+    because "the rule says so" and "the model suggested it" are different claims
+    about the same pair, and a page that cannot tell them apart is one nobody can
+    audit. ``evidence`` joins them so a link whose sentence changed becomes a new
+    row rather than an old row quietly citing something it no longer rests on.
+
+    ``state`` is deliberately NOT part of it. That is the field a person writes,
+    and addressing the row by it would make every accepted or rejected proposal
+    look like a row the computation never produced — deleted, then proposed again
+    the following week.
+    """
+    parts = "\x00".join([entity_id, mention_id, basis, proposed_from, evidence])
+    return f"l{hashlib.blake2b(parts.encode(), digest_size=16).hexdigest()}"
 
 
 class GraphEntityLink(Struct):  # → resource "graph-entity-link"

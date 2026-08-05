@@ -10,7 +10,7 @@ from __future__ import annotations
 from agents import RunContextWrapper
 
 from workspace_app.agent import AgentToolContext, build_tools, lookup_entity_impl
-from workspace_app.kb.graph.link import link_identical_mentions
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim, GraphMention, mention_id
@@ -37,7 +37,7 @@ def _seed(spec) -> None:
             ),
             resource_id=mention_id("deck-A", "回焊爐"),
         )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     grm = spec.get_resource_manager(GraphClaim)
     with grm.using("bob"):
         grm.create(

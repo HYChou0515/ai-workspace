@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from specstar import SpecStar
 
-from workspace_app.kb.graph.link import link_identical_mentions, reconcile_vocabulary
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.lookup import entity_card
 from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.perm import Permission
@@ -65,7 +65,7 @@ def _seed(spec: SpecStar, *, private: bool = False) -> str:
                 ),
                 resource_id=mention_id(doc, surface),
             )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     reconcile_vocabulary(spec, llm=None)  # kinds become entities with evidence
     rrm = spec.get_resource_manager(GraphRelationship)
     with rrm.using("bob"):
@@ -204,7 +204,7 @@ def test_the_card_answers_who_holds_this_value():
             ),
             resource_id=mention_id("deck-D", "PPOOIXUX"),
         )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     card = entity_card(spec, "PPOOIXUX", as_user="alice")
 

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from specstar import SpecStar
 
-from workspace_app.kb.graph.link import link_identical_mentions
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.kb.graph.review import entity_page
 from workspace_app.resources import make_spec
@@ -48,7 +48,7 @@ def _seed(spec: SpecStar) -> str:
                 ),
                 resource_id=mention_id(doc, "回焊爐"),
             )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     erm = spec.get_resource_manager(GraphEntity)
     for r in erm.list_resources():
         if isinstance(r.data, GraphEntity) and r.data.canonical_name == "回焊爐":
@@ -191,7 +191,7 @@ def test_a_value_that_documents_also_discuss_can_be_asked_who_holds_it():
     _claim(spec, cid, subject="回焊爐", attribute="recipe", value="PPOOIXUX", period="")
     _mention(spec, cid, doc="deck-A", surface="回焊爐", kind="機台")
     _mention(spec, cid, doc="deck-B", surface="PPOOIXUX", kind="recipe")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     page = entity_page(spec, _entity_named(spec, "PPOOIXUX"), as_user="alice")
 
@@ -209,7 +209,7 @@ def test_the_thing_holding_the_value_still_shows_the_statement_as_its_own():
     _claim(spec, cid, subject="回焊爐", attribute="recipe", value="PPOOIXUX", period="")
     _mention(spec, cid, doc="deck-A", surface="回焊爐", kind="機台")
     _mention(spec, cid, doc="deck-B", surface="PPOOIXUX", kind="recipe")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     machine = entity_page(spec, _entity_named(spec, "回焊爐"), as_user="alice")
     assert [c.value for c in machine.claims] == ["PPOOIXUX"]
@@ -232,7 +232,7 @@ def test_an_unreadable_holder_never_arrives_through_the_back_direction():
         doc_visibility="private",
     )
     _mention(spec, cid, doc="deck-B", surface="PPOOIXUX", kind="recipe")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     eid = _entity_named(spec, "PPOOIXUX")
 
     assert entity_page(spec, eid, as_user="alice").value_of == []

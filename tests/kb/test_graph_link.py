@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from specstar import QB, SpecStar
 
-from workspace_app.kb.graph.link import link_identical_mentions, reconcile_vocabulary
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_surface
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphEntity, GraphEntityLink, GraphMention, mention_id
@@ -71,7 +71,7 @@ def test_mentions_with_one_key_become_one_entity():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "Reflow Oven", n=3)
     _mention(spec, cid, "deck-B", "  reflow   oven ", n=1)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
     (entity,) = _entities(spec)
     assert entity.norm_keys == [norm_surface("reflow oven")]
@@ -87,7 +87,7 @@ def test_the_display_name_is_the_surface_the_documents_used_most():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "reflow oven", n=1)
     _mention(spec, cid, "deck-B", "Reflow Oven", n=5)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     (entity,) = _entities(spec)
     assert entity.canonical_name == "Reflow Oven"
 
@@ -97,7 +97,7 @@ def test_different_keys_stay_different_entities():
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
     _mention(spec, cid, "deck-A", "錫膏")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     assert len(_entities(spec)) == 2
 
 
@@ -108,8 +108,8 @@ def test_running_twice_changes_nothing():
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
-    link_identical_mentions(spec)
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(spec, llm=None)
     assert len(_entities(spec)) == 1
     assert len(_links(spec)) == 1
 
@@ -120,9 +120,9 @@ def test_an_entity_records_every_collection_its_evidence_came_from():
     spec = make_spec(default_user=lambda: "bob")
     one, two = _collection(spec, "one"), _collection(spec, "two")
     _mention(spec, one, "deck-A", "回焊爐")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     _mention(spec, two, "deck-B", "回焊爐")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     (entity,) = _entities(spec)
     assert sorted(entity.collection_ids) == sorted([one, two])
 
@@ -133,10 +133,10 @@ def test_a_new_document_joins_the_entity_that_already_exists():
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     first = _entities(spec)[0]
     _mention(spec, cid, "deck-B", "回焊爐")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     assert len(_entities(spec)) == 1
     assert len(_links(spec)) == 2
     assert _entities(spec)[0].canonical_name == first.canonical_name
@@ -148,7 +148,7 @@ def test_a_kind_becomes_an_entity_too():
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     _mention(spec, cid, "deck-A", "回焊爐", kind="機台")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     by_name = {e.canonical_name: e for e in _entities(spec)}
     assert set(by_name) == {"回焊爐", "機台"}
     assert by_name["回焊爐"].kind_id
@@ -181,16 +181,16 @@ def test_a_declaration_joins_two_identities_without_a_reviewer():
     own: one document stating the equivalence resolves every other document's
     "RO" — including the ones that only ever use it — to the same identity. The
     link records the sentence, so anyone can check what it rested on."""
-    from workspace_app.kb.graph.link import link_declared_aliases
+    from workspace_app.kb.graph.link import reconcile_vocabulary
 
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     _declaring_mention(spec, cid, "deck-A", "回焊爐", "RO", "回焊爐,以下簡稱 RO")
     _mention(spec, cid, "deck-B", "RO")
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     assert len(_entities(spec)) == 2
 
-    assert link_declared_aliases(spec) == 1
+    reconcile_vocabulary(spec, llm=None)
     live = [e for e in _entities(spec) if e.collection_ids]
     assert len(live) == 1
     assert sorted(live[0].norm_keys) == sorted([norm_surface("回焊爐"), norm_surface("RO")])
@@ -199,16 +199,16 @@ def test_a_declaration_joins_two_identities_without_a_reviewer():
 
 
 def test_applying_declarations_twice_changes_nothing():
-    from workspace_app.kb.graph.link import link_declared_aliases
+    from workspace_app.kb.graph.link import reconcile_vocabulary
 
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     _declaring_mention(spec, cid, "deck-A", "回焊爐", "RO", "回焊爐,以下簡稱 RO")
     _mention(spec, cid, "deck-B", "RO")
-    link_identical_mentions(spec)
-    link_declared_aliases(spec)
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(spec, llm=None)
     before = len(_entities(spec)), len(_links(spec))
-    assert link_declared_aliases(spec) == 0
+    reconcile_vocabulary(spec, llm=None)
     assert (len(_entities(spec)), len(_links(spec))) == before
 
 
@@ -217,14 +217,14 @@ def test_an_absorbed_identity_says_where_it_went():
     stays, because a merge has to be undoable and a row that cannot say where it
     went is a dead end. An unexplained empty identity also reads as corruption to
     whoever finds it next."""
-    from workspace_app.kb.graph.link import link_declared_aliases
+    from workspace_app.kb.graph.link import reconcile_vocabulary
 
     spec = make_spec(default_user=lambda: "bob")
     cid = _collection(spec)
     _declaring_mention(spec, cid, "deck-A", "回焊爐", "RO", "回焊爐,以下簡稱 RO")
     _mention(spec, cid, "deck-B", "RO")
-    link_identical_mentions(spec)
-    link_declared_aliases(spec)
+    reconcile_vocabulary(spec, llm=None)
+    reconcile_vocabulary(spec, llm=None)
 
     host = [e for e in _entities(spec) if e.collection_ids]
     ghost = [e for e in _entities(spec) if not e.collection_ids]
@@ -283,10 +283,10 @@ def test_a_failed_pass_names_itself_and_keeps_its_traceback(caplog, monkeypatch)
     class _PgError(Exception):
         cursor = _Cursor()
 
-    def _boom(_spec: SpecStar) -> int:
+    def _boom(_spec: SpecStar) -> list:
         raise _PgError("stack depth limit exceeded")
 
-    monkeypatch.setattr(link_mod, "name_predicates", _boom)
+    monkeypatch.setattr(link_mod, "read_relation_evidence", _boom)
     spec = make_spec(default_user=lambda: "bob")
 
     with (
@@ -299,8 +299,8 @@ def test_a_failed_pass_names_itself_and_keeps_its_traceback(caplog, monkeypatch)
     assert failed, "a pass died and the log said nothing about it"
     record = failed[0]
     message = record.getMessage()
-    assert "name_predicates" in message, (
-        f"the log does not say WHICH pass died, which is the whole point: {message!r}"
+    assert "read_evidence" in message, (
+        f"the log does not say WHICH stage died, which is the whole point: {message!r}"
     )
     assert record.exc_info is not None, "the traceback was not captured"
     assert "IN (('r1'" in message, f"the failing statement never reached the log: {message!r}"

@@ -36,8 +36,9 @@ _LOGGER = logging.getLogger(__name__)
 _PROMPT = (
     "List everything the passage below talks about — equipment, processes, "
     "materials, defects, parameters, measurements, part numbers, products, "
-    "organisations, anything a reader would consider a distinct thing.\n\n"
-    "For each, give:\n"
+    "organisations, anything a reader would consider a distinct thing.\n"
+    "{guidance}"
+    "\nFor each, give:\n"
     '- "surface": the term EXACTLY as the passage writes it, in the same script '
     "and spelling. Do not translate, expand, abbreviate or tidy it.\n"
     '- "kind": what sort of thing it is, in the passage\'s own words (a short '
@@ -71,6 +72,27 @@ _PROMPT = (
     '"relationships": [{{"subject": ..., "predicate": ..., "object": ..., '
     '"quote": ...}}]}}\n'
     "No prose.\n\nPassage:\n{text}"
+)
+
+# The corpus's own criterion, wrapped so the model knows which rule governs.
+#
+# The sentence above it — "anything a reader would consider a distinct thing" —
+# is not a criterion at all: every noun passes it. A capable model follows it
+# exactly and exhaustively, which is why the vocabulary fills with 「系統」,
+# 「問題」, 「資料」 and every label a table happened to carry, and why a BETTER
+# model makes that worse rather than better. Nothing downstream disagrees: the
+# parser drops only empty surfaces, the writer keeps every distinct key, and the
+# vocabulary mints an identity per key. So the criterion has to arrive here.
+#
+# It is not written here. Which things deserve to exist is a fact about the
+# corpus — machines, processes, defects and part numbers matter in a fab and are
+# noise in a finance deck — and every criterion this module invented from outside
+# a corpus was wrong within a corpus or two. It comes from whoever owns the
+# collection; this only carries it, and says which rule wins when the two differ.
+_GUIDANCE_BLOCK = (
+    "\nWhat counts as a distinct thing IN THIS CORPUS is written below by the "
+    "people who own it. It is more specific than the general description above, "
+    "so where the two differ, follow this:\n\n{guidance}\n"
 )
 
 
@@ -156,9 +178,14 @@ class EntityMention:
     kind: str = ""
 
 
-def extract_entities(llm: ILlm, text: str) -> Extraction:
+def extract_entities(llm: ILlm, text: str, *, guidance: str = "") -> Extraction:
     """Extract the passage's mentions and the equivalences it declares. Never
     raises.
+
+    ``guidance`` is the collection owner's statement of what deserves to be a
+    thing in THIS corpus. Empty (the default, and the state every collection
+    starts in) sends the prompt exactly as it was before the knob existed, so a
+    collection that never set one is unaffected.
 
     A reply that is neither the expected object nor a bare mention array — a
     refusal, commentary, a truncated generation — yields nothing rather than
@@ -175,7 +202,9 @@ def extract_entities(llm: ILlm, text: str) -> Extraction:
     in the passage. Without that check the requirement would be decoration: a
     model free to invent the sentence has given nobody anything to verify.
     """
-    reply = llm.collect(_PROMPT.format(text=text))
+    guidance = guidance.strip()
+    block = _GUIDANCE_BLOCK.format(guidance=guidance) if guidance else ""
+    reply = llm.collect(_PROMPT.format(text=text, guidance=block))
     payload = _parse(reply)
     if payload is None:
         return Extraction(mentions=[], aliases=[], relationships=[], attributes=[])

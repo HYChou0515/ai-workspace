@@ -180,6 +180,20 @@ class Collection(Struct):  # → resource "collection"
     # so the graph dispatch can query the opted-in set instead of scanning. Absent
     # ≡ off (no migration).
     use_graph: bool = False
+    # #534: what deserves to BE a thing in this corpus, in the owner's words —
+    # folded into the extraction prompt (kb/graph/entity_extract). The prompt's
+    # own description ("anything a reader would consider a distinct thing") is
+    # not a criterion: every noun passes it, so a capable model faithfully fills
+    # the vocabulary with 「系統」/「問題」/「資料」 and every label a table
+    # carried, and a BETTER model makes that worse. The criterion cannot be
+    # written in the prompt because it is a fact about the corpus — machines,
+    # processes and part numbers matter in a fab and are noise in a finance deck
+    # — and every criterion this module invented from outside a corpus was wrong
+    # within a corpus or two. So it lives with the owner, next to the `use_graph`
+    # gate they already set. Blank ⇒ the prompt exactly as it was (no migration;
+    # old rows decode with the empty default). Non-indexed: never filtered or
+    # sorted on. Same shape as `wiki_*_guidance` (#90).
+    graph_guidance: str = ""
     # Issue #90: per-collection wiki guidance, APPENDED onto the bundled wiki
     # prompts (never a replacement — the machinery stays). `maintainer` shapes
     # how pages are written/organised (fold + unfold); `reader` shapes how the

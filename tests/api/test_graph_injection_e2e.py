@@ -12,7 +12,7 @@ from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.graph.link import link_identical_mentions
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.resources import make_spec
 from workspace_app.resources.graph import GraphClaim, GraphMention, mention_id
@@ -62,7 +62,7 @@ def _seed(spec) -> None:
                 doc_visibility="public",
             )
         )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
 
 
 def test_a_question_naming_a_known_thing_arrives_with_its_facts():

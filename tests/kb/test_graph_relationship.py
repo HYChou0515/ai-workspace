@@ -127,7 +127,7 @@ def test_a_connection_is_as_visible_as_the_document_that_stated_it():
 
 
 def test_a_deleted_deck_takes_its_connections_with_it():
-    from workspace_app.kb.graph.mention_write import wipe_doc_mentions
+    from workspace_app.kb.graph.persist import wipe_doc_graph
 
     spec = make_spec(default_user=lambda: "bob")
     _deck(spec)
@@ -138,5 +138,5 @@ def test_a_deleted_deck_takes_its_connections_with_it():
         source_doc_id="deck-A",
         chunks=[("deck-A#0", "回焊爐溫度過高造成空洞")],
     )
-    wipe_doc_mentions(spec, "deck-A")
+    wipe_doc_graph(spec, "deck-A")
     assert _relationships(spec) == []

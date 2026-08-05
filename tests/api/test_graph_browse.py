@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.kb.graph.link import link_identical_mentions
+from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_surface
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
@@ -47,7 +47,7 @@ def _seed(spec, *, private: bool = False) -> str:
                 ),
                 resource_id=mention_id("deck-A", surface),
             )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     return cid
 
 
@@ -162,7 +162,7 @@ def _seed_many(spec, n: int) -> str:
                 ),
                 resource_id=mention_id("deck-A", surface),
             )
-    link_identical_mentions(spec)
+    reconcile_vocabulary(spec, llm=None)
     return cid
 
 
