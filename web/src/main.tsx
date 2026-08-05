@@ -27,6 +27,10 @@ import "./styles/topic-hub.css";
 import "./styles/entity-views.css";
 import "./styles/chat-rail.css";
 import "./styles/sheet.css";
+// #698 — second-party view kinds register themselves on import. This runs
+// before the first render below, which it must: the registry is a plain map, so
+// a kind added after a view has painted would not appear in it.
+import "./ext";
 
 initTheme();
 initFontScale();
