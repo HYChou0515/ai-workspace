@@ -213,7 +213,11 @@ export function EntityViewBody(props: EntityViewBodyProps) {
       </div>
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
-      {schemaMissing && (
+      {/* Only an entity-bound kind can be missing an entity SCHEMA. A kind that
+          draws a workspace file has no entity, so this used to render as
+          "No schema for  — showing raw fields", with an empty name, above a
+          perfectly good view. */}
+      {schemaMissing && renderer.needsEntity && (
         <div role="status" className="ev-banner">
           <span className="ev-banner__icon" aria-hidden>
             ⚠

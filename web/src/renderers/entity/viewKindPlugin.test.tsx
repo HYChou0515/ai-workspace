@@ -121,9 +121,11 @@ describe("#698 second-party view kinds", () => {
     expect(await screen.findByTestId("wafer")).toHaveTextContent("A1,0.97");
     // no entity in the spec ⇒ the entity endpoints are never touched
     expect(mock.list).not.toHaveBeenCalled();
-    // ...and the entity-records empty state doesn't gatecrash a view that draws
-    // a file. It used to render whenever `entities` was empty, which is always.
+    // ...and no entity-shaped chrome gatecrashes a view that draws a file.
+    // Both of these used to fire for every file-reading kind: the item has no
+    // entity records (so "empty"), and no schema for "" (so "No schema for —").
     expect(screen.queryByText(/records yet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/no schema for/i)).not.toBeInTheDocument();
   });
 
   it("still degrades a .ai.yaml with no `view:` key to the structured tree", async () => {

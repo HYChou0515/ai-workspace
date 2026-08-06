@@ -79,6 +79,10 @@ describe("the csv-table example kind", () => {
     expect(screen.getByRole("heading", { name: /wafer yield/i })).toBeInTheDocument();
     // a kind with no `entity:` must not make the app fetch entity records
     expect(mock.list).not.toHaveBeenCalled();
+    // nor wear entity chrome. Caught by looking at the real screen, not by a
+    // unit test: the banner read "No schema for — showing raw fields", with an
+    // empty entity name, above a perfectly good grid.
+    expect(screen.queryByText(/no schema for/i)).not.toBeInTheDocument();
   });
 
   it("reads a .tsv with tab delimiters, not commas", async () => {
