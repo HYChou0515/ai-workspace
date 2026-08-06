@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import msgspec
 from specstar import QB, SpecStar
 
 from workspace_app.kb.graph.link import reconcile_vocabulary
@@ -547,3 +548,173 @@ def test_a_waiting_proposal_follows_its_subject_into_a_new_collection():
 
     (waiting,) = [link for link in _links(spec) if link.state == "pending"]
     assert sorted(waiting.collection_ids) == sorted([first, second])
+
+
+def _two_kinds_one_proposal(spec: SpecStar) -> str:
+    """A pending proposal between two KIND identities, and a second collection
+    that makes its computed ``collection_ids`` differ from the stored ones — the
+    state in which the reconcile has a reason to write the link at all."""
+    first = _collection(spec, "first")
+    _mention(spec, first, "deck-A", "回焊爐", kind="機台")
+    _mention(spec, first, "deck-A2", "SPI", kind="設備")
+    reconcile_vocabulary(spec, llm=_KindJudge())
+    second = _collection(spec, "second")
+    _mention(spec, second, "deck-B", "印刷機", kind="設備")
+    return second
+
+
+def test_an_answer_given_while_the_pass_is_writing_is_not_overwritten(monkeypatch):
+    """#697 P14 — the reconcile snapshots the link table BEFORE it writes the
+    entities, and only reaches the links afterwards. A person answering inside
+    that window is judged against a snapshot that still says `pending`, so the
+    guard that protects their answer does not fire.
+
+    With a whole-record write, what lands is the COMPUTED link: state back to
+    `pending`, basis back to `resembles`, `evidence` back to the model's
+    sentence. That is not a re-queued question — `read_decisions` can no longer
+    see the answer, so the merge is never re-derived and the pair is put to a
+    person again, forever.
+
+    The fix is not a better guard, which is a rule someone has to keep. It is to
+    write only the field being reconciled: a merge patch on `collection_ids`
+    cannot express `state` at all, so a stale snapshot costs a redundant write
+    instead of a decision.
+    """
+    from workspace_app.kb.graph.review import accept_proposal, list_proposals
+    from workspace_app.resources.graph import GraphEntity
+
+    spec = make_spec(default_user=lambda: "bob")
+    _two_kinds_one_proposal(spec)
+
+    lrm = spec.get_resource_manager(GraphEntityLink)
+
+    def answered_row():
+        rows = [
+            r
+            for r in lrm.list_resources(QB.all().build())
+            if getattr(r.data, "state", "") in ("settled", "rejected")
+        ]
+        return rows[0] if rows else None
+
+    erm = spec.get_resource_manager(GraphEntity)
+    real_update = erm.update
+    fired: dict[str, object] = {"n": 0}
+
+    def answering_update(*args, **kwargs):
+        out = real_update(*args, **kwargs)
+        if not fired["n"]:
+            fired["n"] = 1
+            (proposal,) = list_proposals(spec)
+            accept_proposal(spec, proposal.entity_id, proposal.proposed_from, by="alice")
+            row = answered_row()
+            assert row is not None
+            fired["revision"] = row.info.revision_id
+        return out
+
+    monkeypatch.setattr(erm, "update", answering_update)
+    reconcile_vocabulary(spec, llm=_KindJudge())
+    monkeypatch.setattr(erm, "update", real_update)
+
+    assert fired["n"], "the probe never got to answer mid-pass"
+    answered = [link for link in _links(spec) if link.proposed_from]
+    assert [link.state for link in answered] == ["settled"], (
+        "the pass wrote over an answer a person had just given"
+    )
+    assert [link.evidence for link in answered] == ["alice"]
+    # …and it was not merely left LOOKING right: the row a person wrote was not
+    # written to at all. The patch cannot express `state`, so without this the
+    # guard that declines the write could be deleted and nothing would notice.
+    final = answered_row()
+    assert final is not None
+    assert final.info.revision_id == fired["revision"], (
+        "the pass wrote to the row carrying the answer, narrowing what it says"
+    )
+
+
+def test_an_answered_link_is_not_written_at_all():
+    """`settled`/`rejected` are the INPUT the merge is re-derived from, so the
+    pass has no business writing them — not even to correct a field it does own.
+
+    Asserted as "no revision was produced" rather than "the values still look
+    right": the write here is a merge patch that cannot express `state`,
+    `basis` or `evidence` in the first place, so checking those would pass with
+    the guard deleted and prove nothing. What the guard owns now is that the row
+    is not touched — no revision, no `updated_by`, no rewritten access footprint
+    on a decision the pass does not own.
+    """
+    from workspace_app.kb.graph.review import accept_proposal, list_proposals
+
+    spec = make_spec(default_user=lambda: "bob")
+    _two_kinds_one_proposal(spec)
+    (proposal,) = list_proposals(spec)
+    accept_proposal(spec, proposal.entity_id, proposal.proposed_from, by="alice")
+
+    lrm = spec.get_resource_manager(GraphEntityLink)
+
+    def answered_row():
+        (row,) = [
+            r
+            for r in lrm.list_resources(QB.all().build())
+            if getattr(r.data, "state", "") in ("settled", "rejected")
+        ]
+        return row
+
+    before = answered_row()
+    baseline = before.info.revision_id
+    link = before.data
+    assert isinstance(link, GraphEntityLink)
+    # Give the pass a REASON to want to write it: its stored collections differ
+    # from what the computation now says. Without this the guard is untested
+    # because the comparison would decline the write anyway.
+    lrm.update(
+        before.info.resource_id,
+        msgspec.structs.replace(link, collection_ids=[]),
+    )
+    baseline = answered_row().info.revision_id
+
+    reconcile_vocabulary(spec, llm=_KindJudge())
+
+    after = answered_row()
+    assert after.info.revision_id == baseline, "the pass wrote to a row carrying a person's answer"
+    data = after.data
+    assert isinstance(data, GraphEntityLink)
+    assert (data.state, data.basis, data.evidence) == ("settled", "approved", "alice")
+
+
+def test_the_same_collections_in_a_different_order_are_not_a_change():
+    """A stored list and a computed one can hold the same collections in
+    different orders — the index preserves write order, the computation sorts.
+    Compared as-is that is a difference every single run: a write, a revision
+    and an `updated_by` per link per pass, for no change at all."""
+    spec = make_spec(default_user=lambda: "bob")
+    _two_kinds_one_proposal(spec)
+    reconcile_vocabulary(spec, llm=_KindJudge())
+
+    lrm = spec.get_resource_manager(GraphEntityLink)
+
+    def pending_row():
+        (row,) = [
+            r
+            for r in lrm.list_resources(QB.all().build())
+            if getattr(r.data, "state", "") == "pending"
+        ]
+        return row
+
+    # Store the same collections in the opposite order. This IS a write, and the
+    # revision it produces is the baseline: the point is that the next reconcile
+    # must not add another.
+    row = pending_row()
+    link = row.data
+    assert isinstance(link, GraphEntityLink)
+    assert len(link.collection_ids) > 1, "an order-only difference needs two collections"
+    lrm.update(
+        row.info.resource_id,
+        msgspec.structs.replace(link, collection_ids=list(reversed(link.collection_ids))),
+    )
+    baseline = pending_row().info.revision_id
+
+    reconcile_vocabulary(spec, llm=_KindJudge())
+
+    assert pending_row().info.revision_id == baseline, (
+        "the same collections in a different order were written as a change"
+    )

@@ -16,7 +16,7 @@ it to be wrong.
 
 from __future__ import annotations
 
-from specstar import QB, SpecStar
+from specstar import QB, MergePatch, SpecStar
 
 from ...resources.graph import (
     GraphClaim,
@@ -110,7 +110,9 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
     not indexed on purpose (nobody else reads it, and indexing every link to
     carry display text is precisely the cost #689 is about), so noticing a
     change to it would mean decoding every row in the corpus. It keeps whatever
-    it was first written with.
+    it was first written with — and it keeps it because the write is a merge
+    PATCH naming one field, not a replacement of the row, so `state`, `basis`
+    and `evidence` are not merely left unchanged but unreachable from here.
 
     Entities go in before the links that point at them, because the ref
     validator refuses a link whose entity is not there yet. On the way out they
@@ -155,7 +157,21 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
             # display text is the cost #689 is about), so noticing a change would
             # mean decoding every row in the corpus. What this compares is
             # exactly what the index can answer.
-            lrm.update(lid, link)
+            #
+            # A PATCH, not a write of the whole row. The snapshot above was taken
+            # before the entity loop, so a person answering while this pass runs
+            # is judged against a row that still said `pending` — and a
+            # whole-record write then puts the computed link there, sending
+            # `state` back to `pending` and `evidence` back to the model's
+            # sentence. That is not a re-queued question: the answer is the input
+            # the merge is re-derived from, so losing it un-merges the identity
+            # and asks the same pair again forever.
+            #
+            # The answer is not a sharper guard — that is a rule someone has to
+            # keep — but a write that CANNOT express the fields it does not own,
+            # aimed at the row as it is NOW rather than as the snapshot
+            # remembered it.
+            _repoint(lrm, lid, sorted(link.collection_ids))
 
     for rid in stored_links.keys() - target_links.keys():
         # A link the computation no longer produces goes — UNLESS it carries a
@@ -199,6 +215,42 @@ _PERSON_ANSWERED = frozenset({"settled", "rejected"})
 def _state_of(indexed: dict) -> str:
     """A stored link's state, with the pre-index default the field itself has."""
     return str(indexed.get("state") or "active")
+
+
+def _repoint(lrm, lid: str, collection_ids: list[str]) -> None:
+    """Bring one link's access footprint onto the computed one — if the row is
+    still what the snapshot said it was.
+
+    The snapshot this pass compares against is taken before the entity loop, so
+    a person answering while the pass runs is judged against a row that still
+    said ``pending``. Their answer is safe from the CONTENT of this write (a
+    merge patch cannot express `state`), but not from the write itself: the
+    computation's collections are the proposal's, and a decision a person wrote
+    carries the union of both sides — so patching it would quietly NARROW who
+    can see the record of their own decision.
+
+    So the state is re-read here, on the handful of rows this pass actually
+    intends to change rather than on every link in the corpus, and the write
+    carries the revision that read saw. Someone who got in between wins; the
+    next pass will bring the collections along if they still need it.
+    """
+    from specstar.types import PreconditionFailedError, ResourceIDNotFoundError
+
+    try:
+        current = lrm.get(lid)
+    except ResourceIDNotFoundError:
+        return  # deleted under us; nothing to repoint
+    link = current.data
+    if isinstance(link, GraphEntityLink) and link.state in _PERSON_ANSWERED:
+        return
+    try:
+        lrm.patch(
+            lid,
+            MergePatch({"collection_ids": collection_ids}),
+            expected_revision_id=current.info.revision_id,
+        )
+    except PreconditionFailedError:
+        return  # answered or rewritten between the read and the write
 
 
 def _subject_survives(indexed: dict, vocabulary: Vocabulary) -> bool:
