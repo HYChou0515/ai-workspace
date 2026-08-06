@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
+import pytest
 from specstar import QB
 from specstar.types import Binary
 
@@ -127,3 +128,51 @@ def test_a_deck_that_vanished_mid_run_leaves_nothing_behind():
     )
     assert _rows(spec, GraphMention, "deck-A") == []
     assert _rows(spec, GraphClaim, "deck-A") == []
+
+
+class _DyingLlm(ILlm):
+    """A model call that dies the way a killed job dies — part way through a
+    document, with no chance to write anything back."""
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        raise RuntimeError("the job was redelivered / the pod went away")
+        yield "", False  # pragma: no cover — unreachable, satisfies the protocol
+
+
+def test_a_re_extraction_that_dies_leaves_the_previous_one_standing():
+    """#697 P9: the wipe must not open before the model has answered.
+
+    Extraction is minutes of model time per document and the job it rides in has
+    a 30-minute ceiling it is known to hit (#670) — so "the run did not finish"
+    is a case that HAPPENS, not a hypothetical. Clearing the document first makes
+    every one of those a deletion: the rows are gone, nothing replaces them, and
+    the vocabulary pass then recomputes over the hole and drops the identities
+    too. A redelivery usually repairs it; a document that times out every time
+    does not get repaired, and until it is, the graph is missing evidence it
+    already had.
+
+    The previous answer is worth more than no answer, so the destructive step
+    waits until there is something to put in its place.
+    """
+    spec = make_spec(default_user=lambda: "bob")
+    _deck(spec)
+    write_doc_graph(
+        spec,
+        _CountingLlm(),
+        collection_id="c1",
+        source_doc_id="deck-A",
+        chunks=[("deck-A#0", "t")],
+    )
+    assert len(_rows(spec, GraphMention, "deck-A")) == 1
+
+    with pytest.raises(RuntimeError):
+        write_doc_graph(
+            spec,
+            _DyingLlm(),
+            collection_id="c1",
+            source_doc_id="deck-A",
+            chunks=[("deck-A#0", "t")],
+        )
+
+    assert [m.surface for m in _rows(spec, GraphMention, "deck-A")] == ["回焊爐"]
+    assert len(_rows(spec, GraphClaim, "deck-A")) == 1

@@ -7,14 +7,23 @@ model time on the most expensive thing the graph does and split the signal: the
 pass naming the things and the pass stating facts about them never saw each
 other's answers, so a subject could be named in one and a stranger to the other.
 
-Three steps, and the order is the point: clear what the document wrote before,
-read the permission its rows must carry, then COMPUTE the graph and record it.
-The computation lives in :mod:`build` and holds no store handle, so this module
-is the only part that can write — and the read-only inspection tool runs the
-same computation without it.
+Read the permission the rows must carry, COMPUTE the graph, and only then clear
+what the document wrote before and record the new answer. The computation lives
+in :mod:`build` and holds no store handle, so this module is the only part that
+can write — and the read-only inspection tool runs the same computation without
+it.
 
-Wipe-then-rewrite per document, so re-running after a prompt change replaces
-what the document produced rather than accumulating beside it.
+The order of those last two is not cosmetic. Extraction is minutes of model time
+per document inside a job with a 30-minute ceiling it is known to hit (#670), so
+"the run did not finish" is an ordinary outcome rather than a hypothetical.
+Clearing first turns every one of those into a deletion: the rows go, nothing
+arrives to replace them, and the vocabulary pass then recomputes over the hole
+and drops the identities as well. Clearing last means the previous answer stands
+until there is a new one to put in its place — which is worth more than no
+answer, and is what the wipe-then-rewrite contract was always trying to say.
+
+Still wipe-then-rewrite per document, so re-running after a prompt change
+replaces what the document produced rather than accumulating beside it.
 """
 
 from __future__ import annotations
@@ -54,10 +63,13 @@ def write_doc_graph(
     extracting from a deck whose permission cannot be read would spend the most
     expensive thing here on rows that could only be born invisible.
     """
-    wipe_doc_graph(spec, source_doc_id)
     try:
         mirror = doc_mirror_fields(spec, source_doc_id)
     except ResourceIDNotFoundError:
+        # Nothing is coming to replace them and nothing may: a deck with no
+        # permission to inherit can only produce rows born invisible. So this is
+        # the one path where clearing is the whole job.
+        wipe_doc_graph(spec, source_doc_id)
         _LOGGER.warning(
             "graph: doc %s is gone; wiped its rows and skipped extraction", source_doc_id
         )
@@ -68,5 +80,6 @@ def write_doc_graph(
         collection_id=collection_id,
         guidance=guidance,
     )
+    wipe_doc_graph(spec, source_doc_id)
     persist_doc_graph(spec, graph)
     return len(graph.mentions), len(graph.claims)
