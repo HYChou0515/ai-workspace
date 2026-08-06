@@ -42,11 +42,11 @@ def _client(**kwargs) -> TestClient:
     )
 
 
-def _preflight(client: TestClient, origin: str):
-    return client.options(
-        "/api/me",
-        headers={"Origin": origin, "Access-Control-Request-Method": "GET"},
-    )
+def _preflight(client: TestClient, origin: str, *, method: str = "GET", headers: str = ""):
+    ask = {"Origin": origin, "Access-Control-Request-Method": method}
+    if headers:
+        ask["Access-Control-Request-Headers"] = headers
+    return client.options("/api/a/rca/items", headers=ask)
 
 
 def test_a_configured_origin_may_call_us_with_credentials():
@@ -57,6 +57,38 @@ def test_a_configured_origin_may_call_us_with_credentials():
 
     assert r.headers.get("access-control-allow-origin") == _LEGACY
     assert r.headers.get("access-control-allow-credentials") == "true"
+
+
+def test_every_method_the_handoff_actually_uses_is_allowed():
+    """GET is the ONE method this feature does not need a preflight for, so
+    testing only GET tests only the case that cannot break. The handoff creates
+    (POST), uploads (PUT) and records (PATCH); if any of those is refused at
+    preflight the whole integration is dead in a real browser while every test
+    here still passes.
+    """
+    client = _client(cors_allowed_origins=[_LEGACY])
+
+    for method in ("POST", "PUT", "PATCH"):
+        r = _preflight(client, _LEGACY, method=method)
+        allowed = r.headers.get("access-control-allow-methods", "")
+        assert r.headers.get("access-control-allow-origin") == _LEGACY, method
+        assert method in allowed or "*" in allowed, f"{method} not in {allowed!r}"
+
+
+def test_the_content_type_header_the_handoff_sends_is_allowed():
+    """The create and the record steps both post JSON, and `Content-Type:
+    application/json` is not a CORS-safelisted value — the browser asks for it
+    at preflight and refuses the request if the answer omits it."""
+    client = _client(cors_allowed_origins=[_LEGACY])
+
+    r = _preflight(client, _LEGACY, method="POST", headers="content-type")
+
+    # The status matters as much as the header: a refused header makes the
+    # preflight itself fail (400), which asserting only on the echoed
+    # allow-headers value would miss.
+    assert r.status_code == 200, f"{r.status_code}: {r.text}"
+    allowed = r.headers.get("access-control-allow-headers", "").lower()
+    assert "content-type" in allowed or "*" in allowed, allowed
 
 
 def test_an_unlisted_origin_is_not_granted_access():
