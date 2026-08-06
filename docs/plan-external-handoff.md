@@ -70,15 +70,36 @@ Established by grilling; each replaced a plausible alternative that is recorded 
 
 ### Why decision 11 has teeth
 
-Not indexing is not merely "skipping an optimisation" — it **forbids a query**. If the
-field is absent from `indexed_fields`, specstar's `.contains` degrades on SQL backends to
-a substring `LIKE`, so `"legacy-rca:1"` would silently match `"legacy-rca:12345"`. Worse,
-unit tests run against the in-memory backend, which always did exact element membership —
-the tests stay green and only production is wrong (the trap already documented in
-`CLAUDE.md`). Therefore: **no code may query this field.** The client filters records it
-has already fetched. Should server-side filtering ever be needed, adding the index also
-requires a `POST /{model}/migrate/execute` backfill, or pre-existing rows become invisible
-to the new predicate (the `#668` lesson).
+Not indexing is not merely "skipping an optimisation" — it **forbids a query**. But the
+first version of this section got the mechanism backwards, and the wrong reason shipped
+into the caller-facing doc, the field's docstring and a guard test's failure message. It
+is corrected here rather than quietly reworded, because the wrong version was persuasive.
+
+**What was claimed:** an un-indexed `.contains` degrades on SQL backends to a substring
+`LIKE`, so `"legacy-rca:1"` would match `"legacy-rca:12345"`, staying exact in the
+in-memory backend the tests use — green in CI, wrong in production.
+
+**What actually happens** (measured against the running API, two items, one holding
+exactly `legacy-rca:1`): the condition never reaches SQL at all. Because the field is in no
+`indexed_fields`, specstar strips it in `_validate_query_fields` and emits a
+`SpecStarWarning`; the query returns **`200` with zero rows**, identically on memory and
+SQL, since the stripping happens before any SQL is generated. The control — the same query
+shape over the indexed `severity` — returns both rows, so the query machinery is fine.
+
+The `CLAUDE.md` note the plan leaned on describes the *opposite* precondition: that trap
+needs the field to **be** in `indexed_fields` while having lost its `list[...]`
+annotation. Ours is annotated `list[str]`, so indexing it would auto-register a list field
+and `.contains` would be exact — **indexing would make a query correct, not dangerous**.
+
+The conclusion survives, for a better reason. Zero rows is the worst possible answer to the
+only question this field exists to settle: "which items already absorbed record X?"
+answered with nothing reads as "none", so the caller re-imports and creates the duplicate
+item this design exists to prevent — with an unread warning as the sole trace. So: **no
+code may query this field**; the client filters the page it already fetched. The field
+stays un-indexed because there is no server-side query to justify the write-time cost — not
+because indexing is unsafe. Two guards hold the line together (no App indexes it; no module
+mentions it outside its definition), and if a genuine query need ever appears the honest
+move is to index it deliberately and delete both guards, not to smuggle a filter past them.
 
 ### Why decision 12 needs `updated_time`, not `created_time`
 

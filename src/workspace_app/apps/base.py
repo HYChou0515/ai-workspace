@@ -106,18 +106,32 @@ class WorkItemBase(Struct):
     meaning to the ``<system>`` half beyond "the caller says these came from
     different places".
 
-    **Deliberately absent from every App's ``INDEXED_FIELDS``, and that is a
-    prohibition, not a missing optimisation.** Un-indexed, specstar's
-    ``.contains`` degrades on SQL backends to a substring ``LIKE`` — so
-    ``"legacy-rca:1"`` would match ``"legacy-rca:12345"`` — while the in-memory
-    backend the unit tests run on keeps exact element membership. A query would
-    therefore be green in CI and silently wrong in production (the trap already
-    documented in ``CLAUDE.md``). So NOTHING may query this field: callers fetch
-    a page of items and filter the records they already hold, which costs zero
-    extra round trips because a listed record carries its own ``external_refs``.
-    Should server-side filtering ever be needed, adding the index also obliges a
-    ``POST /{model}/migrate/execute`` backfill or pre-existing rows go invisible
-    to the new predicate (the #668 lesson)."""
+    **NOTHING MAY QUERY THIS FIELD**, and the reason is not the one you might
+    expect from ``CLAUDE.md``'s ``.contains`` note — that trap needs a field to
+    BE indexed while having lost its ``list[...]`` annotation, which is the
+    opposite precondition. Measured here instead: because the field is absent
+    from every ``INDEXED_FIELDS``, specstar strips the condition above the store
+    (``_validate_query_fields``, emitting a ``SpecStarWarning``), so a filter on
+    it returns **zero rows** — identically on the in-memory and SQL backends, as
+    the stripping happens before any SQL is generated.
+
+    Zero rows is the dangerous answer for the question this field exists to
+    settle. "Which items already absorbed record X?" answered with nothing reads
+    as "none of them", so the caller hands the analysis over again and creates
+    the duplicate item this whole design exists to prevent — with a warning
+    nobody reads in production as the only trace.
+
+    Callers therefore fetch a page of items and filter the records they already
+    hold, which costs zero extra round trips because a listed record carries its
+    own ``external_refs``. Two guards keep it that way: no App may index the
+    field, and no module here may mention it outside this definition.
+
+    (Indexing it would in fact make a query CORRECT — the annotation is
+    ``list[str]``, so specstar registers a list field and ``.contains`` becomes
+    exact membership. It stays un-indexed because there is no server-side query
+    to justify the write-time cost, not because indexing is unsafe. If a real
+    query need ever appears, index it deliberately and delete these guards —
+    do not smuggle a filter past them.)"""
 
     permission: Permission | None = None
     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that

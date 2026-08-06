@@ -14,6 +14,7 @@ records it already holds.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 from workspace_app.agent.config_catalog import AgentConfigCatalog
 from workspace_app.agent.context import AgentToolContext
@@ -99,15 +100,14 @@ def test_appending_a_ref_keeps_the_ones_already_there():
 
 
 def test_no_app_indexes_external_refs():
-    """The absence of an index is a RULE, not an oversight, so it needs a guard.
+    """Keep the field out of every index, so the pair of guards stays coherent.
 
-    Indexed, the field invites `.contains` predicates — and on SQL backends an
-    un-indexed list field degrades that to a substring `LIKE`, so
-    `"legacy-rca:1"` matches `"legacy-rca:12345"`. The in-memory backend these
-    tests run on always does exact membership, so the day someone adds the index
-    and a query alongside it, CI stays green and only production is wrong. This
-    test is what makes that a deliberate decision instead of an accident: adding
-    the index has to break something and be argued for.
+    The real hazard is the sibling test below (nothing may QUERY it). This one
+    exists because the two decisions have to move together: indexing the field
+    is what would make a query start returning real answers, so an index added
+    without deleting the query ban leaves the codebase asserting two things at
+    once. Adding it must therefore be a deliberate act that breaks a test and
+    gets argued for — not a passing optimisation.
     """
     from workspace_app.apps.registry import _app_models
 
@@ -131,8 +131,42 @@ def test_no_app_indexes_external_refs():
     }
 
     assert not offenders, (
-        f"{sorted(offenders)} index external_refs — a query over it degrades to a "
-        "substring match on SQL backends while staying exact in these tests"
+        f"{sorted(offenders)} index external_refs. That is not wrong in itself — an "
+        "indexed list[str] field answers .contains exactly — but it only makes sense "
+        "together with deleting the no-query guard, so make it one deliberate change."
+    )
+
+
+def test_nothing_in_the_app_queries_external_refs():
+    """The guard that matters: a filter on this field returns ZERO ROWS.
+
+    Because it is in no `INDEXED_FIELDS`, specstar strips the condition above the
+    store and warns — on every backend, since the stripping happens before SQL is
+    generated. Verified against the running API: two items, one holding exactly
+    `legacy-rca:1`, filtered by `contains legacy-rca:1` → `200` with `[]`, while
+    the same query shape over the indexed `severity` returns both rows.
+
+    Zero rows is the worst possible answer here. "Which items already absorbed
+    record X?" answered with nothing reads as "none", so the caller re-imports and
+    creates the duplicate item this design exists to prevent — with a warning
+    nobody reads in production as the only trace.
+
+    A source-text check, deliberately: it costs one mention to trip, and the
+    alternative (waiting for someone to notice an empty result) is exactly the
+    silence being guarded against.
+    """
+    src = Path(__file__).resolve().parents[2] / "src" / "workspace_app"
+
+    mentions = sorted(
+        p.relative_to(src).as_posix()
+        for p in src.rglob("*.py")
+        if "external_refs" in p.read_text(encoding="utf-8")
+    )
+
+    assert mentions == ["apps/base.py"], (
+        f"external_refs is referenced in {mentions}. It may be declared, never filtered "
+        "on: an un-indexed field yields zero rows, which for a dedupe check reads as "
+        "'not absorbed yet' and produces a duplicate item."
     )
 
 
