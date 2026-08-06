@@ -47,6 +47,8 @@ export function WorkCalendarPage({ client = workCalendarApi }: { client?: WorkCa
   }, [data]);
 
   const save = useMutation({
+    // Renders its own error beside the Save button (`save.isError` below).
+    meta: { silentError: true },
     mutationFn: (cal: WorkCalendar) => client.putCalendar(cal),
     onSuccess: (cal) => qc.setQueryData(qk.workCalendar, cal),
   });

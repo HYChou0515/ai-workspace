@@ -2,8 +2,13 @@
  * The per-item environment variables panel.
  *
  * The item's `env_vars` are handed to the tools its agent runs — API keys and
- * the like. This edits them; the backend renders them into the sandbox each
- * turn and the tool launchers export them.
+ * the like. This edits them; the backend names them on the `exec` that
+ * dispatches each tool, per turn, and stores them nowhere else (#673).
+ *
+ * Shown only to someone who may actually store them (`write_meta`) — the shell
+ * withholds the save callback otherwise, and the header draws no button without
+ * it. Before that, every Participant was offered this panel and answered 403 by
+ * a request no one was reading.
  *
  * ONE text box holding the whole set as `.env` text, not a row per variable.
  * What people actually do with these is paste a block in from somewhere else —
@@ -18,10 +23,14 @@
  * a name written twice keeps the last, which is dotenv's own rule and is at
  * least visible here, both lines being on screen.
  *
- * Nothing is masked, deliberately. Masking would read as protection it cannot
- * deliver: anyone who can converse with this item's agent can have it read the
- * delivered file, so the only thing a mask removes is the ability to spot a
- * mistyped key.
+ * Nothing is masked, deliberately — but the reason has changed and the old one
+ * is worth not repeating. It used to be "the agent can read the delivered file
+ * anyway"; there is no file any more (#673). The reason now is that the values
+ * are a plain field on the item record, returned unredacted to anyone with
+ * `read_meta`, so a mask here hides them from the one person who may edit them
+ * and from nobody else — it would remove the ability to spot a mistyped key and
+ * deliver no protection at all. If these should ever be secret FROM readers,
+ * that is a backend change (redact on read), not a mask in this component.
  */
 import { useRef, useState } from "react";
 

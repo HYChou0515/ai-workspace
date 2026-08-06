@@ -13,9 +13,11 @@ import { WorkspaceShell } from "./WorkspaceShell";
 // stubbed down to a marker. `ActivityBar`, the thing we assert on, is internal
 // to WorkspaceShell and only mounts inside the `read_content` branch.
 const chatReadOnly = vi.fn();
+const chatProps = vi.fn();
 vi.mock("../../components/ItemChatShell", () => ({
-  ItemChatShell: ({ readOnly }: { readOnly?: boolean }) => {
-    chatReadOnly(readOnly);
+  ItemChatShell: (props: { readOnly?: boolean }) => {
+    chatReadOnly(props.readOnly);
+    chatProps(props);
     return <div data-testid="chat" />;
   },
 }));
@@ -158,5 +160,91 @@ describe("WorkspaceShell — who gets the IDE column", () => {
     expect(await screen.findByTestId("chat")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-locked")).not.toBeInTheDocument();
     expect(chatReadOnly).toHaveBeenLastCalledWith(true);
+  });
+});
+
+// The item's own FIELDS (env vars, tool/skill prefs, the attached preset) are
+// stored by a PATCH the backend gates on `write_meta`. The shell handed the save
+// callbacks down unconditionally, so a Participant got the Env button, typed
+// their keys in, pressed Save — and the 403 was dropped on the floor with the
+// panel closing as if it had worked. The affordance now follows the verb.
+describe("WorkspaceShell — who may edit the item's fields", () => {
+  /** A Participant on someone else's item: may talk to the agent, may not
+   *  store a field on it. */
+  const participantItem = {
+    ...item,
+    permission: {
+      visibility: "restricted",
+      read_meta: ["user:root"],
+      read_chat: ["user:root"],
+      read_content: ["user:root"],
+      converse: ["user:root"],
+    },
+  } as unknown as AppItem;
+
+  function openAs(withItem: AppItem) {
+    return renderWithQuery(
+      <MemoryRouter>
+        <WorkspaceShell manifest={manifest} item={withItem} files={[]} />
+      </MemoryRouter>,
+    );
+  }
+
+  it("withholds the env-var save from a Participant (no Env button, no silent 403)", async () => {
+    openAs(participantItem);
+    // Wait on the DENIED verb, not a granted one: every verb reads true until
+    // identity resolves, so asserting too early passes for the wrong reason.
+    await waitFor(() =>
+      expect(chatProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ onSaveEnvVars: undefined }),
+      ),
+    );
+    // Still a full participant otherwise — this is a narrow gate, not a lockout.
+    expect(chatReadOnly).toHaveBeenLastCalledWith(false);
+  });
+
+  it("hands the same Participant's saves to the owner", async () => {
+    openAs({ ...participantItem, created_by: "root", owner: "root" } as unknown as AppItem);
+    await waitFor(() => expect(screen.getByTestId("chat")).toBeInTheDocument());
+    expect(chatProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ onSaveEnvVars: expect.any(Function) }),
+    );
+  });
+
+  // The top bar's own two writers — the details gear and the inline domain-field
+  // chips — are that same PATCH wearing different clothes.
+  it("hides the details gear from a Participant and keeps it for the owner", async () => {
+    openAs(participantItem);
+    await waitFor(() => expect(screen.getByTestId("page-item")).toBeInTheDocument());
+    expect(screen.queryByLabelText("Edit item details")).not.toBeInTheDocument();
+
+    cleanup();
+    openAs({ ...participantItem, created_by: "root", owner: "root" } as unknown as AppItem);
+    expect(await screen.findByLabelText("Edit item details")).toBeInTheDocument();
+  });
+
+  // The env panel was the reported one, but the tool + skill pickers ride the
+  // same PATCH and were offered on the same terms.
+  it("withholds the tool and skill pref saves too — they are the same PATCH", async () => {
+    openAs(participantItem);
+    await waitFor(() =>
+      expect(chatProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ onSaveToolPrefs: undefined, onSaveSkillPrefs: undefined }),
+      ),
+    );
+  });
+
+  // The exception, pinned so it reads as a decision rather than an oversight:
+  // the preset lives in the model dropdown alongside the VIEWER's own reasoning
+  // / retrieval settings, which write_meta does not govern. Hiding it to protect
+  // one field would take those away too, so it stays and a failed pick is caught
+  // by the write-failure notice instead.
+  it("keeps the model preset picker — it also holds settings that are the viewer's own", async () => {
+    openAs(participantItem);
+    await waitFor(() =>
+      expect(chatProps).toHaveBeenLastCalledWith(
+        expect.objectContaining({ onAttachPreset: expect.any(Function) }),
+      ),
+    );
   });
 });

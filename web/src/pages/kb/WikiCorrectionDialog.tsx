@@ -73,6 +73,8 @@ export function WikiCorrectionDialog({
   });
 
   const submitMut = useMutation({
+    // Renders its own error in the drawer (`submitMut.isError` below).
+    meta: { silentError: true },
     mutationFn: () =>
       client.submitWikiCorrection(collectionId, {
         instruction: instruction.trim(),

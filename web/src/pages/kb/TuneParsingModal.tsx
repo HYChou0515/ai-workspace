@@ -67,6 +67,8 @@ export function TuneParsingModal({
   const [answers, setAnswers] = useState<{ before?: AnswerState; after?: AnswerState }>({});
 
   const probeMut = useMutation({
+    // Renders its own error in the modal (`probeMut.isError` below).
+    meta: { silentError: true },
     mutationFn: (withGuidance: boolean) =>
       client.probeFindability({
         doc_id: docId,

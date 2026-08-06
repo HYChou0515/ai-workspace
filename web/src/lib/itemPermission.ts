@@ -142,6 +142,29 @@ export function canWriteItem(
   return WRITE_VERBS.some((verb) => grantsAnySubject(permission[verb], currentUserId, groups));
 }
 
+/** May the caller edit the item's own FIELDS — env_vars, the tool/skill prefs,
+ * the attached preset, the details form?
+ *
+ * NOT {@link canWriteItem}. That one answers "may they write *something* here"
+ * (a union of edit_content / add_content / write_meta) and is the right question
+ * for entity records and workspace files. Storing a field is a different route
+ * with a different verb: the item PATCH is checked against `write_meta` ALONE
+ * (`perm/checker.work_item_permission_event_handler` → `update → write_meta`).
+ * A content editor therefore passes the union and is still refused 403, which is
+ * exactly the gap the env-var panel fell through — it was offered to every
+ * Participant, took their edits, and dropped the failure on the floor.
+ *
+ * Same shape as every other single-verb gate, so it inherits one rule rather
+ * than restating it: superuser bypasses, owner always allowed, absent ≡ public,
+ * private → owner-only, restricted → granted (user / `all` / group). */
+export const canWriteItemMeta = (
+  permission: ItemPermission | undefined,
+  currentUserId: string,
+  ownerId: string,
+  isSuperuser: boolean,
+  groups: string[] = [],
+): boolean => hasItemVerb(permission, currentUserId, ownerId, "write_meta", isSuperuser, groups);
+
 /** #306 PR3 — mirror `perm/authorize` for ONE item verb, for the FE lock states
  * (hide the thread without read_chat, the files without read_content, disable the
  * composer without converse). Superuser bypasses; owner always allowed; absent ≡
@@ -160,7 +183,10 @@ export function hasItemVerb(
   permission: ItemPermission | undefined,
   currentUserId: string,
   ownerId: string,
-  verb: ItemVerb,
+  // `write_meta` is not an `ItemVerb` because the role ladder / permission dialog
+  // do not offer it as a tier — but it IS a grant list on the permission, and the
+  // item-field PATCH gates on it, so it is askable here. See canWriteItemMeta.
+  verb: ItemVerb | "write_meta",
   isSuperuser: boolean,
   groups: string[] = [],
 ): boolean {
