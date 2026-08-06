@@ -60,7 +60,7 @@ memory + cards,就讓緩慢的 agentic 檢索變成例外,而不是每個 turn �
 | --- | --- |
 | #89 Apps | launcher card、item 清單、建立流程、**檔案工作空間 + IDE + 檔案 tool**、agent + **per-profile 系統提示**、profile(seed 檔案 / skills / 提示)、`members` + `topics`(Tier-2)、3 層 agent-config 解析、`function.*` 開關 |
 | #100 Workflows | `run()` orchestration、agent + 確定性節點、**`human_gate`**、**filesystem-journal + input-hash** 執行模型、`WorkflowRun`、capability(`ingest_to_collection`)、run-scoped 憑證、Run/Poll/Stream/Decide API、phase 圖 |
-| #106 Context Cards | `ContextCard`(`norm_keys`)、`lookup`/`match`/`cards_for_collections`/`card_context_block`、route 層注入慣用法 |
+| #106 Context Cards | `ContextCard`(`norm_keys`)、`lookup`/`match`/`cards_with_ids_for_collections`/`card_context_block`、route 層注入慣用法 |
 | #43 collab(在 `master`) | **多寫者群組聊天**(App-item `send_message` 無 owner gate、`author` 蓋章、**廣播給線上觀看者**、`/stream`)、`mention` + 通知 |
 
 **新平台磚塊** —— 小而**通用**(任何 App 都可用):
@@ -237,7 +237,7 @@ Hub 經整理的 memory 核心(與當前的 collection 集合)必須**每個 tur
 一個給常見情況用的新**輕量 agent tool**:確定性地把一個詞彙比對 Hub 各 collection 的 **context cards**。
 
 - **行為。** 給定一個詞彙(或自由文字),透過既有的 #106 primitives
-  (`cards_for_collections` + `lookup` exact-key / `match` text-scan)回傳 Hub 各 collection
+  (`cards_with_ids_for_collections` + `lookup` exact-key / `match` text-scan)回傳 Hub 各 collection
   (從 `collections.json` 讀取,§5)的匹配 `ContextCard`。**無 LLM、無 embedding、無 retriever、
   無 agentic loop。**
 - **Context 需求極小** —— 只需 Hub 的 `collection_ids`(從檔案)+ 對 `ContextCard` 的 spec 存取。

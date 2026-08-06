@@ -10,8 +10,10 @@ after the uploaded file, no settings/cards restored — so the importer doubles 
 a batch folder upload. ``created_by`` is the importing user (specstar stamps the
 acting user); the manifest's recorded uploader is informational only.
 
-``mode`` governs a path that already exists when importing into an EXISTING
-collection: ``overwrite`` (last-write-wins, the default) or ``skip``.
+``mode`` governs a COLLISION when importing into an EXISTING collection —
+``overwrite`` (last-write-wins, the default) or ``skip``. A document collides on
+its path; a context card collides on its key (#701), resolved by the same rule
+the authoring surfaces use.
 """
 
 from __future__ import annotations

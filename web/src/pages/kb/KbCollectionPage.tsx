@@ -736,7 +736,13 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
 
           {importFile && (
             <div className="kb-colpage__confirm" role="dialog" aria-label="Import into collection">
-              <span>Import “{importFile.name}” — for documents that already exist?</span>
+              {/* The choice governs context cards as well as documents (#701): a card
+                  whose term already names one here is either replaced or left alone by
+                  the same click. Naming only documents asked about one thing and
+                  decided another. */}
+              <span>
+                Import “{importFile.name}” — for documents and cards that already exist?
+              </span>
               <button type="button" className="kb-btn kb-btn--danger" disabled={importIntoMut.isPending} onClick={() => runImportInto("overwrite")}>
                 Overwrite
               </button>
