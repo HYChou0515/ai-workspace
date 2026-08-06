@@ -11,10 +11,22 @@ import type { DayOfMonth, WeekdayFormat, WeekRule } from "./ganttScale";
 import type { ScheduleFields } from "./schedule";
 import type { RefIndex } from "./refTraversal";
 
-/** The kinds this repo ships, for reference and for docs. NOT a gate: which
- * kinds exist is the registry's business (#698), so a second-party kind is just
- * another string. A closed union here used to make a plug-in fail to compile. */
-export const BUILTIN_VIEW_KINDS = ["table", "board", "gantt", "health"] as const;
+/** The kinds this repo ships. NOT a gate — which kinds exist is the registry's
+ * business (#698), so a second-party kind is just another string, and a closed
+ * union here used to make a plug-in fail to compile.
+ *
+ * They are named constants rather than inline literals because `ViewKind` is now
+ * `string`: `spec.view === "gant"` no longer draws a type error, but
+ * `VIEW_KIND.gant` still does. Use these wherever the platform tests for one of
+ * its own kinds. */
+export const VIEW_KIND = {
+  table: "table",
+  board: "board",
+  gantt: "gantt",
+  /** Cross-type: rendered by the container ahead of the dispatcher, so it is
+   * not a registry entry — but the registry still reserves the name. */
+  health: "health",
+} as const;
 
 export type ViewKind = string;
 
@@ -65,11 +77,12 @@ export type ViewSpec = {
    * this renderer serves every app's entity types. */
   schedule?: ScheduleFields;
   card?: { title?: string; badges?: string[] };
-  /** #698 — a plug-in kind's OWN keys ride along verbatim (`parseViewSpec`
-   * spreads the whole document), e.g. `source: /data/wafer.csv`. Typed as
-   * `unknown` so a plug-in narrows what it reads instead of reaching for `any`;
-   * the named fields above keep their exact types. */
-  [key: string]: unknown;
+  // #698 — a plug-in kind's OWN keys ride along verbatim at runtime
+  // (`parseViewSpec` spreads the whole document), but they are deliberately NOT
+  // declared here. An index signature would have made every field above
+  // unverifiable: `spec.weeek` and `view === "tabel"` would both compile, and
+  // excess-property checking would be off for every ViewSpec literal in the
+  // codebase. Plug-ins read their own keys through `viewParam(spec, "source")`.
 };
 
 /** The View settings panel's model (#GH-projects P3) — the effective, locally

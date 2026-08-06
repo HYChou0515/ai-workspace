@@ -67,6 +67,23 @@ describe("parseViewSpec", () => {
       source: "/data/wafer.csv",
     });
   });
+  // #698 review: widening WHAT parses without widening what is VALIDATED handed
+  // arbitrary user YAML straight into fields typed `string`. `title` is rendered
+  // as a React child, so a mapping there threw and took the page down. Every
+  // named field the platform reads must survive a hostile document.
+  it("coerces the platform's own scalar fields, so a hostile document can't smuggle an object in", () => {
+    const spec = parseViewSpec(
+      ["view: table", "entity: issue", "title:", "  en: Hello", "  zh: 你好", "span: [1, 2]", "label: 3"].join("\n"),
+    );
+    expect(spec).not.toBeNull();
+    expect(spec?.title).toBeUndefined();
+    expect(spec?.span).toBeUndefined();
+    expect(spec?.label).toBeUndefined();
+  });
+  it("drops a non-list `columns` instead of handing a renderer something it can't map over", () => {
+    expect(parseViewSpec("view: table\nentity: issue\ncolumns: nope\n")?.columns).toBeUndefined();
+    expect(parseViewSpec("view: table\nentity: issue\ncolumns: [a, 2, b]\n")?.columns).toEqual(["a", "b"]);
+  });
   it("normalises multi-level sort rules, defaulting dir + dropping malformed (#GH-projects)", () => {
     const spec = parseViewSpec(
       "view: table\nentity: issue\nsort:\n  - { field: status, dir: desc }\n  - { field: title }\n  - { dir: asc }\n",

@@ -19,13 +19,10 @@ import type { ComponentType } from "react";
 import { BoardView } from "./BoardView";
 import { GanttView } from "./GanttView";
 import { TableView } from "./TableView";
-import type { EntityViewProps } from "./types";
+import { VIEW_KIND, type EntityViewProps } from "./types";
 
 export type ViewRenderer = {
   kind: string;
-  /** Declares which of the view spec's role-bound keys this renderer consumes,
-   * for future introspection; the dispatcher doesn't rely on it yet. */
-  roleKeys?: string[];
   Component: ComponentType<EntityViewProps>;
   /** The renderer draws its own empty state (so the dispatcher shouldn't show
    * the generic "no records yet" placeholder). */
@@ -45,36 +42,30 @@ export type ViewRenderer = {
  * kind, so a name clash is a plain collision we can refuse outright. */
 const registry = new Map<string, ViewRenderer>();
 
-/** Add a view kind. Throws on a duplicate name rather than silently replacing
- * the incumbent — two renderers answering to one `view:` has no right answer,
- * and a silent winner would depend on import order. */
+/** Names the CONTAINER answers to before the dispatcher ever runs, so no entry
+ * here can win them. Without this, registering `health` succeeded and produced a
+ * component that simply never rendered — the exact silent outcome the duplicate
+ * check exists to prevent, on the one built-in name a plug-in might reuse. */
+const RESERVED = new Set<string>([VIEW_KIND.health]);
+
+/** Add a view kind. Throws on a name that is taken rather than silently
+ * replacing the incumbent — two renderers answering to one `view:` has no right
+ * answer, and a silent winner would depend on import order. */
 export function registerViewKind(def: ViewRenderer): void {
+  if (RESERVED.has(def.kind)) {
+    throw new Error(`view kind "${def.kind}" is reserved by the platform — pick a different name`);
+  }
   if (registry.has(def.kind)) {
     throw new Error(`view kind "${def.kind}" is already registered — pick a different name`);
   }
   registry.set(def.kind, def);
 }
 
-/** Remove a kind. Symmetric with `registerViewKind`; tests use it so the
- * module-level registry doesn't leak between cases. */
+/** Remove a kind. Test-only seam, so the module-level registry doesn't leak
+ * between cases — deliberately NOT re-exported from `public.ts`, or the
+ * duplicate check above would be opt-out for the very code it guards against. */
 export function unregisterViewKind(kind: string): void {
   registry.delete(kind);
-}
-
-export function hasViewKind(kind: string): boolean {
-  return registry.has(kind);
-}
-
-/** The registered renderer, or undefined for an unknown kind. Callers that want
- * to RENDER should use `resolveViewRenderer` (which degrades); this one is for
- * asking about a kind's properties (e.g. `needsEntity`). */
-export function lookupViewKind(kind: string): ViewRenderer | undefined {
-  return registry.get(kind);
-}
-
-/** Every registered kind, for diagnostics / docs. */
-export function viewKindNames(): string[] {
-  return [...registry.keys()];
 }
 
 function FallbackView({ spec }: EntityViewProps) {
@@ -103,12 +94,11 @@ export function resolveViewRenderer(kind: string): ViewRenderer {
 // cross-type and rendered by the container ahead of the dispatcher, so it isn't
 // a registry entry.
 
-registerViewKind({ kind: "table", Component: TableView, roleKeys: ["columns"], needsEntity: true });
-registerViewKind({ kind: "board", Component: BoardView, roleKeys: ["group_by", "card"], needsEntity: true });
+registerViewKind({ kind: VIEW_KIND.table, Component: TableView, needsEntity: true });
+registerViewKind({ kind: VIEW_KIND.board, Component: BoardView, needsEntity: true });
 registerViewKind({
-  kind: "gantt",
+  kind: VIEW_KIND.gantt,
   Component: GanttView,
-  roleKeys: ["span", "label", "group_by"],
   needsEntity: true,
   ownsEmptyState: true,
   // + New is offered (via the shared modal) so a gantt-only entity — the

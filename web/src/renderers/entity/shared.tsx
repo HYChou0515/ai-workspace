@@ -70,15 +70,62 @@ export function parseViewSpec(text: string): ViewSpec | null {
   const o = doc as Record<string, unknown>;
   const { view, entity } = o;
   if (typeof view !== "string" || !view) return null;
-  const sort = normalizeSort(o.sort);
-  const hidden_fields = normalizeStringList(o.hidden_fields);
   return {
+    // A plug-in's own keys ride through untouched — they are its config, and
+    // `unknown` at the type level, so it must narrow them itself.
     ...(o as ViewSpec),
+    // ...but every field the PLATFORM reads is coerced, because this document is
+    // arbitrary user YAML. Widening which files parse (#698) without widening
+    // this was a real defect: `title:` as a mapping reached a React child and
+    // threw, and with no error boundary above it that blanks the page.
     view: view as ViewKind,
-    entity: typeof entity === "string" ? entity : "",
-    sort,
-    hidden_fields,
+    entity: str(entity) ?? "",
+    title: str(o.title),
+    group_by: str(o.group_by),
+    span: str(o.span),
+    label: str(o.label),
+    assignee: str(o.assignee),
+    assignee_display: assigneeDisplay(o.assignee_display),
+    skip_weekends: typeof o.skip_weekends === "boolean" ? o.skip_weekends : undefined,
+    columns: normalizeStringList(o.columns),
+    card: normalizeCard(o.card),
+    sort: normalizeSort(o.sort),
+    hidden_fields: normalizeStringList(o.hidden_fields),
   };
+}
+
+/** Read a key the platform doesn't know about — a plug-in kind's own config,
+ * e.g. `viewParam(spec, "source")` for `source: /data/wafer.csv` (#698).
+ *
+ * This exists so `ViewSpec` does NOT need an index signature. With one, every
+ * named field lost its typo check and every `ViewSpec` literal lost excess-
+ * property checking; the cost landed on the whole codebase to serve plug-ins.
+ * Here the cast is in one audited place and the caller still has to narrow. */
+export function viewParam(spec: ViewSpec, key: string): unknown {
+  return (spec as unknown as Record<string, unknown>)[key];
+}
+
+/** Same, for the common case: a string value, or undefined if it isn't one. */
+export function viewParamString(spec: ViewSpec, key: string): string | undefined {
+  return str(viewParam(spec, key));
+}
+
+/** A YAML scalar that must be a string, or nothing. */
+function str(raw: unknown): string | undefined {
+  return typeof raw === "string" && raw ? raw : undefined;
+}
+
+function assigneeDisplay(raw: unknown): ViewSpec["assignee_display"] {
+  return raw === "avatar" || raw === "name" || raw === "none" ? raw : undefined;
+}
+
+/** `card:` drives the board's title + badges, both rendered — so both are
+ * coerced, and a non-object `card:` is dropped rather than dereferenced. */
+function normalizeCard(raw: unknown): ViewSpec["card"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const card = { title: str(o.title), badges: normalizeStringList(o.badges) };
+  return card.title === undefined && card.badges === undefined ? undefined : card;
 }
 
 /** Set (or remove) a TOP-LEVEL scalar `key` in a view file's raw YAML, preserving

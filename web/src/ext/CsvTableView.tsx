@@ -20,7 +20,7 @@
  * why, and `docs/view-kind-authoring.md` for the guide this file mirrors.
  */
 
-import { DataGrid, type EntityViewProps, parseCsv, useFileBuffer } from "../renderers/entity/public";
+import { DataGrid, type EntityViewProps, parseCsv, useFileBuffer, viewParamString } from "../renderers/entity/public";
 
 function Notice({ children }: { children: React.ReactNode }) {
   return (
@@ -43,7 +43,9 @@ function CsvFromFile({ path }: { path: string }) {
 }
 
 export function CsvTableView({ spec }: EntityViewProps) {
-  const source = typeof spec.source === "string" ? spec.source.trim() : "";
+  // `source` is this kind's own key, so it isn't on `ViewSpec` — read it with
+  // `viewParamString`, which hands back a string or nothing.
+  const source = viewParamString(spec, "source")?.trim() ?? "";
   if (!source) {
     return <Notice>This view needs a `source:` naming the CSV/TSV file to show.</Notice>;
   }

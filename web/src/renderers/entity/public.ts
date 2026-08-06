@@ -1,11 +1,11 @@
 /**
  * The surface a second-party view kind may use (#698).
  *
- * Everything under `web/src/ext/` imports from HERE and nowhere else — the
- * `no-restricted-imports` rule in `eslint.config.js` makes that a lint error
- * rather than a convention people remember. Nothing else in the app should
- * import this module; it exists to name a boundary, not to be a second way to
- * reach the same code.
+ * Everything under `web/src/ext/` imports from HERE and nowhere else, enforced
+ * by `ext/imports.test.ts` (this project has no ESLint) — a red build rather
+ * than a convention people remember. Nothing else in the app should import this
+ * module; it exists to name a boundary, not to be a second way to reach the
+ * same code.
  *
  * This is NOT a frozen API and carries no version. Plug-ins live in this repo
  * and compile in the same CI run, so when we change something here the breakage
@@ -22,14 +22,18 @@
  */
 
 // ── registration ───────────────────────────────────────────────────────────
-export { registerViewKind, unregisterViewKind, viewKindNames } from "./viewKindRegistry";
+// `unregisterViewKind` is deliberately absent: it is a test seam, and exporting
+// it here would make the duplicate-name check opt-out for exactly the code it
+// exists to guard.
+export { registerViewKind } from "./viewKindRegistry";
 export type { ViewRenderer } from "./viewKindRegistry";
 
 // ── the view file ──────────────────────────────────────────────────────────
-// `ViewSpec` carries the parsed `.ai.yaml`. Your own top-level keys survive
-// verbatim (typed `unknown` — narrow them, don't cast to `any`).
+// `ViewSpec` carries the parsed `.ai.yaml`. Fields the platform knows are typed
+// and coerced; YOUR OWN keys are not on the type — read them with
+// `viewParamString(spec, "source")` / `viewParam`.
 export type { EntityViewProps, ViewSpec } from "./types";
-export { BUILTIN_VIEW_KINDS } from "./types";
+export { viewParam, viewParamString } from "./shared";
 
 // ── workspace files: where a plug-in's data comes from ─────────────────────
 // `useFileBuffer(path)` is the cached read (it also tracks external writes);

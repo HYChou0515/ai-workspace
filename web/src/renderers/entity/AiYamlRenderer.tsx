@@ -34,7 +34,7 @@ import { EntityRecordModal } from "./EntityRecordModal";
 import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
 import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
 import { setViewScalar } from "./shared";
-import type { SortRule, ViewConfig } from "./types";
+import { VIEW_KIND, type SortRule, type ViewConfig } from "./types";
 
 /** The View panel's uncommitted edits — a full snapshot of the three panel-owned
  * spec fields (so an untouched field persists through a save of the others). */
@@ -52,7 +52,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   // every hook below is still called unconditionally.
   const spec = entry.status === "ready" ? parseViewSpec(entry.text) : null;
   const entityName = spec?.entity ?? "";
-  const isHealth = spec?.view === "health";
+  const isHealth = spec?.view === VIEW_KIND.health;
 
   // §E read-only gate: derive the item's write permission for this member; a
   // read-only viewer's write affordances are hidden and every write is a no-op.
@@ -120,7 +120,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   }
   if (!spec) return <YamlTree text={entry.text} />;
 
-  if (spec.view === "health") {
+  if (spec.view === VIEW_KIND.health) {
     // Click-to-fix: resolve the finding's type → `records_path` from the catalog
     // and open its record file. Only offered when a shell publishes an opener
     // (§F, #454); an unknown type just no-ops rather than opening a bad path.
@@ -225,7 +225,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const persistGantt = (yaml: string) => void fileService.writeFile(path, yaml).then(() => applyExternalWrite(yaml));
 
   const viewConfig: ViewConfig | undefined =
-    canWrite && type && (spec.view === "table" || spec.view === "board")
+    canWrite && type && (spec.view === VIEW_KIND.table || spec.view === VIEW_KIND.board)
       ? {
           fieldOptions: candidateColumns.map((c) => ({ name: c, label: c })),
           hidden: eff.hidden_fields,
@@ -246,7 +246,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
           onSave: () => void saveView(),
           onReset: () => setOverride(undefined),
         }
-      : canWrite && spec.view === "gantt"
+      : canWrite && spec.view === VIEW_KIND.gantt
         ? // gantt gear: Group by + working-day toggle + people display. Each change
           // persists comment-safe via a targeted text edit, NOT saveView's js-yaml
           // dump, so the self-documenting `week:` block survives. (Sort / Fields

@@ -40,7 +40,8 @@
 | `web/src/api/queryClient.ts` | 唯一的 TanStack `QueryClient`（retry 1、`refetchOnWindowFocus` false、staleTime 30s）。工具型 App 的預設，非即時儀表板。 |
 | `web/src/api/fileService.ts` | `FileService` 接縫 + React context（#87）：檔案樹 IDE 跑在注入的 `FileService` 上（`investigationFileService` vs `kbFileService`），用 `FileCaps` 能力結構讓樹隱藏不支援的操作。 |
 | `web/src/renderers/registry.ts` | 檔案預覽註冊表——**唯一**把 path → renderer Component + flags（`editToggle`/`rawEditor`/`outline`）的表。新增預覽型別 = 一個 entry。**尚未開放第二方註冊**（仍是 const 陣列，順序即語意）。 |
-| `web/src/renderers/entity/viewKindRegistry.tsx` | view-kind 註冊表——`*.ai.yaml` 的 `view:` → Component。**唯一**知道有哪些 kind 的地方（`parseViewSpec` 不再持有副本）；`registerViewKind` 開放第二方在 `web/src/ext/` 註冊（#698）。內建 kind 走同一個函式，沒有特權路徑。 |
+| `web/src/renderers/entity/viewKindRegistry.tsx` | view-kind 註冊表——`*.ai.yaml` 的 `view:` → Component。**唯一**知道哪些 kind 名稱已被佔用的地方：已註冊的（`registry`）+ 容器自己接手的保留名（`RESERVED`，目前只有 `health`）。`parseViewSpec` 不再持有副本，它只判斷「是不是 view 檔」。`registerViewKind` 開放第二方在 `web/src/ext/` 註冊（#698），內建 kind 走同一個函式、沒有特權路徑，撞名或撞保留名都直接丟例外。 |
+| `web/src/renderers/entity/ViewErrorBoundary.tsx` | 全 repo **唯一**的 error boundary，只包住 view kind 的 renderer。第二方程式碼一個 throw 本來會把整個 app 卸載成白畫面（#698）。 |
 | `web/src/renderers/entity/public.ts` | 第二方 view kind 的**唯一**入口面（註冊 + 檔案存取 + 繪圖 helper）。`src/ext/**` 只能從這裡 import，由 `src/ext/imports.test.ts` 強制。 |
 | `web/src/renderers/kbCite.tsx` | 共用 `[n]→citation` 渲染：`buildByMarker`、`kbCiteUrlTransform`（讓 `kb-cite:` scheme 穿過 react-markdown sanitizer）、`kbCiteAnchor`（可點行內 pill）、`renderCitedText`（純文字 `<pre>` 拆分）。把 marker 解析規則集中一處。 |
 | `web/src/renderers/report/remarkKbCitation.ts` | remark plugin，把 `[N]` 改寫成 `kb-cite:N` 連結，讓 markdown renderer 能轉成可點的引用 pill。 |

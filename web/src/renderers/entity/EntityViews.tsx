@@ -21,6 +21,7 @@ import { RoleCreateInput, type WidgetKind } from "./roleWidget";
 import { ConflictBanner, fieldText, parseSpan, parseViewSpec } from "./shared";
 import type { EntityViewProps, ViewConfig, ViewKind, ViewSpec } from "./types";
 import { ViewSettingsPanel } from "./ViewSettingsPanel";
+import { ViewErrorBoundary } from "./ViewErrorBoundary";
 import { resolveViewRenderer } from "./viewKindRegistry";
 
 // Re-exports so existing importers (`AiYamlRenderer`, tests) keep their
@@ -186,10 +187,14 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   // view, so say so — it used to fall out of the parser as `null` and silently
   // become a raw YAML tree, which reads as "this file is not a view".
   const missingEntity = !!renderer.needsEntity && !spec.entity;
-  // The generic placeholder is about entity records, so only an entity-bound
-  // kind can be "empty" in that sense — a plug-in reading files is never empty
-  // just because the item has no entities.
-  const showEmpty = !!renderer.needsEntity && entities.length === 0 && !renderer.ownsEmptyState;
+  // Entity-shaped chrome keys off whether this VIEW names an entity, not off
+  // whether the kind requires one. The container fetches from `spec.entity`
+  // (AiYamlRenderer), so a kind without `needsEntity` whose file still names an
+  // `entity:` does get records — gating on `needsEntity` suppressed the
+  // schema-missing warning for exactly that view, and claimed in the docs that
+  // its entity props were empty when they were not.
+  const hasEntity = !!spec.entity;
+  const showEmpty = hasEntity && entities.length === 0 && !renderer.ownsEmptyState;
   return (
     <div className="ev-panel">
       <div className="ev-panel__head">
@@ -213,11 +218,11 @@ export function EntityViewBody(props: EntityViewBodyProps) {
       </div>
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
-      {/* Only an entity-bound kind can be missing an entity SCHEMA. A kind that
-          draws a workspace file has no entity, so this used to render as
+      {/* Only a view that NAMES an entity can be missing that entity's schema.
+          A kind drawing a workspace file names none, so this used to render as
           "No schema for  — showing raw fields", with an empty name, above a
           perfectly good view. */}
-      {schemaMissing && renderer.needsEntity && (
+      {schemaMissing && hasEntity && (
         <div role="status" className="ev-banner">
           <span className="ev-banner__icon" aria-hidden>
             ⚠
@@ -253,7 +258,9 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           <div>No {spec.entity} records yet.</div>
         </div>
       ) : (
-        <Component {...props} />
+        <ViewErrorBoundary kind={spec.view}>
+          <Component {...props} />
+        </ViewErrorBoundary>
       )}
     </div>
   );

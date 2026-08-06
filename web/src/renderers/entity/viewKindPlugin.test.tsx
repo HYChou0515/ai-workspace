@@ -149,8 +149,38 @@ describe("#698 second-party view kinds", () => {
     expect(screen.queryByTestId("never")).not.toBeInTheDocument();
   });
 
+  // The whole point of this seam is code the platform team did not write. There
+  // was no error boundary anywhere between `createRoot` and the view, so one
+  // throw in a plug-in unmounted the ENTIRE app — a blank page, not a blank
+  // panel.
+  it("contains a throwing plug-in inside its own panel instead of taking the app down", async () => {
+    register({
+      kind: "acme-explodes",
+      Component: () => {
+        throw new Error("plug-in blew up");
+      },
+    });
+
+    renderView("/views/boom.ai.yaml", { "/views/boom.ai.yaml": "view: acme-explodes\n" });
+
+    expect(await screen.findByText(/this view failed to render/i)).toBeInTheDocument();
+    // the surrounding shell survived — the panel is still on the page
+    expect(document.querySelector(".ev-panel")).not.toBeNull();
+  });
+
   it("refuses a duplicate registration instead of silently replacing the incumbent", () => {
     register({ kind: "acme-dup", Component: () => <div /> });
     expect(() => registerViewKind({ kind: "acme-dup", Component: () => <div /> })).toThrow(/acme-dup/);
+  });
+
+  // `health` is rendered by the container BEFORE the dispatcher, so it isn't a
+  // registry entry — which meant registering it used to succeed and produce a
+  // component that simply never rendered. That is the silent, import-order
+  // outcome the duplicate check exists to prevent, on the one built-in name a
+  // plug-in author might plausibly reuse.
+  it("refuses a name the container answers to, rather than accepting a kind that can never render", () => {
+    expect(() => registerViewKind({ kind: "health", Component: () => <div data-testid="never" /> })).toThrow(
+      /reserved/i,
+    );
   });
 });

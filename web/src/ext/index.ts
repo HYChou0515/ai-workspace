@@ -10,8 +10,8 @@
  * registry is a plain module-level map, so a kind registered after a view has
  * already painted will not retroactively appear in it.
  *
- * Everything in this folder imports from `renderers/entity/public` only; the
- * `no-restricted-imports` rule in `eslint.config.js` enforces that.
+ * Everything in this folder — including subfolders — imports from
+ * `renderers/entity/public` only; `./imports.test.ts` enforces that.
  *
  * See `docs/view-kind-authoring.md`.
  */

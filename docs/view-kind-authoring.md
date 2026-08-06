@@ -26,13 +26,13 @@ web/src/ext/
 
 ## 2. 最小可動範例
 
-一個把 workspace 裡的 CSV 畫成表格的 kind。這份程式碼就是 repo 裡的
-[`web/src/ext/CsvTableView.tsx`](https://github.com/HYChou0515/ai-workspace/blob/master/web/src/ext/CsvTableView.tsx)，
-跟著測試一起跑 CI，所以它不會過期。
+一個把 workspace 裡的 CSV 畫成表格的 kind。**權威版本是 repo 裡的**
+[`web/src/ext/CsvTableView.tsx`](https://github.com/HYChou0515/ai-workspace/blob/master/web/src/ext/CsvTableView.tsx)——它跟著測試一起跑 CI。
+下面是同一份程式碼的節錄（省略了錯誤訊息的樣式），**以檔案為準**：
 
 ```tsx
 // web/src/ext/CsvTableView.tsx
-import { DataGrid, type EntityViewProps, parseCsv, useFileBuffer } from "../renderers/entity/public";
+import { DataGrid, type EntityViewProps, parseCsv, useFileBuffer, viewParamString } from "../renderers/entity/public";
 
 // 讀檔的部分獨立成一個元件，這樣「沒有 source」的情況可以在父層直接 return，
 // 不會變成有條件呼叫 hook（React 不允許）。
@@ -40,11 +40,13 @@ function CsvFromFile({ path }: { path: string }) {
   const { entry } = useFileBuffer(path);
   if (entry.status === "loading") return <div>Loading {path}…</div>;
   if (entry.status === "error") return <div>{entry.error ?? `could not read ${path}`}</div>;
-  return <DataGrid rows={parseCsv(entry.text)} />;
+  const delimiter = path.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+  return <DataGrid rows={parseCsv(entry.text, delimiter)} />;
 }
 
 export function CsvTableView({ spec }: EntityViewProps) {
-  const source = typeof spec.source === "string" ? spec.source.trim() : "";
+  // `source` 是你自己的 key，不在 ViewSpec 上 —— 用 viewParamString 讀
+  const source = viewParamString(spec, "source")?.trim() ?? "";
   if (!source) return <div>This view needs a `source:`.</div>;
   return <CsvFromFile path={source} />;
 }
@@ -68,7 +70,11 @@ source: /data/wafer.csv  # 這是「你自己的」key，見下一節
 ```
 
 `kind` 撞名會**直接丟例外**（開機就爆，不是靜默覆蓋）——兩個元件搶同一個 `view:` 沒有正確答案，
-而靜默的勝負會取決於 import 順序。取名建議加自己的前綴，例如 `acme-wafermap`。
+而靜默的勝負會取決於 import 順序。平台保留的名字（目前是 `health`，由容器自己接手渲染）
+同樣會丟例外，而不是讓你註冊成功卻永遠畫不出來。取名建議加自己的前綴，例如 `acme-wafermap`。
+
+**你的元件 throw 不會弄垮整個 app。** renderer 外面包了一層 error boundary，壞掉時只有那個面板
+變成一則錯誤訊息，其餘畫面照常；完整的 stack 會進 console。
 
 ## 3. 你的資料從哪來
 
@@ -77,11 +83,15 @@ source: /data/wafer.csv  # 這是「你自己的」key，見下一節
 ### 3.1 你自己的設定：`spec`
 
 `spec` 是那份 `.ai.yaml` 解析後的內容。平台認得的 key（`view` / `title` / `entity` / `columns`…）
-有明確型別；**你自己加的 key 會原封不動傳給你**，型別是 `unknown`：
+有明確型別，而且**會被強制轉型**——那份 YAML 是使用者手寫的，所以 `title:` 寫成一個 mapping 時
+你拿到的是 `undefined`，不是一個會讓 React 當場爆掉的物件。
+
+**你自己加的 key 不在 `ViewSpec` 型別上**（放上去會讓平台自己每個欄位都失去錯字檢查），
+用存取器讀：
 
 ```tsx
-const source = typeof spec.source === "string" ? spec.source : "";   // ✅ 收窄
-const source = spec.source as string;                                // ❌ 別這樣
+const source = viewParamString(spec, "source")?.trim() ?? "";   // ✅ 字串或 undefined
+const raw = viewParam(spec, "options");                          // ✅ unknown，自己收窄
 ```
 
 ### 3.2 Workspace 檔案
@@ -103,11 +113,14 @@ const source = spec.source as string;                                // ❌ 別�
 只有當你的 kind 要畫「entity 紀錄」（issue、milestone 這類結構化紀錄）時才需要。你要在註冊時
 宣告 `needsEntity: true`，那份 view 檔就必須寫 `entity:`；沒寫的話使用者會看到一則明確的提示。
 
-**不宣告 `needsEntity` 的話，下面這些 props 就是空的**——這是正常的，不是壞掉：
+**判準是那份 view 檔有沒有寫 `entity:`，不是你有沒有宣告 `needsEntity`。** `needsEntity` 只
+決定「沒寫 `entity:` 時要不要擋下來」。所以一份寫了 `entity:` 的檔案，即使你的 kind 沒宣告
+`needsEntity`，下面這些 props 一樣會有內容。**view 檔沒寫 `entity:` 時它們才是空的**——那是
+正常的，不是壞掉：
 
 | prop | 是什麼 |
 |---|---|
-| `entities` | 紀錄陣列。沒宣告 `needsEntity` ⇒ `[]` |
+| `entities` | 紀錄陣列。view 檔沒寫 `entity:` ⇒ `[]` |
 | `type` | 該 entity 的 schema（欄位、role、表單）。沒有就是 `null` |
 | `onCreate` / `onPatch` | 寫入用。**要改 entity 一律走這兩個**，不要自己打 API |
 | `canWrite` | 見下一節 |
@@ -150,7 +163,8 @@ pnpm vitest run src/ext   # 你的測試
 1. 開分支，只動 `web/src/ext/`
 2. 補測試——建議照 [`CsvTableView.test.tsx`](https://github.com/HYChou0515/ai-workspace/blob/master/web/src/ext/CsvTableView.test.tsx)
    從**檔案內容**進去測，那才是使用者真正走的路徑
-3. 開 PR。`web/src/ext/` 掛在 CODEOWNERS 底下 → 只動這個資料夾的 PR 由你們自己審，不必排隊等平台
+3. 開 PR。**（待設定）** 目標是把 `web/src/ext/` 掛進 CODEOWNERS，讓只動這個資料夾的 PR 由你們
+   自己審、不必排隊等平台。這需要一個實際的 GitHub team handle，還沒建立——在那之前照一般流程送審
 4. 合併後隨下一次部署上線
 
 ## 7. 相容性

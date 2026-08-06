@@ -86,13 +86,23 @@ built-ins go through it too, so a second-party kind takes the same path the app
 exercises on every startup.
 
 A view kind does **not** have to be entity-bound. Declare `needsEntity: true`
-only if you draw entity records (the dispatcher then insists the view file names
-an `entity:`); otherwise your component reads whatever workspace files it wants
-via `useFileBuffer` / `useFileService`, and the entity props arrive empty.
+only if you draw entity records — that flag decides whether a view file *must*
+name an `entity:`, nothing more. What actually drives the entity fetch and the
+entity-shaped chrome is `spec.entity`, so a kind without `needsEntity` whose
+file names one still gets records. A kind reading workspace files names no
+entity, and those props arrive empty.
 
 `parseViewSpec` answers only "is this a view file?" (does it name a kind). It
 does not know which kinds exist and does not enforce `entity:` — both moved to
-the registry, so adding a kind touches neither the parser nor a TS union.
+the registry, so adding a kind touches neither the parser nor a TS union. It
+DOES coerce every field the platform reads: the document is arbitrary user YAML,
+and widening what parses without widening what is validated let a `title:`
+mapping reach a React child and blank the page.
+
+The registry also refuses names the container answers to itself (`health`), so a
+registration can't succeed and then never render. `ViewErrorBoundary` wraps the
+renderer — the one error boundary in this app, because this is the one place
+that runs code the platform team didn't write.
 
 Maintainer-authored kinds live in `../../ext/`, import solely from
 `entity/public.ts` (enforced by `../../ext/imports.test.ts`), and are registered
