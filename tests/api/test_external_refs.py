@@ -4,10 +4,13 @@ A legacy system hands an analysis over by creating (or adding to) a work item.
 `create_app_item` mints a fresh uuid every call, so without a record of what has
 already been handed over, one real-world problem sprawls into N items. The record
 is a plain list of opaque `<system>:<record-id>` strings on `WorkItemBase` —
-deliberately NOT indexed, because nothing may query it (see the plan: an
-unindexed `.contains` degrades to substring LIKE on SQL backends while the
-in-memory test backend keeps exact membership, so a query would be green in CI
-and wrong in production). The caller fetches a page of items and filters the
+deliberately NOT indexed, because nothing may query it. Measured, and NOT the
+`substring LIKE` story an earlier version of this docstring told (that trap needs
+the opposite precondition): un-indexed, the predicate has no `indexed_data` to
+match, so it returns **zero rows** on every backend. Zero rows is the worst
+answer here — "which items already absorbed record X?" answered with nothing
+reads as "none", so the caller re-imports and creates the duplicate item this
+design exists to prevent. The caller fetches a page of items and filters the
 records it already holds.
 """
 
@@ -65,17 +68,23 @@ def test_create_item_keeps_the_external_refs_it_was_handed():
 def test_listed_records_carry_their_external_refs():
     """The caller decides "already absorbed?" from the page it fetched, so the
     refs must ride along IN the listing. Without this the design collapses into
-    a per-ref query — the one thing the un-indexed field forbids."""
+    a per-ref query — the one thing the un-indexed field forbids.
+
+    Asserted against the ENVELOPE listing, the one a picker must actually use:
+    `/data` also carries the refs but has no resource id, so a caller cannot act
+    on the row it just filtered. Testing the shape nobody may use would leave the
+    real one uncovered here."""
     app, _ = _app_and_spec()
     client = TestClient(app)
     client.post("/a/rca/items", json={"title": "From legacy", "external_refs": ["legacy-rca:1"]})
     client.post("/a/rca/items", json={"title": "Opened by hand"})
 
-    rows = client.get("/rca-investigation/data?limit=100").json()
+    rows = client.get("/rca-investigation?limit=100").json()
 
-    by_title = {row["title"]: row for row in rows}
-    assert by_title["From legacy"]["external_refs"] == ["legacy-rca:1"]
-    assert by_title["Opened by hand"]["external_refs"] == []
+    by_title = {row["data"]["title"]: row for row in rows}
+    assert by_title["From legacy"]["data"]["external_refs"] == ["legacy-rca:1"]
+    assert by_title["Opened by hand"]["data"]["external_refs"] == []
+    assert by_title["From legacy"]["revision_info"]["resource_id"]
 
 
 def test_appending_a_ref_keeps_the_ones_already_there():
@@ -140,9 +149,10 @@ def test_no_app_indexes_external_refs():
 def test_nothing_in_the_app_queries_external_refs():
     """The guard that matters: a filter on this field returns ZERO ROWS.
 
-    Because it is in no `INDEXED_FIELDS`, specstar strips the condition above the
-    store and warns — on every backend, since the stripping happens before SQL is
-    generated. Verified against the running API: two items, one holding exactly
+    Because it is in no `INDEXED_FIELDS` there is no `indexed_data` for the
+    predicate to match, so it returns nothing on every backend; specstar warns
+    that such a query "will under-return". Verified against the running API: two
+    items, one holding exactly
     `legacy-rca:1`, filtered by `contains legacy-rca:1` → `200` with `[]`, while
     the same query shape over the indexed `severity` returns both rows.
 

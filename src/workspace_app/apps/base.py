@@ -99,8 +99,14 @@ class WorkItemBase(Struct):
     real-world problem across N items, each holding a fraction of the context.
     Several external records may converge onto one item (the whole point: the
     outside system splits a problem into pieces that only a human can regroup),
-    and the SAME record may legitimately appear on several items; the only rule
-    is that a record appears at most once PER item.
+    and the SAME record may legitimately appear on several items.
+
+    "At most once per item" is the CALLER'S contract, not a guarantee this field
+    makes. Nothing here rejects a duplicate — a create carrying the same ref
+    twice stores it twice, and so does a repeated RFC 6902 ``add``. The platform
+    is an opaque store for these strings; the recording procedure in
+    ``docs/external-handoff.md`` gets the property by re-reading before it
+    writes. Anything relying on uniqueness must not assume this field enforces it.
 
     The value is opaque: it is compared, never parsed. The platform assigns no
     meaning to the ``<system>`` half beyond "the caller says these came from
@@ -110,10 +116,13 @@ class WorkItemBase(Struct):
     expect from ``CLAUDE.md``'s ``.contains`` note — that trap needs a field to
     BE indexed while having lost its ``list[...]`` annotation, which is the
     opposite precondition. Measured here instead: because the field is absent
-    from every ``INDEXED_FIELDS``, specstar strips the condition above the store
-    (``_validate_query_fields``, emitting a ``SpecStarWarning``), so a filter on
-    it returns **zero rows** — identically on the in-memory and SQL backends, as
-    the stripping happens before any SQL is generated.
+    from every ``INDEXED_FIELDS`` there is no ``indexed_data`` entry for the
+    predicate to match, so a filter on it returns **zero rows** — identically on
+    the in-memory and SQL backends. specstar does not swallow it in silence:
+    ``_validate_query_fields`` warns that the condition "matches nothing, so the
+    query will under-return" (and a deployment may set ``on_unindexed_query`` to
+    ``error`` to make it raise). But a warning in a server log is not a guard,
+    which is why the ban is enforced by tests.
 
     Zero rows is the dangerous answer for the question this field exists to
     settle. "Which items already absorbed record X?" answered with nothing reads

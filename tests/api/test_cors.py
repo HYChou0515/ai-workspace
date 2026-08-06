@@ -71,8 +71,12 @@ def test_every_method_the_handoff_actually_uses_is_allowed():
     for method in ("POST", "PUT", "PATCH"):
         r = _preflight(client, _LEGACY, method=method)
         allowed = r.headers.get("access-control-allow-methods", "")
+        assert r.status_code == 200, f"{method}: {r.status_code} {r.text}"
         assert r.headers.get("access-control-allow-origin") == _LEGACY, method
-        assert method in allowed or "*" in allowed, f"{method} not in {allowed!r}"
+        # A concrete method, not a `*` escape hatch: paired with
+        # allow_credentials a literal `*` is invalid to browsers anyway, so
+        # accepting it here would let a real regression through.
+        assert method in allowed, f"{method} not in {allowed!r}"
 
 
 def test_the_content_type_header_the_handoff_sends_is_allowed():
@@ -88,7 +92,7 @@ def test_the_content_type_header_the_handoff_sends_is_allowed():
     # allow-headers value would miss.
     assert r.status_code == 200, f"{r.status_code}: {r.text}"
     allowed = r.headers.get("access-control-allow-headers", "").lower()
-    assert "content-type" in allowed or "*" in allowed, allowed
+    assert "content-type" in allowed, allowed
 
 
 def test_an_unlisted_origin_is_not_granted_access():

@@ -81,9 +81,11 @@ in-memory backend the tests use — green in CI, wrong in production.
 
 **What actually happens** (measured against the running API, two items, one holding
 exactly `legacy-rca:1`): the condition never reaches SQL at all. Because the field is in no
-`indexed_fields`, specstar strips it in `_validate_query_fields` and emits a
-`SpecStarWarning`; the query returns **`200` with zero rows**, identically on memory and
-SQL, since the stripping happens before any SQL is generated. The control — the same query
+`indexed_fields` there is no `indexed_data` entry for the predicate to match, so the query
+returns **`200` with zero rows**, identically on memory and SQL. It is not swallowed in
+silence — `_validate_query_fields` warns that the condition "matches nothing, so the query
+will under-return", and `on_unindexed_query=error` would make it raise — but a warning in a
+server log is not a guard, which is why the ban is enforced by tests. The control — the same query
 shape over the indexed `severity` — returns both rows, so the query machinery is fine.
 
 The `CLAUDE.md` note the plan leaned on describes the *opposite* precondition: that trap
@@ -182,21 +184,37 @@ without a single extra request), and how to sort or filter them for display.
 > `limit` and the call silently degrades to fetching everything, nullifying decision 12.
 
 **2a — User picked an existing item:** upload each file (raw body, not multipart;
-`204` on success), then append the ref.
+`204` on success), then record the ref — read-first, under an optimistic lock,
+retrying on `412`.
 
 ```
 PUT   /api/a/{slug}/items/{id}/files/{path}
-PATCH /api/rca-investigation/{id}
+
+GET   /api/rca-investigation/{id}                     → data.external_refs, revision_info.revision_id
+      ↳ ref already present? stop, nothing to do      (this is what makes a retry safe)
+PATCH /api/rca-investigation/{id}?expected_revision_id=<that revision_id>
       [{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:12345"}]
+      → 200 done · 412 someone wrote first, re-read and retry
 ```
 
-**2b — User wants a new item:** create it, then upload, then append as above.
+**2b — User wants a new item:** create it, then upload, then record the ref
+exactly as in 2a.
 
 ```
 POST /api/a/{slug}/items
-     { ...app fields..., "external_refs": ["legacy-rca:12345"],
-       "permission": {"visibility": "public"} }
+     { ...app fields..., "permission": {"visibility": "public"} }
 ```
+
+Both blocks were wrong until this revision, in ways the rest of the plan already
+forbade — this is the section an integrator copies, so it is worth naming what
+changed. 2a showed a bare single `PATCH`: it answers `200` and silently loses a
+concurrent append, and being a non-idempotent `add`, a retried timeout records the
+ref twice. 2b passed `external_refs` at create time, which decision 7 forbids: a
+handoff dying mid-upload leaves an item claiming an analysis it does not hold, and
+since the picker greys out anything already absorbed, that analysis can never be
+retried into it. The caller-facing guide and the contract double were both
+corrected earlier; this block was not, so the design record still taught the
+failure the guide warns against.
 
 **3 — Navigate** the browser to `/a/{slug}/{itemId}`. Files are already in place, so the
 user never sees a half-populated workspace.
@@ -206,9 +224,15 @@ The caller-facing version of all this is [`external-handoff.md`](external-handof
 **Ref format:** `<system>:<record-id>`, e.g. `legacy-rca:12345`. Opaque to the platform —
 never parsed, only compared.
 
-**File layout:** the platform imposes none. The contract doc will *recommend*
-`<system>-<record-id>/` as a path prefix so several handoffs into one item cannot collide,
-but that is guidance to the caller, not a rule we enforce.
+**File layout:** the platform imposes no structure — where in the workspace a handoff puts
+its files is the caller's choice. The contract doc *recommends* `<system>-<record-id>/` as a
+path prefix so several handoffs into one item cannot collide; that is guidance, not a rule.
+
+The one thing the platform does enforce is containment: a path segment of `..` is refused
+with `400` on every route that takes a client path (`api/file_routes.py::_workspace_path`).
+That is not a layout rule — it stops a path from leaving the workspace at all — but it is
+the single constraint a caller can actually hit, so it belongs stated here rather than
+discovered.
 
 ## Phases
 
@@ -292,13 +316,33 @@ silently defeats the whole convergence goal.
 This phase exists because **nothing in this work is visible in our own UI** — the picker
 lives in the legacy page, so "it merged" proves nothing about whether it works. The
 deliverable is an integration test that plays the legacy site's part: list → create with
-refs and public permission → upload two files → append a ref → assert the second press
-against the same item is detectable as already-absorbed → assert the workspace file tree
-shows the files under the recommended prefix.
+public permission (never with refs — decision 7) → upload two files → record the ref →
+assert the second press against the same item is detectable as already-absorbed → assert
+the workspace file tree shows the files under the recommended prefix. It must also pick
+the row it acts on **out of the listing**, not out of the create response: taking the id
+from the create call is how the first version of this test missed that the listing it
+recommended carries no id at all.
 
 Per the project's contract-double rule, this must model **the other side's actual request
 sequence**, not merely assert that our handlers do not crash. A test that only says "we
 did not do anything wrong" is immune to the regressions that matter here.
+
+### Platform changes this work made beyond the field itself
+
+Both are outside the "one field, no endpoints" headline and were not in any phase, so the
+design record names them rather than leaving them to `git log`:
+
+- **`ResourceIsDeletedError` → `410` for every hand-written route** (`api/app.py`). specstar's
+  generated CRUD already answered `410`; the hand-written routes let it escape as a `500`.
+  A list-then-act integration makes "deleted in between" its most likely race, and the caller
+  has to tell "that item is gone" apart from "the platform is down". One handler, the same
+  shape as the existing `WorkspaceFull` / `FileNotFound` ones — so it changes the answer for
+  files, chat and entities too, not only the handoff path.
+- **`..` path segments refused with `400`** (`api/file_routes.py::_workspace_path`) on every
+  route that takes a client path, URL or JSON body. Pre-existing hole, fixed here because
+  this work is what first opens those routes to a cross-origin cookie-authenticated caller —
+  and the guide tells that caller to build a path segment out of an external record id the
+  platform explicitly declines to parse.
 
 ## Risks and accepted trade-offs
 
