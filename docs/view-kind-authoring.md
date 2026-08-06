@@ -105,15 +105,25 @@ const raw = viewParam(spec, "options");                          // ✅ unknown�
 
 ### 3.2 Workspace 檔案
 
-這是主要來源。兩個工具：
+這是主要來源。**讀單一檔案首選 `useFileBuffer(path)`**：有快取；本分頁內的編輯與 agent 回合結束
+後的重整會反映進來，但**別人在另一個瀏覽器改的不會自動推過來**。它回傳的 `entry.status` 是
+`"loading" | "ready" | "error"`，三種都要處理——`ready` 時才有 `entry.text`。
 
-| 用法 | 什麼時候用 |
+其他事情走 `useFileService()`。完整介面（型別 `FileService`，也從 barrel 匯出）：
+
+| 成員 | 做什麼 |
 |---|---|
-| `useFileBuffer(path)` | 讀單一檔案。有快取；本分頁內的編輯與 agent 回合結束後的重整會反映進來，但**別人在另一個瀏覽器改的不會自動推過來**。**首選。** |
-| `useFileService()` | 需要列檔（`listFiles(prefix?)`）、寫檔（`writeFile`）、或組出 `fileUrl(src)` 給 `<img>` 用 |
-
-`useFileBuffer` 回傳的 `entry.status` 是 `"loading" | "ready" | "error"`，三種都要處理——
-`ready` 時才有 `entry.text`。
+| `readFile(path)` | 讀一個檔，回 `FileContent`（`kind: "text" \| "bytes"`）。**要顯示的話用 `useFileBuffer` 就好**，這個是要自己控時機時用 |
+| `listFiles(prefix?)` | 列檔案，回 `FileInfo[]`。`prefix` 會下推到後端，**別列整棵樹再自己過濾** |
+| `listDirs()` / `listTree()` | 只要資料夾 / 一次遍歷同時拿檔案與資料夾（要兩者時用這個，不要併發呼叫上面兩個） |
+| `writeFile(path, body)` | 寫檔（字串／`Blob`／`ArrayBuffer`）。先看 `canWrite`，見下一節 |
+| `deleteFile` / `moveFile` / `copyFile` / `mkdir` | 檔案操作，同樣受權限管 |
+| `refreshFiles()` | 強制把 sandbox 的變動同步進來再讀。少用——它會走一次後端 |
+| `fileUrl(src, fromPath?)` | 把 markdown 的 ref 解析成瀏覽器 URL，`<img src>` 用 |
+| `fileDownloadUrl(path)` | 給 `<a download>` 存單一檔案的 URL |
+| `prepareDirDownload(prefix)` / `dirDownloadUrl(id, prefix)` | 打包整個資料夾成 zip 再下載，兩段式 |
+| `scopeId` | 這個 workspace 的 id。做自己的快取 key 時用它做前綴 |
+| `caps` | **這個介面**支不支援某操作（不是權限，見下一節） |
 
 路徑用 workspace 的絕對路徑（開頭 `/`），跟檔案樹看到的一樣。
 
@@ -127,13 +137,25 @@ const raw = viewParam(spec, "options");                          // ✅ unknown�
 `needsEntity`，下面這些 props 一樣會有內容。**view 檔沒寫 `entity:` 時它們才是空的**——那是
 正常的，不是壞掉：
 
+`EntityViewProps` 全部欄位（`spec` 見上一節）：
+
 | prop | 是什麼 |
 |---|---|
 | `entities` | 紀錄陣列。view 檔沒寫 `entity:` ⇒ `[]` |
+| `invalid` | 解析失敗、被排除在投影外的紀錄。畫個提示比裝作沒事好 |
 | `type` | 該 entity 的 schema（欄位、role、表單）。沒有就是 `null` |
-| `onCreate` / `onPatch` | 寫入用。**要改 entity 一律走這兩個**，不要自己打 API |
-| `canWrite` | 見下一節 |
-| `refIndex` / `users` | 關聯紀錄索引 / 使用者名冊，畫 assignee 之類的東西用 |
+| `users` | 使用者名冊，畫 assignee 之類的 `actor` 欄位用 |
+| `refIndex` | 被關聯到的其他型別紀錄索引（例如 issue 的 milestone） |
+| `canWrite` | 這位使用者能不能寫。**寫入 UI 一律由它決定顯不顯示**，見下一節 |
+| `busy` | 有寫入在飛。用來 disable 按鈕、避免重複送出 |
+| `onCreate(args)` | 新增一筆。**要改 entity 一律走這些回呼**，不要自己打 API |
+| `onPatch(number, patch)` | 改一筆的欄位 |
+| `onPatchAnchor(number, patch)` | 改「被 ref 指到的那個型別」的紀錄（例如從 issue 改它的 milestone）。沒接就是 `undefined` |
+| `onOpenRecord(number)` | 在畫面內開紀錄的編輯 modal。沒接 ⇒ 別畫那個入口 |
+| `onOpenRecordFile(number)` | 另開分頁到該紀錄的 `.md` 原始檔。同樣可能 `undefined` |
+| `viewKey` | 這個 view 的穩定識別（含 item 與檔案路徑）。存「這個人在這個 view 的摺疊狀態」這類 UI 偏好時當 key 用 |
+
+⚠️ 凡是標「沒接就是 `undefined`」的，**要先判斷再畫**——畫一個按了沒反應的按鈕比不畫更糟。
 
 ## 4. 邊界
 

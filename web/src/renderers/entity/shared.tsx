@@ -71,8 +71,10 @@ export function parseViewSpec(text: string): ViewSpec | null {
   const { view, entity } = o;
   if (typeof view !== "string" || !view) return null;
   const spec: ViewSpec = {
-    // A plug-in's own keys ride through untouched — they are its config, and
-    // `unknown` at the type level, so it must narrow them itself.
+    // A plug-in's own keys ride through untouched at RUNTIME — they are its
+    // config. They are deliberately NOT on `ViewSpec` (an index signature there
+    // disarmed typo-checking for every named field), so a plug-in reads them
+    // with `viewParam` / `viewParamString`, which go to the original document.
     ...(o as ViewSpec),
     // ...while the fields listed below are coerced, because this document is
     // arbitrary user YAML. Widening which files parse (#698) without widening

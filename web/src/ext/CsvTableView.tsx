@@ -12,9 +12,10 @@
  *     title: Wafer yield
  *     source: /data/wafer.csv
  *
- * `source` is not a key the platform knows — unknown top-level keys ride
- * through `parseViewSpec` verbatim onto `spec`, typed `unknown`, which is how a
- * plug-in reads its own config.
+ * `source` is not a key the platform knows, so it is NOT on the `ViewSpec` type
+ * — `spec.source` doesn't compile. Read your own keys with `viewParam` /
+ * `viewParamString`, which hand back the original document (so a key of yours
+ * that collides with a platform one still reads the way you wrote it).
  *
  * Everything here comes from `renderers/entity/public` — see that module for
  * why, and `docs/view-kind-authoring.md` for the guide this file mirrors.

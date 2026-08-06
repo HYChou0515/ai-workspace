@@ -176,6 +176,29 @@ describe("violates() resolves the path instead of matching a prefix", () => {
   });
 });
 
+// The whole seam hangs off one side-effect import in the app's entry point.
+// Nothing else can cover it: `CsvTableView.test.tsx` imports `./index` itself,
+// so it stays green with the wiring deleted — and so does every other test,
+// while in production every plug-in kind silently degrades to "Unsupported view
+// kind". One line, no compiler help (it has no bindings to go unused), and the
+// failure only shows in a browser.
+describe("the entry point still loads ext/", () => {
+  const MAIN = fileURLToPath(new URL("../main.tsx", import.meta.url));
+
+  it("main.tsx imports ./ext", () => {
+    expect(scanImports(readFileSync(MAIN, "utf-8"), "main.tsx")).toContain("./ext");
+  });
+
+  it("imports it BEFORE the first render, since the registry is a plain map", () => {
+    const text = readFileSync(MAIN, "utf-8");
+    const wiring = text.indexOf('import "./ext"');
+    const render = text.indexOf("createRoot(");
+    expect(wiring).toBeGreaterThan(-1);
+    expect(render).toBeGreaterThan(-1);
+    expect(wiring).toBeLessThan(render);
+  });
+});
+
 describe("src/ext import boundary", () => {
   it("has files to check, including any in subfolders", () => {
     expect(sourceFiles(EXT_DIR).length).toBeGreaterThan(0);

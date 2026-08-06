@@ -48,6 +48,10 @@ export { viewParam, viewParamString } from "./shared";
 // write affordances off `canWrite`, or you will render a button that 403s.
 export { useFileService } from "../../api/fileService";
 export type { FileCaps, FileService } from "../../api/fileService";
+// The shapes those methods return. Without these a plug-in can call `listFiles`
+// / `readFile` on inference but cannot write a typed signature over the result
+// — and the only other spelling, `../../api/types`, is a boundary violation.
+export type { FileContent, FileInfo } from "../../api/types";
 export { useFileBuffer } from "../../hooks/fileBuffer";
 export type { BufferEntry } from "../../hooks/fileBuffer";
 
