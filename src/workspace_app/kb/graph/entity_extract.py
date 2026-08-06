@@ -167,6 +167,12 @@ class Extraction:
     aliases: list[DeclaredAlias]
     relationships: list[StatedRelationship]
     attributes: list[AttributeClaim] = field(default_factory=list)
+    #: Whether the model's reply could be READ. A refusal, a truncated
+    #: generation or commentary instead of JSON yields the same empty lists as a
+    #: passage that genuinely mentions nothing, and the two mean opposite things
+    #: to a caller about to replace what the document had: one is an answer, the
+    #: other is silence. Nothing downstream can tell them apart from the lists.
+    readable: bool = True
 
 
 @dataclass(frozen=True)
@@ -207,7 +213,10 @@ def extract_entities(llm: ILlm, text: str, *, guidance: str = "") -> Extraction:
     reply = llm.collect(_PROMPT.format(text=text, guidance=block))
     payload = _parse(reply)
     if payload is None:
-        return Extraction(mentions=[], aliases=[], relationships=[], attributes=[])
+        # Empty AND marked unreadable. The lists alone would say "this passage
+        # talks about nothing", which is an ANSWER — and a caller about to
+        # replace what the document had would act on it.
+        return Extraction(mentions=[], aliases=[], relationships=[], attributes=[], readable=False)
     raw_mentions = payload.get("mentions")
     raw_aliases = payload.get("aliases")
     mentions: list[EntityMention] = []

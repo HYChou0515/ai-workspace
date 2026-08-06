@@ -161,6 +161,40 @@ def test_the_summary_answers_the_question_the_tool_was_built_for(tmp_path):
     assert summary["proposals_asked"] is False
 
 
+def test_the_summary_separates_a_silent_model_from_one_that_found_nothing(tmp_path):
+    """#697 P15 — `proposals_asked` is only worth publishing if it means the
+    model ANSWERED. Zero proposals from a pass that ran says the criterion is
+    holding things apart; zero from a model that refused says nothing at all,
+    and read as the first it is evidence for a conclusion nobody established."""
+
+    from workspace_app.kb.graph.preview import preview_collection
+    from workspace_app.kb.llm import ILlm
+
+    class _Refuses(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield "I'm sorry, I can't help with that.", False
+
+    class _Adjudicates(ILlm):
+        """Answers the question actually asked — and finds nothing to merge,
+        which is the whole point: the SAME empty result as the refusal."""
+
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield '{"groups": []}', False
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+
+    graph = preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path, propose_with=_Adjudicates())
+    asked = json.loads((tmp_path / "summary.json").read_text())
+    assert asked["proposals_asked"] is True, "a pass that ran must say so"
+    assert graph.proposed is True
+
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path, propose_with=_Refuses())
+    refused = json.loads((tmp_path / "summary.json").read_text())
+    assert refused["proposals"] == 0
+    assert refused["proposals_asked"] is False
+
+
 def test_the_collections_own_criterion_is_what_the_preview_runs_with(tmp_path):
     """Otherwise the tool would preview something nobody is going to run."""
     spec = make_spec(default_user=lambda: "bob")

@@ -510,6 +510,56 @@ def test_a_rejection_still_holds_once_the_other_side_gains_new_evidence():
     assert list_proposals(spec) == [], "the answer stopped holding once evidence moved"
 
 
+class _UnreadableJudge(ILlm):
+    """Up, replying, and producing nothing the adjudicator can parse."""
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        yield "I'm sorry, I can't help with that.", False
+
+
+def test_a_model_that_answers_nothing_readable_does_not_empty_the_review_queue():
+    """#697 P15, the same rule one layer up. `persist` deletes a pending row the
+    computation no longer produces UNLESS nobody asked the model — and "asked"
+    was recorded as "an llm object was passed in". `_group` deliberately returns
+    nothing for a reply it cannot read, so a model that is up and refusing
+    produced zero proposals while reporting that it had been asked, and every
+    pending question a person had not yet answered was permanently deleted.
+
+    Deleting evidence (the document layer) and deleting a review queue (this
+    one) are the same defect; they are fixed together because they are one rule.
+    """
+    from workspace_app.kb.graph.review import list_proposals
+
+    spec = make_spec(default_user=lambda: "bob")
+    _pair(spec)
+    reconcile_vocabulary(spec, llm=_Judge())
+    assert len(list_proposals(spec)) == 1
+
+    reconcile_vocabulary(spec, llm=_UnreadableJudge())
+
+    assert len(list_proposals(spec)) == 1, "an unreadable reply emptied the queue"
+
+
+def test_a_model_that_answers_and_finds_nothing_does_retire_the_proposal():
+    """The other half. A readable "nothing belongs together" IS an answer about
+    the vocabulary, and a proposal the model has stopped making should go —
+    otherwise this becomes "never delete" and the queue only ever grows."""
+    from workspace_app.kb.graph.review import list_proposals
+
+    class _FindsNothing(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield '{"groups": []}', False
+
+    spec = make_spec(default_user=lambda: "bob")
+    _pair(spec)
+    reconcile_vocabulary(spec, llm=_Judge())
+    assert len(list_proposals(spec)) == 1
+
+    reconcile_vocabulary(spec, llm=_FindsNothing())
+
+    assert list_proposals(spec) == []
+
+
 class _KindJudge(ILlm):
     """A model that says two KIND labels are one sort of thing.
 

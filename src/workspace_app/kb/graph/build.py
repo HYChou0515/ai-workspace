@@ -60,6 +60,11 @@ class DocGraph:
     mentions: list[GraphMention] = field(default_factory=list)
     claims: list[GraphClaim] = field(default_factory=list)
     relationships: list[GraphRelationship] = field(default_factory=list)
+    #: Whether ANY passage of this document came back readable. Empty rows from
+    #: a document the model never answered for look exactly like empty rows from
+    #: a document that mentions nothing, and the caller replaces what was stored
+    #: with them either way — so the difference has to travel.
+    readable: bool = True
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,11 @@ def build_doc_graph(
         mentions=_mentions(extracted, collection_id=collection_id, doc=doc),
         claims=_claims(extracted, collection_id=collection_id, doc=doc),
         relationships=_relationships(extracted, collection_id=collection_id, doc=doc),
+        # ANY, not ALL. One readable passage is a real answer about the document,
+        # even a smaller one than last time; none at all is silence, and silence
+        # must not be recorded as "this document turned out to mention nothing".
+        # A document with no chunks has nothing to say and nothing to protect.
+        readable=any(e.readable for _, e in extracted) or not extracted,
     )
 
 
@@ -586,9 +596,16 @@ def build_vocabulary(
                 merged_into=host_eid,
             )
 
+    # `proposed` is whether the model ANSWERED, not whether one was handed in.
+    # `persist` deletes a pending row the computation no longer produces unless
+    # nobody asked — so a model that is up and replying unreadably (a refusal, a
+    # truncated context) would otherwise empty the whole review queue while
+    # reporting that it had been asked.
+    answered = False
     if llm is not None:
-        links.extend(_proposals(llm, entities, links, decisions, key_of))
-    return Vocabulary(entities=entities, links=links, proposed=llm is not None)
+        proposals, answered = _proposals(llm, entities, links, decisions, key_of)
+        links.extend(proposals)
+    return Vocabulary(entities=entities, links=links, proposed=answered)
 
 
 # How many names go into one adjudication call. Bounded by the model's context,
@@ -625,7 +642,7 @@ def _proposals(
     links: list[GraphEntityLink],
     decisions: Decisions,
     key_of: dict[str, str],
-) -> list[GraphEntityLink]:
+) -> tuple[list[GraphEntityLink], bool]:
     """Ask the model which names denote one thing, and record the answer as
     PENDING links that change nothing.
 
@@ -639,7 +656,10 @@ def _proposals(
     """
     live = {eid: e for eid, e in entities.items() if e.collection_ids}
     if len(live) < 2:
-        return []
+        # Nothing to adjudicate, so nothing was asked. Reporting "asked" here
+        # would let a corpus that has shrunk to one identity delete a queue on
+        # the strength of a question nobody put.
+        return [], False
     by_name: dict[str, list[str]] = {}
     for eid, entity in live.items():
         by_name.setdefault(entity.canonical_name, []).append(eid)
@@ -653,9 +673,14 @@ def _proposals(
     names = sorted(by_name)
     out: list[GraphEntityLink] = []
     seen: set[tuple[str, str]] = set()
+    answered = False
     for start in range(0, len(names), _NAMES_PER_CALL):
         batch = names[start : start + _NAMES_PER_CALL]
-        for group, why in _group(llm, batch):
+        groups = _group(llm, batch)
+        if groups is None:
+            continue  # this batch said nothing readable; it is not an answer
+        answered = True
+        for group, why in groups:
             # Ordered by the identity's KEY — the same rule the grouping uses
             # to pick a merged group's host. Two orderings meant the side a
             # person accepted ON was not the side the merge landed on, so the id
@@ -676,7 +701,7 @@ def _proposals(
                     # a review queue stops being read
                 seen.add((host, other))
                 out.extend(_propose(host, other, live[other], active.get(other, []), why))
-    return out
+    return out, answered
 
 
 def _propose(
@@ -723,25 +748,31 @@ def _propose(
     ]
 
 
-def _group(llm: ILlm, names: list[str]) -> list[tuple[list[str], str]]:
-    """The model's groupings, or nothing for an unreadable answer.
+def _group(llm: ILlm, names: list[str]) -> list[tuple[list[str], str]] | None:
+    """The model's groupings, or ``None`` when the reply could not be read.
 
     Nothing, rather than a guess: this path can only ADD work for a person, so a
-    confused reply should ask them nothing at all.
+    confused reply should ask them nothing at all. But ``None`` rather than an
+    empty list, because the two mean opposite things to the caller — "nothing
+    belongs together" is an answer about the vocabulary, "I could not read the
+    reply" is not an answer at all, and a store told the first when the second
+    is true deletes a review queue nobody answered.
     """
     import json
 
     reply = llm.collect(_GROUP_PROMPT.format(names="\n".join(f"- {n}" for n in names)))
     start, end = reply.find("{"), reply.rfind("}")
     if start == -1 or end == -1 or end < start:
-        return []
+        return None
     try:
         data = json.loads(reply[start : end + 1])
     except (json.JSONDecodeError, ValueError):
-        return []
+        return None
     groups = data.get("groups") if isinstance(data, dict) else None
+    if not isinstance(groups, list):
+        return None  # readable JSON, but not the shape asked for
     out: list[tuple[list[str], str]] = []
-    for item in groups if isinstance(groups, list) else []:
+    for item in groups:
         if not isinstance(item, dict):
             continue
         members = [str(n) for n in item.get("names", []) if str(n) in names]

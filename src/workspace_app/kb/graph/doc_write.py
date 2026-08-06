@@ -80,6 +80,21 @@ def write_doc_graph(
         collection_id=collection_id,
         guidance=guidance,
     )
+    if not graph.readable:
+        # The model never answered for this document — a refusal, a truncated
+        # generation, commentary instead of JSON. `extract_entities` never
+        # raises, so this arrives as an empty result that is indistinguishable
+        # from "the passages mention nothing", and clearing on it would delete
+        # the document's evidence and record silence in its place.
+        #
+        # Compute-then-clear only protects the case where the call RAISED. This
+        # is the same rule for the case it does not, and it is the reachable one.
+        _LOGGER.warning(
+            "graph: doc %s produced no readable reply from the model; "
+            "keeping what it had rather than replacing it with nothing",
+            source_doc_id,
+        )
+        return 0, 0
     wipe_doc_graph(spec, source_doc_id)
     persist_doc_graph(spec, graph)
     return len(graph.mentions), len(graph.claims)

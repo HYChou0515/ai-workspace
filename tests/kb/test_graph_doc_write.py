@@ -176,3 +176,69 @@ def test_a_re_extraction_that_dies_leaves_the_previous_one_standing():
 
     assert [m.surface for m in _rows(spec, GraphMention, "deck-A")] == ["回焊爐"]
     assert len(_rows(spec, GraphClaim, "deck-A")) == 1
+
+
+class _UnreadableLlm(ILlm):
+    """A model that is up, replying, and saying nothing this can parse — a
+    refusal, a truncated generation, commentary instead of JSON."""
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        yield "I'm sorry, I can't help with that.", False
+
+
+def test_a_reply_nobody_can_read_leaves_the_previous_extraction_standing():
+    """#697 P15 — compute-then-clear (P9) only protects the case where the model
+    call RAISES. `extract_entities` is documented "Never raises": a refusal or a
+    truncated generation comes back as an EMPTY extraction, indistinguishable
+    from a passage that genuinely mentions nothing — and the document's rows
+    were cleared and replaced with it.
+
+    So the reachable failure was the one still open, and this deployment has it
+    on record (Ollama num_ctx truncation, #624). #697 makes it likelier: every
+    prompt now carries the collection's criterion on top of an already long one.
+    """
+    spec = make_spec(default_user=lambda: "bob")
+    _deck(spec)
+    write_doc_graph(
+        spec,
+        _CountingLlm(),
+        collection_id="c1",
+        source_doc_id="deck-A",
+        chunks=[("deck-A#0", "t")],
+    )
+    assert len(_rows(spec, GraphMention, "deck-A")) == 1
+
+    things, statements = write_doc_graph(
+        spec,
+        _UnreadableLlm(),
+        collection_id="c1",
+        source_doc_id="deck-A",
+        chunks=[("deck-A#0", "t")],
+    )
+
+    assert (things, statements) == (0, 0)
+    assert [m.surface for m in _rows(spec, GraphMention, "deck-A")] == ["回焊爐"]
+    assert len(_rows(spec, GraphClaim, "deck-A")) == 1
+
+
+def test_a_passage_that_really_mentions_nothing_still_replaces_what_was_there():
+    """The other half, and what stops this becoming "never delete": a readable
+    answer of "nothing here" IS an answer, and a criterion that now excludes
+    what a document used to yield has to be able to empty it."""
+    spec = make_spec(default_user=lambda: "bob")
+    _deck(spec)
+    write_doc_graph(
+        spec,
+        _CountingLlm(),
+        collection_id="c1",
+        source_doc_id="deck-A",
+        chunks=[("deck-A#0", "t")],
+    )
+    write_doc_graph(
+        spec,
+        _CountingLlm('{"mentions": [], "aliases": [], "relationships": [], "attributes": []}'),
+        collection_id="c1",
+        source_doc_id="deck-A",
+        chunks=[("deck-A#0", "t")],
+    )
+    assert _rows(spec, GraphMention, "deck-A") == []
