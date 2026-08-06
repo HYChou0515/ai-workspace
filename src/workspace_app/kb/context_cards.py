@@ -72,6 +72,48 @@ def find_cards_by_key(
     return out
 
 
+def effective_keys(keys: list[str], title: str) -> list[str]:
+    """The keys a card is actually authored under: the given ``keys``, or the ``title``
+    when none of them normalises to a usable lookup key — so an entry someone filed
+    with only a name stays findable instead of becoming unreachable.
+
+    One definition for every surface that authors a card (create / update / upsert /
+    collection import). It used to be copy-pasted at each, which is how the collection
+    importer ended up carrying this half of the rule and not the other half (#701)."""
+    eff = list(keys)
+    if not derive_norm_keys(eff) and title.strip():
+        return [title]
+    return eff
+
+
+def resolve_upsert_target(
+    spec: SpecStar, collection_id: str, keys: list[str]
+) -> tuple[str, ContextCard, int] | None:
+    """The card an upsert of ``keys`` would OVERWRITE in this collection, as
+    ``(card_id, card, sharing_count)`` — or ``None`` when no key names one yet, i.e.
+    this upsert creates.
+
+    The FIRST key with a hit wins and its first card is the target. ``sharing_count``
+    is how many cards carry that matched key: ``> 1`` means the term is ambiguous
+    (it names several cards) and only the first is overwritten, which a review
+    surface can then say out loud rather than letting it pass silently.
+
+    This is the "which card does this become" decision itself, shared rather than
+    mirrored (#701). Every caller has to reach the same answer — a preview that
+    resolved differently from the commit it previews would show a diff against a
+    card the commit does not touch — and copies drift: the collection importer's
+    copy never had this half at all, so importing the same archive twice grew a
+    second card instead of updating the first. What stays per-surface is only the
+    WRITE (who it is stamped as, and whether a stale read is guarded), never the
+    target.
+    """
+    for key in keys:
+        hits = find_cards_by_key(spec, collection_id, key)
+        if hits:
+            return hits[0][0], hits[0][1], len(hits)
+    return None
+
+
 def build_vocab(cards: list[ContextCard]) -> dict[str, list[ContextCard]]:
     """Index a collection's cards by normalised key → the cards carrying it, for
     the internal `match(text)` pre-scan. One card lands under each of its

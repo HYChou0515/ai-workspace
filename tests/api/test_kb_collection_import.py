@@ -278,6 +278,78 @@ def test_import_remints_card_links_against_the_target_collection():
     assert card.reference_doc_ids == [encode_doc_id(new_cid, "spec.md")]
 
 
+def _cards_in(spec: SpecStar, cid: str) -> list:
+    from workspace_app.resources.kb import ContextCard
+
+    rm = spec.get_resource_manager(ContextCard)
+    return [r.data for r in rm.list_resources((QB["collection_id"] == cid).build())]
+
+
+def _card_manifest(body: str) -> dict:
+    return {
+        "version": 1,
+        "collection": {"name": "C"},
+        "documents": [],
+        "context_cards": [{"keys": ["M4"], "title": "M4", "body": body}],
+    }
+
+
+def _import_into(client: TestClient, cid: str, zip_bytes: bytes, mode: str) -> None:
+    r = client.post(
+        f"/kb/collections/{cid}/import?mode={mode}",
+        files={"file": ("c.zip", zip_bytes, "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_importing_the_same_zip_twice_does_not_duplicate_cards():
+    """#701: the round-trip has to be idempotent. Documents already were — they key on
+    path and honour the mode — but cards were created unconditionally, so re-importing
+    the same zip to correct a typo doubled every card in the collection."""
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    zbytes = _make_zip({}, manifest=_card_manifest("metal 4"))
+
+    _import_into(client, cid, zbytes, "overwrite")
+    _import_into(client, cid, zbytes, "overwrite")
+
+    assert len(_cards_in(spec, cid)) == 1
+
+
+def test_import_overwrite_updates_the_card_that_already_carries_the_key():
+    """Overwrite means the same thing for a card as for a document: the incoming one
+    wins. Identity is the key, mirroring `upsert_context_card`."""
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "title": "M4", "body": "old"},
+    )
+
+    _import_into(client, cid, _make_zip({}, manifest=_card_manifest("new")), "overwrite")
+
+    hits = client.post(f"/kb/collections/{cid}/context-cards/lookup", json={"terms": ["M4"]}).json()
+    assert hits["results"]["M4"][0]["body"] == "new"
+    assert len(_cards_in(spec, cid)) == 1  # updated in place, not added beside
+
+
+def test_import_skip_leaves_a_card_that_already_carries_the_key():
+    """Skip means the same thing for a card as for a document: what is already here
+    stays. A curated card is not silently replaced by an archive's older copy."""
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "title": "M4", "body": "old"},
+    )
+
+    _import_into(client, cid, _make_zip({}, manifest=_card_manifest("new")), "skip")
+
+    hits = client.post(f"/kb/collections/{cid}/context-cards/lookup", json={"terms": ["M4"]}).json()
+    assert hits["results"]["M4"][0]["body"] == "old"
+    assert len(_cards_in(spec, cid)) == 1
+
+
 def test_import_restores_only_keyable_cards():
     client = _client()
     manifest = {

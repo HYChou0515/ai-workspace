@@ -476,6 +476,23 @@ async def test_kb_search_injects_a_card_that_links_the_retrieved_document(
     assert "Edge chipping." in out  # and the card that links it came along
 
 
+async def test_glossary_puts_text_matched_cards_before_linked_ones(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # Both kinds share one injection cap and one char budget, so their order decides
+    # who survives a crowded turn. A card the passage NAMES is evidence about this
+    # passage; a card that merely links the document is evidence about the document
+    # it came from — the narrower claim goes first.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    _card(spec, cid, ["notch"], title="Notch", body="NAMED-IN-TEXT.")
+    _card(spec, cid, ["M4"], title="M4", body="LINKED-ONLY.", reference_doc_ids=["doc-a"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = _glossary_for_passages(ctx.context, ["a jagged notch along the rim"], ["doc-a"])
+
+    assert out.index("NAMED-IN-TEXT.") < out.index("LINKED-ONLY.")
+
+
 async def test_kb_search_injects_a_linked_card_only_once_per_turn(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):

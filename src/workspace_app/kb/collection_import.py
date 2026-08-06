@@ -26,7 +26,7 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..resources.kb import Collection, ContextCard, SourceDoc
 from .collection_export import MANIFEST_DIR, MANIFEST_PATH
-from .context_cards import derive_norm_keys
+from .context_cards import derive_norm_keys, effective_keys, resolve_upsert_target
 from .doc_id import canonical_path, encode_doc_id
 
 if TYPE_CHECKING:
@@ -71,33 +71,47 @@ def _create_collection(spec: SpecStar, settings: dict[str, Any], fallback_name: 
     return rev.resource_id
 
 
-def _restore_cards(spec: SpecStar, collection_id: str, cards: list[dict[str, Any]]) -> None:
+def _restore_cards(
+    spec: SpecStar, collection_id: str, cards: list[dict[str, Any]], mode: str
+) -> None:
+    """Restore the manifest's cards, obeying ``mode`` exactly as a colliding document
+    does (#701).
+
+    This used to create unconditionally, so a card was the one thing a round-trip
+    could not survive: re-importing an archive to correct a typo left the collection
+    with two of everything. The identity of a card is its key, and the rule for
+    resolving that — title fallback, first key with a hit wins — is not restated here
+    but shared with the authoring surfaces (``effective_keys`` /
+    ``resolve_upsert_target``). It was the copy that made this diverge: this function
+    carried the title-fallback half of the rule and never the create-or-update half.
+    """
     rm = spec.get_resource_manager(ContextCard)
     for card in cards:
-        keys = list(card.get("keys", []))
         title = card.get("title", "")
-        # Mirror the author action: an entry with no usable key falls back to its
-        # title so it stays findable.
-        if not derive_norm_keys(keys) and title.strip():
-            keys = [title]
+        keys = effective_keys(list(card.get("keys", [])), title)
         if not derive_norm_keys(keys):
             continue  # nothing to key on → unfindable; skip
-        rm.create(
-            ContextCard(
-                collection_id=collection_id,
-                keys=keys,
-                norm_keys=derive_norm_keys(keys),
-                title=title,
-                body=card.get("body", ""),
-                # #518: the manifest carries links as paths (see collection_export), so
-                # re-mint them as ids in the collection we are importing INTO — a doc id
-                # encodes its collection, so replaying the source's ids would land every
-                # link dangling.
-                reference_doc_ids=[
-                    encode_doc_id(collection_id, p) for p in card.get("reference_paths", [])
-                ],
-            )
+        target = resolve_upsert_target(spec, collection_id, keys)
+        if target is not None and mode == "skip":
+            continue  # same rule as a colliding path: what is already here stays
+        restored = ContextCard(
+            collection_id=collection_id,
+            keys=keys,
+            norm_keys=derive_norm_keys(keys),
+            title=title,
+            body=card.get("body", ""),
+            # #518: the manifest carries links as paths (see collection_export), so
+            # re-mint them as ids in the collection we are importing INTO — a doc id
+            # encodes its collection, so replaying the source's ids would land every
+            # link dangling.
+            reference_doc_ids=[
+                encode_doc_id(collection_id, p) for p in card.get("reference_paths", [])
+            ],
         )
+        if target is None:
+            rm.create(restored)
+        else:
+            rm.update(target[0], restored)
 
 
 def _doc_exists(spec: SpecStar, collection_id: str, path: str) -> bool:
@@ -151,5 +165,5 @@ def import_collection(
 
     for doc_id in document_ids:
         index_coordinator.enqueue(doc_id, collection_id)
-    _restore_cards(spec, collection_id, manifest.get("context_cards", []))
+    _restore_cards(spec, collection_id, manifest.get("context_cards", []), mode)
     return ImportResult(collection_id=collection_id, document_ids=document_ids)
