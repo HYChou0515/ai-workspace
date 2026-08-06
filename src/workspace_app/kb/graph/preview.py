@@ -35,6 +35,7 @@ through thousands of rows.
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
 from contextlib import ExitStack
 from pathlib import Path
@@ -51,6 +52,12 @@ from ..doc_permission import denied_doc_ids, doc_mirror_fields
 from ..llm import ILlm
 from .build import DocSource, Graph, build_graph
 from .paging import walk_rows
+
+# A name made of nothing but the characters a bare quantity uses. Deliberately
+# narrow — it is the shape #691's query asks for, so the two numbers compare —
+# and deliberately reported beside the leading-digit count, which is the one
+# that catches a value carrying a unit.
+_ONLY_A_VALUE = re.compile(r"[0-9¥$%.,\s\-]+")
 
 
 def read_collection_sources(
@@ -219,6 +226,24 @@ def summarise(graph: Graph, docs: list[DocSource]) -> dict[str, Any]:
         # What the model thought it was looking at, commonest first. "值" / "數值"
         # / "value" near the top is the extractor treating measurements as things.
         "kinds": dict(Counter(m.kind for m in graph.mentions if m.kind).most_common()),
+        # How much of the vocabulary is really MEASUREMENTS. A corpus whose
+        # extractor treats values as things grows a name per slide that never
+        # repeats, which is what drives `mentions` away from `distinct_names`
+        # and what makes the weekly merge-proposal pass expensive — it feeds
+        # every live identity to the model, sixty at a time.
+        #
+        # Two counts, because the obvious one under-reports. "Made only of value
+        # characters" misses 「245°C」 and 「90 cm/min」 — the unit is letters —
+        # and those are exactly what a process corpus produces most. A leading
+        # digit catches them, and catches almost nothing else: a thing whose
+        # name starts with a number is rare, a measurement that does not is
+        # rarer still.
+        "mentions_starting_with_a_digit": sum(
+            1 for m in graph.mentions if m.norm_surface[:1].isdigit()
+        ),
+        "mentions_that_are_only_a_value": sum(
+            1 for m in graph.mentions if _ONLY_A_VALUE.fullmatch(m.norm_surface)
+        ),
         # Said in the output, not only in a docstring: production groups
         # identities over the WHOLE corpus, and a reader comparing these numbers
         # against the live graph deserves to know which of the two they hold.

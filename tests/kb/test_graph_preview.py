@@ -479,6 +479,42 @@ def test_the_preview_shows_the_merges_people_have_already_accepted(tmp_path):
     assert entity_id("回焊爐") in graph.entities
 
 
+def test_the_summary_counts_the_names_that_are_really_measurements(tmp_path):
+    """The suspected shape of the problem, made a number.
+
+    A corpus whose extractor treats values as things grows a name per slide that
+    never repeats — and those names start with a digit. Counting them is what
+    turns "the vocabulary looks like junk" into something a criterion can be
+    judged against, before and after.
+
+    Two counts, because the obvious one under-reports: a name made only of
+    value characters misses 「245°C」 and 「90 cm/min」, which are exactly the
+    ones a process corpus produces most.
+    """
+
+    class _Values(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield (
+                '{"mentions": [{"surface": "回焊爐", "kind": "機台"},'
+                ' {"surface": "245°C", "kind": "parameter"},'
+                ' {"surface": "90 cm/min", "kind": "parameter"},'
+                ' {"surface": "98.7%", "kind": "measurement"}]}',
+                False,
+            )
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+
+    preview_collection(spec, _Values(), cid, out_dir=tmp_path)
+
+    summary = json.loads((tmp_path / "summary.json").read_text())
+    assert summary["mentions"] == 8  # four names in each of two documents
+    # 245°C / 90 cm/min / 98.7% — every one of them, in both documents
+    assert summary["mentions_starting_with_a_digit"] == 6
+    # the stricter shape only catches the one with no unit letters
+    assert summary["mentions_that_are_only_a_value"] == 2
+
+
 def test_a_collection_the_reader_cannot_open_previews_as_nothing():
     """Unreadable is indistinguishable from absent, by design — the scope hides
     the row rather than refusing it. A preview must not become the one channel
