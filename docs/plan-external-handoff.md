@@ -60,7 +60,7 @@ Established by grilling; each replaced a plausible alternative that is recorded 
 | 3 | **Idempotency key = (item, external ref).** Same ref already on that item ⇒ do nothing. |
 | 4 | **The same ref MAY appear on several items.** Per-item uniqueness only; not globally unique. |
 | 5 | **Identity comes from the shared login.** The legacy *browser* calls us, so the session rides along; nothing carries a user id in a parameter. |
-| 6 | **Files travel by upload**, through the existing streaming `PUT`. Quota is 20 GB (`configs/config.resolved.yaml`), not a constraint at MB scale. |
+| 6 | **Files travel by upload**, through the existing streaming `PUT`. The default workspace quota is 20 GB (`config/schema.py`), not a constraint at MB scale — though a deployment may have lowered it. |
 | 7 | **Item is created first, files written after, then the browser navigates.** Not one combined multipart create. |
 | 8 | **Nothing runs on arrival.** No auto-sent turn, no prefilled prompt, no edit to `/brief.md`. |
 | 9 | **Permission is passed explicitly as `public`** by the caller, overriding the private-by-default. To be tightened later, once the flow is proven in production. |
