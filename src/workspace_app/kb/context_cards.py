@@ -165,17 +165,12 @@ def match(text: str, vocab: dict[str, list[ContextCard]], *, cap: int = 10) -> l
     return out[:cap]
 
 
-def cards_for_collections(spec: SpecStar, collection_ids: list[str]) -> list[ContextCard]:
-    """Load every card across the given collections — the corpus the internal
-    `match(text)` pre-scan builds its vocab from."""
-    return [c for _, c in cards_with_ids_for_collections(spec, collection_ids)]
-
-
 def cards_with_ids_for_collections(
     spec: SpecStar, collection_ids: list[str]
 ) -> list[tuple[str, ContextCard]]:
-    """Like ``cards_for_collections`` but each card is paired with its resource id
-    (#111) — so a matched card can be targeted for ``update_context_card``."""
+    """Load every card across the given collections — the corpus the internal
+    `match(text)` pre-scan builds its vocab from — each paired with its resource id
+    (#111), so a matched card can be targeted for ``update_context_card``."""
     rm = spec.get_resource_manager(ContextCard)
     out: list[tuple[str, ContextCard]] = []
     for cid in collection_ids:
