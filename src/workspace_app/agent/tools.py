@@ -748,15 +748,34 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
 _GLOSSARY_INJECT_CAP = 50
 
 
-def _glossary_for_passages(ctx: AgentToolContext, passage_texts: list[str]) -> str:
+def _glossary_for_passages(
+    ctx: AgentToolContext, passage_texts: list[str], doc_ids: list[str]
+) -> str:
     """#484: scan the passages a `kb_search` just returned for terms that have a
     glossary context card and render the authoritative definitions to append to
     the result — so the model uses the curated meaning instead of inferring one
     from the surrounding prose (the "AI just makes it up" gap).
 
+    A card also comes along when it LINKS one of the documents this search
+    returned (`reference_doc_ids`), not only when its key is spelled in the prose.
+    The link is the curator's own "this document is what my term means", and
+    until now it only pointed one way: `_card_anchor_doc_ids` could narrow a
+    search to a matched card's documents, but a document that surfaced on its own
+    could never name the card vouching for it. Text matching cannot stand in for
+    the link — a document whose body is machine-written (an image caption is the
+    limiting case) may never spell the key, so the curated term stayed
+    unreachable for exactly the documents a human took the trouble to curate.
+
+    Only the documents THIS search returned count, so the link cannot become a
+    back door that injects the whole glossary on every search. Text hits keep
+    priority under `_GLOSSARY_INJECT_CAP` and the block's own char budget: an
+    explicit mention is evidence about this passage, a link is evidence about the
+    document it came from.
+
     Deduped across the turn via `ctx.injected_card_ids`: a card already injected
     by the #106 user-message pre-scan or an earlier search is skipped, so a term
-    is defined exactly once per turn. Returns "" (nothing to append) when no spec/
+    is defined exactly once per turn — link-matched cards share that one dedup,
+    not a second one of their own. Returns "" (nothing to append) when no spec/
     collections/passages are wired or nothing matched.
     """
     spec = ctx.spec
@@ -770,6 +789,14 @@ def _glossary_for_passages(ctx: AgentToolContext, passage_texts: list[str]) -> s
 
     pairs = cards_with_ids_for_collections(spec, ctx.collection_ids)
     hits = match_with_ids("\n".join(passage_texts), pairs, cap=_GLOSSARY_INJECT_CAP)
+    named = {rid for rid, _ in hits}
+    returned = set(doc_ids)
+    linked = [
+        (rid, card)
+        for rid, card in pairs
+        if rid not in named and returned.intersection(card.reference_doc_ids)
+    ]
+    hits = hits + linked[: max(0, _GLOSSARY_INJECT_CAP - len(hits))]
     fresh = [(rid, card) for rid, card in hits if rid not in ctx.injected_card_ids]
     cards = [card for _, card in fresh]
     block = card_context_block(cards)
@@ -946,6 +973,7 @@ def kb_search_impl(
 
     lines: list[str] = []
     passage_texts: list[str] = []
+    passage_doc_ids: list[str] = []
     try:
         # #518 card-anchored two-stage retrieval. Stage 1 searches only inside the
         # documents a card matched by this query vouches for; stage 2 is the ordinary
@@ -986,6 +1014,7 @@ def kb_search_impl(
             where = f"{passage.filename} ({loc})" if loc else passage.filename
             lines.append(f"[{idx + 1}] {where}: {passage.text}")
             passage_texts.append(passage.text)
+            passage_doc_ids.append(passage.document_id)
     except Exception:
         # Log the real cause (with traceback) to the server log so the
         # operator sees what actually broke — connection refused,
@@ -998,7 +1027,7 @@ def kb_search_impl(
         raise
 
     body = "\n\n".join(lines) if lines else "No matching passages in the knowledge base."
-    body += _glossary_for_passages(ctx.context, passage_texts)
+    body += _glossary_for_passages(ctx.context, passage_texts, passage_doc_ids)
     # Permission-disclosure: surface collections the speaker may see-exist but not
     # read whose content is a competitive match — so the answer says "there IS an
     # answer you can't access" instead of silently omitting it. The agent is told

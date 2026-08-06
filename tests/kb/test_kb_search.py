@@ -4,6 +4,7 @@ from agents import RunContextWrapper
 from specstar import SpecStar
 
 from workspace_app.agent import AgentToolContext, KbSearchBudget, kb_search_impl
+from workspace_app.agent.tools import _glossary_for_passages
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
@@ -344,10 +345,23 @@ async def test_kb_search_card_anchor_never_reopens_a_denied_document(
 # --- #484: glossary auto-injection over retrieved passages -------------------
 
 
-def _card(spec: SpecStar, cid: str, keys: list[str], *, title: str = "", body: str = "") -> str:
+def _card(
+    spec: SpecStar,
+    cid: str,
+    keys: list[str],
+    *,
+    title: str = "",
+    body: str = "",
+    reference_doc_ids: list[str] | None = None,
+) -> str:
     rm = spec.get_resource_manager(ContextCard)
     card = ContextCard(
-        collection_id=cid, keys=keys, norm_keys=derive_norm_keys(keys), title=title, body=body
+        collection_id=cid,
+        keys=keys,
+        norm_keys=derive_norm_keys(keys),
+        title=title,
+        body=body,
+        reference_doc_ids=reference_doc_ids or [],
     )
     return rm.create(card).resource_id
 
@@ -427,6 +441,78 @@ async def test_kb_search_skips_a_card_already_injected_upstream(
 
     assert "[1]" in out  # passages still returned
     assert "A protective dielectric cap." not in out  # but the card is not re-injected
+
+
+async def test_kb_search_injects_a_card_that_links_the_retrieved_document(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # `reference_doc_ids` is the curated "THIS document is what my term means", but
+    # the link only ever pointed one way: a card could narrow a search to its own
+    # documents, while a document that surfaced on its own could not name the card
+    # that vouches for it. Text matching cannot stand in for the link — a document
+    # whose whole body is a machine-written description (an image caption, say)
+    # can never be relied on to spell the card's key.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    doc_ids = Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="scan.md",
+        data=b"a jagged notch runs along the outer rim of the disc",
+    )
+    # Note the key appears NOWHERE in the document — only the link connects them.
+    _card(
+        spec,
+        cid,
+        ["M4"],
+        title="M4",
+        body="Edge chipping.",
+        reference_doc_ids=doc_ids,
+    )
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = kb_search_impl(ctx, "jagged notch along the rim")
+
+    assert "[1]" in out  # the document was retrieved
+    assert "Edge chipping." in out  # and the card that links it came along
+
+
+async def test_kb_search_injects_a_linked_card_only_once_per_turn(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # The link-matched cards share the turn-level dedup with the text-matched ones,
+    # so a second search that re-surfaces the same document does not re-define it.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    doc_ids = Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="scan.md",
+        data=b"a jagged notch runs along the outer rim of the disc",
+    )
+    _card(spec, cid, ["M4"], title="M4", body="Edge chipping.", reference_doc_ids=doc_ids)
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    first = kb_search_impl(ctx, "jagged notch along the rim")
+    second = kb_search_impl(ctx, "the notch on the outer rim")
+
+    assert "Edge chipping." in first
+    assert "Edge chipping." not in second
+
+
+async def test_glossary_ignores_a_card_linking_a_document_this_search_missed(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # Only the documents THIS search actually returned pull their cards in, so the
+    # link cannot become a back door that injects the whole glossary on every
+    # search. Driven through the helper rather than `kb_search_impl` because the
+    # point is which doc ids reach it — a two-document fixture is small enough
+    # that top-k returns both, which would prove nothing.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    _card(spec, cid, ["M9"], title="M9", body="Delamination.", reference_doc_ids=["doc-b"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = _glossary_for_passages(ctx.context, ["a jagged notch along the rim"], ["doc-a"])
+
+    assert out == ""  # the card links doc-b; this search returned doc-a
 
 
 async def test_kb_search_without_glossary_cards_appends_nothing(
