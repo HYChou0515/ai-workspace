@@ -96,10 +96,15 @@ for the sort either** — the same pattern already in use at `api/kb_routes.py:2
 
 Everything below already exists except the field in step 1's response.
 
-**1 — List candidates.** specstar's generated CRUD, newest first, capped:
+**1 — List candidates.** specstar's generated CRUD, newest first, capped. The
+exact shape below is what the routes actually accept — verified against a running
+app, not inferred; the first draft of this plan guessed `GET /{model}?sort=-updated_time`
+and was wrong on both the path and the parameter:
 
 ```
-GET /{work-item-model}?limit=100&sort=-updated_time
+GET /api/rca-investigation/data
+      ?limit=100
+      &sorts=[{"type":"meta","key":"updated_time","direction":"-"}]
 ```
 
 Each returned record carries its own `external_refs`, because non-indexed fields are still
@@ -110,24 +115,27 @@ without a single extra request), and how to sort or filter them for display.
 > **Trap:** specstar's default `limit` is a sentinel (~4.29e9), **not** a page size. Omit
 > `limit` and the call silently degrades to fetching everything, nullifying decision 12.
 
-**2a — User picked an existing item:** upload each file, then append the ref.
+**2a — User picked an existing item:** upload each file (raw body, not multipart;
+`204` on success), then append the ref.
 
 ```
-PUT   /a/{slug}/items/{id}/files/{path}
-PATCH /{work-item-model}/{id}
+PUT   /api/a/{slug}/items/{id}/files/{path}
+PATCH /api/rca-investigation/{id}
       [{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:12345"}]
 ```
 
 **2b — User wants a new item:** create it, then upload, then append as above.
 
 ```
-POST /a/{slug}/items
+POST /api/a/{slug}/items
      { ...app fields..., "external_refs": ["legacy-rca:12345"],
        "permission": {"visibility": "public"} }
 ```
 
 **3 — Navigate** the browser to `/a/{slug}/{itemId}`. Files are already in place, so the
 user never sees a half-populated workspace.
+
+The caller-facing version of all this is [`external-handoff.md`](external-handoff.md).
 
 **Ref format:** `<system>:<record-id>`, e.g. `legacy-rca:12345`. Opaque to the platform —
 never parsed, only compared.
