@@ -229,7 +229,19 @@ its files is the caller's choice. The contract doc *recommends* `<system>-<recor
 path prefix so several handoffs into one item cannot collide; that is guidance, not a rule.
 
 The one thing the platform does enforce is containment: a path segment of `..` is refused
-with `400` on every route that takes a client path (`api/file_routes.py::_workspace_path`).
+with `400` on every route that writes a client path **into the workspace store**
+(`api/file_routes.py::_workspace_path`) — the `{path:path}` URL routes plus `mkdir` /
+`move` / `copy`.
+
+Deliberately not "every route that takes a client path", which is what this sentence said
+until a veracity pass falsified it — the same overclaim the `_workspace_path` docstring made
+and that `7d0cb700`'s own thesis is about ("claimed 'no `..` ever' was a rule you could read
+off the code. It was not"). Two routes outside that set take a client path: the
+`/notebooks/{notebook_path:path}` ones, where the path is a kernel session key rather than a
+store path, and `api/workflow_routes.py::_staged_run_uploads`, which takes a workspace path
+from a multipart filename and guards it with `kb.doc_id.canonical_path` — a different
+containment model that **resolves** `..` instead of refusing it, so `a/b/../c` is accepted
+there. Worth knowing before anyone states a platform-wide containment rule.
 That is not a layout rule — it stops a path from leaving the workspace at all — but it is
 the single constraint a caller can actually hit, so it belongs stated here rather than
 discovered.
@@ -263,7 +275,16 @@ Red tests:
    The original test used `asyncio.gather`, which cannot fail here: the patch route's
    critical section is synchronous, so two coroutines on one event loop never interleave.
    It recorded a false pass and the Phase 3 follow-up was never triggered. Re-run with
-   threads, 8 concurrent appends lose 2–3 refs **with every request returning 200**.
+   threads, 8 concurrent appends lose refs **with every request returning 200**.
+
+   The loss is probabilistic, and an earlier version of this line ("lose 2–3 refs", echoed
+   by commit `41c9ea89` as "fails on the first run") reported a bad draw as if it were the
+   norm. Measured properly, 30 rounds of the pre-fix one-shot patch: **10 rounds lost
+   nothing**, median 1, range 0–5. So a single round is a coin flip, not a demonstration —
+   which is exactly why the surviving `xfail` repeats ten times rather than once. The
+   conclusion is unaffected and independently confirmed: the retry loop measurably helps
+   (5/20 rounds clean before, 11/20 after) and measurably does not close the hole (9/20
+   still lose a ref).
 
    The retry-on-revision loop is now in the contract and measurably helps, but it does
    **not** close the hole: `expected_revision_id` is enforced in

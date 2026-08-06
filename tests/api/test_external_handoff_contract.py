@@ -296,7 +296,8 @@ def test_recording_the_same_analysis_twice_is_a_no_op():
         "unaffected — the patch route's critical section is synchronous, so one "
         "event loop serialises it — but multi-pod, the documented production "
         "shape, is not. Kept executing rather than deleted so the day the "
-        "upstream primitive becomes atomic, this XPASSes and tells us."
+        "upstream primitive becomes atomic, this XPASSes and tells us — which "
+        "only works because it repeats: see the docstring."
     ),
     strict=False,
 )
@@ -311,17 +312,36 @@ def test_parallel_handoffs_to_one_item_keep_every_ref():
     synchronous, so coroutines on one event loop cannot interleave and a
     gather-based test can never fail however broken the server is. That is
     exactly the false pass this replaces.
+
+    REPEATED, and that is the point of this version. One round loses a ref only
+    about half the time (measured: 9 losses in 20 rounds with the shipped retry
+    loop), so a single-round xfail XPASSes at random — and a signal that fires by
+    coin flip announces nothing. That is the same defect as the `asyncio.gather`
+    version it replaced, with the polarity flipped: there a test that could never
+    fail, here a test that passes for no reason. Ten rounds make the loss
+    reliable (~1 - 0.55^10), so an XPASS becomes evidence rather than noise — and
+    the day the upstream primitive turns atomic this flips to a STABLE xpass,
+    which is the announcement the xfail is kept alive to make.
     """
-    who = {"user": "alice"}
-    legacy = _LegacySite(TestClient(_app_for(who)))
-    item_id = legacy.open_new_item_and_record("Oven drift", "legacy-rca:0")
-    incoming = [f"legacy-rca:{i}" for i in range(1, 9)]
 
-    with ThreadPoolExecutor(max_workers=len(incoming)) as pool:
-        list(pool.map(lambda ref: legacy.record_absorbed(item_id, ref), incoming))
+    def one_round() -> tuple[list[str], list[str]]:
+        legacy = _LegacySite(TestClient(_app_for({"user": "alice"})))
+        item_id = legacy.open_new_item_and_record("Oven drift", "legacy-rca:0")
+        incoming = [f"legacy-rca:{i}" for i in range(1, 9)]
 
-    absorbed = legacy.list_candidates()[0]["external_refs"]
-    assert sorted(absorbed) == sorted(["legacy-rca:0", *incoming])
+        with ThreadPoolExecutor(max_workers=len(incoming)) as pool:
+            list(pool.map(lambda ref: legacy.record_absorbed(item_id, ref), incoming))
+
+        got = sorted(legacy.list_candidates()[0]["external_refs"])
+        return got, sorted(["legacy-rca:0", *incoming])
+
+    rounds = 10
+    for round_no in range(rounds):
+        got, want = one_round()
+        assert got == want, (
+            f"round {round_no + 1}/{rounds} lost {sorted(set(want) - set(got))} "
+            "— every request answered 200"
+        )
 
 
 def test_paging_past_the_first_page_needs_an_immutable_sort_key():
