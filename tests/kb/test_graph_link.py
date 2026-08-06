@@ -507,3 +507,43 @@ def test_a_rejection_still_holds_once_the_other_side_gains_new_evidence():
     reconcile_vocabulary(spec, llm=_Judge())
 
     assert list_proposals(spec) == [], "the answer stopped holding once evidence moved"
+
+
+class _KindJudge(ILlm):
+    """A model that says two KIND labels are one sort of thing.
+
+    A kind is an identity like any other, but nothing MENTIONS one — things are
+    labelled with it — so its proposal is the mention-less kind, and that is the
+    one whose collections are the SUBJECT's rather than a single mention's.
+    """
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        yield '{"groups": [{"names": ["機台", "設備"], "why": "the same sort of thing"}]}', False
+
+
+def test_a_waiting_proposal_follows_its_subject_into_a_new_collection():
+    """#697 P12 — a link's ``collection_ids`` is what the access scope reads.
+
+    Entities are reconciled onto their computed content; links were only ever
+    created or deleted, so every field outside the address froze at creation.
+    For ``collection_ids`` that is not staleness, it is a visibility bug that
+    fails CLOSED and silently: the subject gains evidence in another collection,
+    the proposal does not follow it, and the reviewers who own that collection
+    are never shown a question that is now partly theirs. Nothing tells them —
+    an empty queue looks exactly like a queue with nothing in it.
+    """
+    spec = make_spec(default_user=lambda: "bob")
+    first = _collection(spec, "first")
+    _mention(spec, first, "deck-A", "回焊爐", kind="機台")
+    _mention(spec, first, "deck-A2", "SPI", kind="設備")
+    reconcile_vocabulary(spec, llm=_KindJudge())
+
+    (waiting,) = [link for link in _links(spec) if link.state == "pending"]
+    assert waiting.collection_ids == [first]
+
+    second = _collection(spec, "second")
+    _mention(spec, second, "deck-B", "印刷機", kind="設備")
+    reconcile_vocabulary(spec, llm=_KindJudge())
+
+    (waiting,) = [link for link in _links(spec) if link.state == "pending"]
+    assert sorted(waiting.collection_ids) == sorted([first, second])

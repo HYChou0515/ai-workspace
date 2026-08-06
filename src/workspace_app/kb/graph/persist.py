@@ -92,12 +92,25 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
 
     Nothing here materialises a stored row. Both tables are compared through
     their INDEX: an entity's five fields are all indexed, and a link is
-    content-addressed on everything about it except ``state``. Over a corpus that
-    is the difference between one decode per identity per week and none (#689).
+    content-addressed on everything about it except ``state``, ``evidence`` and
+    ``collection_ids``. Over a corpus that is the difference between one decode
+    per identity per week and none (#689).
 
     ``state`` is deliberately outside the address. It is the one field a PERSON
     writes — accepting or rejecting a merge proposal — so leaving an existing row
     alone is what keeps that decision from being recomputed away the same night.
+
+    Of the two remaining, only ``collection_ids`` is brought back onto the
+    computed value, and the split is the index rather than a judgement call:
+    ``collection_ids`` is indexed and is what the access scope reads, so a row
+    left on the collections that were true the day it was created is a
+    visibility rule frozen in the past — a proposal whose subject gains evidence
+    elsewhere never reaches the reviewers who now own half the question, and an
+    empty queue looks exactly like a queue with nothing in it. ``evidence`` is
+    not indexed on purpose (nobody else reads it, and indexing every link to
+    carry display text is precisely the cost #689 is about), so noticing a
+    change to it would mean decoding every row in the corpus. It keeps whatever
+    it was first written with.
 
     Entities go in before the links that point at them, because the ref
     validator refuses a link whose entity is not there yet. On the way out they
@@ -124,8 +137,25 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
         elif _entity_indexed(entity) != _normalised(indexed, _ENTITY_FIELDS):
             erm.update(eid, entity)
     for lid, link in target_links.items():
-        if lid not in stored_links:
+        stored = stored_links.get(lid)
+        if stored is None:
             lrm.create(link, resource_id=lid)
+        elif _state_of(stored) not in _PERSON_ANSWERED and sorted(
+            stored.get("collection_ids") or []
+        ) != sorted(link.collection_ids):
+            # A link's collections are what the access scope reads, so leaving
+            # them at whatever was true the day the row was created is not
+            # staleness — it is a visibility rule frozen in the past, failing
+            # closed and saying nothing. A proposal whose subject gains evidence
+            # in another collection has become partly that collection's
+            # question, and its reviewers would never be shown it.
+            #
+            # `evidence` is not reconciled and cannot be: it is deliberately not
+            # indexed (nobody else reads it, and indexing every link to carry
+            # display text is the cost #689 is about), so noticing a change would
+            # mean decoding every row in the corpus. What this compares is
+            # exactly what the index can answer.
+            lrm.update(lid, link)
 
     for rid in stored_links.keys() - target_links.keys():
         # A link the computation no longer produces goes — UNLESS it carries a
@@ -133,7 +163,7 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
         # evidence and cannot be recomputed, and they are the input that keeps
         # the merge from being re-proposed; deleting them asks the same question
         # again next week with the answer filed against a row nobody looks up.
-        state = str(stored_links[rid].get("state") or "active")
+        state = _state_of(stored_links[rid])
         if state in _PERSON_ANSWERED and _subject_survives(stored_links[rid], vocabulary):
             continue
         if state in _PERSON_ANSWERED and not _subject_survives(stored_links[rid], vocabulary):
@@ -159,6 +189,11 @@ _ENTITY_FIELDS = ("canonical_name", "norm_keys", "kind_id", "collection_ids", "m
 #: Link states a PERSON wrote. The computation never produces them, so they
 #: would otherwise look exactly like rows it no longer produces.
 _PERSON_ANSWERED = frozenset({"settled", "rejected"})
+
+
+def _state_of(indexed: dict) -> str:
+    """A stored link's state, with the pre-index default the field itself has."""
+    return str(indexed.get("state") or "active")
 
 
 def _subject_survives(indexed: dict, vocabulary: Vocabulary) -> bool:
