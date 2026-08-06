@@ -148,4 +148,43 @@ describe("the corpus's own extraction criterion (#697)", () => {
     render(<GraphToggle collection={coll({ use_graph: true, graph_guidance: "abc" })} client={client()} />);
     expect(screen.getByTestId("kb-graph-guidance-save")).toBeDisabled();
   });
+
+  it("says so when the save fails, instead of looking exactly like a save", async () => {
+    // #697 P19: with no error state, a refused save leaves the typed criterion
+    // in the box and the button live again — which is what a SUCCESSFUL save
+    // followed by one more keystroke also looks like. The owner walks away
+    // believing the corpus is being extracted under the new criterion, and it
+    // is not. Reachable for anyone without write_meta who can open the panel,
+    // and for any transient 5xx.
+    const updateCollection = vi.fn(async () => {
+      throw Object.assign(new Error("403"), { status: 403 });
+    });
+    render(
+      <GraphToggle
+        collection={coll({ use_graph: true, graph_guidance: "" })}
+        client={client({ updateCollection } as unknown as Partial<KbApi>)}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("kb-graph-guidance"), { target: { value: "只收機台。" } });
+    fireEvent.click(screen.getByTestId("kb-graph-guidance-save"));
+
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+  });
+
+  it("confirms a save that landed, so the two outcomes do not look alike", async () => {
+    const updateCollection = vi.fn(async () => {});
+    render(
+      <GraphToggle
+        collection={coll({ use_graph: true, graph_guidance: "" })}
+        client={client({ updateCollection } as unknown as Partial<KbApi>)}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("kb-graph-guidance"), { target: { value: "只收機台。" } });
+    fireEvent.click(screen.getByTestId("kb-graph-guidance-save"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("kb-graph-guidance-save")).toHaveTextContent("已儲存"),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 });

@@ -49,11 +49,19 @@ export function GraphToggle({
   const stored = collection.graph_guidance ?? "";
   const [criterion, setCriterion] = useState(stored);
   useEffect(() => setCriterion(stored), [stored]);
+  // What the server last accepted. Kept here rather than read back off the
+  // collection because the refetch lands later, and until it does "saved" and
+  // "not saved" would look the same — which is the whole problem.
+  const [accepted, setAccepted] = useState<string | null>(null);
   const saveCriterion = useMutation({
     mutationFn: () =>
       client.updateCollection(collection.resource_id, { graph_guidance: criterion }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
+    onSuccess: () => {
+      setAccepted(criterion);
+      void qc.invalidateQueries({ queryKey: qk.kb.collections });
+    },
   });
+  const settled = criterion === stored || criterion === accepted;
 
   return (
     <SettingRow
@@ -130,11 +138,26 @@ export function GraphToggle({
             data-testid="kb-graph-guidance-save"
             // Dirty-gated: specstar writes a revision per update, so an
             // accidental press should not add a version that changed nothing.
-            disabled={criterion === stored || saveCriterion.isPending}
+            disabled={settled || saveCriterion.isPending}
             onClick={() => saveCriterion.mutate()}
           >
-            {t("kb.graphGuidance.save")}
+            {criterion === accepted
+              ? t("kb.graphGuidance.saved")
+              : t("kb.graphGuidance.save")}
           </button>
+          {/* A refused save otherwise leaves the typed criterion in the box and
+              the button live again — which is exactly what a save that LANDED,
+              followed by one more keystroke, also looks like. The owner then
+              believes the corpus is being extracted under the new criterion
+              while it is not, and nothing on screen disagrees. */}
+          {saveCriterion.isError && (
+            <span
+              role="alert"
+              style={{ marginLeft: 8, fontSize: pxToRem(12), color: "var(--warn)" }}
+            >
+              {t("kb.graphGuidance.saveFailed")}
+            </span>
+          )}
         </div>
       </div>
     </SettingRow>

@@ -782,6 +782,13 @@ export const messages = {
     en: "e.g. keep machines, processes, materials, defects, process parameters and part numbers; a measured value is not a thing.",
   },
   "kb.graphGuidance.save": { "zh-TW": "儲存", en: "Save" },
+  "kb.graphGuidance.saved": { "zh-TW": "已儲存", en: "Saved" },
+  // A save that failed must not look like a save that worked: the box still
+  // holds what was typed either way.
+  "kb.graphGuidance.saveFailed": {
+    "zh-TW": "沒有儲存,請再試一次(可能是你沒有這個知識庫的編輯權限)。",
+    en: "Not saved — try again (you may not have permission to edit this knowledge base).",
+  },
   "kb.autoDigest.label": { "zh-TW": "自動生成卡片", en: "Auto-generate cards" },
   "kb.autoDigest.help": {
     "zh-TW": "文件索引完成後，自動草擬卡片並提出待釐清的問題。",
