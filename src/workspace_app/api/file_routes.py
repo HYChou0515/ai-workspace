@@ -632,8 +632,9 @@ def register_file_routes(
         investigation_id = locator.require_access(slug, item_id, "read_content")
         import mimetypes
 
+        norm = _workspace_path(path)
         try:
-            data = await files.read(investigation_id, _workspace_path(path))
+            data = await files.read(investigation_id, norm)
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         # Issue #40: extension → MIME first so workspace markdown reports
@@ -642,7 +643,15 @@ def register_file_routes(
         # (the browser offers a download). Unknown extension → fall back
         # to the previous UTF-8 sniff so text-with-unknown-extension
         # still renders in the file viewer.
-        guessed, _ = mimetypes.guess_type(path)
+        #
+        # Guess from the NORMALISED path, not the raw one. `GET /files/logo.png/`
+        # finds the file (the read is normalised) but `splitext` sees no extension
+        # on a string ending in `/`, so the raw form fell through to the sniff and
+        # answered `application/octet-stream` — a download prompt where the user
+        # expected an inlined image, with a 200 hiding it. That contradicted this
+        # module's own rule that a trailing slash must not change what a path
+        # means, one line after enforcing it.
+        guessed, _ = mimetypes.guess_type(norm)
         if guessed:
             media_type = guessed
         else:

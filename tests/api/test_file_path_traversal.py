@@ -56,6 +56,60 @@ def test_an_upload_cannot_write_outside_the_workspace(escaping: str):
     assert not any(".." in p for p in listed), listed
 
 
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_reading_or_deleting_cannot_reach_outside_the_workspace(method: str):
+    """The two call sites the first version of this file left uncovered.
+
+    Writing out is the obvious hole, so it got the tests; reading and deleting
+    are the ones that matter more. `WorkspaceFiles.read`/`delete` normalise via
+    `abs_path`, which does not touch `..`, and hand the path straight to the
+    sandbox — so on a warm local sandbox, whose items are sibling directories on
+    one shared volume, an unguarded GET is another item's file leaving the
+    building and an unguarded DELETE is another item's file gone.
+
+    Measured before this test existed: removing the guard from either route left
+    all 46 tests across the file-route suites green. The route guard is the only
+    defence, so it needs a test that dies with it.
+    """
+    client, iid = _client_and_item()
+    escaping = "..%2F..%2Fother-item%2Froot%2Fsecret.csv"
+
+    r = client.request(method, f"/a/rca/items/{iid}/files/{escaping}")
+
+    assert r.status_code == 400, f"{method} → {r.status_code}: {r.text}"
+
+
+def test_a_trailing_slash_url_resolves_to_the_same_stored_file():
+    """The URL half of the normalisation fix, which had no test of its own.
+
+    Verified by mutation: putting only the `{path:path}` routes back on `lstrip`
+    left every file-route test green, so this half could be reverted silently.
+    Before the fix `PUT /files/a.txt/` stored a distinct `/a.txt/` that
+    `GET /files/a.txt` then 404'd on — the file existed and was unreachable by
+    its own name."""
+    client, iid = _client_and_item()
+
+    put = client.put(f"/a/rca/items/{iid}/files/report.md/", content=b"# hi")
+
+    assert put.status_code == 204, put.text
+    assert {e["path"] for e in client.get(f"/a/rca/items/{iid}/files").json()} == {"/report.md"}
+
+    canonical = client.get(f"/a/rca/items/{iid}/files/report.md")
+    assert canonical.status_code == 200, canonical.text
+    assert canonical.content == b"# hi"
+
+    # Fetch it back through the TRAILING-SLASH form too — that is where the
+    # normalisation has to hold, and asserting only on the canonical form tests
+    # the one spelling that cannot break. The content type has to follow the
+    # normalised path as well: `splitext` sees no extension on a string ending in
+    # `/`, so guessing from the raw path answers octet-stream and the browser
+    # offers a download for a file it should render — with a 200 hiding it.
+    via_slash = client.get(f"/a/rca/items/{iid}/files/report.md/")
+    assert via_slash.status_code == 200, via_slash.text
+    assert via_slash.content == b"# hi"
+    assert via_slash.headers["content-type"].startswith("text/markdown"), via_slash.headers
+
+
 def test_the_json_body_routes_are_guarded_too():
     """The routes that take a path in a JSON BODY, not the URL.
 
