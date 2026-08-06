@@ -4,7 +4,8 @@ A file is previewed by the renderer matched in **`registry.ts`** — the one pla
 that maps a path to a renderer. `FileView.tsx` just mounts
 `rendererComponent(path)`; pane padding, the preview⇄edit toggle, and the
 Outline panel all derive from the same table. **Adding a preview type is one
-entry — no other file changes.**
+entry**, plus the handful of places that still branch on the renderer key — see
+the note under "Add a type" for what those are.
 
 Renderers are backend-agnostic: file IO, the `fileUrl` for embedded refs, and
 the listing all come from the **`FileService`** in context (`useFileService()` /

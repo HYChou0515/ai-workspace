@@ -10,8 +10,10 @@
  * registry is a plain module-level map, so a kind registered after a view has
  * already painted will not retroactively appear in it.
  *
- * Everything in this folder — including subfolders — imports from
- * `renderers/entity/public` only; `./imports.test.ts` enforces that.
+ * Every shipping file in this folder — including subfolders — imports from
+ * `renderers/entity/public` only; `./imports.test.ts` enforces that. Test files
+ * are exempt (they mount the real container and the app's providers); see the
+ * barrel's own docstring for why, and for what that costs.
  *
  * See `docs/view-kind-authoring.md`.
  */

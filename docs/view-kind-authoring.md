@@ -99,9 +99,10 @@ const raw = viewParam(spec, "options");                          // ✅ unknown�
 ```
 
 這兩個存取器回傳的是**原始 YAML 文件**的值，不是平台轉型後的版本。所以就算你的 key 剛好跟
-平台的撞名——`columns`、`card`、`sort`、`title`、`label`、`span`、`group_by`、`week`、
-`entity`、`hidden_fields`、`skip_weekends`、`assignee`、`assignee_display`——你讀回來的
-仍然是你寫下去的東西。（不過還是**建議避開這些名字**，因為平台可能也會拿它們去畫東西。）
+平台的撞名——`view`、`entity`、`title`、`columns`、`card`、`sort`、`hidden_fields`、
+`group_by`、`span`、`label`、`assignee`、`assignee_display`、`skip_weekends`、`week`、
+`schedule`——你讀回來的仍然是你寫下去的東西。（不過還是**建議避開這些名字**，因為平台
+也會拿它們去畫東西。）
 
 ### 3.2 Workspace 檔案
 
@@ -161,6 +162,10 @@ const raw = viewParam(spec, "options");                          // ✅ unknown�
 
 **只從 `renderers/entity/public` import。** 這條規則有測試在守（`web/src/ext/imports.test.ts`），
 違反會讓 CI 變紅。理由在下一節。
+
+**例外：你的測試檔（`*.test.tsx`）不受這條限制**——測試得掛真正的容器跟一整套 provider，
+把那些東西也從 barrel 匯出等於把測試鷹架當成產品 API 賣給你。代價是：測試對內部的依賴
+我們看不到，所以我們改壞的時候不會事先警告你，是你的測試在 CI 變紅時才發現。
 
 **讀寫檔一律經 `FileService`**，不要自己 `fetch`——權限、scope、快取都在那層。
 

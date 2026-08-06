@@ -1,11 +1,19 @@
 /**
  * The surface a second-party view kind may use (#698).
  *
- * Everything under `web/src/ext/` imports from HERE and nowhere else, enforced
- * by `ext/imports.test.ts` (this project has no ESLint) — a red build rather
- * than a convention people remember. Nothing else in the app should import this
- * module; it exists to name a boundary, not to be a second way to reach the
- * same code.
+ * Every SHIPPING file under `web/src/ext/` imports from HERE and nowhere else,
+ * enforced by `ext/imports.test.ts` (this project has no ESLint) — a red build
+ * rather than a convention people remember. Nothing else in the app should
+ * import this module; it exists to name a boundary, not to be a second way to
+ * reach the same code.
+ *
+ * `*.test.tsx` files under `ext/` are EXEMPT and reach internals freely: a test
+ * has to mount the real container and the app's providers, and routing that
+ * scaffolding through this barrel would export test-only machinery to plug-in
+ * authors as if it were product API. The cost is that a plug-in's TEST-time
+ * coupling stays invisible here — break one of those internals and the plug-in
+ * author fixes their own test, with CI telling them, rather than this module
+ * having warned anyone in advance.
  *
  * This is NOT a frozen API and carries no version. Plug-ins live in this repo
  * and compile in the same CI run, so when we change something here the breakage
