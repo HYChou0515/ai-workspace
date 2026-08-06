@@ -283,7 +283,7 @@ def test_the_warning_names_a_config_key_that_really_exists():
         for path in re.findall(r"resources\.[a-z_.]+[a-z]", message):
             node: object = settings
             for part in path.split("."):
-                fields = {f.name for f in dataclasses.fields(node)}  # ty: ignore[invalid-argument-type]
+                fields = {f.name for f in dataclasses.fields(node)}
                 assert part in fields, f"{path!r} in the warning: no field {part!r}"
                 node = getattr(node, part)
 
