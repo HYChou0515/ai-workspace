@@ -314,6 +314,26 @@ def test_parallel_handoffs_to_one_item_keep_every_ref():
     assert sorted(absorbed) == sorted(["legacy-rca:0", *incoming])
 
 
+def test_uploading_into_a_deleted_item_says_it_is_gone_rather_than_crashing():
+    """The picker lists, the user picks, and in between someone deletes the item.
+
+    A plausible race given the list-then-act shape this integration is built on.
+    The caller needs to tell "that item is gone, offer to open a new one" apart
+    from "the platform is broken, retry later" — and a 500 says the second.
+    Reading and patching a deleted item already answer 410; the upload path did
+    not, so the outside team's most likely race looked like an outage.
+    """
+    who = {"user": "alice"}
+    client = TestClient(_app_for(who))
+    legacy = _LegacySite(client)
+    item_id = legacy.open_new_item("Oven drift")
+    assert client.delete(f"/rca-investigation/{item_id}").status_code in (200, 204)
+
+    r = client.put(f"/a/rca/items/{item_id}/files/legacy-rca-1/readings.csv", content=b"x")
+
+    assert r.status_code == 410, f"expected 410 Gone, got {r.status_code}"
+
+
 def test_a_colleague_sees_the_item_so_convergence_survives_across_people():
     """Convergence has to hold between people, not just within one account —
     an item a colleague cannot see is one they will silently duplicate."""

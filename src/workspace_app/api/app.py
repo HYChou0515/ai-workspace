@@ -14,6 +14,7 @@ from fastapi import APIRouter, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from specstar import SpecStar
+from specstar.types import ResourceIsDeletedError
 
 from ..agent.config_catalog import AgentConfigCatalog
 from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
@@ -930,6 +931,20 @@ def create_app(
         return JSONResponse(
             status_code=404,
             content={"detail": {"error": "file_not_found", "message": str(exc)}},
+        )
+
+    @app.exception_handler(ResourceIsDeletedError)
+    async def _resource_gone(_request: Request, exc: ResourceIsDeletedError) -> JSONResponse:
+        """#700: an item was soft-deleted between a client listing it and acting
+        on it. specstar's own CRUD routes already answer 410 for this, but every
+        HAND-WRITTEN route that resolves an item (the file ops, chat, entities)
+        let it escape as a bare 500 — so the most likely race in a list-then-act
+        integration was indistinguishable from the platform being down. Same
+        shape as the FileNotFound handler above: one handler, so no route has to
+        remember, and the answer matches what the generated routes already give."""
+        return JSONResponse(
+            status_code=410,
+            content={"detail": {"error": "resource_deleted", "message": str(exc)}},
         )
 
     # #177: EVERY backend route registers on this prefixed router — specstar's
