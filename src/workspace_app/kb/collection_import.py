@@ -24,6 +24,7 @@ import zipfile
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import msgspec
 from specstar.types import ResourceIDNotFoundError
 
 from ..resources.kb import Collection, ContextCard, SourceDoc
@@ -109,19 +110,24 @@ def _restore_cards(
         target = pick_upsert_target(snapshot.candidates, keys)
         if target is not None and mode == "skip":
             continue  # same rule as a colliding path: what is already here stays
+        # #518: the manifest carries links as paths (see collection_export), so re-mint
+        # them as ids in the collection we are importing INTO — a doc id encodes its
+        # collection, so replaying the source's ids would land every link dangling.
+        # Tri-state, exactly as `update_context_card` defines it: the field ABSENT means
+        # the archive says nothing and the card keeps what it has, a list replaces, and
+        # an explicit `[]` clears. Silence is not a claim that there are no links, and
+        # deleting curated evidence on a re-import to fix a typo is precisely what that
+        # rule exists to prevent. A real export always writes the field, so round-trip
+        # fidelity is untouched; silence only ever protects a partial archive.
+        paths = card.get("reference_paths")
+        links = None if paths is None else [encode_doc_id(collection_id, p) for p in paths]
         restored = ContextCard(
             collection_id=collection_id,
             keys=keys,
             norm_keys=derive_norm_keys(keys),
             title=title,
             body=card.get("body", ""),
-            # #518: the manifest carries links as paths (see collection_export), so
-            # re-mint them as ids in the collection we are importing INTO — a doc id
-            # encodes its collection, so replaying the source's ids would land every
-            # link dangling.
-            reference_doc_ids=[
-                encode_doc_id(collection_id, p) for p in card.get("reference_paths", [])
-            ],
+            reference_doc_ids=list(links or []),
         )
         if target is None:
             rm.create(restored)
@@ -129,6 +135,10 @@ def _restore_cards(
             # Pair one-to-one: a later manifest card under the same key must fall
             # through to the NEXT card carrying it, or create, never re-target this one.
             snapshot.claim(target[0])
+            if links is None:
+                restored = msgspec.structs.replace(
+                    restored, reference_doc_ids=list(target[1].reference_doc_ids)
+                )
             rm.update(target[0], restored)
 
 

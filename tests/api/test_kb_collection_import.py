@@ -347,24 +347,16 @@ def test_reimporting_two_cards_under_one_key_updates_both_rather_than_adding_mor
     assert sorted(c.body for c in cards) == ["metal v2", "process v2"]
 
 
-def test_import_overwrite_replaces_a_cards_links_rather_than_merging_them():
-    """Overwrite is a whole-card replacement, links included — the same thing it means
-    for a document, whose bytes are replaced rather than merged. An archive states what
-    a card IS, so one that lists no `reference_paths` states a card with no links.
-
-    Worth pinning because the *authoring* surface deliberately does the opposite:
-    `update_context_card` treats absent links as "say nothing" and keeps them (#518),
-    so a caller refreshing a definition cannot cost the card its curated evidence.
-    The two rules differ on purpose and the difference should be visible, not folklore.
-    """
+def _curated_card_with_a_link(client: TestClient) -> tuple[str, str]:
+    """A collection holding one document and an `M4` card that links it."""
     from workspace_app.kb.doc_id import encode_doc_id
 
-    client, spec = _client_with_spec()
     cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
     client.post(
         f"/kb/collections/{cid}/documents",
         files={"file": ("spec.md", b"the metal 4 spec", "text/markdown")},
     )
+    link = encode_doc_id(cid, "spec.md")
     client.post(
         "/context-card/author",
         json={
@@ -372,15 +364,46 @@ def test_import_overwrite_replaces_a_cards_links_rather_than_merging_them():
             "keys": ["M4"],
             "title": "M4",
             "body": "old",
-            "reference_doc_ids": [encode_doc_id(cid, "spec.md")],
+            "reference_doc_ids": [link],
         },
     )
+    return cid, link
 
+
+def test_import_keeps_a_cards_links_when_the_archive_says_nothing_about_them():
+    """An archive that never mentions `reference_paths` is not claiming the card has no
+    links — it is saying nothing about them, and silence must not delete evidence.
+
+    This is `update_context_card`'s documented tri-state (#518: absent KEEPS, a list
+    replaces, `[]` clears), which #701's 定案 7 binds the importer to. The motivating
+    story is re-importing an archive to fix a typo: links curated AFTER the export
+    would otherwise vanish on the way back in — and they are exactly the data the
+    reverse injection in this same PR makes load-bearing for retrieval.
+    """
+    client, spec = _client_with_spec()
+    cid, link = _curated_card_with_a_link(client)
+
+    # `_card_manifest` carries no `reference_paths` key at all.
     _import_into(client, cid, _make_zip({}, manifest=_card_manifest("new")), "overwrite")
 
     (card,) = _cards_in(spec, cid)
-    assert card.body == "new"
-    assert card.reference_doc_ids == []  # the archive says "no links", so no links
+    assert card.body == "new"  # the definition the archive DID state is applied
+    assert card.reference_doc_ids == [link]  # the links it said nothing about survive
+
+
+def test_import_replaces_a_cards_links_when_the_archive_lists_them():
+    """Stating the links — even as an empty list — IS a claim, and replaces them. A real
+    export always writes the field, so an export→import round-trip stays faithful;
+    silence only protects hand-written or partial archives."""
+    client, spec = _client_with_spec()
+    cid, _link = _curated_card_with_a_link(client)
+    manifest = _card_manifest("new")
+    manifest["context_cards"][0]["reference_paths"] = []
+
+    _import_into(client, cid, _make_zip({}, manifest=manifest), "overwrite")
+
+    (card,) = _cards_in(spec, cid)
+    assert card.reference_doc_ids == []  # an explicit empty list clears
 
 
 def test_importing_the_same_zip_twice_does_not_duplicate_cards():
