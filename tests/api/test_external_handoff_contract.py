@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 from workspace_app.agent.config_catalog import AgentConfigCatalog
 from workspace_app.agent.context import AgentToolContext
@@ -95,13 +98,38 @@ class _LegacySite:
         r = self._c.put(f"/a/{self._slug}/items/{item_id}/files/{folder}/{name}", content=body)
         assert r.status_code == 204, r.text
 
-    def record_absorbed(self, item_id: str, ref: str) -> None:
-        """Append, never replace — a diff, so a second handoff cannot erase the first."""
-        r = self._c.patch(
-            f"/rca-investigation/{item_id}",
-            json=[{"op": "add", "path": "/external_refs/-", "value": ref}],
-        )
-        assert r.status_code == 200, r.text
+    def record_absorbed(self, item_id: str, ref: str, *, attempts: int = 20) -> None:
+        """Record the ref under an optimistic lock, and make the whole call safe
+        to repeat.
+
+        Two properties the naive one-shot append does not have:
+
+        **No lost update.** The server's patch is a read-modify-write, so two
+        appends landing together silently keep one and drop the other — both
+        answering 200. `expected_revision_id` converts that into a 412 the
+        caller can retry against fresh state.
+
+        **Idempotent.** RFC 6902 `add` to `/-` appends unconditionally, so a
+        caller that times out on a request which actually landed — the ordinary
+        thing to do — would record the ref twice. Re-reading first and returning
+        early when the ref is already present makes a retry a no-op, which is
+        what the platform means by "at most once per item".
+        """
+        for _ in range(attempts):
+            env = self._c.get(f"/rca-investigation/{item_id}")
+            assert env.status_code == 200, env.text
+            body = env.json()
+            if ref in body["data"]["external_refs"]:
+                return
+            r = self._c.patch(
+                f"/rca-investigation/{item_id}",
+                params={"expected_revision_id": body["revision_info"]["revision_id"]},
+                json=[{"op": "add", "path": "/external_refs/-", "value": ref}],
+            )
+            if r.status_code == 200:
+                return
+            assert r.status_code == 412, r.text  # 412 = someone else got there first; retry
+        raise AssertionError(f"could not record {ref} after {attempts} attempts")
 
     def files_in(self, item_id: str) -> set[str]:
         r = self._c.get(f"/a/{self._slug}/items/{item_id}/files")
@@ -182,6 +210,91 @@ def test_absorbing_an_analysis_pulls_the_item_back_to_the_front_of_the_page():
     legacy.record_absorbed(older, "legacy-rca:3")  # a second analysis lands on the older item
 
     assert [c["title"] for c in legacy.list_candidates()] == ["Oven drift", "Coater streaks"]
+
+
+def test_a_stale_revision_is_refused_instead_of_silently_overwriting():
+    """The precondition that makes a lost update *detectable*.
+
+    Without it, two appends landing together both answer 200 and one simply
+    vanishes. With it, the loser is told (412) and can retry against fresh
+    state. This is the mechanism `record_absorbed` is built on, so it gets a
+    deterministic test of its own rather than being inferred from a race.
+    """
+    who = {"user": "alice"}
+    client = TestClient(_app_for(who))
+    legacy = _LegacySite(client)
+    item_id = legacy.open_new_item("Oven drift", "legacy-rca:0")
+    stale = client.get(f"/rca-investigation/{item_id}").json()["revision_info"]["revision_id"]
+
+    first = client.patch(
+        f"/rca-investigation/{item_id}",
+        params={"expected_revision_id": stale},
+        json=[{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:1"}],
+    )
+    second = client.patch(
+        f"/rca-investigation/{item_id}",
+        params={"expected_revision_id": stale},  # now one revision behind
+        json=[{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:2"}],
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 412, second.text
+    assert legacy.list_candidates()[0]["external_refs"] == ["legacy-rca:0", "legacy-rca:1"]
+
+
+def test_recording_the_same_analysis_twice_is_a_no_op():
+    """RFC 6902 `add` to `/-` appends unconditionally, so a caller that times
+    out on a request which actually landed — the ordinary thing to do — would
+    record the ref twice. "At most once per item" has to be enforced by the
+    recording step, not hoped for."""
+    who = {"user": "alice"}
+    legacy = _LegacySite(TestClient(_app_for(who)))
+    item_id = legacy.open_new_item("Oven drift", "legacy-rca:0")
+
+    legacy.record_absorbed(item_id, "legacy-rca:1")
+    legacy.record_absorbed(item_id, "legacy-rca:1")  # the retry
+    legacy.record_absorbed(item_id, "legacy-rca:1")
+
+    assert legacy.list_candidates()[0]["external_refs"] == ["legacy-rca:0", "legacy-rca:1"]
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Upstream: specstar's optimistic lock is check-then-write, not atomic — "
+        "resource_manager/core.py reads current_revision_id, compares, and only "
+        "then writes, with no transaction spanning the two. Two writers can both "
+        "pass the check and the second overwrites the first, so a ref is lost "
+        "while both requests answer 200. Retrying on 412 (what record_absorbed "
+        "does) narrows the window but cannot close it. Single-pod deploys are "
+        "unaffected — the patch route's critical section is synchronous, so one "
+        "event loop serialises it — but multi-pod, the documented production "
+        "shape, is not. Kept executing rather than deleted so the day the "
+        "upstream primitive becomes atomic, this XPASSes and tells us."
+    ),
+    strict=False,
+)
+def test_parallel_handoffs_to_one_item_keep_every_ref():
+    """Several people hand analyses to the SAME item at the same moment.
+
+    A lost ref is not cosmetic: the caller decides "already absorbed?" from this
+    list, so losing one reads as "not absorbed yet" and the analysis is handed
+    over a second time — precisely the sprawl this design exists to prevent.
+
+    Threads, not `asyncio.gather`: the patch route's critical section is
+    synchronous, so coroutines on one event loop cannot interleave and a
+    gather-based test can never fail however broken the server is. That is
+    exactly the false pass this replaces.
+    """
+    who = {"user": "alice"}
+    legacy = _LegacySite(TestClient(_app_for(who)))
+    item_id = legacy.open_new_item("Oven drift", "legacy-rca:0")
+    incoming = [f"legacy-rca:{i}" for i in range(1, 9)]
+
+    with ThreadPoolExecutor(max_workers=len(incoming)) as pool:
+        list(pool.map(lambda ref: legacy.record_absorbed(item_id, ref), incoming))
+
+    absorbed = legacy.list_candidates()[0]["external_refs"]
+    assert sorted(absorbed) == sorted(["legacy-rca:0", *incoming])
 
 
 def test_a_colleague_sees_the_item_so_convergence_survives_across_people():

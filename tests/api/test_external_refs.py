@@ -13,10 +13,7 @@ records it already holds.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
-
-from httpx import ASGITransport
 
 from workspace_app.agent.config_catalog import AgentConfigCatalog
 from workspace_app.agent.context import AgentToolContext
@@ -27,7 +24,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
-from ._client import AsyncClient, TestClient
+from ._client import TestClient
 
 
 class _Runner:
@@ -99,42 +96,6 @@ def test_appending_a_ref_keeps_the_ones_already_there():
     assert r.status_code == 200, r.text
     got = spec.get_resource_manager(RcaInvestigation).get(item_id).data
     assert got.external_refs == ["legacy-rca:1", "legacy-rca:2"]
-
-
-async def test_concurrent_handoffs_to_one_item_both_survive():
-    """Two people hand different analyses to the SAME item at the same moment.
-    Both refs must land: losing one silently re-opens the door to a duplicate
-    handoff later, since the caller decides "already absorbed?" from this list.
-
-    Scope, stated so this test is not read as proving more than it does: it runs
-    on the in-memory backend under a single-threaded event loop, so what it
-    actually pins is the CONTRACT — that appending is an RFC 6902 `add` diff and
-    not a whole-list replace, which is the shape a future refactor could quietly
-    break. A genuine cross-pod lost update against Postgres lives below this
-    level and cannot be reproduced here."""
-    app, spec = _app_and_spec()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-        item_id = (
-            await c.post(
-                "/a/rca/items",
-                json={"title": "Oven drift", "external_refs": ["legacy-rca:0"]},
-            )
-        ).json()["resource_id"]
-
-        results = await asyncio.gather(
-            c.patch(
-                f"/rca-investigation/{item_id}",
-                json=[{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:1"}],
-            ),
-            c.patch(
-                f"/rca-investigation/{item_id}",
-                json=[{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:2"}],
-            ),
-        )
-
-    assert [r.status_code for r in results] == [200, 200], [r.text for r in results]
-    got = spec.get_resource_manager(RcaInvestigation).get(item_id).data
-    assert sorted(got.external_refs) == ["legacy-rca:0", "legacy-rca:1", "legacy-rca:2"]
 
 
 def test_no_app_indexes_external_refs():

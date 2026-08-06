@@ -186,6 +186,29 @@ Red tests:
    loop in the caller contract, documented in Phase 3; **do not** paper over it by making
    the client send the whole list, which reintroduces last-writer-wins.
 
+   **Outcome (this prediction was right, and the first version of the test hid it).**
+   The original test used `asyncio.gather`, which cannot fail here: the patch route's
+   critical section is synchronous, so two coroutines on one event loop never interleave.
+   It recorded a false pass and the Phase 3 follow-up was never triggered. Re-run with
+   threads, 8 concurrent appends lose 2–3 refs **with every request returning 200**.
+
+   The retry-on-revision loop is now in the contract and measurably helps, but it does
+   **not** close the hole: `expected_revision_id` is enforced in
+   `specstar/resource_manager/core.py` as check-then-write with no transaction spanning
+   the comparison and the write, so two writers can both pass the check. Measured after
+   the fix: 5 runs → 2 pass, 3 still lose a ref. Single-pod is unaffected (one event loop
+   serialises the synchronous section); multi-pod, the documented production shape, is
+   not. The test stays in the suite as a non-strict `xfail` so it announces itself the day
+   the upstream primitive becomes atomic. **This belongs upstream in specstar** — there is
+   no correct fix at this layer, because the only cross-pod primitive available is the
+   non-atomic CAS itself.
+
+   The retry loop still earns its place for a second reason: it re-reads before writing and
+   returns early when the ref is already present, which makes the whole call idempotent.
+   Without that, a caller that times out on a request which actually landed — the ordinary
+   thing to do — records the ref twice, and "at most once per item" was until now a rule
+   nothing enforced.
+
 No migration: the field is new, so every existing row's correct value is the empty list,
 and nothing queries it.
 
