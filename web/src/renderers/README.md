@@ -102,13 +102,18 @@ reach a React child and blank the page.
 That coercion is an explicit list (`parseViewSpec`), not a schema, so **adding a
 field to `ViewSpec` means adding it there too**. A field left off rides raw into
 whatever renders it; `ViewErrorBoundary` contains the resulting throw, but the
-user still loses the panel. `schedule` is the field currently carried raw —
-its consumers validate it themselves.
+user still loses the panel. Where a field then indexes a lookup table, type
+coercion isn't enough — `week.start` is checked against its enum, because
+`start: mon` passed a string check and produced `Invalid time value` from deep
+inside the axis code.
+
+Fields still carried raw: `color_by`, `always_week`, `weekday`, `day_of_month`.
 
 The registry also refuses names the container answers to itself (`health`), so a
 registration can't succeed and then never render. `ViewErrorBoundary` wraps the
-renderer — the one error boundary in this app, because this is the one place
-that runs code the platform team didn't write.
+whole panel — the one error boundary in this app, because this is the one place
+that runs code the platform team didn't write. It covers the header too, since
+that renders `spec.title`, which is where a hostile view file actually crashed.
 
 Maintainer-authored kinds live in `../../ext/`, import solely from
 `entity/public.ts` (enforced by `../../ext/imports.test.ts`), and are registered

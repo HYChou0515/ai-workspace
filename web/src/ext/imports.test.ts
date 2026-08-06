@@ -6,29 +6,32 @@
  * something the barrel exports and you can see who depends on it; change
  * anything else and `ext/` was never allowed to be looking at it.
  *
- * The plan called for an ESLint `no-restricted-imports` rule, but this project
- * has no ESLint (the web toolchain is tsc + vitest). Rather than pull in a
- * linter for one rule, the rule lives here — same CI run, same red build.
+ * The plan called for an ESLint `no-restricted-imports` rule; this project has
+ * no ESLint (the web toolchain is tsc + vitest), so the rule lives here — same
+ * CI run, same red build.
  *
- * The first version of this file was checked against ONE violation shape and
- * therefore caught only that shape: it never recursed into subfolders, its lazy
- * `[\s\S]*?from` swallowed every bare `import "…"` before the first `from`, and
- * it could not see `import(...)` at all. `scanImports` is now tested directly
- * against each of those, so the rule cannot quietly stop enforcing again.
+ * It does NOT use a hand-rolled scanner. Three were written and all three
+ * silently stopped enforcing: a lazy regex swallowed bare `import "…"`; a
+ * per-line scan could not see a multi-line import (this repo's own house
+ * style); three "independent" passes shared one comment-stripper that deleted
+ * real code whenever `/*` appeared inside a string. Each was a lexer written by
+ * hand, and each traded one blind spot for the next. `typescript` is already a
+ * dependency and ships a real one, so the scanning question is now closed.
  */
 import { readFileSync, readdirSync } from "node:fs";
+import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const EXT_DIR = fileURLToPath(new URL(".", import.meta.url));
 
-/** The single sanctioned door into the platform. */
-const PUBLIC_BARREL = "renderers/entity/public";
+/** The single sanctioned door into the platform, relative to `ext/`. */
+const PUBLIC_BARREL = "../renderers/entity/public";
 
-/** Every `.ts`/`.tsx` under `dir`, recursively, excluding tests. Relative paths.
- * Recursion matters: the guide tells authors a plug-in may span several files,
- * and a flat scan silently exempts every subfolder. */
+/** Every `.ts`/`.tsx` under `dir`, recursively, excluding tests. Paths are
+ * relative to `ext/`, which is what `violates` resolves against. */
 export function sourceFiles(dir: string, base = ""): string[] {
   const out: string[] = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -39,108 +42,77 @@ export function sourceFiles(dir: string, base = ""): string[] {
   return out;
 }
 
-/** Module specifiers imported/re-exported by `text`, including side-effect and
- * dynamic imports.
+/** Module specifiers imported/re-exported by `text` — static, side-effect,
+ * dynamic and re-export — as TypeScript's own preprocessor sees them.
  *
- * Three INDEPENDENT passes over the whole text, not one clever pattern and not a
- * per-line scan. Both earlier attempts failed the same way — each traded one
- * blind spot for another. A single lazy `import…from` pattern swallowed the bare
- * `import "…"` statements in between; scanning per line then made every
- * MULTI-LINE statement invisible, which is this repo's own house style for long
- * import lists and therefore exactly what a plug-in author copying a neighbour
- * will write. Separate anchored passes can't shadow each other. */
+ * `import.meta.glob` is Vite-specific and invisible to TS, so it gets its own
+ * pass: it takes a path and really does reach into the app. */
 export function scanImports(text: string): string[] {
-  const src = stripComments(text);
-  const out: string[] = [];
-  // `… from "m"` — covers import and re-export, however many lines it spans.
-  for (const m of src.matchAll(/\bfrom\s*["']([^"']+)["']/g)) out.push(m[1]);
-  // bare `import "m"` (side effects only — no `from`)
-  for (const m of src.matchAll(/\bimport\s+["']([^"']+)["']/g)) out.push(m[1]);
-  // dynamic `import("m")` / `import(`m`)`
-  for (const m of src.matchAll(/\bimport\s*\(\s*["'`]([^"'`]+)["'`]/g)) out.push(m[1]);
+  const out = ts.preProcessFile(text, /* readImportFiles */ true, /* detectJavaScriptImports */ true).importedFiles.map(
+    (f) => f.fileName,
+  );
+  for (const m of text.matchAll(/import\.meta\.glob\w*\s*\(\s*["'`]([^"'`]+)/g)) out.push(m[1]);
   return out;
 }
 
-/** Comments only — so a commented-out import isn't reported as a violation. */
-function stripComments(text: string): string {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
-}
-
-/** Is this specifier allowed from a file `depth` folders below `ext/`? */
-function violates(spec: string, depth: number): boolean {
-  // Vite resolves a leading "/" against the project root, so `/src/api/entities`
-  // reaches straight into the app without a single `.` — treat it as reaching in.
-  if (spec.startsWith("/")) return true;
+/** Is this specifier, written in `ext/<fileRel>`, reaching outside the barrel?
+ *
+ * Resolved as a path rather than matched as a prefix. The prefix version called
+ * anything starting with `./` a sibling, so `./../api/entities` walked straight
+ * out; it also needed the caller to compute a `../` depth, which is the sort of
+ * arithmetic that is right until someone adds a subfolder. */
+export function violates(fileRel: string, spec: string): boolean {
+  if (spec.startsWith("/")) return true; // Vite resolves this against the project root
   if (!spec.startsWith(".")) return false; // bare package (react, …) — fine
-  if (spec.startsWith("./")) return false; // sibling inside ext/ — fine
-  // The barrel, reached with the right number of `../` for this file's depth.
-  return spec !== `${"../".repeat(depth + 1)}${PUBLIC_BARREL}`;
+  const resolved = posix.normalize(posix.join(posix.dirname(fileRel), spec));
+  if (!resolved.startsWith("../")) return false; // stayed inside ext/
+  return resolved !== PUBLIC_BARREL;
 }
 
-describe("scanImports sees the shapes that used to slip past", () => {
-  it("finds a bare side-effect import even when a `from` import follows it", () => {
-    // The old lazy regex matched from the FIRST `import` to the FIRST `from`,
-    // eating everything between — this line vanished entirely.
-    const text = ['import "../hooks/useEntities";', 'import { x } from "../renderers/entity/public";'].join("\n");
-    // order is not part of the contract — the scanner makes three passes
-    expect(scanImports(text).sort()).toEqual(["../hooks/useEntities", "../renderers/entity/public"]);
-  });
-
-  it("finds several consecutive side-effect imports", () => {
-    const text = ['import "../a.css";', 'import "../b.css";', 'import { x } from "./y";'].join("\n");
-    expect(scanImports(text).sort()).toEqual(["../a.css", "../b.css", "./y"]);
-  });
-
-  it("finds a dynamic import, including mid-line", () => {
-    expect(scanImports('const m = await import("../api/entities");')).toEqual(["../api/entities"]);
-    expect(scanImports('const L = lazy(() => import("../renderers/csv"));')).toEqual(["../renderers/csv"]);
-  });
-
-  it("finds a re-export", () => {
-    expect(scanImports('export { a } from "../secret";')).toEqual(["../secret"]);
-  });
-
-  // This repo wraps long import lists across lines — it is the house style, so
-  // it is what a plug-in author copying a neighbouring file will write. The
-  // per-line scanner that replaced the original regex could not see any of it.
-  it("finds an import whose statement spans several lines", () => {
-    const text = ["import {", "  registerViewKind,", "  useFileBuffer,", '} from "../renderers/entity/shared";'].join(
-      "\n",
-    );
-    expect(scanImports(text)).toEqual(["../renderers/entity/shared"]);
-  });
-
-  it("finds a multi-line import even with a bare side-effect import above it", () => {
-    const text = ['import "../hooks/useEntities";', "import {", "  a,", '} from "../api/entities";'].join("\n");
-    expect(scanImports(text).sort()).toEqual(["../api/entities", "../hooks/useEntities"]);
-  });
-
-  it("finds a dynamic import written with a template literal", () => {
-    expect(scanImports("const m = await import(`../api/entities`);")).toEqual(["../api/entities"]);
-  });
-
-  it("ignores a commented-out import rather than reporting a violation that isn't there", () => {
-    expect(scanImports('// import "../api/entities";')).toEqual([]);
-    expect(scanImports('/* import "../api/entities"; */')).toEqual([]);
-  });
+describe("scanImports (TypeScript's preprocessor)", () => {
+  const cases: [string, string, string[]][] = [
+    ["multi-line statement — this repo's house style", 'import {\n  a,\n} from "../x";', ["../x"]],
+    ["bare side-effect import before a `from` import", 'import "../a";\nimport { b } from "../c";', ["../a", "../c"]],
+    ["dynamic import", 'await import("../d");', ["../d"]],
+    ["dynamic import with a template literal", "await import(`../e`);", ["../e"]],
+    ["re-export", 'export { a } from "../f";', ["../f"]],
+    ["import.meta.glob — Vite-only, invisible to TS", 'import.meta.glob("/src/api/*.ts");', ["/src/api/*.ts"]],
+    // The two traps that killed the previous hand-written comment stripper.
+    ["`/*` inside a line comment", '// glob is /* like this\nimport { s } from "../g";\nconst c = "*/";', ["../g"]],
+    ["`/*` inside a string", 'const g = "/*";\nimport { s } from "../h";\nconst e = "*/";', ["../h"]],
+    ["a genuinely commented-out import", '// import "../i";', []],
+    ["a from-quote inside JSX text is not an import", 'const N = () => <p>from "/data/x.csv"</p>;', []],
+  ];
+  for (const [name, text, expected] of cases) {
+    it(name, () => expect(scanImports(text).sort()).toEqual([...expected].sort()));
+  }
 });
 
-describe("violates() judges by the file's depth, not a fixed prefix", () => {
+describe("violates() resolves the path instead of matching a prefix", () => {
   it("accepts the barrel from the top level and from a subfolder", () => {
-    expect(violates("../renderers/entity/public", 0)).toBe(false);
-    expect(violates("../../renderers/entity/public", 1)).toBe(false);
+    expect(violates("index.ts", "../renderers/entity/public")).toBe(false);
+    expect(violates("acme/Deep.tsx", "../../renderers/entity/public")).toBe(false);
   });
-  it("rejects reaching past the barrel at any depth", () => {
-    expect(violates("../renderers/entity/shared", 0)).toBe(true);
-    expect(violates("../../api/entities", 1)).toBe(true);
-    // ...including the barrel spelled with the WRONG depth, which wouldn't resolve
-    expect(violates("../renderers/entity/public", 1)).toBe(true);
-    // ...and a Vite root-absolute path, which reaches in without any dots
-    expect(violates("/src/api/entities", 0)).toBe(true);
+  it("accepts siblings and bare packages", () => {
+    expect(violates("index.ts", "./CsvTableView")).toBe(false);
+    expect(violates("acme/Deep.tsx", "../CsvTableView")).toBe(false); // still inside ext/
+    expect(violates("index.ts", "react")).toBe(false);
   });
-  it("leaves bare packages and siblings alone", () => {
-    expect(violates("react", 0)).toBe(false);
-    expect(violates("./CsvTableView", 0)).toBe(false);
+  it("rejects reaching past the barrel however it is spelled", () => {
+    expect(violates("index.ts", "../renderers/entity/shared")).toBe(true);
+    expect(violates("acme/Deep.tsx", "../../api/entities")).toBe(true);
+    // a `./` prefix that walks out anyway — the old prefix check called this a sibling
+    expect(violates("index.ts", "./../api/entities")).toBe(true);
+    expect(violates("index.ts", "./sub/../../api/entities")).toBe(true);
+    // Vite root-absolute — reaches in without a single dot
+    expect(violates("index.ts", "/src/api/entities")).toBe(true);
+  });
+
+  it("leaves 'that module does not exist' to tsc", () => {
+    // The barrel spelled with too few `../` from a subfolder resolves INSIDE
+    // ext/, to a path that isn't there. That's a compile error, not a boundary
+    // breach, and tsc reports it with a better message than this rule could.
+    expect(violates("acme/Deep.tsx", "../renderers/entity/public")).toBe(false);
   });
 });
 
@@ -152,11 +124,10 @@ describe("src/ext import boundary", () => {
   it("reaches the platform only through renderers/entity/public", () => {
     const offenders: string[] = [];
     for (const rel of sourceFiles(EXT_DIR)) {
-      const depth = rel.split("/").length - 1;
       for (const spec of scanImports(readFileSync(EXT_DIR + rel, "utf-8"))) {
-        if (violates(spec, depth)) offenders.push(`${rel} → ${spec}`);
+        if (violates(rel, spec)) offenders.push(`${rel} → ${spec}`);
       }
     }
-    expect(offenders, `ext/ may only import the public barrel or its own siblings`).toEqual([]);
+    expect(offenders, "ext/ may only import the public barrel or its own siblings").toEqual([]);
   });
 });

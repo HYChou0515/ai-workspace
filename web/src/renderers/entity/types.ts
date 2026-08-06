@@ -30,6 +30,9 @@ export const VIEW_KIND = {
 
 export type ViewKind = string;
 
+/** Key for the untouched parsed document carried on every `ViewSpec`. */
+export const RAW_DOC: unique symbol = Symbol("viewRawDoc");
+
 export type SortDir = "asc" | "desc";
 /** One tier of a multi-level sort (#GH-projects). Ties fall through to the next
  * rule; the final tie-break is always the manual `rank`. */
@@ -77,6 +80,17 @@ export type ViewSpec = {
    * this renderer serves every app's entity types. */
   schedule?: ScheduleFields;
   card?: { title?: string; badges?: string[] };
+  /** The document this spec was parsed from, before the platform coerced its own
+   * fields (#698). `viewParam` reads it so a plug-in whose key collides with a
+   * platform one still gets what its author wrote.
+   *
+   * It is a SYMBOL because it has to survive `{...spec}` — the container spreads
+   * the spec to apply the View panel's overrides, and the first attempt at this
+   * (a WeakMap keyed on the spec object) was silently dead from that one line
+   * onward: the copy was never a key. A symbol property rides along with the
+   * value, stays out of `JSON.stringify` and `Object.keys`, and cannot be typo'd
+   * into by a plug-in. */
+  [RAW_DOC]?: Record<string, unknown>;
   // #698 — a plug-in kind's OWN keys ride along verbatim at runtime
   // (`parseViewSpec` spreads the whole document), but they are deliberately NOT
   // declared here. An index signature would have made every field above

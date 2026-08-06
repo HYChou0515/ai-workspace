@@ -52,6 +52,11 @@ const RESERVED = new Set<string>([VIEW_KIND.health]);
  * replacing the incumbent — two renderers answering to one `view:` has no right
  * answer, and a silent winner would depend on import order. */
 export function registerViewKind(def: ViewRenderer): void {
+  if (!def.kind) {
+    // `parseViewSpec` requires a non-empty `view:`, so an empty name registers
+    // fine and can never match — the same silent outcome RESERVED exists for.
+    throw new Error("a view kind needs a name — an empty one can never match a view file");
+  }
   if (RESERVED.has(def.kind)) {
     throw new Error(`view kind "${def.kind}" is reserved by the platform — pick a different name`);
   }

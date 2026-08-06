@@ -53,7 +53,15 @@ export class ViewErrorBoundary extends Component<Props, State> {
           ⚠
         </span>
         <div className="ev-banner__body">
-          This view failed to render. <code>{this.props.kind}</code>: {error.message}
+          This view failed to render. <code>{this.props.kind}</code>: {error.message}{" "}
+          {/* `resetKey` tracks the VIEW file, but a plug-in's data lives in
+              whatever workspace files it reads — the whole point of the seam.
+              Fix one of those and nothing the boundary subscribes to changes, so
+              without this the panel stays broken for the life of the tab. The
+              boundary cannot know a plug-in's dependencies; the user can. */}
+          <button type="button" onClick={() => this.setState({ error: null })}>
+            Retry
+          </button>
         </div>
       </div>
     );

@@ -15,7 +15,7 @@
 import { load as parseYaml } from "js-yaml";
 
 import type { EntityFieldSpec, EntityType } from "../../api/entities";
-import type { SortRule, ViewKind, ViewSpec } from "./types";
+import { RAW_DOC, type SortRule, type ViewKind, type ViewSpec } from "./types";
 
 /** Normalise a raw `sort:` value into clean `SortRule[]` — keep only entries with
  * a non-empty `field`, default `dir` to "asc", drop anything malformed. Returns
@@ -90,10 +90,12 @@ export function parseViewSpec(text: string): ViewSpec | null {
     columns: normalizeStringList(o.columns),
     card: normalizeCard(o.card),
     week: normalizeWeek(o.week),
+    schedule: normalizeSchedule(o.schedule),
     sort: normalizeSort(o.sort),
     hidden_fields: normalizeStringList(o.hidden_fields),
+    // rides along through every `{...spec}` the container does
+    [RAW_DOC]: o,
   };
-  rawDocs.set(spec, o);
   return spec;
 }
 
@@ -104,23 +106,21 @@ export function parseViewSpec(text: string): ViewSpec | null {
 function normalizeWeek(raw: unknown): ViewSpec["week"] {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const o = raw as Record<string, unknown>;
+  // Coerce the TYPE, then check the DOMAIN: `week: {start: mon}` survives a
+  // string check and then indexes a weekday table with a miss, producing
+  // `new Date(NaN)` and a bare "Invalid time value" from deep inside the axis.
+  // These are small closed enums written by hand in a YAML file; an unknown
+  // member is a typo, and falling back to the default beats a stack trace.
   const week = {
-    start: str(o.start),
-    first_week: str(o.first_week),
-    reset: str(o.reset),
-    boundary: str(o.boundary),
+    start: oneOf(o.start, WEEKDAYS),
+    first_week: oneOf(o.first_week, ["jan1", "first_full", "iso"]),
+    reset: oneOf(o.reset, ["yearly", "none"]),
+    boundary: oneOf(o.boundary, ["new_year", "old_year", "by_today"]),
     epoch: str(o.epoch),
     label: str(o.label),
   } as ViewSpec["week"];
-  return Object.values(week ?? {}).some((v) => v !== undefined) ? week : undefined;
+  return Object.values(week as Record<string, unknown>).some((v) => v !== undefined) ? week : undefined;
 }
-
-/** The document each spec was parsed from, BEFORE the platform coerced its own
- * fields. `viewParam` reads from here so a plug-in whose key happens to collide
- * with a platform one (`columns`, `card`, `sort`, `label`, …) gets what its
- * author wrote, instead of the platform's rewritten — often dropped — version.
- * Keyed weakly so a spec that goes out of scope takes its document with it. */
-const rawDocs = new WeakMap<ViewSpec, Record<string, unknown>>();
 
 /** Read a key the platform doesn't know about — a plug-in kind's own config,
  * e.g. `viewParam(spec, "source")` for `source: /data/wafer.csv` (#698).
@@ -128,10 +128,15 @@ const rawDocs = new WeakMap<ViewSpec, Record<string, unknown>>();
  * This exists so `ViewSpec` does NOT need an index signature. With one, every
  * named field lost its typo check and every `ViewSpec` literal lost excess-
  * property checking; the cost landed on the whole codebase to serve plug-ins.
- * Here the cast is in one audited place and the caller still has to narrow. */
+ * Here the cast is in one audited place and the caller still has to narrow.
+ *
+ * It reads the ORIGINAL document (carried on the spec under `RAW_DOC`) so a
+ * plug-in key that collides with a platform one — `columns`, `card`, `sort`,
+ * `label`, … — still reads back the way its author wrote it, rather than the
+ * platform's coerced, often dropped, version. */
 export function viewParam(spec: ViewSpec, key: string): unknown {
-  const raw = rawDocs.get(spec);
-  if (raw && key in raw) return raw[key];
+  const raw = spec[RAW_DOC];
+  if (raw && Object.hasOwn(raw, key)) return raw[key];
   return (spec as unknown as Record<string, unknown>)[key];
 }
 
@@ -153,6 +158,30 @@ function str(raw: unknown): string | undefined {
 
 function assigneeDisplay(raw: unknown): ViewSpec["assignee_display"] {
   return raw === "avatar" || raw === "name" || raw === "none" ? raw : undefined;
+}
+
+/** `schedule:` names the FIELDS the auto-scheduler writes, so a half-written
+ * block is worse than none: with `span:` missing, Recalculate used to PATCH a
+ * field literally named "undefined" onto every record in one click. All three
+ * required names must be present, or the view is simply not a scheduling one and
+ * the Recalculate affordance never appears. */
+function normalizeSchedule(raw: unknown): ViewSpec["schedule"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const span = str(o.span);
+  const duration = str(o.duration);
+  const flag = str(o.flag);
+  if (!span || !duration || !flag) return undefined;
+  return { span, duration, flag, unit: str(o.unit), anchor: str(o.anchor), assignee: str(o.assignee) };
+}
+
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+/** A scalar that must be one of a small closed set, or nothing. Coercing the
+ * type alone isn't enough for a field that then indexes a lookup table. */
+function oneOf(raw: unknown, allowed: string[]): string | undefined {
+  const s = str(raw);
+  return s !== undefined && allowed.includes(s) ? s : undefined;
 }
 
 /** `card:` drives the board's title + badges, both rendered — so both are

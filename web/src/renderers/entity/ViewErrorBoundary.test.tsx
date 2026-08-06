@@ -9,7 +9,7 @@
  * of the tab. Both cases come down to: a new `resetKey` means try again.
  */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ViewErrorBoundary } from "./ViewErrorBoundary";
@@ -63,6 +63,29 @@ describe("ViewErrorBoundary", () => {
     );
     expect(screen.getByTestId("ok")).toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  // A file-reading plug-in's data lives in files the boundary knows nothing
+  // about, so `resetKey` cannot cover them. Repairing one of those has to have
+  // an escape that doesn't require closing the tab.
+  it("offers a Retry that re-attempts without any prop changing", () => {
+    let explode = true;
+    function Flaky() {
+      if (explode) throw new Error("kaboom");
+      return <div data-testid="ok">fine</div>;
+    }
+    render(
+      <ViewErrorBoundary kind="acme" resetKey="unchanged">
+        <Flaky />
+      </ViewErrorBoundary>,
+    );
+    expect(screen.getByRole("status")).toBeInTheDocument();
+
+    // the user fixed /data/x.csv somewhere else; nothing here changed
+    explode = false;
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+    expect(screen.getByTestId("ok")).toBeInTheDocument();
   });
 
   it("stays broken while the resetKey is unchanged, rather than looping on a still-broken view", () => {

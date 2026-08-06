@@ -14,7 +14,6 @@ import {
   type ViewSpec,
 } from "./EntityViews";
 import { buildRefIndex } from "./refTraversal";
-import { viewParam, viewParamString } from "./shared";
 
 const issueType: EntityType = {
   name: "issue",
@@ -101,18 +100,20 @@ describe("parseViewSpec", () => {
     expect(spec?.week?.label).toBeUndefined();
     expect(parseViewSpec("view: gantt\nentity: issue\nweek: nope\n")?.week).toBeUndefined();
   });
-  // A plug-in's key may collide with a platform one. The platform rewrites its
-  // own fields; the plug-in must still see what its author actually wrote.
-  it("hands a plug-in the ORIGINAL document, not the platform's rewritten fields", () => {
-    const spec = parseViewSpec(
-      ["view: acme-grid", "columns:", "  - key: lot", "    width: 80", "source: /data/x.csv"].join("\n"),
-    );
-    expect(spec).not.toBeNull();
-    // the platform's own view of `columns` drops a list of mappings...
+  // The plug-in's view of a colliding key is asserted THROUGH THE CONTAINER, in
+  // viewKindPlugin.test.tsx — the parser-level shortcut here is what let a dead
+  // mechanism ship green. This one only pins the platform's own coercion.
+  it("drops a `columns:` list of mappings from the platform's own view of the spec", () => {
+    const spec = parseViewSpec(["view: acme-grid", "columns:", "  - key: lot", "    width: 80"].join("\n"));
     expect(spec?.columns).toBeUndefined();
-    // ...but the plug-in that put it there gets it back intact
-    expect(viewParam(spec!, "columns")).toEqual([{ key: "lot", width: 80 }]);
-    expect(viewParamString(spec!, "source")).toBe("/data/x.csv");
+  });
+  // A half-written `schedule:` used to reach Recalculate, which PATCHed a field
+  // literally named "undefined" onto every record in one click.
+  it("drops a `schedule:` block that doesn't name all three required fields", () => {
+    expect(parseViewSpec("view: gantt\nentity: issue\nschedule:\n  duration: est\n  flag: mode\n")?.schedule).toBeUndefined();
+    expect(
+      parseViewSpec("view: gantt\nentity: issue\nschedule:\n  span: when\n  duration: est\n  flag: mode\n")?.schedule,
+    ).toMatchObject({ span: "when", duration: "est", flag: "mode" });
   });
   it("normalises multi-level sort rules, defaulting dir + dropping malformed (#GH-projects)", () => {
     const spec = parseViewSpec(

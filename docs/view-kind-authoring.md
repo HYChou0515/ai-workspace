@@ -73,8 +73,12 @@ source: /data/wafer.csv  # 這是「你自己的」key，見下一節
 而靜默的勝負會取決於 import 順序。平台保留的名字（目前是 `health`，由容器自己接手渲染）
 同樣會丟例外，而不是讓你註冊成功卻永遠畫不出來。取名建議加自己的前綴，例如 `acme-wafermap`。
 
-**你的元件 throw 不會弄垮整個 app。** renderer 外面包了一層 error boundary，壞掉時只有那個面板
-變成一則錯誤訊息，其餘畫面照常；完整的 stack 會進 console。
+**你的元件 throw 不會弄垮整個 app。** 面板外面包了一層 error boundary，壞掉時只有那個面板
+變成一則錯誤訊息，其餘畫面照常；完整的 stack 會進 console。錯誤訊息附一顆 **Retry**——因為
+你讀的資料檔平台看不到，使用者在別處把它修好之後，需要一個明確的重試出口。
+
+⚠️ **`spec` 每次 render 都是新物件。** 別把它放進 `useEffect` 的相依陣列（會每次都觸發）。
+要相依就相依你真正讀出來的值，例如 `viewParamString(spec, "source")`。
 
 ## 3. 你的資料從哪來
 

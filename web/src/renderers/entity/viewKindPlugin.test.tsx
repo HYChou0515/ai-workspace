@@ -19,6 +19,7 @@ import { FileBufferProvider, FileBufferStore } from "../../hooks/fileBuffer";
 import { useFileBuffer } from "../../hooks/fileBuffer";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
 import { QueryWrap } from "../../test/queryWrapper";
+import { viewParam, viewParamString } from "./shared";
 import { registerViewKind, unregisterViewKind } from "./viewKindRegistry";
 
 const mock = vi.hoisted(() => ({
@@ -209,6 +210,47 @@ describe("#698 second-party view kinds", () => {
     rerender(tree("/views/good.ai.yaml"));
     expect(await screen.findByTestId("fine")).toHaveTextContent("fine");
     expect(screen.queryByText(/this view failed to render/i)).not.toBeInTheDocument();
+  });
+
+  // A plug-in's key may share a name with a platform one. The container spreads
+  // the spec to apply the View panel's overrides, so the first attempt at this —
+  // a WeakMap keyed on the spec object — was dead from that one line onward: the
+  // copy was never a key. It passed its own test because that test called
+  // `parseViewSpec` and handed the result straight to `viewParam`, the
+  // parser-level shortcut this file's header forbids. Assert it HERE, through
+  // the container, or the next mechanism will pass its test and fail in the app.
+  it("hands a plug-in the author's own value for a key that collides with a platform one", async () => {
+    const seen: Record<string, unknown> = {};
+    register({
+      kind: "acme-collide",
+      Component: ({ spec }) => {
+        seen.columns = viewParam(spec, "columns");
+        seen.card = viewParam(spec, "card");
+        seen.source = viewParamString(spec, "source");
+        return <div data-testid="collide" />;
+      },
+    });
+
+    renderView("/views/c.ai.yaml", {
+      "/views/c.ai.yaml": [
+        "view: acme-collide",
+        "source: /data/x.csv",
+        "columns:",
+        "  - name: lot",
+        "    width: 40",
+        "card:",
+        "  chart: line",
+        "  y: yield",
+      ].join("\n"),
+    });
+
+    await screen.findByTestId("collide");
+    // the platform's own coercion drops both of these — a list of mappings isn't
+    // a column list, and `card` keeps only title/badges...
+    expect(seen.source).toBe("/data/x.csv");
+    // ...but the plug-in that wrote them reads them back intact
+    expect(seen.columns).toEqual([{ name: "lot", width: 40 }]);
+    expect(seen.card).toEqual({ chart: "line", y: "yield" });
   });
 
   it("refuses a duplicate registration instead of silently replacing the incumbent", () => {
