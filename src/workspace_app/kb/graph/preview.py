@@ -44,8 +44,10 @@ import msgspec
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ...perm import Actor
 from ...resources.kb import Collection, DocChunk, SourceDoc
-from ..doc_permission import doc_mirror_fields
+from ..collections import readable_collection_ids
+from ..doc_permission import denied_doc_ids, doc_mirror_fields
 from ..llm import ILlm
 from .build import DocSource, Graph, build_graph
 from .paging import walk_rows
@@ -56,12 +58,19 @@ def read_collection_sources(
 ) -> tuple[str, list[DocSource]]:
     """The collection's criterion and one :class:`DocSource` per document.
 
-    ``as_user`` reads AS that person, with access scopes applied, so the preview
-    shows the corpus THEY can see. Setting the spec's default user is not the
-    same thing and does not do it: that decides who a write is attributed to, not
-    what a read may return — so a tool offering the option without the scope
-    would be handing out an assurance it was not giving. ``None`` reads with
-    whatever the spec was built with, which is the operator's own view.
+    ``as_user`` reads AS that person, so the preview shows the corpus THEY can
+    see. Setting the spec's default user is not the same thing and does not do
+    it: that decides who a write is attributed to, not what a read may return —
+    so a tool offering the option without the check would be handing out an
+    assurance it was not giving. ``None`` reads with whatever the spec was built
+    with, which is the operator's own view.
+
+    The question asked is ``read_content``, at both levels, because what comes
+    out of here is the passages themselves. The access scopes on ``Collection``
+    and ``SourceDoc`` are read_meta scopes — "may you know this exists" — and
+    "discoverable but not readable" is a state the product models on purpose and
+    offers in the share dialog, so scoping on them alone would hand a corpus's
+    verbatim text to someone allowed only to know it is there.
 
     The permission mirror is read here, exactly as the extractor reads it, so a
     previewed row is the row that would have been stored — including whether
@@ -69,16 +78,40 @@ def read_collection_sources(
     reader may not open, is skipped rather than previewed against a mirror nobody
     could compute.
     """
+    denied: frozenset[str] = frozenset()
+    if as_user is not None:
+        # READ_CONTENT, not read_meta. The scopes below are the collection's and
+        # the deck's, and both are read_meta scopes — "may you know this exists".
+        # What this tool hands over is the passages themselves, and
+        # "discoverable but not readable" is a state the product models on
+        # purpose and offers in the share dialog. Production's rule for exactly
+        # this data says it outright (`graph_evidence_access_scope`): with only
+        # read_meta, a claim would hand over content the reader is not allowed
+        # to read.
+        if collection_id not in readable_collection_ids(spec, [collection_id], as_user):
+            return "", []
+        # …and the same question per deck, because #308 lets one tighten inside
+        # a collection anyone may read. Usually empty.
+        denied = denied_doc_ids(spec, Actor.human(as_user), [collection_id], "read_content")
+
     with ExitStack() as scope:
         if as_user is not None:
-            for model in (Collection, DocChunk, SourceDoc):
+            # The read_meta scopes still apply on top: they are what hides a
+            # collection or a deck the person may not even know about, and the
+            # content gate above does not answer that question. `DocChunk` is
+            # deliberately absent — it carries no access scope at all, so
+            # entering one would be a no-op dressed as a safeguard; chunks are
+            # gated by the two checks above instead.
+            for model in (Collection, SourceDoc):
                 scope.enter_context(
                     spec.get_resource_manager(model).using(as_user, apply_access_scope=True)  # ty: ignore[unknown-argument]
                 )
-        return _read_sources(spec, collection_id)
+        return _read_sources(spec, collection_id, denied=denied)
 
 
-def _read_sources(spec: SpecStar, collection_id: str) -> tuple[str, list[DocSource]]:
+def _read_sources(
+    spec: SpecStar, collection_id: str, *, denied: frozenset[str] = frozenset()
+) -> tuple[str, list[DocSource]]:
     try:
         collection = spec.get_resource_manager(Collection).get(collection_id).data
     except ResourceIDNotFoundError:
@@ -99,6 +132,8 @@ def _read_sources(spec: SpecStar, collection_id: str) -> tuple[str, list[DocSour
 
     docs: list[DocSource] = []
     for doc_id in sorted(chunks):
+        if doc_id in denied:
+            continue  # a deck tightened on its own (#308), inside a readable collection
         # The document's own order. Nothing orders the chunk read, and passage
         # order decides the order every statement and connection is written in.
         chunks[doc_id].sort()

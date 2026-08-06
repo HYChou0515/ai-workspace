@@ -49,9 +49,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--as-user",
         default=None,
-        help="read AS this user, with access scopes applied, so the preview shows the "
-        "corpus THEY can see. Omitted, the reads are unscoped — the operator's own view "
-        "of the whole collection",
+        help="read AS this user — only what they may READ (not merely discover), so the "
+        "preview shows the corpus THEY can see. Omitted, the reads are unscoped — the "
+        "operator's own view of the whole collection",
     )
     p.add_argument(
         "--propose-merges",

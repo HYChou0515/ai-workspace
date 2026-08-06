@@ -300,6 +300,108 @@ def test_the_preview_reads_as_the_person_it_was_told_to_read_as(tmp_path):
     assert theirs == [], "an outsider was handed the contents of a private collection"
 
 
+def test_being_allowed_to_know_a_corpus_exists_is_not_being_allowed_to_read_it(tmp_path):
+    """#697 P16 — `--as-user` was scoped on read_meta, and the thing it hands
+    over is content.
+
+    "Discoverable" is a role the product models on purpose and offers in the
+    share dialog: read_meta WITHOUT read_content — you may know this exists and
+    ask for access, you may not read it. The scopes the preview entered
+    (`collection_access_scope`, `source_doc_access_scope`) are read_meta-only,
+    and `DocChunk` carries no access scope at all, so a preview taken as such a
+    person wrote every verbatim chunk of the corpus into a local JSON file.
+
+    Production's own rule for exactly this data says why, in
+    `graph_evidence_access_scope`: "with only read_meta, a claim would hand over
+    content the reader is not allowed to read."
+    """
+    from workspace_app.perm import Permission
+
+    spec = make_spec(default_user=lambda: "alice")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("alice"):
+        cid = crm.create(
+            Collection(
+                name="restricted",
+                use_graph=True,
+                # Bob may DISCOVER it. Nobody granted him the content.
+                permission=Permission(visibility="restricted", read_meta=["user:bob"]),
+            )
+        ).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    krm = spec.get_resource_manager(DocChunk)
+    with drm.using("alice"):
+        drm.create(
+            SourceDoc(
+                collection_id=cid,
+                path="secret.pptx",
+                content=Binary(data=b"x"),
+                collection_visibility="restricted",
+                collection_read_meta=["user:bob"],
+                collection_created_by="alice",
+            ),
+            resource_id="deck-S",
+        )
+    krm.create(
+        DocChunk(
+            collection_id=cid,
+            source_doc_id="deck-S",
+            seq=0,
+            start=0,
+            end=1,
+            text="機密製程 SECRET",
+        )
+    )
+
+    _, discoverable = read_collection_sources(spec, cid, as_user="bob")
+    assert discoverable == [], "a read_meta-only grantee was handed the passages"
+
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path, as_user="bob")
+    assert "SECRET" not in (tmp_path / "mentions.json").read_text()
+    assert json.loads((tmp_path / "summary.json").read_text())["documents"] == 0
+
+    # …and the owner is unaffected.
+    _, owner = read_collection_sources(spec, cid, as_user="alice")
+    assert [d.doc_id for d in owner] == ["deck-S"]
+
+
+def test_a_document_tightened_on_its_own_is_left_out_too(tmp_path):
+    """#308 lets one deck tighten inside a readable collection. The collection
+    gate alone would wave it through — and the per-doc override is precisely the
+    case where someone took the trouble to say no."""
+    from workspace_app.perm import Permission
+
+    spec = make_spec(default_user=lambda: "alice")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("alice"):
+        cid = crm.create(Collection(name="open", use_graph=True)).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    krm = spec.get_resource_manager(DocChunk)
+    # The deck is DISCOVERABLE to mallory and not readable — the only shape the
+    # read_content check catches. A `private` override would be excluded by the
+    # read_meta scope already, and a test using one passes without this gate.
+    shut = Permission(visibility="restricted", read_meta=["user:mallory"])
+    for doc_id, override in (("deck-open", None), ("deck-shut", shut)):
+        with drm.using("alice"):
+            drm.create(
+                SourceDoc(
+                    collection_id=cid,
+                    path=f"{doc_id}.pptx",
+                    content=Binary(data=b"x"),
+                    permission=override,
+                    collection_visibility="public",
+                    collection_created_by="alice",
+                ),
+                resource_id=doc_id,
+            )
+        krm.create(
+            DocChunk(collection_id=cid, source_doc_id=doc_id, seq=0, start=0, end=1, text="回焊爐")
+        )
+
+    _, docs = read_collection_sources(spec, cid, as_user="mallory")
+    assert [d.doc_id for d in docs] == ["deck-open"], "a deck tightened on its own was previewed"
+
+
 def test_chunks_reach_the_extractor_in_the_documents_own_order():
     """Nothing orders the store's answer, and passage order decides which kind and
     which declared quote a mention keeps (first non-empty wins) as well as the
