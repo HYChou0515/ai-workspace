@@ -90,7 +90,9 @@ class GraphCoordinator:
         """
         self._job_rm.create(
             GraphJob(
-                payload=GraphJobPayload(kind="split", collection_id=collection_id),
+                payload=GraphJobPayload(
+                    kind="split", collection_id=collection_id, reconcile_after=True
+                ),
                 partition_key=collection_id,
             )
         )
@@ -204,6 +206,23 @@ class GraphCoordinator:
                     partition_key=None,
                 )
             )
+        if payload.reconcile_after:
+            # #697: finish the job the button started. Extraction moves the
+            # mentions; the entity pages, `lookup_entity` and the review queue
+            # are all built by the reconcile, so stopping here leaves everything
+            # the owner actually LOOKS AT answering from the previous criterion
+            # until the weekly dispatch comes round. The copy beside the
+            # criterion box says "re-extract for a change to take effect", and
+            # that has to be true of the button it points at.
+            #
+            # Only here. The scheduled dispatch queues ONE reconcile for the
+            # whole run, and a reconcile is a whole-corpus pass — asking per
+            # collection there would multiply it by the number of opted-in
+            # collections for no extra answer.
+            #
+            # Same caveat the dispatch already records: this may run before the
+            # last batch lands, which is fine — it is idempotent and re-runs.
+            self._job_rm.create(GraphJob(payload=GraphJobPayload(kind="reconcile")))
 
     def _batch(self, payload: GraphJobPayload) -> None:
         cid = payload.collection_id

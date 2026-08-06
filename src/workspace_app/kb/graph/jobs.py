@@ -24,6 +24,12 @@ class GraphJobPayload(msgspec.Struct):
     kind: str = "dispatch"  # dispatch | split | batch | reconcile
     collection_id: str = ""  # split | batch
     doc_ids: list[str] = []  # batch: the docs to (re)extract claims for
+    # #697 — a `split` that must ask for the vocabulary once its batches are
+    # queued. Only the HAND-PRESSED rebuild sets it: the weekly dispatch already
+    # queues one reconcile for the whole run, and a reconcile is a whole-corpus
+    # pass, so setting it per collection there would multiply that by the number
+    # of opted-in collections. Absent ≡ off (no migration).
+    reconcile_after: bool = False
 
 
 class GraphJob(Job[GraphJobPayload]):

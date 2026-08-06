@@ -474,3 +474,61 @@ async def test_the_extractor_sees_a_documents_chunks_in_order():
     coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
 
     assert [text for _, text in coord._doc_chunks("deck-A")] == ["t0", "t1", "t2", "t3"]
+
+
+def test_a_rebuild_asks_for_the_vocabulary_too():
+    """#697 P18 — "extract now" has to finish the job it starts.
+
+    The loop the criterion knob exists for is: write it, press 「立即抽取」, look
+    at the result. The button re-extracts the mentions and stops there, so the
+    entity pages, `lookup_entity` and the review queue keep answering from the
+    OLD vocabulary until the weekly cronjob — which is the one part the owner
+    actually looks at to judge whether their criterion worked.
+
+    The scheduled dispatch already queues a reconcile after its splits and says
+    why: it is idempotent and re-runs, so racing the last batch costs nothing.
+    The hand-pressed path needs the same ending for the same reason.
+    """
+    spec = make_spec()
+    cid = _mk_collection(spec, "fab", use_graph=True, docs=[("deck-A", "回焊爐造成冷焊")])
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
+    # Through the real entry point — the button calls this, and what it puts on
+    # the payload is half the behaviour under test.
+    coord.enqueue_collection_rebuild(cid)
+    jrm = spec.get_resource_manager(GraphJob)
+    (split,) = [
+        r.data.payload
+        for r in jrm.list_resources(QB.all().build())
+        if isinstance(r.data, GraphJob) and r.data.payload.kind == "split"
+    ]
+    coord._handle(SimpleNamespace(data=GraphJob(payload=split)))
+
+    queued = [
+        r.data.payload.kind
+        for r in jrm.list_resources(QB.all().build())
+        if isinstance(r.data, GraphJob)
+    ]
+    assert "reconcile" in queued, "the rebuild extracted and left the vocabulary stale"
+
+
+def test_the_weekly_sweep_still_asks_for_the_vocabulary_exactly_once():
+    """A reconcile is a WHOLE-CORPUS pass. Asking per collection would multiply
+    the weekly cost by the number of opted-in collections and answer nothing
+    extra — identity is shared across them, so one pass covers all of them."""
+    spec = make_spec()
+    for name in ("fab", "reports"):
+        _mk_collection(spec, name, use_graph=True, docs=[("deck-" + name, "回焊爐")])
+    coord = GraphCoordinator(spec, _FakeLlm(), chunk_budget=10)
+    jrm = spec.get_resource_manager(GraphJob)
+
+    coord._handle(SimpleNamespace(data=GraphJob(payload=GraphJobPayload(kind="dispatch"))))
+    for r in list(jrm.list_resources(QB.all().build())):
+        if isinstance(r.data, GraphJob) and r.data.payload.kind == "split":
+            coord._handle(SimpleNamespace(data=GraphJob(payload=r.data.payload)))
+
+    kinds = [
+        r.data.payload.kind
+        for r in jrm.list_resources(QB.all().build())
+        if isinstance(r.data, GraphJob)
+    ]
+    assert kinds.count("reconcile") == 1, f"one whole-corpus pass per sweep, got {kinds}"
