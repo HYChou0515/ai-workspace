@@ -81,8 +81,17 @@ def test_every_method_the_handoff_actually_uses_is_allowed():
 
 def test_the_content_type_header_the_handoff_sends_is_allowed():
     """The create and the record steps both post JSON, and `Content-Type:
-    application/json` is not a CORS-safelisted value — the browser asks for it
-    at preflight and refuses the request if the answer omits it."""
+    application/json` is not a CORS-safelisted VALUE — the browser asks for the
+    header at preflight and refuses the request if the answer omits it.
+
+    Documentation, not a guard, and labelled so nobody counts it twice.
+    Starlette's `CORSMiddleware` does `sorted(SAFELISTED_HEADERS | set(...))`
+    with `Content-Type` in that safelist, so this header is allowed for EVERY
+    value of `allow_headers` — measured: narrowing it to `["authorization"]` or
+    to `[]` leaves this test green. What it does catch (a broken method
+    allowance, the layer disappearing) the two tests around it already catch.
+    It stays because the browser fact is worth recording next to the preflight
+    that depends on it — not because it is protecting anything."""
     client = _client(cors_allowed_origins=[_LEGACY])
 
     r = _preflight(client, _LEGACY, method="POST", headers="content-type")

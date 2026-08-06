@@ -96,13 +96,29 @@ def _workspace_path(raw: str) -> str:
     the containment check. A filename that merely CONTAINS dots
     (``report..final.csv``) is untouched — only whole segments count.
 
-    Every route that takes a client path **to the workspace store** calls this —
-    the ``{path:path}`` URL routes and the JSON-body ones (``mkdir`` / ``move`` /
-    ``copy``, both sides of the latter). The body routes are the worse case, and
-    were missed on the first pass: Starlette's URL normalisation never runs on a
-    body, so there even a LITERAL ``../`` survived. (The ``/notebooks/`` routes
-    are deliberately NOT routed through here — their path is a kernel session
-    key, not a store path.)
+    Callers, named rather than described. Every previous attempt to state this as
+    a RULE ("no ``..`` ever", then "every route that takes a client path", then
+    "…to the workspace store") was falsified by the next reviewer, because a rule
+    invites the reader to assume coverage the code does not have. A list can be
+    checked against ``grep``:
+
+    * ``write_file`` / ``read_file`` / ``delete_file`` — the ``{path:path}`` URL routes
+    * ``make_dir`` — the JSON body path
+    * ``move_file`` / ``copy_file`` — BOTH sides of each
+    * ``list_files`` / ``list_tree`` / ``prepare_files_download`` — via
+      ``_workspace_prefix``, which keeps ``""`` meaning "whole workspace"
+
+    Known NOT to pass through here, deliberately or otherwise:
+    ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store
+    path — verified: it only ever indexes a dict in ``KernelService``);
+    ``api/workflow_routes.py::_staged_run_uploads``, which uses
+    ``kb.doc_id.canonical_path`` — a different model that RESOLVES ``..`` rather
+    than refusing it; and ``api/chat_send.py``'s attachment paths, which have no
+    containment check at all. The last one is a gap, not a decision.
+
+    The body routes were missed on the first pass and are the worse case:
+    Starlette's URL normalisation never runs on a body, so there even a LITERAL
+    ``../`` survived.
 
     ``strip`` and not ``lstrip``: a trailing slash must not change what a path
     MEANS. That is not cosmetic — the first version of this helper used
@@ -119,6 +135,22 @@ def _workspace_path(raw: str) -> str:
     if any(segment == ".." for segment in norm.split("/")):
         raise HTTPException(status_code=400, detail="path may not contain a '..' segment")
     return norm
+
+
+def _workspace_prefix(prefix: str) -> str:
+    """``_workspace_path`` for the listing/download ``prefix`` parameter, which
+    is a client path to the store like any other but was reaching the sandbox
+    unchecked.
+
+    It goes to ``sandbox.walk``, whose ``_resolve`` is ``cwd / prefix.lstrip("/")``,
+    so on the shared-dir local backend a crafted prefix enumerates a SIBLING
+    item's files — paths and sizes. Reading them back is already refused (that
+    is the ``{path:path}`` guard), so this closes the enumeration half of the
+    same chain.
+
+    Empty stays empty: ``""`` means "the whole workspace" to every consumer, and
+    normalising it to ``"/"`` would change what a plain listing asks for."""
+    return _workspace_path(prefix) if prefix else prefix
 
 
 async def _stream_upload_to_store(
@@ -272,7 +304,7 @@ def register_file_routes(
         # snapshot record's inline size) — NEVER by reading each file's bytes, so
         # a 600-file tree costs one listing, not 600 full-content downloads.
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        entries = await files.stat_all(investigation_id, prefix)
+        entries = await files.stat_all(investigation_id, _workspace_prefix(prefix))
         return [
             _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
             for p, size in sorted(entries)
@@ -301,7 +333,7 @@ def register_file_routes(
         `dirs` still comes back separately rather than being derived client-side,
         because an EMPTY directory appears in no file path."""
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        entries, dirs = await files.tree(investigation_id, prefix)
+        entries, dirs = await files.tree(investigation_id, _workspace_prefix(prefix))
         return _WorkspaceTree(
             files=[
                 _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
@@ -350,7 +382,7 @@ def register_file_routes(
         Reading routes warm→sandbox / cold→snapshot via the facade; only the
         compression runs off the event loop."""
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        members = await _collect_download_members(investigation_id, prefix)
+        members = await _collect_download_members(investigation_id, _workspace_prefix(prefix))
         download_id, size = await prepare_zip(lambda out: write_zip_members(out, members))
         logger.info(
             "file_routes: prepared download %s of %r for item %s (%d bytes)",

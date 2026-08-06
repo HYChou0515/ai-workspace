@@ -141,6 +141,43 @@ def test_the_json_body_routes_are_guarded_too():
     assert not any(".." in d for d in tree.get("dirs", [])), tree
 
 
+@pytest.mark.parametrize("route", ["files", "tree", "files/download/prepare"])
+def test_the_listing_prefix_cannot_enumerate_another_item(route: str):
+    """`prefix` is a client path to the store, and it was reaching the sandbox
+    unchecked.
+
+    It lands in `sandbox.walk`, whose `_resolve` is `cwd / prefix.lstrip("/")` —
+    so on the shared-dir local backend a crafted prefix lists a SIBLING item's
+    files, with sizes. Reading them back is already refused, so this is the
+    enumeration half of the same chain; a docstring claiming the containment rule
+    was complete is what kept it unexamined for three rounds."""
+    client, iid = _client_and_item()
+
+    r = client.request(
+        "POST" if route.endswith("prepare") else "GET",
+        f"/a/rca/items/{iid}/{route}",
+        params={"prefix": "/../../other-item/root"},
+    )
+
+    assert r.status_code == 400, f"{route} → {r.status_code}: {r.text}"
+
+
+@pytest.mark.parametrize("route", ["files", "tree"])
+def test_an_empty_prefix_still_means_the_whole_workspace(route: str):
+    """The guard must not change what a plain listing asks for — `""` is what
+    every consumer sends for "everything", and normalising it to `/` would be a
+    different question."""
+    client, iid = _client_and_item()
+    client.put(f"/a/rca/items/{iid}/files/seed.txt", content=b"x")
+
+    r = client.get(f"/a/rca/items/{iid}/{route}")
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    paths = {e["path"] for e in (body if route == "files" else body["files"])}
+    assert "/seed.txt" in paths, body
+
+
 def test_a_dot_dot_inside_a_name_is_still_allowed():
     """Only path SEGMENTS that are `..` escape; a filename that merely contains
     dots is ordinary and must keep working, or this guard breaks real uploads."""
