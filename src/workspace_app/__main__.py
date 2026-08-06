@@ -310,6 +310,7 @@ def main() -> None:
             kb_cluster_sweep_seconds=settings.kb.cluster.sweep_interval_seconds,
             monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
             root_path=settings.server.root_path,
+            cors_allowed_origins=settings.server.cors_allowed_origins,
             read_file_max_lines=settings.read_file.max_lines,
             read_file_max_chars=settings.read_file.max_chars,
             tool_output_max_chars=settings.exec.tool_output_max_chars,

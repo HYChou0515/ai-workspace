@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as importlib_version
@@ -11,6 +11,7 @@ from typing import Any, cast
 
 from agents.tracing import set_trace_processors
 from fastapi import APIRouter, FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from specstar import SpecStar
 
@@ -411,6 +412,14 @@ def create_app(
     # runs. None ⇒ the sweeper is off (the safe default — headless triggered runs are opt-in
     # per deploy). A real deploy sets a cadence (e.g. 60 s) to enable time-triggered workflows.
     trigger_check_interval: timedelta | None = None,
+    # #700: browser origins allowed to call this API cross-site. An outside system
+    # (e.g. a legacy analysis site) hands work over FROM ITS OWN PAGE, so the request
+    # is cross-origin and the browser blocks it before our code runs unless we say
+    # otherwise. Empty (the default) ⇒ no CORS layer at all, so a deployment that
+    # never opts in behaves exactly as before. Origins must be listed explicitly:
+    # the caller's identity is the shared session cookie, which needs
+    # `allow_credentials`, and browsers refuse to pair that with a `*` wildcard.
+    cors_allowed_origins: Sequence[str] = (),
 ) -> FastAPI:
     logger.info(
         "boot: composing app (run_consumers=%s, host_managed_durable=%s)",
@@ -788,6 +797,22 @@ def create_app(
         openapi_url="/api/openapi.json",
         swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
     )
+
+    # #700: only mounted when a deployment actually names origins, so the default
+    # deployment carries no CORS layer and its responses are byte-identical to
+    # before. `allow_credentials` is not optional here — the caller is identified
+    # by the shared session cookie, and a cookie-bearing cross-origin request is
+    # refused unless the response allows credentials. That in turn forbids a `*`
+    # wildcard (browsers reject the pair), which is why origins are an explicit
+    # list rather than a boolean.
+    if cors_allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(cors_allowed_origins),
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     # Version-skew handshake: EVERY response (errors included) carries the
     # backend version so the SPA — which bakes its own build version — can spot
