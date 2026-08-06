@@ -26,7 +26,15 @@ from workspace_app.sandbox.mock import MockSandbox
 
 from ._client import TestClient
 
-_NEWEST_FIRST = json.dumps([{"type": "meta", "key": "updated_time", "direction": "-"}])
+_NEWEST_FIRST = json.dumps(
+    [
+        {"type": "meta", "key": "updated_time", "direction": "-"},
+        # Tiebreaker, not decoration: without a total order, two rows sharing a
+        # timestamp can swap between pages, so `offset` paging silently skips
+        # one — and an item the picker never shows is one the user re-creates.
+        {"type": "meta", "key": "resource_id", "direction": "+"},
+    ]
+)
 
 
 class _Runner:
@@ -47,13 +55,20 @@ class _LegacySite:
         self._slug = slug
 
     def list_candidates(self, limit: int = 100) -> list[dict]:
-        """The picker's only read: newest-touched first, explicitly capped."""
+        """The picker's only read: newest-touched first, explicitly capped.
+
+        Reads the ENVELOPE listing, not the `/data` one. `/data` returns the
+        struct alone — no resource id — so a picker built on it can render rows
+        and then do nothing with the one the user clicks. The id lives in
+        `revision_info`, which is also where this platform's own frontend reads
+        it from (`web/src/api/real.ts`).
+        """
         r = self._c.get(
-            "/rca-investigation/data",
+            "/rca-investigation",
             params={"limit": limit, "sorts": _NEWEST_FIRST},
         )
         assert r.status_code == 200, r.text
-        return r.json()
+        return [{"id": row["revision_info"]["resource_id"], **row["data"]} for row in r.json()]
 
     def already_absorbed(self, items: list[dict], ref: str) -> list[str]:
         """Answered from the page already fetched — never a query (the field is
@@ -124,8 +139,13 @@ def test_two_analyses_from_the_legacy_site_converge_on_one_item():
     candidates = legacy.list_candidates()
     assert [c["title"] for c in candidates] == ["Oven drift"]
     assert legacy.already_absorbed(candidates, "legacy-rca:2") == []
-    legacy.upload(item_id, "legacy-rca:2", "pareto.png", b"\x89PNG")
-    legacy.record_absorbed(item_id, "legacy-rca:2")
+    # Act on the row the USER CLICKED — the id has to come out of the listing,
+    # not out of a create response the picker never sees. This is the move that
+    # makes or breaks the integration, so the double must play it.
+    picked = candidates[0]["id"]
+    assert picked == item_id
+    legacy.upload(picked, "legacy-rca:2", "pareto.png", b"\x89PNG")
+    legacy.record_absorbed(picked, "legacy-rca:2")
 
     # One item holds both analyses, each in its own folder.
     absorbed = legacy.list_candidates()[0]["external_refs"]

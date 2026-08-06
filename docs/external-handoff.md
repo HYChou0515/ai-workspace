@@ -27,30 +27,48 @@
 ### 1. 列出候選 item（給使用者挑）
 
 ```
-GET /api/rca-investigation/data
+GET /api/rca-investigation
       ?limit=100
-      &sorts=[{"type":"meta","key":"updated_time","direction":"-"}]
+      &sorts=[{"type":"meta","key":"updated_time","direction":"-"},
+              {"type":"meta","key":"resource_id","direction":"+"}]
 ```
 
-回來的每一筆都帶著自己的 `external_refs` 欄位，長這樣：
+回來長這樣（外層是信封，`data` 是 item 本身）：
 
 ```json
 [
   {
-    "title": "烤箱溫度飄移",
-    "external_refs": ["legacy-rca:12345", "legacy-rca:12346"],
-    "severity": "P1",
-    "status": "triaging"
+    "data": {
+      "title": "烤箱溫度飄移",
+      "external_refs": ["legacy-rca:12345", "legacy-rca:12346"],
+      "severity": "P1",
+      "status": "triaging"
+    },
+    "revision_info": {
+      "resource_id": "rca-investigation:0f3c…",
+      "revision_id": "rca-investigation:0f3c…:7"
+    }
   }
 ]
 ```
 
-所以「這筆分析是不是已經進過某個 item」**你在自己的前端就能判斷完**，
-不用多打任何一支 API：把使用者這次要交棒的編號，拿去比對每筆的 `external_refs` 就好。
+兩個欄位你後面都會用到：
+
+- **`revision_info.resource_id`** 就是 item 的 id，第 2、3 步全部要用它。
+- **`revision_info.revision_id`** 是這一版的版本號，第 2a 步記錄編號時要帶（見地雷四）。
+
+> **不要打 `/api/rca-investigation/data`。** 那支只回 `data` 本體、**沒有 id**，
+> 你會做出一個畫得出清單、卻無法對使用者點的那一列做任何事的畫面。
+
+「這筆分析是不是已經進過某個 item」**你在自己的前端就能判斷完**，
+不用多打任何一支 API：把使用者這次要交棒的編號，拿去比對每筆 `data.external_refs` 就好。
 已經進過的那個 item，就在畫面上標示或停用。
 
-排序請用 `updated_time`（最後被動過的排最前面），**不要用 `created_time`**。
-原因見下面的地雷二。
+排序請照上面帶**兩個** key：主要用 `updated_time`（最後被動過的排最前面，
+**不要用 `created_time`**，原因見地雷二），次要用 `resource_id`。
+次要那個不是裝飾 —— 少了它，兩筆時間戳相同的資料排序就沒有定數，
+你用 `offset` 往下翻頁時會**跳過**某些 item，而跳過的那筆對使用者就是不存在，
+於是他又開一個新的。
 
 ### 2a. 使用者挑了既有 item → 上傳檔案，再記一筆
 

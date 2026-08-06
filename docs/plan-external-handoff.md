@@ -102,10 +102,27 @@ app, not inferred; the first draft of this plan guessed `GET /{model}?sort=-upda
 and was wrong on both the path and the parameter:
 
 ```
-GET /api/rca-investigation/data
+GET /api/rca-investigation
       ?limit=100
-      &sorts=[{"type":"meta","key":"updated_time","direction":"-"}]
+      &sorts=[{"type":"meta","key":"updated_time","direction":"-"},
+              {"type":"meta","key":"resource_id","direction":"+"}]
 ```
+
+Two corrections that arrived from review, both of which had shipped in the
+caller-facing doc:
+
+- It must be the **envelope** listing, not `/data`. `/data` returns the struct
+  alone — **no resource id** — so a picker built on it can render the rows and
+  then act on none of them, since every later step keys off the id. The id is at
+  `revision_info.resource_id`, which is where this platform's own frontend reads
+  it from (`web/src/api/real.ts`). The contract double missed this because it
+  only ever consumed `title` from the listing and took the id from the create
+  response — it never played the one move the integration depends on.
+- The sort needs a **tiebreaker**. `updated_time` alone is not a total order, so
+  two rows sharing a timestamp may swap between pages and `offset` paging drops
+  one. `api/kb_routes.py` already pairs its sort with `resource_id` for exactly
+  this reason (#184); the plan cited that line as precedent while omitting the
+  precaution it exists to document.
 
 Each returned record carries its own `external_refs`, because non-indexed fields are still
 part of the record. The picker therefore decides everything locally: which items exist,
