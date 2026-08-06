@@ -9,6 +9,7 @@ permission rule that drifts is a leak.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from specstar import QB, SpecStar
 
@@ -416,4 +417,60 @@ def test_rejecting_a_merge_does_not_block_the_event_loop(monkeypatch) -> None:
 
     assert r.status_code == 200, r.text
     assert recorded, "the route never called reject_proposal"
+    assert not any(recorded)
+
+
+def _watch_loop(monkeypatch, recorded: list[bool]) -> None:
+    """Record, for every `list_proposals` the request makes, whether it ran on
+    the loop — then let the real one answer."""
+    real = kb_routes.list_proposals
+
+    def spy(*args: Any, **kwargs: Any):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            recorded.append(False)
+        else:
+            recorded.append(True)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(kb_routes, "list_proposals", spy)
+
+
+def test_finding_the_proposal_is_off_the_loop_too(monkeypatch) -> None:
+    """#697 P17 — the first version moved the decision and left the LOOKUP.
+
+    `_require_proposal` scans every pending link in the corpus and, per pair,
+    fetches both identities and their evidence. On any queue worth reviewing
+    that is the larger half of the request, and it ran on the loop — so the
+    route still held the pod while one person's click was served, and the tests
+    could not see it because they asserted which function was moved rather than
+    that nothing blocking was left behind.
+    """
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _seed(spec)
+    host, other = _pending_pair(spec)
+
+    recorded: list[bool] = []
+    _watch_loop(monkeypatch, recorded)
+    r = client.post(f"/kb/graph/proposals/{host}/accept", params={"other": other})
+
+    assert r.status_code == 200, r.text
+    assert recorded, "the route never looked the proposal up"
+    assert not any(recorded)
+
+
+def test_finding_the_proposal_is_off_the_loop_when_rejecting_too(monkeypatch) -> None:
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _seed(spec)
+    host, other = _pending_pair(spec)
+
+    recorded: list[bool] = []
+    _watch_loop(monkeypatch, recorded)
+    r = client.post(f"/kb/graph/proposals/{host}/reject", params={"other": other})
+
+    assert r.status_code == 200, r.text
+    assert recorded, "the route never looked the proposal up"
     assert not any(recorded)

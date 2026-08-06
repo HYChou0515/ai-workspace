@@ -2307,9 +2307,20 @@ def register_kb_routes(
         inline it holds the event loop, so every other request on the pod queues
         behind one person's click.
         """
-        _require_proposal(entity_id, other)
-        await asyncio.to_thread(accept_proposal, spec, entity_id, other, by=get_user_id())
+        await asyncio.to_thread(_accept_sync, entity_id, other, get_user_id())
         return await graph_entity(entity_id)
+
+    def _accept_sync(entity_id: str, other: str, by: str) -> None:
+        """The whole blocking half, in one place so it moves as one thing.
+
+        The lookup goes with it. It scans every pending link in the corpus and,
+        per pair, fetches both identities and their evidence — on a queue worth
+        reviewing that is the larger half of the request, and leaving it behind
+        meant the route still held the loop while the part that had been moved
+        was the cheap one.
+        """
+        _require_proposal(entity_id, other)
+        accept_proposal(spec, entity_id, other, by=by)
 
     @app.post("/kb/graph/proposals/{entity_id}/reject")
     async def graph_reject(entity_id: str, other: str = Query(...)) -> GraphProposalOut:
@@ -2318,8 +2329,13 @@ def register_kb_routes(
 
         Also off the loop: it is two scans of every pending link in the corpus.
         """
+        return await asyncio.to_thread(_reject_sync, entity_id, other, get_user_id())
+
+    def _reject_sync(entity_id: str, other: str, by: str) -> GraphProposalOut:
+        """Same shape as accept: the lookup and the decision move together, and
+        the answer to return is the one the lookup already produced."""
         proposal = _require_proposal(entity_id, other)
-        await asyncio.to_thread(reject_proposal, spec, entity_id, other, by=get_user_id())
+        reject_proposal(spec, entity_id, other, by=by)
         return proposal
 
     def _require_proposal(entity_id: str, other: str) -> GraphProposalOut:
