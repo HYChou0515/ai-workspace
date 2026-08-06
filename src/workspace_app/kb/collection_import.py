@@ -109,6 +109,12 @@ def _restore_cards(
             continue  # nothing to key on → unfindable; skip
         target = pick_upsert_target(snapshot.candidates, keys)
         if target is not None and mode == "skip":
+            # Claim even though nothing is written: the pairing is one-to-one either
+            # way. Without this a second manifest card under the same key re-resolves
+            # onto this same already-matched card and is skipped too — dropping a card
+            # that collided with nothing, where a document import under `skip` would
+            # have added it.
+            snapshot.claim(target[0])
             continue  # same rule as a colliding path: what is already here stays
         # #518: the manifest carries links as paths (see collection_export), so re-mint
         # them as ids in the collection we are importing INTO — a doc id encodes its

@@ -796,8 +796,14 @@ def _glossary_for_passages(
         for rid, card in pairs
         if rid not in named and returned.intersection(card.reference_doc_ids)
     ]
-    hits = hits + linked[: max(0, _GLOSSARY_INJECT_CAP - len(hits))]
-    fresh = [(rid, card) for rid, card in hits if rid not in ctx.injected_card_ids]
+    # Drop what the turn has already defined BEFORE the cap is applied. The cap bounds
+    # what this search adds to the prompt, so spending it on cards that will render
+    # nothing is spending it on nothing: a turn that already met the cap in text hits
+    # would otherwise emit an empty block and still drop the linked cards — and a link
+    # is the ONLY route to a card whose document never spells its term.
+    text_hits = [(rid, card) for rid, card in hits if rid not in ctx.injected_card_ids]
+    linked = [(rid, card) for rid, card in linked if rid not in ctx.injected_card_ids]
+    fresh = text_hits + linked[: max(0, _GLOSSARY_INJECT_CAP - len(text_hits))]
     cards = [card for _, card in fresh]
     block = card_context_block(cards)
     if not block:

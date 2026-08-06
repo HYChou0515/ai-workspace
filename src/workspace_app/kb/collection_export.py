@@ -23,6 +23,7 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..files.zip_download import safe_zip_filename, subtree_arcname
 from ..resources.kb import Collection, ContextCard, SourceDoc
+from .context_cards import live_cards
 
 if TYPE_CHECKING:
     from specstar import SpecStar
@@ -119,7 +120,11 @@ def build_collection_zip(
         return out
 
     cards: list[dict[str, Any]] = []
-    for rev in card_rm.list_resources((QB["collection_id"] == collection_id).build()):
+    # #701: export is the fourth card-read path and obeys the same tombstone fence as
+    # the other three. Without it a soft-deleted card rides the archive out and the
+    # import RESURRECTS it — live again in the target collection and quoted to the
+    # model as authoritative. A backup must not be a place a deletion undoes itself.
+    for rev in card_rm.list_resources(live_cards(collection_id).build()):
         card = rev.data
         assert isinstance(card, ContextCard)
         cards.append(

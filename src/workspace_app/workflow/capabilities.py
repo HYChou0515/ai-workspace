@@ -235,7 +235,7 @@ def update_context_card(
     ``None`` KEEPS the card's existing links, a list replaces them, ``[]`` clears. A
     caller that only means to refresh a definition must not cost the card the evidence
     someone curated onto it."""
-    from specstar.types import ResourceIDNotFoundError
+    from specstar.types import ResourceNotFoundError
 
     from ..kb.context_cards import derive_norm_keys, effective_keys
     from ..resources.kb import ContextCard
@@ -243,7 +243,12 @@ def update_context_card(
     rm = spec.get_resource_manager(ContextCard)
     try:
         existing = rm.get(card_id).data
-    except ResourceIDNotFoundError as exc:
+    except ResourceNotFoundError as exc:
+        # The PARENT of both `ResourceIDNotFoundError` and `ResourceIsDeletedError`,
+        # which are siblings: catching only the former let a tombstone's raise escape
+        # to a caller with no reason to expect it (#701). Key-based resolution stopped
+        # handing out tombstones, but the agent surface passes an id it read earlier,
+        # so the id path answers for itself. Deleted is gone, whichever way it went.
         raise CardNotFound(card_id) from exc
     assert isinstance(existing, ContextCard)  # narrow Struct|Unset for ty
     if expected_body is not None and expected_body != existing.body:

@@ -493,6 +493,43 @@ async def test_glossary_puts_text_matched_cards_before_linked_ones(
     assert out.index("NAMED-IN-TEXT.") < out.index("LINKED-ONLY.")
 
 
+async def test_glossary_spends_the_cap_on_cards_it_will_actually_render(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # The cap was applied BEFORE the turn-level dedup, so cards already injected
+    # earlier in the turn still consumed slots. A turn that has met the cap in text
+    # hits then renders an EMPTY block — full budget, nothing in it — and the linked
+    # card is dropped anyway. That is the one case linking exists for: the document's
+    # text never spells the term, so no later search can reach that card either.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    for i in range(_GLOSSARY_INJECT_CAP):
+        _card(spec, cid, [f"term{i}"], title=f"T{i}", body="x.")
+    _card(spec, cid, ["M4"], title="M4", body="LINKED.", reference_doc_ids=["doc-a"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+    mentions_every_term = " ".join(f"term{i}" for i in range(_GLOSSARY_INJECT_CAP))
+
+    _glossary_for_passages(ctx.context, [mentions_every_term], [])  # fills the turn
+    # The second search surfaces the same terms again — they render nothing this time,
+    # having been defined already — plus a document a card links.
+    out = _glossary_for_passages(ctx.context, [mentions_every_term], ["doc-a"])
+
+    assert "LINKED." in out  # a slot spent on an already-injected card is not a slot
+
+
+async def test_glossary_injects_a_card_once_when_it_both_names_and_links(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # A card can arrive by both routes at once. Counting it twice would render its body
+    # twice and burn two slots of the same cap for one definition.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    _card(spec, cid, ["notch"], title="Notch", body="ONCE.", reference_doc_ids=["doc-a"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = _glossary_for_passages(ctx.context, ["a jagged notch along the rim"], ["doc-a"])
+
+    assert out.count("ONCE.") == 1
+
+
 async def test_kb_search_injects_a_linked_card_only_once_per_turn(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):

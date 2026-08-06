@@ -38,7 +38,7 @@ def derive_norm_keys(keys: list[str]) -> list[str]:
     return sorted({n for k in keys if (n := norm(k))})
 
 
-def _live(collection_id: str):
+def live_cards(collection_id: str):
     """Every card read goes through this: one collection, tombstones excluded.
 
     ``list_resources`` returns soft-deleted rows, so without the ``is_deleted``
@@ -57,7 +57,7 @@ def lookup(spec: SpecStar, collection_id: str, terms: list[str]) -> dict[str, li
     rm = spec.get_resource_manager(ContextCard)
     out: dict[str, list[ContextCard]] = {}
     for term in terms:
-        q = _live(collection_id) & QB["norm_keys"].contains(norm(term))
+        q = live_cards(collection_id) & QB["norm_keys"].contains(norm(term))
         cards: list[ContextCard] = []
         for r in rm.list_resources(q.build()):
             data = r.data
@@ -75,7 +75,7 @@ def find_cards_by_key(
     — a blind ``ContextCard`` struct carries none. Same ``norm`` + ``.contains`` exact
     membership, scoped to one collection."""
     rm = spec.get_resource_manager(ContextCard)
-    q = _live(collection_id) & QB["norm_keys"].contains(norm(term))
+    q = live_cards(collection_id) & QB["norm_keys"].contains(norm(term))
     out: list[tuple[str, ContextCard]] = []
     for r in rm.list_resources(q.build()):
         data = r.data
@@ -234,7 +234,7 @@ def cards_with_ids_for_collections(
     rm = spec.get_resource_manager(ContextCard)
     out: list[tuple[str, ContextCard]] = []
     for cid in collection_ids:
-        for r in rm.list_resources(_live(cid).build()):
+        for r in rm.list_resources(live_cards(cid).build()):
             data = r.data
             assert isinstance(data, ContextCard)  # narrow Struct|Unset for ty
             out.append((r.info.resource_id, data))  # ty: ignore[unresolved-attribute]

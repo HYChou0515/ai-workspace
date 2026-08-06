@@ -314,6 +314,27 @@ def _two_cards_one_key(body_a: str, body_b: str) -> dict:
     }
 
 
+def test_import_skip_still_brings_in_a_manifest_card_that_collides_with_nothing():
+    """Skip protects what is already here; it does not discard what is not here.
+
+    A document import under `skip` still adds every non-colliding path, and a card has
+    to mean the same thing. The skipped card must still be CLAIMED, or a second
+    manifest entry under that key re-resolves onto the same already-matched card and is
+    skipped too — silently dropping a card that collided with nothing at all.
+    """
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "title": "existing", "body": "orig"},
+    )
+
+    _import_into(client, cid, _make_zip({}, manifest=_two_cards_one_key("a", "b")), "skip")
+
+    titles = sorted(c.title for c in _cards_in(spec, cid))
+    assert titles == ["M4 (process)", "existing"]  # the curated one kept, the spare added
+
+
 def test_import_keeps_both_cards_when_a_manifest_has_two_under_one_key():
     """Several cards may share a key on purpose — the term names more than one thing,
     which is why `resolve_upsert_target` reports how many carry the matched key.
