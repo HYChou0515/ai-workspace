@@ -11,6 +11,7 @@ indexed lookup surface materialised on write).
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from specstar import QB
@@ -37,6 +38,17 @@ def derive_norm_keys(keys: list[str]) -> list[str]:
     return sorted({n for k in keys if (n := norm(k))})
 
 
+def _live(collection_id: str):
+    """Every card read goes through this: one collection, tombstones excluded.
+
+    ``list_resources`` returns soft-deleted rows, so without the ``is_deleted``
+    predicate a deleted card keeps answering — quoted back as an authoritative
+    definition, and handed to an upsert as a target whose ``update`` then raises.
+    specstar carries ``is_deleted`` as a meta field, so this is a predicate the
+    backend applies, not a filter each caller has to remember to reapply."""
+    return (QB["collection_id"] == collection_id) & (QB.is_deleted() == False)  # noqa: E712
+
+
 def lookup(spec: SpecStar, collection_id: str, terms: list[str]) -> dict[str, list[ContextCard]]:
     """Deterministic exact-key lookup, scoped to one collection. For each input
     term, return every card whose `norm_keys` contains `norm(term)` — exact
@@ -45,7 +57,7 @@ def lookup(spec: SpecStar, collection_id: str, terms: list[str]) -> dict[str, li
     rm = spec.get_resource_manager(ContextCard)
     out: dict[str, list[ContextCard]] = {}
     for term in terms:
-        q = (QB["collection_id"] == collection_id) & QB["norm_keys"].contains(norm(term))
+        q = _live(collection_id) & QB["norm_keys"].contains(norm(term))
         cards: list[ContextCard] = []
         for r in rm.list_resources(q.build()):
             data = r.data
@@ -63,7 +75,7 @@ def find_cards_by_key(
     — a blind ``ContextCard`` struct carries none. Same ``norm`` + ``.contains`` exact
     membership, scoped to one collection."""
     rm = spec.get_resource_manager(ContextCard)
-    q = (QB["collection_id"] == collection_id) & QB["norm_keys"].contains(norm(term))
+    q = _live(collection_id) & QB["norm_keys"].contains(norm(term))
     out: list[tuple[str, ContextCard]] = []
     for r in rm.list_resources(q.build()):
         data = r.data
@@ -86,12 +98,11 @@ def effective_keys(keys: list[str], title: str) -> list[str]:
     return eff
 
 
-def resolve_upsert_target(
-    spec: SpecStar, collection_id: str, keys: list[str]
+def pick_upsert_target(
+    candidates: Callable[[str], list[tuple[str, ContextCard]]], keys: list[str]
 ) -> tuple[str, ContextCard, int] | None:
-    """The card an upsert of ``keys`` would OVERWRITE in this collection, as
-    ``(card_id, card, sharing_count)`` — or ``None`` when no key names one yet, i.e.
-    this upsert creates.
+    """The card an upsert of ``keys`` would OVERWRITE, as ``(card_id, card,
+    sharing_count)`` — or ``None`` when no key names one yet, i.e. this upsert creates.
 
     The FIRST key with a hit wins and its first card is the target. ``sharing_count``
     is how many cards carry that matched key: ``> 1`` means the term is ambiguous
@@ -103,15 +114,64 @@ def resolve_upsert_target(
     resolved differently from the commit it previews would show a diff against a
     card the commit does not touch — and copies drift: the collection importer's
     copy never had this half at all, so importing the same archive twice grew a
-    second card instead of updating the first. What stays per-surface is only the
-    WRITE (who it is stamped as, and whether a stale read is guarded), never the
-    target.
+    second card instead of updating the first.
+
+    ``candidates`` is where the cards come from, and it is the ONLY thing callers
+    vary: one query per key for a single authoring action, a pre-loaded snapshot for
+    a batch restore that must not see its own writes. Splitting the SOURCE from the
+    RULE is what lets a batch caller stay linear without owning a second copy of the
+    rule. What stays per-surface beyond that is only the WRITE — who it is stamped
+    as, and whether a stale read is guarded — never the target.
     """
     for key in keys:
-        hits = find_cards_by_key(spec, collection_id, key)
+        hits = candidates(key)
         if hits:
             return hits[0][0], hits[0][1], len(hits)
     return None
+
+
+def resolve_upsert_target(
+    spec: SpecStar, collection_id: str, keys: list[str]
+) -> tuple[str, ContextCard, int] | None:
+    """``pick_upsert_target`` against live storage — one indexed query per key.
+
+    The right source for a SINGLE authoring action, where reading the current state is
+    the point. A batch restore wants ``CardSnapshot`` instead: repeating this per item
+    is a query per key per card, and it also lets the batch see cards it just wrote."""
+    return pick_upsert_target(lambda key: find_cards_by_key(spec, collection_id, key), keys)
+
+
+class CardSnapshot:
+    """A collection's cards as they stood at ONE moment, for resolving a whole batch.
+
+    Two problems, one object. **Correctness**: resolving each item against live storage
+    means a batch sees its own writes, so two manifest entries sharing a key collapse
+    — the second finds the first and overwrites it, and a plain export→import quietly
+    loses a card. A snapshot cannot grow mid-restore, so entries can only ever pair
+    with cards that predate the batch. **Cost**: one load instead of a query per key
+    per item, which is the difference between linear and quadratic on a collection
+    whose cards a generator wrote by the thousand.
+
+    ``claim`` is what keeps the pairing one-to-one: an existing card taken by an
+    earlier entry is withdrawn from the pool, so a later entry under the same key
+    pairs with the NEXT card carrying it, or creates. Without that, N entries sharing
+    a key would all land on the same card and N-1 of them would vanish.
+    """
+
+    def __init__(self, pairs: list[tuple[str, ContextCard]]) -> None:
+        self._by_key: dict[str, list[tuple[str, ContextCard]]] = {}
+        for rid, card in pairs:
+            for nk in card.norm_keys:
+                self._by_key.setdefault(nk, []).append((rid, card))
+        self._claimed: set[str] = set()
+
+    def candidates(self, key: str) -> list[tuple[str, ContextCard]]:
+        """The unclaimed cards carrying ``key`` — the ``pick_upsert_target`` source."""
+        return [(rid, c) for rid, c in self._by_key.get(norm(key), []) if rid not in self._claimed]
+
+    def claim(self, card_id: str) -> None:
+        """Withdraw a card from the pool: this batch has already paired with it."""
+        self._claimed.add(card_id)
 
 
 def build_vocab(cards: list[ContextCard]) -> dict[str, list[ContextCard]]:
@@ -174,7 +234,7 @@ def cards_with_ids_for_collections(
     rm = spec.get_resource_manager(ContextCard)
     out: list[tuple[str, ContextCard]] = []
     for cid in collection_ids:
-        for r in rm.list_resources((QB["collection_id"] == cid).build()):
+        for r in rm.list_resources(_live(cid).build()):
             data = r.data
             assert isinstance(data, ContextCard)  # narrow Struct|Unset for ty
             out.append((r.info.resource_id, data))  # ty: ignore[unresolved-attribute]

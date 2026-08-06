@@ -26,7 +26,13 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..resources.kb import Collection, ContextCard, SourceDoc
 from .collection_export import MANIFEST_DIR, MANIFEST_PATH
-from .context_cards import derive_norm_keys, effective_keys, resolve_upsert_target
+from .context_cards import (
+    CardSnapshot,
+    cards_with_ids_for_collections,
+    derive_norm_keys,
+    effective_keys,
+    pick_upsert_target,
+)
 from .doc_id import canonical_path, encode_doc_id
 
 if TYPE_CHECKING:
@@ -82,16 +88,23 @@ def _restore_cards(
     with two of everything. The identity of a card is its key, and the rule for
     resolving that — title fallback, first key with a hit wins — is not restated here
     but shared with the authoring surfaces (``effective_keys`` /
-    ``resolve_upsert_target``). It was the copy that made this diverge: this function
+    ``pick_upsert_target``). It was the copy that made this diverge: this function
     carried the title-fallback half of the rule and never the create-or-update half.
+
+    Targets come from a ``CardSnapshot`` of the collection as it stood BEFORE this
+    restore, never from live storage. A batch that resolved against live storage would
+    see its own writes, so two manifest cards sharing a key would collapse into one —
+    trading duplication for silent loss — and it would cost a query per key per card
+    on a collection that may hold thousands.
     """
     rm = spec.get_resource_manager(ContextCard)
+    snapshot = CardSnapshot(cards_with_ids_for_collections(spec, [collection_id]))
     for card in cards:
         title = card.get("title", "")
         keys = effective_keys(list(card.get("keys", [])), title)
         if not derive_norm_keys(keys):
             continue  # nothing to key on → unfindable; skip
-        target = resolve_upsert_target(spec, collection_id, keys)
+        target = pick_upsert_target(snapshot.candidates, keys)
         if target is not None and mode == "skip":
             continue  # same rule as a colliding path: what is already here stays
         restored = ContextCard(
@@ -111,6 +124,9 @@ def _restore_cards(
         if target is None:
             rm.create(restored)
         else:
+            # Pair one-to-one: a later manifest card under the same key must fall
+            # through to the NEXT card carrying it, or create, never re-target this one.
+            snapshot.claim(target[0])
             rm.update(target[0], restored)
 
 

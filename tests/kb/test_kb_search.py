@@ -4,7 +4,7 @@ from agents import RunContextWrapper
 from specstar import SpecStar
 
 from workspace_app.agent import AgentToolContext, KbSearchBudget, kb_search_impl
-from workspace_app.agent.tools import _glossary_for_passages
+from workspace_app.agent.tools import _GLOSSARY_INJECT_CAP, _glossary_for_passages
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
@@ -523,13 +523,33 @@ async def test_glossary_ignores_a_card_linking_a_document_this_search_missed(
     # search. Driven through the helper rather than `kb_search_impl` because the
     # point is which doc ids reach it — a two-document fixture is small enough
     # that top-k returns both, which would prove nothing.
+    #
+    # Both halves in ONE test on purpose: asserting only the absence would pass just
+    # as well against a build where linking does nothing at all, which is no guard.
     cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    _card(spec, cid, ["M4"], title="M4", body="Edge chipping.", reference_doc_ids=["doc-a"])
     _card(spec, cid, ["M9"], title="M9", body="Delamination.", reference_doc_ids=["doc-b"])
     ctx = _glossary_ctx(spec, embedder, [cid])
 
     out = _glossary_for_passages(ctx.context, ["a jagged notch along the rim"], ["doc-a"])
 
-    assert out == ""  # the card links doc-b; this search returned doc-a
+    assert "Edge chipping." in out  # links doc-a, which this search returned
+    assert "Delamination." not in out  # links doc-b, which it did not
+
+
+async def test_glossary_caps_how_many_linked_cards_one_search_injects(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # Text hits have always been capped; linking is a second way in and needs the same
+    # ceiling, or one heavily-curated document could hand the model an unbounded block.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    for i in range(_GLOSSARY_INJECT_CAP + 10):
+        _card(spec, cid, [f"K{i}"], title=f"K{i}", body="x.", reference_doc_ids=["doc-a"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = _glossary_for_passages(ctx.context, ["nothing here names a card"], ["doc-a"])
+
+    assert out.count("###") <= _GLOSSARY_INJECT_CAP
 
 
 async def test_kb_search_without_glossary_cards_appends_nothing(

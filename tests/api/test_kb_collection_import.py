@@ -302,6 +302,51 @@ def _import_into(client: TestClient, cid: str, zip_bytes: bytes, mode: str) -> N
     assert r.status_code == 200, r.text
 
 
+def _two_cards_one_key(body_a: str, body_b: str) -> dict:
+    return {
+        "version": 1,
+        "collection": {"name": "C"},
+        "documents": [],
+        "context_cards": [
+            {"keys": ["M4"], "title": "M4 (metal)", "body": body_a},
+            {"keys": ["M4"], "title": "M4 (process)", "body": body_b},
+        ],
+    }
+
+
+def test_import_keeps_both_cards_when_a_manifest_has_two_under_one_key():
+    """Several cards may share a key on purpose — the term names more than one thing,
+    which is why `resolve_upsert_target` reports how many carry the matched key.
+
+    So restoring must not resolve each manifest card against a store the restore loop
+    is itself filling: the second card would find the first and overwrite it, turning
+    a plain export→import into silent data loss. Targets are resolved against the
+    collection as it stood BEFORE the restore, and a card already claimed by an
+    earlier manifest entry is not offered to a later one."""
+    client, spec = _client_with_spec()
+    zbytes = _make_zip({}, manifest=_two_cards_one_key("metal", "process"))
+
+    new_cid = _import_new(client, zbytes)
+
+    assert sorted(c.title for c in _cards_in(spec, new_cid)) == ["M4 (metal)", "M4 (process)"]
+
+
+def test_reimporting_two_cards_under_one_key_updates_both_rather_than_adding_more():
+    """The pair above still has to be idempotent: the second import pairs each manifest
+    card with a different existing card instead of both landing on the first."""
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+
+    first = _make_zip({}, manifest=_two_cards_one_key("metal", "process"))
+    second = _make_zip({}, manifest=_two_cards_one_key("metal v2", "process v2"))
+    _import_into(client, cid, first, "overwrite")
+    _import_into(client, cid, second, "overwrite")
+
+    cards = _cards_in(spec, cid)
+    assert len(cards) == 2
+    assert sorted(c.body for c in cards) == ["metal v2", "process v2"]
+
+
 def test_import_overwrite_replaces_a_cards_links_rather_than_merging_them():
     """Overwrite is a whole-card replacement, links included — the same thing it means
     for a document, whose bytes are replaced rather than merged. An archive states what
