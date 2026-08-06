@@ -87,6 +87,38 @@ class WorkItemBase(Struct):
     injection does not go through the UI, so a member who may not edit still
     gets the variables in their turns."""
 
+    external_refs: list[str] = field(default_factory=list)
+    """Tier 1 (#700) — the external records this item has already absorbed, as
+    opaque ``<system>:<record-id>`` strings (e.g. ``"legacy-rca:12345"``).
+    Declared here rather than opted into, for the same reason as ``env_vars``:
+    any App can be handed work by an outside system, so this is a platform
+    capability, not one App's domain field.
+
+    It exists to answer ONE question — "has this item already taken this
+    record?" — which is what stops a legacy site's button from sprawling one
+    real-world problem across N items, each holding a fraction of the context.
+    Several external records may converge onto one item (the whole point: the
+    outside system splits a problem into pieces that only a human can regroup),
+    and the SAME record may legitimately appear on several items; the only rule
+    is that a record appears at most once PER item.
+
+    The value is opaque: it is compared, never parsed. The platform assigns no
+    meaning to the ``<system>`` half beyond "the caller says these came from
+    different places".
+
+    **Deliberately absent from every App's ``INDEXED_FIELDS``, and that is a
+    prohibition, not a missing optimisation.** Un-indexed, specstar's
+    ``.contains`` degrades on SQL backends to a substring ``LIKE`` — so
+    ``"legacy-rca:1"`` would match ``"legacy-rca:12345"`` — while the in-memory
+    backend the unit tests run on keeps exact element membership. A query would
+    therefore be green in CI and silently wrong in production (the trap already
+    documented in ``CLAUDE.md``). So NOTHING may query this field: callers fetch
+    a page of items and filter the records they already hold, which costs zero
+    extra round trips because a listed record carries its own ``external_refs``.
+    Should server-side filtering ever be needed, adding the index also obliges a
+    ``POST /{model}/migrate/execute`` backfill or pre-existing rows go invisible
+    to the new predicate (the #668 lesson)."""
+
     permission: Permission | None = None
     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
     governs collections / KbChat: ``visibility`` decides whether the per-verb grant
