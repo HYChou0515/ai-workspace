@@ -14,6 +14,16 @@ empty segments, so both render as the same name at the same level.
 Reachable from the shipped UI, not just an API client: `FileTree.commitRename`
 collapses runs of slashes but does not strip a trailing one, so renaming to
 `foo/` takes this path.
+
+**No migration was needed.** Rows stored under a trailing-slash key would have
+been left behind by the window this was live, and they would be worse than
+cosmetic: the canonical form now resolves to the sibling file, so a `DELETE` of
+the trailing-slash path destroys the good file and keeps the phantom, and a
+phantom with no sibling is unaddressable by any API call while still counting
+toward the workspace quota. The operator checked the durable store — **zero rows
+end in `/`** — so nothing exists to migrate. That is a point-in-time answer about
+the environment queried, not a property the schema enforces; if a deployment
+turns up that ran the affected build for longer, count again before assuming.
 """
 
 from __future__ import annotations

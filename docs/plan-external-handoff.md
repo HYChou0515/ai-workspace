@@ -350,6 +350,14 @@ did not do anything wrong" is immune to the regressions that matter here.
 
 ### Platform changes this work made beyond the field itself
 
+A note on the one that needed an operator answer rather than a code decision: the
+trailing-slash normalisation was briefly wrong on this branch, and any row written under a
+trailing-slash key during that window would now be worse than cosmetic — the canonical form
+resolves to the sibling file, so deleting the trailing-slash path destroys the good one, and
+a phantom without a sibling is unaddressable while still counting toward the quota. **The
+durable store was queried: zero rows end in `/`**, so no migration ships. Recorded because
+"we decided it was fine" and "we counted and it was zero" age very differently.
+
 Both are outside the "one field, no endpoints" headline and were not in any phase, so the
 design record names them rather than leaving them to `git log`:
 
