@@ -70,7 +70,7 @@ export function parseViewSpec(text: string): ViewSpec | null {
   const o = doc as Record<string, unknown>;
   const { view, entity } = o;
   if (typeof view !== "string" || !view) return null;
-  return {
+  const spec: ViewSpec = {
     // A plug-in's own keys ride through untouched — they are its config, and
     // `unknown` at the type level, so it must narrow them itself.
     ...(o as ViewSpec),
@@ -89,10 +89,38 @@ export function parseViewSpec(text: string): ViewSpec | null {
     skip_weekends: typeof o.skip_weekends === "boolean" ? o.skip_weekends : undefined,
     columns: normalizeStringList(o.columns),
     card: normalizeCard(o.card),
+    week: normalizeWeek(o.week),
     sort: normalizeSort(o.sort),
     hidden_fields: normalizeStringList(o.hidden_fields),
   };
+  rawDocs.set(spec, o);
+  return spec;
 }
+
+/** `week:` drives the gantt's time axis, and every field in it is a scalar the
+ * chart formats or matches on — a `label:` left blank (which the shipped file
+ * documents as an option) parsed as `null` and threw inside `formatWeekLabel`,
+ * because the default only fires for `undefined`. */
+function normalizeWeek(raw: unknown): ViewSpec["week"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const week = {
+    start: str(o.start),
+    first_week: str(o.first_week),
+    reset: str(o.reset),
+    boundary: str(o.boundary),
+    epoch: str(o.epoch),
+    label: str(o.label),
+  } as ViewSpec["week"];
+  return Object.values(week ?? {}).some((v) => v !== undefined) ? week : undefined;
+}
+
+/** The document each spec was parsed from, BEFORE the platform coerced its own
+ * fields. `viewParam` reads from here so a plug-in whose key happens to collide
+ * with a platform one (`columns`, `card`, `sort`, `label`, …) gets what its
+ * author wrote, instead of the platform's rewritten — often dropped — version.
+ * Keyed weakly so a spec that goes out of scope takes its document with it. */
+const rawDocs = new WeakMap<ViewSpec, Record<string, unknown>>();
 
 /** Read a key the platform doesn't know about — a plug-in kind's own config,
  * e.g. `viewParam(spec, "source")` for `source: /data/wafer.csv` (#698).
@@ -102,6 +130,8 @@ export function parseViewSpec(text: string): ViewSpec | null {
  * property checking; the cost landed on the whole codebase to serve plug-ins.
  * Here the cast is in one audited place and the caller still has to narrow. */
 export function viewParam(spec: ViewSpec, key: string): unknown {
+  const raw = rawDocs.get(spec);
+  if (raw && key in raw) return raw[key];
   return (spec as unknown as Record<string, unknown>)[key];
 }
 
@@ -110,9 +140,15 @@ export function viewParamString(spec: ViewSpec, key: string): string | undefined
   return str(viewParam(spec, key));
 }
 
-/** A YAML scalar that must be a string, or nothing. */
+/** A YAML scalar the platform will render or match on. Numbers and booleans are
+ * stringified rather than dropped — `title: 2026` is a perfectly ordinary thing
+ * to write, and silently discarding it is a regression, not safety. What must
+ * not survive is a mapping or a list, which is what reached a React child and
+ * blanked the page. */
 function str(raw: unknown): string | undefined {
-  return typeof raw === "string" && raw ? raw : undefined;
+  if (typeof raw === "string") return raw || undefined;
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  return undefined;
 }
 
 function assigneeDisplay(raw: unknown): ViewSpec["assignee_display"] {

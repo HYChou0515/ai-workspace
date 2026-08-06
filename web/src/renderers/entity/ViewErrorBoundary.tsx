@@ -13,7 +13,18 @@
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
-type Props = { kind: string; children: ReactNode };
+type Props = {
+  kind: string;
+  /** Changes whenever a DIFFERENT attempt should be made — a different view
+   * file, or the same file edited. Resetting on `kind` alone was not enough:
+   * the IDE mounts ONE renderer and swaps its `path`, so two files of the same
+   * kind share this instance. A crash in one then followed the user to the
+   * other (reporting the wrong file's error), and repairing a file in place —
+   * an agent write, or the gear panel's own save — never cleared it, leaving a
+   * fixed file permanently broken for the life of the tab. */
+  resetKey: string;
+  children: ReactNode;
+};
 type State = { error: Error | null };
 
 export class ViewErrorBoundary extends Component<Props, State> {
@@ -29,10 +40,8 @@ export class ViewErrorBoundary extends Component<Props, State> {
     console.error(`view kind "${this.props.kind}" threw while rendering`, error, info.componentStack);
   }
 
-  // A different view file must get a fresh attempt; the boundary instance is
-  // reused when only the kind changes.
   componentDidUpdate(prev: Props): void {
-    if (prev.kind !== this.props.kind && this.state.error) this.setState({ error: null });
+    if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null });
   }
 
   render(): ReactNode {

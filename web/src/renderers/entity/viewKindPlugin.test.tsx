@@ -164,8 +164,51 @@ describe("#698 second-party view kinds", () => {
     renderView("/views/boom.ai.yaml", { "/views/boom.ai.yaml": "view: acme-explodes\n" });
 
     expect(await screen.findByText(/this view failed to render/i)).toBeInTheDocument();
-    // the surrounding shell survived — the panel is still on the page
-    expect(document.querySelector(".ev-panel")).not.toBeNull();
+    // the message names the kind, so a maintainer knows whose code threw
+    expect(screen.getByRole("status")).toHaveTextContent("acme-explodes");
+  });
+
+  // The IDE mounts ONE renderer and swaps its `path`, so two files of the SAME
+  // kind share one boundary instance. Resetting on `kind` alone meant a crash in
+  // one file followed the user to the other and reported the wrong file.
+  it("gives another file of the same kind a fresh attempt instead of showing the first file's crash", async () => {
+    register({
+      kind: "acme-cond",
+      Component: ({ spec }) => {
+        if (spec.title === "boom") throw new Error("boom");
+        return <div data-testid="fine">{spec.title}</div>;
+      },
+    });
+    const files = {
+      "/views/bad.ai.yaml": "view: acme-cond\ntitle: boom\n",
+      "/views/good.ai.yaml": "view: acme-cond\ntitle: fine\n",
+    };
+    const store = storeWithFiles(files);
+    // Warm BOTH buffers: a cold target hits the loading branch, which unmounts
+    // and would hide the bug. Warm tabs are the normal case in this IDE.
+    store.ensureLoaded("/views/bad.ai.yaml");
+    store.ensureLoaded("/views/good.ai.yaml");
+
+    const tree = (path: string) => (
+      <QueryWrap>
+        <WorkspaceSlugProvider value="rca">
+          <FileServiceProvider value={investigationFileService("rca", "item1")}>
+            <EditModeProvider>
+              <FileBufferProvider store={store}>
+                <AiYamlRenderer path={path} />
+              </FileBufferProvider>
+            </EditModeProvider>
+          </FileServiceProvider>
+        </WorkspaceSlugProvider>
+      </QueryWrap>
+    );
+
+    const { rerender } = render(tree("/views/bad.ai.yaml"));
+    expect(await screen.findByText(/this view failed to render/i)).toBeInTheDocument();
+
+    rerender(tree("/views/good.ai.yaml"));
+    expect(await screen.findByTestId("fine")).toHaveTextContent("fine");
+    expect(screen.queryByText(/this view failed to render/i)).not.toBeInTheDocument();
   });
 
   it("refuses a duplicate registration instead of silently replacing the incumbent", () => {

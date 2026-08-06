@@ -94,6 +94,11 @@ const source = viewParamString(spec, "source")?.trim() ?? "";   // ✅ 字串或
 const raw = viewParam(spec, "options");                          // ✅ unknown，自己收窄
 ```
 
+這兩個存取器回傳的是**原始 YAML 文件**的值，不是平台轉型後的版本。所以就算你的 key 剛好跟
+平台的撞名——`columns`、`card`、`sort`、`title`、`label`、`span`、`group_by`、`week`、
+`entity`、`hidden_fields`、`skip_weekends`、`assignee`、`assignee_display`——你讀回來的
+仍然是你寫下去的東西。（不過還是**建議避開這些名字**，因為平台可能也會拿它們去畫東西。）
+
 ### 3.2 Workspace 檔案
 
 這是主要來源。兩個工具：

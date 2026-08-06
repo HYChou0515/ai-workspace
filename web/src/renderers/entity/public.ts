@@ -31,7 +31,10 @@ export type { ViewRenderer } from "./viewKindRegistry";
 // ── the view file ──────────────────────────────────────────────────────────
 // `ViewSpec` carries the parsed `.ai.yaml`. Fields the platform knows are typed
 // and coerced; YOUR OWN keys are not on the type — read them with
-// `viewParamString(spec, "source")` / `viewParam`.
+// `viewParamString(spec, "source")` / `viewParam`, which hand back the ORIGINAL
+// document, so a key of yours that happens to share a name with a platform one
+// (`columns`, `card`, `sort`, `label`, `span`, `title`, `group_by`, `week`, …)
+// still reads back the way you wrote it.
 export type { EntityViewProps, ViewSpec } from "./types";
 export { viewParam, viewParamString } from "./shared";
 

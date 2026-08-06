@@ -21,7 +21,6 @@ import { RoleCreateInput, type WidgetKind } from "./roleWidget";
 import { ConflictBanner, fieldText, parseSpan, parseViewSpec } from "./shared";
 import type { EntityViewProps, ViewConfig, ViewKind, ViewSpec } from "./types";
 import { ViewSettingsPanel } from "./ViewSettingsPanel";
-import { ViewErrorBoundary } from "./ViewErrorBoundary";
 import { resolveViewRenderer } from "./viewKindRegistry";
 
 // Re-exports so existing importers (`AiYamlRenderer`, tests) keep their
@@ -258,9 +257,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           <div>No {spec.entity} records yet.</div>
         </div>
       ) : (
-        <ViewErrorBoundary kind={spec.view}>
-          <Component {...props} />
-        </ViewErrorBoundary>
+        <Component {...props} />
       )}
     </div>
   );

@@ -40,21 +40,37 @@ export function sourceFiles(dir: string, base = ""): string[] {
 }
 
 /** Module specifiers imported/re-exported by `text`, including side-effect and
- * dynamic imports. Scanned per line so one statement can never swallow another. */
+ * dynamic imports.
+ *
+ * Three INDEPENDENT passes over the whole text, not one clever pattern and not a
+ * per-line scan. Both earlier attempts failed the same way — each traded one
+ * blind spot for another. A single lazy `import…from` pattern swallowed the bare
+ * `import "…"` statements in between; scanning per line then made every
+ * MULTI-LINE statement invisible, which is this repo's own house style for long
+ * import lists and therefore exactly what a plug-in author copying a neighbour
+ * will write. Separate anchored passes can't shadow each other. */
 export function scanImports(text: string): string[] {
+  const src = stripComments(text);
   const out: string[] = [];
-  for (const line of text.split("\n")) {
-    // `import x from "m"` / `export … from "m"` / bare `import "m"`
-    const stat = /^\s*(?:import|export)\b[^"']*?["']([^"']+)["']/.exec(line);
-    if (stat) out.push(stat[1]);
-    // `import("m")` anywhere on the line (dynamic / lazy)
-    for (const m of line.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g)) out.push(m[1]);
-  }
+  // `… from "m"` — covers import and re-export, however many lines it spans.
+  for (const m of src.matchAll(/\bfrom\s*["']([^"']+)["']/g)) out.push(m[1]);
+  // bare `import "m"` (side effects only — no `from`)
+  for (const m of src.matchAll(/\bimport\s+["']([^"']+)["']/g)) out.push(m[1]);
+  // dynamic `import("m")` / `import(`m`)`
+  for (const m of src.matchAll(/\bimport\s*\(\s*["'`]([^"'`]+)["'`]/g)) out.push(m[1]);
   return out;
+}
+
+/** Comments only — so a commented-out import isn't reported as a violation. */
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 }
 
 /** Is this specifier allowed from a file `depth` folders below `ext/`? */
 function violates(spec: string, depth: number): boolean {
+  // Vite resolves a leading "/" against the project root, so `/src/api/entities`
+  // reaches straight into the app without a single `.` — treat it as reaching in.
+  if (spec.startsWith("/")) return true;
   if (!spec.startsWith(".")) return false; // bare package (react, …) — fine
   if (spec.startsWith("./")) return false; // sibling inside ext/ — fine
   // The barrel, reached with the right number of `../` for this file's depth.
@@ -66,12 +82,13 @@ describe("scanImports sees the shapes that used to slip past", () => {
     // The old lazy regex matched from the FIRST `import` to the FIRST `from`,
     // eating everything between — this line vanished entirely.
     const text = ['import "../hooks/useEntities";', 'import { x } from "../renderers/entity/public";'].join("\n");
-    expect(scanImports(text)).toEqual(["../hooks/useEntities", "../renderers/entity/public"]);
+    // order is not part of the contract — the scanner makes three passes
+    expect(scanImports(text).sort()).toEqual(["../hooks/useEntities", "../renderers/entity/public"]);
   });
 
   it("finds several consecutive side-effect imports", () => {
     const text = ['import "../a.css";', 'import "../b.css";', 'import { x } from "./y";'].join("\n");
-    expect(scanImports(text)).toEqual(["../a.css", "../b.css", "./y"]);
+    expect(scanImports(text).sort()).toEqual(["../a.css", "../b.css", "./y"]);
   });
 
   it("finds a dynamic import, including mid-line", () => {
@@ -81,6 +98,30 @@ describe("scanImports sees the shapes that used to slip past", () => {
 
   it("finds a re-export", () => {
     expect(scanImports('export { a } from "../secret";')).toEqual(["../secret"]);
+  });
+
+  // This repo wraps long import lists across lines — it is the house style, so
+  // it is what a plug-in author copying a neighbouring file will write. The
+  // per-line scanner that replaced the original regex could not see any of it.
+  it("finds an import whose statement spans several lines", () => {
+    const text = ["import {", "  registerViewKind,", "  useFileBuffer,", '} from "../renderers/entity/shared";'].join(
+      "\n",
+    );
+    expect(scanImports(text)).toEqual(["../renderers/entity/shared"]);
+  });
+
+  it("finds a multi-line import even with a bare side-effect import above it", () => {
+    const text = ['import "../hooks/useEntities";', "import {", "  a,", '} from "../api/entities";'].join("\n");
+    expect(scanImports(text).sort()).toEqual(["../api/entities", "../hooks/useEntities"]);
+  });
+
+  it("finds a dynamic import written with a template literal", () => {
+    expect(scanImports("const m = await import(`../api/entities`);")).toEqual(["../api/entities"]);
+  });
+
+  it("ignores a commented-out import rather than reporting a violation that isn't there", () => {
+    expect(scanImports('// import "../api/entities";')).toEqual([]);
+    expect(scanImports('/* import "../api/entities"; */')).toEqual([]);
   });
 });
 
@@ -94,6 +135,8 @@ describe("violates() judges by the file's depth, not a fixed prefix", () => {
     expect(violates("../../api/entities", 1)).toBe(true);
     // ...including the barrel spelled with the WRONG depth, which wouldn't resolve
     expect(violates("../renderers/entity/public", 1)).toBe(true);
+    // ...and a Vite root-absolute path, which reaches in without any dots
+    expect(violates("/src/api/entities", 0)).toBe(true);
   });
   it("leaves bare packages and siblings alone", () => {
     expect(violates("react", 0)).toBe(false);

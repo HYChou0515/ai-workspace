@@ -35,6 +35,7 @@ import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
 import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
 import { setViewScalar } from "./shared";
 import { VIEW_KIND, type SortRule, type ViewConfig } from "./types";
+import { ViewErrorBoundary } from "./ViewErrorBoundary";
 
 /** The View panel's uncommitted edits — a full snapshot of the three panel-owned
  * spec fields (so an untouched field persists through a save of the others). */
@@ -292,30 +293,38 @@ export function AiYamlRenderer({ path }: { path: string }) {
 
   return (
     <>
-      <EntityViewBody
-        spec={effectiveSpec}
-        // #690 P4 — per project, per view: the collapse state lives in this
-        // person's browser, and two views must not collapse each other.
-        viewKey={`${itemId}:${path}`}
-        type={type}
-        entities={list?.entities ?? []}
-        invalid={list?.invalid ?? []}
-        users={users}
-        refIndex={refIndex}
-        canWrite={canWrite}
-        catalogDiagnostics={catalogQ.data?.diagnostics ?? []}
-        // catalog loaded but this type isn't in it → its schema failed to load (§D).
-        schemaMissing={catalogQ.isSuccess && !type}
-        onCreate={write.create}
-        onPatch={write.patch}
-        onPatchAnchor={anchorType ? anchorWrite.patch : undefined}
-        onOpenRecord={openInModal}
-        onOpenRecordFile={onOpenRecordFile}
-        busy={write.isBusy}
-        conflicts={write.conflicts}
-        onDismissConflict={write.dismissConflict}
-        viewConfig={viewConfig}
-      />
+      {/* The boundary wraps the WHOLE panel, not just the registered component:
+          the header renders `spec.title`, which is where a hostile `.ai.yaml`
+          crashed the app before the parser started coercing. Wrapping only the
+          component left that site — the original one — outside the net.
+          `resetKey` covers both the file and its contents, so switching tabs or
+          repairing the file in place both get a fresh attempt. */}
+      <ViewErrorBoundary kind={spec.view} resetKey={`${path} ${entry.text}`}>
+        <EntityViewBody
+            spec={effectiveSpec}
+          // #690 P4 — per project, per view: the collapse state lives in this
+          // person's browser, and two views must not collapse each other.
+          viewKey={`${itemId}:${path}`}
+          type={type}
+          entities={list?.entities ?? []}
+          invalid={list?.invalid ?? []}
+          users={users}
+          refIndex={refIndex}
+          canWrite={canWrite}
+          catalogDiagnostics={catalogQ.data?.diagnostics ?? []}
+          // catalog loaded but this type isn't in it → its schema failed to load (§D).
+          schemaMissing={catalogQ.isSuccess && !type}
+          onCreate={write.create}
+          onPatch={write.patch}
+          onPatchAnchor={anchorType ? anchorWrite.patch : undefined}
+          onOpenRecord={openInModal}
+          onOpenRecordFile={onOpenRecordFile}
+          busy={write.isBusy}
+          conflicts={write.conflicts}
+          onDismissConflict={write.dismissConflict}
+          viewConfig={viewConfig}
+        />
+      </ViewErrorBoundary>
       {/* #680 — the record a gesture opened. A number with no record behind it
           (deleted by a peer, or dropped from the projection) closes rather than
           rendering an empty shell; the live-sync refetch is what surfaces it. */}

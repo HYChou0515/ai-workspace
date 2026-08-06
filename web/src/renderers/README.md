@@ -95,9 +95,15 @@ entity, and those props arrive empty.
 `parseViewSpec` answers only "is this a view file?" (does it name a kind). It
 does not know which kinds exist and does not enforce `entity:` — both moved to
 the registry, so adding a kind touches neither the parser nor a TS union. It
-DOES coerce every field the platform reads: the document is arbitrary user YAML,
-and widening what parses without widening what is validated let a `title:`
-mapping reach a React child and blank the page.
+does coerce the platform's own fields — the document is arbitrary user YAML, and
+widening what parses without widening what is validated let a `title:` mapping
+reach a React child and blank the page.
+
+That coercion is an explicit list (`parseViewSpec`), not a schema, so **adding a
+field to `ViewSpec` means adding it there too**. A field left off rides raw into
+whatever renders it; `ViewErrorBoundary` contains the resulting throw, but the
+user still loses the panel. `schedule` is the field currently carried raw —
+its consumers validate it themselves.
 
 The registry also refuses names the container answers to itself (`health`), so a
 registration can't succeed and then never render. `ViewErrorBoundary` wraps the
