@@ -95,12 +95,18 @@ def build_graph(
     collection_id: str,
     guidance: str = "",
     propose_with: ILlm | None = None,
+    decisions: Decisions | None = None,
 ) -> Graph:
     """Every document extracted, then the vocabulary built over all of it.
 
     ``propose_with`` is the model for the merge-proposal pass, off by default:
     it can only ADD work for a person, and when the question is what the
     EXTRACTOR did, its output is noise on top of the answer.
+
+    ``decisions`` are the merges people have already accepted or refused. They
+    belong here for the same reason they belong in production: without them a
+    preview of a curated corpus shows every accepted merge come apart again, and
+    a reader diffing two runs reads that as something the criterion did.
     """
     per_doc = [
         build_doc_graph(llm, doc, collection_id=collection_id, guidance=guidance) for doc in docs
@@ -111,6 +117,7 @@ def build_graph(
         [evidence_of(m) for m in mentions],
         [relation_evidence_of(r) for r in relationships],
         llm=propose_with,
+        decisions=decisions,
     )
     return Graph(
         mentions=mentions,
@@ -581,8 +588,6 @@ def build_vocabulary(
     # its evidence moved to.
     for host_key, keys in sorted(groups.items()):
         host_eid = entity_id(host_key)
-        if host_eid not in entities:
-            continue
         for absorbed in keys:
             if absorbed == host_key:
                 continue

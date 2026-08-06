@@ -768,3 +768,53 @@ def test_the_same_collections_in_a_different_order_are_not_a_change():
     assert pending_row().info.revision_id == baseline, (
         "the same collections in a different order were written as a change"
     )
+
+
+def test_a_recorded_answer_goes_once_the_things_it_was_about_are_gone():
+    """A decision is kept because it cannot be recomputed — but only while there
+    is something for it to apply to. Once both identities have left the corpus
+    there is no merge to re-derive, and keeping the row leaves it DANGLING:
+    `permanently_delete` fires no cascade, so nothing else would ever collect it.
+    """
+    from workspace_app.kb.graph.persist import wipe_doc_graph
+    from workspace_app.kb.graph.review import list_proposals, reject_proposal
+
+    spec = make_spec(default_user=lambda: "bob")
+    _pair(spec)
+    reconcile_vocabulary(spec, llm=_Judge())
+    (proposal,) = list_proposals(spec)
+    reject_proposal(spec, proposal.entity_id, proposal.proposed_from, by="alice")
+    assert [link.state for link in _links(spec) if link.proposed_from] == ["rejected"]
+
+    for doc in ("deck-A", "deck-B"):  # the evidence leaves the corpus entirely
+        wipe_doc_graph(spec, doc)
+    reconcile_vocabulary(spec, llm=None)
+
+    assert _entities(spec) == []
+    assert _links(spec) == [], "the answer was left pointing at identities that are gone"
+
+
+def test_a_link_naming_only_one_side_is_not_read_as_an_answer():
+    """`validate_refs` is off by default, so a row CAN carry a `proposed_from`
+    with no `entity_id` — and a pair with one end names nothing. Read as a
+    decision it would suppress a proposal about an identity nobody chose, or
+    merge against the empty key."""
+    from workspace_app.kb.graph.link import read_decisions
+
+    spec = make_spec(default_user=lambda: "bob")
+    lrm = spec.get_resource_manager(GraphEntityLink)
+    lrm.create(
+        GraphEntityLink(
+            entity_id="",
+            mention_id="m",
+            basis="resembles",
+            state="rejected",
+            proposed_from="some-entity",
+            collection_ids=["c1"],
+        )
+    )
+
+    decisions = read_decisions(spec)
+
+    assert decisions.rejected == frozenset()
+    assert decisions.accepted == frozenset()

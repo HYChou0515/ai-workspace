@@ -434,3 +434,55 @@ def test_chunks_reach_the_extractor_in_the_documents_own_order():
     _, (doc,) = read_collection_sources(spec, cid)
 
     assert [text for _, text in doc.chunks] == ["t0", "t1", "t2", "t3"]
+
+
+def test_the_preview_shows_the_merges_people_have_already_accepted(tmp_path):
+    """Otherwise a preview of any corpus anyone has curated shows every accepted
+    merge come apart again — and a reader diffing two runs reads that as
+    something the criterion did. Reading the decisions is still only reading, so
+    the tool stays what it says it is."""
+    from workspace_app.kb.graph.link import reconcile_vocabulary
+    from workspace_app.kb.graph.review import accept_proposal, list_proposals
+    from workspace_app.resources.graph import entity_id
+
+    class _Judge(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield '{"groups": [{"names": ["回焊爐", "冷焊"], "why": "one thing"}]}', False
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+    # give the store a real graph, then have a person merge two of its identities
+    from workspace_app.kb.graph.doc_write import write_doc_graph
+
+    for doc in ("deck-A", "deck-B"):
+        write_doc_graph(
+            spec,
+            _FakeLlm(),
+            collection_id=cid,
+            source_doc_id=doc,
+            chunks=[(f"{doc}#0", "回焊爐造成冷焊")],
+        )
+    reconcile_vocabulary(spec, llm=_Judge())
+    (proposal,) = list_proposals(spec)
+    accept_proposal(spec, proposal.entity_id, proposal.proposed_from, by="amy")
+
+    before = _snapshot(spec)
+    graph = preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path)
+
+    assert _snapshot(spec) == before, "reading the decisions was not a read"
+    live = {e.canonical_name for e in graph.entities.values() if e.collection_ids}
+    assert "冷焊" not in live or "回焊爐" not in live, (
+        "the preview shows an accepted merge as two identities again"
+    )
+    merged = [e for e in graph.entities.values() if len(e.norm_keys) > 1]
+    assert merged and set(merged[0].norm_keys) == {"回焊爐", "冷焊"}
+    assert entity_id("回焊爐") in graph.entities
+
+
+def test_a_collection_the_reader_cannot_open_previews_as_nothing():
+    """Unreadable is indistinguishable from absent, by design — the scope hides
+    the row rather than refusing it. A preview must not become the one channel
+    that confirms a collection exists."""
+    spec = make_spec(default_user=lambda: "bob")
+
+    assert read_collection_sources(spec, "collection:does-not-exist") == ("", [])

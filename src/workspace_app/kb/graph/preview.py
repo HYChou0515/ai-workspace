@@ -171,6 +171,8 @@ def preview_collection(
     tried BEFORE anyone commits it to the collection — the whole point of the
     loop. Omitted, the preview runs what production would run today.
     """
+    from .link import read_decisions  # noqa: PLC0415 — circular at module level
+
     stored_guidance, docs = read_collection_sources(spec, collection_id, as_user=as_user)
     graph = build_graph(
         llm,
@@ -178,6 +180,11 @@ def preview_collection(
         collection_id=collection_id,
         guidance=stored_guidance if guidance is None else guidance,
         propose_with=propose_with,
+        # The merges people have already accepted or refused. Reading them is
+        # still only reading — and without them a preview of a corpus anyone
+        # has curated shows every accepted merge undone, which a reader
+        # diffing two runs would read as something the criterion did.
+        decisions=read_decisions(spec),
     )
     write_preview(graph, docs, out_dir=out_dir)
     return graph

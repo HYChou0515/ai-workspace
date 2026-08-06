@@ -662,3 +662,45 @@ def test_a_graph_says_whether_anyone_actually_asked_for_merge_proposals():
     # An empty answer from a model that WAS asked still counts as having asked.
     assert [link for link in asked.links if link.state == "pending"] == []
     assert run(ask=False).proposed is False
+
+
+def test_a_decision_about_evidence_that_is_gone_is_dropped():
+    """A person merged two things and one has since left the corpus — the deck
+    was deleted, or a new criterion no longer names it. There is nothing left to
+    merge, and re-inventing the key would put a name in the vocabulary that no
+    document says."""
+    from workspace_app.kb.graph.build import Decisions, build_vocabulary
+    from workspace_app.resources.graph import entity_id
+
+    vocab = build_vocabulary(
+        [_mention("deck-A", "回焊爐")],
+        [],
+        decisions=Decisions(accepted=frozenset({(entity_id("回焊爐"), entity_id("gone"), "amy")})),
+    )
+
+    live = [e for e in vocab.entities.values() if e.collection_ids]
+    assert [e.canonical_name for e in live] == ["回焊爐"]
+    assert entity_id("gone") not in vocab.entities
+
+
+def test_a_pair_both_accepted_and_rejected_is_not_merged():
+    """Two answers that contradict each other, and nothing here can tell which
+    came last. It takes the side this module always takes when it cannot be sure:
+    it may fail to merge, it may never merge wrongly — a failure to merge is two
+    entries someone can see, a wrong merge is one entry that quietly lost a
+    distinction."""
+    from workspace_app.kb.graph.build import Decisions, build_vocabulary
+    from workspace_app.resources.graph import entity_id
+
+    pair = (entity_id("回焊爐"), entity_id("reflow oven"))
+    evidence = [_mention("deck-A", "回焊爐"), _mention("deck-B", "Reflow Oven")]
+    for rejected in (pair, (pair[1], pair[0])):  # recorded either way round
+        vocab = build_vocabulary(
+            evidence,
+            [],
+            decisions=Decisions(
+                accepted=frozenset({(*pair, "amy")}), rejected=frozenset({rejected})
+            ),
+        )
+        live = [e for e in vocab.entities.values() if e.collection_ids]
+        assert len(live) == 2, f"a contradicted decision was applied anyway ({rejected})"
