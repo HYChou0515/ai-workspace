@@ -135,3 +135,73 @@ async def test_concurrent_handoffs_to_one_item_both_survive():
     assert [r.status_code for r in results] == [200, 200], [r.text for r in results]
     got = spec.get_resource_manager(RcaInvestigation).get(item_id).data
     assert sorted(got.external_refs) == ["legacy-rca:0", "legacy-rca:1", "legacy-rca:2"]
+
+
+def test_no_app_indexes_external_refs():
+    """The absence of an index is a RULE, not an oversight, so it needs a guard.
+
+    Indexed, the field invites `.contains` predicates — and on SQL backends an
+    un-indexed list field degrades that to a substring `LIKE`, so
+    `"legacy-rca:1"` matches `"legacy-rca:12345"`. The in-memory backend these
+    tests run on always does exact membership, so the day someone adds the index
+    and a query alongside it, CI stays green and only production is wrong. This
+    test is what makes that a deliberate decision instead of an accident: adding
+    the index has to break something and be argued for.
+    """
+    from workspace_app.apps.registry import _app_models
+
+    def _names(fields) -> list[str]:
+        # IndexedFields entries are a bare name, a (name, type) pair, or an
+        # IndexableField carrying one.
+        out = []
+        for f in fields:
+            if isinstance(f, str):
+                out.append(f)
+            elif isinstance(f, tuple):
+                out.append(f[0])
+            else:
+                out.append(getattr(f, "name", ""))
+        return out
+
+    offenders = {
+        slug: _names(indexed)
+        for slug, (_model, indexed) in _app_models().items()
+        if "external_refs" in _names(indexed)
+    }
+
+    assert not offenders, (
+        f"{sorted(offenders)} index external_refs — a query over it degrades to a "
+        "substring match on SQL backends while staying exact in these tests"
+    )
+
+
+def test_every_app_can_be_handed_work_from_outside():
+    """Being handed work by an outside system is a platform capability, not one
+    App's feature — so it is declared on the base and every App has it, without
+    anyone special-casing a slug."""
+    from workspace_app.apps.registry import registered_apps
+
+    apps = registered_apps()
+
+    assert apps, "no Apps discovered — this guard would pass vacuously"
+    assert all("external_refs" in m.__struct_fields__ for m in apps.values())
+
+
+def test_one_analysis_may_be_attached_to_a_second_item():
+    """Decision 4: uniqueness is PER ITEM, not global. Two investigations may
+    legitimately both draw on the same source analysis, so nothing may reject
+    the second attachment."""
+    app, spec = _app_and_spec()
+    client = TestClient(app)
+    shared = "legacy-rca:1"
+
+    first = client.post(
+        "/a/rca/items", json={"title": "Oven drift", "external_refs": [shared]}
+    ).json()["resource_id"]
+    second = client.post(
+        "/a/rca/items", json={"title": "Coater streaks", "external_refs": [shared]}
+    ).json()["resource_id"]
+
+    rm = spec.get_resource_manager(RcaInvestigation)
+    assert rm.get(first).data.external_refs == [shared]
+    assert rm.get(second).data.external_refs == [shared]
