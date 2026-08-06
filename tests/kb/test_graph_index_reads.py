@@ -259,3 +259,88 @@ def test_a_second_reconcile_reads_no_stored_row_at_all(monkeypatch: pytest.Monke
     assert reads["graph-entity-link"] == 0, (
         f"the link table is scanned through the resource store: {reads['graph-entity-link']}"
     )
+
+
+def test_a_decision_made_before_the_index_is_not_deleted_as_a_stranger(tmp_path) -> None:
+    """#697 P13 — the same rule, on the one read that DELETES instead of skipping.
+
+    `persist_vocabulary` keeps a `settled` / `rejected` link only while both
+    identities it names still exist, and it asks that question of the index.
+    `proposed_from` was indexed after `settled` / `rejected` shipped, so a
+    decision a reviewer made on the released build carries no such cell — it
+    reads as the empty string, which is in no vocabulary, so the row is
+    `permanently_delete`d as a decision about something that is gone.
+
+    What it actually was is the only record of a merge a person approved, and
+    the input the recompute re-derives that merge from. Losing it does not
+    re-queue the question; it un-merges the identity and asks again forever.
+
+    That makes the migrate a CORRECTNESS gate and orders the deploy against it,
+    which is the exact property `link.indexed_rows` documents itself as
+    preserving. So this read goes through the same fallback every other walk on
+    this path already uses.
+    """
+    from specstar import BackendBinding, BackendConfig, ConnectionProfile
+    from specstar.types import IndexableField
+
+    from workspace_app.resources.graph import GraphEntityLink, link_id
+
+    backend = BackendConfig(
+        connections={"local": ConnectionProfile(type="disk", options={"rootdir": str(tmp_path)})},
+        meta=BackendBinding(use="local"),
+        resource=BackendBinding(use="local"),
+        blob=BackendBinding(use="local"),
+    )
+    spec = make_spec(default_user=lambda: "bob", backend=backend)
+    crm = spec.get_resource_manager(Collection)
+    cid = crm.create(Collection(name="c")).resource_id
+    for doc, surface in (("deck-A", "回焊爐"), ("deck-B", "Reflow Oven")):
+        spec.get_resource_manager(GraphMention).create(
+            GraphMention(
+                collection_id=cid,
+                source_doc_id=doc,
+                surface=surface,
+                norm_surface=norm_surface(surface),
+                occurrences=1,
+            ),
+            resource_id=mention_id(doc, surface),
+        )
+    reconcile_vocabulary(spec, llm=None)
+    erm = spec.get_resource_manager(GraphEntity)
+    ids = sorted(r.info.resource_id for r in erm.list_resources(QB.all().build()))  # ty: ignore[unresolved-attribute]
+    assert len(ids) == 2, ids
+    host, other = ids
+
+    # The answer, written by the registration that shipped it — before
+    # `proposed_from` was indexed, which is the only way to produce a row
+    # specstar itself considers un-migrated.
+    old = SpecStar()
+    old.configure(default_user="bob", backend=backend)
+    old.add_model(
+        GraphEntityLink,
+        indexed_fields=[
+            "entity_id",
+            "mention_id",
+            IndexableField("state", str),
+            IndexableField("collection_ids", list),
+        ],
+    )
+    decision = link_id(host, "", "approved", other)
+    old.get_resource_manager(GraphEntityLink).create(
+        GraphEntityLink(
+            entity_id=host,
+            mention_id="",
+            basis="approved",
+            evidence="alice",
+            state="settled",
+            proposed_from=other,
+            collection_ids=[cid],
+        ),
+        resource_id=decision,
+    )
+
+    reconcile_vocabulary(spec, llm=None)
+
+    lrm = spec.get_resource_manager(GraphEntityLink)
+    kept = [r.info.resource_id for r in lrm.list_resources(QB.all().build())]  # ty: ignore[unresolved-attribute]
+    assert decision in kept, "a merge a person approved was deleted for predating an index"

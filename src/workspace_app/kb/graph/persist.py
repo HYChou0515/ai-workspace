@@ -29,7 +29,7 @@ from ...resources.graph import (
     relationship_id,
 )
 from .build import DocGraph, Vocabulary
-from .paging import PAGE
+from .paging import indexed_rows
 
 # Every model keyed on the document that produced it. A re-extraction clears the
 # document's rows across ALL of them, so the three layers can never disagree
@@ -127,8 +127,8 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
         link_id(link.entity_id, link.mention_id, link.basis, link.proposed_from): link
         for link in vocabulary.links
     }
-    stored_entities = _stored(erm)
-    stored_links = _stored(lrm)
+    stored_entities = _stored(erm, _ENTITY_FIELDS)
+    stored_links = _stored(lrm, _LINK_FIELDS)
 
     for eid, entity in vocabulary.entities.items():
         indexed = stored_entities.get(eid)
@@ -186,6 +186,11 @@ def persist_vocabulary(spec: SpecStar, vocabulary: Vocabulary) -> tuple[int, int
 
 _ENTITY_FIELDS = ("canonical_name", "norm_keys", "kind_id", "collection_ids", "merged_into")
 
+#: What the link half reads. `proposed_from` is REQUESTED, not merely read:
+#: it was indexed after `settled`/`rejected` shipped, so asking for it is what
+#: makes a decision written on the released build arrive at all.
+_LINK_FIELDS = ("entity_id", "state", "proposed_from", "collection_ids")
+
 #: Link states a PERSON wrote. The computation never produces them, so they
 #: would otherwise look exactly like rows it no longer produces.
 _PERSON_ANSWERED = frozenset({"settled", "rejected"})
@@ -204,13 +209,22 @@ def _subject_survives(indexed: dict, vocabulary: Vocabulary) -> bool:
     )
 
 
-def _stored(rm) -> dict[str, dict]:
-    """Every stored id with its indexed values, read a page at a time and without
-    materialising a single row."""
-    return {
-        meta.resource_id: (meta.indexed_data or {})
-        for meta in rm.iter_all(QB.all().build(), batch_size=PAGE)
-    }
+def _stored(rm, fields: tuple[str, ...]) -> dict[str, dict]:
+    """Every stored id with the values this pass reads, a page at a time.
+
+    Through ``indexed_rows`` rather than straight off ``indexed_data``, because
+    this is the read that DELETES. A row written before one of these fields was
+    indexed carries no cell for it, and an absent cell read as a value is an
+    identity that looks like it no longer exists — so a merge a person approved
+    on the released build was deleted for predating an index it could not have
+    been written with. Everywhere else on this path the same miss only costs a
+    blob read; here it cost the decision itself.
+
+    The fallback is empty once the model's migrate route has run, which is what
+    keeps the migrate a speed-up rather than something the deploy has to be
+    ordered against.
+    """
+    return dict(indexed_rows(rm, fields))
 
 
 def _entity_indexed(entity: GraphEntity) -> dict:

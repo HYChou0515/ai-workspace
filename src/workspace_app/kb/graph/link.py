@@ -21,9 +21,8 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 
-import msgspec
 from specstar import QB, SpecStar
 
 from ...resources.graph import (
@@ -33,38 +32,18 @@ from ...resources.graph import (
 )
 from ..llm import ILlm
 from .build import Decisions, MentionEvidence, RelationEvidence, build_vocabulary
-from .paging import PAGE
+from .paging import PAGE, indexed_rows
 from .persist import persist_vocabulary
 
+__all__ = [
+    "indexed_rows",  # re-exported: it moved to `paging` so `persist` can use it too
+    "read_decisions",
+    "read_mention_evidence",
+    "read_relation_evidence",
+    "reconcile_vocabulary",
+]
+
 _LOGGER = logging.getLogger(__name__)
-
-
-def indexed_rows(rm, fields: tuple[str, ...], cond=None) -> Iterator[tuple[str, dict]]:
-    """``(resource_id, values)`` for every matching row, read from the INDEX.
-
-    A listing materialises each row through the resource store; a metadata search
-    does not. Every field the reconcile reads is indexed precisely so these walks
-    never have to — over a whole corpus that is the difference between one decode
-    per row and none.
-
-    Rows written before a field was indexed do not carry it — specstar extracts
-    ``indexed_data`` at write time and does not backfill — and reading an absent
-    cell would quietly yield an empty name or a zero count, which the pass would
-    then store as an identity's display name. So those rows are collected and
-    read from their blobs instead, in bounded pages. That list is empty once the
-    model's migrate route has run, which is what makes the migrate a speed-up
-    rather than a correctness gate: no deploy has to be ordered against it.
-    """
-    stale: list[str] = []
-    for meta in rm.iter_all((QB.all() if cond is None else cond).build(), batch_size=PAGE):
-        indexed = meta.indexed_data or {}
-        if any(field not in indexed for field in fields):
-            stale.append(meta.resource_id)
-            continue
-        yield meta.resource_id, indexed
-    for start in range(0, len(stale), PAGE):
-        for r in rm.list_resources((QB.resource_id() << stale[start : start + PAGE]).build()):
-            yield r.info.resource_id, msgspec.structs.asdict(r.data)
 
 
 _MENTION_FIELDS = (
