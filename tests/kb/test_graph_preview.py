@@ -152,6 +152,13 @@ def test_the_summary_answers_the_question_the_tool_was_built_for(tmp_path):
     # and the one way the preview differs from production, said out loud rather
     # than left for a reader to discover by disagreeing with the live graph
     assert "whole corpus" in summary["identity_scope"]
+    # #697 P11: zero proposals because the pass is OFF by default here, which is
+    # a different fact from the model having been asked and found nothing. A
+    # reader comparing two previews has to be able to tell those apart, or they
+    # read "the criterion stopped the model conflating things" off a run where
+    # nobody asked it anything.
+    assert summary["proposals"] == 0
+    assert summary["proposals_asked"] is False
 
 
 def test_the_collections_own_criterion_is_what_the_preview_runs_with(tmp_path):

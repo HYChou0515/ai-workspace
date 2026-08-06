@@ -169,6 +169,11 @@ def summarise(graph: Graph, docs: list[DocSource]) -> dict[str, Any]:
         "entities": len(graph.entities),
         "links": len(graph.links),
         "proposals": sum(1 for link in graph.links if link.state == "pending"),
+        # Whether anyone ASKED. Zero proposals from a pass that ran says the
+        # model found nothing to merge; zero from a pass that never ran says
+        # nothing at all — and read as the first, it looks like evidence the
+        # criterion is working.
+        "proposals_asked": graph.proposed,
         # What the model thought it was looking at, commonest first. "值" / "數值"
         # / "value" near the top is the extractor treating measurements as things.
         "kinds": dict(Counter(m.kind for m in graph.mentions if m.kind).most_common()),

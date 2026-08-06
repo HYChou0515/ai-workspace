@@ -628,3 +628,37 @@ def test_a_kind_a_person_merged_is_still_what_its_things_point_at():
     absorbed = (entity_id("機台"), entity_id("tool"))
     (gone,) = [eid for eid in absorbed if eid != kind_id]
     assert vocab.entities[gone].merged_into == kind_id
+
+
+def test_a_graph_says_whether_anyone_actually_asked_for_merge_proposals():
+    """#697 P11 — "the model proposed nothing" and "nobody asked the model" are
+    the same empty list, and telling them apart is what stops a store from
+    emptying a review queue nobody answered.
+
+    ``Vocabulary`` records it and ``persist`` acts on it, but ``build_graph`` was
+    dropping it on the way out, so ``Graph.proposed`` was False even when the
+    pass had run — a field whose whole reason to exist is that distinction,
+    quietly answering "nobody asked" every time. Nothing read it yet, which is
+    exactly the kind of trap that is cheap now and expensive the day someone
+    wires the preview to a writer.
+    """
+    from workspace_app.kb.graph.build import build_graph
+
+    def run(*, ask: bool):
+        llm = _FakeLlm(
+            '{"mentions": [{"surface": "回焊爐", "kind": "機台"},'
+            ' {"surface": "Reflow Oven", "kind": "machine"}]}',
+            '{"groups": []}',
+        )
+        return build_graph(
+            llm,
+            [DocSource(doc_id="deck-A", chunks=[("c1", "回焊爐 / Reflow Oven")])],
+            collection_id="col-1",
+            propose_with=llm if ask else None,
+        )
+
+    asked = run(ask=True)
+    assert asked.proposed is True
+    # An empty answer from a model that WAS asked still counts as having asked.
+    assert [link for link in asked.links if link.state == "pending"] == []
+    assert run(ask=False).proposed is False

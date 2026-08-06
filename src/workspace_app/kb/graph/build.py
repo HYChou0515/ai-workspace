@@ -113,6 +113,11 @@ def build_graph(
         relationships=relationships,
         entities=vocabulary.entities,
         links=vocabulary.links,
+        # Carried, not defaulted. The flag exists precisely to separate "the
+        # model proposed nothing" from "nobody asked it", so a copy of this
+        # structure that always says the second is worse than no flag at all:
+        # it looks like the answer and is not one.
+        proposed=vocabulary.proposed,
     )
 
 
