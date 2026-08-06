@@ -77,6 +77,31 @@ def _is_readonly_path(path: str) -> bool:
     return _READONLY_DIR in path.strip("/").split("/")
 
 
+def _workspace_path(raw: str) -> str:
+    """Normalise a client-supplied workspace path, refusing any that climbs out.
+
+    #700: nothing here normalised, and the two layers below do not either —
+    ``files.write`` joins onto the workspace root and the local sandbox's
+    ``_resolve`` does ``cwd / remote_path.lstrip("/")``. Starlette collapses a
+    LITERAL ``../`` before routing, so that form was already refused and the gap
+    looked closed; a **percent-encoded** ``..%2F`` arrives intact and the OS
+    resolves it at write time. The write then lands beside the workspace in the
+    infra area (alongside ``.ready`` and the per-sandbox ``.home``) or, with
+    enough segments, inside another item's directory on the shared scratch volume.
+
+    Rejecting a ``..`` segment outright rather than resolving it: a path that
+    normalises back inside (``a/b/../c``) is legitimate but vanishingly rare from
+    a real client, and "no ``..`` ever" is a rule that can be read off the code,
+    whereas "resolves to somewhere inside" invites the next person to re-derive
+    the containment check. A filename that merely CONTAINS dots
+    (``report..final.csv``) is untouched — only whole segments count.
+    """
+    norm = "/" + raw.lstrip("/")
+    if any(segment == ".." for segment in norm.split("/")):
+        raise HTTPException(status_code=400, detail="path may not contain a '..' segment")
+    return norm
+
+
 async def _stream_upload_to_store(
     workspace_id: str,
     path: str,
@@ -339,7 +364,7 @@ def register_file_routes(
     )
     async def write_file(slug: str, item_id: str, path: str, request: Request) -> Response:
         investigation_id = locator.require_access(slug, item_id, "edit_content")
-        norm = "/" + path.lstrip("/")
+        norm = _workspace_path(path)
         if _is_readonly_path(norm):
             # #205: the `.readonly/` snapshot the human diffs against is not hand-editable.
             raise HTTPException(status_code=403, detail="this file is read-only")
@@ -555,7 +580,7 @@ def register_file_routes(
     )
     async def delete_file(slug: str, item_id: str, path: str) -> Response:
         investigation_id = locator.require_access(slug, item_id, "edit_content")
-        norm = "/" + path.lstrip("/")
+        norm = _workspace_path(path)
         if await files.is_dir(investigation_id, norm):
             await files.rmdir(investigation_id, norm)
             activity.record(
@@ -589,7 +614,7 @@ def register_file_routes(
         import mimetypes
 
         try:
-            data = await files.read(investigation_id, "/" + path.lstrip("/"))
+            data = await files.read(investigation_id, _workspace_path(path))
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         # Issue #40: extension → MIME first so workspace markdown reports
