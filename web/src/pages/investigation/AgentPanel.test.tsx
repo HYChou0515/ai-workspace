@@ -3,10 +3,13 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MemoryRouter } from "react-router-dom";
+
 import { api } from "../../api";
 import { kbApi } from "../../api/kb";
 import { DialogProvider } from "../../components/Dialog";
 import type { AgentState } from "../../hooks/useAgent";
+import { translate } from "../../lib/i18n";
 import { renderWithQuery } from "../../test/queryWrapper";
 import { AgentPanel, CHAT_COLUMN_MAX_W } from "./AgentPanel";
 
@@ -22,19 +25,23 @@ function stubAgent(): AgentState {
   };
 }
 
-function renderPanel(uploadDir = "uploads") {
+function renderPanel(uploadDir = "uploads", agent: AgentState = stubAgent()) {
   return renderWithQuery(
-    <DialogProvider>
-      <AgentPanel
-        investigationId="it1"
-        agent={stubAgent()}
-        picker={[]}
-        suggestions={[]}
-        attachedPreset=""
-        onAttachPreset={() => {}}
-        uploadDir={uploadDir}
-      />
-    </DialogProvider>,
+    // The composer's refusal messages route the user to /my-resources (#692),
+    // so the panel renders real router links.
+    <MemoryRouter>
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={agent}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir={uploadDir}
+        />
+      </DialogProvider>
+    </MemoryRouter>,
   );
 }
 
@@ -759,5 +766,45 @@ describe("AgentPanel env vars", () => {
 
     expect(onSave).toHaveBeenCalledWith({ API_KEY: "sk-2" });
     expect(screen.queryByTestId("env-modal")).toBeNull(); // and it closes
+  });
+});
+
+describe("AgentPanel — a quota refusal is reachable, not just readable (#692)", () => {
+  // #688 refuses outright at the limit, and that is only defensible because the
+  // refused person has somewhere to go. Both composer refusals named the page in
+  // flat text, so the person had to read the sentence, remember the name, and go
+  // hunt for it in the global-nav popover themselves.
+  it("makes the send refusal's remedy pressable", () => {
+    const agent = stubAgent();
+    renderPanel("uploads", {
+      ...agent,
+      log: { ...agent.log, error: translate("zh-TW", "chat.send.envFull") },
+    });
+    expect(screen.getByRole("link", { name: "我的資源" })).toHaveAttribute(
+      "href",
+      "/my-resources",
+    );
+  });
+
+  it("makes the dropped-attachment refusal's remedy pressable", async () => {
+    vi.spyOn(api, "uploadFile").mockRejectedValue(
+      Object.assign(new Error("507"), { status: 507, code: "user_quota_exceeded" }),
+    );
+    const { container } = renderPanel();
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["x"], "big.bin")] } });
+
+    const hint = await screen.findByTestId("composer-hint");
+    expect(within(hint).getByRole("link", { name: "我的資源" })).toHaveAttribute(
+      "href",
+      "/my-resources",
+    );
+  });
+
+  it("leaves an ordinary failure as plain text — there is nothing to go and do", () => {
+    const agent = stubAgent();
+    renderPanel("uploads", { ...agent, log: { ...agent.log, error: "stream died" } });
+    expect(screen.getByText("stream died")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "我的資源" })).not.toBeInTheDocument();
   });
 });

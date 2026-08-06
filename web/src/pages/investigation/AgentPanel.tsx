@@ -36,6 +36,7 @@ import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { ConnectionNotice } from "../../components/ConnectionNotice";
+import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnsFromEntry } from "./agentLog";
 import type { QuotaKind } from "../../lib/quotaFailure";
@@ -201,6 +202,9 @@ export function AgentPanel({
   const queueNote = othersTurn
     ? `${log.streamingBy} 正在對話中。你現在送出的訊息會排在後面。`
     : null;
+  // The strip under the composer says one thing at a time: what just happened to
+  // an attachment if anything did, otherwise why a send would queue.
+  const composerNote = composerHint ?? queueNote;
   const dialog = useDialog();
 
   // #38: "undo to here" on the user prompt at entry `i` — drop that turn
@@ -594,13 +598,17 @@ export function AgentPanel({
               fontSize: pxToRem(12),
             }}
           >
-            {log.error}
+            {/* #692: when the refusal names /my-resources, that name is the way
+                there — a message that only TELLS you where to go leaves the
+                #688 "refuse outright" trade-off resting on a page you have to
+                go and find. */}
+            <ResourceLinkText text={log.error} />
           </div>
         )}
         </div>
       </div>
 
-      {(composerHint ?? queueNote) && (
+      {composerNote && (
         <div
           data-testid="composer-hint"
           role="status"
@@ -610,7 +618,9 @@ export function AgentPanel({
             color: "var(--text-paper-d)",
           }}
         >
-          {composerHint ?? queueNote}
+          {/* #692: an attach refused for a resource limit names /my-resources —
+              render it so that name is the way there, not just a signpost. */}
+          <ResourceLinkText text={composerNote} />
         </div>
       )}
 

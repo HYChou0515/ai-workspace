@@ -33,7 +33,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
+import ssl
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -43,6 +45,8 @@ from urllib.parse import urlsplit, urlunsplit
 #: refused rather than parsed on a guess.
 FORMAT_VERSION = 1
 
+logger = logging.getLogger(__name__)
+
 
 #: The environment names that decide whether a fetch may carry a credential.
 #: Here rather than beside either fetcher because there are three of them —
@@ -50,6 +54,24 @@ FORMAT_VERSION = 1
 #: a secret may go is not one to keep three copies of.
 TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
 HOSTS_ENV = "TOOL_ARTIFACT_HOSTS"
+
+#: Set to `1` (or `true`/`yes`) to stop checking the artifact store's TLS
+#: certificate. OFF unless asked for, and asked for by name.
+#:
+#: It exists because an internal artifact store commonly sits behind a
+#: private CA that the deployment cannot always be given, and the honest
+#: alternative — pointing `SSL_CERT_FILE` at that CA — is not always
+#: available to the person doing the deploy.
+#:
+#: What it costs, stated plainly because whoever sets it should know: this
+#: fetch returns code that is unpacked and RUN. Neither of the other anchors
+#: covers the gap — `bundle.sha256` travels in the same manifest, so whoever
+#: can replace one replaces both, and a certificate binds a name to a URL
+#: PREFIX, which an interceptor on that same URL still satisfies. TLS is the
+#: only thing here that ties the bytes to the host that published them.
+INSECURE_ENV = "TOOL_ARTIFACT_INSECURE_TLS"
+
+_TRUTHY = {"1", "true", "yes"}
 
 
 #: The two file names an author's CI publishes. The platform is given the
@@ -121,10 +143,42 @@ class _CredentialAwareRedirects(urllib.request.HTTPRedirectHandler):
         return following
 
 
+def tls_checks_disabled() -> bool:
+    """Whether this deployment asked for its artifact store to go unchecked.
+
+    Read per call rather than at import, so a test — and an operator reading
+    a running process — sees the environment as it is now."""
+    return os.environ.get(INSECURE_ENV, "").strip().lower() in _TRUTHY
+
+
+def _unchecked_tls() -> ssl.SSLContext:
+    """A context that accepts any certificate.
+
+    `check_hostname` first: turning it off after `CERT_NONE` raises, and the
+    two together are what an intercepting proxy needs to be accepted."""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def artifact_opener() -> urllib.request.OpenerDirector:
     """An opener that carries the artifact credential only where it may go —
-    on the first request and on every redirect after it."""
-    return urllib.request.build_opener(_CredentialAwareRedirects)
+    on the first request and on every redirect after it.
+
+    Logs when TLS checking is off. A setting that changes what the platform
+    trusts should not be invisible in the logs of the process it changed."""
+    if not tls_checks_disabled():
+        return urllib.request.build_opener(_CredentialAwareRedirects)
+    logger.warning(
+        "%s is set: the artifact store's TLS certificate is NOT being checked, "
+        "so anything able to intercept that connection can serve a bundle this "
+        "platform will unpack and run",
+        INSECURE_ENV,
+    )
+    return urllib.request.build_opener(
+        _CredentialAwareRedirects, urllib.request.HTTPSHandler(context=_unchecked_tls())
+    )
 
 
 class ArtifactError(Exception):
