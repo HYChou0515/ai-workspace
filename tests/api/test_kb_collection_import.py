@@ -302,6 +302,42 @@ def _import_into(client: TestClient, cid: str, zip_bytes: bytes, mode: str) -> N
     assert r.status_code == 200, r.text
 
 
+def test_import_overwrite_replaces_a_cards_links_rather_than_merging_them():
+    """Overwrite is a whole-card replacement, links included — the same thing it means
+    for a document, whose bytes are replaced rather than merged. An archive states what
+    a card IS, so one that lists no `reference_paths` states a card with no links.
+
+    Worth pinning because the *authoring* surface deliberately does the opposite:
+    `update_context_card` treats absent links as "say nothing" and keeps them (#518),
+    so a caller refreshing a definition cannot cost the card its curated evidence.
+    The two rules differ on purpose and the difference should be visible, not folklore.
+    """
+    from workspace_app.kb.doc_id import encode_doc_id
+
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("spec.md", b"the metal 4 spec", "text/markdown")},
+    )
+    client.post(
+        "/context-card/author",
+        json={
+            "collection_id": cid,
+            "keys": ["M4"],
+            "title": "M4",
+            "body": "old",
+            "reference_doc_ids": [encode_doc_id(cid, "spec.md")],
+        },
+    )
+
+    _import_into(client, cid, _make_zip({}, manifest=_card_manifest("new")), "overwrite")
+
+    (card,) = _cards_in(spec, cid)
+    assert card.body == "new"
+    assert card.reference_doc_ids == []  # the archive says "no links", so no links
+
+
 def test_importing_the_same_zip_twice_does_not_duplicate_cards():
     """#701: the round-trip has to be idempotent. Documents already were — they key on
     path and honour the mode — but cards were created unconditionally, so re-importing
