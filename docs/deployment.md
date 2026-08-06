@@ -558,11 +558,25 @@ RCA 的 system prompt 是純 markdown，存在
 | `TOOL_BUILDER_ID` — 給 sandbox-host、tool-builder、mcp-runner **同一個值** | 每次發版 | **整個第三方功能關閉**。沒有 ABI 錨就沒得比對，而不能比對就不該去抓——會掛上一個為別的底層 build 的 bundle，然後在使用者面前壞掉 |
 | `TOOL_ARTIFACT_HOSTS` — 憑證能被送到哪些網域（逗號分隔），給 sandbox-host 與 mcp-runner 映像 | 一次（換 artifact store 才改） | 憑證**永遠不會被送出**，private 的 GitLab project 抓不到。這是刻意的預設，理由見 §15.7 |
 | `TOOL_ARTIFACT_TOKEN` — 讀 artifact 用 | 一次 | private 的抓不到（public 仍可）。**只有 host 需要**，app 從不持有 |
+| `TOOL_ARTIFACT_INSECURE_TLS` — 不檢查 artifact store 的 TLS 憑證 | 只在必要時 | 預設是**檢查**。內部 store 沒有可交給部署的 CA 時才設；代價見下方 |
 | `grant keygen --as <代號>` → 公鑰進 `TRUSTED_KEYS` → 發版（§15.6） | **每人**一次 | `TRUSTED_KEYS` 是空的 ⇒ 任何憑證都驗不過 ⇒ **一支第三方工具都上不了架** |
 | 發布 mcp-runner 映像（§15.7） | 每次發版 | 工程師沒辦法在自己的編輯器裡用這些工具。平台本身不受影響 |
 
 `TOOL_BUILDER_ID` 三個映像必須同一個值。不同步正是那道閘門存在的理由——它會擋下來，
 而不是讓它在執行期壞掉；有測試釘住三顆映像都帶這個旋鈕。
+
+**`TOOL_ARTIFACT_INSECURE_TLS`（`1`／`true`／`yes`）關掉憑證檢查**，任何憑證都接受：未知簽發者、
+自簽、過期、主機名不符。它存在是因為內部的 artifact store 常常沒有一份可以交給部署的 CA，
+而唯一的替代方案（`SSL_CERT_FILE` 指向那份 CA）在沒有 CA 時無路可走。
+
+代價要寫在旋鈕旁邊，不是寫在 review 意見裡：**這條路抓回來的是會被解開並執行的程式碼**，
+而另外兩個錨點都補不上這個洞——`bundle.sha256` 跟 manifest 同源，能換一個就能換另一個；
+憑證綁的是「名字 + 網址前綴」，而攔截者用的正是同一個網址。TLS 是這裡唯一把位元組和
+「發布它的那台主機」綁在一起的東西。開啟時 host 會在 log 留一行 warning 指名這個變數。
+
+沒有這個需求的部署不要設它。它是 runtime 變數，四個執行體裡只有會自己去抓 artifact 的那三個
+（sandbox-host、mcp-runner、operator 跑 `verify` 的 shell）需要；`build-tool` 和 app/API pods
+一個都不用——app 從不直連 artifact store。
 
 **每支工具要做的**是另一回事，而且只有兩件：發一張憑證（§15.6），以及把名字和網址寫進
 `app.json` 再發版（§15.2）。
@@ -738,6 +752,15 @@ docker build -f sandbox-host/mcp-runner.Dockerfile \
 `BUILDER_ID` 要和你給 `tool-builder`、`sandbox-host` 的**同一個值**——runner 會直接執行
 第三方 bundle，所以它跟 host 受同一條 ABI 規則約束。有測試釘住這三顆映像的錨點一致。
 
+**build context 必須是 repo 根目錄**（上面那行結尾的 `.`）。三個 Dockerfile 的 `COPY` 路徑都寫成
+`sandbox-host/…`，用 `sandbox-host/` 當 context 會直接 `COPY failed` ——會明確失敗，不會產生
+一顆壞掉的映像，但共用的 CI build template 若預設拿 Dockerfile 所在目錄當 context 就要改。
+
+映像刻意不依賴 PATH 或某一種安裝方式：entry point 是 venv 直譯器的**絕對路徑**，而 `src/`
+同時掛在 `PYTHONPATH` 上。三種情況都會產生同一句 `No module named sandbox_host`——外面的東西
+插進 PATH 前面、`uv sync` 的 editable 安裝斷了連結、或某棵樹設了 `[tool.uv] package = false`
+（uv 稱之為 virtual project，完全不安裝）。一句話三個成因，所以兩邊都釘死，有測試守著。
+
 #### 怎麼交到工程師手上
 
 **不要把下面那段設定貼給他們。** 他手上通常只有工具的 GitLab repo 網址，而要湊出一個能用的
@@ -762,6 +785,26 @@ skill 花了不少篇幅在講**失敗怎麼辦**，因為照著做的人是一�
     "registry/ai-workspace/mcp-runner:<tag>",
     "wafer-history","https://gitlab.example/.../tool.manifest.json" ] } } }
 ```
+
+**不同的 client 設定格式不一樣。** 上面那份是 `mcpServers` 家族（Claude 系）。opencode 用
+`mcp` + `type: local`，而且**抓工具清單的預設逾時只有 5 秒**——第一次啟動要下載整包 bundle，
+一定超過，症狀是 client 顯示 loading 然後失敗，不會說是逾時:
+
+```jsonc
+{ "$schema": "https://opencode.ai/config.json",
+  "mcp": { "wafer-history": {
+    "type": "local",
+    "command": ["docker","run","-i","--rm",
+      "-v","mcp-tools:/cache","-v","/absolute/path/to/project:/work",
+      "-e","TOOL_ARTIFACT_TOKEN",
+      "registry/ai-workspace/mcp-runner:<tag>",
+      "wafer-history","https://gitlab.example/.../tool.manifest.json"],
+    "enabled": true,
+    "timeout": 180000 } } }
+```
+
+opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數沒設時會替換成空字串——
+`-v :/work` 會失敗。掛載路徑用絕對路徑最不會出事。
 
 幾件值得知道的:
 
@@ -804,6 +847,16 @@ skill 花了不少篇幅在講**失敗怎麼辦**，因為照著做的人是一�
   用的是哪一版。
 - **artifact store 連不上**：host 會用**上次成功**的版本繼續服務並標記 `stale`，
   不會讓 workspace 開不起來。
+- **`cannot resolve <名字>: …`**：這句只在**抓 manifest 失敗**時出現，所以憑證、ABI、sha
+  都還沒輪到——是網路、TLS 或 token。冒號後面那半才是原因，別只看前半。
+  `is unreachable:` 涵蓋 HTTP 錯誤（`HTTPError` 是 `OSError` 的子類），所以 404 也長這樣。
+- **`verify` 說 404，但同一個網址 `curl` 得到 200**：`curl` 無條件送 token，`verify` 只在
+  hostname 出現在 `TOOL_ARTIFACT_HOSTS` 時才送。GitLab 對看不到的私有專案回 **404 而非 403**，
+  所以「沒帶 token」和「網址錯」長得一模一樣。
+- **`No module named sandbox_host`**：映像的問題，不是 artifact 的問題。三個成因見 §15.7。
+- **MCP client 一直 loading 然後失敗**：多半是 client 端的逾時（opencode 預設 5 秒），
+  不是 server 壞掉。先在終端機直接跑設定裡那串 `docker run`，stderr 第一行會說實話——
+  client 通常把它吃掉了。
 
 ---
 

@@ -25,7 +25,12 @@ RUN uv sync --frozen --no-dev --no-install-project
 COPY src/ ./src/
 COPY sample-tools/ ./sample-tools/
 COPY scripts/ ./scripts/
-RUN uv sync --frozen --no-dev \
+# `--no-editable`: install the package INTO site-packages rather than
+# leaving a `.pth` that points back at ./src. An editable install makes a
+# shipped image depend on a source tree surviving beside it and on `.pth`
+# processing being on — and when either slips the error is
+# `No module named sandbox_host`, which names the wrong culprit.
+RUN uv sync --frozen --no-dev --no-editable \
     && uv run --no-dev python scripts/prebuild_tools.py
 
 # ---- stage 2: the lean host runtime ----
@@ -64,6 +69,7 @@ ARG ARTIFACT_HOSTS=
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PATH="/host/.venv/bin:$PATH" \
+    PYTHONPATH=/host/src \
     NODE_PATH=/usr/local/lib/node_modules \
     SANDBOX_HOST_BIND=0.0.0.0:8000 \
     SANDBOX_HOST_TOOLS_DIR=/opt/tools \
@@ -76,7 +82,12 @@ COPY sandbox-host/pyproject.toml sandbox-host/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 
 COPY sandbox-host/src/ ./src/
-RUN uv sync --frozen --no-dev
+# `--no-editable`: install the package INTO site-packages rather than
+# leaving a `.pth` that points back at ./src. An editable install makes a
+# shipped image depend on a source tree surviving beside it and on `.pth`
+# processing being on — and when either slips the error is
+# `No module named sandbox_host`, which names the wrong culprit.
+RUN uv sync --frozen --no-dev --no-editable
 
 # The agent's prebuilt tools — an opaque bundle dir the host bind-mounts at
 # /.tools inside each sandbox (SANDBOX_HOST_TOOLS_DIR above points here).
@@ -98,4 +109,6 @@ COPY docker/profile.d/sandbox-jailbin.sh /etc/profile.d/sandbox-jailbin.sh
 EXPOSE 8000
 # The host needs root (setuid/chown to foreign uids) + a delegated cgroup v2
 # subtree; it fails loud at boot / on /readyz if cgroup v2 isn't available.
-CMD ["python", "-m", "sandbox_host"]
+# Absolute, for the reason spelled out in mcp-runner.Dockerfile: a bare
+# `python` is whatever PATH says, and PATH is not ours alone to set.
+CMD ["/host/.venv/bin/python", "-m", "sandbox_host"]

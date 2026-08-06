@@ -138,3 +138,36 @@ async def test_a_host_with_no_tool_store_sweeps_nothing() -> None:
     app = make_host_app(object(), advertise_url="http://h", tool_resolver=None)
 
     assert await app.state.controller.sweep_tool_cache() == []
+
+
+class _RecordingSandbox:
+    """Records the spec `create` was handed, so a field dropped between the
+    app's request body and the sandbox is visible."""
+
+    def __init__(self) -> None:
+        self.spec: object = None
+
+    async def create(self, spec):
+        from sandbox_host.protocol import SandboxHandle
+
+        self.spec = spec
+        return SandboxHandle(id="rid-1")
+
+
+async def test_create_mounts_the_third_party_bundles_the_app_resolved() -> None:
+    """#674: the app sends `{name: sha}` on create and the sandbox mounts them.
+
+    Regressions here are invisible: the schemas still reach the model (they
+    come from `/tools/resolve`, a different call), so the tool LOOKS present
+    and every call fails with "launcher not found". Pydantic drops an unknown
+    field silently, so only asserting the far side catches it."""
+    sandbox = _RecordingSandbox()
+    app = make_host_app(sandbox, advertise_url="http://h")
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h") as c:
+        r = await c.post(
+            "/sandboxes", json={"item_id": "i-1", "tools": {"wafer-history": "a" * 64}}
+        )
+
+    assert r.status_code == 200
+    assert sandbox.spec.tools == {"wafer-history": "a" * 64}
