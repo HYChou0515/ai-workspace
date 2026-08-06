@@ -1,0 +1,2904 @@
+diff --git a/docs/deployment.md b/docs/deployment.md
+index e274ef00..6f0e3c1d 100644
+--- a/docs/deployment.md
++++ b/docs/deployment.md
+@@ -558,12 +558,26 @@ RCA 的 system prompt 是純 markdown，存在
+ | `TOOL_BUILDER_ID` — 給 sandbox-host、tool-builder、mcp-runner **同一個值** | 每次發版 | **整個第三方功能關閉**。沒有 ABI 錨就沒得比對，而不能比對就不該去抓——會掛上一個為別的底層 build 的 bundle，然後在使用者面前壞掉 |
+ | `TOOL_ARTIFACT_HOSTS` — 憑證能被送到哪些網域（逗號分隔），給 sandbox-host 與 mcp-runner 映像 | 一次（換 artifact store 才改） | 憑證**永遠不會被送出**，private 的 GitLab project 抓不到。這是刻意的預設，理由見 §15.7 |
+ | `TOOL_ARTIFACT_TOKEN` — 讀 artifact 用 | 一次 | private 的抓不到（public 仍可）。**只有 host 需要**，app 從不持有 |
++| `TOOL_ARTIFACT_INSECURE_TLS` — 不檢查 artifact store 的 TLS 憑證 | 只在必要時 | 預設是**檢查**。內部 store 沒有可交給部署的 CA 時才設；代價見下方 |
+ | `grant keygen --as <代號>` → 公鑰進 `TRUSTED_KEYS` → 發版（§15.6） | **每人**一次 | `TRUSTED_KEYS` 是空的 ⇒ 任何憑證都驗不過 ⇒ **一支第三方工具都上不了架** |
+ | 發布 mcp-runner 映像（§15.7） | 每次發版 | 工程師沒辦法在自己的編輯器裡用這些工具。平台本身不受影響 |
+ 
+ `TOOL_BUILDER_ID` 三個映像必須同一個值。不同步正是那道閘門存在的理由——它會擋下來，
+ 而不是讓它在執行期壞掉；有測試釘住三顆映像都帶這個旋鈕。
+ 
++**`TOOL_ARTIFACT_INSECURE_TLS`（`1`／`true`／`yes`）關掉憑證檢查**，任何憑證都接受：未知簽發者、
++自簽、過期、主機名不符。它存在是因為內部的 artifact store 常常沒有一份可以交給部署的 CA，
++而唯一的替代方案（`SSL_CERT_FILE` 指向那份 CA）在沒有 CA 時無路可走。
++
++代價要寫在旋鈕旁邊，不是寫在 review 意見裡：**這條路抓回來的是會被解開並執行的程式碼**，
++而另外兩個錨點都補不上這個洞——`bundle.sha256` 跟 manifest 同源，能換一個就能換另一個；
++憑證綁的是「名字 + 網址前綴」，而攔截者用的正是同一個網址。TLS 是這裡唯一把位元組和
++「發布它的那台主機」綁在一起的東西。開啟時 host 會在 log 留一行 warning 指名這個變數。
++
++沒有這個需求的部署不要設它。它是 runtime 變數，四個執行體裡只有會自己去抓 artifact 的那三個
++（sandbox-host、mcp-runner、operator 跑 `verify` 的 shell）需要；`build-tool` 和 app/API pods
++一個都不用——app 從不直連 artifact store。
++
+ **每支工具要做的**是另一回事，而且只有兩件：發一張憑證（§15.6），以及把名字和網址寫進
+ `app.json` 再發版（§15.2）。
+ 
+@@ -738,6 +752,15 @@ docker build -f sandbox-host/mcp-runner.Dockerfile \
+ `BUILDER_ID` 要和你給 `tool-builder`、`sandbox-host` 的**同一個值**——runner 會直接執行
+ 第三方 bundle，所以它跟 host 受同一條 ABI 規則約束。有測試釘住這三顆映像的錨點一致。
+ 
++**build context 必須是 repo 根目錄**（上面那行結尾的 `.`）。三個 Dockerfile 的 `COPY` 路徑都寫成
++`sandbox-host/…`，用 `sandbox-host/` 當 context 會直接 `COPY failed` ——會明確失敗，不會產生
++一顆壞掉的映像，但共用的 CI build template 若預設拿 Dockerfile 所在目錄當 context 就要改。
++
++映像刻意不依賴 PATH 或某一種安裝方式：entry point 是 venv 直譯器的**絕對路徑**，而 `src/`
++同時掛在 `PYTHONPATH` 上。三種情況都會產生同一句 `No module named sandbox_host`——外面的東西
++插進 PATH 前面、`uv sync` 的 editable 安裝斷了連結、或某棵樹設了 `[tool.uv] package = false`
++（uv 稱之為 virtual project，完全不安裝）。一句話三個成因，所以兩邊都釘死，有測試守著。
++
+ #### 怎麼交到工程師手上
+ 
+ **不要把下面那段設定貼給他們。** 他手上通常只有工具的 GitLab repo 網址，而要湊出一個能用的
+@@ -763,6 +786,26 @@ skill 花了不少篇幅在講**失敗怎麼辦**，因為照著做的人是一
+     "wafer-history","https://gitlab.example/.../tool.manifest.json" ] } } }
+ ```
+ 
++**不同的 client 設定格式不一樣。** 上面那份是 `mcpServers` 家族（Claude 系）。opencode 用
++`mcp` + `type: local`，而且**抓工具清單的預設逾時只有 5 秒**——第一次啟動要下載整包 bundle，
++一定超過，症狀是 client 顯示 loading 然後失敗，不會說是逾時:
++
++```jsonc
++{ "$schema": "https://opencode.ai/config.json",
++  "mcp": { "wafer-history": {
++    "type": "local",
++    "command": ["docker","run","-i","--rm",
++      "-v","mcp-tools:/cache","-v","/absolute/path/to/project:/work",
++      "-e","TOOL_ARTIFACT_TOKEN",
++      "registry/ai-workspace/mcp-runner:<tag>",
++      "wafer-history","https://gitlab.example/.../tool.manifest.json"],
++    "enabled": true,
++    "timeout": 180000 } } }
++```
++
++opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數沒設時會替換成空字串——
++`-v :/work` 會失敗。掛載路徑用絕對路徑最不會出事。
++
+ 幾件值得知道的:
+ 
+ - **bundle 不會被存第二份。** artifact store 裡已經有一份，runner 依 sha 存進
+@@ -804,6 +847,16 @@ skill 花了不少篇幅在講**失敗怎麼辦**，因為照著做的人是一
+   用的是哪一版。
+ - **artifact store 連不上**：host 會用**上次成功**的版本繼續服務並標記 `stale`，
+   不會讓 workspace 開不起來。
++- **`cannot resolve <名字>: …`**：這句只在**抓 manifest 失敗**時出現，所以憑證、ABI、sha
++  都還沒輪到——是網路、TLS 或 token。冒號後面那半才是原因，別只看前半。
++  `is unreachable:` 涵蓋 HTTP 錯誤（`HTTPError` 是 `OSError` 的子類），所以 404 也長這樣。
++- **`verify` 說 404，但同一個網址 `curl` 得到 200**：`curl` 無條件送 token，`verify` 只在
++  hostname 出現在 `TOOL_ARTIFACT_HOSTS` 時才送。GitLab 對看不到的私有專案回 **404 而非 403**，
++  所以「沒帶 token」和「網址錯」長得一模一樣。
++- **`No module named sandbox_host`**：映像的問題，不是 artifact 的問題。三個成因見 §15.7。
++- **MCP client 一直 loading 然後失敗**：多半是 client 端的逾時（opencode 預設 5 秒），
++  不是 server 壞掉。先在終端機直接跑設定裡那串 `docker run`，stderr 第一行會說實話——
++  client 通常把它吃掉了。
+ 
+ ---
+ 
+diff --git a/docs/tool-authoring.md b/docs/tool-authoring.md
+index 2c0848a0..a77d9e44 100644
+--- a/docs/tool-authoring.md
++++ b/docs/tool-authoring.md
+@@ -40,6 +40,16 @@ wafer-history = "wafer_tools.cli:main"   # 必須「剛好一個」
+ 變得沒有答案，零個則沒東西可跑。一個 package 可以有**很多 command**——那是下一節的事，不是靠多個
+ script 達成的。
+ 
++**不要設 `[tool.uv] package = false`。** 有些團隊把「要部署的東西不是可散布的套件」當成內規，
++但你的 repo 不是那種東西：uv 會把設了這個的專案當成 virtual project，**完全不建套件**，於是
++`[project.scripts]` 那支執行檔不存在，而 bundle 的啟動器要執行的正是它。build 會停在
++
++```
++FileNotFoundError: [Errno 2] No such file or directory: '.../.venv/bin/wafer-history'
++```
++
++會失敗總比發出一個跑不起來的 bundle 好，但那串訊息指的是路徑而不是原因，所以先寫在這裡。
++
+ ## 2. 三段式契約
+ 
+ 你的 CLI 要能回答三種呼叫。前兩種是**給機器看的自我描述**，第三種才是幹活：
+@@ -182,6 +192,7 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
+ | **smoke 沒過** | **build 失敗，而且不留下任何 artifact**（免得 CI 把壞的傳上去） |
+ | 不是在 builder image 裡 build 的 | 平台拒絕掛載 |
+ | `[project.scripts]` 不是剛好一個 / 沒有 `version` | build 失敗 |
++| 設了 `[tool.uv] package = false` | build 失敗——沒有進入點可執行（見 §1） |
+ | **bundle 壓縮後超過 150MB** | build 失敗，並列出最重的幾樣；平台上架時也擋 |
+ | **沒有平台憑證** | 平台拒絕執行——`tool-certificate.token` 是上架的前提，不只是體積的例外 |
+ | manifest 裡的名字跟我們登記的不一樣 | 平台拒絕——代表這個網址指到了別支工具 |
+diff --git a/sandbox-host/Dockerfile b/sandbox-host/Dockerfile
+index cfab19ae..8fd36387 100644
+--- a/sandbox-host/Dockerfile
++++ b/sandbox-host/Dockerfile
+@@ -25,7 +25,12 @@ RUN uv sync --frozen --no-dev --no-install-project
+ COPY src/ ./src/
+ COPY sample-tools/ ./sample-tools/
+ COPY scripts/ ./scripts/
+-RUN uv sync --frozen --no-dev \
++# `--no-editable`: install the package INTO site-packages rather than
++# leaving a `.pth` that points back at ./src. An editable install makes a
++# shipped image depend on a source tree surviving beside it and on `.pth`
++# processing being on — and when either slips the error is
++# `No module named sandbox_host`, which names the wrong culprit.
++RUN uv sync --frozen --no-dev --no-editable \
+     && uv run --no-dev python scripts/prebuild_tools.py
+ 
+ # ---- stage 2: the lean host runtime ----
+@@ -64,6 +69,7 @@ ARG ARTIFACT_HOSTS=
+ ENV UV_COMPILE_BYTECODE=1 \
+     UV_LINK_MODE=copy \
+     PATH="/host/.venv/bin:$PATH" \
++    PYTHONPATH=/host/src \
+     NODE_PATH=/usr/local/lib/node_modules \
+     SANDBOX_HOST_BIND=0.0.0.0:8000 \
+     SANDBOX_HOST_TOOLS_DIR=/opt/tools \
+@@ -76,7 +82,12 @@ COPY sandbox-host/pyproject.toml sandbox-host/uv.lock ./
+ RUN uv sync --frozen --no-dev --no-install-project
+ 
+ COPY sandbox-host/src/ ./src/
+-RUN uv sync --frozen --no-dev
++# `--no-editable`: install the package INTO site-packages rather than
++# leaving a `.pth` that points back at ./src. An editable install makes a
++# shipped image depend on a source tree surviving beside it and on `.pth`
++# processing being on — and when either slips the error is
++# `No module named sandbox_host`, which names the wrong culprit.
++RUN uv sync --frozen --no-dev --no-editable
+ 
+ # The agent's prebuilt tools — an opaque bundle dir the host bind-mounts at
+ # /.tools inside each sandbox (SANDBOX_HOST_TOOLS_DIR above points here).
+@@ -98,4 +109,6 @@ COPY docker/profile.d/sandbox-jailbin.sh /etc/profile.d/sandbox-jailbin.sh
+ EXPOSE 8000
+ # The host needs root (setuid/chown to foreign uids) + a delegated cgroup v2
+ # subtree; it fails loud at boot / on /readyz if cgroup v2 isn't available.
+-CMD ["python", "-m", "sandbox_host"]
++# Absolute, for the reason spelled out in mcp-runner.Dockerfile: a bare
++# `python` is whatever PATH says, and PATH is not ours alone to set.
++CMD ["/host/.venv/bin/python", "-m", "sandbox_host"]
+diff --git a/sandbox-host/mcp-runner.Dockerfile b/sandbox-host/mcp-runner.Dockerfile
+index 7880a2f0..71becf20 100644
+--- a/sandbox-host/mcp-runner.Dockerfile
++++ b/sandbox-host/mcp-runner.Dockerfile
+@@ -32,6 +32,7 @@ ARG ARTIFACT_HOSTS=
+ ENV UV_COMPILE_BYTECODE=1 \
+     UV_LINK_MODE=copy \
+     PATH="/runner/.venv/bin:$PATH" \
++    PYTHONPATH=/runner/src \
+     TOOL_CACHE_DIR=/cache \
+     TOOL_BUILDER_ID=${BUILDER_ID} \
+     TOOL_ARTIFACT_HOSTS=${ARTIFACT_HOSTS}
+@@ -41,7 +42,12 @@ WORKDIR /runner
+ COPY sandbox-host/pyproject.toml sandbox-host/uv.lock ./
+ RUN uv sync --frozen --no-dev --no-install-project
+ COPY sandbox-host/src/ ./src/
+-RUN uv sync --frozen --no-dev
++# `--no-editable`: install the package INTO site-packages rather than
++# leaving a `.pth` that points back at ./src. An editable install makes a
++# shipped image depend on a source tree surviving beside it and on `.pth`
++# processing being on — and when either slips the error is
++# `No module named sandbox_host`, which names the wrong culprit.
++RUN uv sync --frozen --no-dev --no-editable
+ 
+ # Bundles land here, keyed by sha. Mounting a named volume is what makes the
+ # download a once-per-version cost rather than a once-per-start one; running
+@@ -82,4 +88,8 @@ RUN mkdir -p /cache && chmod 1777 /cache
+ # do on the platform, where it is the user's workspace. Mount the project here.
+ WORKDIR /work
+ 
+-ENTRYPOINT ["python", "-m", "sandbox_host.mcp_runner"]
++# The venv's interpreter by absolute path, not a bare `python` off PATH.
++# A base image, a CI template or a `docker run -e PATH=...` can all put
++# something else first, and the failure is `No module named sandbox_host`
++# from an interpreter that was never meant to run this.
++ENTRYPOINT ["/runner/.venv/bin/python", "-m", "sandbox_host.mcp_runner"]
+diff --git a/sandbox-host/src/sandbox_host/app.py b/sandbox-host/src/sandbox_host/app.py
+index be2ead50..1512e352 100644
+--- a/sandbox-host/src/sandbox_host/app.py
++++ b/sandbox-host/src/sandbox_host/app.py
+@@ -93,6 +93,8 @@ class _CreateBody(BaseModel):
+     cpu_cores: float | None = None
+     memory_bytes: int | None = None
+     pids_max: int | None = None
++    # #674: this turn's third-party bundles, {local name: bundle sha}.
++    tools: dict[str, str] | None = None
+ 
+ 
+ class _PersistBody(BaseModel):
+@@ -444,6 +446,7 @@ def make_host_app(
+             image=body.image,
+             env=body.env,
+             exposed_ports=tuple(body.exposed_ports),
++            tools=body.tools,
+             cpu_cores=body.cpu_cores,
+             memory_bytes=body.memory_bytes,
+             pids_max=body.pids_max,
+diff --git a/sandbox-host/src/sandbox_host/artifact.py b/sandbox-host/src/sandbox_host/artifact.py
+index fa61967e..e8ad3d72 100644
+--- a/sandbox-host/src/sandbox_host/artifact.py
++++ b/sandbox-host/src/sandbox_host/artifact.py
+@@ -33,7 +33,9 @@ from __future__ import annotations
+ 
+ import hashlib
+ import json
++import logging
+ import os
++import ssl
+ import urllib.request
+ from dataclasses import dataclass
+ from typing import Any
+@@ -43,6 +45,8 @@ from urllib.parse import urlsplit, urlunsplit
+ #: refused rather than parsed on a guess.
+ FORMAT_VERSION = 1
+ 
++logger = logging.getLogger(__name__)
++
+ 
+ #: The environment names that decide whether a fetch may carry a credential.
+ #: Here rather than beside either fetcher because there are three of them —
+@@ -51,6 +55,24 @@ FORMAT_VERSION = 1
+ TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
+ HOSTS_ENV = "TOOL_ARTIFACT_HOSTS"
+ 
++#: Set to `1` (or `true`/`yes`) to stop checking the artifact store's TLS
++#: certificate. OFF unless asked for, and asked for by name.
++#:
++#: It exists because an internal artifact store commonly sits behind a
++#: private CA that the deployment cannot always be given, and the honest
++#: alternative — pointing `SSL_CERT_FILE` at that CA — is not always
++#: available to the person doing the deploy.
++#:
++#: What it costs, stated plainly because whoever sets it should know: this
++#: fetch returns code that is unpacked and RUN. Neither of the other anchors
++#: covers the gap — `bundle.sha256` travels in the same manifest, so whoever
++#: can replace one replaces both, and a certificate binds a name to a URL
++#: PREFIX, which an interceptor on that same URL still satisfies. TLS is the
++#: only thing here that ties the bytes to the host that published them.
++INSECURE_ENV = "TOOL_ARTIFACT_INSECURE_TLS"
++
++_TRUTHY = {"1", "true", "yes"}
++
+ 
+ #: The two file names an author's CI publishes. The platform is given the
+ #: manifest's URL and derives the bundle's, so these are contract.
+@@ -121,10 +143,42 @@ class _CredentialAwareRedirects(urllib.request.HTTPRedirectHandler):
+         return following
+ 
+ 
++def tls_checks_disabled() -> bool:
++    """Whether this deployment asked for its artifact store to go unchecked.
++
++    Read per call rather than at import, so a test — and an operator reading
++    a running process — sees the environment as it is now."""
++    return os.environ.get(INSECURE_ENV, "").strip().lower() in _TRUTHY
++
++
++def _unchecked_tls() -> ssl.SSLContext:
++    """A context that accepts any certificate.
++
++    `check_hostname` first: turning it off after `CERT_NONE` raises, and the
++    two together are what an intercepting proxy needs to be accepted."""
++    context = ssl.create_default_context()
++    context.check_hostname = False
++    context.verify_mode = ssl.CERT_NONE
++    return context
++
++
+ def artifact_opener() -> urllib.request.OpenerDirector:
+     """An opener that carries the artifact credential only where it may go —
+-    on the first request and on every redirect after it."""
+-    return urllib.request.build_opener(_CredentialAwareRedirects)
++    on the first request and on every redirect after it.
++
++    Logs when TLS checking is off. A setting that changes what the platform
++    trusts should not be invisible in the logs of the process it changed."""
++    if not tls_checks_disabled():
++        return urllib.request.build_opener(_CredentialAwareRedirects)
++    logger.warning(
++        "%s is set: the artifact store's TLS certificate is NOT being checked, "
++        "so anything able to intercept that connection can serve a bundle this "
++        "platform will unpack and run",
++        INSECURE_ENV,
++    )
++    return urllib.request.build_opener(
++        _CredentialAwareRedirects, urllib.request.HTTPSHandler(context=_unchecked_tls())
++    )
+ 
+ 
+ class ArtifactError(Exception):
+diff --git a/sandbox-host/tests/test_tools_endpoint.py b/sandbox-host/tests/test_tools_endpoint.py
+index ff6612e8..05009419 100644
+--- a/sandbox-host/tests/test_tools_endpoint.py
++++ b/sandbox-host/tests/test_tools_endpoint.py
+@@ -138,3 +138,36 @@ async def test_a_host_with_no_tool_store_sweeps_nothing() -> None:
+     app = make_host_app(object(), advertise_url="http://h", tool_resolver=None)
+ 
+     assert await app.state.controller.sweep_tool_cache() == []
++
++
++class _RecordingSandbox:
++    """Records the spec `create` was handed, so a field dropped between the
++    app's request body and the sandbox is visible."""
++
++    def __init__(self) -> None:
++        self.spec: object = None
++
++    async def create(self, spec):
++        from sandbox_host.protocol import SandboxHandle
++
++        self.spec = spec
++        return SandboxHandle(id="rid-1")
++
++
++async def test_create_mounts_the_third_party_bundles_the_app_resolved() -> None:
++    """#674: the app sends `{name: sha}` on create and the sandbox mounts them.
++
++    Regressions here are invisible: the schemas still reach the model (they
++    come from `/tools/resolve`, a different call), so the tool LOOKS present
++    and every call fails with "launcher not found". Pydantic drops an unknown
++    field silently, so only asserting the far side catches it."""
++    sandbox = _RecordingSandbox()
++    app = make_host_app(sandbox, advertise_url="http://h")
++
++    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h") as c:
++        r = await c.post(
++            "/sandboxes", json={"item_id": "i-1", "tools": {"wafer-history": "a" * 64}}
++        )
++
++    assert r.status_code == 200
++    assert sandbox.spec.tools == {"wafer-history": "a" * 64}
+diff --git a/scripts/check_third_party_tools_674.py b/scripts/check_third_party_tools_674.py
+index 82d83cdd..caa42c8a 100644
+--- a/scripts/check_third_party_tools_674.py
++++ b/scripts/check_third_party_tools_674.py
+@@ -45,15 +45,32 @@ check(
+     "gates raise distinct, catchable errors",
+     all(f"class {n}(" in a for n in ("ManifestError", "IncompatibleArtifact", "ChecksumMismatch")),
+ )
++
++
++def _non_stdlib_imports(source: str) -> set[str]:
++    """What this module imports that does not ship with python.
++
++    Derived from `sys.stdlib_module_names` rather than compared against a
++    written-out list of the imports it happened to have: a list has to be
++    edited every time a stdlib import is added, and the edit is a rule
++    restated in a second place — so the check fails for a module that is
++    still perfectly stdlib-only, and whoever hits it learns to widen the
++    list rather than to read it."""
++    import ast
++
++    found: set[str] = set()
++    for node in ast.walk(ast.parse(source)):
++        if isinstance(node, ast.Import):
++            found |= {alias.name.split(".")[0] for alias in node.names}
++        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
++            found.add(node.module.split(".")[0])
++    return {m for m in found if m != "__future__"} - set(sys.stdlib_module_names)
++
++
+ check(
+     "P1",
+     "the module is stdlib-only, so the builder can import it",
+-    not re.search(
+-        r"^from (?!__future__|dataclasses|collections|typing|urllib)\w"
+-        r"|^import (?!hashlib|json|os|urllib)",
+-        a,
+-        re.M,
+-    ),
++    not _non_stdlib_imports(a),
+ )
+ check(
+     "P1",
+diff --git a/src/workspace_app/api/locator.py b/src/workspace_app/api/locator.py
+index 16d7ccb6..4e5ea53c 100644
+--- a/src/workspace_app/api/locator.py
++++ b/src/workspace_app/api/locator.py
+@@ -96,10 +96,11 @@ class ItemLocator:
+ 
+     def env_vars_of(self, item_id: str) -> dict[str, str]:
+         """The item's user-set environment variables (``WorkItemBase.env_vars``)
+-        — rendered into the sandbox's infra area each turn so the tool launchers
+-        can export them. Empty when the id maps to no registered App's item (the
+-        delivery file is then written empty, which is also how a user's last
+-        deleted variable stops reaching the tools)."""
++        — read fresh per turn and named on the ``exec`` that dispatches each tool
++        (#673), which is what makes an edit between turns take effect. Empty when
++        the id maps to no registered App's item; empty is also how a user's last
++        deleted variable stops reaching the tools, since nothing is stored
++        anywhere for a stale copy to survive in."""
+         found = find_work_item(self._spec, item_id)
+         return dict(found[1].env_vars) if found is not None else {}
+ 
+diff --git a/src/workspace_app/apps/base.py b/src/workspace_app/apps/base.py
+index 52f1eb59..d6eec4bd 100644
+--- a/src/workspace_app/apps/base.py
++++ b/src/workspace_app/apps/base.py
+@@ -74,18 +74,27 @@ class WorkItemBase(Struct):
+     fine here and worth knowing: nothing may depend on the order, and a UI that
+     promised to preserve it would be promising something the store undoes.
+ 
+-    This is the SOURCE OF TRUTH. The copy the tools actually read is a file in
+-    the sandbox's infra area, rewritten once per turn — it cannot be the storage
+-    because ``Sandbox.kill`` rmtrees the whole sandbox root (the idle reaper
+-    fires it) and ``NfsArchive.persist``/``restore`` carry only the *workspace*,
+-    so a sandbox-only file loses the user's keys the moment the item goes idle.
+-    Deliberately NOT kept in the workspace either: ``read_file`` is
+-    workspace-confined, and that confinement is the only thing standing between
+-    the agent and a trivial read.
+-
+-    Reading and writing ride the item's own ``permission`` (``write_meta``);
+-    injection does not go through the UI, so a member who may not edit still
+-    gets the variables in their turns."""
++    This is the SOURCE OF TRUTH, and the ONLY copy (#673). The values do not
++    land anywhere: they are named on the ``exec`` that dispatches a tool and
++    nowhere else (``tooling.registry._exec_tool``), read fresh per turn, so the
++    agent's own ``exec`` / ``python`` has nothing to inherit and no file to open.
++    An earlier design (#664) wrote them to a file in the sandbox's infra area;
++    it was removed because tool and agent share a uid, which made that file
++    readable by both or by neither.
++
++    ACCESS IS ASYMMETRIC, and the asymmetry is the point to know:
++
++    * WRITING is ``write_meta`` — this field rides the item PATCH like every
++      other, so a Participant cannot set it (the FE withholds the panel to match,
++      `useItemAccess.canWriteMeta`).
++    * READING is ``read_meta`` — the values are a plain field on the item record
++      and are NOT redacted on the way out, so anyone who can open the item can
++      read them, and the panel shows them unmasked.
++    * USING is ``converse`` — injection does not go through the UI at all, so a
++      member who may not edit them still gets them in their turns.
++
++    Treat them as shared-with-the-item, not shared-with-the-owner: an API key put
++    here is visible to everyone the item is shared with."""
+ 
+     permission: Permission | None = None
+     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
+diff --git a/src/workspace_app/tooling/artifact.py b/src/workspace_app/tooling/artifact.py
+index fa61967e..e8ad3d72 100644
+--- a/src/workspace_app/tooling/artifact.py
++++ b/src/workspace_app/tooling/artifact.py
+@@ -33,7 +33,9 @@ from __future__ import annotations
+ 
+ import hashlib
+ import json
++import logging
+ import os
++import ssl
+ import urllib.request
+ from dataclasses import dataclass
+ from typing import Any
+@@ -43,6 +45,8 @@ from urllib.parse import urlsplit, urlunsplit
+ #: refused rather than parsed on a guess.
+ FORMAT_VERSION = 1
+ 
++logger = logging.getLogger(__name__)
++
+ 
+ #: The environment names that decide whether a fetch may carry a credential.
+ #: Here rather than beside either fetcher because there are three of them —
+@@ -51,6 +55,24 @@ FORMAT_VERSION = 1
+ TOKEN_ENV = "TOOL_ARTIFACT_TOKEN"
+ HOSTS_ENV = "TOOL_ARTIFACT_HOSTS"
+ 
++#: Set to `1` (or `true`/`yes`) to stop checking the artifact store's TLS
++#: certificate. OFF unless asked for, and asked for by name.
++#:
++#: It exists because an internal artifact store commonly sits behind a
++#: private CA that the deployment cannot always be given, and the honest
++#: alternative — pointing `SSL_CERT_FILE` at that CA — is not always
++#: available to the person doing the deploy.
++#:
++#: What it costs, stated plainly because whoever sets it should know: this
++#: fetch returns code that is unpacked and RUN. Neither of the other anchors
++#: covers the gap — `bundle.sha256` travels in the same manifest, so whoever
++#: can replace one replaces both, and a certificate binds a name to a URL
++#: PREFIX, which an interceptor on that same URL still satisfies. TLS is the
++#: only thing here that ties the bytes to the host that published them.
++INSECURE_ENV = "TOOL_ARTIFACT_INSECURE_TLS"
++
++_TRUTHY = {"1", "true", "yes"}
++
+ 
+ #: The two file names an author's CI publishes. The platform is given the
+ #: manifest's URL and derives the bundle's, so these are contract.
+@@ -121,10 +143,42 @@ class _CredentialAwareRedirects(urllib.request.HTTPRedirectHandler):
+         return following
+ 
+ 
++def tls_checks_disabled() -> bool:
++    """Whether this deployment asked for its artifact store to go unchecked.
++
++    Read per call rather than at import, so a test — and an operator reading
++    a running process — sees the environment as it is now."""
++    return os.environ.get(INSECURE_ENV, "").strip().lower() in _TRUTHY
++
++
++def _unchecked_tls() -> ssl.SSLContext:
++    """A context that accepts any certificate.
++
++    `check_hostname` first: turning it off after `CERT_NONE` raises, and the
++    two together are what an intercepting proxy needs to be accepted."""
++    context = ssl.create_default_context()
++    context.check_hostname = False
++    context.verify_mode = ssl.CERT_NONE
++    return context
++
++
+ def artifact_opener() -> urllib.request.OpenerDirector:
+     """An opener that carries the artifact credential only where it may go —
+-    on the first request and on every redirect after it."""
+-    return urllib.request.build_opener(_CredentialAwareRedirects)
++    on the first request and on every redirect after it.
++
++    Logs when TLS checking is off. A setting that changes what the platform
++    trusts should not be invisible in the logs of the process it changed."""
++    if not tls_checks_disabled():
++        return urllib.request.build_opener(_CredentialAwareRedirects)
++    logger.warning(
++        "%s is set: the artifact store's TLS certificate is NOT being checked, "
++        "so anything able to intercept that connection can serve a bundle this "
++        "platform will unpack and run",
++        INSECURE_ENV,
++    )
++    return urllib.request.build_opener(
++        _CredentialAwareRedirects, urllib.request.HTTPSHandler(context=_unchecked_tls())
++    )
+ 
+ 
+ class ArtifactError(Exception):
+diff --git a/tests/api/test_item_env_vars.py b/tests/api/test_item_env_vars.py
+index f3f247d5..80fb3e7f 100644
+--- a/tests/api/test_item_env_vars.py
++++ b/tests/api/test_item_env_vars.py
+@@ -8,15 +8,19 @@ brings storage, permission and a PATCH route.
+ They are deliberately NOT kept in the sandbox. `Sandbox.kill` rmtrees the whole
+ sandbox root and the idle reaper fires it, and `NfsArchive.persist/restore` only
+ carry the *workspace* — so a sandbox-only file would lose a user's keys over a
+-lunch break. The sandbox copy is a per-turn delivery artefact; this is the
+-source of truth.
++lunch break. Nor are they kept there as a copy: since #673 nothing is written
++into the sandbox at all, the values being named on the `exec` that dispatches
++each tool and nowhere else. This is the only place they live.
+ """
+ 
++from specstar import SpecStar
++
+ from workspace_app.api import ScriptedAgentRunner, create_app
+ from workspace_app.apps.base import WorkItemBase
+ from workspace_app.apps.playground.model import PlaygroundItem
+ from workspace_app.apps.rca.model import RcaInvestigation
+ from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.perm import Permission
+ from workspace_app.resources import make_spec
+ from workspace_app.sandbox.mock import MockSandbox
+ 
+@@ -34,6 +38,43 @@ def _client() -> TestClient:
+     return TestClient(app)
+ 
+ 
++def _client_as(holder: dict[str, str]) -> tuple[TestClient, SpecStar]:
++    """A client that acts as whoever `holder["id"]` currently names, so one test
++    can be the owner and then the participant."""
++    spec = make_spec(default_user=lambda: holder["id"])
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=MemoryFileStore(),
++        runner=ScriptedAgentRunner([]),
++        get_user_id=lambda: holder["id"],
++    )
++    return TestClient(app), spec
++
++
++def _participant_item(spec: SpecStar, *, owner: str, guest: str, env: dict[str, str]) -> str:
++    """An item owned by `owner`, carrying `env`, on which `guest` holds exactly the
++    Participant grants the members roster hands out (`item_routes._PARTICIPANT_VERBS`)."""
++    rm = spec.get_resource_manager(RcaInvestigation)
++    subject = [f"user:{guest}"]
++    with rm.using(owner):
++        rid = rm.create(
++            RcaInvestigation(
++                title="t",
++                owner=owner,
++                env_vars=env,
++                permission=Permission(
++                    visibility="restricted",
++                    read_meta=subject,
++                    read_chat=subject,
++                    read_content=subject,
++                    converse=subject,
++                ),
++            )
++        ).resource_id
++    return rid
++
++
+ def test_every_app_item_carries_env_vars():
+     # Tier 1, declared once on the base — an App does not opt in, because any
+     # App can run tools and any tool may need a key.
+@@ -44,10 +85,54 @@ def test_every_app_item_carries_env_vars():
+ 
+ def test_env_vars_default_to_empty():
+     # An item that never set one must not be distinguishable from one that set
+-    # none — the delivery file is then simply empty.
++    # none — the tool is then handed no variables at all.
+     assert RcaInvestigation(title="t", owner="u").env_vars == {}
+ 
+ 
++# Who may READ and who may WRITE these are DIFFERENT verbs, and the gap between
++# them is wide enough to be worth pinning rather than rediscovering. The two
++# tests below are the contract `useItemAccess.canWriteMeta` mirrors on the FE:
++# they characterise what is already true, so that if the backend rule moves, the
++# mirror is not left silently claiming the old one.
++
++
++def test_a_participant_cannot_write_the_env_vars():
++    """WRITE is `write_meta`, which the Participant grants do not include.
++
++    This is the 403 the env panel used to collect in silence: the FE offered the
++    panel to anyone who could open the item, and only the network tab said no.
++    """
++    holder = {"id": "alice"}
++    client, spec = _client_as(holder)
++    rid = _participant_item(spec, owner="bob", guest="alice", env={"API_KEY": "sk-1"})
++
++    r = client.patch(
++        f"/rca-investigation/{rid}",
++        json=[{"op": "replace", "path": "/env_vars", "value": {"API_KEY": "stolen"}}],
++    )
++    assert r.status_code == 403
++
++    holder["id"] = "bob"  # and the owner still can
++    data = client.get(f"/rca-investigation/{rid}").json()
++    assert data.get("data", data)["env_vars"] == {"API_KEY": "sk-1"}
++
++
++def test_a_participant_CAN_read_the_env_vars_in_full():
++    """READ is `read_meta`, and the values are NOT redacted on the way out.
++
++    Deliberate, and the reason the panel does not mask them: anyone who can open
++    the item can read them anyway. Pinned because it is the surprising half — a
++    key put here is shared with everyone the item is shared with, so a change of
++    mind about that has to be a change to this test, not a quiet one.
++    """
++    holder = {"id": "alice"}
++    client, spec = _client_as(holder)
++    rid = _participant_item(spec, owner="bob", guest="alice", env={"API_KEY": "sk-1"})
++
++    data = client.get(f"/rca-investigation/{rid}").json()
++    assert data.get("data", data)["env_vars"] == {"API_KEY": "sk-1"}
++
++
+ def test_env_vars_round_trip_through_the_item_patch_route():
+     client = _client()
+     rid = client.post("/a/rca/items", json={"title": "t"}).json()["resource_id"]
+diff --git a/tests/tooling/test_artifact.py b/tests/tooling/test_artifact.py
+index e3233ea5..53c42a6c 100644
+--- a/tests/tooling/test_artifact.py
++++ b/tests/tooling/test_artifact.py
+@@ -11,21 +11,30 @@ Nothing here does I/O — fetching and extracting live host-side (P4/P6).
+ 
+ from __future__ import annotations
+ 
++import contextlib
+ import hashlib
++import http.server
+ import json
++import logging
++import ssl
++import threading
++import urllib.request
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from workspace_app.tooling.artifact import (
+     FORMAT_VERSION,
++    INSECURE_ENV,
+     BundleRef,
+     ChecksumMismatch,
+     IncompatibleArtifact,
+     ManifestError,
++    artifact_opener,
+     check_compatible,
+     parse_manifest,
+     render_manifest,
++    tls_checks_disabled,
+     verify_bundle,
+ )
+ 
+@@ -219,3 +228,117 @@ def test_the_host_carries_a_byte_identical_copy_of_this_contract() -> None:
+         "copy — copy it across; the module has no imports beyond the stdlib "
+         "exactly so this can stay a verbatim copy"
+     )
++
++
++# ─── TLS checking, and the deployment that has to turn it off ────────
++
++
++@contextlib.contextmanager
++def _server_with_an_unknown_certificate(tmp_path: Path):
++    """A real HTTPS server holding a certificate nothing trusts.
++
++    The point of testing against one is that the alternative — reading the
++    context off the handler — asserts how the opener is BUILT. What matters
++    is what it accepts, and only a connection answers that."""
++    import datetime
++
++    from cryptography import x509
++    from cryptography.hazmat.primitives import hashes, serialization
++    from cryptography.hazmat.primitives.asymmetric import ec
++    from cryptography.x509.oid import NameOID
++
++    key = ec.generate_private_key(ec.SECP256R1())
++    who = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
++    now = datetime.datetime.now(datetime.UTC)
++    cert = (
++        x509.CertificateBuilder()
++        .subject_name(who)
++        .issuer_name(who)
++        .public_key(key.public_key())
++        .serial_number(x509.random_serial_number())
++        .not_valid_before(now - datetime.timedelta(days=1))
++        .not_valid_after(now + datetime.timedelta(days=1))
++        .add_extension(x509.SubjectAlternativeName([x509.DNSName("localhost")]), critical=False)
++        .sign(key, hashes.SHA256())
++    )
++    cert_path, key_path = tmp_path / "c.pem", tmp_path / "k.pem"
++    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
++    key_path.write_bytes(
++        key.private_bytes(
++            serialization.Encoding.PEM,
++            serialization.PrivateFormat.PKCS8,
++            serialization.NoEncryption(),
++        )
++    )
++
++    class _Answer(http.server.BaseHTTPRequestHandler):
++        def do_GET(self) -> None:
++            self.send_response(200)
++            self.send_header("Content-Length", "2")
++            self.end_headers()
++            self.wfile.write(b"ok")
++
++        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
++            pass
++
++    server = http.server.HTTPServer(("127.0.0.1", 0), _Answer)
++    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
++    context.load_cert_chain(cert_path, key_path)
++    server.socket = context.wrap_socket(server.socket, server_side=True)
++    threading.Thread(target=server.serve_forever, daemon=True).start()
++    try:
++        yield f"https://localhost:{server.server_port}/"
++    finally:
++        server.shutdown()
++        server.server_close()
++
++
++def _get(url: str) -> bytes:
++    return artifact_opener().open(urllib.request.Request(url), timeout=10).read()
++
++
++def test_an_artifact_store_with_an_unknown_certificate_is_refused(tmp_path, monkeypatch) -> None:
++    """The default, and the one worth stating: this fetch returns code that
++    gets unpacked and run, and the sha in the manifest cannot vouch for it —
++    the manifest travels with the bundle."""
++    monkeypatch.delenv(INSECURE_ENV, raising=False)
++
++    with _server_with_an_unknown_certificate(tmp_path) as url, pytest.raises(OSError):
++        _get(url)
++
++
++def test_a_deployment_can_ask_for_the_certificate_not_to_be_checked(tmp_path, monkeypatch) -> None:
++    """An internal artifact store commonly sits behind a private CA that the
++    deployment cannot be given. Refusing to offer any way through means the
++    way through gets improvised somewhere less visible."""
++    monkeypatch.setenv(INSECURE_ENV, "1")
++
++    with _server_with_an_unknown_certificate(tmp_path) as url:
++        assert _get(url) == b"ok"
++
++
++def test_turning_the_check_off_says_so_in_the_log(tmp_path, monkeypatch, caplog) -> None:
++    # A setting that changes what the platform trusts must not be silent in
++    # the logs of the process it changed.
++    monkeypatch.setenv(INSECURE_ENV, "yes")
++
++    with caplog.at_level(logging.WARNING):
++        artifact_opener()
++
++    assert INSECURE_ENV in caplog.text
++
++
++@pytest.mark.parametrize("spelling", ["1", "true", "TRUE", "yes"])
++def test_the_spellings_an_operator_will_actually_type_are_accepted(spelling, monkeypatch) -> None:
++    # A knob that silently fails because someone wrote `true` instead of `1`
++    # is worse than no knob: it reads as "I turned it off and it still broke".
++    monkeypatch.setenv(INSECURE_ENV, spelling)
++
++    assert tls_checks_disabled()
++
++
++@pytest.mark.parametrize("spelling", ["", "0", "false", "no"])
++def test_anything_else_leaves_the_check_on(spelling, monkeypatch) -> None:
++    monkeypatch.setenv(INSECURE_ENV, spelling)
++
++    assert not tls_checks_disabled()
+diff --git a/tests/tooling/test_builder_image.py b/tests/tooling/test_builder_image.py
+index ca85c9c0..91f2ea80 100644
+--- a/tests/tooling/test_builder_image.py
++++ b/tests/tooling/test_builder_image.py
+@@ -430,3 +430,60 @@ def test_the_runner_cache_is_sticky() -> None:
+ 
+     assert "chmod 1777 /cache" in text
+     assert "chmod 0777 /cache" not in text
++
++
++def test_the_images_start_their_own_interpreter_by_absolute_path() -> None:
++    """A bare `python` is whatever PATH says, and PATH is not ours alone.
++
++    Both images install into a venv and put it first on PATH, which holds
++    right up until something puts itself in front — a shared CI build
++    template appending its own `ENV PATH`, a base image change, a
++    `docker run -e PATH=...`. The container then starts, finds the system
++    interpreter, and dies with `No module named sandbox_host`: a message
++    that points at packaging when the packaging is fine.
++
++    Naming the interpreter takes the whole class away."""
++    for rel, interpreter in (
++        (("sandbox-host", "mcp-runner.Dockerfile"), "/runner/.venv/bin/python"),
++        (("sandbox-host", "Dockerfile"), "/host/.venv/bin/python"),
++    ):
++        text = _REPO.joinpath(*rel).read_text("utf-8")
++
++        assert f'["{interpreter}"' in text or f'["{interpreter}",' in text, rel
++        assert '["python"' not in text, rel
++
++
++def test_the_images_install_their_package_rather_than_linking_to_source() -> None:
++    """An editable install leaves a `.pth` pointing at ./src instead of the
++    package itself, so a shipped image depends on that tree surviving beside
++    it and on `.pth` processing being on.
++
++    When either slips the interpreter reports `No module named sandbox_host`
++    — which sends whoever reads it looking at packaging, while the real
++    package is sitting right there in the layer."""
++    for rel in (("sandbox-host", "mcp-runner.Dockerfile"), ("sandbox-host", "Dockerfile")):
++        for line in _REPO.joinpath(*rel).read_text("utf-8").splitlines():
++            stripped = line.strip()
++            if not stripped.startswith("RUN uv sync"):
++                continue
++            # `--no-install-project` lines only build the dependency layer;
++            # there is no project in them to install either way.
++            if "--no-install-project" in stripped:
++                continue
++            assert "--no-editable" in stripped, f"{rel}: {stripped}"
++
++
++def test_the_images_can_import_their_package_however_it_was_installed() -> None:
++    """`uv sync` installs nothing at all when a tree sets `[tool.uv] package =
++    false` — uv calls that a virtual project, and a deployment that treats
++    services as not-distributable sets it as a matter of house style.
++
++    The image then starts an interpreter that cannot import the package
++    sitting beside it, and says `No module named sandbox_host`: the same
++    sentence three different causes produce, which is why this is pinned
++    rather than left to whichever install path happens to be in use."""
++    for rel, root in (
++        (("sandbox-host", "mcp-runner.Dockerfile"), "/runner"),
++        (("sandbox-host", "Dockerfile"), "/host"),
++    ):
++        assert f"PYTHONPATH={root}/src" in _REPO.joinpath(*rel).read_text("utf-8"), rel
+diff --git a/web/src/App.test.tsx b/web/src/App.test.tsx
+index 8ea73fac..7510462d 100644
+--- a/web/src/App.test.tsx
++++ b/web/src/App.test.tsx
+@@ -5,6 +5,8 @@ import { MemoryRouter } from "react-router-dom";
+ import { afterEach, describe, expect, it } from "vitest";
+ 
+ import { AppRoutes } from "./App";
++import { MY_RESOURCES_PATH } from "./components/ResourceLinkText";
++import { translate } from "./lib/i18n";
+ import { QueryWrap } from "./test/queryWrapper";
+ 
+ afterEach(cleanup);
+@@ -42,6 +44,17 @@ describe("AppRoutes", () => {
+     expect(screen.getByTestId("page-app-workspace")).toBeTruthy();
+   });
+ 
++  // #692: every resource refusal now links here. The link spells the path via
++  // MY_RESOURCES_PATH; this is the assertion that the path still resolves to
++  // the page — otherwise the refusals would route people to the catch-all.
++  it("renders My resources at the path every refusal links to", () => {
++    renderAt(MY_RESOURCES_PATH);
++    expect(screen.getByText(translate("zh-TW", "resources.loading"))).toBeTruthy();
++    // An unknown path bounces to the launcher, so this is what tells the two
++    // outcomes apart.
++    expect(screen.queryByTestId("page-launcher")).toBeNull();
++  });
++
+   it("falls back to the launcher for unknown paths", () => {
+     renderAt("/totally-bogus");
+     expect(screen.getByTestId("page-launcher")).toBeTruthy();
+diff --git a/web/src/api/queryClient.test.tsx b/web/src/api/queryClient.test.tsx
+new file mode 100644
+index 00000000..de905c68
+--- /dev/null
++++ b/web/src/api/queryClient.test.tsx
+@@ -0,0 +1,82 @@
++// @vitest-environment happy-dom
++import { QueryClientProvider, useMutation } from "@tanstack/react-query";
++import { act, renderHook, waitFor } from "@testing-library/react";
++import type { ReactNode } from "react";
++import { beforeEach, describe, expect, it } from "vitest";
++
++import { currentWriteFailure, resetWriteFailures } from "../lib/writeFailures";
++import { HttpError } from "./http";
++import { makeQueryClient } from "./queryClient";
++
++/**
++ * The rule this pins: a write that fails is never silent.
++ *
++ * It was. `useUpdateItemField` called `mutation.mutate` and never read
++ * `mutation.error`, so a 403 from the item PATCH reached no one — the env-var
++ * panel closed on click and looked exactly like a save. Reading the error at
++ * each of the 135 call sites is not a rule anyone can keep; the client reports
++ * it once, for all of them.
++ */
++function wrap(children: ReactNode) {
++  return <QueryClientProvider client={makeQueryClient()}>{children}</QueryClientProvider>;
++}
++
++function failing(error: unknown) {
++  return renderHook(
++    () =>
++      useMutation({
++        mutationFn: async () => {
++          throw error;
++        },
++      }),
++    { wrapper: ({ children }) => wrap(children) },
++  );
++}
++
++describe("makeQueryClient — no silent write failures", () => {
++  beforeEach(() => resetWriteFailures());
++
++  it("reports a rejected mutation, carrying the status so the copy can name the cause", async () => {
++    const { result } = failing(new HttpError(403, "403 Forbidden: not permitted"));
++    act(() => result.current.mutate());
++
++    await waitFor(() => expect(currentWriteFailure()).not.toBeNull());
++    expect(currentWriteFailure()?.status).toBe(403);
++  });
++
++  it("reports a plain Error too — a network drop is just as silent", async () => {
++    const { result } = failing(new Error("Failed to fetch"));
++    act(() => result.current.mutate());
++
++    await waitFor(() => expect(currentWriteFailure()).not.toBeNull());
++    expect(currentWriteFailure()?.status).toBeNull();
++    expect(currentWriteFailure()?.message).toContain("Failed to fetch");
++  });
++
++  it("stays quiet for a mutation that renders its own error inline", async () => {
++    const { result } = renderHook(
++      () =>
++        useMutation({
++          meta: { silentError: true },
++          mutationFn: async () => {
++            throw new HttpError(403, "403 Forbidden: not permitted");
++          },
++        }),
++      { wrapper: ({ children }) => wrap(children) },
++    );
++    act(() => result.current.mutate());
++
++    await waitFor(() => expect(result.current.isError).toBe(true));
++    expect(currentWriteFailure()).toBeNull();
++  });
++
++  // A failing READ already has its own empty/error states everywhere, and a
++  // background refetch failing is not something to interrupt anyone about.
++  it("says nothing about a failed query — this is about writes", async () => {
++    const client = makeQueryClient();
++    await client
++      .fetchQuery({ queryKey: ["boom"], queryFn: async () => { throw new Error("read failed"); }, retry: false })
++      .catch(() => {});
++    expect(currentWriteFailure()).toBeNull();
++  });
++});
+diff --git a/web/src/api/queryClient.ts b/web/src/api/queryClient.ts
+index 2cb2ee1d..515cacb9 100644
+--- a/web/src/api/queryClient.ts
++++ b/web/src/api/queryClient.ts
+@@ -1,4 +1,16 @@
+-import { QueryClient } from "@tanstack/react-query";
++import { MutationCache, QueryClient } from "@tanstack/react-query";
++
++import { reportWriteFailure } from "../lib/writeFailures";
++
++/** Opt OUT of the global failure notice, for a mutation that already renders its
++ * own error where the user is looking. Opt-out rather than opt-in on purpose: a
++ * default of "silent" is how 135 mutations came to swallow their failures, and
++ * the next one added would inherit the same hole. */
++declare module "@tanstack/react-query" {
++  interface Register {
++    mutationMeta: { silentError?: boolean };
++  }
++}
+ 
+ /**
+  * App-wide TanStack Query client. One instance owns the cache, dedupes
+@@ -12,9 +24,23 @@ import { QueryClient } from "@tanstack/react-query";
+  *    refetching. Near-static reads (agent configs, templates, current user)
+  *    override this to `Infinity` at the call site.
+  *  - `retry: 1` — one retry; the backend is local/internal, not flaky cloud.
++ *
++ * The `mutationCache` handler is the app's "no silent write failure" rule, kept
++ * here because this is the only place every mutation passes through. Each call
++ * site reading its own `mutation.error` was the alternative, and it is the one
++ * that failed: `useUpdateItemField` never read it, so the item PATCH's 403 —
++ * env vars, tool/skill prefs, the details form — closed the panel and looked
++ * like a save. QUERIES are deliberately not covered: a read has empty and error
++ * states already, and a background refetch failing is not worth interrupting.
+  */
+ export function makeQueryClient(): QueryClient {
+   return new QueryClient({
++    mutationCache: new MutationCache({
++      onError: (error, _vars, _ctx, mutation) => {
++        if (mutation.meta?.silentError) return;
++        reportWriteFailure(error);
++      },
++    }),
+     defaultOptions: {
+       queries: {
+         retry: 1,
+diff --git a/web/src/components/ChatListRail.test.tsx b/web/src/components/ChatListRail.test.tsx
+index e6fd63de..4df9f8c3 100644
+--- a/web/src/components/ChatListRail.test.tsx
++++ b/web/src/components/ChatListRail.test.tsx
+@@ -24,6 +24,15 @@ vi.mock("../hooks/useCreateChat", () => ({ useCreateChat: () => ({ mutate: newCh
+ const chatActions = { rename: vi.fn(), remove: vi.fn(), busy: false };
+ vi.mock("../hooks/useChatActions", () => ({ useChatActions: () => chatActions }));
+ vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "me" }));
++const directory = [
++  { id: "me", name: "Me", section: "", email: "", photo_url: null },
++  { id: "someone-else", name: "Sam Teammate", section: "", email: "", photo_url: null },
++];
++vi.mock("../hooks/useUsers", () => ({
++  useUsers: () => directory,
++  useUser: (id: string) =>
++    directory.find((u) => u.id === id) ?? { id, name: id, section: "", email: "", photo_url: null },
++}));
+ vi.mock("./ShareChatDialog", () => ({ ShareChatDialog: () => <div data-testid="share-dialog" /> }));
+ 
+ afterEach(cleanup);
+@@ -58,10 +67,10 @@ afterEach(() => {
+   window.matchMedia = realMatchMedia;
+ });
+ 
+-function renderRail() {
++function renderRail(currentId = "rca-investigation/1") {
+   return render(
+     <MemoryRouter>
+-      <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId="rca-investigation/1" />
++      <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId={currentId} />
+     </MemoryRouter>,
+   );
+ }
+@@ -113,6 +122,48 @@ describe("ChatListRail", () => {
+     expect(within(row).queryByRole("button", { name: /Chat options/i })).not.toBeInTheDocument();
+   });
+ 
++  // A chat I didn't make shows up in my rail with only its title — nothing said
++  // where it came from, so "From a teammate" read like a chat I'd forgotten
++  // writing. The one thing that distinguishes it is who put it there.
++  it("names who shared each chat in the Shared with me tab", () => {
++    renderRail();
++    fireEvent.click(screen.getByRole("tab", { name: /Shared with me/i }));
++    const row = screen.getByText("From a teammate").closest(".chat-rail__row") as HTMLElement;
++    expect(within(row).getByText(/Shared by/i)).toHaveTextContent("Sam Teammate");
++  });
++
++  it("says nothing about sharing on my own chats", () => {
++    renderRail();
++    const row = screen.getByText("Oven drift").closest(".chat-rail__row") as HTMLElement;
++    expect(within(row).queryByText(/Shared by/i)).not.toBeInTheDocument();
++  });
++
++  /**
++   * The tab used to be free-floating `useState("mine")` in a component that is
++   * destroyed on every navigation — `AppWorkspaceInner` renders "Loading…"
++   * instead of the workspace (rail included) whenever the item query hasn't
++   * answered yet, which is every first visit to a chat. So opening a chat from
++   * "Shared with me" landed you back on "My chats", with the chat you are
++   * actually reading nowhere in the list. Derive the tab from the chat you're
++   * in and it survives the remount — and a reload — for free.
++   */
++  it("opens on Shared with me when the chat you're in is one shared with you", () => {
++    renderRail("rca-investigation/9");
++    expect(screen.getByRole("tab", { name: /Shared with me/i })).toHaveAttribute(
++      "aria-selected",
++      "true",
++    );
++    expect(screen.getByText("From a teammate")).toBeInTheDocument();
++    expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
++  });
++
++  it("still lets you cross to the other tab from a shared chat", () => {
++    renderRail("rca-investigation/9");
++    fireEvent.click(screen.getByRole("tab", { name: /My chats/i }));
++    expect(screen.getByText("Oven drift")).toBeInTheDocument();
++    expect(screen.queryByText("From a teammate")).not.toBeInTheDocument();
++  });
++
+   it("opens the share dialog from a chat's ⋯ menu", () => {
+     renderRail();
+     fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+diff --git a/web/src/components/ChatListRail.tsx b/web/src/components/ChatListRail.tsx
+index 874e6ec9..76bdb878 100644
+--- a/web/src/components/ChatListRail.tsx
++++ b/web/src/components/ChatListRail.tsx
+@@ -21,6 +21,7 @@ import { useMinWidth } from "../hooks/useMediaQuery";
+ import { useAppItems, useApps } from "../hooks/useResources";
+ import { BREAKPOINTS } from "../lib/breakpoints";
+ import { ShareChatDialog } from "./ShareChatDialog";
++import { UserChip } from "./UserChip";
+ 
+ // Platform destinations that live behind the menu (App-agnostic — the App
+ // switcher is data-driven from useApps, these are the fixed platform surfaces).
+@@ -31,6 +32,14 @@ const PLATFORM_LINKS: { to: string; label: string }[] = [
+   { to: "/help", label: "Help" },
+ ];
+ 
++type Tab = "mine" | "shared";
++
++/** The tab the chat you're in belongs to — "Shared with me" iff it's one of
++ * theirs. With no chat open (the App home) that's "My chats". */
++function defaultTab(shared: AppItem[], currentId: string): Tab {
++  return shared.some((it) => it.resource_id === currentId) ? "shared" : "mine";
++}
++
+ export function ChatListRail({
+   slug,
+   resourceRoute,
+@@ -66,9 +75,19 @@ export function ChatListRail({
+     setCollapsed(!railFits);
+   }, [railFits]);
+   // #chat-private: split my chats from ones shared with me (owner !== me).
+-  const [tab, setTab] = useState<"mine" | "shared">("mine");
+   const mine = items.filter((it) => it.owner === me);
+   const shared = items.filter((it) => it.owner !== me);
++  // Which tab is open FOLLOWS the chat you are in; a click only overrides it for
++  // as long as you stay in that chat. It cannot be plain `useState("mine")`:
++  // this rail is destroyed on every navigation — `AppWorkspaceInner` renders
++  // "Loading…" in place of the whole workspace until the item query answers,
++  // which is every first visit to a chat — so a seeded tab meant opening
++  // something from "Shared with me" dropped you back on "My chats", with the
++  // chat you were now reading absent from the list you were looking at. Derived,
++  // it survives that remount, and a reload, without persisting anything.
++  const [picked, setPicked] = useState<{ chat: string; tab: Tab } | null>(null);
++  const tab = picked?.chat === currentId ? picked.tab : defaultTab(shared, currentId);
++  const setTab = (next: Tab) => setPicked({ chat: currentId, tab: next });
+   const shown = tab === "mine" ? mine : shared;
+   const closeMenu = () => setMenuOpen(false);
+ 
+@@ -251,9 +270,17 @@ function ChatRailItem({
+         title={title}
+       >
+         <span className="chat-rail__item-title">{title}</span>
++        {/* Whose chat this is. A shared row is otherwise indistinguishable from
++            one of my own once it's in my rail, and the owner IS the person who
++            shared it — Share is an owner-only action (below). */}
++        {shared && (
++          <span className="chat-rail__item-by">
++            Shared by <UserChip userId={item.owner} nameOnly />
++          </span>
++        )}
+       </Link>
+-      {/* Rename / Share / Delete only for chats I own; a shared-with-me chat just
+-          shows the "shared" tag (the backend would 403 those actions anyway). */}
++      {/* Rename / Share / Delete only for chats I own — the backend would 403
++          those actions anyway; the "Shared by" line above carries the rest. */}
+       {!shared && (
+         <>
+           <button
+diff --git a/web/src/components/EnvVarsModal.tsx b/web/src/components/EnvVarsModal.tsx
+index 1884b02e..02d96b9b 100644
+--- a/web/src/components/EnvVarsModal.tsx
++++ b/web/src/components/EnvVarsModal.tsx
+@@ -2,8 +2,13 @@
+  * The per-item environment variables panel.
+  *
+  * The item's `env_vars` are handed to the tools its agent runs — API keys and
+- * the like. This edits them; the backend renders them into the sandbox each
+- * turn and the tool launchers export them.
++ * the like. This edits them; the backend names them on the `exec` that
++ * dispatches each tool, per turn, and stores them nowhere else (#673).
++ *
++ * Shown only to someone who may actually store them (`write_meta`) — the shell
++ * withholds the save callback otherwise, and the header draws no button without
++ * it. Before that, every Participant was offered this panel and answered 403 by
++ * a request no one was reading.
+  *
+  * ONE text box holding the whole set as `.env` text, not a row per variable.
+  * What people actually do with these is paste a block in from somewhere else —
+@@ -18,10 +23,14 @@
+  * a name written twice keeps the last, which is dotenv's own rule and is at
+  * least visible here, both lines being on screen.
+  *
+- * Nothing is masked, deliberately. Masking would read as protection it cannot
+- * deliver: anyone who can converse with this item's agent can have it read the
+- * delivered file, so the only thing a mask removes is the ability to spot a
+- * mistyped key.
++ * Nothing is masked, deliberately — but the reason has changed and the old one
++ * is worth not repeating. It used to be "the agent can read the delivered file
++ * anyway"; there is no file any more (#673). The reason now is that the values
++ * are a plain field on the item record, returned unredacted to anyone with
++ * `read_meta`, so a mask here hides them from the one person who may edit them
++ * and from nobody else — it would remove the ability to spot a mistyped key and
++ * deliver no protection at all. If these should ever be secret FROM readers,
++ * that is a backend change (redact on read), not a mask in this component.
+  */
+ import { useRef, useState } from "react";
+ 
+diff --git a/web/src/components/GlobalLayout.test.tsx b/web/src/components/GlobalLayout.test.tsx
+index d5a10dd2..1f8e6a93 100644
+--- a/web/src/components/GlobalLayout.test.tsx
++++ b/web/src/components/GlobalLayout.test.tsx
+@@ -1,13 +1,17 @@
+ // @vitest-environment happy-dom
+ import "@testing-library/jest-dom/vitest";
+-import { cleanup, render, screen, within } from "@testing-library/react";
++import { act, cleanup, render, screen, within } from "@testing-library/react";
++import { useEffect } from "react";
+ import { MemoryRouter, Route, Routes } from "react-router-dom";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+ afterEach(cleanup);
+ 
+ import { GlobalLayout } from "./GlobalLayout";
++import { HttpError } from "../api/http";
+ import { useBreadcrumbs } from "../hooks/breadcrumbs";
++import { useNavChrome } from "../hooks/useNavChrome";
++import { reportWriteFailure, resetWriteFailures } from "../lib/writeFailures";
+ import { QueryWrap } from "../test/queryWrapper";
+ 
+ vi.mock("../hooks/useResources", () => ({
+@@ -32,6 +36,20 @@ function Child() {
+   return <div data-testid="child">child page</div>;
+ }
+ 
++function mount(child: React.ReactElement) {
++  return render(
++    <MemoryRouter initialEntries={["/a/rca"]}>
++      <QueryWrap>
++        <Routes>
++          <Route element={<GlobalLayout />}>
++            <Route path="/a/:slug" element={child} />
++          </Route>
++        </Routes>
++      </QueryWrap>
++    </MemoryRouter>,
++  );
++}
++
+ describe("GlobalLayout", () => {
+   it("wraps child routes with the global bar and shares the breadcrumb trail a page publishes", () => {
+     render(
+@@ -55,4 +73,32 @@ describe("GlobalLayout", () => {
+     expect(within(nav).getByRole("link", { name: "Home" })).toHaveAttribute("href", "/");
+     expect(within(nav).getByText("RCA")).toBeInTheDocument();
+   });
++
++  // Every route in the app nests under this layout, so mounting the notice here
++  // is what makes "a write never fails silently" true everywhere rather than on
++  // the one page someone remembered.
++  it("carries the write-failure notice for every page below it", async () => {
++    resetWriteFailures();
++    mount(<Child />);
++    expect(screen.queryByTestId("write-failure")).toBeNull();
++
++    await act(async () => reportWriteFailure(new HttpError(403, "403 Forbidden")));
++    expect(screen.getByTestId("write-failure")).toBeInTheDocument();
++  });
++
++  // A chat-first workspace hides the top bar. The notice is not chrome — it is
++  // the only thing standing between a lost edit and silence, so it stays.
++  it("still shows it on a page that hides the global bar", async () => {
++    resetWriteFailures();
++    function BareChild() {
++      const { setHidden } = useNavChrome();
++      useEffect(() => setHidden(true), [setHidden]);
++      return <div data-testid="child">child page</div>;
++    }
++    mount(<BareChild />);
++    expect(screen.queryByRole("link", { name: /Workspace/ })).toBeNull();
++
++    await act(async () => reportWriteFailure(new HttpError(500, "boom")));
++    expect(screen.getByTestId("write-failure")).toBeInTheDocument();
++  });
+ });
+diff --git a/web/src/components/GlobalLayout.tsx b/web/src/components/GlobalLayout.tsx
+index 534c0a74..2e83314c 100644
+--- a/web/src/components/GlobalLayout.tsx
++++ b/web/src/components/GlobalLayout.tsx
+@@ -12,6 +12,7 @@ import { Outlet } from "react-router-dom";
+ import { BreadcrumbProvider } from "../hooks/breadcrumbs";
+ import { NavChromeProvider, useNavChrome } from "../hooks/useNavChrome";
+ import { GlobalNav } from "./GlobalNav";
++import { WriteFailureNotice } from "./WriteFailureNotice";
+ 
+ export function GlobalLayout() {
+   return (
+@@ -33,6 +34,11 @@ function GlobalLayoutInner() {
+       <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+         <Outlet />
+       </div>
++      {/* Every route nests here, which is the only reason "a failed write is
++          never silent" can be true app-wide instead of page by page. Outside the
++          `hidden` guard on purpose: a chat-first surface drops the nav bar as
++          chrome, and this is not chrome. */}
++      <WriteFailureNotice />
+     </div>
+   );
+ }
+diff --git a/web/src/components/ResourceLinkText.test.tsx b/web/src/components/ResourceLinkText.test.tsx
+new file mode 100644
+index 00000000..04b3850c
+--- /dev/null
++++ b/web/src/components/ResourceLinkText.test.tsx
+@@ -0,0 +1,95 @@
++// @vitest-environment happy-dom
++import "@testing-library/jest-dom/vitest";
++import { cleanup, render, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { MemoryRouter, Route, Routes } from "react-router-dom";
++import { afterEach, describe, expect, it } from "vitest";
++
++import { type Locale, LocaleProvider, translate } from "../lib/i18n";
++import { MY_RESOURCES_PATH, RESOURCE_LINK_KEYS, ResourceLinkText } from "./ResourceLinkText";
++
++afterEach(cleanup);
++
++const show = (text: string) =>
++  render(
++    <MemoryRouter>
++      <ResourceLinkText text={text} />
++    </MemoryRouter>,
++  );
++
++const LOCALES: Locale[] = ["zh-TW", "en"];
++
++describe("<ResourceLinkText /> (#692)", () => {
++  it("turns the page's name into a link to it, keeping the sentence intact", () => {
++    show(translate("zh-TW", "terminal.envFull"));
++    const link = screen.getByRole("link", { name: translate("zh-TW", "resources.title") });
++    expect(link).toHaveAttribute("href", "/my-resources");
++    // The remedy still reads as one sentence — the link replaced the phrase,
++    // it was not appended as a stray "click here".
++    expect(screen.getByText(/執行環境已達上限/)).toBeInTheDocument();
++    expect(screen.getByText(/關掉不用的環境再試一次/)).toBeInTheDocument();
++  });
++
++  it("links the English wording too, so the phrase is not hardcoded", () => {
++    localStorage.setItem("ws.locale", "en");
++    try {
++      render(
++        <MemoryRouter>
++          <LocaleProvider>
++            <ResourceLinkText text={translate("en", "terminal.envFull")} />
++          </LocaleProvider>
++        </MemoryRouter>,
++      );
++      expect(screen.getByRole("link", { name: "My resources" })).toHaveAttribute(
++        "href",
++        "/my-resources",
++      );
++    } finally {
++      localStorage.removeItem("ws.locale");
++    }
++  });
++
++  // An href is not the claim being made — #692 is that the person can GET
++  // there. Press it and land.
++  it("actually navigates to the page when pressed", async () => {
++    render(
++      <MemoryRouter initialEntries={["/a/rca/items/it1"]}>
++        <Routes>
++          <Route
++            path="/a/rca/items/it1"
++            element={<ResourceLinkText text={translate("zh-TW", "chat.send.userFull")} />}
++          />
++          <Route path={MY_RESOURCES_PATH} element={<p>資源頁</p>} />
++        </Routes>
++      </MemoryRouter>,
++    );
++    await userEvent.click(screen.getByRole("link"));
++    expect(await screen.findByText("資源頁")).toBeInTheDocument();
++  });
++
++  it("leaves a message that names no destination exactly as it was", () => {
++    show("boom: exec failed");
++    expect(screen.queryByRole("link")).not.toBeInTheDocument();
++    expect(screen.getByText("boom: exec failed")).toBeInTheDocument();
++  });
++
++  // A composed line (the composer joins several files' outcomes) still carries
++  // the phrase, so it still gets the link.
++  it("links the phrase inside a composed line", () => {
++    show(`big.bin — ${translate("zh-TW", "workspace.overQuota.user", { names: "big.bin" })}`);
++    expect(screen.getByRole("link")).toHaveAttribute("href", "/my-resources");
++  });
++});
++
++describe("the messages that promise the page (#692 guard)", () => {
++  // The link is produced by finding the page's own name inside the sentence.
++  // That is only sound while every message that sends someone there spells the
++  // name the catalog spells it — reword one to 「資源頁」 and the sentence would
++  // still read fine while quietly becoming unclickable again, which is exactly
++  // the defect this issue is about. Fail here instead.
++  it.each(RESOURCE_LINK_KEYS)("%s names the page verbatim in every locale", (key) => {
++    for (const locale of LOCALES) {
++      expect(translate(locale, key)).toContain(translate(locale, "resources.title"));
++    }
++  });
++});
+diff --git a/web/src/components/ResourceLinkText.tsx b/web/src/components/ResourceLinkText.tsx
+new file mode 100644
+index 00000000..8516ba64
+--- /dev/null
++++ b/web/src/components/ResourceLinkText.tsx
+@@ -0,0 +1,67 @@
++/**
++ * A refusal message, rendered so the place it sends you to is REACHABLE (#692).
++ *
++ * The resource limits (#688) refuse outright, and that is only defensible
++ * because the refused person has somewhere to go: `/my-resources`, where they
++ * close an environment or find the item eating their space. Every one of those
++ * messages named the page — and every one of them was flat text, on screens
++ * whose only route to it was a popover in the far corner of the global nav. The
++ * page existed; at the moment it was needed it was not reachable, and reachable
++ * is what the "just refuse them" trade-off actually rested on.
++ *
++ * So: the message keeps saying what it said, and the page's OWN NAME inside it
++ * becomes the link. No "click here" tacked on the end, no second sentence — the
++ * remedy is already a noun in that sentence, it just needed to be pressable.
++ *
++ * Matching on the name rather than on a `{placeholder}` is deliberate. Both the
++ * sentence and the name come from the same catalog, so they agree by
++ * construction, and a caller that forgets to render through this component
++ * degrades to the plain sentence it shows today — not to a leaked `{token}` in
++ * the user's face. What that trades away (a reworded message silently losing its
++ * link) is bought back by the guard test over {@link RESOURCE_LINK_KEYS}.
++ */
++import { Link } from "react-router-dom";
++
++import { type MsgKey, useT } from "../lib/i18n";
++
++/** Where a person goes when a resource limit refuses them. */
++export const MY_RESOURCES_PATH = "/my-resources";
++
++/**
++ * Every message that promises the page. The guard test asserts each one still
++ * spells its name the way the catalog does — reword one and the sentence would
++ * read fine while quietly going back to being unclickable.
++ *
++ * The workspace-full wordings are absent on purpose: they point at THIS item's
++ * files, which the user deletes right where they are, so there is nothing on
++ * `/my-resources` for them to do.
++ */
++export const RESOURCE_LINK_KEYS = [
++  "chat.send.envFull",
++  "chat.send.userFull",
++  "terminal.envFull",
++  "terminal.userFull",
++  "workspace.overQuota.user",
++  "workspace.overQuota.env",
++  "workspace.upload.userFull",
++  "workspace.upload.envFull",
++] as const satisfies readonly MsgKey[];
++
++export function ResourceLinkText({ text }: { text: string }) {
++  const t = useT();
++  const name = t("resources.title");
++  const at = text.indexOf(name);
++  if (at < 0) return <>{text}</>;
++  return (
++    <>
++      {text.slice(0, at)}
++      <Link
++        to={MY_RESOURCES_PATH}
++        style={{ color: "inherit", textDecoration: "underline", fontWeight: 600 }}
++      >
++        {name}
++      </Link>
++      {text.slice(at + name.length)}
++    </>
++  );
++}
+diff --git a/web/src/components/WriteFailureNotice.test.tsx b/web/src/components/WriteFailureNotice.test.tsx
+new file mode 100644
+index 00000000..7eb2a983
+--- /dev/null
++++ b/web/src/components/WriteFailureNotice.test.tsx
+@@ -0,0 +1,60 @@
++// @vitest-environment happy-dom
++import "@testing-library/jest-dom/vitest";
++import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++
++import { dismissWriteFailure, reportWriteFailure, resetWriteFailures } from "../lib/writeFailures";
++import { HttpError } from "../api/http";
++import { WriteFailureNotice } from "./WriteFailureNotice";
++
++describe("WriteFailureNotice", () => {
++  beforeEach(() => resetWriteFailures());
++  afterEach(cleanup);
++
++  it("shows nothing until something fails — it is not a permanent chrome", () => {
++    render(<WriteFailureNotice />);
++    expect(screen.queryByTestId("write-failure")).toBeNull();
++  });
++
++  it("appears when a write fails, without the page having to re-render on its own", () => {
++    render(<WriteFailureNotice />);
++    act(() => reportWriteFailure(new HttpError(500, "500 Internal Server Error")));
++    expect(screen.getByTestId("write-failure")).toBeInTheDocument();
++  });
++
++  // The whole reported symptom: a 403 that only F12 could see. The copy has to
++  // name the cause, not echo a status line nobody reads as "you lack a verb".
++  it("says a 403 is a permission problem, in words", () => {
++    render(<WriteFailureNotice />);
++    act(() => reportWriteFailure(new HttpError(403, "403 Forbidden: not permitted")));
++    expect(screen.getByTestId("write-failure")).toHaveTextContent("權限");
++  });
++
++  it("announces itself to assistive tech — a silent banner is the same bug again", () => {
++    render(<WriteFailureNotice />);
++    act(() => reportWriteFailure(new HttpError(403, "nope")));
++    expect(screen.getByTestId("write-failure")).toHaveAttribute("role", "alert");
++  });
++
++  it("can be dismissed", () => {
++    render(<WriteFailureNotice />);
++    act(() => reportWriteFailure(new HttpError(500, "boom")));
++    fireEvent.click(screen.getByTestId("write-failure-dismiss"));
++    expect(screen.queryByTestId("write-failure")).toBeNull();
++  });
++
++  it("clears when the store is cleared from anywhere else", () => {
++    render(<WriteFailureNotice />);
++    act(() => reportWriteFailure(new HttpError(500, "boom")));
++    act(() => dismissWriteFailure());
++    expect(screen.queryByTestId("write-failure")).toBeNull();
++  });
++
++  // Keeps the detail available without making it the headline — the user needs
++  // to know it did not save; a developer needs to know what the server said.
++  it("keeps the server's own message visible as detail", () => {
++    render(<WriteFailureNotice />);
++    act(() => reportWriteFailure(new HttpError(507, "507: workspace full")));
++    expect(screen.getByTestId("write-failure")).toHaveTextContent("workspace full");
++  });
++});
+diff --git a/web/src/components/WriteFailureNotice.tsx b/web/src/components/WriteFailureNotice.tsx
+new file mode 100644
+index 00000000..866d9393
+--- /dev/null
++++ b/web/src/components/WriteFailureNotice.tsx
+@@ -0,0 +1,90 @@
++/**
++ * Says so when a write did not save.
++ *
++ * Mounted once, above every page, and fed by the QueryClient's mutation cache
++ * (`api/queryClient.ts`) rather than by any call site. That is the point: the
++ * bug it closes was not one panel forgetting to check an error, it was 135
++ * mutations sharing a default of silence — the env-var panel took a Participant's
++ * API keys, PATCHed them, got a 403, and closed as if it had saved.
++ *
++ * It reports, it does not diagnose. The headline says what happened to the
++ * user's work; the server's own message rides underneath in smaller type for
++ * whoever needs it. Anything that can explain a failure better in place should
++ * keep doing so and opt out with `meta: { silentError: true }`.
++ */
++import { useSyncExternalStore } from "react";
++
++import { useT } from "../lib/i18n";
++import { pxToRem } from "../lib/pxToRem";
++import {
++  currentWriteFailure,
++  dismissWriteFailure,
++  subscribeWriteFailures,
++} from "../lib/writeFailures";
++
++export function WriteFailureNotice() {
++  const t = useT();
++  const failure = useSyncExternalStore(
++    subscribeWriteFailures,
++    currentWriteFailure,
++    currentWriteFailure,
++  );
++  if (!failure) return null;
++
++  // 403 is the one status worth naming, because its remedy is not "try again" —
++  // it is "ask someone". Every other failure gets the neutral line; guessing at
++  // a cause we did not read would send people to look in the wrong place.
++  const headline = failure.status === 403 ? t("writeFailure.forbidden") : t("writeFailure.generic");
++
++  return (
++    <div
++      data-testid="write-failure"
++      role="alert"
++      style={{
++        position: "fixed",
++        // Bottom-centre: out of the way of the top bar's own controls, and not
++        // over the composer, which is where the user's hands are.
++        bottom: 18,
++        left: "50%",
++        transform: "translateX(-50%)",
++        zIndex: 60,
++        maxWidth: "min(560px, calc(100vw - 32px))",
++        display: "flex",
++        alignItems: "flex-start",
++        gap: 12,
++        padding: "10px 12px",
++        borderRadius: "var(--radius-btn)",
++        background: "var(--paper-2)",
++        border: "1px solid var(--err, var(--warn))",
++        boxShadow: "0 6px 20px rgba(0,0,0,0.18)",
++        fontSize: pxToRem(13),
++        lineHeight: 1.5,
++      }}
++    >
++      <div style={{ minWidth: 0 }}>
++        <div style={{ fontWeight: 600 }}>{headline}</div>
++        <div
++          style={{
++            color: "var(--text-paper-d)",
++            fontSize: pxToRem(11),
++            marginTop: 2,
++            // A long server message must not stretch the banner off-screen.
++            overflowWrap: "anywhere",
++          }}
++        >
++          {failure.message}
++        </div>
++      </div>
++      <button
++        type="button"
++        className="btn"
++        data-variant="secondary"
++        data-size="sm"
++        data-testid="write-failure-dismiss"
++        onClick={dismissWriteFailure}
++      >
++        {t("writeFailure.dismiss")}
++      </button>
++    </div>
++  );
++}
+diff --git a/web/src/hooks/useItemAccess.test.tsx b/web/src/hooks/useItemAccess.test.tsx
+index 0d9d293e..13e2495e 100644
+--- a/web/src/hooks/useItemAccess.test.tsx
++++ b/web/src/hooks/useItemAccess.test.tsx
+@@ -62,6 +62,44 @@ describe("useItemAccess", () => {
+     expect(result.current.canWrite).toBe(false);
+   });
+ 
++  // The env-var panel's gate. A Participant may converse and still may not store
++  // a field on the item: that PATCH is write_meta, which the participant grant
++  // set does not include. Per the contract above, the wait is on a DENIED verb
++  // (canWrite) — waiting on a granted one proves nothing, since every verb is
++  // true before identity settles.
++  it("denies a Participant the item-field write, while they may still converse", async () => {
++    signInAs("dave", false);
++    const { result } = access({
++      ...privateItem,
++      permission: {
++        visibility: "restricted",
++        read_meta: ["user:dave"],
++        read_chat: ["user:dave"],
++        read_content: ["user:dave"],
++        converse: ["user:dave"],
++      },
++    } as unknown as AppItem);
++
++    await waitFor(() => expect(result.current.canWrite).toBe(false));
++    expect(result.current.canWriteMeta).toBe(false);
++    expect(result.current.canConverse).toBe(true);
++  });
++
++  // canWrite and canWriteMeta are different questions and must be able to
++  // disagree — an editor writes files and entity records, but the item PATCH
++  // still answers 403.
++  it("separates writing CONTENT from writing the item's own fields", async () => {
++    signInAs("erin", false);
++    const { result } = access({
++      ...privateItem,
++      permission: { visibility: "restricted", edit_content: ["user:erin"] },
++    } as unknown as AppItem);
++
++    await waitFor(() => expect(result.current.canConverse).toBe(false));
++    expect(result.current.canWrite).toBe(true);
++    expect(result.current.canWriteMeta).toBe(false);
++  });
++
+   it("the owner keeps full access without being a superuser", async () => {
+     signInAs("alice", false);
+     const { result } = access(privateItem);
+diff --git a/web/src/hooks/useItemAccess.ts b/web/src/hooks/useItemAccess.ts
+index 331ca839..07a436df 100644
+--- a/web/src/hooks/useItemAccess.ts
++++ b/web/src/hooks/useItemAccess.ts
+@@ -34,6 +34,7 @@ import {
+   canReadChat,
+   canReadItemContent,
+   canWriteItem,
++  canWriteItemMeta,
+   isDiscoverableOnly,
+   parseItemPermission,
+ } from "../lib/itemPermission";
+@@ -49,6 +50,10 @@ export type ItemAccess = {
+   canConverse: boolean;
+   /** Write entity records / edit files (`edit_content` family). */
+   canWrite: boolean;
++  /** Store a field ON the item — env vars, tool/skill prefs, the details form
++   * (`write_meta`). Narrower than {@link canWrite} on purpose: the item PATCH
++   * accepts write_meta alone, so an editor who passes canWrite is still refused. */
++  canWriteMeta: boolean;
+   /** Sees it exists but cannot enter — the 🔒 list row offering "request access". */
+   isDiscoverableOnly: boolean;
+ };
+@@ -63,6 +68,7 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
+       canSeeFiles: true,
+       canConverse: true,
+       canWrite: true,
++      canWriteMeta: true,
+       isDiscoverableOnly: false,
+     };
+   }
+@@ -75,6 +81,7 @@ export function useItemAccess(item: AppItem | undefined): ItemAccess {
+     canSeeFiles: canReadItemContent(perm, me, owner, isSuperuser, groups),
+     canConverse: canConverse(perm, me, owner, isSuperuser, groups),
+     canWrite: canWriteItem(perm, me, owner, isSuperuser, groups),
++    canWriteMeta: canWriteItemMeta(perm, me, owner, isSuperuser, groups),
+     isDiscoverableOnly: isDiscoverableOnly(perm, me, owner, isSuperuser, groups),
+   };
+ }
+diff --git a/web/src/hooks/useResources.ts b/web/src/hooks/useResources.ts
+index 397423f9..7c6c9b6f 100644
+--- a/web/src/hooks/useResources.ts
++++ b/web/src/hooks/useResources.ts
+@@ -111,6 +111,9 @@ export function useUpdateItemField(slug: string, resourceRoute: string, item: Ap
+ export function useSetItemPermission(slug: string, itemId: string) {
+   const qc = useQueryClient();
+   const mutation = useMutation({
++    // Surfaces `error` to the share dialog itself (see the docstring above), so
++    // the global notice would be the same 403 said twice.
++    meta: { silentError: true },
+     mutationFn: (perm: ItemPermission) => api.setItemPermission(slug, itemId, perm),
+     onSuccess: () => {
+       void qc.invalidateQueries({ queryKey: qk.appItem(slug, itemId) });
+diff --git a/web/src/lib/i18n.tsx b/web/src/lib/i18n.tsx
+index e4d85102..6248ae90 100644
+--- a/web/src/lib/i18n.tsx
++++ b/web/src/lib/i18n.tsx
+@@ -1025,6 +1025,9 @@ export const messages = {
+   // A failure we could not attribute. Report WHAT happened rather than guessing
+   // WHY: blaming the size limit for a dropped connection sends the user after a
+   // setting that was never involved.
++  // #692: the tree's upload report is re-readable, so it needs a way to be put
++  // away — which an alert() got for free and this has to say out loud.
++  "workspace.upload.dismiss": { "zh-TW": "知道了", en: "Dismiss" },
+   "workspace.upload.error": {
+     "zh-TW": "「{name}」上傳失敗:{reason}",
+     en: "{name} failed to upload: {reason}",
+@@ -1174,6 +1177,18 @@ export const messages = {
+   "env.export": { "zh-TW": "匯出 .env", en: "Export .env" },
+   "env.save": { "zh-TW": "儲存", en: "Save" },
+   "env.cancel": { "zh-TW": "取消", en: "Cancel" },
++  // The global "that didn't save" notice. Says what happened to the user's work
++  // ("未儲存" / "wasn't saved") first — a status line alone reads as noise, and
++  // reading it as "nothing was stored" is the one thing they must not get wrong.
++  "writeFailure.forbidden": {
++    "zh-TW": "沒有權限做這項變更,內容未儲存。",
++    en: "You don’t have permission to make this change — nothing was saved.",
++  },
++  "writeFailure.generic": {
++    "zh-TW": "儲存失敗,內容未套用。",
++    en: "Couldn’t save — the change was not applied.",
++  },
++  "writeFailure.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
+   "tools.title": { "zh-TW": "助理可用的工具", en: "Tools the assistant can use" },
+   "tools.desc": {
+     "zh-TW": "預設沿用範本設定。把任一工具改成「開啟」或「關閉」只會影響這個工作區；其餘維持「預設」會跟著範本變動。",
+diff --git a/web/src/lib/itemPermission.test.ts b/web/src/lib/itemPermission.test.ts
+index 04de26c0..e75c0339 100644
+--- a/web/src/lib/itemPermission.test.ts
++++ b/web/src/lib/itemPermission.test.ts
+@@ -1,6 +1,12 @@
+ import { describe, expect, it } from "vitest";
+ 
+-import { canChangeItemPermission, canWriteItem, itemVisibility, parseItemPermission } from "./itemPermission";
++import {
++  canChangeItemPermission,
++  canWriteItem,
++  canWriteItemMeta,
++  itemVisibility,
++  parseItemPermission,
++} from "./itemPermission";
+ 
+ const OWNER = "owner1";
+ const ME = "me1";
+@@ -28,6 +34,48 @@ describe("canWriteItem (mirrors backend perm/authorize for a write verb)", () =>
+   });
+ });
+ 
++describe("canWriteItemMeta (mirrors the backend's ITEM-FIELD write gate: write_meta)", () => {
++  // The reason this is not `canWriteItem`: the PATCH that stores env_vars /
++  // attached_tool_prefs / attached_skill_prefs is checked against write_meta
++  // ALONE. A content editor passes the 3-verb union and is still refused 403.
++  it("a content editor is NOT a field editor — the union would have said yes", () => {
++    const perm = { visibility: "restricted" as const, edit_content: ["user:me1"] };
++    expect(canWriteItem(perm, ME, OWNER, false)).toBe(true);
++    expect(canWriteItemMeta(perm, ME, OWNER, false)).toBe(false);
++  });
++  it("a Participant (read_meta/read_chat/read_content/converse) cannot", () => {
++    expect(
++      canWriteItemMeta(
++        {
++          visibility: "restricted",
++          read_meta: ["user:me1"],
++          read_content: ["user:me1"],
++          converse: ["user:me1"],
++        },
++        ME,
++        OWNER,
++        false,
++      ),
++    ).toBe(false);
++  });
++  it("restricted + write_meta granted, directly or via a group", () => {
++    expect(canWriteItemMeta({ visibility: "restricted", write_meta: ["user:me1"] }, ME, OWNER, false)).toBe(true);
++    expect(canWriteItemMeta({ visibility: "restricted", write_meta: ["all"] }, ME, OWNER, false)).toBe(true);
++    expect(
++      canWriteItemMeta({ visibility: "restricted", write_meta: ["group:eng"] }, ME, OWNER, false, ["eng"]),
++    ).toBe(true);
++  });
++  it("owner, superuser, and absent ≡ public all pass — the server accepts them", () => {
++    expect(canWriteItemMeta({ visibility: "private" }, OWNER, OWNER, false)).toBe(true);
++    expect(canWriteItemMeta({ visibility: "private" }, ME, OWNER, true)).toBe(true);
++    expect(canWriteItemMeta(undefined, ME, OWNER, false)).toBe(true);
++    expect(canWriteItemMeta({ visibility: "public" }, ME, OWNER, false)).toBe(true);
++  });
++  it("private + non-owner is refused even when a grant lists them", () => {
++    expect(canWriteItemMeta({ visibility: "private", write_meta: ["user:me1"] }, ME, OWNER, false)).toBe(false);
++  });
++});
++
+ describe("parseItemPermission", () => {
+   it("passes a well-formed permission object through", () => {
+     expect(parseItemPermission({ visibility: "restricted", edit_content: ["user:a"] })).toMatchObject({
+diff --git a/web/src/lib/itemPermission.ts b/web/src/lib/itemPermission.ts
+index 88c62683..07dd30d3 100644
+--- a/web/src/lib/itemPermission.ts
++++ b/web/src/lib/itemPermission.ts
+@@ -142,6 +142,29 @@ export function canWriteItem(
+   return WRITE_VERBS.some((verb) => grantsAnySubject(permission[verb], currentUserId, groups));
+ }
+ 
++/** May the caller edit the item's own FIELDS — env_vars, the tool/skill prefs,
++ * the attached preset, the details form?
++ *
++ * NOT {@link canWriteItem}. That one answers "may they write *something* here"
++ * (a union of edit_content / add_content / write_meta) and is the right question
++ * for entity records and workspace files. Storing a field is a different route
++ * with a different verb: the item PATCH is checked against `write_meta` ALONE
++ * (`perm/checker.work_item_permission_event_handler` → `update → write_meta`).
++ * A content editor therefore passes the union and is still refused 403, which is
++ * exactly the gap the env-var panel fell through — it was offered to every
++ * Participant, took their edits, and dropped the failure on the floor.
++ *
++ * Same shape as every other single-verb gate, so it inherits one rule rather
++ * than restating it: superuser bypasses, owner always allowed, absent ≡ public,
++ * private → owner-only, restricted → granted (user / `all` / group). */
++export const canWriteItemMeta = (
++  permission: ItemPermission | undefined,
++  currentUserId: string,
++  ownerId: string,
++  isSuperuser: boolean,
++  groups: string[] = [],
++): boolean => hasItemVerb(permission, currentUserId, ownerId, "write_meta", isSuperuser, groups);
++
+ /** #306 PR3 — mirror `perm/authorize` for ONE item verb, for the FE lock states
+  * (hide the thread without read_chat, the files without read_content, disable the
+  * composer without converse). Superuser bypasses; owner always allowed; absent ≡
+@@ -160,7 +183,10 @@ export function hasItemVerb(
+   permission: ItemPermission | undefined,
+   currentUserId: string,
+   ownerId: string,
+-  verb: ItemVerb,
++  // `write_meta` is not an `ItemVerb` because the role ladder / permission dialog
++  // do not offer it as a tier — but it IS a grant list on the permission, and the
++  // item-field PATCH gates on it, so it is askable here. See canWriteItemMeta.
++  verb: ItemVerb | "write_meta",
+   isSuperuser: boolean,
+   groups: string[] = [],
+ ): boolean {
+diff --git a/web/src/lib/writeFailures.ts b/web/src/lib/writeFailures.ts
+new file mode 100644
+index 00000000..5c3b90cc
+--- /dev/null
++++ b/web/src/lib/writeFailures.ts
+@@ -0,0 +1,76 @@
++/**
++ * The one place a failed WRITE is recorded, so that no save can fail in silence.
++ *
++ * Why a module-level store rather than React state: the QueryClient is built at
++ * module scope (`api/queryClient.ts`) and its `MutationCache.onError` fires
++ * outside any component, so it has no `setState` to call. The notice subscribes
++ * with `useSyncExternalStore` instead — React reads this, this never reads React.
++ *
++ * It holds ONE failure, the latest. A queue would let a flaky connection stack up
++ * a column of identical banners, and the honest message in that situation is
++ * still just "the last thing you did didn't save".
++ *
++ * The COPY is not decided here. A store that formatted its own message would
++ * have to know the current locale, which is a React concern — so this carries
++ * the two facts the component needs (the HTTP status, when there was one, and
++ * the raw message) and lets the notice choose the words.
++ */
++
++export type WriteFailure = {
++  /** Distinguishes two consecutive failures that read identically, so the notice
++   *  re-announces rather than looking like the stale one never cleared. */
++  id: number;
++  /** The HTTP status, or null when the request never got one (network drop). */
++  status: number | null;
++  /** The server's machine-readable reason (`{"detail": {"error": …}}`), when it
++   *  sent one — 507 means three different things and they need three remedies. */
++  code?: string;
++  /** Developer-facing detail, shown as the second line. Never the whole story:
++   *  the notice's own copy says what it means for the user. */
++  message: string;
++};
++
++let current: WriteFailure | null = null;
++let seq = 0;
++const listeners = new Set<() => void>();
++
++function emit() {
++  for (const l of listeners) l();
++}
++
++/** Record a failed write. Anything can be thrown, so anything is accepted. */
++export function reportWriteFailure(error: unknown): void {
++  const status =
++    typeof error === "object" && error !== null && typeof (error as { status?: unknown }).status === "number"
++      ? (error as { status: number }).status
++      : null;
++  const code =
++    typeof error === "object" && error !== null && typeof (error as { code?: unknown }).code === "string"
++      ? (error as { code: string }).code
++      : undefined;
++  const message = error instanceof Error ? error.message : String(error);
++  seq += 1;
++  current = { id: seq, status, code, message };
++  emit();
++}
++
++export function dismissWriteFailure(): void {
++  if (current === null) return;
++  current = null;
++  emit();
++}
++
++export function currentWriteFailure(): WriteFailure | null {
++  return current;
++}
++
++export function subscribeWriteFailures(listener: () => void): () => void {
++  listeners.add(listener);
++  return () => listeners.delete(listener);
++}
++
++/** Tests only — the store outlives a single `render`, being module scope. */
++export function resetWriteFailures(): void {
++  current = null;
++  seq = 0;
++}
+diff --git a/web/src/pages/AppNewItem.tsx b/web/src/pages/AppNewItem.tsx
+index a7639221..b2045c8b 100644
+--- a/web/src/pages/AppNewItem.tsx
++++ b/web/src/pages/AppNewItem.tsx
+@@ -57,6 +57,8 @@ export function AppNewItem() {
+   const me = useCurrentUser();
+ 
+   const create = useMutation({
++    // Renders its own error under the form (`create.isError` below).
++    meta: { silentError: true },
+     mutationFn: (values: Record<string, unknown>) => api.createAppItem(slug, values),
+     onSuccess: (data) => {
+       // Refresh the dashboard list (so the new item shows when you return) and
+diff --git a/web/src/pages/RetrievalEvalPanel.tsx b/web/src/pages/RetrievalEvalPanel.tsx
+index f33e5138..094a8db4 100644
+--- a/web/src/pages/RetrievalEvalPanel.tsx
++++ b/web/src/pages/RetrievalEvalPanel.tsx
+@@ -107,6 +107,8 @@ export function RetrievalEvalPanel() {
+   const names = new Map((collections.data ?? []).map((c) => [c.resource_id, c.name]));
+ 
+   const fire = useMutation({
++    // Renders its own error in the panel (`fire.isError` below).
++    meta: { silentError: true },
+     mutationFn: async () => {
+       const label = `run-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`;
+       const resp = await apiFetch("/eval-job", {
+diff --git a/web/src/pages/WorkCalendarPage.tsx b/web/src/pages/WorkCalendarPage.tsx
+index fda78246..e8c6744b 100644
+--- a/web/src/pages/WorkCalendarPage.tsx
++++ b/web/src/pages/WorkCalendarPage.tsx
+@@ -47,6 +47,8 @@ export function WorkCalendarPage({ client = workCalendarApi }: { client?: WorkCa
+   }, [data]);
+ 
+   const save = useMutation({
++    // Renders its own error beside the Save button (`save.isError` below).
++    meta: { silentError: true },
+     mutationFn: (cal: WorkCalendar) => client.putCalendar(cal),
+     onSuccess: (cal) => qc.setQueryData(qk.workCalendar, cal),
+   });
+diff --git a/web/src/pages/investigation/AgentPanel.test.tsx b/web/src/pages/investigation/AgentPanel.test.tsx
+index 75df2e13..a7de09c5 100644
+--- a/web/src/pages/investigation/AgentPanel.test.tsx
++++ b/web/src/pages/investigation/AgentPanel.test.tsx
+@@ -3,10 +3,13 @@ import "@testing-library/jest-dom/vitest";
+ import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+ 
++import { MemoryRouter } from "react-router-dom";
++
+ import { api } from "../../api";
+ import { kbApi } from "../../api/kb";
+ import { DialogProvider } from "../../components/Dialog";
+ import type { AgentState } from "../../hooks/useAgent";
++import { translate } from "../../lib/i18n";
+ import { renderWithQuery } from "../../test/queryWrapper";
+ import { AgentPanel, CHAT_COLUMN_MAX_W } from "./AgentPanel";
+ 
+@@ -22,19 +25,23 @@ function stubAgent(): AgentState {
+   };
+ }
+ 
+-function renderPanel(uploadDir = "uploads") {
++function renderPanel(uploadDir = "uploads", agent: AgentState = stubAgent()) {
+   return renderWithQuery(
+-    <DialogProvider>
+-      <AgentPanel
+-        investigationId="it1"
+-        agent={stubAgent()}
+-        picker={[]}
+-        suggestions={[]}
+-        attachedPreset=""
+-        onAttachPreset={() => {}}
+-        uploadDir={uploadDir}
+-      />
+-    </DialogProvider>,
++    // The composer's refusal messages route the user to /my-resources (#692),
++    // so the panel renders real router links.
++    <MemoryRouter>
++      <DialogProvider>
++        <AgentPanel
++          investigationId="it1"
++          agent={agent}
++          picker={[]}
++          suggestions={[]}
++          attachedPreset=""
++          onAttachPreset={() => {}}
++          uploadDir={uploadDir}
++        />
++      </DialogProvider>
++    </MemoryRouter>,
+   );
+ }
+ 
+@@ -761,3 +768,43 @@ describe("AgentPanel env vars", () => {
+     expect(screen.queryByTestId("env-modal")).toBeNull(); // and it closes
+   });
+ });
++
++describe("AgentPanel — a quota refusal is reachable, not just readable (#692)", () => {
++  // #688 refuses outright at the limit, and that is only defensible because the
++  // refused person has somewhere to go. Both composer refusals named the page in
++  // flat text, so the person had to read the sentence, remember the name, and go
++  // hunt for it in the global-nav popover themselves.
++  it("makes the send refusal's remedy pressable", () => {
++    const agent = stubAgent();
++    renderPanel("uploads", {
++      ...agent,
++      log: { ...agent.log, error: translate("zh-TW", "chat.send.envFull") },
++    });
++    expect(screen.getByRole("link", { name: "我的資源" })).toHaveAttribute(
++      "href",
++      "/my-resources",
++    );
++  });
++
++  it("makes the dropped-attachment refusal's remedy pressable", async () => {
++    vi.spyOn(api, "uploadFile").mockRejectedValue(
++      Object.assign(new Error("507"), { status: 507, code: "user_quota_exceeded" }),
++    );
++    const { container } = renderPanel();
++    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
++    fireEvent.change(input, { target: { files: [new File(["x"], "big.bin")] } });
++
++    const hint = await screen.findByTestId("composer-hint");
++    expect(within(hint).getByRole("link", { name: "我的資源" })).toHaveAttribute(
++      "href",
++      "/my-resources",
++    );
++  });
++
++  it("leaves an ordinary failure as plain text — there is nothing to go and do", () => {
++    const agent = stubAgent();
++    renderPanel("uploads", { ...agent, log: { ...agent.log, error: "stream died" } });
++    expect(screen.getByText("stream died")).toBeInTheDocument();
++    expect(screen.queryByRole("link", { name: "我的資源" })).not.toBeInTheDocument();
++  });
++});
+diff --git a/web/src/pages/investigation/AgentPanel.tsx b/web/src/pages/investigation/AgentPanel.tsx
+index b8ae1d99..098e2bf9 100644
+--- a/web/src/pages/investigation/AgentPanel.tsx
++++ b/web/src/pages/investigation/AgentPanel.tsx
+@@ -36,6 +36,7 @@ import { modCombo } from "../../lib/platform";
+ import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
+ import { useStickToBottom } from "../../hooks/useStickToBottom";
+ import { ConnectionNotice } from "../../components/ConnectionNotice";
++import { ResourceLinkText } from "../../components/ResourceLinkText";
+ import { TurnStatus } from "../../components/TurnStatus";
+ import { turnsFromEntry } from "./agentLog";
+ import type { QuotaKind } from "../../lib/quotaFailure";
+@@ -201,6 +202,9 @@ export function AgentPanel({
+   const queueNote = othersTurn
+     ? `${log.streamingBy} 正在對話中。你現在送出的訊息會排在後面。`
+     : null;
++  // The strip under the composer says one thing at a time: what just happened to
++  // an attachment if anything did, otherwise why a send would queue.
++  const composerNote = composerHint ?? queueNote;
+   const dialog = useDialog();
+ 
+   // #38: "undo to here" on the user prompt at entry `i` — drop that turn
+@@ -594,13 +598,17 @@ export function AgentPanel({
+               fontSize: pxToRem(12),
+             }}
+           >
+-            {log.error}
++            {/* #692: when the refusal names /my-resources, that name is the way
++                there — a message that only TELLS you where to go leaves the
++                #688 "refuse outright" trade-off resting on a page you have to
++                go and find. */}
++            <ResourceLinkText text={log.error} />
+           </div>
+         )}
+         </div>
+       </div>
+ 
+-      {(composerHint ?? queueNote) && (
++      {composerNote && (
+         <div
+           data-testid="composer-hint"
+           role="status"
+@@ -610,7 +618,9 @@ export function AgentPanel({
+             color: "var(--text-paper-d)",
+           }}
+         >
+-          {composerHint ?? queueNote}
++          {/* #692: an attach refused for a resource limit names /my-resources —
++              render it so that name is the way there, not just a signpost. */}
++          <ResourceLinkText text={composerNote} />
+         </div>
+       )}
+ 
+diff --git a/web/src/pages/investigation/FileTree.test.tsx b/web/src/pages/investigation/FileTree.test.tsx
+index 9ddb6b08..d262770d 100644
+--- a/web/src/pages/investigation/FileTree.test.tsx
++++ b/web/src/pages/investigation/FileTree.test.tsx
+@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
+ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+ import userEvent from "@testing-library/user-event";
+ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { MemoryRouter } from "react-router-dom";
+ 
+ import { type FileService, FileServiceProvider, investigationFileService } from "../../api/fileService";
+ import type { FileInfo } from "../../api/types";
+@@ -350,11 +351,15 @@ describe("<FileTree /> upload target", () => {
+   }
+   function renderWith(svc: FileService, files: FileInfo[]) {
+     render(
+-      <FileServiceProvider value={svc}>
+-        <DialogProvider>
+-          <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} />
+-        </DialogProvider>
+-      </FileServiceProvider>,
++      // An upload refused by a resource limit routes the user to /my-resources
++      // (#692), so the tree renders a real router link.
++      <MemoryRouter>
++        <FileServiceProvider value={svc}>
++          <DialogProvider>
++            <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} />
++          </DialogProvider>
++        </FileServiceProvider>
++      </MemoryRouter>,
+     );
+   }
+   const filesInput = () =>
+@@ -383,8 +388,6 @@ describe("<FileTree /> upload target", () => {
+    */
+   it("does not blame the size limit for a failure that has nothing to do with size", async () => {
+     const user = userEvent.setup();
+-    const alertSpy = vi.fn();
+-    vi.stubGlobal("alert", alertSpy);
+     const writeFile = vi.fn(async () => {
+       throw Object.assign(new Error("403"), { status: 403 });
+     });
+@@ -392,9 +395,8 @@ describe("<FileTree /> upload target", () => {
+     await user.click(screen.getByText("mydir"));
+     fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
+ 
+-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+-    expect(String(alertSpy.mock.calls[0]![0])).not.toContain("大小上限");
+-    vi.unstubAllGlobals();
++    const notice = await screen.findByTestId("upload-problems");
++    expect(notice).not.toHaveTextContent("大小上限");
+   });
+ 
+   // Resolving an inconclusive failure against the file list now lives at the
+@@ -403,8 +405,6 @@ describe("<FileTree /> upload target", () => {
+   // is only to report it without inventing a reason.
+   it("still reports a cut connection that really did lose the file", async () => {
+     const user = userEvent.setup();
+-    const alertSpy = vi.fn();
+-    vi.stubGlobal("alert", alertSpy);
+     const writeFile = vi.fn(async () => {
+       throw Object.assign(new Error("network error"), { status: 0 });
+     });
+@@ -413,10 +413,75 @@ describe("<FileTree /> upload target", () => {
+     await user.click(screen.getByText("mydir"));
+     fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
+ 
+-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
++    expect(await screen.findByTestId("upload-problems")).toHaveTextContent("up.md");
++  });
++
++  /**
++   * #692: the report used to be an OS `alert()`. An alert interrupts, cannot be
++   * re-read once dismissed, is the one piece of UI that cannot say which part of
++   * the app it belongs to — and it cannot hold a link, which is what a refusal
++   * pointing at /my-resources needs. The composer stopped using one for exactly
++   * this in #245; the tree never followed.
++   */
++  it("reports a refusal in the tree, with the remedy pressable, and no OS alert", async () => {
++    const user = userEvent.setup();
++    const alertSpy = vi.fn();
++    vi.stubGlobal("alert", alertSpy);
++    const writeFile = vi.fn(async () => {
++      throw Object.assign(new Error("507"), { status: 507, code: "user_quota_exceeded" });
++    });
++    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
++    await user.click(screen.getByText("mydir"));
++    fireEvent.change(filesInput(), { target: { files: [new File(["x"], "up.md")] } });
++
++    const notice = await screen.findByTestId("upload-problems");
++    expect(notice).toHaveTextContent("up.md");
++    expect(within(notice).getByRole("link", { name: "我的資源" })).toHaveAttribute(
++      "href",
++      "/my-resources",
++    );
++    expect(alertSpy).not.toHaveBeenCalled();
+     vi.unstubAllGlobals();
+   });
+ 
++  it("names every file that failed, and stays until dismissed", async () => {
++    const user = userEvent.setup();
++    const writeFile = vi.fn(async (path: string) => {
++      if (path !== "/mydir/ok.md") throw Object.assign(new Error("507"), { status: 507 });
++    });
++    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
++    await user.click(screen.getByText("mydir"));
++    fireEvent.change(filesInput(), {
++      target: {
++        files: [new File(["x"], "one.md"), new File(["y"], "ok.md"), new File(["z"], "two.md")],
++      },
++    });
++
++    const notice = await screen.findByTestId("upload-problems");
++    await waitFor(() => expect(notice).toHaveTextContent("two.md"));
++    expect(notice).toHaveTextContent("one.md");
++    expect(notice).not.toHaveTextContent("ok.md"); // that one landed
++
++    await user.click(within(notice).getByRole("button", { name: "知道了" }));
++    expect(screen.queryByTestId("upload-problems")).toBeNull();
++  });
++
++  it("a fresh upload replaces the previous report rather than piling up", async () => {
++    const user = userEvent.setup();
++    let fail = true;
++    const writeFile = vi.fn(async () => {
++      if (fail) throw Object.assign(new Error("507"), { status: 507 });
++    });
++    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
++    await user.click(screen.getByText("mydir"));
++    fireEvent.change(filesInput(), { target: { files: [new File(["x"], "bad.md")] } });
++    await screen.findByTestId("upload-problems");
++
++    fail = false;
++    fireEvent.change(filesInput(), { target: { files: [new File(["y"], "good.md")] } });
++    await waitFor(() => expect(screen.queryByTestId("upload-problems")).toBeNull());
++  });
++
+   it("a folder's context menu uploads files into that folder", async () => {
+     const user = userEvent.setup();
+     const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+@@ -447,9 +512,7 @@ describe("<FileTree /> upload target", () => {
+     expect(writeFile.mock.calls[0]![0]).toBe("/big.bin");
+   });
+ 
+-  it("alerts and keeps going when the server rejects an upload (#219)", async () => {
+-    const alertSpy = vi.fn();
+-    vi.stubGlobal("alert", alertSpy);
++  it("reports and keeps going when the server rejects an upload (#219)", async () => {
+     const writeFile = vi.fn(async () => {
+       // A real rejection carries its STATUS (the client throws HttpError); a
+       // message that merely reads "413" is not a 413, and the size message is
+@@ -459,17 +522,13 @@ describe("<FileTree /> upload target", () => {
+     renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
+     const file = new File(["x"], "up.md", { type: "text/markdown" });
+     fireEvent.change(filesInput(), { target: { files: [file] } });
+-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+-    expect(alertSpy.mock.calls[0]![0]).toMatch(/大小上限/);
+-    vi.unstubAllGlobals();
++    expect(await screen.findByTestId("upload-problems")).toHaveTextContent("大小上限");
+   });
+ 
+   it("a full workspace (507) tells the user to delete files, in their language (#538)", async () => {
+     // The out-of-space message was hardcoded English and said only that the
+     // workspace was out of space. Being full is the one upload failure the user
+     // can actually fix, so the message has to name the remedy — and be readable.
+-    const alertSpy = vi.fn();
+-    vi.stubGlobal("alert", alertSpy);
+     const writeFile = vi.fn(async () => {
+       throw Object.assign(new Error("507"), { status: 507 });
+     });
+@@ -477,12 +536,13 @@ describe("<FileTree /> upload target", () => {
+     fireEvent.change(filesInput(), {
+       target: { files: [new File(["x"], "up.md", { type: "text/markdown" })] },
+     });
+-    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+-    const msg = alertSpy.mock.calls[0]![0] as string;
+-    expect(msg).toContain("up.md");
+-    expect(msg).toContain("空間已滿");
+-    expect(msg).toContain("刪除");
+-    vi.unstubAllGlobals();
++    const notice = await screen.findByTestId("upload-problems");
++    expect(notice).toHaveTextContent("up.md");
++    expect(notice).toHaveTextContent("空間已滿");
++    expect(notice).toHaveTextContent("刪除");
++    // This item's own workspace: the files to delete are right here, so there is
++    // nowhere else to send them.
++    expect(within(notice).queryByRole("link")).toBeNull();
+   });
+ });
+ 
+diff --git a/web/src/pages/investigation/FileTree.tsx b/web/src/pages/investigation/FileTree.tsx
+index ab8989d8..203b2035 100644
+--- a/web/src/pages/investigation/FileTree.tsx
++++ b/web/src/pages/investigation/FileTree.tsx
+@@ -11,6 +11,7 @@ import { type FileCaps, type FileService, useOptionalFileService } from "../../a
+ import type { FileInfo } from "../../api/types";
+ import { useOptionalDialog } from "../../components/Dialog";
+ import { Icon } from "../../components/Icon";
++import { ResourceLinkText } from "../../components/ResourceLinkText";
+ import { usePersistentSet } from "../../hooks/usePersistentSet";
+ import { useT } from "../../lib/i18n";
+ import { buildFileTree, pruneTree, type TreeNode } from "./fileTree";
+@@ -166,6 +167,10 @@ export function FileTree({
+   // A force-open (filter) ancestor counts as expanded for navigation order too.
+   const order = visibleOrder(tree, (p) => collapsed.has(p) && !expand.has(p));
+   const [rootDrop, setRootDrop] = useState(false);
++  // #692: what went wrong with the last upload, one line per file, shown in the
++  // tree until dismissed — see the note on the notice below for why this stopped
++  // being an alert().
++  const [uploadProblems, setUploadProblems] = useState<string[]>([]);
+   const [uploadMenu, setUploadMenu] = useState(false);
+   const fileInputRef = useRef<HTMLInputElement>(null);
+   // Set by the folder context menu just before it opens the file picker, so the
+@@ -209,6 +214,11 @@ export function FileTree({
+   const upload = async (fileList: FileList | File[] | null, targetDir: string = createDir) => {
+     if (!fileList || fileList.length === 0) return;
+     const existing = new Set(files.map((f) => f.path));
++    // A new attempt reports on itself: the previous report described files the
++    // user has already dealt with (or re-dropped), so keeping it would leave
++    // them reading stale failures next to fresh ones.
++    setUploadProblems([]);
++    const problems: string[] = [];
+     let firstPath: string | null = null;
+     for (const f of Array.from(fileList)) {
+       // #219: no client-side size cap — the upload streams to a blob store, so
+@@ -241,7 +251,12 @@ export function FileTree({
+         const status = (err as { status?: number }).status;
+         const code = (err as { code?: string }).code;
+         const key = uploadFailureKey(status, code);
+-        alert(
++        // #692: reported in the tree rather than through an OS alert(). An alert
++        // interrupts, cannot be re-read once dismissed, cannot say which part of
++        // the app it belongs to — and cannot hold a link, which is precisely
++        // what a refusal that points at /my-resources needs. Dropping ten files
++        // also meant ten modal dialogs to click through, one at a time.
++        problems.push(
+           key === "workspace.upload.error"
+             ? t(key, {
+                 name: f.name,
+@@ -253,6 +268,7 @@ export function FileTree({
+       }
+       firstPath ??= path;
+     }
++    setUploadProblems(problems);
+     refresh();
+     if (firstPath) onOpen(firstPath, { preview: false });
+   };
+@@ -631,6 +647,40 @@ export function FileTree({
+         />
+       </div>
+ 
++      {/* #692: what the last upload refused, next to the tree it was dropped on
++          — re-readable, one line per file, and (when the remedy is another page)
++          carrying the link that an alert() could never hold. */}
++      {uploadProblems.length > 0 && (
++        <div
++          data-testid="upload-problems"
++          role="status"
++          style={{
++            margin: "0 10px 6px 14px",
++            padding: 8,
++            border: "1px solid var(--err)",
++            borderRadius: "var(--radius-card)",
++            color: "var(--err)",
++            fontSize: pxToRem(11),
++            display: "flex",
++            flexDirection: "column",
++            gap: 4,
++          }}
++        >
++          {uploadProblems.map((problem, i) => (
++            <span key={i}>
++              <ResourceLinkText text={problem} />
++            </span>
++          ))}
++          <button
++            type="button"
++            onClick={() => setUploadProblems([])}
++            style={{ alignSelf: "flex-start", color: "var(--text-paper-d)" }}
++          >
++            {t("workspace.upload.dismiss")}
++          </button>
++        </div>
++      )}
++
+       {/* Tree body — also the root drop zone (move/copy to root). Only the
+           genuine empty area highlights, so dragging a file no longer tints
+           the whole tree: we ignore dragover that bubbled up from a row. */}
+diff --git a/web/src/pages/investigation/TerminalPane.test.tsx b/web/src/pages/investigation/TerminalPane.test.tsx
+index 6a653b4e..30b9e8db 100644
+--- a/web/src/pages/investigation/TerminalPane.test.tsx
++++ b/web/src/pages/investigation/TerminalPane.test.tsx
+@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
+ import { cleanup, render as rtlRender, screen } from "@testing-library/react";
+ import userEvent from "@testing-library/user-event";
+ import { afterEach, describe, expect, it, vi } from "vitest";
++import { MemoryRouter } from "react-router-dom";
+ 
+ import { QueryWrap } from "../../test/queryWrapper";
+ import { TerminalPane } from "./TerminalPane";
+@@ -16,7 +17,15 @@ vi.mock("../../hooks/useRefreshFiles", () => ({ useRefreshFiles: () => () => {}
+ const execShell = vi.fn();
+ vi.mock("../../api", () => ({ api: { execShell: (...a: unknown[]) => execShell(...a) } }));
+ 
+-const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: QueryWrap });
++// A quota refusal routes the user to /my-resources (#692), so the pane renders
++// a real router link.
++const Wrap = ({ children }: { children: React.ReactNode }) => (
++  <MemoryRouter>
++    <QueryWrap>{children}</QueryWrap>
++  </MemoryRouter>
++);
++
++const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: Wrap });
+ 
+ describe("TerminalPane empty-state help (#171)", () => {
+   afterEach(cleanup);
+@@ -57,3 +66,40 @@ describe("TerminalPane quota refusals", () => {
+     expect(await screen.findByText(/boom/)).toBeInTheDocument();
+   });
+ });
++
++describe("TerminalPane quota refusals are reachable (#692)", () => {
++  afterEach(cleanup);
++
++  // The refusal already said where to go. Saying it in a scrollback line the
++  // user cannot press means the remedy is a name they have to go and find in
++  // the global-nav popover — which is the whole gap #692 is about.
++  it.each([["sandbox_quota_exceeded"], ["user_quota_exceeded"]])(
++    "makes the remedy in the %s message pressable",
++    async (code) => {
++      execShell.mockRejectedValueOnce(
++        Object.assign(new Error("exec failed: 507"), { status: 507, code }),
++      );
++      render(<TerminalPane investigationId="item:1" />);
++      await userEvent.type(screen.getByRole("textbox"), "ls{Enter}");
++      expect(await screen.findByRole("link", { name: "我的資源" })).toHaveAttribute(
++        "href",
++        "/my-resources",
++      );
++    },
++  );
++
++  // This item's workspace is full: the files to delete are right here, so there
++  // is nothing on /my-resources to do and no link to offer.
++  it("offers no link when the fix is in this workspace", async () => {
++    execShell.mockRejectedValueOnce(
++      Object.assign(new Error("exec failed: 507"), {
++        status: 507,
++        code: "workspace_quota_exceeded",
++      }),
++    );
++    render(<TerminalPane investigationId="item:1" />);
++    await userEvent.type(screen.getByRole("textbox"), "ls{Enter}");
++    expect(await screen.findByText(/工作區空間已滿/)).toBeInTheDocument();
++    expect(screen.queryByRole("link")).not.toBeInTheDocument();
++  });
++});
+diff --git a/web/src/pages/investigation/TerminalPane.tsx b/web/src/pages/investigation/TerminalPane.tsx
+index 601fb112..bbcd0aea 100644
+--- a/web/src/pages/investigation/TerminalPane.tsx
++++ b/web/src/pages/investigation/TerminalPane.tsx
+@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
+ import { api } from "../../api";
+ import type { ExecResult } from "../../api/types";
+ import { Icon } from "../../components/Icon";
++import { ResourceLinkText } from "../../components/ResourceLinkText";
+ import { useRefreshFiles } from "../../hooks/useRefreshFiles";
+ import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+ import { useT } from "../../lib/i18n";
+@@ -254,8 +255,13 @@ function EntryView({ entry }: { entry: Entry }) {
+       {!isRunning && !isError && "stderr" in entry.result && entry.result.stderr && (
+         <pre style={{ ...preStyle, color: "var(--err)" }}>{entry.result.stderr}</pre>
+       )}
++      {/* #692: a refusal that names /my-resources gets that name rendered as
++          the link to it. The line stays where it happened, in scrollback next
++          to the command that was refused — no separate banner to correlate. */}
+       {isError && "message" in entry.result && (
+-        <pre style={{ ...preStyle, color: "var(--err)" }}>{entry.result.message}</pre>
++        <pre style={{ ...preStyle, color: "var(--err)" }}>
++          <ResourceLinkText text={entry.result.message} />
++        </pre>
+       )}
+     </div>
+   );
+diff --git a/web/src/pages/investigation/WorkspaceShell.access.test.tsx b/web/src/pages/investigation/WorkspaceShell.access.test.tsx
+index 1f99d467..88af2952 100644
+--- a/web/src/pages/investigation/WorkspaceShell.access.test.tsx
++++ b/web/src/pages/investigation/WorkspaceShell.access.test.tsx
+@@ -13,9 +13,11 @@ import { WorkspaceShell } from "./WorkspaceShell";
+ // stubbed down to a marker. `ActivityBar`, the thing we assert on, is internal
+ // to WorkspaceShell and only mounts inside the `read_content` branch.
+ const chatReadOnly = vi.fn();
++const chatProps = vi.fn();
+ vi.mock("../../components/ItemChatShell", () => ({
+-  ItemChatShell: ({ readOnly }: { readOnly?: boolean }) => {
+-    chatReadOnly(readOnly);
++  ItemChatShell: (props: { readOnly?: boolean }) => {
++    chatReadOnly(props.readOnly);
++    chatProps(props);
+     return <div data-testid="chat" />;
+   },
+ }));
+@@ -160,3 +162,89 @@ describe("WorkspaceShell — who gets the IDE column", () => {
+     expect(chatReadOnly).toHaveBeenLastCalledWith(true);
+   });
+ });
++
++// The item's own FIELDS (env vars, tool/skill prefs, the attached preset) are
++// stored by a PATCH the backend gates on `write_meta`. The shell handed the save
++// callbacks down unconditionally, so a Participant got the Env button, typed
++// their keys in, pressed Save — and the 403 was dropped on the floor with the
++// panel closing as if it had worked. The affordance now follows the verb.
++describe("WorkspaceShell — who may edit the item's fields", () => {
++  /** A Participant on someone else's item: may talk to the agent, may not
++   *  store a field on it. */
++  const participantItem = {
++    ...item,
++    permission: {
++      visibility: "restricted",
++      read_meta: ["user:root"],
++      read_chat: ["user:root"],
++      read_content: ["user:root"],
++      converse: ["user:root"],
++    },
++  } as unknown as AppItem;
++
++  function openAs(withItem: AppItem) {
++    return renderWithQuery(
++      <MemoryRouter>
++        <WorkspaceShell manifest={manifest} item={withItem} files={[]} />
++      </MemoryRouter>,
++    );
++  }
++
++  it("withholds the env-var save from a Participant (no Env button, no silent 403)", async () => {
++    openAs(participantItem);
++    // Wait on the DENIED verb, not a granted one: every verb reads true until
++    // identity resolves, so asserting too early passes for the wrong reason.
++    await waitFor(() =>
++      expect(chatProps).toHaveBeenLastCalledWith(
++        expect.objectContaining({ onSaveEnvVars: undefined }),
++      ),
++    );
++    // Still a full participant otherwise — this is a narrow gate, not a lockout.
++    expect(chatReadOnly).toHaveBeenLastCalledWith(false);
++  });
++
++  it("hands the same Participant's saves to the owner", async () => {
++    openAs({ ...participantItem, created_by: "root", owner: "root" } as unknown as AppItem);
++    await waitFor(() => expect(screen.getByTestId("chat")).toBeInTheDocument());
++    expect(chatProps).toHaveBeenLastCalledWith(
++      expect.objectContaining({ onSaveEnvVars: expect.any(Function) }),
++    );
++  });
++
++  // The top bar's own two writers — the details gear and the inline domain-field
++  // chips — are that same PATCH wearing different clothes.
++  it("hides the details gear from a Participant and keeps it for the owner", async () => {
++    openAs(participantItem);
++    await waitFor(() => expect(screen.getByTestId("page-item")).toBeInTheDocument());
++    expect(screen.queryByLabelText("Edit item details")).not.toBeInTheDocument();
++
++    cleanup();
++    openAs({ ...participantItem, created_by: "root", owner: "root" } as unknown as AppItem);
++    expect(await screen.findByLabelText("Edit item details")).toBeInTheDocument();
++  });
++
++  // The env panel was the reported one, but the tool + skill pickers ride the
++  // same PATCH and were offered on the same terms.
++  it("withholds the tool and skill pref saves too — they are the same PATCH", async () => {
++    openAs(participantItem);
++    await waitFor(() =>
++      expect(chatProps).toHaveBeenLastCalledWith(
++        expect.objectContaining({ onSaveToolPrefs: undefined, onSaveSkillPrefs: undefined }),
++      ),
++    );
++  });
++
++  // The exception, pinned so it reads as a decision rather than an oversight:
++  // the preset lives in the model dropdown alongside the VIEWER's own reasoning
++  // / retrieval settings, which write_meta does not govern. Hiding it to protect
++  // one field would take those away too, so it stays and a failed pick is caught
++  // by the write-failure notice instead.
++  it("keeps the model preset picker — it also holds settings that are the viewer's own", async () => {
++    openAs(participantItem);
++    await waitFor(() =>
++      expect(chatProps).toHaveBeenLastCalledWith(
++        expect.objectContaining({ onAttachPreset: expect.any(Function) }),
++      ),
++    );
++  });
++});
+diff --git a/web/src/pages/investigation/WorkspaceShell.tsx b/web/src/pages/investigation/WorkspaceShell.tsx
+index 76d47f6f..a06caf04 100644
+--- a/web/src/pages/investigation/WorkspaceShell.tsx
++++ b/web/src/pages/investigation/WorkspaceShell.tsx
+@@ -232,11 +232,17 @@ function ShellBody({
+   // only the user id, so an admin (who the backend lets in) lost the entire
+   // workspace to the `private` branch with nothing on screen to explain it.
+   // read_chat gates the chat column below (a locked pane, not a mounted shell
+-  // streaming 403s); read_content the IDE column; converse the composer.
++  // streaming 403s); read_content the IDE column; converse the composer;
++  // write_meta the controls that STORE a field on the item (env vars, tool /
++  // skill prefs, the attached preset — all one PATCH, all one verb). Withholding
++  // the callback is how that last one is expressed: the header already treats an
++  // absent `onSave*` as "this surface cannot persist", so there is no second rule
++  // about when to draw the button.
+   const {
+     canReadChat: _canReadChat,
+     canSeeFiles: _canSeeFiles,
+     canConverse: _canConverse,
++    canWriteMeta: _canWriteMeta,
+   } = useItemAccess(item);
+ 
+   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
+@@ -569,7 +575,7 @@ function ShellBody({
+         <TopBar
+           item={item}
+           manifest={manifest}
+-          onEditField={setField}
++          onEditField={_canWriteMeta ? setField : undefined}
+           isNarrow={isNarrow}
+           ideCollapsed={ideCollapsed}
+           onToggleIde={toggleIde}
+@@ -578,7 +584,7 @@ function ShellBody({
+           chatCollapsed={chatCollapsed}
+           onToggleChat={toggleChat}
+           onCommandPalette={() => setPaletteOpen(true)}
+-          onEdit={() => setEditOpen(true)}
++          onEdit={_canWriteMeta ? () => setEditOpen(true) : undefined}
+         />
+         {editOpen && (
+           <EditItemModal
+@@ -808,11 +814,22 @@ function ShellBody({
+               appIcon={manifest.icon}
+               appColor={manifest.color}
+               attachedPreset={String(item.attached_preset ?? "")}
++              // NOT gated, deliberately. The model dropdown that carries this
++              // also carries the viewer's OWN settings — reasoning effort, KB
++              // search depth — which `write_meta` has no say over, so hiding it
++              // would confiscate those to protect one field inside it. A viewer
++              // who picks a preset here gets the write-failure notice instead.
+               onAttachPreset={(preset) => setField("attached_preset", preset)}
+-              onSaveToolPrefs={(prefs) => setField("attached_tool_prefs", prefs)}
+-              onSaveSkillPrefs={(prefs) => setField("attached_skill_prefs", prefs)}
++              onSaveToolPrefs={
++                _canWriteMeta ? (prefs) => setField("attached_tool_prefs", prefs) : undefined
++              }
++              onSaveSkillPrefs={
++                _canWriteMeta ? (prefs) => setField("attached_skill_prefs", prefs) : undefined
++              }
+               envVars={(item as unknown as { env_vars?: Record<string, string> }).env_vars ?? {}}
+-              onSaveEnvVars={(envVars) => setField("env_vars", envVars)}
++              onSaveEnvVars={
++                _canWriteMeta ? (envVars) => setField("env_vars", envVars) : undefined
++              }
+             />
+             )}
+           </div>
+@@ -953,7 +970,10 @@ export function TopBar({
+ }: {
+   item: AppItem;
+   manifest: AppManifest;
+-  onEditField: (name: string, value: string) => void;
++  /** Commit one inline domain-field edit. Absent → the chips render read-only
++   * (`DomainFields` already treats it that way), which is what a viewer without
++   * `write_meta` must see. */
++  onEditField?: (name: string, value: string) => void;
+   /** #fe-responsive: the SHELL decides this, from its own measured width — the
+    * bar used to ask the viewport itself, which over-reports by the width of
+    * whatever sits beside the shell (a chat-first App's 240px rail). */
+@@ -969,7 +989,10 @@ export function TopBar({
+   chatCollapsed: boolean;
+   onToggleChat: () => void;
+   onCommandPalette: () => void;
+-  onEdit: () => void;
++  /** Open the details form. Absent → the caller may not store fields on this
++   * item (`write_meta`), so the gear is not drawn — the same "no callback, no
++   * affordance" rule `onEditField` above already follows. */
++  onEdit?: () => void;
+ }) {
+   // Owned here rather than in the roster popover below — see the `onManage` note.
+   const [sharing, setSharing] = useState(false);
+@@ -1048,15 +1071,17 @@ export function TopBar({
+           onEditField={onEditField}
+         />
+         <IdChip resourceId={item.resource_id} />
+-        <button
+-          type="button"
+-          onClick={onEdit}
+-          title="Edit item details"
+-          aria-label="Edit item details"
+-          style={{ color: "var(--text-paper-d)", display: "inline-flex", alignItems: "center" }}
+-        >
+-          <Icon name="settings" size={13} />
+-        </button>
++        {onEdit && (
++          <button
++            type="button"
++            onClick={onEdit}
++            title="Edit item details"
++            aria-label="Edit item details"
++            style={{ color: "var(--text-paper-d)", display: "inline-flex", alignItems: "center" }}
++          >
++            <Icon name="settings" size={13} />
++          </button>
++        )}
+       </div>
+       <span style={{ flex: 1 }} />
+ 
+diff --git a/web/src/pages/kb/QualityRubricEditor.tsx b/web/src/pages/kb/QualityRubricEditor.tsx
+index 6ae69ead..f5bbd7a5 100644
+--- a/web/src/pages/kb/QualityRubricEditor.tsx
++++ b/web/src/pages/kb/QualityRubricEditor.tsx
+@@ -26,6 +26,8 @@ export function QualityRubricEditor({
+   useEffect(() => setDraft(rubric), [rubric]);
+ 
+   const saveMut = useMutation({
++    // Renders its own error in the editor (`saveMut.isError` below).
++    meta: { silentError: true },
+     mutationFn: () => client.updateCollection(collectionId, { quality_rubric: draft }),
+     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
+   });
+diff --git a/web/src/pages/kb/TuneParsingModal.tsx b/web/src/pages/kb/TuneParsingModal.tsx
+index 36a8a131..17d12437 100644
+--- a/web/src/pages/kb/TuneParsingModal.tsx
++++ b/web/src/pages/kb/TuneParsingModal.tsx
+@@ -67,6 +67,8 @@ export function TuneParsingModal({
+   const [answers, setAnswers] = useState<{ before?: AnswerState; after?: AnswerState }>({});
+ 
+   const probeMut = useMutation({
++    // Renders its own error in the modal (`probeMut.isError` below).
++    meta: { silentError: true },
+     mutationFn: (withGuidance: boolean) =>
+       client.probeFindability({
+         doc_id: docId,
+diff --git a/web/src/pages/kb/WikiCorrectionDialog.tsx b/web/src/pages/kb/WikiCorrectionDialog.tsx
+index 82df7d8b..4f22fc9b 100644
+--- a/web/src/pages/kb/WikiCorrectionDialog.tsx
++++ b/web/src/pages/kb/WikiCorrectionDialog.tsx
+@@ -73,6 +73,8 @@ export function WikiCorrectionDialog({
+   });
+ 
+   const submitMut = useMutation({
++    // Renders its own error in the drawer (`submitMut.isError` below).
++    meta: { silentError: true },
+     mutationFn: () =>
+       client.submitWikiCorrection(collectionId, {
+         instruction: instruction.trim(),
+diff --git a/web/src/styles/chat-rail.css b/web/src/styles/chat-rail.css
+index 5423e493..37d02748 100644
+--- a/web/src/styles/chat-rail.css
++++ b/web/src/styles/chat-rail.css
+@@ -199,7 +199,9 @@
+ }
+ .chat-rail__item {
+   display: flex;
+-  align-items: center;
++  flex-direction: column;
++  justify-content: center;
++  gap: 1px;
+   padding: var(--space-8);
+   border-radius: var(--radius-card);
+   color: var(--text-paper);
+@@ -213,14 +215,18 @@
+   text-overflow: ellipsis;
+   white-space: nowrap;
+ }
+-.chat-rail__shared {
+-  flex: 0 0 auto;
+-  margin-left: var(--space-4);
+-  padding: 0 var(--space-4);
+-  border-radius: var(--radius-chip);
+-  background: var(--paper-3);
++/* Who put this chat in my rail (shared-with-me rows only). Sits under the title
++   as a quiet second line — it identifies the row, it isn't a heading. */
++.chat-rail__item-by {
++  display: flex;
++  align-items: center;
++  gap: var(--space-4);
++  min-width: 0;
++  overflow: hidden;
++  white-space: nowrap;
+   color: var(--text-paper-d);
+   font-size: var(--text-xs);
++  font-weight: 400; /* the active row bolds its title; this line stays quiet */
+ }
+ .chat-rail__item:hover {
+   background: var(--paper-3);
