@@ -108,6 +108,8 @@ day_of_month: hidden
 #   flag:      `auto` (the schedule decides) or `manual` (you decide).
 #   anchor:    a `ref` field whose target supplies the lower bound.
 #   assignee:  who does the work; records sharing a value share a queue.
+# `span`, `duration` and `flag` are REQUIRED — leave any of them out and the
+# whole block is ignored, so Recalculate simply never appears.
 schedule:
   span: span
   duration: exp_days

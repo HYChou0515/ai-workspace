@@ -181,12 +181,24 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   const canWrite = props.canWrite !== false; // omitted ≡ writable (§E)
   const renderer = resolveViewRenderer(spec.view);
   const { Component } = renderer;
-  const showEmpty = entities.length === 0 && !renderer.ownsEmptyState;
+  // #698 — the kind declares whether it draws entity records; the parser no
+  // longer decides. A kind that needs one and wasn't given one is a MALFORMED
+  // view, so say so — it used to fall out of the parser as `null` and silently
+  // become a raw YAML tree, which reads as "this file is not a view".
+  const missingEntity = !!renderer.needsEntity && !spec.entity;
+  // Entity-shaped chrome keys off whether this VIEW names an entity, not off
+  // whether the kind requires one. The container fetches from `spec.entity`
+  // (AiYamlRenderer), so a kind without `needsEntity` whose file still names an
+  // `entity:` does get records — gating on `needsEntity` suppressed the
+  // schema-missing warning for exactly that view, and claimed in the docs that
+  // its entity props were empty when they were not.
+  const hasEntity = !!spec.entity;
+  const showEmpty = hasEntity && entities.length === 0 && !renderer.ownsEmptyState;
   return (
     <div className="ev-panel">
       <div className="ev-panel__head">
         <h3 className="ev-panel__title">
-          {spec.title ?? spec.entity}
+          {spec.title || spec.entity || spec.view}
           {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
         </h3>
         <div className="ev-panel__actions">
@@ -205,7 +217,11 @@ export function EntityViewBody(props: EntityViewBodyProps) {
       </div>
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
-      {schemaMissing && (
+      {/* Only a view that NAMES an entity can be missing that entity's schema.
+          A kind drawing a workspace file names none, so this used to render as
+          "No schema for  — showing raw fields", with an empty name, above a
+          perfectly good view. */}
+      {schemaMissing && hasEntity && (
         <div role="status" className="ev-banner">
           <span className="ev-banner__icon" aria-hidden>
             ⚠
@@ -224,7 +240,16 @@ export function EntityViewBody(props: EntityViewBodyProps) {
           </div>
         </div>
       )}
-      {showEmpty ? (
+      {missingEntity ? (
+        <div role="status" className="ev-banner">
+          <span className="ev-banner__icon" aria-hidden>
+            ⚠
+          </span>
+          <div className="ev-banner__body">
+            The <code>{spec.view}</code> view needs an <code>entity:</code> naming which records to draw.
+          </div>
+        </div>
+      ) : showEmpty ? (
         <div className="ev-empty">
           <span className="ev-empty__icon" aria-hidden>
             ◇
