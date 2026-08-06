@@ -8,9 +8,11 @@ permission rule that drifts is a leak.
 
 from __future__ import annotations
 
+import asyncio
+
 from specstar import QB, SpecStar
 
-from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.api import ScriptedAgentRunner, create_app, kb_routes
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
@@ -18,7 +20,14 @@ from workspace_app.kb.graph.link import reconcile_vocabulary
 from workspace_app.kb.graph.normalize import norm_attribute, norm_surface
 from workspace_app.perm import Permission
 from workspace_app.resources import make_spec
-from workspace_app.resources.graph import GraphClaim, GraphEntity, GraphMention, mention_id
+from workspace_app.resources.graph import (
+    GraphClaim,
+    GraphEntity,
+    GraphEntityLink,
+    GraphMention,
+    link_id,
+    mention_id,
+)
 from workspace_app.resources.kb import EMBED_DIM, Collection
 from workspace_app.sandbox.mock import MockSandbox
 
@@ -313,3 +322,98 @@ def test_the_entity_response_reads_the_statement_table_from_both_ends():
     assert held["attribute"] == "recipe"
     assert held["source_doc_id"] == "deck-A"
     assert body["claims"] == []  # the recipe itself has no attributes stated
+
+
+def _pending_pair(spec: SpecStar) -> tuple[str, str]:
+    """Two identities with a merge proposal waiting between them."""
+    row = next(iter(spec.get_resource_manager(Collection).list_resources(QB.all().build())))
+    collection_id = row.info.resource_id  # ty: ignore[unresolved-attribute]
+    mrm = spec.get_resource_manager(GraphMention)
+    with mrm.using("bob"):
+        mrm.create(
+            GraphMention(
+                collection_id=collection_id,
+                source_doc_id="deck-C",
+                surface="Reflow Oven",
+                norm_surface=norm_surface("Reflow Oven"),
+                kind="機台",
+                norm_kind=norm_surface("機台"),
+                occurrences=1,
+                chunk_ids=["deck-C#0"],
+                collection_visibility="public",
+                collection_created_by="bob",
+                doc_visibility="public",
+            ),
+            resource_id=mention_id("deck-C", "Reflow Oven"),
+        )
+    reconcile_vocabulary(spec, llm=None)
+    host, other = _entity_id(spec, "回焊爐"), _entity_id(spec, "Reflow Oven")
+    mid = mention_id("deck-C", "Reflow Oven")
+    lrm = spec.get_resource_manager(GraphEntityLink)
+    with lrm.using("bob"):
+        lrm.create(
+            GraphEntityLink(
+                entity_id=host,
+                mention_id=mid,
+                basis="resembles",
+                evidence="the machine that reflows solder",
+                state="pending",
+                proposed_from=other,
+                collection_ids=[collection_id],
+            ),
+            resource_id=link_id(host, mid, "resembles", other),
+        )
+    return host, other
+
+
+def _loop_spy(recorded: list[bool]):
+    def spy(*_args: object, **_kwargs: object) -> None:
+        # A thread that has a running loop IS the loop's thread. Blocking work
+        # there stops every other request on the pod, which is the whole reason
+        # this file already reaches for `asyncio.to_thread` a dozen times.
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            recorded.append(False)
+        else:
+            recorded.append(True)
+
+    return spy
+
+
+def test_accepting_a_merge_does_not_block_the_event_loop(monkeypatch) -> None:
+    """#697 P10 — accepting a proposal re-derives the vocabulary over the WHOLE
+    corpus (P8, deliberately: one implementation of the merge, not two). That is
+    job-scale work — every mention, relationship and link read, recomputed and
+    written — and it ran straight from an ``async def``, where it holds the loop
+    and every other request on the pod waits behind one person's click.
+    """
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _seed(spec)
+    host, other = _pending_pair(spec)
+
+    recorded: list[bool] = []
+    monkeypatch.setattr(kb_routes, "accept_proposal", _loop_spy(recorded))
+    r = client.post(f"/kb/graph/proposals/{host}/accept", params={"other": other})
+
+    assert r.status_code == 200, r.text
+    assert recorded, "the route never called accept_proposal"
+    assert not any(recorded)
+
+
+def test_rejecting_a_merge_does_not_block_the_event_loop(monkeypatch) -> None:
+    """Same rule: it is two scans of every pending link in the corpus — the queue
+    read once to find the pair and once to mark it."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    _seed(spec)
+    host, other = _pending_pair(spec)
+
+    recorded: list[bool] = []
+    monkeypatch.setattr(kb_routes, "reject_proposal", _loop_spy(recorded))
+    r = client.post(f"/kb/graph/proposals/{host}/reject", params={"other": other})
+
+    assert r.status_code == 200, r.text
+    assert recorded, "the route never called reject_proposal"
+    assert not any(recorded)

@@ -2299,17 +2299,27 @@ def register_kb_routes(
     @app.post("/kb/graph/proposals/{entity_id}/accept")
     async def graph_accept(entity_id: str, other: str = Query(...)) -> GraphEntityOut:
         """Agree that two identities are one. The links record WHO agreed, so the
-        answer to "why are these the same" becomes a person rather than a model."""
+        answer to "why are these the same" becomes a person rather than a model.
+
+        Off the loop, because applying the answer means re-deriving the
+        vocabulary over the WHOLE corpus — that is deliberate (#697 P8: one
+        implementation of the merge, not two), and it is job-scale work. Run
+        inline it holds the event loop, so every other request on the pod queues
+        behind one person's click.
+        """
         _require_proposal(entity_id, other)
-        accept_proposal(spec, entity_id, other, by=get_user_id())
+        await asyncio.to_thread(accept_proposal, spec, entity_id, other, by=get_user_id())
         return await graph_entity(entity_id)
 
     @app.post("/kb/graph/proposals/{entity_id}/reject")
     async def graph_reject(entity_id: str, other: str = Query(...)) -> GraphProposalOut:
         """Say no. Nothing merges — nothing was changed to propose it — but the
-        answer is kept, so the pair is never raised again."""
+        answer is kept, so the pair is never raised again.
+
+        Also off the loop: it is two scans of every pending link in the corpus.
+        """
         proposal = _require_proposal(entity_id, other)
-        reject_proposal(spec, entity_id, other, by=get_user_id())
+        await asyncio.to_thread(reject_proposal, spec, entity_id, other, by=get_user_id())
         return proposal
 
     def _require_proposal(entity_id: str, other: str) -> GraphProposalOut:
