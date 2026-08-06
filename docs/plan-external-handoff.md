@@ -149,11 +149,29 @@ caller-facing doc:
   it from (`web/src/api/real.ts`). The contract double missed this because it
   only ever consumed `title` from the listing and took the id from the create
   response — it never played the one move the integration depends on.
-- The sort needs a **tiebreaker**. `updated_time` alone is not a total order, so
-  two rows sharing a timestamp may swap between pages and `offset` paging drops
-  one. `api/kb_routes.py` already pairs its sort with `resource_id` for exactly
-  this reason (#184); the plan cited that line as precedent while omitting the
-  precaution it exists to document.
+- The sort carries a **tiebreaker** (`resource_id`), which makes a single query's
+  order deterministic when timestamps collide. It does **not** make `offset`
+  paging safe, and an earlier revision of this plan and the caller guide both
+  claimed it did. Measured, four items at two per page: page 1 returns `d, c`; a
+  handoff then touches `a` (which was on page 2), lifting it to the front; page 2
+  at `offset=2` returns `c, b`. The caller sees `d, c, c, b` and **never sees
+  `a`** — the design's own worst outcome, since an item the picker never shows is
+  one the user re-creates.
+
+  The mistake was reading half of the cited precedent. `api/kb_routes.py:2030`
+  does pair its sort with `resource_id`, but its comment says *why* it also sorts
+  on `created_time`: "Sort by **IMMUTABLE** keys BEFORE paging … **NOT
+  `updated_time`**: re-ingest / re-index bumps it, so a doc indexing *between*
+  the FE's offset fetches would jump to the front and slide the window,
+  double-counting one row and dropping another (#184)." Decision 12 deliberately
+  chooses the mutable key, so it inherits exactly the hazard that comment exists
+  to warn about — the tiebreaker was never the mitigation.
+
+  Not fixable while keeping decision 12, and it does not need to be: the primary
+  use is "find the recently-handed-to item", which is on page one by
+  construction. The guide now tells callers that paging past page one requires
+  re-querying under `created_time` (immutable, so stable) and treats that as a
+  separate "browse everything" mode.
 
 Each returned record carries its own `external_refs`, because non-indexed fields are still
 part of the record. The picker therefore decides everything locally: which items exist,

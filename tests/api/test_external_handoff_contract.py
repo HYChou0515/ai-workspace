@@ -32,9 +32,19 @@ from ._client import TestClient
 _NEWEST_FIRST = json.dumps(
     [
         {"type": "meta", "key": "updated_time", "direction": "-"},
-        # Tiebreaker, not decoration: without a total order, two rows sharing a
-        # timestamp can swap between pages, so `offset` paging silently skips
-        # one — and an item the picker never shows is one the user re-creates.
+        # Tiebreaker: makes ONE query's order deterministic when timestamps
+        # collide. It does NOT make `offset` paging safe — that needs an
+        # immutable sort key, see the paging test below. Conflating the two is
+        # the mistake this comment used to make.
+        {"type": "meta", "key": "resource_id", "direction": "+"},
+    ]
+)
+
+# What a caller must switch to in order to page past the first page. `created_time`
+# never moves, so a concurrent handoff cannot slide the window between fetches.
+_STABLE_FOR_PAGING = json.dumps(
+    [
+        {"type": "meta", "key": "created_time", "direction": "-"},
         {"type": "meta", "key": "resource_id", "direction": "+"},
     ]
 )
@@ -312,6 +322,43 @@ def test_parallel_handoffs_to_one_item_keep_every_ref():
 
     absorbed = legacy.list_candidates()[0]["external_refs"]
     assert sorted(absorbed) == sorted(["legacy-rca:0", *incoming])
+
+
+def test_paging_past_the_first_page_needs_an_immutable_sort_key():
+    """Decision 12 sorts by `updated_time` — a key a concurrent handoff MUTATES.
+
+    So an item can slide across the page boundary between two `offset` fetches
+    and be seen by neither. Measured with the mutable key: page 1 gives `d, c`;
+    a handoff then touches `a` (on page 2), lifting it to the front; page 2 at
+    `offset=2` gives `c, b` — the caller sees `d, c, c, b` and never sees `a`.
+    The `resource_id` tiebreaker does not prevent this, it only settles ties
+    within one query; an earlier version of the guide claimed otherwise.
+
+    An item the picker never shows is one the user re-creates, which is the
+    sprawl this design exists to stop. Since decision 12 keeps the mutable key
+    for page one (where it is exactly right), the guide tells callers to
+    re-query under `created_time` to page. This pins that the escape hatch is
+    genuinely stable — swap the sort back to `updated_time` and it fails.
+    """
+    who = {"user": "alice"}
+    client = TestClient(_app_for(who))
+    legacy = _LegacySite(client)
+    ids = {name: legacy.open_new_item(name) for name in ("a", "b", "c", "d")}
+
+    def page(offset: int) -> list[str]:
+        rows = client.get(
+            "/rca-investigation",
+            params={"limit": 2, "offset": offset, "sorts": _STABLE_FOR_PAGING},
+        ).json()
+        return [r["data"]["title"] for r in rows]
+
+    first = page(0)
+    # A handoff lands on the OLDEST item, which sits on page two — the exact
+    # interleaving that loses a row when the sort key is the mutable one.
+    legacy.record_absorbed(ids["a"], "legacy-rca:1")
+    second = page(2)
+
+    assert sorted(first + second) == ["a", "b", "c", "d"], (first, second)
 
 
 def test_uploading_into_a_deleted_item_says_it_is_gone_rather_than_crashing():
