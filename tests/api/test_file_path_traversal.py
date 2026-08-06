@@ -56,6 +56,37 @@ def test_an_upload_cannot_write_outside_the_workspace(escaping: str):
     assert not any(".." in p for p in listed), listed
 
 
+def test_the_json_body_routes_are_guarded_too():
+    """The routes that take a path in a JSON BODY, not the URL.
+
+    These are the worse case: Starlette's URL normalisation never runs on a body,
+    so here even a LITERAL `../` survives — no percent-encoding needed. Guarding
+    only the `{path:path}` routes left `mkdir`, `move` and `copy` writing outside
+    the workspace, while the guard's own docstring claimed "no `..` ever" was a
+    rule you could read off the code.
+    """
+    client, iid = _client_and_item()
+    assert client.put(f"/a/rca/items/{iid}/files/seed.txt", content=b"hello").status_code == 204
+
+    mkdir = client.post(f"/a/rca/items/{iid}/files/mkdir", json={"path": "../escaped"})
+    copy = client.post(
+        f"/a/rca/items/{iid}/files/copy", json={"from": "/seed.txt", "to": "../esc.txt"}
+    )
+    move = client.post(
+        f"/a/rca/items/{iid}/files/move", json={"from": "/seed.txt", "to": "../mv.txt"}
+    )
+    reach_out = client.post(
+        f"/a/rca/items/{iid}/files/copy", json={"from": "../../secret.txt", "to": "/stolen.txt"}
+    )
+
+    assert [mkdir.status_code, copy.status_code, move.status_code] == [400, 400, 400]
+    assert reach_out.status_code == 400, "the SOURCE side must be guarded as well"
+    listed = {e["path"] for e in client.get(f"/a/rca/items/{iid}/files").json()}
+    assert not any(".." in p for p in listed), listed
+    tree = client.get(f"/a/rca/items/{iid}/tree").json()
+    assert not any(".." in d for d in tree.get("dirs", [])), tree
+
+
 def test_a_dot_dot_inside_a_name_is_still_allowed():
     """Only path SEGMENTS that are `..` escape; a filename that merely contains
     dots is ordinary and must keep working, or this guard breaks real uploads."""

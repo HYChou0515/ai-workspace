@@ -95,6 +95,14 @@ def _workspace_path(raw: str) -> str:
     whereas "resolves to somewhere inside" invites the next person to re-derive
     the containment check. A filename that merely CONTAINS dots
     (``report..final.csv``) is untouched — only whole segments count.
+
+    EVERY route that takes a client path calls this — the ``{path:path}`` URL
+    routes AND the JSON-body ones (``mkdir`` / ``move`` / ``copy``, both sides of
+    the latter). The body routes are in fact the worse case, and were missed on
+    the first pass: Starlette's URL normalisation never runs on a body, so there
+    even a LITERAL ``../`` survived. Guarding only what the encoded-``..`` report
+    happened to name would have left the plainer hole open while the rule above
+    claimed otherwise.
     """
     norm = "/" + raw.lstrip("/")
     if any(segment == ".." for segment in norm.split("/")):
@@ -395,7 +403,7 @@ def register_file_routes(
     )
     async def make_dir(slug: str, item_id: str, body: _MkdirBody) -> Response:
         investigation_id = locator.require_access(slug, item_id, "add_content")
-        norm = "/" + body.path.strip("/")
+        norm = _workspace_path(body.path)
         try:
             await files.mkdir(investigation_id, norm)
         except FileExists as exc:
@@ -463,8 +471,8 @@ def register_file_routes(
     )
     async def move_file(slug: str, item_id: str, body: _MoveBody) -> Response:
         investigation_id = locator.require_access(slug, item_id, "edit_content")
-        src = "/" + body.from_.strip("/")
-        dst = "/" + body.to.strip("/")
+        src = _workspace_path(body.from_)
+        dst = _workspace_path(body.to)
         await _transfer(investigation_id, src, dst, copy=False)
         activity.record(
             "file_moved",
@@ -481,8 +489,8 @@ def register_file_routes(
     )
     async def copy_file(slug: str, item_id: str, body: _MoveBody) -> Response:
         investigation_id = locator.require_access(slug, item_id, "add_content")
-        src = "/" + body.from_.strip("/")
-        dst = "/" + body.to.strip("/")
+        src = _workspace_path(body.from_)
+        dst = _workspace_path(body.to)
         await _transfer(investigation_id, src, dst, copy=True)
         activity.record(
             "file_copied",
