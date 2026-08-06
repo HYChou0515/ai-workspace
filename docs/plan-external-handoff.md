@@ -61,7 +61,7 @@ Established by grilling; each replaced a plausible alternative that is recorded 
 | 4 | **The same ref MAY appear on several items.** Per-item uniqueness only; not globally unique. |
 | 5 | **Identity comes from the shared login.** The legacy *browser* calls us, so the session rides along; nothing carries a user id in a parameter. |
 | 6 | **Files travel by upload**, through the existing streaming `PUT`. The default workspace quota is 20 GB (`config/schema.py`), not a constraint at MB scale — though a deployment may have lowered it. |
-| 7 | **Item is created first, files written after, then the browser navigates.** Not one combined multipart create. |
+| 7 | **Item created first, files written, ref recorded LAST, then the browser navigates.** Not one combined multipart create — and never `external_refs` at create time, or a handoff that dies mid-upload leaves an item claiming an analysis it does not hold, which the picker then greys out so it can never be retried. |
 | 8 | **Nothing runs on arrival.** No auto-sent turn, no prefilled prompt, no edit to `/brief.md`. |
 | 9 | **Permission is passed explicitly as `public`** by the caller, overriding the private-by-default. To be tightened later, once the flow is proven in production. |
 | 10 | **Generic, not RCA-specific.** No `slug` is special-cased; the field lives on `WorkItemBase`. |
@@ -105,11 +105,21 @@ move is to index it deliberately and delete both guards, not to smuggle a filter
 
 Capping the list re-opens the original wound from a side door: if the target item has
 fallen past the cap, the user cannot see it, so they create a new one — item sprawl again.
-Sorting by **`updated_time` descending** all but closes it, at zero cost: absorbing a
-handoff writes files and appends a ref, which bumps the timestamp, so an item that is
-being actively worked is pushed back to the front. Only items nobody has touched in a
-long while fall off the first page, and those are exactly the ones a person should be
-searching for deliberately. Both helpers are specstar built-ins
+Sorting by **`updated_time` descending** greatly reduces it, at zero cost: recording a
+handoff bumps the timestamp, so each successive handoff returns that item to the front —
+which covers the main case, "one problem handed over several times".
+
+**Corrected from the original claim, which was measurably too generous.** It said
+"absorbing a handoff writes files *and* appends a ref, which bumps the timestamp, so an
+item that is being actively worked is pushed back to the front". Only the ref append does
+it. Measured: uploading a file into the older of two items left the order unchanged;
+appending a ref to it moved it to the front. `updated_time` belongs to the item row, and
+only `item_routes.py` and the generic CRUD patch write it — files live in the FileStore and
+chat turns write `Conversation`, so neither touches it. So an item created by hand and
+worked in daily, never handed to from outside, sinks exactly as it would under
+`created_time`. For the caller's own flow this is fine (everything it touches has been
+handed to), but the sentence "actively worked items stay at the front" is not true in
+general and should not be relied on. Both helpers are specstar built-ins
 (`QB.created_time()` / `QB.updated_time()`, `specstar/query.py`), so **no index is needed
 for the sort either** — the same pattern already in use at `api/kb_routes.py:2043`.
 
@@ -281,14 +291,31 @@ did not do anything wrong" is immune to the regressions that matter here.
 2. **The same analysis may be attached to several items** (decision 4). Chosen knowingly:
    it buys flexibility at the cost of one analysis's discussion potentially living in two
    places.
-3. **`public` by default** (decision 9) means RCA content — customer complaints, yield,
-   supplier names — is visible company-wide. Accepted to make the rollout debuggable, and
-   explicitly slated for tightening.
+3. **`public` (decision 9) is world-WRITABLE, not merely world-readable.** This risk was
+   originally written as "visible company-wide", which understates what is being accepted
+   and is the sentence a reviewer would rely on when judging whether "tighten it later" is
+   tolerable. `perm/authorize.py` grants every verb except `change_permission` under
+   `public`. Measured, as a second user against someone else's public item: upload or
+   overwrite any file `204`, rewrite the title `200`, **reassign `owner` `200`**; only
+   delete is refused (`403`, creator-only). `converse`, `execute` and `use_terminal` come
+   with it, so each handoff item is also a shell any employee can drive. Still accepted for
+   the rollout — but on those terms, not the softer ones.
 4. **Client-side filtering gets heavier as item counts grow.** Known, not an oversight.
    The remedy (index + migrate) is understood; the trigger should be a measurement, not a
    guess.
-5. **Concurrent appends** — see Phase 1 test 4. Unknown until measured against real
-   specstar behaviour; the plan states what to do either way rather than assuming.
+5. **Concurrent appends** — see Phase 1 test 4. Measured, and it does lose refs; the
+   residual hole is upstream and documented there.
+
+6. **The per-user disk quota lands on one person.** Decision 6 reasoned only about
+   `filestore.workspace_quota` and missed the second cap: `quota/disk_ledger.py` charges an
+   item's bytes to its `owner`, summed across every item in that person's name (#688).
+   Convergence is the whole point of this design, so N colleagues' uploads all land in one
+   item — created by whoever pressed first — and every one of them is charged to that
+   person's budget. When it trips, the uploader gets a `507` naming a quota they cannot see
+   and cannot clear, because the space is in other items belonging to someone else. And
+   since `owner` is a plain PATCHable field on a `public` item (risk 3), anyone can move
+   the debt onto anyone else — which is #687, and is why #687 gates this quota having any
+   force at all.
 
 ## Rejected alternatives
 

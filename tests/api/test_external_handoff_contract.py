@@ -78,12 +78,20 @@ class _LegacySite:
         deliberately un-indexed, so a query would be silently wrong on SQL)."""
         return [it["title"] for it in items if ref in it["external_refs"]]
 
-    def open_new_item(self, title: str, ref: str) -> str:
+    def open_new_item(self, title: str) -> str:
+        """Create the item WITHOUT the ref — it is recorded last, once the files
+        are in.
+
+        Naming the analysis at create time looks tidier and is a trap: a handoff
+        that dies mid-upload leaves an item CLAIMING an analysis it does not
+        hold, and because the picker greys out anything already absorbed, that
+        analysis can never be retried into it. Recording last means a crash
+        leaves "not yet recorded", and a re-run overwrites the same paths.
+        """
         r = self._c.post(
             f"/a/{self._slug}/items",
             json={
                 "title": title,
-                "external_refs": [ref],
                 # Explicit, because the default is private — an item nobody else
                 # can see cannot be the thing colleagues converge on.
                 "permission": {"visibility": "public"},
@@ -91,6 +99,14 @@ class _LegacySite:
         )
         assert r.status_code == 200, r.text
         return r.json()["resource_id"]
+
+    def open_new_item_and_record(self, title: str, ref: str) -> str:
+        """The whole 2b flow for tests that only need an item to exist: create,
+        then record. Still in the correct order — never `external_refs` at
+        create time."""
+        item_id = self.open_new_item(title)
+        self.record_absorbed(item_id, ref)
+        return item_id
 
     def upload(self, item_id: str, ref: str, name: str, body: bytes) -> None:
         """One folder per source record, so several handoffs cannot collide."""
@@ -160,8 +176,9 @@ def test_two_analyses_from_the_legacy_site_converge_on_one_item():
 
     # First analysis: nothing exists yet, so the user opens an item.
     assert legacy.list_candidates() == []
-    item_id = legacy.open_new_item("Oven drift", "legacy-rca:1")
+    item_id = legacy.open_new_item("Oven drift")
     legacy.upload(item_id, "legacy-rca:1", "readings.csv", b"t,v\n1,9\n")
+    legacy.record_absorbed(item_id, "legacy-rca:1")
 
     # Second analysis, same real-world problem: the user picks that item.
     candidates = legacy.list_candidates()
@@ -189,7 +206,7 @@ def test_a_second_press_of_the_same_analysis_is_recognisable_as_already_taken():
     to tell BEFORE uploading, or the user transfers megabytes for nothing."""
     who = {"user": "alice"}
     legacy = _LegacySite(TestClient(_app_for(who)))
-    legacy.open_new_item("Oven drift", "legacy-rca:1")
+    legacy.open_new_item_and_record("Oven drift", "legacy-rca:1")
 
     assert legacy.already_absorbed(legacy.list_candidates(), "legacy-rca:1") == ["Oven drift"]
 
@@ -202,8 +219,8 @@ def test_absorbing_an_analysis_pulls_the_item_back_to_the_front_of_the_page():
     Created-time order would leave it buried exactly when it matters most."""
     who = {"user": "alice"}
     legacy = _LegacySite(TestClient(_app_for(who)))
-    older = legacy.open_new_item("Oven drift", "legacy-rca:1")
-    legacy.open_new_item("Coater streaks", "legacy-rca:2")
+    older = legacy.open_new_item_and_record("Oven drift", "legacy-rca:1")
+    legacy.open_new_item_and_record("Coater streaks", "legacy-rca:2")
 
     assert [c["title"] for c in legacy.list_candidates()] == ["Coater streaks", "Oven drift"]
 
@@ -223,7 +240,7 @@ def test_a_stale_revision_is_refused_instead_of_silently_overwriting():
     who = {"user": "alice"}
     client = TestClient(_app_for(who))
     legacy = _LegacySite(client)
-    item_id = legacy.open_new_item("Oven drift", "legacy-rca:0")
+    item_id = legacy.open_new_item_and_record("Oven drift", "legacy-rca:0")
     stale = client.get(f"/rca-investigation/{item_id}").json()["revision_info"]["revision_id"]
 
     first = client.patch(
@@ -249,7 +266,7 @@ def test_recording_the_same_analysis_twice_is_a_no_op():
     recording step, not hoped for."""
     who = {"user": "alice"}
     legacy = _LegacySite(TestClient(_app_for(who)))
-    item_id = legacy.open_new_item("Oven drift", "legacy-rca:0")
+    item_id = legacy.open_new_item_and_record("Oven drift", "legacy-rca:0")
 
     legacy.record_absorbed(item_id, "legacy-rca:1")
     legacy.record_absorbed(item_id, "legacy-rca:1")  # the retry
@@ -287,7 +304,7 @@ def test_parallel_handoffs_to_one_item_keep_every_ref():
     """
     who = {"user": "alice"}
     legacy = _LegacySite(TestClient(_app_for(who)))
-    item_id = legacy.open_new_item("Oven drift", "legacy-rca:0")
+    item_id = legacy.open_new_item_and_record("Oven drift", "legacy-rca:0")
     incoming = [f"legacy-rca:{i}" for i in range(1, 9)]
 
     with ThreadPoolExecutor(max_workers=len(incoming)) as pool:
@@ -302,7 +319,7 @@ def test_a_colleague_sees_the_item_so_convergence_survives_across_people():
     an item a colleague cannot see is one they will silently duplicate."""
     who = {"user": "alice"}
     app = _app_for(who)
-    _LegacySite(TestClient(app)).open_new_item("Oven drift", "legacy-rca:1")
+    _LegacySite(TestClient(app)).open_new_item_and_record("Oven drift", "legacy-rca:1")
 
     who["user"] = "bob"
     seen = _LegacySite(TestClient(app)).list_candidates()
