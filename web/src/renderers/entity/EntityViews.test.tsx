@@ -100,6 +100,20 @@ describe("parseViewSpec", () => {
     expect(spec?.week?.label).toBeUndefined();
     expect(parseViewSpec("view: gantt\nentity: issue\nweek: nope\n")?.week).toBeUndefined();
   });
+  // Type-checking one field and not its neighbour just moves the crash: both of
+  // these produced the same bare "Invalid time value" from inside the axis.
+  it("rejects out-of-domain `week:` values, not merely non-strings", () => {
+    const spec = parseViewSpec(
+      ["view: gantt", "entity: issue", "week:", "  start: mon", "  epoch: yesterday"].join("\n"),
+    );
+    expect(spec?.week?.start).toBeUndefined(); // not a weekday
+    expect(spec?.week?.epoch).toBeUndefined(); // not a date
+  });
+  // All three shipped gantt files say in their own comments that a bare
+  // `week: {}` is already a valid rule. Dropping it lost the timeline's W-codes.
+  it("keeps an empty `week: {}` — every field has a default, as the shipped files promise", () => {
+    expect(parseViewSpec("view: gantt\nentity: issue\nweek: {}\n")?.week).toEqual({});
+  });
   // The plug-in's view of a colliding key is asserted THROUGH THE CONTAINER, in
   // viewKindPlugin.test.tsx — the parser-level shortcut here is what let a dead
   // mechanism ship green. This one only pins the platform's own coercion.

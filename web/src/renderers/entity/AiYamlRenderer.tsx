@@ -22,6 +22,7 @@ import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
 import { useOpenFile } from "../../hooks/openFile";
+import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { useEntities, useEntityCatalog, useEntityHealth, useReferencedRecords } from "../../hooks/useEntities";
 import { useEntityLiveSync } from "../../hooks/useEntityLiveSync";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
@@ -69,6 +70,9 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const write = useEntityWrite(slug, itemId, entityName, { canWrite });
   const users = useUsers();
   const openFile = useOpenFile();
+  // #698 — the boundary's Retry: a plug-in reads FILES, so re-render alone
+  // can't help when the repair happened outside this tab. Re-read first.
+  const refreshFiles = useRefreshFiles(itemId);
 
   // Resolve the type + load its referenced types BEFORE the early returns, so the
   // ref-record queries stay unconditional (rules of hooks). `milestone.title`
@@ -299,7 +303,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
           component left that site — the original one — outside the net.
           `resetKey` covers both the file and its contents, so switching tabs or
           repairing the file in place both get a fresh attempt. */}
-      <ViewErrorBoundary kind={spec.view} resetKey={`${path} ${entry.text}`}>
+      <ViewErrorBoundary kind={spec.view} resetKey={`${path}\n${entry.text}`} onRetry={refreshFiles}>
         <EntityViewBody
             spec={effectiveSpec}
           // #690 P4 — per project, per view: the collapse state lives in this

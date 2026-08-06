@@ -9,7 +9,7 @@
  * of the tab. Both cases come down to: a new `resetKey` means try again.
  */
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ViewErrorBoundary } from "./ViewErrorBoundary";
@@ -68,24 +68,56 @@ describe("ViewErrorBoundary", () => {
   // A file-reading plug-in's data lives in files the boundary knows nothing
   // about, so `resetKey` cannot cover them. Repairing one of those has to have
   // an escape that doesn't require closing the tab.
-  it("offers a Retry that re-attempts without any prop changing", () => {
+  it("re-reads the workspace before re-attempting, then recovers", async () => {
     let explode = true;
     function Flaky() {
       if (explode) throw new Error("kaboom");
       return <div data-testid="ok">fine</div>;
     }
+    // Standing in for `useRefreshFiles`: the repair happened outside this tab,
+    // so the buffer cache still holds the bad bytes. Re-rendering alone would
+    // just throw again — the refresh is what makes Retry mean anything.
+    const onRetry = vi.fn(async () => {
+      explode = false;
+    });
+
     render(
-      <ViewErrorBoundary kind="acme" resetKey="unchanged">
+      <ViewErrorBoundary kind="acme" resetKey="unchanged" onRetry={onRetry}>
         <Flaky />
       </ViewErrorBoundary>,
     );
     expect(screen.getByRole("status")).toBeInTheDocument();
 
-    // the user fixed /data/x.csv somewhere else; nothing here changed
-    explode = false;
     fireEvent.click(screen.getByRole("button", { name: /retry/i }));
 
-    expect(screen.getByTestId("ok")).toBeInTheDocument();
+    expect(await screen.findByTestId("ok")).toBeInTheDocument();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("catches again — and stays usable — when the retry doesn't help", async () => {
+    const onRetry = vi.fn(async () => {});
+    render(
+      <ViewErrorBoundary kind="acme" resetKey="unchanged" onRetry={onRetry}>
+        <Boom explode />
+      </ViewErrorBoundary>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+    // still broken, but the escape hatch is offerable again rather than a dead
+    // panel with a permanently disabled button
+    await waitFor(() => expect(screen.getByRole("button", { name: /retry/i })).toBeEnabled());
+    expect(screen.getByRole("status")).toHaveTextContent("kaboom");
+  });
+
+  it("carries the house button chrome, so the one escape hatch looks like a control", () => {
+    render(
+      <ViewErrorBoundary kind="acme" resetKey="a">
+        <Boom explode />
+      </ViewErrorBoundary>,
+    );
+    // base.css strips all default button styling; `.btn` is how this app puts it
+    // back. Without it the only affordance renders as plain body text.
+    expect(screen.getByRole("button", { name: /retry/i })).toHaveClass("btn");
   });
 
   it("stays broken while the resetKey is unchanged, rather than looping on a still-broken view", () => {

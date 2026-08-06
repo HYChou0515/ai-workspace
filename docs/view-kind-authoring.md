@@ -109,7 +109,7 @@ const raw = viewParam(spec, "options");                          // ✅ unknown�
 
 | 用法 | 什麼時候用 |
 |---|---|
-| `useFileBuffer(path)` | 讀單一檔案。有快取，別人／agent 改了會自動更新。**首選。** |
+| `useFileBuffer(path)` | 讀單一檔案。有快取；本分頁內的編輯與 agent 回合結束後的重整會反映進來，但**別人在另一個瀏覽器改的不會自動推過來**。**首選。** |
 | `useFileService()` | 需要列檔（`listFiles(prefix?)`）、寫檔（`writeFile`）、或組出 `fileUrl(src)` 給 `<img>` 用 |
 
 `useFileBuffer` 回傳的 `entry.status` 是 `"loading" | "ready" | "error"`，三種都要處理——

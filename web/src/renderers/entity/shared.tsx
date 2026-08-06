@@ -74,10 +74,15 @@ export function parseViewSpec(text: string): ViewSpec | null {
     // A plug-in's own keys ride through untouched — they are its config, and
     // `unknown` at the type level, so it must narrow them itself.
     ...(o as ViewSpec),
-    // ...but every field the PLATFORM reads is coerced, because this document is
+    // ...while the fields listed below are coerced, because this document is
     // arbitrary user YAML. Widening which files parse (#698) without widening
     // this was a real defect: `title:` as a mapping reached a React child and
     // threw, and with no error boundary above it that blanks the page.
+    //
+    // This is an enumeration, not a schema — it covers what is listed here and
+    // nothing else. `color_by`, `always_week`, `weekday` and `day_of_month` are
+    // still carried raw (they degrade quietly rather than throwing). Adding a
+    // field to `ViewSpec` means adding it here too; see renderers/README.md.
     view: view as ViewKind,
     entity: str(entity) ?? "",
     title: str(o.title),
@@ -111,15 +116,22 @@ function normalizeWeek(raw: unknown): ViewSpec["week"] {
   // `new Date(NaN)` and a bare "Invalid time value" from deep inside the axis.
   // These are small closed enums written by hand in a YAML file; an unknown
   // member is a typo, and falling back to the default beats a stack trace.
-  const week = {
+  return {
     start: oneOf(o.start, WEEKDAYS),
     first_week: oneOf(o.first_week, ["jan1", "first_full", "iso"]),
     reset: oneOf(o.reset, ["yearly", "none"]),
     boundary: oneOf(o.boundary, ["new_year", "old_year", "by_today"]),
-    epoch: str(o.epoch),
+    // Not an enum, but still fed to `Date.parse` — `epoch: yesterday` produced
+    // the same bare "Invalid time value" from inside the axis that `start: mon`
+    // did. Domain-checking one field and not its neighbour just moves the crash.
+    epoch: date(o.epoch),
     label: str(o.label),
   } as ViewSpec["week"];
-  return Object.values(week as Record<string, unknown>).some((v) => v !== undefined) ? week : undefined;
+  // NOTE: an empty `week: {}` returns an empty rule, NOT undefined. Every field
+  // has a default, and all three shipped gantt files tell the user in their own
+  // comments that "a bare `week: {}` is already a valid rule" — dropping it
+  // silently cost the timeline its W-codes for anyone who took them at
+  // their word, or who commented the block's contents out.
 }
 
 /** Read a key the platform doesn't know about — a plug-in kind's own config,
@@ -182,6 +194,13 @@ const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "satur
 function oneOf(raw: unknown, allowed: string[]): string | undefined {
   const s = str(raw);
   return s !== undefined && allowed.includes(s) ? s : undefined;
+}
+
+/** A scalar that must be a parseable date, or nothing — same reasoning as
+ * `oneOf`, for a field consumed by `Date.parse` rather than a lookup table. */
+function date(raw: unknown): string | undefined {
+  const s = str(raw);
+  return s !== undefined && !Number.isNaN(Date.parse(s)) ? s : undefined;
 }
 
 /** `card:` drives the board's title + badges, both rendered — so both are

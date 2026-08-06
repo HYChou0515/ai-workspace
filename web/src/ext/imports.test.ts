@@ -10,13 +10,22 @@
  * no ESLint (the web toolchain is tsc + vitest), so the rule lives here — same
  * CI run, same red build.
  *
- * It does NOT use a hand-rolled scanner. Three were written and all three
- * silently stopped enforcing: a lazy regex swallowed bare `import "…"`; a
- * per-line scan could not see a multi-line import (this repo's own house
- * style); three "independent" passes shared one comment-stripper that deleted
- * real code whenever `/*` appeared inside a string. Each was a lexer written by
- * hand, and each traded one blind spot for the next. `typescript` is already a
- * dependency and ships a real one, so the scanning question is now closed.
+ * Nothing here pattern-matches source text. FOUR hand-rolled scanners were
+ * written for this one rule and every one of them silently stopped enforcing:
+ *
+ *   1. a lazy regex that swallowed bare `import "…"` before the first `from`
+ *   2. a per-line scan, blind to multi-line imports — this repo's house style
+ *   3. three "independent" passes sharing one comment-stripper that deleted
+ *      real code whenever `/*` appeared inside a string
+ *   4. after switching the main scan to TypeScript, a leftover regex for
+ *      `import.meta.glob` — which missed its documented array form (a genuine
+ *      reach-in, green CI) and flagged the *string* `'try import.meta.glob(…)'`
+ *
+ * The fourth is the instructive one: the lesson was applied to two thirds of
+ * this file and the last third kept the old habit, so the same class of bug
+ * survived a whole review round. Everything now comes off TypeScript's AST,
+ * including the Vite-only glob, and the file's `fileName` is passed so a `.tsx`
+ * is parsed as TSX rather than TS.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { posix } from "node:path";
@@ -42,16 +51,52 @@ export function sourceFiles(dir: string, base = ""): string[] {
   return out;
 }
 
-/** Module specifiers imported/re-exported by `text` — static, side-effect,
- * dynamic and re-export — as TypeScript's own preprocessor sees them.
+/** Every module specifier `text` reaches for: static, side-effect, dynamic,
+ * re-export, and Vite's `import.meta.glob`.
  *
- * `import.meta.glob` is Vite-specific and invisible to TS, so it gets its own
- * pass: it takes a path and really does reach into the app. */
-export function scanImports(text: string): string[] {
-  const out = ts.preProcessFile(text, /* readImportFiles */ true, /* detectJavaScriptImports */ true).importedFiles.map(
-    (f) => f.fileName,
-  );
-  for (const m of text.matchAll(/import\.meta\.glob\w*\s*\(\s*["'`]([^"'`]+)/g)) out.push(m[1]);
+ * Read off TypeScript's own AST. `fileName` matters — it selects TSX vs TS, and
+ * without it a `.tsx` file is parsed as TS, where JSX text is just expressions
+ * and a sentence containing `import "…"` becomes an import.
+ *
+ * `import.meta.glob` is Vite-only, so TypeScript doesn't model it — but it is
+ * read from the SAME tree rather than a regex beside it. A regex here was the
+ * fourth hand-rolled scanner in this file's history: it missed the documented
+ * array form (`import.meta.glob([...])`, which really does reach in) and
+ * reported the string `'try import.meta.glob("…")'` as an import. Ask the
+ * parser what a call expression is; don't pattern-match source text. */
+export function scanImports(text: string, fileName = "probe.tsx"): string[] {
+  const kind = fileName.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+  const src = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, /* setParentNodes */ true, kind);
+  const out: string[] = [];
+  const literal = (n: ts.Node | undefined): void => {
+    if (n && ts.isStringLiteralLike(n)) out.push(n.text);
+    else if (n && ts.isArrayLiteralExpression(n)) n.elements.forEach(literal);
+  };
+
+  const visit = (node: ts.Node): void => {
+    // `import x from "m"` / `import "m"` / `export … from "m"` / `export * from "m"`
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+      literal(node.moduleSpecifier);
+    }
+    // `import x = require("m")`
+    if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      literal(node.moduleReference.expression);
+    }
+    if (ts.isCallExpression(node)) {
+      // `import("m")` — dynamic, string or template
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) literal(node.arguments[0]);
+      // `import.meta.glob("m")` / `import.meta.glob(["m", …])` / globEager
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isMetaProperty(node.expression.expression) &&
+        node.expression.name.text.startsWith("glob")
+      ) {
+        literal(node.arguments[0]);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(src);
   return out;
 }
 
@@ -77,6 +122,21 @@ describe("scanImports (TypeScript's preprocessor)", () => {
     ["dynamic import with a template literal", "await import(`../e`);", ["../e"]],
     ["re-export", 'export { a } from "../f";', ["../f"]],
     ["import.meta.glob — Vite-only, invisible to TS", 'import.meta.glob("/src/api/*.ts");', ["/src/api/*.ts"]],
+    [
+      "import.meta.glob's documented ARRAY form, which a regex could not see",
+      'import.meta.glob(["/src/api/entities.ts", "/src/renderers/entity/shared.tsx"], { eager: true });',
+      ["/src/api/entities.ts", "/src/renderers/entity/shared.tsx"],
+    ],
+    ["import.meta.globEager", 'import.meta.globEager("/src/api/*.ts");', ["/src/api/*.ts"]],
+    ["glob named inside a STRING is not a glob", 'const help = \'try import.meta.glob("/src/api/*.ts")\';', []],
+    ["glob named inside a COMMENT is not a glob", '// never import.meta.glob("/src/api/*.ts") here', []],
+    // Without a .tsx filename the parser reads JSX text as expressions, and an
+    // ordinary sentence in an empty state becomes an import.
+    [
+      "a sentence containing `import \"…\"` inside JSX text",
+      'export const E = () => <p>Nothing yet — import "/data/wafer.csv" first.</p>;',
+      [],
+    ],
     // The two traps that killed the previous hand-written comment stripper.
     ["`/*` inside a line comment", '// glob is /* like this\nimport { s } from "../g";\nconst c = "*/";', ["../g"]],
     ["`/*` inside a string", 'const g = "/*";\nimport { s } from "../h";\nconst e = "*/";', ["../h"]],
@@ -124,7 +184,7 @@ describe("src/ext import boundary", () => {
   it("reaches the platform only through renderers/entity/public", () => {
     const offenders: string[] = [];
     for (const rel of sourceFiles(EXT_DIR)) {
-      for (const spec of scanImports(readFileSync(EXT_DIR + rel, "utf-8"))) {
+      for (const spec of scanImports(readFileSync(EXT_DIR + rel, "utf-8"), rel)) {
         if (violates(rel, spec)) offenders.push(`${rel} → ${spec}`);
       }
     }

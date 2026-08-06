@@ -23,15 +23,23 @@ type Props = {
    * an agent write, or the gear panel's own save — never cleared it, leaving a
    * fixed file permanently broken for the life of the tab. */
   resetKey: string;
+  /** Re-read the workspace before re-rendering. Clearing the error alone only
+   * helps if the cause was transient: a plug-in reads FILES, and a repair made
+   * outside this tab is still sitting behind the buffer cache, so the retry
+   * would fail again on the same stale bytes. */
+  onRetry?: () => void | Promise<void>;
   children: ReactNode;
 };
-type State = { error: Error | null };
+type State = { error: Error | null; retrying: boolean };
 
 export class ViewErrorBoundary extends Component<Props, State> {
-  state: State = { error: null };
+  state: State = { error: null, retrying: false };
 
   static getDerivedStateFromError(error: Error): State {
-    return { error };
+    // Showing an error means the attempt is over, so the button is offerable
+    // again. Leaving `retrying` set here strands it disabled when the retry
+    // didn't help — the one case where the user most needs to press it again.
+    return { error, retrying: false };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -43,6 +51,17 @@ export class ViewErrorBoundary extends Component<Props, State> {
   componentDidUpdate(prev: Props): void {
     if (prev.resetKey !== this.props.resetKey && this.state.error) this.setState({ error: null });
   }
+
+  private retry = async (): Promise<void> => {
+    this.setState({ retrying: true });
+    try {
+      await this.props.onRetry?.();
+    } finally {
+      // Clear regardless: a failed refresh shouldn't strand the panel, and if
+      // the view still throws the boundary simply catches it again.
+      this.setState({ error: null, retrying: false });
+    }
+  };
 
   render(): ReactNode {
     const { error } = this.state;
@@ -59,8 +78,8 @@ export class ViewErrorBoundary extends Component<Props, State> {
               Fix one of those and nothing the boundary subscribes to changes, so
               without this the panel stays broken for the life of the tab. The
               boundary cannot know a plug-in's dependencies; the user can. */}
-          <button type="button" onClick={() => this.setState({ error: null })}>
-            Retry
+          <button type="button" className="btn" onClick={() => void this.retry()} disabled={this.state.retrying}>
+            {this.state.retrying ? "Retrying…" : "Retry"}
           </button>
         </div>
       </div>
