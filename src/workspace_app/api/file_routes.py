@@ -96,15 +96,26 @@ def _workspace_path(raw: str) -> str:
     the containment check. A filename that merely CONTAINS dots
     (``report..final.csv``) is untouched — only whole segments count.
 
-    EVERY route that takes a client path calls this — the ``{path:path}`` URL
-    routes AND the JSON-body ones (``mkdir`` / ``move`` / ``copy``, both sides of
-    the latter). The body routes are in fact the worse case, and were missed on
-    the first pass: Starlette's URL normalisation never runs on a body, so there
-    even a LITERAL ``../`` survived. Guarding only what the encoded-``..`` report
-    happened to name would have left the plainer hole open while the rule above
-    claimed otherwise.
+    Every route that takes a client path **to the workspace store** calls this —
+    the ``{path:path}`` URL routes and the JSON-body ones (``mkdir`` / ``move`` /
+    ``copy``, both sides of the latter). The body routes are the worse case, and
+    were missed on the first pass: Starlette's URL normalisation never runs on a
+    body, so there even a LITERAL ``../`` survived. (The ``/notebooks/`` routes
+    are deliberately NOT routed through here — their path is a kernel session
+    key, not a store path.)
+
+    ``strip`` and not ``lstrip``: a trailing slash must not change what a path
+    MEANS. That is not cosmetic — the first version of this helper used
+    ``lstrip`` and silently dropped the trailing-slash normalisation the body
+    routes already had, so ``"/folder/"`` stopped naming the directory
+    ``/folder``. Moving a file onto an existing directory went from a refusal to
+    a SUCCESS that deleted the source and left a file whose stored path was
+    ``/folder/`` beside the directory ``/folder`` — indistinguishable in the file
+    tree, which splits on ``/`` and drops empty segments. Reachable from the
+    rename box in the UI, and covered now by
+    ``tests/api/test_file_path_normalisation.py``.
     """
-    norm = "/" + raw.lstrip("/")
+    norm = "/" + raw.strip("/")
     if any(segment == ".." for segment in norm.split("/")):
         raise HTTPException(status_code=400, detail="path may not contain a '..' segment")
     return norm
