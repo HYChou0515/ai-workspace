@@ -1,0 +1,185 @@
+diff --git a/src/workspace_app/graph_preview/__init__.py b/src/workspace_app/graph_preview/__init__.py
+index 72f5f663..804173b8 100644
+--- a/src/workspace_app/graph_preview/__init__.py
++++ b/src/workspace_app/graph_preview/__init__.py
+@@ -15,6 +15,27 @@ from pathlib import Path
+ from ..config.schema import Settings
+ 
+ 
++def chunking_for(settings: Settings, *, tokens: int | None, overlap: int | None) -> tuple[int, int]:
++    """How the offline loop should cut its passages: the DEPLOYMENT's own
++    setting, unless a flag says otherwise.
++
++    A prompt tuned offline only transfers if the passages were cut the way
++    production cuts them — the model is answering a question about a passage, and
++    the size of that passage changes the answer. A CLI default sitting beside a
++    deployment that configured something else would mean tuning against a corpus
++    nobody runs, with nothing on screen to say so.
++
++    The flags still win, because trying a different cut is itself one of the
++    experiments worth running: whether the passages are too large is a live
++    suspect for why the extractor answers with topics rather than things.
++    """
++    chunker = settings.kb.chunker
++    return (
++        chunker.max_tokens if tokens is None else tokens,
++        chunker.overlap if overlap is None else overlap,
++    )
++
++
+ def unusable_config(settings: Settings, config_path: Path | None) -> str | None:
+     """Why this run cannot work, or ``None``.
+ 
+diff --git a/src/workspace_app/graph_preview/__main__.py b/src/workspace_app/graph_preview/__main__.py
+index 8a13d222..7b71e262 100644
+--- a/src/workspace_app/graph_preview/__main__.py
++++ b/src/workspace_app/graph_preview/__main__.py
+@@ -22,7 +22,7 @@ from pathlib import Path
+ from ..config.loader import _resolve_config_path, load
+ from ..factories import get_kb_llm, get_spec
+ from ..kb.graph.preview import preview_collection
+-from . import unusable_config
++from . import chunking_for, unusable_config
+ 
+ 
+ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+@@ -129,10 +129,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+     p.add_argument(
+         "--chunk-tokens",
+         type=int,
+-        default=256,
+-        help="how large a passage the model is asked about, in whitespace tokens, when "
+-        "running against --samples. CJK is not written with word spaces, so a Chinese "
+-        "corpus gets passages several times this (default 256)",
++        default=None,
++        help="how large a passage the model is asked about, in whitespace tokens. "
++        "Defaults to THIS DEPLOYMENT's kb.chunker.max_tokens, so what you tune offline is "
++        "cut the way production cuts it. Pass a value to try a different cut — CJK is not "
++        "written with word spaces, so a Chinese corpus gets passages several times this",
++    )
++    p.add_argument(
++        "--chunk-overlap",
++        type=int,
++        default=None,
++        help="how much consecutive passages share, in whitespace tokens. Defaults to the "
++        "deployment's kb.chunker.overlap",
+     )
+     p.add_argument(
+         "--as-user",
+@@ -192,12 +200,22 @@ def main() -> None:
+         llm = get_kb_llm(settings)
+         if llm is None:
+             raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
++        tokens, overlap = chunking_for(
++            settings, tokens=args.chunk_tokens, overlap=args.chunk_overlap
++        )
++        logging.info(
++            "cutting passages at %d whitespace tokens, overlap %d%s",
++            tokens,
++            overlap,
++            "" if args.chunk_tokens is None else "  (--chunk-tokens overrides the deployment)",
++        )
+         version = run_round(
+             llm,
+             rounds_dir=args.tune_round,
+             tune_dir=args.tune_round / "tune",
+             holdout_dir=args.tune_round / "holdout",
+-            chunk_tokens=args.chunk_tokens,
++            chunk_tokens=tokens,
++            chunk_overlap=overlap,
+             batch=args.batch,
+             holdout_every=args.holdout_every,
+         )
+@@ -217,12 +235,17 @@ def main() -> None:
+         llm = _llm_for_samples(settings)
+         if llm is None:
+             raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
++        tokens, overlap = chunking_for(
++            settings, tokens=args.chunk_tokens, overlap=args.chunk_overlap
++        )
++        logging.info("cutting passages at %d whitespace tokens, overlap %d", tokens, overlap)
+         graph = preview_samples(
+             llm,
+             args.samples,
+             out_dir=args.out_dir,
+             prompt=prompt,
+-            max_tokens=args.chunk_tokens,
++            max_tokens=tokens,
++            overlap_tokens=overlap,
+         )
+         _report(args.out_dir, graph, file=sys.stderr)
+         return
+diff --git a/src/workspace_app/kb/graph/tune.py b/src/workspace_app/kb/graph/tune.py
+index 37e5647b..4b77a0ed 100644
+--- a/src/workspace_app/kb/graph/tune.py
++++ b/src/workspace_app/kb/graph/tune.py
+@@ -187,6 +187,7 @@ def run_round(
+     tune_dir: Path,
+     holdout_dir: Path,
+     chunk_tokens: int = 256,
++    chunk_overlap: int = 32,
+     reviser: ILlm | None = None,
+     batch: int = 0,
+     holdout_every: int = 1,
+@@ -209,13 +210,19 @@ def run_round(
+         out_dir=here / "tune",
+         prompt=current,
+         max_tokens=chunk_tokens,
++        overlap_tokens=chunk_overlap,
+         only=_batch(tune_dir, batch, seed=version),
+     )
+     tune = scorecard(here / "tune")
+     holdout: dict[str, Any] | None = None
+     if holdout_every <= 1 or version % holdout_every == 0:
+         preview_samples(
+-            llm, holdout_dir, out_dir=here / "holdout", prompt=current, max_tokens=chunk_tokens
++            llm,
++            holdout_dir,
++            out_dir=here / "holdout",
++            prompt=current,
++            max_tokens=chunk_tokens,
++            overlap_tokens=chunk_overlap,
+         )
+         holdout = scorecard(here / "holdout")
+     (here / "scorecard.json").write_text(
+diff --git a/tests/kb/test_graph_preview_cli.py b/tests/kb/test_graph_preview_cli.py
+index 016d8df5..07e32d6e 100644
+--- a/tests/kb/test_graph_preview_cli.py
++++ b/tests/kb/test_graph_preview_cli.py
+@@ -44,3 +44,36 @@ def test_a_disk_backed_config_is_usable():
+ 
+ def test_a_postgres_backed_config_is_usable():
+     assert unusable_config(_with_store(pg_dsn="postgresql://x/y"), Path("config.yaml")) is None
++
++
++def test_the_offline_loop_defaults_to_the_deployments_own_chunking():
++    """What is tuned offline only transfers if the passages are cut the way
++    production cuts them. A CLI default of 256 sitting next to a deployment that
++    configured something else means the prompt is tuned against a corpus nobody
++    runs — and nothing on screen would say so."""
++    from workspace_app.graph_preview import chunking_for
++
++    settings = dataclasses.replace(
++        Settings(), kb=dataclasses.replace(Settings().kb, chunker=_chunker(96, 8))
++    )
++
++    assert chunking_for(settings, tokens=None, overlap=None) == (96, 8)
++
++
++def test_an_explicit_flag_still_wins_over_the_deployment():
++    """Trying a different cut is the whole point of the experiment — it is one
++    of the live suspects. The default follows production; the flag overrides it."""
++    from workspace_app.graph_preview import chunking_for
++
++    settings = dataclasses.replace(
++        Settings(), kb=dataclasses.replace(Settings().kb, chunker=_chunker(96, 8))
++    )
++
++    assert chunking_for(settings, tokens=40, overlap=None) == (40, 8)
++    assert chunking_for(settings, tokens=None, overlap=0) == (96, 0)
++
++
++def _chunker(max_tokens: int, overlap: int):
++    from workspace_app.config.schema import ChunkerSettings
++
++    return ChunkerSettings(max_tokens=max_tokens, overlap=overlap)
