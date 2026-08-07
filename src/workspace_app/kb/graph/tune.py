@@ -188,6 +188,101 @@ def probe_score(out_dir: Path, names: list[str]) -> dict[str, Any]:
     }
 
 
+#: A name is COMMON when more than half the pool's documents contain it. Above
+#: this line a name is either the corpus's subject or the documents' own
+#: furniture, and only the second dimension tells those apart.
+_COMMON = 0.5
+#: A name is REPEATED when some document says it at least this many times. Once
+#: is what a passing noun gets; a thing the document is about comes back.
+_REPEATED = 2
+#: How many names of each quadrant the scorecard carries. Enough to check a
+#: share against, small enough to leave the model room to write a prompt.
+_PER_BUCKET = 20
+
+
+def document_frequency(pool_dir: Path, names: list[str]) -> dict[str, tuple[int, int]]:
+    """How many of the pool's documents contain each name, out of how many.
+
+    Over the WHOLE pool, always — counting is plain string matching against the
+    raw text, costs no model call, and a frequency estimated from a mini-batch is
+    not an estimate: eight documents read a one-in-eight name as 0 or 1, which
+    looks like stable evidence either way and is the same every round.
+
+    Matched on the raw text rather than on what was extracted, so a name the
+    criterion MISSED in some document still counts against its own frequency.
+    """
+    bodies = [path.read_text() for path in sorted(pool_dir.glob("*.txt"))]
+    return {name: (sum(1 for body in bodies if name in body), len(bodies)) for name in names}
+
+
+def quadrants(counts: dict[str, tuple[tuple[int, int], int]]) -> dict[str, list[str]]:
+    """Sort names by (how many documents have it, how often one document says it).
+
+    Document frequency ALONE cannot tell a rare-but-real thing from one-off
+    noise: a machine used only in the reflow step appears in one document in
+    eight and many times inside it, while a passing noun appears in one document,
+    once. On df they are identical. Both dimensions together separate them —
+    the termhood intuition behind C-value, and the reason this is four buckets
+    rather than one threshold:
+
+    =================  ==========================  =========================
+                       said repeatedly in a doc    said once
+    =================  ==========================  =========================
+    in most documents  ``core`` — the subject      ``furniture`` — headings,
+                                                   column labels, categories
+    in few documents   ``discriminative`` — the    ``singleton`` — values,
+                       most informative shape      passing nouns
+    =================  ==========================  =========================
+
+    ``discriminative`` is the one worth protecting. Every naive rule that
+    punishes rarity deletes it, and it is precisely what a knowledge graph is
+    for.
+    """
+    out: dict[str, list[str]] = {
+        k: [] for k in ("core", "furniture", "discriminative", "singleton")
+    }
+    for name, ((seen_in, total), inside) in counts.items():
+        common = total > 0 and seen_in / total > _COMMON
+        repeated = inside >= _REPEATED
+        if common:
+            out["core" if repeated else "furniture"].append(name)
+        else:
+            out["discriminative" if repeated else "singleton"].append(name)
+    return {key: sorted(names) for key, names in out.items()}
+
+
+def termhood(out_dir: Path, pool_dir: Path) -> dict[str, Any]:
+    """The quadrant shares for one preview run, with the names in each.
+
+    Shares alone are gameable in the usual direction — against an empty graph
+    every one of them reads perfectly — so each carries its members. This is what
+    replaces a blacklist: a blacklist teaches the model to avoid four particular
+    words, a populated share describes the SHAPE, and the shape is what carries
+    over to a corpus nobody has looked at yet. It is also why nothing here is
+    ever fed back as an exclusion: an excluded name stops being extracted, so it
+    stops appearing in any later evidence, and no round can ever discover the
+    exclusion was wrong.
+    """
+    mentions = json.loads((out_dir / "mentions.json").read_text())
+    # The most times any ONE document said it — concentration, not volume. A
+    # name summed across documents would let breadth stand in for depth, which
+    # is the exact confusion the second dimension exists to remove.
+    inside: dict[str, int] = {}
+    surface: dict[str, str] = {}
+    for mention in mentions:
+        key = mention["norm_surface"]
+        inside[key] = max(inside.get(key, 0), int(mention.get("occurrences", 1)))
+        surface.setdefault(key, mention["surface"])
+    frequency = document_frequency(pool_dir, [surface[key] for key in inside])
+    buckets = quadrants({surface[k]: (frequency[surface[k]], inside[k]) for k in inside})
+    total = sum(len(names) for names in buckets.values()) or 1
+    scored: dict[str, Any] = {"pool_documents": len(list(pool_dir.glob("*.txt")))}
+    for key, names in buckets.items():
+        scored[key] = names[:_PER_BUCKET]
+        scored[f"{key}_share"] = round(len(names) / total, 3)
+    return scored
+
+
 #: What a name has to BE, and the ones this corpus actually produced that it must
 #: not. Stated as a PROPERTY plus real observations, never as a list of good
 #: words: naming the good ones would mean guessing what the corpus is about from
@@ -339,7 +434,9 @@ def run_round(
         concurrency=concurrency,
         only=_batch(tune_dir, batch, seed=version),
     )
-    tune = scorecard(here / "tune")
+    # The pool, not the batch: `tune_dir` is every document available, and the
+    # frequency half of termhood must be estimated from all of it.
+    tune = scorecard(here / "tune") | termhood(here / "tune", tune_dir)
     holdout: dict[str, Any] | None = None
     if holdout_every <= 1 or version % holdout_every == 0:
         # Before the extraction, so a run killed part-way keeps the probes it
@@ -354,7 +451,11 @@ def run_round(
             overlap_tokens=chunk_overlap,
             concurrency=concurrency,
         )
-        holdout = scorecard(here / "holdout") | probe_score(here / "holdout", probes)
+        holdout = (
+            scorecard(here / "holdout")
+            | probe_score(here / "holdout", probes)
+            | termhood(here / "holdout", holdout_dir)
+        )
     (here / "scorecard.json").write_text(
         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
     )

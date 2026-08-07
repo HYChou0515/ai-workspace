@@ -378,3 +378,107 @@ def test_the_model_is_shown_what_the_graph_could_not_answer(tmp_path):
     (asked,) = llm.revision_prompts
     assert "lookup_hit_rate" in asked
     assert "錫膏" in asked, "the reviser was told the rate but not what was missed"
+
+
+# --- P2: termhood needs TWO dimensions ---------------------------------------
+#
+# Document frequency alone cannot tell a rare-but-real thing from one-off noise.
+# A machine used only in the reflow section appears in one document in eight and
+# many times inside it; a passing noun appears in one document, once. On df they
+# are identical. The pair (df, times-inside-a-document) separates them, which is
+# the C-value/termhood intuition and is 25 years old.
+
+
+def _pool_text(tmp_path, docs: dict[str, str]):
+    tune = tmp_path / "tune"
+    tune.mkdir()
+    for name, body in docs.items():
+        (tune / f"{name}.txt").write_text(body)
+    holdout = tmp_path / "holdout"
+    holdout.mkdir()
+    (holdout / "h.txt").write_text("錫膏")
+    return tune, holdout
+
+
+def test_document_frequency_counts_the_whole_pool(tmp_path):
+    """Counting is plain string matching over the raw text — no model call — so
+    there is never a reason to estimate it from a subset."""
+    from workspace_app.kb.graph.tune import document_frequency
+
+    pool = tmp_path / "pool"
+    pool.mkdir()
+    for i in range(8):
+        (pool / f"{i}.txt").write_text("回焊爐 出現在這裡" if i == 0 else "別的內容")
+
+    assert document_frequency(pool, ["回焊爐"]) == {"回焊爐": (1, 8)}
+
+
+def test_the_batch_does_not_shrink_the_frequency_denominator(tmp_path):
+    """The regression this phase exists to prevent. Eight documents cannot
+    estimate a frequency of one-in-eight — the reading is 0 or 1 and looks like
+    stable evidence either way, every round. The batch decides how many MODEL
+    CALLS a round costs; it must not decide how many samples a statistic is
+    estimated from."""
+    tune, holdout = _pool_text(tmp_path, {"a": "回焊爐", "b": "x", "c": "y", "d": "z"})
+    rounds = tmp_path / "rounds"
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, batch=1)
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
+    assert card["pool_documents"] == 4, "the denominator followed the batch"
+
+
+def test_a_rare_but_concentrated_name_is_discriminative_not_noise(tmp_path):
+    """The trap this phase exists for. `回焊爐` is in one document of four and
+    said many times inside it — the most informative shape there is. Punishing
+    it for being rare would delete exactly what the graph is for."""
+    from workspace_app.kb.graph.tune import quadrants
+
+    counts = {
+        # name: (documents containing it, times inside the documents that do)
+        "回焊爐": ((1, 4), 9),
+        "訊息": ((4, 4), 1),
+        "隨手一提": ((1, 4), 1),
+        "錫膏": ((3, 4), 6),
+    }
+    got = quadrants(counts)
+
+    assert got["discriminative"] == ["回焊爐"]
+    assert got["furniture"] == ["訊息"]
+    assert got["singleton"] == ["隨手一提"]
+    assert got["core"] == ["錫膏"]
+
+
+def test_the_scorecard_carries_the_quadrants_with_their_names(tmp_path):
+    """Proportions alone are gameable by extracting nothing — every one of them
+    looks perfect against an empty graph. The names are what make the shares
+    checkable."""
+    tune, holdout = _pool_text(
+        tmp_path, {"a": "回焊爐 回焊爐 回焊爐 245°C", "b": "回焊爐 溫度", "c": "別的"}
+    )
+    rounds = tmp_path / "rounds"
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
+    buckets = ("discriminative", "core", "furniture", "singleton")
+    assert all(isinstance(card[b], list) for b in buckets), (
+        "a share with no names cannot be checked"
+    )
+    assert all(f"{b}_share" in card for b in buckets)
+    assert "回焊爐" in [n for b in buckets for n in card[b]], "an extracted name landed nowhere"
+
+
+def test_the_reviser_is_shown_which_names_are_document_furniture(tmp_path):
+    """This is what replaces the blacklist. A blacklist teaches the model to
+    avoid four particular words; a share plus its members describes the SHAPE,
+    which is the thing that generalises to a corpus nobody has looked at."""
+    tune, holdout = _pool_text(tmp_path, {"a": "回焊爐 245°C", "b": "回焊爐 245°C"})
+    rounds = tmp_path / "rounds"
+    llm = _Extractor()
+
+    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    (asked,) = llm.revision_prompts
+    assert "furniture" in asked
+    assert "discriminative" in asked
