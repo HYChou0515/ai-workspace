@@ -76,6 +76,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--seed", type=int, default=0, help="fixes the sample draw (default 0)")
     p.add_argument(
+        "--tune-round",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="run ONE prompt-improvement round in DIR: score the newest unscored prompt on "
+        "DIR/tune and DIR/holdout, ask the model for a revision, and file it as the next "
+        "version. Trigger it as often as you like — every version is kept and scored on "
+        "both sets, so a later reader can see where tuning became overfitting and walk back",
+    )
+    p.add_argument(
         "--prompt-file",
         type=Path,
         default=None,
@@ -138,6 +148,28 @@ def main() -> None:
         return
 
     prompt = args.prompt_file.read_text() if args.prompt_file else None
+    if args.tune_round:
+        from ..kb.graph.tune import run_round
+
+        settings = load(config_path=args.config)
+        llm = get_kb_llm(settings)
+        if llm is None:
+            raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
+        version = run_round(
+            llm,
+            rounds_dir=args.tune_round,
+            tune_dir=args.tune_round / "tune",
+            holdout_dir=args.tune_round / "holdout",
+            chunk_tokens=args.chunk_tokens,
+        )
+        print(f"scored v{version}, wrote v{version + 1}", file=sys.stderr)
+        for row in json.loads((args.tune_round / "index.json").read_text()):
+            print(
+                f"  v{row['version']}: tune {row['tune']} | holdout {row['holdout']}",
+                file=sys.stderr,
+            )
+        return
+
     if args.samples:
         from ..factories import get_kb_llm as _llm_for_samples
         from ..kb.graph.preview import preview_samples
