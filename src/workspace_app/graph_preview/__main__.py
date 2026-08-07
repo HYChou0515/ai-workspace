@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -75,6 +76,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "at; this is what tells the difference",
     )
     p.add_argument("--seed", type=int, default=0, help="fixes the sample draw (default 0)")
+    p.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="log every model reply that failed to parse, in full, not only its opening",
+    )
     p.add_argument(
         "--tune-round",
         type=Path,
@@ -137,6 +144,16 @@ def _report(out_dir, graph, *, file) -> None:
 
 def main() -> None:
     args = _parse_args()
+    # Without this, Python's last-resort handler emits WARNING and above and
+    # nothing else — so a run that takes half an hour shows one line, and that
+    # line is a failure. Every INFO the extraction already emits was being
+    # thrown away by the process that asked for it.
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+        stream=sys.stderr,
+    )
 
     # The two paths that need no store at all, handled before anything opens one.
     if args.dump_prompt:

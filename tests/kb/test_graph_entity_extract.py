@@ -360,6 +360,51 @@ def test_a_list_entry_that_is_not_an_object_is_skipped_not_fatal():
 # Python constant.
 
 
+class _Recorder(ILlm):
+    """Records how `collect` was called, not only what it was asked."""
+
+    def __init__(self, reply: str = "{}") -> None:
+        self._reply = reply
+        self.kwargs: dict = {}
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        yield self._reply, False
+
+    def collect(self, prompt: str, on_chunk=None, **kw) -> str:  # noqa: ANN001
+        self.kwargs = kw
+        return self._reply
+
+
+def test_the_extractor_recovers_a_reply_that_landed_in_the_reasoning_channel():
+    """A reasoning model that runs out of tokens before closing `</think>` puts
+    its WHOLE reply — the JSON this has to parse — in `reasoning_content`, and no
+    content delta ever arrives. `collect` then returns "" and this reports "no
+    usable JSON", which reads like a model that answered badly rather than one
+    whose answer went down the other pipe.
+
+    Production runs reasoning models. Three other structured callers already ask
+    for the recovery (#494); this one did not, and a run of it dropped batch
+    after batch for half an hour saying only that.
+    """
+    llm = _Recorder()
+    extract_entities(llm, "t")
+    assert llm.kwargs.get("recover_reasoning") is True
+
+
+def test_an_unparseable_reply_is_logged_with_enough_of_itself_to_diagnose(caplog):
+    """"No usable JSON" without the reply names the symptom and withholds the
+    evidence — a refusal, a think block and a truncated generation all produce
+    that one line, and they need different fixes."""
+    import logging
+
+    llm = _FakeLlm("I am sorry, I cannot help with that request.")
+    with caplog.at_level(logging.WARNING, logger="workspace_app.kb.graph.entity_extract"):
+        extract_entities(llm, "t")
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "I am sorry" in logged, f"the reply itself never reached the log: {logged!r}"
+
+
 def test_a_supplied_prompt_replaces_the_built_in_one():
     llm = _FakeLlm("{}")
     extract_entities(llm, "回焊爐 245°C", prompt="Name only the machines.\n\n{text}")

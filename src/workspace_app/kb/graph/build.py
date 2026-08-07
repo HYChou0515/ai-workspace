@@ -21,6 +21,8 @@ travelling beside it is a second place for it to be wrong.
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -36,6 +38,8 @@ from ...resources.graph import (
 from ..llm import ILlm
 from .entity_extract import Extraction, extract_entities
 from .normalize import norm_attribute, norm_period, norm_surface, norm_unit
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -113,10 +117,44 @@ def build_graph(
     preview of a curated corpus shows every accepted merge come apart again, and
     a reader diffing two runs reads that as something the criterion did.
     """
-    per_doc = [
-        build_doc_graph(llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt)
-        for doc in docs
-    ]
+    # Say what is happening WHILE it happens. Extraction is one model call per
+    # passage over a whole corpus, so a run is tens of minutes with nothing to
+    # show for itself — and a run that is failing every call looks exactly like a
+    # run that is working, until it ends. The counts here are what tell them
+    # apart at minute one instead of at minute thirty.
+    started = time.monotonic()
+    passages = sum(len(d.chunks) for d in docs)
+    _LOGGER.info("graph build: %d documents, %d passages, one model call each", len(docs), passages)
+    per_doc: list[DocGraph] = []
+    done = 0
+    for index, doc in enumerate(docs, start=1):
+        built = build_doc_graph(
+            llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt
+        )
+        per_doc.append(built)
+        done += len(doc.chunks)
+        _LOGGER.info(
+            "graph build: %d/%d %s — %d passages, %d names, %d statements (%.0fs elapsed)",
+            index,
+            len(docs),
+            doc.doc_id,
+            len(doc.chunks),
+            len(built.mentions),
+            len(built.claims),
+            time.monotonic() - started,
+        )
+    silent = [d.doc_id for d, g in zip(docs, per_doc, strict=True) if d.chunks and not g.mentions]
+    if silent:
+        # Named, not counted. A document that yielded nothing is either a
+        # document about nothing or a model call that failed, and which one it
+        # is can only be settled by going and looking at that document.
+        _LOGGER.warning(
+            "graph build: %d of %d documents yielded no names at all — %s%s",
+            len(silent),
+            len(docs),
+            ", ".join(silent[:10]),
+            "" if len(silent) <= 10 else f", and {len(silent) - 10} more",
+        )
     mentions = [m for doc in per_doc for m in doc.mentions]
     relationships = [r for doc in per_doc for r in doc.relationships]
     vocabulary = build_vocabulary(

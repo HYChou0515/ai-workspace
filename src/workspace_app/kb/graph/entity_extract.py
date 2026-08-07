@@ -237,7 +237,13 @@ def extract_entities(
     reply = llm.collect(
         template.format(text=text, guidance=block)
         if "{guidance}" in template
-        else template.format(text=text)
+        else template.format(text=text),
+        # #494: a reasoning model that runs out of tokens before closing
+        # `</think>` puts its WHOLE reply — the JSON this has to parse — in the
+        # reasoning channel, and no content delta ever arrives. Without this the
+        # answer is simply not seen, and the run reports "no usable JSON": a
+        # model that answered fine, read as a model that answered badly.
+        recover_reasoning=True,
     )
     payload = _parse(reply)
     if payload is None:
@@ -343,5 +349,13 @@ def _parse(reply: str) -> dict[str, Any] | None:
             continue  # a lone object from INSIDE a bare array — try the array shape
         if isinstance(data, list):
             return {"mentions": data, "aliases": [], "relationships": [], "attributes": []}
-    _LOGGER.warning("extract_entities: no usable JSON in the reply, dropping the batch")
+    # WITH the reply. A refusal, a think block that never closed and a
+    # truncated generation all produce this one line and need different fixes,
+    # so the line that names the symptom has to carry the evidence too.
+    _LOGGER.warning(
+        "extract_entities: no usable JSON in a %d-character reply, dropping this passage. "
+        "It began: %r",
+        len(reply),
+        reply[:400],
+    )
     return None
