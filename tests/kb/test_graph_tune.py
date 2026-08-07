@@ -638,3 +638,132 @@ def test_only_the_most_recent_prompts_are_carried(tmp_path):
 
     assert "PROMPT_5" in asked
     assert "PROMPT_0" not in asked, "the whole history was pasted in"
+
+
+# --- P5: revise from the best version, not merely the latest -----------------
+#
+# Single-line hill climbing has no way back: a bad revision becomes the base for
+# the next one, and the good version it came from is on disk but out of play.
+# ProTeGi keeps a beam for exactly this reason.
+
+
+def test_a_round_revises_from_the_best_scoring_version_not_the_last_one(tmp_path):
+    """The revision is filed as the next version either way — the beam decides
+    which PARENT it is written from, so a regression costs one round instead of
+    becoming the base everything after it is measured against."""
+    from workspace_app.kb.graph.tune import Round, pick_parent
+
+    def card(hit_rate: float) -> dict:
+        return {"lookup_hit_rate": hit_rate, "furniture_share": 0.1, "mentions_per_document": 8.0}
+
+    history = [
+        Round(version=0, prompt="GOOD", tune=card(0.9), holdout=card(0.9)),
+        Round(version=1, prompt="WORSE", tune=card(0.2), holdout=card(0.2)),
+    ]
+
+    assert pick_parent(history).prompt == "GOOD"
+
+
+def test_the_beam_only_looks_at_versions_the_holdout_actually_scored(tmp_path):
+    """A version graded only on its own mini-batch cannot be compared with one
+    graded on the fixed set — picking between them would reward a lucky draw."""
+    from workspace_app.kb.graph.tune import Round, pick_parent
+
+    def card(hit_rate: float) -> dict:
+        return {"lookup_hit_rate": hit_rate, "furniture_share": 0.1, "mentions_per_document": 8.0}
+
+    history = [
+        Round(version=0, prompt="GRADED", tune=card(0.5), holdout=card(0.5)),
+        Round(version=1, prompt="UNGRADED", tune=card(0.99), holdout=None),
+    ]
+
+    assert pick_parent(history).prompt == "GRADED"
+
+
+def test_a_version_that_found_nothing_never_wins_the_beam(tmp_path):
+    """The failure the whole reward design exists to prevent, restated at the
+    selection step. An empty graph has a noise share of ZERO, so any penalty that
+    is SUBTRACTED hands it the win over a messy version that actually answers
+    something — the noise has to be a discount on what was found, not a debt
+    against it. These numbers are the discriminating case: subtracting makes the
+    empty version score higher."""
+    from workspace_app.kb.graph.tune import Round, pick_parent
+
+    empty = {"lookup_hit_rate": 0.0, "furniture_share": 0.0, "singleton_share": 0.0}
+    messy = {"lookup_hit_rate": 0.6, "furniture_share": 0.5, "singleton_share": 0.2}
+    history = [
+        Round(version=0, prompt="MESSY BUT USEFUL", tune=messy, holdout=messy),
+        Round(version=1, prompt="EMPTY", tune=empty, holdout=empty),
+    ]
+
+    assert pick_parent(history).prompt == "MESSY BUT USEFUL"
+
+
+class _PerPassage(ILlm):
+    """Names whichever known thing the passage actually contains.
+
+    A fake that answers the same way for every passage makes every name equally
+    frequent, which flattens exactly the statistics under test. This one varies
+    with the text, so document frequency and concentration mean something.
+    """
+
+    KNOWN = ("回焊爐", "錫膏", "AOI")
+
+    def __init__(self, *, silent: bool = False) -> None:
+        self._silent = silent
+        self.revision_prompts: list[str] = []
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        if "REVISED PROMPT" in prompt:
+            self.revision_prompts.append(prompt)
+            yield "REVISED\n{text}", False
+        elif "look up later" in prompt:
+            yield '{"names": ["回焊爐", "錫膏"]}', False
+        elif self._silent:
+            yield '{"mentions": []}', False
+        else:
+            found = [n for n in self.KNOWN if n in prompt.rsplit("\n", 1)[-1]]
+            yield json.dumps({"mentions": [{"surface": n, "kind": "機台"} for n in found]}), False
+
+
+def _varied(tmp_path):
+    """Three documents, each about a different thing said more than once — so a
+    name is rare across the pool and concentrated inside one document, the shape
+    the quadrants are meant to reward."""
+    for half in ("tune", "holdout"):
+        folder = tmp_path / half
+        folder.mkdir()
+        for name in _PerPassage.KNOWN:
+            (folder / f"{name}.txt").write_text(f"{name} {name} 說明")
+    return tmp_path / "tune", tmp_path / "holdout"
+
+
+def test_a_bad_round_does_not_become_the_base_for_every_round_after_it(tmp_path):
+    """The beam, end to end. v1 finds nothing, so v2 must be written from v0 —
+    under single-line climbing v1 would be the base and one bad revision would
+    cost every round that followed."""
+    tune, holdout = _varied(tmp_path)
+    rounds = tmp_path / "rounds"
+    # One whitespace token per passage, so a name said twice in a document
+    # registers as concentrated rather than as a single mention.
+    fine = {"chunk_tokens": 1, "chunk_overlap": 0}
+
+    run_round(_PerPassage(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, **fine)
+    run_round(
+        _PerPassage(silent=True), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, **fine
+    )
+
+    assert (rounds / "v2" / "parent.txt").read_text() == "0", "the empty version became the base"
+
+
+def test_the_round_records_which_version_it_revised_from(tmp_path):
+    """Without it the folder is unreadable: v7 built from v3 looks like v7 built
+    from v6, and nobody can reconstruct why a version appeared."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    index = json.loads((rounds / "index.json").read_text())
+    assert "revised_from" in index[1]

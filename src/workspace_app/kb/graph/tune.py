@@ -67,6 +67,53 @@ class Round:
     prompt: str
     tune: dict[str, Any]
     holdout: dict[str, Any] | None
+    #: Which version this one's prompt was written from. Not always the version
+    #: before it — see :func:`pick_parent`.
+    parent: int | None = None
+
+
+def fitness(card: dict[str, Any]) -> float:
+    """One number for comparing versions: what it FINDS, discounted by clutter.
+
+    MULTIPLIED, not subtracted. Subtracting the noise shares looks equivalent
+    and is not: an empty graph has a noise share of zero, so a penalty that is
+    subtracted rewards extracting nothing — the exact failure the rest of this
+    module exists to prevent, reappearing in the function that chooses between
+    versions. Multiplying makes the recall leg a factor, so a version that
+    answers no probe scores zero however clean it looks.
+    """
+    hit = float(card.get("lookup_hit_rate", 0.0))
+    noise = float(card.get("furniture_share", 0.0)) + float(card.get("singleton_share", 0.0))
+    return hit * max(0.0, 1.0 - noise)
+
+
+def pick_parent(history: list[Round]) -> Round:
+    """The version the next revision is written from — the best one, not the last.
+
+    Single-line hill climbing has no way back. A bad revision becomes the base
+    for the next one, and the good version it came from stays on disk but out of
+    play, so one unlucky edit can cost every round after it. Keeping the whole
+    scored history in contention is what a beam is for (ProTeGi, arXiv
+    2305.03495, whose own runs overfit a mini-batch around iteration 3-4 and
+    which selects across a beam rather than a line for this reason).
+
+    Only versions the HOLDOUT graded are eligible. A version scored on its own
+    mini-batch is not comparable with one scored on the fixed set — choosing
+    between them would reward a lucky draw, which is the failure the holdout
+    exists to prevent.
+
+    Ties go to the later version: on a plateau the loop should keep moving
+    forward rather than re-deriving from the same old parent for ever.
+    """
+    graded = [r for r in history if r.holdout is not None]
+    if not graded:
+        return history[-1]
+    best = graded[0]
+    for candidate in graded[1:]:
+        assert candidate.holdout is not None and best.holdout is not None
+        if fitness(candidate.holdout) >= fitness(best.holdout):
+            best = candidate
+    return best
 
 
 def next_version(rounds_dir: Path) -> int:
@@ -553,13 +600,18 @@ def run_round(
     history = _history(rounds_dir, upto=version)
     _write_index(rounds_dir, history)
 
+    # The beam: revise the best version so far, which is not always this one.
+    # Its own evidence travels with it, so the prompt and the scores the model is
+    # asked to reason about describe the same run.
+    parent = pick_parent(history)
+
     # Whoever owns the corpus knows its vocabulary better than this file does.
     notes = rounds_dir / "examples.md"
     revised = (reviser or llm).collect(
         revision_prompt(
-            current,
-            tune,
-            holdout,
+            parent.prompt,
+            parent.tune,
+            parent.holdout,
             history,
             examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
             lost=lost_names(rounds_dir, version=version),
@@ -567,7 +619,11 @@ def run_round(
     )
     nxt = rounds_dir / f"v{version + 1}"
     nxt.mkdir(parents=True, exist_ok=True)
-    (nxt / "prompt.txt").write_text(_usable(revised, fallback=current))
+    (nxt / "prompt.txt").write_text(_usable(revised, fallback=parent.prompt))
+    # Which version this one grew from. Without it the folder is unreadable: v7
+    # written from v3 looks exactly like v7 written from v6, and the shape of the
+    # search — the whole reason a beam is worth having — is invisible.
+    (nxt / "parent.txt").write_text(str(parent.version))
     return version
 
 
@@ -614,12 +670,14 @@ def _history(rounds_dir: Path, *, upto: int) -> list[Round]:
         if not card.is_file():
             continue
         data = json.loads(card.read_text())
+        parent = rounds_dir / f"v{version}" / "parent.txt"
         out.append(
             Round(
                 version=version,
                 prompt=(rounds_dir / f"v{version}" / "prompt.txt").read_text(),
                 tune=data["tune"],
                 holdout=data["holdout"],
+                parent=int(parent.read_text()) if parent.is_file() else None,
             )
         )
     return out
@@ -638,6 +696,10 @@ def _write_index(rounds_dir: Path, history: list[Round]) -> None:
             [
                 {
                     "version": r.version,
+                    # Which version's prompt this one was written from. The beam
+                    # means that is not always the version before it, and a
+                    # search whose shape is invisible cannot be walked back.
+                    "revised_from": r.parent,
                     "tune": {k: r.tune[k] for k in _HEADLINE},
                     # The holdout row carries the downstream number too — it is
                     # the one a person is actually looking for when they open
