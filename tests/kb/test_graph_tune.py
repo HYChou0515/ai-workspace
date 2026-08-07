@@ -31,16 +31,21 @@ _REPLY = (
 class _Extractor(ILlm):
     """Answers extraction calls; hands revision calls back as a new prompt."""
 
-    def __init__(self, revision: str = "REVISED\n{text}") -> None:
+    def __init__(self, revision: str = "REVISED\n{text}", reply: str = _REPLY) -> None:
         self._revision = revision
+        self._reply = reply
         self.revision_prompts: list[str] = []
+        self.probe_calls = 0
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         if "REVISED PROMPT" in prompt:  # the meta-prompt, not a passage
             self.revision_prompts.append(prompt)
             yield self._revision, False
+        elif "look up later" in prompt:  # the probe-drawing call
+            self.probe_calls += 1
+            yield '{"names": ["回焊爐", "錫膏"]}', False
         else:
-            yield _REPLY, False
+            yield self._reply, False
 
 
 def _samples(tmp_path):
@@ -267,3 +272,109 @@ def test_the_holdout_can_be_run_less_often_than_the_batch(tmp_path):
     assert ran == [0, 2], f"the holdout ran on {ran}, not every second round"
     index = json.loads((rounds / "index.json").read_text())
     assert index[1]["holdout"] is None, "a round that skipped the holdout must say so, not guess"
+
+
+# --- P1: the downstream reward — can the graph be LOOKED UP? -----------------
+#
+# Every other number in the scorecard falls when the criterion refuses more, so
+# a loop optimising them alone walks towards extracting nothing. This is the one
+# signal that moves the other way, and the only one measuring what the graph is
+# actually FOR: `lookup_entity(name)` resolves a name through
+# `GraphEntity.norm_keys`, so "is it in the graph" means "would that lookup hit".
+
+
+def test_the_probe_set_is_drawn_once_and_then_frozen(tmp_path):
+    """A target redrawn every round is not a target. The probes have to outlive
+    the versions they grade, or an improvement and a re-draw are the same shape
+    in the numbers."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    llm = _Extractor()
+
+    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+    first = (rounds / "probes.json").read_text()
+    drawn = llm.probe_calls
+    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    assert drawn > 0, "no probes were ever drawn"
+    assert llm.probe_calls == drawn, "the probes were redrawn — the target moved"
+    assert (rounds / "probes.json").read_text() == first
+
+
+def test_the_holdout_scorecard_says_which_probes_the_graph_cannot_answer(tmp_path):
+    """A rate on its own cannot be checked; the names can. Whoever reads the
+    round can open the document and see whether a miss was the extractor's fault
+    or a probe that was never reasonable."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())
+    assert card["holdout"]["probes_total"] == 2
+    assert card["holdout"]["lookup_hit_rate"] == 0.5, "回焊爐 was extracted, 錫膏 was not"
+    assert card["holdout"]["probes_missed"] == ["錫膏"]
+
+
+def test_extracting_nothing_scores_zero_here(tmp_path):
+    """The whole reason this layer exists. Refusing everything is perfect on
+    every other number in the scorecard and is the worst possible outcome; this
+    is the number that says so."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+
+    run_round(
+        _Extractor(reply='{"mentions": []}'),
+        rounds_dir=rounds,
+        tune_dir=tune,
+        holdout_dir=holdout,
+    )
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())
+    assert card["holdout"]["lookup_hit_rate"] == 0.0
+
+
+def test_probes_the_owner_wrote_are_used_as_they_are(tmp_path):
+    """The probes are a plain list in a plain file precisely so a person can
+    strike out the unreasonable ones. Regenerating over their edit would make
+    that pointless — and silently."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    rounds.mkdir()
+    (rounds / "probes.json").write_text(json.dumps({"names": ["回焊爐"]}, ensure_ascii=False))
+    llm = _Extractor()
+
+    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    assert llm.probe_calls == 0, "the owner's probe set was overwritten"
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())
+    assert card["holdout"]["lookup_hit_rate"] == 1.0
+
+
+def test_a_probe_matches_through_the_same_normalisation_lookup_uses(tmp_path):
+    """`lookup_entity` resolves through `norm_surface`, so a probe differing only
+    by width or spacing IS answerable and must not count as a miss — scoring it
+    stricter than the tool being modelled would make the loop chase a difference
+    no user can observe."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    rounds.mkdir()
+    (rounds / "probes.json").write_text(json.dumps({"names": [" 回焊爐 "]}, ensure_ascii=False))
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())
+    assert card["holdout"]["lookup_hit_rate"] == 1.0
+
+
+def test_the_model_is_shown_what_the_graph_could_not_answer(tmp_path):
+    """The reviser cannot pull back from over-tightening it cannot see."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    llm = _Extractor()
+
+    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    (asked,) = llm.revision_prompts
+    assert "lookup_hit_rate" in asked
+    assert "錫膏" in asked, "the reviser was told the rate but not what was missed"

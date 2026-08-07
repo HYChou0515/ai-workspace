@@ -29,11 +29,34 @@ from typing import Any
 
 from ..llm import ILlm
 from .entity_extract import built_in_prompt
+from .normalize import norm_surface
 from .preview import preview_samples
 
 #: How many surfaces the model is shown from each set. Enough to see what the
 #: criterion is doing, small enough to leave room for the prompt it must write.
 _SHOWN = 60
+
+#: Drawing the probe set. Deliberately a NARROWER question than extraction:
+#: "name a few things a reader would look up" is answerable in a way that "list
+#: everything this passage is about" is not, and that asymmetry is the only
+#: reason a model may grade its own family's work here. It is not a licence to
+#: trust it — the set is written to disk in plain text so the corpus owner can
+#: strike out whatever was never reasonable.
+PROBES = """Below is one document from a technical corpus.
+
+Name up to {per_doc} things in it that a reader would come back to look up later —
+something they would type into a search box expecting a page about that thing. A
+machine, a part or component number, a material, a named process step, a defect,
+a supplier.
+
+NOT section headings, NOT generic categories, NOT measured values, NOT words
+about knowledge itself. The test: if the word could appear in a document from any
+other field, it is not one of these.
+
+Answer as JSON and nothing else: {{"names": ["...", "..."]}}
+
+DOCUMENT
+{text}"""
 
 
 @dataclass(frozen=True)
@@ -85,6 +108,83 @@ def scorecard(out_dir: Path, *, seed: int = 0) -> dict[str, Any]:
         "mentions_starting_with_a_digit": summary["mentions_starting_with_a_digit"],
         "kinds": dict(list(summary["kinds"].items())[:12]),
         "kept": sorted(names[:_SHOWN]),
+    }
+
+
+def ensure_probes(llm: ILlm, rounds_dir: Path, holdout_dir: Path, *, per_doc: int = 3) -> list[str]:
+    """The frozen probe set: names a reader would come back to look up.
+
+    Drawn ONCE, from the holdout, and never again. A target redrawn each round is
+    not a target — an improvement and a re-draw would be the same shape in the
+    numbers, and nobody reading the run later could tell which they were seeing.
+
+    Kept as plain text on purpose. Whoever owns the corpus can delete a probe
+    that was never reasonable, and this will not write over them.
+    """
+    path = rounds_dir / "probes.json"
+    if path.is_file():
+        names = json.loads(path.read_text())["names"]
+        assert isinstance(names, list)
+        return [str(n) for n in names]
+
+    drawn: list[str] = []
+    for doc in sorted(holdout_dir.glob("*.txt")):
+        drawn.extend(
+            _probe_names(llm.collect(PROBES.format(per_doc=per_doc, text=doc.read_text())))
+        )
+    seen: set[str] = set()
+    unique: list[str] = []
+    for name in drawn:
+        key = norm_surface(name)
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(name)
+    rounds_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"names": unique}, ensure_ascii=False, indent=2) + "\n")
+    return unique
+
+
+def _probe_names(reply: str) -> list[str]:
+    """The names out of one reply, or none — a model that answers unusably costs
+    this document's probes, not the run."""
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end < start:
+        return []
+    try:
+        data = json.loads(reply[start : end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return []
+    names = data.get("names") if isinstance(data, dict) else None
+    return [str(n) for n in names if str(n).strip()] if isinstance(names, list) else []
+
+
+def probe_score(out_dir: Path, names: list[str]) -> dict[str, Any]:
+    """Would ``lookup_entity`` find each probe in the graph this version built?
+
+    This is the one number in the scorecard that FALLS when the criterion
+    refuses more. Every other one rewards refusing everything, so without this
+    the loop has no way to notice it has tightened past useful — the meta-prompt
+    can only warn about that, and a warning is not a signal.
+
+    Matched exactly the way the tool being modelled matches: through
+    ``norm_surface`` against a live entity's ``norm_keys``. Tombstones are
+    skipped because ``entity_card`` skips them — their evidence lives at the host
+    now, so counting them would credit a lookup that returns nothing.
+    """
+    entities = json.loads((out_dir / "entities.json").read_text())
+    keys = {
+        key
+        for entity in entities
+        if not entity.get("merged_into")
+        for key in entity.get("norm_keys", ())
+    }
+    missed = [name for name in names if norm_surface(name) not in keys]
+    return {
+        # The rate alone cannot be checked by a reader. The names can: they can
+        # open the document and see whether the miss was the extractor's fault.
+        "lookup_hit_rate": round((len(names) - len(missed)) / len(names), 3) if names else 0.0,
+        "probes_total": len(names),
+        "probes_missed": missed,
     }
 
 
@@ -242,6 +342,9 @@ def run_round(
     tune = scorecard(here / "tune")
     holdout: dict[str, Any] | None = None
     if holdout_every <= 1 or version % holdout_every == 0:
+        # Before the extraction, so a run killed part-way keeps the probes it
+        # paid for: they are the one artefact here that must never be redrawn.
+        probes = ensure_probes(llm, rounds_dir, holdout_dir)
         preview_samples(
             llm,
             holdout_dir,
@@ -251,7 +354,7 @@ def run_round(
             overlap_tokens=chunk_overlap,
             concurrency=concurrency,
         )
-        holdout = scorecard(here / "holdout")
+        holdout = scorecard(here / "holdout") | probe_score(here / "holdout", probes)
     (here / "scorecard.json").write_text(
         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
     )
@@ -344,7 +447,15 @@ def _write_index(rounds_dir: Path, history: list[Round]) -> None:
                 {
                     "version": r.version,
                     "tune": {k: r.tune[k] for k in _HEADLINE},
-                    "holdout": {k: r.holdout[k] for k in _HEADLINE} if r.holdout else None,
+                    # The holdout row carries the downstream number too — it is
+                    # the one a person is actually looking for when they open
+                    # this file, and the only column that falls when the
+                    # criterion has tightened past useful.
+                    "holdout": (
+                        {k: r.holdout.get(k) for k in (*_HEADLINE, "lookup_hit_rate")}
+                        if r.holdout
+                        else None
+                    ),
                 }
                 for r in history
             ],
