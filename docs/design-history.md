@@ -30,6 +30,7 @@
 | [plan-llm-wiki.md](plan-llm-wiki.md) | #50 LLM wiki：與 chunk-RAG 平行的第二條維基管線 |
 | [plan-context-cards.md](plan-context-cards.md) | #106 Context cards：輕量、確定性的詞彙卡（glossary） |
 | [plan-collab-kb.md](plan-collab-kb.md) | KB 協作設計 |
+| [plan-graph-reward.md](plan-graph-reward.md) | #697 抽取判準調校迴圈的三層 reward：lookup 命中率（凍結探針）+ termhood 四象限（df 從整個 pool 算）+ judge/對照語料;beam 取代單線爬山;刻意不做黑名單 |
 
 ## Workflows
 
