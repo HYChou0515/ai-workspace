@@ -22,6 +22,7 @@ import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
 import { useOpenFile } from "../../hooks/openFile";
+import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { useEntities, useEntityCatalog, useEntityHealth, useReferencedRecords } from "../../hooks/useEntities";
 import { useEntityLiveSync } from "../../hooks/useEntityLiveSync";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
@@ -34,7 +35,8 @@ import { EntityRecordModal } from "./EntityRecordModal";
 import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
 import { buildRefIndex, referencedTypes, refOptionsForField } from "./refTraversal";
 import { setViewScalar } from "./shared";
-import type { SortRule, ViewConfig } from "./types";
+import { VIEW_KIND, type SortRule, type ViewConfig } from "./types";
+import { ViewErrorBoundary } from "./ViewErrorBoundary";
 
 /** The View panel's uncommitted edits — a full snapshot of the three panel-owned
  * spec fields (so an untouched field persists through a save of the others). */
@@ -52,7 +54,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   // every hook below is still called unconditionally.
   const spec = entry.status === "ready" ? parseViewSpec(entry.text) : null;
   const entityName = spec?.entity ?? "";
-  const isHealth = spec?.view === "health";
+  const isHealth = spec?.view === VIEW_KIND.health;
 
   // §E read-only gate: derive the item's write permission for this member; a
   // read-only viewer's write affordances are hidden and every write is a no-op.
@@ -68,6 +70,9 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const write = useEntityWrite(slug, itemId, entityName, { canWrite });
   const users = useUsers();
   const openFile = useOpenFile();
+  // #698 — the boundary's Retry: a plug-in reads FILES, so re-render alone
+  // can't help when the repair happened outside this tab. Re-read first.
+  const refreshFiles = useRefreshFiles(itemId);
 
   // Resolve the type + load its referenced types BEFORE the early returns, so the
   // ref-record queries stay unconditional (rules of hooks). `milestone.title`
@@ -120,7 +125,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   }
   if (!spec) return <YamlTree text={entry.text} />;
 
-  if (spec.view === "health") {
+  if (spec.view === VIEW_KIND.health) {
     // Click-to-fix: resolve the finding's type → `records_path` from the catalog
     // and open its record file. Only offered when a shell publishes an opener
     // (§F, #454); an unknown type just no-ops rather than opening a bad path.
@@ -225,7 +230,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const persistGantt = (yaml: string) => void fileService.writeFile(path, yaml).then(() => applyExternalWrite(yaml));
 
   const viewConfig: ViewConfig | undefined =
-    canWrite && type && (spec.view === "table" || spec.view === "board")
+    canWrite && type && (spec.view === VIEW_KIND.table || spec.view === VIEW_KIND.board)
       ? {
           fieldOptions: candidateColumns.map((c) => ({ name: c, label: c })),
           hidden: eff.hidden_fields,
@@ -246,7 +251,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
           onSave: () => void saveView(),
           onReset: () => setOverride(undefined),
         }
-      : canWrite && spec.view === "gantt"
+      : canWrite && spec.view === VIEW_KIND.gantt
         ? // gantt gear: Group by + working-day toggle + people display. Each change
           // persists comment-safe via a targeted text edit, NOT saveView's js-yaml
           // dump, so the self-documenting `week:` block survives. (Sort / Fields
@@ -292,30 +297,38 @@ export function AiYamlRenderer({ path }: { path: string }) {
 
   return (
     <>
-      <EntityViewBody
-        spec={effectiveSpec}
-        // #690 P4 — per project, per view: the collapse state lives in this
-        // person's browser, and two views must not collapse each other.
-        viewKey={`${itemId}:${path}`}
-        type={type}
-        entities={list?.entities ?? []}
-        invalid={list?.invalid ?? []}
-        users={users}
-        refIndex={refIndex}
-        canWrite={canWrite}
-        catalogDiagnostics={catalogQ.data?.diagnostics ?? []}
-        // catalog loaded but this type isn't in it → its schema failed to load (§D).
-        schemaMissing={catalogQ.isSuccess && !type}
-        onCreate={write.create}
-        onPatch={write.patch}
-        onPatchAnchor={anchorType ? anchorWrite.patch : undefined}
-        onOpenRecord={openInModal}
-        onOpenRecordFile={onOpenRecordFile}
-        busy={write.isBusy}
-        conflicts={write.conflicts}
-        onDismissConflict={write.dismissConflict}
-        viewConfig={viewConfig}
-      />
+      {/* The boundary wraps the WHOLE panel, not just the registered component:
+          the header renders `spec.title`, which is where a hostile `.ai.yaml`
+          crashed the app before the parser started coercing. Wrapping only the
+          component left that site — the original one — outside the net.
+          `resetKey` covers both the file and its contents, so switching tabs or
+          repairing the file in place both get a fresh attempt. */}
+      <ViewErrorBoundary kind={spec.view} resetKey={`${path}\n${entry.text}`} onRetry={refreshFiles}>
+        <EntityViewBody
+            spec={effectiveSpec}
+          // #690 P4 — per project, per view: the collapse state lives in this
+          // person's browser, and two views must not collapse each other.
+          viewKey={`${itemId}:${path}`}
+          type={type}
+          entities={list?.entities ?? []}
+          invalid={list?.invalid ?? []}
+          users={users}
+          refIndex={refIndex}
+          canWrite={canWrite}
+          catalogDiagnostics={catalogQ.data?.diagnostics ?? []}
+          // catalog loaded but this type isn't in it → its schema failed to load (§D).
+          schemaMissing={catalogQ.isSuccess && !type}
+          onCreate={write.create}
+          onPatch={write.patch}
+          onPatchAnchor={anchorType ? anchorWrite.patch : undefined}
+          onOpenRecord={openInModal}
+          onOpenRecordFile={onOpenRecordFile}
+          busy={write.isBusy}
+          conflicts={write.conflicts}
+          onDismissConflict={write.dismissConflict}
+          viewConfig={viewConfig}
+        />
+      </ViewErrorBoundary>
       {/* #680 — the record a gesture opened. A number with no record behind it
           (deleted by a peer, or dropped from the projection) closes rather than
           rendering an empty shell; the live-sync refetch is what surfaces it. */}

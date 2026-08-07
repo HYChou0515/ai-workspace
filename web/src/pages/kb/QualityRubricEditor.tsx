@@ -26,6 +26,8 @@ export function QualityRubricEditor({
   useEffect(() => setDraft(rubric), [rubric]);
 
   const saveMut = useMutation({
+    // Renders its own error in the editor (`saveMut.isError` below).
+    meta: { silentError: true },
     mutationFn: () => client.updateCollection(collectionId, { quality_rubric: draft }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
   });

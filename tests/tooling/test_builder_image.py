@@ -430,3 +430,60 @@ def test_the_runner_cache_is_sticky() -> None:
 
     assert "chmod 1777 /cache" in text
     assert "chmod 0777 /cache" not in text
+
+
+def test_the_images_start_their_own_interpreter_by_absolute_path() -> None:
+    """A bare `python` is whatever PATH says, and PATH is not ours alone.
+
+    Both images install into a venv and put it first on PATH, which holds
+    right up until something puts itself in front — a shared CI build
+    template appending its own `ENV PATH`, a base image change, a
+    `docker run -e PATH=...`. The container then starts, finds the system
+    interpreter, and dies with `No module named sandbox_host`: a message
+    that points at packaging when the packaging is fine.
+
+    Naming the interpreter takes the whole class away."""
+    for rel, interpreter in (
+        (("sandbox-host", "mcp-runner.Dockerfile"), "/runner/.venv/bin/python"),
+        (("sandbox-host", "Dockerfile"), "/host/.venv/bin/python"),
+    ):
+        text = _REPO.joinpath(*rel).read_text("utf-8")
+
+        assert f'["{interpreter}"' in text or f'["{interpreter}",' in text, rel
+        assert '["python"' not in text, rel
+
+
+def test_the_images_install_their_package_rather_than_linking_to_source() -> None:
+    """An editable install leaves a `.pth` pointing at ./src instead of the
+    package itself, so a shipped image depends on that tree surviving beside
+    it and on `.pth` processing being on.
+
+    When either slips the interpreter reports `No module named sandbox_host`
+    — which sends whoever reads it looking at packaging, while the real
+    package is sitting right there in the layer."""
+    for rel in (("sandbox-host", "mcp-runner.Dockerfile"), ("sandbox-host", "Dockerfile")):
+        for line in _REPO.joinpath(*rel).read_text("utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("RUN uv sync"):
+                continue
+            # `--no-install-project` lines only build the dependency layer;
+            # there is no project in them to install either way.
+            if "--no-install-project" in stripped:
+                continue
+            assert "--no-editable" in stripped, f"{rel}: {stripped}"
+
+
+def test_the_images_can_import_their_package_however_it_was_installed() -> None:
+    """`uv sync` installs nothing at all when a tree sets `[tool.uv] package =
+    false` — uv calls that a virtual project, and a deployment that treats
+    services as not-distributable sets it as a matter of house style.
+
+    The image then starts an interpreter that cannot import the package
+    sitting beside it, and says `No module named sandbox_host`: the same
+    sentence three different causes produce, which is why this is pinned
+    rather than left to whichever install path happens to be in use."""
+    for rel, root in (
+        (("sandbox-host", "mcp-runner.Dockerfile"), "/runner"),
+        (("sandbox-host", "Dockerfile"), "/host"),
+    ):
+        assert f"PYTHONPATH={root}/src" in _REPO.joinpath(*rel).read_text("utf-8"), rel

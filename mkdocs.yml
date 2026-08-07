@@ -108,6 +108,7 @@ nav:
       - 新增一個 App: adding-an-app.md
       - 擴充平台（Tools / Skills / Workflows）: extending-the-platform.md
       - 寫一支工具（外部作者）: tool-authoring.md
+      - 寫一個 View Kind（維運方）: view-kind-authoring.md
       - 撰寫 Workflow: workflows-authoring.md
       - 共創 Skills: skills-authoring.md
       - 發布與更新紀錄: releasing.md

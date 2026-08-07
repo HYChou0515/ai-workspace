@@ -62,6 +62,44 @@ describe("useItemAccess", () => {
     expect(result.current.canWrite).toBe(false);
   });
 
+  // The env-var panel's gate. A Participant may converse and still may not store
+  // a field on the item: that PATCH is write_meta, which the participant grant
+  // set does not include. Per the contract above, the wait is on a DENIED verb
+  // (canWrite) — waiting on a granted one proves nothing, since every verb is
+  // true before identity settles.
+  it("denies a Participant the item-field write, while they may still converse", async () => {
+    signInAs("dave", false);
+    const { result } = access({
+      ...privateItem,
+      permission: {
+        visibility: "restricted",
+        read_meta: ["user:dave"],
+        read_chat: ["user:dave"],
+        read_content: ["user:dave"],
+        converse: ["user:dave"],
+      },
+    } as unknown as AppItem);
+
+    await waitFor(() => expect(result.current.canWrite).toBe(false));
+    expect(result.current.canWriteMeta).toBe(false);
+    expect(result.current.canConverse).toBe(true);
+  });
+
+  // canWrite and canWriteMeta are different questions and must be able to
+  // disagree — an editor writes files and entity records, but the item PATCH
+  // still answers 403.
+  it("separates writing CONTENT from writing the item's own fields", async () => {
+    signInAs("erin", false);
+    const { result } = access({
+      ...privateItem,
+      permission: { visibility: "restricted", edit_content: ["user:erin"] },
+    } as unknown as AppItem);
+
+    await waitFor(() => expect(result.current.canConverse).toBe(false));
+    expect(result.current.canWrite).toBe(true);
+    expect(result.current.canWriteMeta).toBe(false);
+  });
+
   it("the owner keeps full access without being a superuser", async () => {
     signInAs("alice", false);
     const { result } = access(privateItem);

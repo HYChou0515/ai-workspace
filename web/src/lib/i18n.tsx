@@ -1195,6 +1195,18 @@ export const messages = {
   "env.export": { "zh-TW": "匯出 .env", en: "Export .env" },
   "env.save": { "zh-TW": "儲存", en: "Save" },
   "env.cancel": { "zh-TW": "取消", en: "Cancel" },
+  // The global "that didn't save" notice. Says what happened to the user's work
+  // ("未儲存" / "wasn't saved") first — a status line alone reads as noise, and
+  // reading it as "nothing was stored" is the one thing they must not get wrong.
+  "writeFailure.forbidden": {
+    "zh-TW": "沒有權限做這項變更,內容未儲存。",
+    en: "You don’t have permission to make this change — nothing was saved.",
+  },
+  "writeFailure.generic": {
+    "zh-TW": "儲存失敗,內容未套用。",
+    en: "Couldn’t save — the change was not applied.",
+  },
+  "writeFailure.dismiss": { "zh-TW": "關閉", en: "Dismiss" },
   "tools.title": { "zh-TW": "助理可用的工具", en: "Tools the assistant can use" },
   "tools.desc": {
     "zh-TW": "預設沿用範本設定。把任一工具改成「開啟」或「關閉」只會影響這個工作區；其餘維持「預設」會跟著範本變動。",

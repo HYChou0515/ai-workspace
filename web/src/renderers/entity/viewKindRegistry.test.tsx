@@ -31,7 +31,7 @@ function props(spec: ViewSpec, entities: EntityInstance[] = []): EntityViewProps
 describe("viewKindRegistry", () => {
   it("falls back to an unsupported-view notice for an unknown kind", () => {
     const r = resolveViewRenderer("chart");
-    render(<r.Component {...props({ view: "chart" as never, entity: "issue" })} />);
+    render(<r.Component {...props({ view: "chart", entity: "issue" })} />);
     expect(screen.getByText(/unsupported view kind: chart/i)).toBeInTheDocument();
   });
 
