@@ -1,0 +1,2071 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index f345bb11..ab104c93 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -27,7 +27,7 @@ Backend (Python 3.12, uv-managed):
+ - Type check: `uv run ty check`
+ - Run the app: `uv run python -m workspace_app` (serves API + SPA on 127.0.0.1:8000)
+ - Author a workflow: `uv run python -m workspace_app.workflow new <app> <profile> <id> [--recipe minimal|review-commit|batch]` scaffolds a runnable `run.py` + manifest stub; `uv run python -m workspace_app.workflow check [app]` statically catches drift/typos/missing `run()` before startup. **Writing or modifying a workflow → read [`docs/workflows-authoring.md`](docs/workflows-authoring.md)** (the dev-side `run.py` block catalog + conventions); the spec is [`docs/workflows.md`](docs/workflows.md) (#287). For the **user-side `workflow.json` DSL** (declarative), see [`docs/workflows.md`](docs/workflows.md) §22 + the visual manual [`docs/workflows-syntax.html`](docs/workflows-syntax.html); the #428 six-syntax locked decisions (unified reference / `outputs` / `switch` / `over` list·range / fan-in / gate `revise`) are in [`docs/workflow-reference-model.md`](docs/workflow-reference-model.md).
+-- Preview a collection's knowledge graph without storing anything (#697): `uv run python -m workspace_app.graph_preview <collection-id> --config /path/to/config.yaml -o ./graph-preview` reads the collection, runs the computation **production runs** (`kb/graph/build.build_graph`), and writes `summary.json` + one file per layer. It never constructs a write path, so it is safe to point at an environment that has data in it (verified against a real disk-backed store holding graph rows already: every file is byte-identical afterwards — the check has to be "nothing changed", not "the tables are empty", or it would pass a tool that DELETED). `--guidance-file` runs a candidate extraction criterion INSTEAD of the collection's own, so it can be tried before being committed — that is the loop: write a criterion, preview, diff against the last run, adjust. The criterion itself lives on `Collection.graph_guidance` (owner's settings panel, beside `use_graph`); blank ⇒ the extraction prompt exactly as it was. **Tuning the prompt is a three-step loop, and only the first step needs prod**: `--dump-samples N --holdout M` draws a random, disjoint pair of document sets out of the collection as plain text (one read-only read); `--dump-prompt PATH` writes the built-in extraction prompt out to edit; then `--samples <folder> --prompt-file PATH [--chunk-tokens N]` runs the whole extraction against those files with **no store at all**, so iterating costs a model call per passage and nothing else. `--chunk-tokens` is a knob because the chunker counts whitespace tokens and CJK has no word spaces — a Chinese corpus gets passages several times the size the setting names, and a model asked what three pages are ABOUT answers with the topic rather than the things in it. Run the holdout before believing a criterion: one tuned on the passages you looked at works on the passages you looked at. `--tune-round DIR` runs ONE unattended improvement round against `DIR/tune` + `DIR/holdout` — score the newest unscored prompt, hand the model what it produced, file the revision as the next version — so triggering it repeatedly accumulates `DIR/v0, v1, …` each with its prompt, its output and a scorecard for BOTH sets, plus `DIR/index.json` putting every version side by side. That side-by-side is the point: overfitting is the shape where `tune` improves and `holdout` does not, and walking back needs the losing versions still on disk. The reviser is told that extracting NOTHING scores perfectly on every number and is the worst outcome, and is shown the names that survived, because a model optimising counts alone will otherwise tighten until nothing does. `--as-user` reads with that person's access scopes applied (omitted ⇒ unscoped, the operator's own view). **The config is resolved `--config` > `$WORKSPACE_APP_CONFIG` > `./config.yaml` in the CURRENT directory** — so running it from a worktree (which has no `config.yaml`) would otherwise read an empty in-memory store and report a corpus with no documents; it prints which file it read and refuses up front when none configures a store.
++- Preview a collection's knowledge graph without storing anything (#697): `uv run python -m workspace_app.graph_preview <collection-id> --config /path/to/config.yaml -o ./graph-preview` reads the collection, runs the computation **production runs** (`kb/graph/build.build_graph`), and writes `summary.json` + one file per layer. It never constructs a write path, so it is safe to point at an environment that has data in it (verified against a real disk-backed store holding graph rows already: every file is byte-identical afterwards — the check has to be "nothing changed", not "the tables are empty", or it would pass a tool that DELETED). `--guidance-file` runs a candidate extraction criterion INSTEAD of the collection's own, so it can be tried before being committed — that is the loop: write a criterion, preview, diff against the last run, adjust. The criterion itself lives on `Collection.graph_guidance` (owner's settings panel, beside `use_graph`); blank ⇒ the extraction prompt exactly as it was. **Tuning the prompt is a three-step loop, and only the first step needs prod**: `--dump-samples N --holdout M` draws a random, disjoint pair of document sets out of the collection as plain text (one read-only read); `--dump-prompt PATH` writes the built-in extraction prompt out to edit; then `--samples <folder> --prompt-file PATH [--chunk-tokens N]` runs the whole extraction against those files with **no store at all**, so iterating costs a model call per passage and nothing else. `--chunk-tokens` is a knob because the chunker counts whitespace tokens and CJK has no word spaces — a Chinese corpus gets passages several times the size the setting names, and a model asked what three pages are ABOUT answers with the topic rather than the things in it. Run the holdout before believing a criterion: one tuned on the passages you looked at works on the passages you looked at. `--tune-round DIR` runs ONE unattended improvement round against `DIR/tune` + `DIR/holdout` — score the newest unscored prompt, hand the model what it produced, file the revision as the next version — so triggering it repeatedly accumulates `DIR/v0, v1, …` each with its prompt, its output and a scorecard for BOTH sets, plus `DIR/index.json` putting every version side by side. That side-by-side is the point: overfitting is the shape where `tune` improves and `holdout` does not, and walking back needs the losing versions still on disk. **Every count in a scorecard improves when the criterion refuses more, so counts alone point at extracting nothing** — the reward is therefore three layers that ride the HOLDOUT (fixed documents, so a change is attributable to the prompt rather than to the draw): (1) `lookup_hit_rate` against a **frozen probe set** (`DIR/probes.json`, drawn once, editable, matched through `norm_surface` exactly as `lookup_entity` matches) — the only number that FALLS when the criterion tightens past useful; (2) the **termhood quadrants** (`discriminative` / `core` / `furniture` / `singleton`), which need BOTH document frequency — always counted over the whole pool's raw text, never the mini-batch, because eight documents read a one-in-eight name as 0 or 1 — and within-document concentration, since a machine used only in the reflow step is rare AND real while a passing noun is rare and not; (3) `judged_keep_share` from a model asked the narrower question, plus `ordinary` against a contrast corpus the owner drops in `DIR/contrast/*.txt` (absent ⇒ silence, never a guessed default). `lost_names` shows the reviser what this version STOPPED finding, with the quote and how often the document said it. Versions are selected by a **beam** — `pick_parent` revises the best scored version, not merely the latest, so one bad revision costs a round instead of becoming the base for everything after it (`vN/parent.txt` + `revised_from` record the shape of the search). **There is deliberately no blacklist**: an excluded name stops being extracted, so it never appears in later evidence and no round can discover the exclusion was wrong — the quadrant shares and the contrast corpus describe the same failure as a SHAPE, which generalises to a corpus nobody has looked at. Rationale, the decisions that were reversed, and the literature (OPRO / ProTeGi / C-value / weirdness) are in [`docs/plan-graph-reward.md`](docs/plan-graph-reward.md). `--as-user` reads with that person's access scopes applied (omitted ⇒ unscoped, the operator's own view). **The config is resolved `--config` > `$WORKSPACE_APP_CONFIG` > `./config.yaml` in the CURRENT directory** — so running it from a worktree (which has no `config.yaml`) would otherwise read an empty in-memory store and report a corpus with no documents; it prints which file it read and refuses up front when none configures a store.
+ - Release notes (#441): the changelog (`src/workspace_app/help_content/CHANGELOG.md`) is generated in house by **`python -m workspace_app.changelog`** (pure renderer in `changelog/render.py`, git/IO glue in `changelog/__main__.py`) and is the single source for both the GitHub Release and the web `/help/releases` view. **Granularity = one bullet per merged PR**, walked via `git log --first-parent`: a PR-merge commit contributes its **PR title** (the merge body's first line, a Conventional Commit); squash/direct commits contribute their subject; intermediate branch commits (`P1 …`, `P2 …`) live on the second parent and never appear. The whole file is regenerated deterministically from the git tags each run (oldest section folds all history); section dates derive from the CalVer version, not the clock. `make changelog-preview` previews; `make release` cuts a **CalVer** release (`vYYYY.MM.DD`, `.N` same-day suffix) — bump `pyproject` + regenerate changelog + commit + local tag. The parser back into structured releases is `kb/changelog.py`. **NEVER bump the version or hand-edit generated changelog sections in normal commits**; `make release` + pushing the tag (→ `.github/workflows/release.yml`, which `awk`-slices the top section for the Release body) is a maintainer step. Full flow: [`docs/releasing.md`](docs/releasing.md).
+ 
+ Frontend (React + Vite, lives in `web/`):
+diff --git a/docs/design-history.md b/docs/design-history.md
+index fdf6b1db..ffe6b108 100644
+--- a/docs/design-history.md
++++ b/docs/design-history.md
+@@ -30,6 +30,7 @@
+ | [plan-llm-wiki.md](plan-llm-wiki.md) | #50 LLM wiki：與 chunk-RAG 平行的第二條維基管線 |
+ | [plan-context-cards.md](plan-context-cards.md) | #106 Context cards：輕量、確定性的詞彙卡（glossary） |
+ | [plan-collab-kb.md](plan-collab-kb.md) | KB 協作設計 |
++| [plan-graph-reward.md](plan-graph-reward.md) | #697 抽取判準調校迴圈的三層 reward：lookup 命中率（凍結探針）+ termhood 四象限（df 從整個 pool 算）+ judge/對照語料;beam 取代單線爬山;刻意不做黑名單 |
+ 
+ ## Workflows
+ 
+diff --git a/docs/plan-graph-reward.md b/docs/plan-graph-reward.md
+new file mode 100644
+index 00000000..1b981540
+--- /dev/null
++++ b/docs/plan-graph-reward.md
+@@ -0,0 +1,130 @@
++# Plan — 把抽取調校迴圈的 reward 做對(#697 後續)
++
++## 這份計畫要解的問題
++
++`--tune-round` 現在的 reward 只有五個數字(每篇幾個、不重複幾個、數字開頭幾個、kinds、60 個抽樣名字)。
++
++**這五個數字全部朝同一個方向:抽越少越好看。** 抽出零個在每一項上都滿分,而那是最糟的結果。meta-prompt 目前靠一句「WORST possible outcome」的告誡擋著,那是提醒,不是訊號 —— 迴圈本身量不到自己收得太緊。
++
++文獻上這叫 reward hacking;迴圈本身則是 OPRO / ProTeGi 那一系(見最後的〈文獻〉)。
++
++## 已定案(對話中拍板,含被推翻的東西)
++
++| 決定 | 理由 |
++|---|---|
++| **不做黑名單 / `must_not`** | 排除項是**不可逆的吸收態**:一個詞被排除 → 不再被抽出 → 不再出現在 `kept` → **後面沒有任何一輪能發現這個決定是錯的**。而且它只教模型避開那幾個字,不教它避開那個類別,換一批文件就原形畢露。 |
++| **不做 `must_find` 人工名單** | 兩個理由。(a) 在 mini-batch 上量 recall,只有**近乎每篇都出現**的詞量得穩定 —— 那正是我們要殺的文件家具;df=1/8 的詞每輪不是 0 就是 1,那是取樣解析度不足,不是 prompt 變差。(b) 更根本:列得出那份名單,就代表已經知道答案了。 |
++| **df 一律從整個 pool 的原文算** | 八篇估不出 1/8 的詞頻。batch 只該決定「這輪花多少模型呼叫」,不該決定「統計量從多少樣本估」。數幾個 `.txt` 含有某字串是純字串比對,不用模型。 |
++| **罰則要兩維都低才成立** | df 單獨一維分不出「罕見但真實」與「一次性垃圾」。 |
++| **低 df + 高文內次數要加分** | 那是最有鑑別度的形狀(只在回焊那節出現的機台)。 |
++| **下游指標是 lookup 命中率,不是 recall@k** | graph 沒有餵進向量檢索;它被 `lookup_entity(name)` 以正規化後的名字**精確查表**取用(`kb/graph/lookup.py`)。 |
++
++### 四象限 —— 判斷「是不是東西」要兩個維度
++
++|                     | 文內出現多次     | 文內只出現一次           |
++| ------------------- | ---------------- | ------------------------ |
++| **很多篇都有**      | 核心主題 ✅       | **文件家具**(訊息、討論)❌ |
++| **只有少數篇有**    | **最有鑑別度** ✅ | 一次性垃圾(值、路過的名詞)❌ |
++
++## 三層 reward
++
++便宜的代理指標負責爬,昂貴的真指標定期校準 —— 這是標準做法,不是新東西。
++
++| 層 | 訊號 | 成本 | 節奏 |
++|---|---|---|---|
++| 快 | ATR 統計(四象限、weirdness) | 零模型呼叫 | 每輪 |
++| 中 | LLM-as-judge 抽樣 + 流失名單 | 少量呼叫 | 每輪 |
++| 慢 | **lookup 命中率**(下游真指標) | 一組探針 | 每 N 輪(跟 holdout 同節奏) |
++
++前兩層讓迴圈跑得動,第三層負責**確認前兩層沒在說謊**。
++
++---
++
++## Phases
++
++### P1 — 下游 reward:lookup 命中率
++
++**為什麼先做這個**:沒有它,後面每一層改得再漂亮都沒人能證明有用。
++
++一次性從 **holdout 的原文**產生一組**凍結的探針**:每篇問模型「一個讀者事後會想回來查的東西,列 3 個」,存成 `rounds/probes.json`。然後每次評估時檢查:圖裡查不查得到這些名字。
++
++- 探針**產生一次就凍結**,不隨版本重跑 —— 否則靶會跟著移動
++- 探針是人可讀的純文字檔,擁有者可以刪掉不合理的(選配,不做也能跑)
++- 比對走 `norm_surface`,跟 `lookup_entity` 的查表規則同一套 —— 量的是真的查得到,不是「大概有」
++- **抽零個 → 命中率 0%**,這隻腳擋的就是這個
++
++新增 scorecard 欄位:`lookup_hit_rate`、`probes_total`、`probes_missed`(附名字,不只數字)。
++
++> 探針由模型產生,跟抽取器同一個家族,所以帶有共同偏誤。用得下去的理由是那個真實的不對稱:**判斷比生成簡單** —— 「列 3 個讀者會想查的東西」比「列出所有重要的東西」窄得多。這是 LLM-as-judge 能成立的同一個理由,不是無條件可信。
++
++### P2 — ATR:df 從 pool 算 + 四象限
++
++- `document_frequency(pool)`:掃 `rounds/tune/*.txt` 的**原文**,純字串比對,與 batch 大小脫鉤
++- 每個抽出的名字落到四象限的哪一格
++- scorecard 多三行:`furniture`(高 df 低 tf 的占比)、`singleton`(低 df 低 tf 的占比)、`discriminative`(低 df 高 tf 的占比,**越高越好**)
++- 送進 meta-prompt 時附上每一格的**實際名字**,不只是比例 —— 比例是可以靠抽零個做漂亮的,名字不行
++
++### P3 — 流失名單(recall 的第二隻腳)
++
++在 **holdout** 上算 `v_{n-1}` 有而 `v_n` 沒有的名字。holdout 每次都是同一批文件,所以名字消失可歸因到 prompt,不是抽籤抽掉的。
++
++送進 meta-prompt 時附**文內出現次數 + 原文引句**:
++
++```
++你這一版丟掉了這些名字,確定嗎:
++  回焊爐   (在 d3 出現 14 次)  "...回焊爐溫度設定為..."
++  訊息     (在 d3 出現 1 次)   "## 訊息"
++```
++
++判準沿用 P2 的兩維:丟掉高度聚合的詞可疑,丟掉 singleton 是好事。
++
++### P4 — meta-prompt 帶前幾版 prompt 全文
++
++現在 history 只送 `version / per_doc / digits` 兩個數字,**過去版本的 prompt 全文沒送** —— 所以模型會來回震盪:改壞、改回來、再改壞。把最近 K 版的 prompt 連同分數一起送。最便宜的一個修法。
++
++### P5 — beam:保留 top-k 而非單線
++
++現在是單線爬山 `v_n → v_{n+1}`,舊版躺在磁碟上但不參與後續。ProTeGi 的做法是保留 top-4 一起往下走。改成從**歷史最佳的 k 版**各衍生一個候選,下一輪擇優。
++
++### P6 — LLM-as-judge 抽樣
++
++對 `kept` 抽樣逐個問「人能不能指著它或查到它」。放在 P1 之後,因為要有下游指標才能驗證這個評審跟真實效用有沒有相關。
++
++### P7 — weirdness ratio ✅
++
++領域語料 vs 一般語料:「訊息」「討論」在兩邊都出現 → 是一般語言,自動出局,不用黑名單、不用打字、**而且會類推**。
++
++**對照語料從哪來 —— 定案:擁有者自己放。** 把任何一般文章丟進 `rounds/contrast/*.txt` 就生效,沒放就**完全不報這個數字**。內建一份通用詞頻表被否決:那正是「從語料外面寫判準」,是這整個 issue 要修的毛病。退化的方向必須是沉默,不是猜一個數字。
++
++---
++
++## 實作過程中被證據推翻的東西
++
++寫下來,因為每一條都是「看起來對、跑起來錯」的形狀,而且都是靠變異測試而不是靠審閱抓到的。
++
++| 原本 | 為什麼錯 | 改成 |
++|---|---|---|
++| `fitness = 命中率 − 雜訊佔比` | **空圖的雜訊佔比是 0**,所以什麼都不抽的版本能贏過有內容但雜的版本 —— 這整套 reward 要防的失敗,出現在挑版本的函數自己身上 | `命中率 × (1 − 雜訊佔比)`,雜訊是「對找到的東西打折」而不是「欠的債」 |
++| beam 只寫了 `pick_parent` 的單元測試 | 把 `run_round` 裡的呼叫換成「永遠取最新」,**全部測試照樣綠** —— 函數對了但沒有接上,而沒接上的樣子跟接上了一模一樣 | 補端到端測試:v1 抽不到東西時,v2 必須從 v0 寫出來 |
++| 「跳過 holdout 的輪次會誤報整批流失」 | 實際是**靜默**(找不到參照就回報沒流失),而靜默跟「真的沒流失」在數字上完全相同,更難發現 | 往前找最近一次真的跑過 holdout 的版本,並補測試 |
++| `weirdness` 的 `is_dir()` 守衛 | 死碼:`glob` 對不存在的目錄本來就回空 | 刪掉;真正在擋除零的是 `not names`,補了測試 |
++
++## 非目標
++
++- 不動模型權重。整個東西是 in-context 的優化,不是參數的優化。真 RL 需要 LoRA + 一份標註過的偏好資料集,而**沒有那份資料集就無從開始** —— P1/P6 的產出正好是它的種子。
++- 不做黑名單、不做人工 `must_find`(理由見上)。
++
++## 文獻
++
++迴圈本身是既有技術,照抄即可;新的只是把 ATR 統計量接成無標註條件下的 reward。
++
++- **OPRO** — Yang et al., *Large Language Models as Optimizers*, arXiv 2309.03409。meta-prompt 帶 (prompt, 分數) 軌跡,即 `index.json` → revise。
++- **ProTeGi / APO** — Pryzant et al., *Automatic Prompt Optimization with "Gradient Descent" and Beam Search*, arXiv 2305.03495 (EMNLP'23)。mini-batch + 文字梯度 + beam search;**論文自己記錄了第 3~4 輪 overfit 到特定 minibatch**,解法是 beam + bandit 選擇 → P5。
++- **Reflexion** — Shinn et al., arXiv 2303.11366。自稱 *verbal reinforcement learning*,即「借用 RL 概念但不動權重」。
++- **Self-Refine** — Madaan et al., arXiv 2303.17651。
++- **LLM-as-judge** — Zheng et al., arXiv 2306.05685 → P6。
++- **C-value / NC-value** — Frantzi, Ananiadou & Mima (2000)。自動術語辨識的經典,即 P2 的四象限。
++- **Weirdness ratio** — Ahmad et al. (1999) → P7。
++- **Termhood vs unithood** — Kageura & Umino (1996)。
++- **GraphRAG** — Edge et al., arXiv 2404.16130。
++- Reward hacking / Goodhart's law — 為什麼代理指標要靠下游真指標校準。
+diff --git a/src/workspace_app/graph_preview/__init__.py b/src/workspace_app/graph_preview/__init__.py
+index 72f5f663..804173b8 100644
+--- a/src/workspace_app/graph_preview/__init__.py
++++ b/src/workspace_app/graph_preview/__init__.py
+@@ -15,6 +15,27 @@ from pathlib import Path
+ from ..config.schema import Settings
+ 
+ 
++def chunking_for(settings: Settings, *, tokens: int | None, overlap: int | None) -> tuple[int, int]:
++    """How the offline loop should cut its passages: the DEPLOYMENT's own
++    setting, unless a flag says otherwise.
++
++    A prompt tuned offline only transfers if the passages were cut the way
++    production cuts them — the model is answering a question about a passage, and
++    the size of that passage changes the answer. A CLI default sitting beside a
++    deployment that configured something else would mean tuning against a corpus
++    nobody runs, with nothing on screen to say so.
++
++    The flags still win, because trying a different cut is itself one of the
++    experiments worth running: whether the passages are too large is a live
++    suspect for why the extractor answers with topics rather than things.
++    """
++    chunker = settings.kb.chunker
++    return (
++        chunker.max_tokens if tokens is None else tokens,
++        chunker.overlap if overlap is None else overlap,
++    )
++
++
+ def unusable_config(settings: Settings, config_path: Path | None) -> str | None:
+     """Why this run cannot work, or ``None``.
+ 
+diff --git a/src/workspace_app/graph_preview/__main__.py b/src/workspace_app/graph_preview/__main__.py
+index 8a13d222..c7709ba1 100644
+--- a/src/workspace_app/graph_preview/__main__.py
++++ b/src/workspace_app/graph_preview/__main__.py
+@@ -22,7 +22,7 @@ from pathlib import Path
+ from ..config.loader import _resolve_config_path, load
+ from ..factories import get_kb_llm, get_spec
+ from ..kb.graph.preview import preview_collection
+-from . import unusable_config
++from . import chunking_for, unusable_config
+ 
+ 
+ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+@@ -129,10 +129,28 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+     p.add_argument(
+         "--chunk-tokens",
+         type=int,
+-        default=256,
+-        help="how large a passage the model is asked about, in whitespace tokens, when "
+-        "running against --samples. CJK is not written with word spaces, so a Chinese "
+-        "corpus gets passages several times this (default 256)",
++        default=None,
++        help="how large a passage the model is asked about, in whitespace tokens. "
++        "Defaults to THIS DEPLOYMENT's kb.chunker.max_tokens, so what you tune offline is "
++        "cut the way production cuts it. Pass a value to try a different cut — CJK is not "
++        "written with word spaces, so a Chinese corpus gets passages several times this",
++    )
++    p.add_argument(
++        "--concurrency",
++        type=int,
++        default=1,
++        metavar="N",
++        help="extract N passages at once. One model call per passage IS the cost of a run, "
++        "and the calls do not depend on each other — the only reason they were serial is "
++        "that nobody said otherwise. Order is restored, so the graph is unchanged. Raise it "
++        "until the model server, not this process, is the thing that is busy",
++    )
++    p.add_argument(
++        "--chunk-overlap",
++        type=int,
++        default=None,
++        help="how much consecutive passages share, in whitespace tokens. Defaults to the "
++        "deployment's kb.chunker.overlap",
+     )
+     p.add_argument(
+         "--as-user",
+@@ -192,12 +210,23 @@ def main() -> None:
+         llm = get_kb_llm(settings)
+         if llm is None:
+             raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
++        tokens, overlap = chunking_for(
++            settings, tokens=args.chunk_tokens, overlap=args.chunk_overlap
++        )
++        logging.info(
++            "cutting passages at %d whitespace tokens, overlap %d%s",
++            tokens,
++            overlap,
++            "" if args.chunk_tokens is None else "  (--chunk-tokens overrides the deployment)",
++        )
+         version = run_round(
+             llm,
+             rounds_dir=args.tune_round,
+             tune_dir=args.tune_round / "tune",
+             holdout_dir=args.tune_round / "holdout",
+-            chunk_tokens=args.chunk_tokens,
++            chunk_tokens=tokens,
++            chunk_overlap=overlap,
++            concurrency=args.concurrency,
+             batch=args.batch,
+             holdout_every=args.holdout_every,
+         )
+@@ -217,12 +246,18 @@ def main() -> None:
+         llm = _llm_for_samples(settings)
+         if llm is None:
+             raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
++        tokens, overlap = chunking_for(
++            settings, tokens=args.chunk_tokens, overlap=args.chunk_overlap
++        )
++        logging.info("cutting passages at %d whitespace tokens, overlap %d", tokens, overlap)
+         graph = preview_samples(
+             llm,
+             args.samples,
+             out_dir=args.out_dir,
+             prompt=prompt,
+-            max_tokens=args.chunk_tokens,
++            max_tokens=tokens,
++            overlap_tokens=overlap,
++            concurrency=args.concurrency,
+         )
+         _report(args.out_dir, graph, file=sys.stderr)
+         return
+@@ -283,6 +318,7 @@ def main() -> None:
+         propose_with=llm if args.propose_merges else None,
+         as_user=args.as_user,
+         prompt=prompt,
++        concurrency=args.concurrency,
+     )
+     _report(args.out_dir, graph, file=sys.stderr)
+ 
+diff --git a/src/workspace_app/kb/graph/build.py b/src/workspace_app/kb/graph/build.py
+index f56a708b..5cd158f4 100644
+--- a/src/workspace_app/kb/graph/build.py
++++ b/src/workspace_app/kb/graph/build.py
+@@ -24,6 +24,7 @@ from __future__ import annotations
+ import logging
+ import time
+ from collections.abc import Callable
++from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import dataclass, field
+ from typing import Any
+ 
+@@ -107,6 +108,7 @@ def build_graph(
+     decisions: Decisions | None = None,
+     prompt: str | None = None,
+     on_document: Callable[[DocSource, DocGraph], None] | None = None,
++    concurrency: int = 1,
+ ) -> Graph:
+     """Every document extracted, then the vocabulary built over all of it.
+ 
+@@ -136,7 +138,12 @@ def build_graph(
+     done = 0
+     for index, doc in enumerate(docs, start=1):
+         built = build_doc_graph(
+-            llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt
++            llm,
++            doc,
++            collection_id=collection_id,
++            guidance=guidance,
++            prompt=prompt,
++            concurrency=concurrency,
+         )
+         per_doc.append(built)
+         if on_document is not None:
+@@ -193,6 +200,7 @@ def build_doc_graph(
+     collection_id: str,
+     guidance: str = "",
+     prompt: str | None = None,
++    concurrency: int = 1,
+ ) -> DocGraph:
+     """Extract every chunk of ``doc`` and fold the result into its rows.
+ 
+@@ -201,14 +209,17 @@ def build_doc_graph(
+     the count is the only signal anything downstream has for how much a document
+     cared about something. Counted per passage it would say nothing.
+     """
+-    extracted = [
+-        (chunk_id, extract_entities(llm, text, guidance=guidance, prompt=prompt))
+-        for chunk_id, text in doc.chunks
+-    ]
++    extracted = _extract_all(llm, doc.chunks, guidance=guidance, prompt=prompt, at_once=concurrency)
++    mentions = _mentions(extracted, collection_id=collection_id, doc=doc)
+     return DocGraph(
+-        mentions=_mentions(extracted, collection_id=collection_id, doc=doc),
++        mentions=mentions,
+         claims=_claims(extracted, collection_id=collection_id, doc=doc),
+-        relationships=_relationships(extracted, collection_id=collection_id, doc=doc),
++        relationships=_relationships(
++            extracted,
++            collection_id=collection_id,
++            doc=doc,
++            things={m.norm_surface for m in mentions},
++        ),
+         # ANY, not ALL. One readable passage is a real answer about the document,
+         # even a smaller one than last time; none at all is silence, and silence
+         # must not be recorded as "this document turned out to mention nothing".
+@@ -217,14 +228,63 @@ def build_doc_graph(
+     )
+ 
+ 
++def _extract_all(
++    llm: ILlm,
++    chunks: list[tuple[str, str]],
++    *,
++    guidance: str,
++    prompt: str | None,
++    at_once: int,
++) -> list[tuple[str, Extraction]]:
++    """Every passage extracted, in the DOCUMENT's order however they finish.
++
++    One model call per passage is the whole cost of a run, and the calls do not
++    depend on each other — the only reason they were serial is that nobody said
++    otherwise. `ILlm.collect` is blocking IO, so threads are the right tool and
++    the GIL is not in the way.
++
++    The order is restored before returning, and that is not cosmetic: passage
++    order decides which kind and which declared quote a mention keeps, and the
++    order every statement is written in. A run that returned them as they
++    completed would produce a different graph each time from the same corpus.
++    """
++    if at_once <= 1 or len(chunks) <= 1:
++        return [
++            (chunk_id, extract_entities(llm, text, guidance=guidance, prompt=prompt))
++            for chunk_id, text in chunks
++        ]
++    with ThreadPoolExecutor(max_workers=at_once) as pool:
++        futures = [
++            pool.submit(extract_entities, llm, text, guidance=guidance, prompt=prompt)
++            for _, text in chunks
++        ]
++        return [(chunk_id, f.result()) for (chunk_id, _), f in zip(chunks, futures, strict=True)]
++
++
+ def _relationships(
+     extracted: list[tuple[str, Extraction]],
+     *,
+     collection_id: str,
+     doc: DocSource,
++    things: set[str],
+ ) -> list[GraphRelationship]:
+-    """What the document said connects two things, ends kept as surfaces."""
+-    return [
++    """What the document said connects two THINGS, ends kept as surfaces.
++
++    An edge whose end the same answer did not name as a thing is dropped. The
++    extractor was returning sentence parses rather than graph edges — 「第一個
++    —是→ 汽車」 out of "the first one is a car", where 「第一個」 points at context
++    and means nothing outside the sentence it came from.
++
++    Structural, not a guess about spelling: an edge JOINS two things, so an end
++    that is not one is not an end. It also means this layer inherits the
++    criterion for what counts as a thing rather than needing its own — improve
++    that and the edges improve with it, with no second rule to keep in step.
++
++    Judged against the WHOLE document's things, not the passage's: a deck that
++    names the machine on slide one and states the connection on slide four is
++    the ordinary case.
++    """
++    kept = [
+         GraphRelationship(
+             collection_id=collection_id,
+             source_doc_id=doc.doc_id,
+@@ -240,7 +300,18 @@ def _relationships(
+         )
+         for chunk_id, extraction in extracted
+         for rel in extraction.relationships
++        if norm_surface(rel.subject) in things and norm_surface(rel.object) in things
+     ]
++    asked = sum(len(e.relationships) for _, e in extracted)
++    if asked > len(kept):
++        _LOGGER.info(
++            "graph build: %s — dropped %d of %d connections whose ends the document "
++            "never named as things",
++            doc.doc_id,
++            asked - len(kept),
++            asked,
++        )
++    return kept
+ 
+ 
+ def _claims(
+diff --git a/src/workspace_app/kb/graph/preview.py b/src/workspace_app/kb/graph/preview.py
+index 1268cd64..c726df15 100644
+--- a/src/workspace_app/kb/graph/preview.py
++++ b/src/workspace_app/kb/graph/preview.py
+@@ -104,6 +104,7 @@ def preview_samples(
+     max_tokens: int = 256,
+     overlap_tokens: int = 32,
+     only: set[str] | None = None,
++    concurrency: int = 1,
+ ) -> Graph:
+     """Run the extraction over a folder of text files. No store, no collection.
+ 
+@@ -141,6 +142,7 @@ def preview_samples(
+         collection_id="",
+         guidance=guidance,
+         prompt=prompt,
++        concurrency=concurrency,
+         on_document=lambda doc, built: append_progress(out_dir, doc, built),
+     )
+     write_preview(graph, docs, out_dir=out_dir)
+@@ -316,6 +318,7 @@ def preview_collection(
+     propose_with: ILlm | None = None,
+     as_user: str | None = None,
+     prompt: str | None = None,
++    concurrency: int = 1,
+ ) -> Graph:
+     """Build ``collection_id``'s graph in memory and write it to ``out_dir``.
+ 
+@@ -340,6 +343,7 @@ def preview_collection(
+         # diffing two runs would read as something the criterion did.
+         decisions=read_decisions(spec),
+         prompt=prompt,
++        concurrency=concurrency,
+         on_document=lambda doc, built: append_progress(out_dir, doc, built),
+     )
+     write_preview(graph, docs, out_dir=out_dir)
+diff --git a/src/workspace_app/kb/graph/tune.py b/src/workspace_app/kb/graph/tune.py
+index 37e5647b..196462bf 100644
+--- a/src/workspace_app/kb/graph/tune.py
++++ b/src/workspace_app/kb/graph/tune.py
+@@ -29,12 +29,35 @@ from typing import Any
+ 
+ from ..llm import ILlm
+ from .entity_extract import built_in_prompt
++from .normalize import norm_surface
+ from .preview import preview_samples
+ 
+ #: How many surfaces the model is shown from each set. Enough to see what the
+ #: criterion is doing, small enough to leave room for the prompt it must write.
+ _SHOWN = 60
+ 
++#: Drawing the probe set. Deliberately a NARROWER question than extraction:
++#: "name a few things a reader would look up" is answerable in a way that "list
++#: everything this passage is about" is not, and that asymmetry is the only
++#: reason a model may grade its own family's work here. It is not a licence to
++#: trust it — the set is written to disk in plain text so the corpus owner can
++#: strike out whatever was never reasonable.
++PROBES = """Below is one document from a technical corpus.
++
++Name up to {per_doc} things in it that a reader would come back to look up later —
++something they would type into a search box expecting a page about that thing. A
++machine, a part or component number, a material, a named process step, a defect,
++a supplier.
++
++NOT section headings, NOT generic categories, NOT measured values, NOT words
++about knowledge itself. The test: if the word could appear in a document from any
++other field, it is not one of these.
++
++Answer as JSON and nothing else: {{"names": ["...", "..."]}}
++
++DOCUMENT
++{text}"""
++
+ 
+ @dataclass(frozen=True)
+ class Round:
+@@ -44,6 +67,53 @@ class Round:
+     prompt: str
+     tune: dict[str, Any]
+     holdout: dict[str, Any] | None
++    #: Which version this one's prompt was written from. Not always the version
++    #: before it — see :func:`pick_parent`.
++    parent: int | None = None
++
++
++def fitness(card: dict[str, Any]) -> float:
++    """One number for comparing versions: what it FINDS, discounted by clutter.
++
++    MULTIPLIED, not subtracted. Subtracting the noise shares looks equivalent
++    and is not: an empty graph has a noise share of zero, so a penalty that is
++    subtracted rewards extracting nothing — the exact failure the rest of this
++    module exists to prevent, reappearing in the function that chooses between
++    versions. Multiplying makes the recall leg a factor, so a version that
++    answers no probe scores zero however clean it looks.
++    """
++    hit = float(card.get("lookup_hit_rate", 0.0))
++    noise = float(card.get("furniture_share", 0.0)) + float(card.get("singleton_share", 0.0))
++    return hit * max(0.0, 1.0 - noise)
++
++
++def pick_parent(history: list[Round]) -> Round:
++    """The version the next revision is written from — the best one, not the last.
++
++    Single-line hill climbing has no way back. A bad revision becomes the base
++    for the next one, and the good version it came from stays on disk but out of
++    play, so one unlucky edit can cost every round after it. Keeping the whole
++    scored history in contention is what a beam is for (ProTeGi, arXiv
++    2305.03495, whose own runs overfit a mini-batch around iteration 3-4 and
++    which selects across a beam rather than a line for this reason).
++
++    Only versions the HOLDOUT graded are eligible. A version scored on its own
++    mini-batch is not comparable with one scored on the fixed set — choosing
++    between them would reward a lucky draw, which is the failure the holdout
++    exists to prevent.
++
++    Ties go to the later version: on a plateau the loop should keep moving
++    forward rather than re-deriving from the same old parent for ever.
++    """
++    graded = [r for r in history if r.holdout is not None]
++    if not graded:
++        return history[-1]
++    best = graded[0]
++    for candidate in graded[1:]:
++        assert candidate.holdout is not None and best.holdout is not None
++        if fitness(candidate.holdout) >= fitness(best.holdout):
++            best = candidate
++    return best
+ 
+ 
+ def next_version(rounds_dir: Path) -> int:
+@@ -88,27 +158,363 @@ def scorecard(out_dir: Path, *, seed: int = 0) -> dict[str, Any]:
+     }
+ 
+ 
++def ensure_probes(llm: ILlm, rounds_dir: Path, holdout_dir: Path, *, per_doc: int = 3) -> list[str]:
++    """The frozen probe set: names a reader would come back to look up.
++
++    Drawn ONCE, from the holdout, and never again. A target redrawn each round is
++    not a target — an improvement and a re-draw would be the same shape in the
++    numbers, and nobody reading the run later could tell which they were seeing.
++
++    Kept as plain text on purpose. Whoever owns the corpus can delete a probe
++    that was never reasonable, and this will not write over them.
++    """
++    path = rounds_dir / "probes.json"
++    if path.is_file():
++        names = json.loads(path.read_text())["names"]
++        assert isinstance(names, list)
++        return [str(n) for n in names]
++
++    drawn: list[str] = []
++    for doc in sorted(holdout_dir.glob("*.txt")):
++        drawn.extend(
++            _probe_names(llm.collect(PROBES.format(per_doc=per_doc, text=doc.read_text())))
++        )
++    seen: set[str] = set()
++    unique: list[str] = []
++    for name in drawn:
++        key = norm_surface(name)
++        if key and key not in seen:
++            seen.add(key)
++            unique.append(name)
++    rounds_dir.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps({"names": unique}, ensure_ascii=False, indent=2) + "\n")
++    return unique
++
++
++def _probe_names(reply: str) -> list[str]:
++    """The names out of one reply, or none — a model that answers unusably costs
++    this document's probes, not the run."""
++    start, end = reply.find("{"), reply.rfind("}")
++    if start == -1 or end < start:
++        return []
++    try:
++        data = json.loads(reply[start : end + 1])
++    except (json.JSONDecodeError, ValueError):
++        return []
++    names = data.get("names") if isinstance(data, dict) else None
++    return [str(n) for n in names if str(n).strip()] if isinstance(names, list) else []
++
++
++def probe_score(out_dir: Path, names: list[str]) -> dict[str, Any]:
++    """Would ``lookup_entity`` find each probe in the graph this version built?
++
++    This is the one number in the scorecard that FALLS when the criterion
++    refuses more. Every other one rewards refusing everything, so without this
++    the loop has no way to notice it has tightened past useful — the meta-prompt
++    can only warn about that, and a warning is not a signal.
++
++    Matched exactly the way the tool being modelled matches: through
++    ``norm_surface`` against a live entity's ``norm_keys``. Tombstones are
++    skipped because ``entity_card`` skips them — their evidence lives at the host
++    now, so counting them would credit a lookup that returns nothing.
++    """
++    entities = json.loads((out_dir / "entities.json").read_text())
++    keys = {
++        key
++        for entity in entities
++        if not entity.get("merged_into")
++        for key in entity.get("norm_keys", ())
++    }
++    missed = [name for name in names if norm_surface(name) not in keys]
++    return {
++        # The rate alone cannot be checked by a reader. The names can: they can
++        # open the document and see whether the miss was the extractor's fault.
++        "lookup_hit_rate": round((len(names) - len(missed)) / len(names), 3) if names else 0.0,
++        "probes_total": len(names),
++        "probes_missed": missed,
++    }
++
++
++#: A name is COMMON when more than half the pool's documents contain it. Above
++#: this line a name is either the corpus's subject or the documents' own
++#: furniture, and only the second dimension tells those apart.
++_COMMON = 0.5
++#: A name is REPEATED when some document says it at least this many times. Once
++#: is what a passing noun gets; a thing the document is about comes back.
++_REPEATED = 2
++#: How many names of each quadrant the scorecard carries. Enough to check a
++#: share against, small enough to leave the model room to write a prompt.
++_PER_BUCKET = 20
++
++
++def document_frequency(pool_dir: Path, names: list[str]) -> dict[str, tuple[int, int]]:
++    """How many of the pool's documents contain each name, out of how many.
++
++    Over the WHOLE pool, always — counting is plain string matching against the
++    raw text, costs no model call, and a frequency estimated from a mini-batch is
++    not an estimate: eight documents read a one-in-eight name as 0 or 1, which
++    looks like stable evidence either way and is the same every round.
++
++    Matched on the raw text rather than on what was extracted, so a name the
++    criterion MISSED in some document still counts against its own frequency.
++    """
++    bodies = [path.read_text() for path in sorted(pool_dir.glob("*.txt"))]
++    return {name: (sum(1 for body in bodies if name in body), len(bodies)) for name in names}
++
++
++def quadrants(counts: dict[str, tuple[tuple[int, int], int]]) -> dict[str, list[str]]:
++    """Sort names by (how many documents have it, how often one document says it).
++
++    Document frequency ALONE cannot tell a rare-but-real thing from one-off
++    noise: a machine used only in the reflow step appears in one document in
++    eight and many times inside it, while a passing noun appears in one document,
++    once. On df they are identical. Both dimensions together separate them —
++    the termhood intuition behind C-value, and the reason this is four buckets
++    rather than one threshold:
++
++    =================  ==========================  =========================
++                       said repeatedly in a doc    said once
++    =================  ==========================  =========================
++    in most documents  ``core`` — the subject      ``furniture`` — headings,
++                                                   column labels, categories
++    in few documents   ``discriminative`` — the    ``singleton`` — values,
++                       most informative shape      passing nouns
++    =================  ==========================  =========================
++
++    ``discriminative`` is the one worth protecting. Every naive rule that
++    punishes rarity deletes it, and it is precisely what a knowledge graph is
++    for.
++    """
++    out: dict[str, list[str]] = {
++        k: [] for k in ("core", "furniture", "discriminative", "singleton")
++    }
++    for name, ((seen_in, total), inside) in counts.items():
++        common = total > 0 and seen_in / total > _COMMON
++        repeated = inside >= _REPEATED
++        if common:
++            out["core" if repeated else "furniture"].append(name)
++        else:
++            out["discriminative" if repeated else "singleton"].append(name)
++    return {key: sorted(names) for key, names in out.items()}
++
++
++def termhood(out_dir: Path, pool_dir: Path) -> dict[str, Any]:
++    """The quadrant shares for one preview run, with the names in each.
++
++    Shares alone are gameable in the usual direction — against an empty graph
++    every one of them reads perfectly — so each carries its members. This is what
++    replaces a blacklist: a blacklist teaches the model to avoid four particular
++    words, a populated share describes the SHAPE, and the shape is what carries
++    over to a corpus nobody has looked at yet. It is also why nothing here is
++    ever fed back as an exclusion: an excluded name stops being extracted, so it
++    stops appearing in any later evidence, and no round can ever discover the
++    exclusion was wrong.
++    """
++    mentions = json.loads((out_dir / "mentions.json").read_text())
++    # The most times any ONE document said it — concentration, not volume. A
++    # name summed across documents would let breadth stand in for depth, which
++    # is the exact confusion the second dimension exists to remove.
++    inside: dict[str, int] = {}
++    surface: dict[str, str] = {}
++    for mention in mentions:
++        key = mention["norm_surface"]
++        inside[key] = max(inside.get(key, 0), int(mention.get("occurrences", 1)))
++        surface.setdefault(key, mention["surface"])
++    frequency = document_frequency(pool_dir, [surface[key] for key in inside])
++    buckets = quadrants({surface[k]: (frequency[surface[k]], inside[k]) for k in inside})
++    total = sum(len(names) for names in buckets.values()) or 1
++    scored: dict[str, Any] = {"pool_documents": len(list(pool_dir.glob("*.txt")))}
++    for key, names in buckets.items():
++        scored[key] = names[:_PER_BUCKET]
++        scored[f"{key}_share"] = round(len(names) / total, 3)
++    return scored
++
++
++#: How many earlier prompts travel with the history. Enough that the model can
++#: see what it already tried; few enough that they do not crowd out the evidence.
++_CARRY = 2
++#: How many lost names the model is asked about. A long list reads as an order
++#: to undo the version wholesale, which is the opposite of the intent.
++_LOST_SHOWN = 25
++
++
++def lost_names(rounds_dir: Path, *, version: int) -> list[dict[str, Any]]:
++    """Names the previous version found on the HOLDOUT and this one does not.
++
++    The recall leg that costs the corpus owner nothing: the reference set is
++    produced by the loop itself, one version ago, so there is no list for anyone
++    to write and keep current.
++
++    Measured on the holdout because it is the SAME documents every round. On the
++    tuning batch a name disappears whenever the draw changes, and that is not
++    evidence about the prompt — it is evidence about the shuffle.
++
++    Compared against the most recent version that actually RAN the holdout, not
++    against ``version - 1``. With ``--holdout-every`` most rounds skip it, and
++    comparing against the round before would then find no reference at all and
++    report nothing lost — silence that reads exactly like a version that lost
++    nothing, on every round but one.
++    """
++
++    def mentions_of(v: int) -> list[dict[str, Any]] | None:
++        path = rounds_dir / f"v{v}" / "holdout" / "mentions.json"
++        return json.loads(path.read_text()) if path.is_file() else None
++
++    now = mentions_of(version)
++    if now is None:
++        return []
++    before = next(
++        (found for v in range(version - 1, -1, -1) if (found := mentions_of(v)) is not None), None
++    )
++    if before is None:
++        return []  # nothing to have lost it from
++
++    here = {m["norm_surface"] for m in now}
++    seen: set[str] = set()
++    lost: list[dict[str, Any]] = []
++    for mention in before:
++        key = mention["norm_surface"]
++        if key in here or key in seen:
++            continue
++        seen.add(key)
++        # The evidence, not just the name: whether a loss was right is the same
++        # two-dimensional question as termhood. Dropping something a document
++        # said seven times is suspicious; dropping something said once in a
++        # heading is the whole point.
++        lost.append(
++            {
++                "surface": mention["surface"],
++                "occurrences": int(mention.get("occurrences", 1)),
++                "quote": mention.get("declared_quote", ""),
++            }
++        )
++    return lost
++
++
++#: How many extracted names the judge is asked about in one round. A sample, not
++#: the vocabulary: the point is a trend across rounds, and a trend does not need
++#: every name every time.
++_JUDGED = 40
++
++JUDGE = """Here are names a knowledge-graph extractor pulled out of a technical
++corpus. For each one, answer whether a reader could POINT AT IT or LOOK IT UP —
++a machine, a part or component number, a material, a named process step, a
++defect, a named parameter, a supplier.
++
++Answer no for section headings, generic categories, measured values, severity
++levels, counts, and words about knowledge itself. The test: if the word could
++appear in a document from any other field, the answer is no.
++
++NAMES
++{names}
++
++Answer as JSON and nothing else:
++{{"verdicts": [{{"name": "...", "keep": true}}, ...]}}"""
++
++
++def judge_names(llm: ILlm, names: list[str]) -> dict[str, Any]:
++    """A second opinion on a sample of what was extracted.
++
++    Asked a NARROWER question than the extractor was. "Could a person look this
++    up" is answerable in a way that "list everything this passage is about" is
++    not, and that asymmetry is the entire licence for a model to grade its own
++    family's work. It is not a reason to trust the verdict, so the rejected names
++    travel with the share and a person can see whether the judge was right.
++
++    An unusable reply reports NOTHING rather than zero: a parse failure and a
++    verdict of "keep none" are the same number and opposite facts, and read as
++    the second the reviser would loosen a criterion that was never assessed.
++    """
++    if not names:
++        return {}  # nothing was extracted; an empty graph must not buy a clean sheet here
++    reply = llm.collect(JUDGE.format(names="\n".join(f"- {n}" for n in names[:_JUDGED])))
++    start, end = reply.find("{"), reply.rfind("}")
++    if start == -1 or end < start:
++        return {}
++    try:
++        data = json.loads(reply[start : end + 1])
++    except (json.JSONDecodeError, ValueError):
++        return {}
++    verdicts = data.get("verdicts") if isinstance(data, dict) else None
++    if not isinstance(verdicts, list) or not verdicts:
++        return {}
++    rows = [v for v in verdicts if isinstance(v, dict) and "name" in v]
++    if not rows:
++        return {}
++    out = sorted(str(v["name"]) for v in rows if not v.get("keep"))
++    return {
++        "judged_keep_share": round((len(rows) - len(out)) / len(rows), 3),
++        "judged_out": out[:_PER_BUCKET],
++    }
++
++
++def weirdness(contrast_dir: Path, names: list[str]) -> dict[str, Any]:
++    """Which extracted names ordinary writing also uses.
++
++    The contrast-corpus idea behind the weirdness ratio (Ahmad et al., 1999): a
++    word frequent in the domain corpus AND in general language is general
++    language, whatever it looks like in isolation. This is what replaces a
++    blacklist properly — a blacklist teaches the model to avoid four particular
++    words, this describes the SHAPE, and the shape carries over to a corpus
++    nobody has looked at.
++
++    With no contrast corpus it reports NOTHING. Shipping a general-language
++    frequency table would be one more criterion written from outside the corpus,
++    which is the failure this whole issue exists to fix; the owner supplies
++    ordinary writing from their own world or this stays quiet.
++    """
++    # Nothing extracted is not "0% ordinary" — it is no evidence, and a share
++    # computed from it would divide by zero on the way to saying so.
++    if not names:
++        return {}
++    bodies = [path.read_text() for path in sorted(contrast_dir.glob("*.txt"))]
++    if not bodies:  # no corpus, or none supplied at all — glob tolerates both
++        return {}
++    ordinary = sorted({name for name in names if any(name in body for body in bodies)})
++    return {
++        "ordinary": ordinary[:_PER_BUCKET],
++        "ordinary_share": round(len(ordinary) / len(set(names)), 3),
++    }
++
++
++#: What a name has to BE, and the ones this corpus actually produced that it must
++#: not. Stated as a PROPERTY plus real observations, never as a list of good
++#: words: naming the good ones would mean guessing what the corpus is about from
++#: outside it, and every criterion this project invented that way was wrong
++#: within a corpus or two. The bad ones are quoted from real runs, which is a
++#: different kind of claim — they are evidence, not a guess.
++#:
++#: Overridable: drop an `examples.md` in the rounds folder and it replaces this.
++#: Whoever owns the corpus knows its vocabulary; this only has to be right enough
++#: to start.
++DEFAULT_EXAMPLES = """A name earns its place if a person could POINT AT IT or LOOK IT UP:
++a machine, a part or component number, a material, a named process step, a defect, a named
++parameter, a supplier. The test that separates them: **if the word could appear
++in a document from any other field, it is not what THIS document is about.**
++
++These came out of the real corpus and are the failure being fixed:
++
++- 基礎知識 / 細結構 / 影響比對模式 / 典型 — words about KNOWLEDGE rather than
++  about the subject. They compose endlessly, which is why one document currently
++  yields 163 distinct names.
++- 訊息 / 討論 / product — the document's own furniture: a section heading, a
++  column label, a generic category. Every document has them, so they distinguish
++  nothing.
++- severe — a severity LEVEL. It is the VALUE of some thing's attribute, and the
++  prompt already collects values separately.
++- 「10 product (10prds)」 — a table cell or a legend read as an object. A count
++  is not a thing.
++
++A measured value is never a thing either: it belongs to the statements the
++prompt already collects."""
++
+ REVISE = """You are improving the prompt that extracts a knowledge graph from a
+ technical corpus. Your whole output is the REVISED PROMPT — no commentary, no
+ explanation, no code fences.
+ 
+ ## What the corpus is, and what a good extraction looks like
+ 
+-Manufacturing and process documents. The things worth extracting are the ones a
+-person on the line could point at or look up: machines and their identifiers,
+-part and component numbers, materials, named process steps, defects, named
+-process parameters, suppliers.
+-
+-GOOD names, from this corpus: 回焊爐 RO-3 / SPI / PPOOIXUX / 冷焊 / 錫膏印刷偏移
+-/ 第四溫區 / 輸送帶速度
+-
+-BAD names, and these are the actual failure being fixed — the corpus is currently
+-full of them: 基礎知識 / 細結構 / 影響比對模式 / 典型 / 系統 / 問題 / 資料 / 方法.
+-They are words ABOUT documents rather than things in a factory, and they compose
+-endlessly, which is why one document currently yields 163 distinct names.
+-
+-A measured VALUE is not a thing: 245°C, 98.7%, 12 件 belong to the statements the
+-prompt already collects, not to the list of things.
++{examples}
+ 
+ ## The rule that must not be broken
+ 
+@@ -135,7 +541,17 @@ run reports nothing.
+ 
+ {scores}
+ 
+-## History
++## What this version stopped finding, compared with the one before it
++
++These names were extracted from the held-out documents by an earlier prompt and
++are no longer extracted at all. The held-out documents do not change between
++rounds, so each of these is a consequence of a prompt edit and nothing else.
++Losing a name a document said many times is evidence you have gone too far;
++losing one said once in a heading is the intent. Judge each one.
++
++{lost}
++
++## History — what has already been tried
+ 
+ {history}
+ 
+@@ -143,12 +559,25 @@ Revise the prompt. Change what the evidence above says is wrong; leave what is
+ working alone. Output the full revised prompt and nothing else."""
+ 
+ 
+-def revision_prompt(current: str, tune: dict, holdout: dict | None, history: list[Round]) -> str:
++def revision_prompt(
++    current: str,
++    tune: dict,
++    holdout: dict | None,
++    history: list[Round],
++    examples: str = DEFAULT_EXAMPLES,
++    lost: list[dict[str, Any]] | None = None,
++) -> str:
+     """What the model is asked, in full.
+ 
+     The HOLDOUT numbers are shown too, and labelled. A model told only how it did
+     on the passages it was tuned against has no way to know it is overfitting,
+     and neither would anyone reading its output later.
++
++    The recent prompts travel with their scores. Sending numbers alone leaves the
++    model hill-climbing blind — it cannot recognise a change it already made and
++    moved away from, so it undoes it, scores worse, redoes it, and oscillates.
++    Only the last few: the older ones have already been revised away from and
++    would crowd out the evidence.
+     """
+     scores = (
+         "### On the passages drawn for this round\n"
+@@ -173,9 +602,22 @@ def revision_prompt(current: str, tune: dict, holdout: dict | None, history: lis
+         )
+         for r in history
+     ]
++    for r in history[-_CARRY:]:
++        rows.append(f"\n### The prompt v{r.version} ran\n```\n{r.prompt.strip()}\n```")
++    dropped = lost or []
+     return REVISE.format(
++        examples=examples,
+         current=current,
+         scores=scores,
++        lost=(
++            "\n".join(
++                f"- {row['surface']}  (said {row['occurrences']}x in the document it came "
++                f"from)  “{row['quote']}”"
++                for row in dropped[:_LOST_SHOWN]
++            )
++            if dropped
++            else "(nothing — this version finds everything the previous one did)"
++        ),
+         history="\n".join(rows) if rows else "(this is the first version)",
+     )
+ 
+@@ -187,6 +629,8 @@ def run_round(
+     tune_dir: Path,
+     holdout_dir: Path,
+     chunk_tokens: int = 256,
++    chunk_overlap: int = 32,
++    concurrency: int = 1,
+     reviser: ILlm | None = None,
+     batch: int = 0,
+     holdout_every: int = 1,
+@@ -209,15 +653,41 @@ def run_round(
+         out_dir=here / "tune",
+         prompt=current,
+         max_tokens=chunk_tokens,
++        overlap_tokens=chunk_overlap,
++        concurrency=concurrency,
+         only=_batch(tune_dir, batch, seed=version),
+     )
+-    tune = scorecard(here / "tune")
++    # The pool, not the batch: `tune_dir` is every document available, and the
++    # frequency half of termhood must be estimated from all of it.
++    tune = scorecard(here / "tune") | termhood(here / "tune", tune_dir)
+     holdout: dict[str, Any] | None = None
+     if holdout_every <= 1 or version % holdout_every == 0:
++        # Before the extraction, so a run killed part-way keeps the probes it
++        # paid for: they are the one artefact here that must never be redrawn.
++        probes = ensure_probes(llm, rounds_dir, holdout_dir)
+         preview_samples(
+-            llm, holdout_dir, out_dir=here / "holdout", prompt=current, max_tokens=chunk_tokens
++            llm,
++            holdout_dir,
++            out_dir=here / "holdout",
++            prompt=current,
++            max_tokens=chunk_tokens,
++            overlap_tokens=chunk_overlap,
++            concurrency=concurrency,
++        )
++        # The two name-level verdicts ride the holdout, not the batch. Both
++        # answer "is this NAME a thing", so on a set of documents that rotates
++        # every round their share moves with the draw rather than with the
++        # prompt — the same reason `lost_names` is measured here. It is also
++        # where the expensive check belongs: the judge costs a model call, and
++        # `--holdout-every` is already the knob for how often that is paid.
++        named = _extracted_names(here / "holdout")
++        holdout = (
++            scorecard(here / "holdout")
++            | probe_score(here / "holdout", probes)
++            | termhood(here / "holdout", holdout_dir)
++            | judge_names(reviser or llm, named)
++            | weirdness(rounds_dir / "contrast", named)
+         )
+-        holdout = scorecard(here / "holdout")
+     (here / "scorecard.json").write_text(
+         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
+     )
+@@ -225,10 +695,30 @@ def run_round(
+     history = _history(rounds_dir, upto=version)
+     _write_index(rounds_dir, history)
+ 
+-    revised = (reviser or llm).collect(revision_prompt(current, tune, holdout, history))
++    # The beam: revise the best version so far, which is not always this one.
++    # Its own evidence travels with it, so the prompt and the scores the model is
++    # asked to reason about describe the same run.
++    parent = pick_parent(history)
++
++    # Whoever owns the corpus knows its vocabulary better than this file does.
++    notes = rounds_dir / "examples.md"
++    revised = (reviser or llm).collect(
++        revision_prompt(
++            parent.prompt,
++            parent.tune,
++            parent.holdout,
++            history,
++            examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
++            lost=lost_names(rounds_dir, version=version),
++        )
++    )
+     nxt = rounds_dir / f"v{version + 1}"
+     nxt.mkdir(parents=True, exist_ok=True)
+-    (nxt / "prompt.txt").write_text(_usable(revised, fallback=current))
++    (nxt / "prompt.txt").write_text(_usable(revised, fallback=parent.prompt))
++    # Which version this one grew from. Without it the folder is unreadable: v7
++    # written from v3 looks exactly like v7 written from v6, and the shape of the
++    # search — the whole reason a beam is worth having — is invisible.
++    (nxt / "parent.txt").write_text(str(parent.version))
+     return version
+ 
+ 
+@@ -254,6 +744,15 @@ def _batch(tune_dir: Path, size: int, *, seed: int) -> set[str] | None:
+     return set(names[:size])
+ 
+ 
++def _extracted_names(out_dir: Path) -> list[str]:
++    """The distinct surfaces one preview run produced, in a stable order."""
++    mentions = json.loads((out_dir / "mentions.json").read_text())
++    seen: dict[str, str] = {}
++    for mention in mentions:
++        seen.setdefault(mention["norm_surface"], mention["surface"])
++    return sorted(seen.values())
++
++
+ def _usable(revised: str, *, fallback: str) -> str:
+     """The revision, or the prompt it was meant to replace.
+ 
+@@ -275,12 +774,14 @@ def _history(rounds_dir: Path, *, upto: int) -> list[Round]:
+         if not card.is_file():
+             continue
+         data = json.loads(card.read_text())
++        parent = rounds_dir / f"v{version}" / "parent.txt"
+         out.append(
+             Round(
+                 version=version,
+                 prompt=(rounds_dir / f"v{version}" / "prompt.txt").read_text(),
+                 tune=data["tune"],
+                 holdout=data["holdout"],
++                parent=int(parent.read_text()) if parent.is_file() else None,
+             )
+         )
+     return out
+@@ -299,8 +800,26 @@ def _write_index(rounds_dir: Path, history: list[Round]) -> None:
+             [
+                 {
+                     "version": r.version,
++                    # Which version's prompt this one was written from. The beam
++                    # means that is not always the version before it, and a
++                    # search whose shape is invisible cannot be walked back.
++                    "revised_from": r.parent,
+                     "tune": {k: r.tune[k] for k in _HEADLINE},
+-                    "holdout": {k: r.holdout[k] for k in _HEADLINE} if r.holdout else None,
++                    # The holdout row carries the two judgements as well as the
++                    # counts. `lookup_hit_rate` is the column that falls when the
++                    # criterion has tightened past useful — the one a person
++                    # opening this file is actually looking for — and
++                    # `judged_keep_share` is an INDEPENDENT opinion, which is
++                    # what lets a reader see whether the version the beam chose
++                    # is one the judge agreed with.
++                    "holdout": (
++                        {
++                            k: r.holdout.get(k)
++                            for k in (*_HEADLINE, "lookup_hit_rate", "judged_keep_share")
++                        }
++                        if r.holdout
++                        else None
++                    ),
+                 }
+                 for r in history
+             ],
+diff --git a/tests/kb/test_graph_build.py b/tests/kb/test_graph_build.py
+index 81bf3f8c..783ddbbf 100644
+--- a/tests/kb/test_graph_build.py
++++ b/tests/kb/test_graph_build.py
+@@ -336,7 +336,8 @@ def test_a_collection_becomes_a_graph_in_one_call():
+     from workspace_app.kb.graph.build import build_graph
+ 
+     llm = _FakeLlm(
+-        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
++        # both ends named as things, or the edge is a sentence parse and is dropped
++        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}, {"surface": "冷焊", "kind": "缺陷"}],'
+         ' "relationships": [{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"}]}',
+         '{"mentions": [{"surface": "回 焊 爐", "kind": "機台"}]}',
+     )
+@@ -351,10 +352,11 @@ def test_a_collection_becomes_a_graph_in_one_call():
+     )
+ 
+     assert {m.source_doc_id for m in graph.mentions} == {"deck-A", "deck-B"}
+-    # both decks' spellings landed on ONE identity, and 機台 / 造成 are identities too
++    # both decks' spellings landed on ONE identity, and the kinds and the
++    # connecting word are identities too
+     names = {e.canonical_name for e in graph.entities.values()}
+-    assert names == {"回焊爐", "機台", "造成"}
+-    assert len([link for link in graph.links if link.basis == "identical"]) == 2
++    assert names == {"回焊爐", "冷焊", "機台", "缺陷", "造成"}
++    assert len([link for link in graph.links if link.basis == "identical"]) == 3
+ 
+ 
+ def test_the_same_evidence_twice_produces_the_same_graph():
+@@ -664,6 +666,119 @@ def test_a_graph_says_whether_anyone_actually_asked_for_merge_proposals():
+     assert run(ask=False).proposed is False
+ 
+ 
++def test_passages_can_be_extracted_several_at_a_time():
++    """One model call per passage, run serially, is the whole cost of a run —
++    measured at ~107 seconds per document on the real corpus. The calls do not
++    depend on each other, so the only reason they were serial is that nobody
++    said otherwise.
++
++    Asserted on CONCURRENCY, not on wall clock: a timing assertion on a machine
++    under load is a flaky test that teaches nothing."""
++    import threading
++
++    peak = 0
++    live = 0
++    lock = threading.Lock()
++
++    class _Slow(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            nonlocal peak, live
++            with lock:
++                live += 1
++                peak = max(peak, live)
++            try:
++                import time as _t
++
++                _t.sleep(0.05)
++                yield '{"mentions": [{"surface": "回焊爐"}]}', False
++            finally:
++                with lock:
++                    live -= 1
++
++    build_doc_graph(
++        _Slow(),
++        DocSource(doc_id="d", chunks=[(f"c{i}", f"t{i}") for i in range(8)]),
++        collection_id="c",
++        concurrency=4,
++    )
++
++    assert peak > 1, "the passages were still extracted one at a time"
++    assert peak <= 4, f"more calls were in flight ({peak}) than the limit allowed"
++
++
++def test_the_passages_keep_their_order_however_they_finish():
++    """Concurrency must not reorder them: passage order decides which kind and
++    which declared quote a mention keeps, and the order statements are written
++    in. A run that reordered would produce a different graph each time from the
++    same corpus."""
++    replies = [f'{{"mentions": [{{"surface": "w{i}"}}]}}' for i in range(6)]
++
++    class _OutOfOrder(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            import time as _t
++
++            index = int(prompt.rsplit("t", 1)[-1])
++            _t.sleep(0.02 * (6 - index))  # later passages answer FIRST
++            yield replies[index], False
++
++    graph = build_doc_graph(
++        _OutOfOrder(),
++        DocSource(doc_id="d", chunks=[(f"c{i}", f"t{i}") for i in range(6)]),
++        collection_id="c",
++        concurrency=6,
++    )
++
++    assert [m.surface for m in graph.mentions] == [f"w{i}" for i in range(6)]
++
++
++def test_a_connection_whose_ends_are_not_things_is_not_a_connection():
++    """The extractor was returning sentence parses rather than graph edges:
++    「第一個 —是→ 汽車」 from a passage that said "the first one is a car". 「第一個」
++    points at context and means nothing outside the sentence it came from; 「是」
++    is a copula, not a relation.
++
++    The rule is structural, not a guess about spelling: an edge joins two THINGS,
++    so an end that the same answer did not name as a thing is not an end. It also
++    means the connection layer inherits the criterion for free — improve what
++    counts as a thing and the edges improve with it, without a second rule to
++    keep in step.
++    """
++    llm = _FakeLlm(
++        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}, {"surface": "冷焊", "kind": "缺陷"}],'
++        ' "relationships": ['
++        '{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"},'
++        '{"subject": "第一個", "predicate": "是", "object": "汽車"}]}'
++    )
++
++    graph = build_doc_graph(
++        llm,
++        DocSource(doc_id="deck-A", chunks=[("c1", "回焊爐造成冷焊。第一個是汽車。")]),
++        collection_id="col-1",
++    )
++
++    assert [(r.subject, r.predicate, r.object) for r in graph.relationships] == [
++        ("回焊爐", "造成", "冷焊")
++    ]
++
++
++def test_a_connection_is_kept_when_a_LATER_passage_named_its_ends():
++    """The test is the whole DOCUMENT's things, not the passage's. A deck that
++    names the machine on slide one and states the connection on slide four is
++    the ordinary case, and judging per passage would throw it away."""
++    llm = _FakeLlm(
++        '{"mentions": [{"surface": "回焊爐"}, {"surface": "冷焊"}]}',
++        '{"relationships": [{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"}]}',
++    )
++
++    graph = build_doc_graph(
++        llm,
++        DocSource(doc_id="deck-A", chunks=[("c1", "回焊爐、冷焊"), ("c2", "回焊爐造成冷焊")]),
++        collection_id="col-1",
++    )
++
++    assert len(graph.relationships) == 1
++
++
+ def test_a_decision_about_evidence_that_is_gone_is_dropped():
+     """A person merged two things and one has since left the corpus — the deck
+     was deleted, or a new criterion no longer names it. There is nothing left to
+diff --git a/tests/kb/test_graph_preview_cli.py b/tests/kb/test_graph_preview_cli.py
+index 016d8df5..07e32d6e 100644
+--- a/tests/kb/test_graph_preview_cli.py
++++ b/tests/kb/test_graph_preview_cli.py
+@@ -44,3 +44,36 @@ def test_a_disk_backed_config_is_usable():
+ 
+ def test_a_postgres_backed_config_is_usable():
+     assert unusable_config(_with_store(pg_dsn="postgresql://x/y"), Path("config.yaml")) is None
++
++
++def test_the_offline_loop_defaults_to_the_deployments_own_chunking():
++    """What is tuned offline only transfers if the passages are cut the way
++    production cuts them. A CLI default of 256 sitting next to a deployment that
++    configured something else means the prompt is tuned against a corpus nobody
++    runs — and nothing on screen would say so."""
++    from workspace_app.graph_preview import chunking_for
++
++    settings = dataclasses.replace(
++        Settings(), kb=dataclasses.replace(Settings().kb, chunker=_chunker(96, 8))
++    )
++
++    assert chunking_for(settings, tokens=None, overlap=None) == (96, 8)
++
++
++def test_an_explicit_flag_still_wins_over_the_deployment():
++    """Trying a different cut is the whole point of the experiment — it is one
++    of the live suspects. The default follows production; the flag overrides it."""
++    from workspace_app.graph_preview import chunking_for
++
++    settings = dataclasses.replace(
++        Settings(), kb=dataclasses.replace(Settings().kb, chunker=_chunker(96, 8))
++    )
++
++    assert chunking_for(settings, tokens=40, overlap=None) == (40, 8)
++    assert chunking_for(settings, tokens=None, overlap=0) == (96, 0)
++
++
++def _chunker(max_tokens: int, overlap: int):
++    from workspace_app.config.schema import ChunkerSettings
++
++    return ChunkerSettings(max_tokens=max_tokens, overlap=overlap)
+diff --git a/tests/kb/test_graph_tune.py b/tests/kb/test_graph_tune.py
+index 4c7d0618..1f666256 100644
+--- a/tests/kb/test_graph_tune.py
++++ b/tests/kb/test_graph_tune.py
+@@ -31,16 +31,21 @@ _REPLY = (
+ class _Extractor(ILlm):
+     """Answers extraction calls; hands revision calls back as a new prompt."""
+ 
+-    def __init__(self, revision: str = "REVISED\n{text}") -> None:
++    def __init__(self, revision: str = "REVISED\n{text}", reply: str = _REPLY) -> None:
+         self._revision = revision
++        self._reply = reply
+         self.revision_prompts: list[str] = []
++        self.probe_calls = 0
+ 
+     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+         if "REVISED PROMPT" in prompt:  # the meta-prompt, not a passage
+             self.revision_prompts.append(prompt)
+             yield self._revision, False
++        elif "look up later" in prompt:  # the probe-drawing call
++            self.probe_calls += 1
++            yield '{"names": ["回焊爐", "錫膏"]}', False
+         else:
+-            yield _REPLY, False
++            yield self._reply, False
+ 
+ 
+ def _samples(tmp_path):
+@@ -141,8 +146,31 @@ def test_the_model_is_told_what_it_scored_on_the_holdout_and_that_it_is_held_out
+     assert "learning the sample" in asked
+     # …and the rule that stops it optimising itself into extracting nothing
+     assert "WORST" in asked
+-    assert "回焊爐 RO-3" in asked  # what a good name looks like, from this corpus
+-    assert "基礎知識" in asked  # and what the actual failure looks like
++    # What a name has to BE, stated as a property rather than a list of good
++    # words — naming those would mean guessing what the corpus is about from
++    # outside it, which is the mistake this module keeps having to unlearn.
++    assert "POINT AT IT or LOOK IT UP" in asked
++    # …and the real failures, quoted from actual runs rather than imagined
++    assert "基礎知識" in asked
++    assert "severe" in asked
++
++
++def test_the_corpus_owner_can_replace_the_examples(tmp_path):
++    """Whoever owns the corpus knows its vocabulary; the built-in text only has
++    to be right enough to start. Left unreplaceable it would be one more
++    criterion written from outside the corpus, which is the failure this whole
++    issue exists to fix."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    rounds.mkdir()
++    (rounds / "examples.md").write_text("Only ever name 工單編號. Nothing else counts.")
++    llm = _Extractor()
++
++    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = llm.revision_prompts
++    assert "工單編號" in asked
++    assert "基礎知識" not in asked, "the built-in examples were sent as well as theirs"
+ 
+ 
+ def test_the_history_carries_both_columns_so_a_trend_is_visible():
+@@ -244,3 +272,651 @@ def test_the_holdout_can_be_run_less_often_than_the_batch(tmp_path):
+     assert ran == [0, 2], f"the holdout ran on {ran}, not every second round"
+     index = json.loads((rounds / "index.json").read_text())
+     assert index[1]["holdout"] is None, "a round that skipped the holdout must say so, not guess"
++
++
++# --- P1: the downstream reward — can the graph be LOOKED UP? -----------------
++#
++# Every other number in the scorecard falls when the criterion refuses more, so
++# a loop optimising them alone walks towards extracting nothing. This is the one
++# signal that moves the other way, and the only one measuring what the graph is
++# actually FOR: `lookup_entity(name)` resolves a name through
++# `GraphEntity.norm_keys`, so "is it in the graph" means "would that lookup hit".
++
++
++def test_the_probe_set_is_drawn_once_and_then_frozen(tmp_path):
++    """A target redrawn every round is not a target. The probes have to outlive
++    the versions they grade, or an improvement and a re-draw are the same shape
++    in the numbers."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    llm = _Extractor()
++
++    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++    first = (rounds / "probes.json").read_text()
++    drawn = llm.probe_calls
++    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    assert drawn > 0, "no probes were ever drawn"
++    assert llm.probe_calls == drawn, "the probes were redrawn — the target moved"
++    assert (rounds / "probes.json").read_text() == first
++
++
++def test_the_holdout_scorecard_says_which_probes_the_graph_cannot_answer(tmp_path):
++    """A rate on its own cannot be checked; the names can. Whoever reads the
++    round can open the document and see whether a miss was the extractor's fault
++    or a probe that was never reasonable."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())
++    assert card["holdout"]["probes_total"] == 2
++    assert card["holdout"]["lookup_hit_rate"] == 0.5, "回焊爐 was extracted, 錫膏 was not"
++    assert card["holdout"]["probes_missed"] == ["錫膏"]
++
++
++def test_extracting_nothing_scores_zero_here(tmp_path):
++    """The whole reason this layer exists. Refusing everything is perfect on
++    every other number in the scorecard and is the worst possible outcome; this
++    is the number that says so."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    run_round(
++        _Extractor(reply='{"mentions": []}'),
++        rounds_dir=rounds,
++        tune_dir=tune,
++        holdout_dir=holdout,
++    )
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())
++    assert card["holdout"]["lookup_hit_rate"] == 0.0
++
++
++def test_probes_the_owner_wrote_are_used_as_they_are(tmp_path):
++    """The probes are a plain list in a plain file precisely so a person can
++    strike out the unreasonable ones. Regenerating over their edit would make
++    that pointless — and silently."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    rounds.mkdir()
++    (rounds / "probes.json").write_text(json.dumps({"names": ["回焊爐"]}, ensure_ascii=False))
++    llm = _Extractor()
++
++    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    assert llm.probe_calls == 0, "the owner's probe set was overwritten"
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())
++    assert card["holdout"]["lookup_hit_rate"] == 1.0
++
++
++def test_a_probe_matches_through_the_same_normalisation_lookup_uses(tmp_path):
++    """`lookup_entity` resolves through `norm_surface`, so a probe differing only
++    by width or spacing IS answerable and must not count as a miss — scoring it
++    stricter than the tool being modelled would make the loop chase a difference
++    no user can observe."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    rounds.mkdir()
++    (rounds / "probes.json").write_text(json.dumps({"names": [" 回焊爐 "]}, ensure_ascii=False))
++
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())
++    assert card["holdout"]["lookup_hit_rate"] == 1.0
++
++
++def test_the_model_is_shown_what_the_graph_could_not_answer(tmp_path):
++    """The reviser cannot pull back from over-tightening it cannot see."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    llm = _Extractor()
++
++    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = llm.revision_prompts
++    assert "lookup_hit_rate" in asked
++    assert "錫膏" in asked, "the reviser was told the rate but not what was missed"
++
++
++# --- P2: termhood needs TWO dimensions ---------------------------------------
++#
++# Document frequency alone cannot tell a rare-but-real thing from one-off noise.
++# A machine used only in the reflow section appears in one document in eight and
++# many times inside it; a passing noun appears in one document, once. On df they
++# are identical. The pair (df, times-inside-a-document) separates them, which is
++# the C-value/termhood intuition and is 25 years old.
++
++
++def _pool_text(tmp_path, docs: dict[str, str]):
++    tune = tmp_path / "tune"
++    tune.mkdir()
++    for name, body in docs.items():
++        (tune / f"{name}.txt").write_text(body)
++    holdout = tmp_path / "holdout"
++    holdout.mkdir()
++    (holdout / "h.txt").write_text("錫膏")
++    return tune, holdout
++
++
++def test_document_frequency_counts_the_whole_pool(tmp_path):
++    """Counting is plain string matching over the raw text — no model call — so
++    there is never a reason to estimate it from a subset."""
++    from workspace_app.kb.graph.tune import document_frequency
++
++    pool = tmp_path / "pool"
++    pool.mkdir()
++    for i in range(8):
++        (pool / f"{i}.txt").write_text("回焊爐 出現在這裡" if i == 0 else "別的內容")
++
++    assert document_frequency(pool, ["回焊爐"]) == {"回焊爐": (1, 8)}
++
++
++def test_the_batch_does_not_shrink_the_frequency_denominator(tmp_path):
++    """The regression this phase exists to prevent. Eight documents cannot
++    estimate a frequency of one-in-eight — the reading is 0 or 1 and looks like
++    stable evidence either way, every round. The batch decides how many MODEL
++    CALLS a round costs; it must not decide how many samples a statistic is
++    estimated from."""
++    tune, holdout = _pool_text(tmp_path, {"a": "回焊爐", "b": "x", "c": "y", "d": "z"})
++    rounds = tmp_path / "rounds"
++
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, batch=1)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
++    assert card["pool_documents"] == 4, "the denominator followed the batch"
++
++
++def test_a_rare_but_concentrated_name_is_discriminative_not_noise(tmp_path):
++    """The trap this phase exists for. `回焊爐` is in one document of four and
++    said many times inside it — the most informative shape there is. Punishing
++    it for being rare would delete exactly what the graph is for."""
++    from workspace_app.kb.graph.tune import quadrants
++
++    counts = {
++        # name: (documents containing it, times inside the documents that do)
++        "回焊爐": ((1, 4), 9),
++        "訊息": ((4, 4), 1),
++        "隨手一提": ((1, 4), 1),
++        "錫膏": ((3, 4), 6),
++    }
++    got = quadrants(counts)
++
++    assert got["discriminative"] == ["回焊爐"]
++    assert got["furniture"] == ["訊息"]
++    assert got["singleton"] == ["隨手一提"]
++    assert got["core"] == ["錫膏"]
++
++
++def test_the_scorecard_carries_the_quadrants_with_their_names(tmp_path):
++    """Proportions alone are gameable by extracting nothing — every one of them
++    looks perfect against an empty graph. The names are what make the shares
++    checkable."""
++    tune, holdout = _pool_text(
++        tmp_path, {"a": "回焊爐 回焊爐 回焊爐 245°C", "b": "回焊爐 溫度", "c": "別的"}
++    )
++    rounds = tmp_path / "rounds"
++
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
++    buckets = ("discriminative", "core", "furniture", "singleton")
++    assert all(isinstance(card[b], list) for b in buckets), (
++        "a share with no names cannot be checked"
++    )
++    assert all(f"{b}_share" in card for b in buckets)
++    assert "回焊爐" in [n for b in buckets for n in card[b]], "an extracted name landed nowhere"
++
++
++def test_the_reviser_is_shown_which_names_are_document_furniture(tmp_path):
++    """This is what replaces the blacklist. A blacklist teaches the model to
++    avoid four particular words; a share plus its members describes the SHAPE,
++    which is the thing that generalises to a corpus nobody has looked at."""
++    tune, holdout = _pool_text(tmp_path, {"a": "回焊爐 245°C", "b": "回焊爐 245°C"})
++    rounds = tmp_path / "rounds"
++    llm = _Extractor()
++
++    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = llm.revision_prompts
++    assert "furniture" in asked
++    assert "discriminative" in asked
++
++
++# --- P3: what this version STOPPED finding -----------------------------------
++#
++# The recall leg that needs nobody to write a list. Measured on the holdout,
++# because it is the same documents every time — so a name that disappears is
++# attributable to the prompt rather than to the draw.
++
++
++def test_the_names_this_version_lost_are_measured_on_the_holdout(tmp_path):
++    """On the tuning batch a name vanishes whenever the draw changes, which is
++    not evidence about the prompt. The holdout is fixed, so a disappearance
++    there has exactly one cause."""
++    from workspace_app.kb.graph.tune import lost_names
++
++    rounds = tmp_path / "rounds"
++    for version, reply in ((0, ["回焊爐", "錫膏"]), (1, ["回焊爐"])):
++        out = rounds / f"v{version}" / "holdout"
++        out.mkdir(parents=True)
++        (out / "mentions.json").write_text(
++            json.dumps(
++                [
++                    {"surface": n, "norm_surface": n, "occurrences": 7, "declared_quote": f"…{n}…"}
++                    for n in reply
++                ],
++                ensure_ascii=False,
++            )
++        )
++
++    assert [row["surface"] for row in lost_names(rounds, version=1)] == ["錫膏"]
++
++
++def test_a_lost_name_is_reported_with_the_evidence_needed_to_judge_it(tmp_path):
++    """Whether a loss was right is the two-dimensional question again: dropping
++    something a document said seven times is suspicious, dropping something said
++    once is the point. A bare list of names cannot be judged either way."""
++    from workspace_app.kb.graph.tune import lost_names
++
++    rounds = tmp_path / "rounds"
++    out = rounds / "v0" / "holdout"
++    out.mkdir(parents=True)
++    (out / "mentions.json").write_text(
++        json.dumps(
++            [
++                {
++                    "surface": "錫膏",
++                    "norm_surface": "錫膏",
++                    "occurrences": 7,
++                    "declared_quote": "…錫膏…",
++                }
++            ],
++            ensure_ascii=False,
++        )
++    )
++    (rounds / "v1" / "holdout").mkdir(parents=True)
++    (rounds / "v1" / "holdout" / "mentions.json").write_text("[]")
++
++    (row,) = lost_names(rounds, version=1)
++    assert row == {"surface": "錫膏", "occurrences": 7, "quote": "…錫膏…"}
++
++
++def test_the_first_version_has_lost_nothing(tmp_path):
++    """There is no earlier version to have lost it from, and reporting the whole
++    vocabulary as 'lost' would tell the model to undo a prompt it never ran."""
++    from workspace_app.kb.graph.tune import lost_names
++
++    rounds = tmp_path / "rounds"
++    (rounds / "v0" / "holdout").mkdir(parents=True)
++    (rounds / "v0" / "holdout" / "mentions.json").write_text("[]")
++
++    assert lost_names(rounds, version=0) == []
++
++
++def test_a_round_that_skipped_the_holdout_does_not_blind_the_comparison(tmp_path):
++    """With `--holdout-every` most rounds have no holdout to compare against.
++    Looking only at `version - 1` would find no reference and report nothing
++    lost — and "nothing lost" is indistinguishable from a version that really
++    lost nothing, so the leg would go quiet on every round but one."""
++    from workspace_app.kb.graph.tune import lost_names
++
++    rounds = tmp_path / "rounds"
++    for version, names in ((0, ["回焊爐", "錫膏"]), (2, ["回焊爐"])):
++        out = rounds / f"v{version}" / "holdout"
++        out.mkdir(parents=True)
++        (out / "mentions.json").write_text(
++            json.dumps(
++                [
++                    {"surface": n, "norm_surface": n, "occurrences": 3, "declared_quote": ""}
++                    for n in names
++                ],
++                ensure_ascii=False,
++            )
++        )
++    (rounds / "v1").mkdir()  # ran, but skipped the holdout
++
++    assert [row["surface"] for row in lost_names(rounds, version=2)] == ["錫膏"]
++
++
++def test_the_reviser_is_asked_to_justify_what_it_dropped(tmp_path):
++    """The model cannot pull back from a loss it is never told about, and this
++    is the leg that costs the corpus owner nothing to maintain — the reference
++    set is produced by the loop itself."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++    second = _Extractor(reply='{"mentions": [{"surface": "回焊爐", "kind": "機台"}]}')
++    run_round(second, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = second.revision_prompts
++    assert "245°C" in asked, "a name that disappeared was never put to the model"
++    assert "stopped finding" in asked
++
++
++# --- P4: the reviser must see the prompts it already tried -------------------
++
++
++def test_the_reviser_is_shown_the_text_of_earlier_prompts(tmp_path):
++    """Sending scores without the prompts that produced them leaves the model
++    hill-climbing blind: it undoes a change, scores worse, redoes it, and
++    oscillates. Two numbers per version cannot tell it what it already tried."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    for revision in ("FIRST TRY\n{text}", "SECOND TRY\n{text}"):
++        run_round(
++            _Extractor(revision=revision), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout
++        )
++    third = _Extractor(revision="THIRD TRY\n{text}")
++    run_round(third, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = third.revision_prompts
++    # "SECOND TRY" is what this round ran and is shown anyway; "FIRST TRY" is
++    # the one it can only know about from the history.
++    assert "FIRST TRY" in asked, "the model cannot see what it already tried and moved away from"
++
++
++def test_only_the_most_recent_prompts_are_carried(tmp_path):
++    """Every prompt ever written would crowd out the evidence — and the oldest
++    are the least informative, having already been revised away from."""
++    from workspace_app.kb.graph.tune import Round, revision_prompt
++
++    card = {
++        "mentions_per_document": 9.0,
++        "distinct_names": 4,
++        "mentions": 9,
++        "mentions_starting_with_a_digit": 2,
++        "kinds": {},
++        "kept": [],
++    }
++    history = [Round(version=v, prompt=f"PROMPT_{v}", tune=card, holdout=card) for v in range(6)]
++
++    asked = revision_prompt("P {text}", card, card, history)
++
++    assert "PROMPT_5" in asked
++    assert "PROMPT_0" not in asked, "the whole history was pasted in"
++
++
++# --- P5: revise from the best version, not merely the latest -----------------
++#
++# Single-line hill climbing has no way back: a bad revision becomes the base for
++# the next one, and the good version it came from is on disk but out of play.
++# ProTeGi keeps a beam for exactly this reason.
++
++
++def test_a_round_revises_from_the_best_scoring_version_not_the_last_one(tmp_path):
++    """The revision is filed as the next version either way — the beam decides
++    which PARENT it is written from, so a regression costs one round instead of
++    becoming the base everything after it is measured against."""
++    from workspace_app.kb.graph.tune import Round, pick_parent
++
++    def card(hit_rate: float) -> dict:
++        return {"lookup_hit_rate": hit_rate, "furniture_share": 0.1, "mentions_per_document": 8.0}
++
++    history = [
++        Round(version=0, prompt="GOOD", tune=card(0.9), holdout=card(0.9)),
++        Round(version=1, prompt="WORSE", tune=card(0.2), holdout=card(0.2)),
++    ]
++
++    assert pick_parent(history).prompt == "GOOD"
++
++
++def test_the_beam_only_looks_at_versions_the_holdout_actually_scored(tmp_path):
++    """A version graded only on its own mini-batch cannot be compared with one
++    graded on the fixed set — picking between them would reward a lucky draw."""
++    from workspace_app.kb.graph.tune import Round, pick_parent
++
++    def card(hit_rate: float) -> dict:
++        return {"lookup_hit_rate": hit_rate, "furniture_share": 0.1, "mentions_per_document": 8.0}
++
++    history = [
++        Round(version=0, prompt="GRADED", tune=card(0.5), holdout=card(0.5)),
++        Round(version=1, prompt="UNGRADED", tune=card(0.99), holdout=None),
++    ]
++
++    assert pick_parent(history).prompt == "GRADED"
++
++
++def test_a_version_that_found_nothing_never_wins_the_beam(tmp_path):
++    """The failure the whole reward design exists to prevent, restated at the
++    selection step. An empty graph has a noise share of ZERO, so any penalty that
++    is SUBTRACTED hands it the win over a messy version that actually answers
++    something — the noise has to be a discount on what was found, not a debt
++    against it. These numbers are the discriminating case: subtracting makes the
++    empty version score higher."""
++    from workspace_app.kb.graph.tune import Round, pick_parent
++
++    empty = {"lookup_hit_rate": 0.0, "furniture_share": 0.0, "singleton_share": 0.0}
++    messy = {"lookup_hit_rate": 0.6, "furniture_share": 0.5, "singleton_share": 0.2}
++    history = [
++        Round(version=0, prompt="MESSY BUT USEFUL", tune=messy, holdout=messy),
++        Round(version=1, prompt="EMPTY", tune=empty, holdout=empty),
++    ]
++
++    assert pick_parent(history).prompt == "MESSY BUT USEFUL"
++
++
++class _PerPassage(ILlm):
++    """Names whichever known thing the passage actually contains.
++
++    A fake that answers the same way for every passage makes every name equally
++    frequent, which flattens exactly the statistics under test. This one varies
++    with the text, so document frequency and concentration mean something.
++    """
++
++    KNOWN = ("回焊爐", "錫膏", "AOI")
++
++    def __init__(self, *, silent: bool = False) -> None:
++        self._silent = silent
++        self.revision_prompts: list[str] = []
++
++    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++        if "REVISED PROMPT" in prompt:
++            self.revision_prompts.append(prompt)
++            yield "REVISED\n{text}", False
++        elif "look up later" in prompt:
++            yield '{"names": ["回焊爐", "錫膏"]}', False
++        elif self._silent:
++            yield '{"mentions": []}', False
++        else:
++            found = [n for n in self.KNOWN if n in prompt.rsplit("\n", 1)[-1]]
++            yield json.dumps({"mentions": [{"surface": n, "kind": "機台"} for n in found]}), False
++
++
++def _varied(tmp_path):
++    """Three documents, each about a different thing said more than once — so a
++    name is rare across the pool and concentrated inside one document, the shape
++    the quadrants are meant to reward."""
++    for half in ("tune", "holdout"):
++        folder = tmp_path / half
++        folder.mkdir()
++        for name in _PerPassage.KNOWN:
++            (folder / f"{name}.txt").write_text(f"{name} {name} 說明")
++    return tmp_path / "tune", tmp_path / "holdout"
++
++
++def test_a_bad_round_does_not_become_the_base_for_every_round_after_it(tmp_path):
++    """The beam, end to end. v1 finds nothing, so v2 must be written from v0 —
++    under single-line climbing v1 would be the base and one bad revision would
++    cost every round that followed."""
++    tune, holdout = _varied(tmp_path)
++    rounds = tmp_path / "rounds"
++    # One whitespace token per passage, so a name said twice in a document
++    # registers as concentrated rather than as a single mention.
++    for extractor in (_PerPassage(), _PerPassage(silent=True)):
++        run_round(
++            extractor,
++            rounds_dir=rounds,
++            tune_dir=tune,
++            holdout_dir=holdout,
++            chunk_tokens=1,
++            chunk_overlap=0,
++        )
++
++    assert (rounds / "v2" / "parent.txt").read_text() == "0", "the empty version became the base"
++
++
++def test_the_round_records_which_version_it_revised_from(tmp_path):
++    """Without it the folder is unreadable: v7 built from v3 looks like v7 built
++    from v6, and nobody can reconstruct why a version appeared."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    index = json.loads((rounds / "index.json").read_text())
++    assert "revised_from" in index[1]
++
++
++# --- P6: a judge, on a sample -------------------------------------------------
++#
++# Cheap enough to run every round, and asked a NARROWER question than the
++# extractor was: "could a person point at this or look it up" is answerable in a
++# way that "list everything this passage is about" is not. That asymmetry is the
++# whole licence for a model to grade its own family's work — it is not a reason
++# to trust the verdict, which is why the names travel with it.
++
++
++def test_the_judge_reports_the_share_it_would_keep_and_the_names_it_would_not(tmp_path):
++    from workspace_app.kb.graph.tune import judge_names
++
++    class _Judge(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            yield (
++                '{"verdicts": [{"name": "回焊爐", "keep": true}, {"name": "訊息", "keep": false}]}',
++                False,
++            )
++
++    got = judge_names(_Judge(), ["回焊爐", "訊息"])
++
++    assert got["judged_keep_share"] == 0.5
++    assert got["judged_out"] == ["訊息"]
++
++
++def test_a_judge_that_answers_unusably_reports_nothing_rather_than_zero(tmp_path):
++    """A parse failure and a verdict of "keep none" are the same number and
++    opposite facts. Reporting zero would tell the reviser to loosen a criterion
++    the judge never actually assessed."""
++    from workspace_app.kb.graph.tune import judge_names
++
++    class _Broken(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            yield "I think most of these are fine, honestly.", False
++
++    assert judge_names(_Broken(), ["回焊爐"]) == {}
++
++
++def test_the_judge_is_only_asked_about_names_that_were_extracted(tmp_path):
++    """No names, no call — an empty graph must not be able to buy a perfect
++    judged share by giving the judge nothing to reject."""
++    from workspace_app.kb.graph.tune import judge_names
++
++    class _NeverCalled(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            raise AssertionError("the judge was asked about an empty graph")
++            yield "", False  # pragma: no cover
++
++    assert judge_names(_NeverCalled(), []) == {}
++
++
++# --- P7: weirdness needs a contrast corpus, and it is the OWNER's ------------
++
++
++def test_weirdness_needs_no_contrast_corpus_to_run(tmp_path):
++    """The degenerate case has to be silence, not a wrong number. Without
++    something to contrast against there is no evidence about which words are
++    ordinary, and inventing a general-language frequency table would be one more
++    criterion written from outside the corpus."""
++    from workspace_app.kb.graph.tune import weirdness
++
++    assert weirdness(tmp_path / "absent", ["回焊爐"]) == {}
++
++
++def test_a_word_common_in_both_corpora_is_not_a_term(tmp_path):
++    """What replaces the blacklist for good. 「訊息」 is frequent in the domain
++    corpus AND in ordinary writing, so it is ordinary language; 「回焊爐」 is
++    frequent here and absent there. The shape generalises to a corpus nobody has
++    looked at, which four banned words never could."""
++    from workspace_app.kb.graph.tune import weirdness
++
++    contrast = tmp_path / "contrast"
++    contrast.mkdir()
++    (contrast / "a.txt").write_text("訊息 討論 訊息")
++    (contrast / "b.txt").write_text("訊息 一般的文章")
++
++    got = weirdness(contrast, ["回焊爐", "訊息"])
++
++    assert got["ordinary"] == ["訊息"], "a word ordinary writing also uses was called a term"
++    assert got["ordinary_share"] == 0.5
++
++
++def test_an_empty_extraction_reports_no_ordinariness_even_with_a_contrast_corpus(tmp_path):
++    """Not "0% ordinary" — no evidence. The share is a fraction of what was
++    extracted, so with nothing extracted there is nothing to take a fraction of,
++    and the honest answer is silence rather than a number that flatters an empty
++    graph."""
++    from workspace_app.kb.graph.tune import weirdness
++
++    contrast = tmp_path / "contrast"
++    contrast.mkdir()
++    (contrast / "a.txt").write_text("一般的文章")
++
++    assert weirdness(contrast, []) == {}
++
++
++def test_a_round_runs_the_judge_and_shows_the_reviser_its_verdict(tmp_path):
++    """The wiring, not the function. A judge nothing calls is a judge that never
++    graded anything, and the round would look identical."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    class _Judging(_Extractor):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "POINT AT IT or LOOK IT UP" in prompt and "verdicts" in prompt:
++                yield '{"verdicts": [{"name": "245°C", "keep": false}]}', False
++            else:
++                yield from super().stream(prompt)
++
++    llm = _Judging()
++    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
++    assert card["judged_keep_share"] == 0.0
++    assert card["judged_out"] == ["245°C"]
++    (asked,) = llm.revision_prompts
++    assert "judged_out" in asked
++    # …and at a glance, beside the number the beam actually selects on: a reader
++    # otherwise cannot tell whether the version the search chose is one the judge
++    # agreed with.
++    index = json.loads((rounds / "index.json").read_text())
++    assert index[0]["holdout"]["judged_keep_share"] == 0.0
++
++
++def test_a_round_uses_the_contrast_corpus_when_the_owner_supplies_one(tmp_path):
++    """Dropping ordinary writing into `rounds/contrast/` is the whole interface.
++    Nothing to configure, and absent it the round is unchanged."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    (rounds / "contrast").mkdir(parents=True)
++    (rounds / "contrast" / "ordinary.txt").write_text("今天天氣很好 245°C 也很常見")
++
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
++    assert card["ordinary"] == ["245°C"]
++
++
++def test_without_a_contrast_corpus_the_round_says_nothing_about_ordinariness(tmp_path):
++    """Silence, not a guess. A default frequency table would be a criterion from
++    outside the corpus, which is the mistake being unlearned."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
++    assert "ordinary" not in card and "ordinary_share" not in card
