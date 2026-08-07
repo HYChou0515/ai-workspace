@@ -1121,6 +1121,13 @@ button.ev-card__status:focus-visible {
    * is how #690 shipped cream text on a 93%-white chip fill. This default is
    * for the gradient above: light text on a saturated slab, in both themes. */
   color: var(--text-dark);
+  /* Reserved whether or not it is drawn, so a coloured bar and an uncoloured
+   * one occupy the same box — box-sizing is border-box, so this costs no
+   * width. A `color_by` bar paints it in its own ink (GanttView barColor): the
+   * chip fill is translucent, and on a grouped chart the neutral slot IS the
+   * lane-band colour, so without an edge the bar's start and end — the data —
+   * have nothing to read against. The solid fill used to do this job. */
+  border: 1px solid transparent;
   border-radius: var(--radius-chip);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
   cursor: grab;

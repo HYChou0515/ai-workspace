@@ -13,7 +13,9 @@ import {
   TOKENS_CSS,
   contrast,
   mixSrgb,
+  over,
   paintedOver,
+  parseFill,
   tokenIn,
 } from "../../test/contrast";
 import { ENTITY_VIEWS_CSS, effective, inheritedColor } from "../../test/cssRules";
@@ -170,6 +172,47 @@ describe("a coloured gantt bar's text (#690)", () => {
       });
     }
   }
+});
+
+describe("a coloured gantt bar's extent", () => {
+  // A chip fill is translucent, and in a GROUPED chart it lands on the lane
+  // band — which for the neutral slot is literally the same token. The bar
+  // then has no readable edge, and in a gantt the bar's start and end ARE the
+  // data. The solid fill used to do this job; since #690 it cannot, so the
+  // bar states its own boundary in the ink it already carries.
+  const laneBand = (block: RegExp) => {
+    // .ev-gantt__lane-band: color-mix(in srgb, var(--paper-2) 60%, transparent)
+    // over the chart surface — i.e. --paper-2 at 60% alpha.
+    const [r, g, b] = parseFill(tokenIn(TOKENS_CSS, block, "--paper-2"));
+    return over([r, g, b, 0.6], tokenIn(TOKENS_CSS, block, "--white"));
+  };
+
+  for (const urgency of ["critical", "low"]) {
+    for (const [themeName, block] of THEMES) {
+      it(`gives the ${urgency} bar an edge against a lane band in ${themeName} mode`, () => {
+        const { bar } = renderBar({ urgency }, { color_by: "urgency", group_by: "urgency" });
+
+        const edge = bar.style.borderColor || effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar", "border");
+        expect(edge, "the bar draws no boundary of its own").toBeTruthy();
+        expect(edge, "a transparent edge is not an edge").not.toContain("transparent");
+
+        const ratio = contrast(inkHex(edge as string, block), laneBand(block));
+        expect(
+          ratio,
+          `${urgency} bar edge in ${themeName}: ${edge} on ${laneBand(block)} = ${ratio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(3);
+      });
+    }
+  }
+
+  it("keeps the uncoloured bar's box metrics identical to a coloured one", () => {
+    // The edge must not make coloured bars a different SIZE — a border that
+    // changes the box would shift every bar's start by a pixel depending on
+    // whether the view happens to colour it.
+    const border = effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar", "border");
+    expect(border, ".ev-gantt__bar declares no border to reserve the space").toBeTruthy();
+    expect(border).toMatch(/^1px solid /);
+  });
 });
 
 describe("an uncoloured gantt bar's text (the default blue slab)", () => {

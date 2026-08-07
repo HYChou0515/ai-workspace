@@ -461,7 +461,13 @@ export function GanttView({
                         onDoubleClick={() => onOpenRecord?.(row.e.number)}
                         style={(() => {
                           const c = barColor(row.e);
-                          return { left, width, background: c?.bg, color: c?.fg };
+                          return {
+                            left,
+                            width,
+                            background: c?.bg,
+                            color: c?.fg,
+                            borderColor: c?.fg,
+                          };
                         })()}
                       >
                         <span className="ev-gantt__bar-label">
