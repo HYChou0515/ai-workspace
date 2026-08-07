@@ -1,0 +1,144 @@
+diff --git a/src/workspace_app/kb/graph/tune.py b/src/workspace_app/kb/graph/tune.py
+index 4b77a0ed..74e30262 100644
+--- a/src/workspace_app/kb/graph/tune.py
++++ b/src/workspace_app/kb/graph/tune.py
+@@ -88,27 +88,44 @@ def scorecard(out_dir: Path, *, seed: int = 0) -> dict[str, Any]:
+     }
+ 
+ 
++#: What a name has to BE, and the ones this corpus actually produced that it must
++#: not. Stated as a PROPERTY plus real observations, never as a list of good
++#: words: naming the good ones would mean guessing what the corpus is about from
++#: outside it, and every criterion this project invented that way was wrong
++#: within a corpus or two. The bad ones are quoted from real runs, which is a
++#: different kind of claim — they are evidence, not a guess.
++#:
++#: Overridable: drop an `examples.md` in the rounds folder and it replaces this.
++#: Whoever owns the corpus knows its vocabulary; this only has to be right enough
++#: to start.
++DEFAULT_EXAMPLES = """A name earns its place if a person could POINT AT IT or LOOK IT UP:
++a machine, a part or component number, a material, a named process step, a defect, a named
++parameter, a supplier. The test that separates them: **if the word could appear
++in a document from any other field, it is not what THIS document is about.**
++
++These came out of the real corpus and are the failure being fixed:
++
++- 基礎知識 / 細結構 / 影響比對模式 / 典型 — words about KNOWLEDGE rather than
++  about the subject. They compose endlessly, which is why one document currently
++  yields 163 distinct names.
++- 訊息 / 討論 / product — the document's own furniture: a section heading, a
++  column label, a generic category. Every document has them, so they distinguish
++  nothing.
++- severe — a severity LEVEL. It is the VALUE of some thing's attribute, and the
++  prompt already collects values separately.
++- 「10 product (10prds)」 — a table cell or a legend read as an object. A count
++  is not a thing.
++
++A measured value is never a thing either: it belongs to the statements the
++prompt already collects."""
++
+ REVISE = """You are improving the prompt that extracts a knowledge graph from a
+ technical corpus. Your whole output is the REVISED PROMPT — no commentary, no
+ explanation, no code fences.
+ 
+ ## What the corpus is, and what a good extraction looks like
+ 
+-Manufacturing and process documents. The things worth extracting are the ones a
+-person on the line could point at or look up: machines and their identifiers,
+-part and component numbers, materials, named process steps, defects, named
+-process parameters, suppliers.
+-
+-GOOD names, from this corpus: 回焊爐 RO-3 / SPI / PPOOIXUX / 冷焊 / 錫膏印刷偏移
+-/ 第四溫區 / 輸送帶速度
+-
+-BAD names, and these are the actual failure being fixed — the corpus is currently
+-full of them: 基礎知識 / 細結構 / 影響比對模式 / 典型 / 系統 / 問題 / 資料 / 方法.
+-They are words ABOUT documents rather than things in a factory, and they compose
+-endlessly, which is why one document currently yields 163 distinct names.
+-
+-A measured VALUE is not a thing: 245°C, 98.7%, 12 件 belong to the statements the
+-prompt already collects, not to the list of things.
++{examples}
+ 
+ ## The rule that must not be broken
+ 
+@@ -143,7 +160,13 @@ Revise the prompt. Change what the evidence above says is wrong; leave what is
+ working alone. Output the full revised prompt and nothing else."""
+ 
+ 
+-def revision_prompt(current: str, tune: dict, holdout: dict | None, history: list[Round]) -> str:
++def revision_prompt(
++    current: str,
++    tune: dict,
++    holdout: dict | None,
++    history: list[Round],
++    examples: str = DEFAULT_EXAMPLES,
++) -> str:
+     """What the model is asked, in full.
+ 
+     The HOLDOUT numbers are shown too, and labelled. A model told only how it did
+@@ -174,6 +197,7 @@ def revision_prompt(current: str, tune: dict, holdout: dict | None, history: lis
+         for r in history
+     ]
+     return REVISE.format(
++        examples=examples,
+         current=current,
+         scores=scores,
+         history="\n".join(rows) if rows else "(this is the first version)",
+@@ -232,7 +256,17 @@ def run_round(
+     history = _history(rounds_dir, upto=version)
+     _write_index(rounds_dir, history)
+ 
+-    revised = (reviser or llm).collect(revision_prompt(current, tune, holdout, history))
++    # Whoever owns the corpus knows its vocabulary better than this file does.
++    notes = rounds_dir / "examples.md"
++    revised = (reviser or llm).collect(
++        revision_prompt(
++            current,
++            tune,
++            holdout,
++            history,
++            examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
++        )
++    )
+     nxt = rounds_dir / f"v{version + 1}"
+     nxt.mkdir(parents=True, exist_ok=True)
+     (nxt / "prompt.txt").write_text(_usable(revised, fallback=current))
+diff --git a/tests/kb/test_graph_tune.py b/tests/kb/test_graph_tune.py
+index 4c7d0618..e5365855 100644
+--- a/tests/kb/test_graph_tune.py
++++ b/tests/kb/test_graph_tune.py
+@@ -141,8 +141,31 @@ def test_the_model_is_told_what_it_scored_on_the_holdout_and_that_it_is_held_out
+     assert "learning the sample" in asked
+     # …and the rule that stops it optimising itself into extracting nothing
+     assert "WORST" in asked
+-    assert "回焊爐 RO-3" in asked  # what a good name looks like, from this corpus
+-    assert "基礎知識" in asked  # and what the actual failure looks like
++    # What a name has to BE, stated as a property rather than a list of good
++    # words — naming those would mean guessing what the corpus is about from
++    # outside it, which is the mistake this module keeps having to unlearn.
++    assert "POINT AT IT or LOOK IT UP" in asked
++    # …and the real failures, quoted from actual runs rather than imagined
++    assert "基礎知識" in asked
++    assert "severe" in asked
++
++
++def test_the_corpus_owner_can_replace_the_examples(tmp_path):
++    """Whoever owns the corpus knows its vocabulary; the built-in text only has
++    to be right enough to start. Left unreplaceable it would be one more
++    criterion written from outside the corpus, which is the failure this whole
++    issue exists to fix."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    rounds.mkdir()
++    (rounds / "examples.md").write_text("Only ever name 工單編號. Nothing else counts.")
++    llm = _Extractor()
++
++    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = llm.revision_prompts
++    assert "工單編號" in asked
++    assert "基礎知識" not in asked, "the built-in examples were sent as well as theirs"
+ 
+ 
+ def test_the_history_carries_both_columns_so_a_trend_is_visible():
