@@ -51,7 +51,7 @@ import {
 import type { RefIndex } from "./refTraversal";
 import { fieldText, roleOf } from "./shared";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
-import { selectColor } from "./selectColor";
+import { type ChipColor, selectColor } from "./selectColor";
 import { sortRows } from "./sortRows";
 import type { EntityViewProps } from "./types";
 
@@ -149,11 +149,16 @@ export function GanttView({
   const collapsed = usePersistentSet(`gantt-collapsed:${viewKey ?? spec.entity}`);
   const colorField = spec.color_by;
   const colorSpec = colorField ? roleOf(type, colorField) : undefined;
-  const barColor = (e: EntityInstance): string | undefined => {
+  // Both halves of the palette entry or neither: `bg` is a translucent CHIP
+  // fill, legible only under its paired `fg`. Handing the bar the fill alone
+  // left it wearing the ink of the solid blue slab it used to be — cream on a
+  // 93%-white fill, 1.07:1, invisible in light mode (#690). The pair travels
+  // together now, guarded by ganttBarContrast.test.ts.
+  const barColor = (e: EntityInstance): ChipColor | undefined => {
     if (!colorField) return undefined;
     // The palette the chips already use. A second one would put one `status`
     // value on two different colours in two places on the same screen.
-    return selectColor(fieldText(e.fields[colorField]) ?? "", colorSpec).bg;
+    return selectColor(fieldText(e.fields[colorField]) ?? "", colorSpec);
   };
   // null ⇒ auto-fit the whole project to the measured pane (fills the width on
   // open); a number ⇒ the user has taken over the zoom via the slider / anchors.
@@ -438,6 +443,7 @@ export function GanttView({
                   // this replaces was hiding the off-by-one: it made a same-day
                   // span look right while every longer bar stopped a day short.
                   const width = barColumns(ps, skip) * ppd;
+                  const c = barColor(row.e);
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
@@ -454,7 +460,7 @@ export function GanttView({
                         // arrive; and a zero-day drag commits nothing, so the two
                         // presses underneath write no span.
                         onDoubleClick={() => onOpenRecord?.(row.e.number)}
-                        style={{ left, width, background: barColor(row.e) }}
+                        style={{ left, width, background: c?.bg, color: c?.fg, borderColor: c?.fg }}
                       >
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
