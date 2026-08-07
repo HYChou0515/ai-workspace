@@ -15,6 +15,27 @@ from pathlib import Path
 from ..config.schema import Settings
 
 
+def chunking_for(settings: Settings, *, tokens: int | None, overlap: int | None) -> tuple[int, int]:
+    """How the offline loop should cut its passages: the DEPLOYMENT's own
+    setting, unless a flag says otherwise.
+
+    A prompt tuned offline only transfers if the passages were cut the way
+    production cuts them — the model is answering a question about a passage, and
+    the size of that passage changes the answer. A CLI default sitting beside a
+    deployment that configured something else would mean tuning against a corpus
+    nobody runs, with nothing on screen to say so.
+
+    The flags still win, because trying a different cut is itself one of the
+    experiments worth running: whether the passages are too large is a live
+    suspect for why the extractor answers with topics rather than things.
+    """
+    chunker = settings.kb.chunker
+    return (
+        chunker.max_tokens if tokens is None else tokens,
+        chunker.overlap if overlap is None else overlap,
+    )
+
+
 def unusable_config(settings: Settings, config_path: Path | None) -> str | None:
     """Why this run cannot work, or ``None``.
 

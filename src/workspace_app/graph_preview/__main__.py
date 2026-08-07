@@ -22,7 +22,7 @@ from pathlib import Path
 from ..config.loader import _resolve_config_path, load
 from ..factories import get_kb_llm, get_spec
 from ..kb.graph.preview import preview_collection
-from . import unusable_config
+from . import chunking_for, unusable_config
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -129,10 +129,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--chunk-tokens",
         type=int,
-        default=256,
-        help="how large a passage the model is asked about, in whitespace tokens, when "
-        "running against --samples. CJK is not written with word spaces, so a Chinese "
-        "corpus gets passages several times this (default 256)",
+        default=None,
+        help="how large a passage the model is asked about, in whitespace tokens. "
+        "Defaults to THIS DEPLOYMENT's kb.chunker.max_tokens, so what you tune offline is "
+        "cut the way production cuts it. Pass a value to try a different cut — CJK is not "
+        "written with word spaces, so a Chinese corpus gets passages several times this",
+    )
+    p.add_argument(
+        "--chunk-overlap",
+        type=int,
+        default=None,
+        help="how much consecutive passages share, in whitespace tokens. Defaults to the "
+        "deployment's kb.chunker.overlap",
     )
     p.add_argument(
         "--as-user",
@@ -192,12 +200,22 @@ def main() -> None:
         llm = get_kb_llm(settings)
         if llm is None:
             raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
+        tokens, overlap = chunking_for(
+            settings, tokens=args.chunk_tokens, overlap=args.chunk_overlap
+        )
+        logging.info(
+            "cutting passages at %d whitespace tokens, overlap %d%s",
+            tokens,
+            overlap,
+            "" if args.chunk_tokens is None else "  (--chunk-tokens overrides the deployment)",
+        )
         version = run_round(
             llm,
             rounds_dir=args.tune_round,
             tune_dir=args.tune_round / "tune",
             holdout_dir=args.tune_round / "holdout",
-            chunk_tokens=args.chunk_tokens,
+            chunk_tokens=tokens,
+            chunk_overlap=overlap,
             batch=args.batch,
             holdout_every=args.holdout_every,
         )
@@ -217,12 +235,17 @@ def main() -> None:
         llm = _llm_for_samples(settings)
         if llm is None:
             raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
+        tokens, overlap = chunking_for(
+            settings, tokens=args.chunk_tokens, overlap=args.chunk_overlap
+        )
+        logging.info("cutting passages at %d whitespace tokens, overlap %d", tokens, overlap)
         graph = preview_samples(
             llm,
             args.samples,
             out_dir=args.out_dir,
             prompt=prompt,
-            max_tokens=args.chunk_tokens,
+            max_tokens=tokens,
+            overlap_tokens=overlap,
         )
         _report(args.out_dir, graph, file=sys.stderr)
         return

@@ -44,3 +44,36 @@ def test_a_disk_backed_config_is_usable():
 
 def test_a_postgres_backed_config_is_usable():
     assert unusable_config(_with_store(pg_dsn="postgresql://x/y"), Path("config.yaml")) is None
+
+
+def test_the_offline_loop_defaults_to_the_deployments_own_chunking():
+    """What is tuned offline only transfers if the passages are cut the way
+    production cuts them. A CLI default of 256 sitting next to a deployment that
+    configured something else means the prompt is tuned against a corpus nobody
+    runs — and nothing on screen would say so."""
+    from workspace_app.graph_preview import chunking_for
+
+    settings = dataclasses.replace(
+        Settings(), kb=dataclasses.replace(Settings().kb, chunker=_chunker(96, 8))
+    )
+
+    assert chunking_for(settings, tokens=None, overlap=None) == (96, 8)
+
+
+def test_an_explicit_flag_still_wins_over_the_deployment():
+    """Trying a different cut is the whole point of the experiment — it is one
+    of the live suspects. The default follows production; the flag overrides it."""
+    from workspace_app.graph_preview import chunking_for
+
+    settings = dataclasses.replace(
+        Settings(), kb=dataclasses.replace(Settings().kb, chunker=_chunker(96, 8))
+    )
+
+    assert chunking_for(settings, tokens=40, overlap=None) == (40, 8)
+    assert chunking_for(settings, tokens=None, overlap=0) == (96, 0)
+
+
+def _chunker(max_tokens: int, overlap: int):
+    from workspace_app.config.schema import ChunkerSettings
+
+    return ChunkerSettings(max_tokens=max_tokens, overlap=overlap)
