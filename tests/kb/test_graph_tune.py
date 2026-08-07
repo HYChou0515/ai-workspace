@@ -746,12 +746,15 @@ def test_a_bad_round_does_not_become_the_base_for_every_round_after_it(tmp_path)
     rounds = tmp_path / "rounds"
     # One whitespace token per passage, so a name said twice in a document
     # registers as concentrated rather than as a single mention.
-    fine = {"chunk_tokens": 1, "chunk_overlap": 0}
-
-    run_round(_PerPassage(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, **fine)
-    run_round(
-        _PerPassage(silent=True), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, **fine
-    )
+    for extractor in (_PerPassage(), _PerPassage(silent=True)):
+        run_round(
+            extractor,
+            rounds_dir=rounds,
+            tune_dir=tune,
+            holdout_dir=holdout,
+            chunk_tokens=1,
+            chunk_overlap=0,
+        )
 
     assert (rounds / "v2" / "parent.txt").read_text() == "0", "the empty version became the base"
 
