@@ -141,8 +141,31 @@ def test_the_model_is_told_what_it_scored_on_the_holdout_and_that_it_is_held_out
     assert "learning the sample" in asked
     # …and the rule that stops it optimising itself into extracting nothing
     assert "WORST" in asked
-    assert "回焊爐 RO-3" in asked  # what a good name looks like, from this corpus
-    assert "基礎知識" in asked  # and what the actual failure looks like
+    # What a name has to BE, stated as a property rather than a list of good
+    # words — naming those would mean guessing what the corpus is about from
+    # outside it, which is the mistake this module keeps having to unlearn.
+    assert "POINT AT IT or LOOK IT UP" in asked
+    # …and the real failures, quoted from actual runs rather than imagined
+    assert "基礎知識" in asked
+    assert "severe" in asked
+
+
+def test_the_corpus_owner_can_replace_the_examples(tmp_path):
+    """Whoever owns the corpus knows its vocabulary; the built-in text only has
+    to be right enough to start. Left unreplaceable it would be one more
+    criterion written from outside the corpus, which is the failure this whole
+    issue exists to fix."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    rounds.mkdir()
+    (rounds / "examples.md").write_text("Only ever name 工單編號. Nothing else counts.")
+    llm = _Extractor()
+
+    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    (asked,) = llm.revision_prompts
+    assert "工單編號" in asked
+    assert "基礎知識" not in asked, "the built-in examples were sent as well as theirs"
 
 
 def test_the_history_carries_both_columns_so_a_trend_is_visible():

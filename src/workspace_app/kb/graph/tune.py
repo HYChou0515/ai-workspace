@@ -88,27 +88,44 @@ def scorecard(out_dir: Path, *, seed: int = 0) -> dict[str, Any]:
     }
 
 
+#: What a name has to BE, and the ones this corpus actually produced that it must
+#: not. Stated as a PROPERTY plus real observations, never as a list of good
+#: words: naming the good ones would mean guessing what the corpus is about from
+#: outside it, and every criterion this project invented that way was wrong
+#: within a corpus or two. The bad ones are quoted from real runs, which is a
+#: different kind of claim — they are evidence, not a guess.
+#:
+#: Overridable: drop an `examples.md` in the rounds folder and it replaces this.
+#: Whoever owns the corpus knows its vocabulary; this only has to be right enough
+#: to start.
+DEFAULT_EXAMPLES = """A name earns its place if a person could POINT AT IT or LOOK IT UP:
+a machine, a part or component number, a material, a named process step, a defect, a named
+parameter, a supplier. The test that separates them: **if the word could appear
+in a document from any other field, it is not what THIS document is about.**
+
+These came out of the real corpus and are the failure being fixed:
+
+- 基礎知識 / 細結構 / 影響比對模式 / 典型 — words about KNOWLEDGE rather than
+  about the subject. They compose endlessly, which is why one document currently
+  yields 163 distinct names.
+- 訊息 / 討論 / product — the document's own furniture: a section heading, a
+  column label, a generic category. Every document has them, so they distinguish
+  nothing.
+- severe — a severity LEVEL. It is the VALUE of some thing's attribute, and the
+  prompt already collects values separately.
+- 「10 product (10prds)」 — a table cell or a legend read as an object. A count
+  is not a thing.
+
+A measured value is never a thing either: it belongs to the statements the
+prompt already collects."""
+
 REVISE = """You are improving the prompt that extracts a knowledge graph from a
 technical corpus. Your whole output is the REVISED PROMPT — no commentary, no
 explanation, no code fences.
 
 ## What the corpus is, and what a good extraction looks like
 
-Manufacturing and process documents. The things worth extracting are the ones a
-person on the line could point at or look up: machines and their identifiers,
-part and component numbers, materials, named process steps, defects, named
-process parameters, suppliers.
-
-GOOD names, from this corpus: 回焊爐 RO-3 / SPI / PPOOIXUX / 冷焊 / 錫膏印刷偏移
-/ 第四溫區 / 輸送帶速度
-
-BAD names, and these are the actual failure being fixed — the corpus is currently
-full of them: 基礎知識 / 細結構 / 影響比對模式 / 典型 / 系統 / 問題 / 資料 / 方法.
-They are words ABOUT documents rather than things in a factory, and they compose
-endlessly, which is why one document currently yields 163 distinct names.
-
-A measured VALUE is not a thing: 245°C, 98.7%, 12 件 belong to the statements the
-prompt already collects, not to the list of things.
+{examples}
 
 ## The rule that must not be broken
 
@@ -143,7 +160,13 @@ Revise the prompt. Change what the evidence above says is wrong; leave what is
 working alone. Output the full revised prompt and nothing else."""
 
 
-def revision_prompt(current: str, tune: dict, holdout: dict | None, history: list[Round]) -> str:
+def revision_prompt(
+    current: str,
+    tune: dict,
+    holdout: dict | None,
+    history: list[Round],
+    examples: str = DEFAULT_EXAMPLES,
+) -> str:
     """What the model is asked, in full.
 
     The HOLDOUT numbers are shown too, and labelled. A model told only how it did
@@ -174,6 +197,7 @@ def revision_prompt(current: str, tune: dict, holdout: dict | None, history: lis
         for r in history
     ]
     return REVISE.format(
+        examples=examples,
         current=current,
         scores=scores,
         history="\n".join(rows) if rows else "(this is the first version)",
@@ -232,7 +256,17 @@ def run_round(
     history = _history(rounds_dir, upto=version)
     _write_index(rounds_dir, history)
 
-    revised = (reviser or llm).collect(revision_prompt(current, tune, holdout, history))
+    # Whoever owns the corpus knows its vocabulary better than this file does.
+    notes = rounds_dir / "examples.md"
+    revised = (reviser or llm).collect(
+        revision_prompt(
+            current,
+            tune,
+            holdout,
+            history,
+            examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
+        )
+    )
     nxt = rounds_dir / f"v{version + 1}"
     nxt.mkdir(parents=True, exist_ok=True)
     (nxt / "prompt.txt").write_text(_usable(revised, fallback=current))
