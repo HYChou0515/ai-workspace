@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -105,12 +106,18 @@ def build_graph(
     propose_with: ILlm | None = None,
     decisions: Decisions | None = None,
     prompt: str | None = None,
+    on_document: Callable[[DocSource, DocGraph], None] | None = None,
 ) -> Graph:
     """Every document extracted, then the vocabulary built over all of it.
 
     ``propose_with`` is the model for the merge-proposal pass, off by default:
     it can only ADD work for a person, and when the question is what the
     EXTRACTOR did, its output is noise on top of the answer.
+
+    ``on_document`` is called as each document completes, BEFORE the rest of
+    the corpus is extracted. A run is one model call per passage — measured at
+    about 99 seconds per document — so a modest collection is hours, and a caller
+    that only sees the end sees nothing when the end never comes.
 
     ``decisions`` are the merges people have already accepted or refused. They
     belong here for the same reason they belong in production: without them a
@@ -132,6 +139,8 @@ def build_graph(
             llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt
         )
         per_doc.append(built)
+        if on_document is not None:
+            on_document(doc, built)
         done += len(doc.chunks)
         _LOGGER.info(
             "graph build: %d/%d %s — %d passages, %d names, %d statements (%.0fs elapsed)",

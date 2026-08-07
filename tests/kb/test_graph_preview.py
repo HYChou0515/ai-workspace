@@ -670,6 +670,57 @@ class _CountingLlm(ILlm):
         yield _REPLY, False
 
 
+def test_each_document_lands_on_disk_as_it_finishes(tmp_path):
+    """A run is one model call per passage over a whole corpus — measured at ~99
+    seconds per document on the real thing, so a 71-document collection is two
+    hours. Writing only at the end means an interrupted run, a killed pod or an
+    impatient Ctrl-C costs all of it and leaves nothing to look at.
+
+    So every document is appended as it completes. The full JSON still lands at
+    the end; this is what survives when the end never comes.
+    """
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path)
+
+    lines = [
+        json.loads(line)
+        for line in (tmp_path / "progress.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert [row["document"] for row in lines] == ["deck-A", "deck-B"]
+    assert all(row["names"] for row in lines), "a row that lists no names says nothing"
+    assert "回焊爐" in lines[0]["names"]
+
+
+def test_a_run_that_stops_partway_still_leaves_what_it_had(tmp_path):
+    """The property the file exists for, asserted the way it actually happens:
+    the model dies in the middle and nothing writes the final JSON."""
+
+    class _DiesOnTheSecond(ILlm):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError("the model went away")
+            yield _REPLY, False
+
+    import pytest
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+
+    with pytest.raises(RuntimeError):
+        preview_collection(spec, _DiesOnTheSecond(), cid, out_dir=tmp_path)
+
+    assert not (tmp_path / "summary.json").exists()  # the run never finished
+    lines = (tmp_path / "progress.jsonl").read_text().splitlines()
+    assert len(lines) == 1, "the document that DID finish was lost with the one that did not"
+
+
 def test_a_collection_the_reader_cannot_open_previews_as_nothing():
     """Unreadable is indistinguishable from absent, by design — the scope hides
     the row rather than refusing it. A preview must not become the one channel

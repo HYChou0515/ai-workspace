@@ -129,7 +129,14 @@ def preview_samples(
         )
         for path in sorted(sample_dir.glob("*.txt"))
     ]
-    graph = build_graph(llm, docs, collection_id="", guidance=guidance, prompt=prompt)
+    graph = build_graph(
+        llm,
+        docs,
+        collection_id="",
+        guidance=guidance,
+        prompt=prompt,
+        on_document=lambda doc, built: append_progress(out_dir, doc, built),
+    )
     write_preview(graph, docs, out_dir=out_dir)
     return graph
 
@@ -325,6 +332,7 @@ def preview_collection(
         # diffing two runs would read as something the criterion did.
         decisions=read_decisions(spec),
         prompt=prompt,
+        on_document=lambda doc, built: append_progress(out_dir, doc, built),
     )
     write_preview(graph, docs, out_dir=out_dir)
     return graph
@@ -382,6 +390,27 @@ def summarise(graph: Graph, docs: list[DocSource]) -> dict[str, Any]:
         # against the live graph deserves to know which of the two they hold.
         "identity_scope": "this collection only (production groups across the whole corpus)",
     }
+
+
+def append_progress(out_dir: Path, doc: DocSource, built: Any) -> None:
+    """One line per document, flushed as it completes.
+
+    A whole-corpus run is hours, and until this existed an interrupted one — a
+    killed pod, a lost connection, an impatient Ctrl-C — left nothing at all.
+    JSONL rather than a growing JSON array because a line is complete the moment
+    it is written: a file cut off mid-run is still readable to its last newline,
+    which is exactly the case this is for.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    row = {
+        "document": doc.doc_id,
+        "passages": len(doc.chunks),
+        "names": [m.surface for m in built.mentions],
+        "kinds": sorted({m.kind for m in built.mentions if m.kind}),
+        "statements": len(built.claims),
+    }
+    with (out_dir / "progress.jsonl").open("a") as fh:
+        fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def write_preview(graph: Graph, docs: list[DocSource], *, out_dir: Path) -> None:

@@ -392,7 +392,7 @@ def test_the_extractor_recovers_a_reply_that_landed_in_the_reasoning_channel():
 
 
 def test_an_unparseable_reply_is_logged_with_enough_of_itself_to_diagnose(caplog):
-    """"No usable JSON" without the reply names the symptom and withholds the
+    """ "No usable JSON" without the reply names the symptom and withholds the
     evidence — a refusal, a think block and a truncated generation all produce
     that one line, and they need different fixes."""
     import logging
