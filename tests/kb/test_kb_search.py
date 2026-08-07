@@ -4,6 +4,7 @@ from agents import RunContextWrapper
 from specstar import SpecStar
 
 from workspace_app.agent import AgentToolContext, KbSearchBudget, kb_search_impl
+from workspace_app.agent.tools import _GLOSSARY_INJECT_CAP, _glossary_for_passages
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
@@ -344,10 +345,23 @@ async def test_kb_search_card_anchor_never_reopens_a_denied_document(
 # --- #484: glossary auto-injection over retrieved passages -------------------
 
 
-def _card(spec: SpecStar, cid: str, keys: list[str], *, title: str = "", body: str = "") -> str:
+def _card(
+    spec: SpecStar,
+    cid: str,
+    keys: list[str],
+    *,
+    title: str = "",
+    body: str = "",
+    reference_doc_ids: list[str] | None = None,
+) -> str:
     rm = spec.get_resource_manager(ContextCard)
     card = ContextCard(
-        collection_id=cid, keys=keys, norm_keys=derive_norm_keys(keys), title=title, body=body
+        collection_id=cid,
+        keys=keys,
+        norm_keys=derive_norm_keys(keys),
+        title=title,
+        body=body,
+        reference_doc_ids=reference_doc_ids or [],
     )
     return rm.create(card).resource_id
 
@@ -427,6 +441,192 @@ async def test_kb_search_skips_a_card_already_injected_upstream(
 
     assert "[1]" in out  # passages still returned
     assert "A protective dielectric cap." not in out  # but the card is not re-injected
+
+
+async def test_kb_search_injects_a_card_that_links_the_retrieved_document(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # `reference_doc_ids` is the curated "THIS document is what my term means", but
+    # the link only ever pointed one way: a card could narrow a search to its own
+    # documents, while a document that surfaced on its own could not name the card
+    # that vouches for it. Text matching cannot stand in for the link — a document
+    # whose whole body is a machine-written description (an image caption, say)
+    # can never be relied on to spell the card's key.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    doc_ids = Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="scan.md",
+        data=b"a jagged notch runs along the outer rim of the disc",
+    )
+    # Note the key appears NOWHERE in the document — only the link connects them.
+    _card(
+        spec,
+        cid,
+        ["M4"],
+        title="M4",
+        body="Edge chipping.",
+        reference_doc_ids=doc_ids,
+    )
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = kb_search_impl(ctx, "jagged notch along the rim")
+
+    assert "[1]" in out  # the document was retrieved
+    assert "Edge chipping." in out  # and the card that links it came along
+
+
+async def test_glossary_puts_text_matched_cards_before_linked_ones(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # Both kinds share one injection cap and one char budget, so their order decides
+    # who survives a crowded turn. A card the passage NAMES is evidence about this
+    # passage; a card that merely links the document is evidence about the document
+    # it came from — the narrower claim goes first.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    _card(spec, cid, ["notch"], title="Notch", body="NAMED-IN-TEXT.")
+    _card(spec, cid, ["M4"], title="M4", body="LINKED-ONLY.", reference_doc_ids=["doc-a"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = _glossary_for_passages(ctx.context, ["a jagged notch along the rim"], ["doc-a"])
+
+    assert out.index("NAMED-IN-TEXT.") < out.index("LINKED-ONLY.")
+
+
+async def test_glossary_spends_the_cap_on_cards_it_will_actually_render(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # The cap was applied BEFORE the turn-level dedup, so cards already injected
+    # earlier in the turn still consumed slots. A turn that has met the cap in text
+    # hits then renders an EMPTY block — full budget, nothing in it — and the linked
+    # card is dropped anyway. That is the one case linking exists for: the document's
+    # text never spells the term, so no later search can reach that card either.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    for i in range(_GLOSSARY_INJECT_CAP):
+        _card(spec, cid, [f"term{i}"], title=f"T{i}", body="x.")
+    _card(spec, cid, ["M4"], title="M4", body="LINKED.", reference_doc_ids=["doc-a"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+    mentions_every_term = " ".join(f"term{i}" for i in range(_GLOSSARY_INJECT_CAP))
+
+    _glossary_for_passages(ctx.context, [mentions_every_term], [])  # fills the turn
+    # The second search surfaces the same terms again — they render nothing this time,
+    # having been defined already — plus a document a card links.
+    out = _glossary_for_passages(ctx.context, [mentions_every_term], ["doc-a"])
+
+    assert "LINKED." in out  # a slot spent on an already-injected card is not a slot
+
+
+async def test_glossary_reaches_a_text_matched_card_the_cap_deferred(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # The cap has to bound what gets RENDERED, so it belongs after the turn-level
+    # dedup on BOTH arms. `match_with_ids` truncated text hits before the dedup, and
+    # `match` is deterministic, so the same cap-worth of cards won the truncation every
+    # time: a card the search legitimately matched was never injected in the whole
+    # turn, and no later search could reach it either.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    for i in range(_GLOSSARY_INJECT_CAP + 1):
+        _card(spec, cid, [f"term{i:03d}"], title=f"T{i}", body=f"BODY{i:03d}.")
+    ctx = _glossary_ctx(spec, embedder, [cid])
+    names_every_term = " ".join(f"term{i:03d}" for i in range(_GLOSSARY_INJECT_CAP + 1))
+
+    first = _glossary_for_passages(ctx.context, [names_every_term], [])
+    second = _glossary_for_passages(ctx.context, [names_every_term], [])
+
+    injected = first + second
+    missing = [i for i in range(_GLOSSARY_INJECT_CAP + 1) if f"BODY{i:03d}." not in injected]
+    assert missing == []  # every matched card is reached within the turn
+
+
+async def test_glossary_injects_a_card_once_when_it_both_names_and_links(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # A card can arrive by both routes at once. Counting it twice would render its body
+    # twice and burn two slots of the same cap for one definition.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    _card(spec, cid, ["notch"], title="Notch", body="ONCE.", reference_doc_ids=["doc-a"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = _glossary_for_passages(ctx.context, ["a jagged notch along the rim"], ["doc-a"])
+
+    assert out.count("ONCE.") == 1
+
+
+async def test_kb_search_injects_a_linked_card_only_once_per_turn(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # The link-matched cards share the turn-level dedup with the text-matched ones,
+    # so a second search that re-surfaces the same document does not re-define it.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    doc_ids = Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="scan.md",
+        data=b"a jagged notch runs along the outer rim of the disc",
+    )
+    _card(spec, cid, ["M4"], title="M4", body="Edge chipping.", reference_doc_ids=doc_ids)
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    first = kb_search_impl(ctx, "jagged notch along the rim")
+    second = kb_search_impl(ctx, "the notch on the outer rim")
+
+    assert "Edge chipping." in first
+    assert "Edge chipping." not in second
+
+
+async def test_glossary_ignores_a_card_linking_a_document_this_search_missed(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # Only the documents THIS search actually returned pull their cards in, so the
+    # link cannot become a back door that injects the whole glossary on every
+    # search. Driven through the helper rather than `kb_search_impl` because the
+    # point is which doc ids reach it — a two-document fixture is small enough
+    # that top-k returns both, which would prove nothing.
+    #
+    # Both halves in ONE test on purpose: asserting only the absence would pass just
+    # as well against a build where linking does nothing at all, which is no guard.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    _card(spec, cid, ["M4"], title="M4", body="Edge chipping.", reference_doc_ids=["doc-a"])
+    _card(spec, cid, ["M9"], title="M9", body="Delamination.", reference_doc_ids=["doc-b"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = _glossary_for_passages(ctx.context, ["a jagged notch along the rim"], ["doc-a"])
+
+    assert "Edge chipping." in out  # links doc-a, which this search returned
+    assert "Delamination." not in out  # links doc-b, which it did not
+
+
+async def test_glossary_caps_how_many_text_matched_cards_one_search_injects(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # The cap binds BOTH arms. Moving it after the dedup (so a slot is never spent on
+    # a card that renders nothing) must not quietly remove it from the text arm: a
+    # passage naming a hundred curated terms would otherwise hand the model all of
+    # them at once.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    for i in range(_GLOSSARY_INJECT_CAP + 10):
+        _card(spec, cid, [f"term{i:03d}"], title=f"T{i}", body="x.")
+    ctx = _glossary_ctx(spec, embedder, [cid])
+    names_every_term = " ".join(f"term{i:03d}" for i in range(_GLOSSARY_INJECT_CAP + 10))
+
+    out = _glossary_for_passages(ctx.context, [names_every_term], [])
+
+    assert out.count("###") <= _GLOSSARY_INJECT_CAP
+
+
+async def test_glossary_caps_how_many_linked_cards_one_search_injects(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # Text hits have always been capped; linking is a second way in and needs the same
+    # ceiling, or one heavily-curated document could hand the model an unbounded block.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    for i in range(_GLOSSARY_INJECT_CAP + 10):
+        _card(spec, cid, [f"K{i}"], title=f"K{i}", body="x.", reference_doc_ids=["doc-a"])
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = _glossary_for_passages(ctx.context, ["nothing here names a card"], ["doc-a"])
+
+    assert out.count("###") <= _GLOSSARY_INJECT_CAP
 
 
 async def test_kb_search_without_glossary_cards_appends_nothing(

@@ -16,7 +16,7 @@ from fastapi import APIRouter, Body, FastAPI
 from pydantic import BaseModel
 from specstar import SpecStar
 
-from ..kb.context_cards import derive_norm_keys, lookup
+from ..kb.context_cards import derive_norm_keys, effective_keys, lookup
 from ..resources.kb import ContextCard
 
 
@@ -53,12 +53,12 @@ def register_context_card_actions(spec: SpecStar) -> None:
 
     @spec.create_action("context-card", path="author", label="Add context card")
     def author_context_card(body: ContextCardBody = Body(...)) -> ContextCard:  # noqa: B008
-        # Fall back to the title as the key when no usable key was given (empty
-        # list or only blanks) — otherwise the card has no norm_keys and could
-        # never be found by lookup / match.
-        keys = body.keys
-        if not derive_norm_keys(keys) and (title := body.title.strip()):
-            keys = [title]
+        # #701: the shared definition of what a card is keyed under — the title
+        # stands in when no key normalises, or the card has no `norm_keys` and could
+        # never be found by lookup / match. This route used to restate it and the two
+        # disagreed on whitespace, which is a difference a person sees: `keys` is what
+        # the editor displays.
+        keys = effective_keys(body.keys, body.title)
         return ContextCard(
             collection_id=body.collection_id,
             keys=keys,
@@ -73,10 +73,15 @@ def register_context_card_actions(spec: SpecStar) -> None:
         existing: ContextCard,
         body: ContextCardPatchBody = Body(...),  # noqa: B008
     ) -> ContextCard:
+        # #701: the same fallback as `author` / `create_context_card` /
+        # `update_context_card`. Without it, clearing the last term left the card with
+        # empty `norm_keys` — still listed, still editable, and reachable by no lookup,
+        # match or upsert ever again.
+        keys = effective_keys(body.keys, body.title)
         return ContextCard(
             collection_id=existing.collection_id,  # immutable across edits
-            keys=body.keys,
-            norm_keys=derive_norm_keys(body.keys),
+            keys=keys,
+            norm_keys=derive_norm_keys(keys),
             title=body.title,
             body=body.body,
             # #518: absent ⇒ carry the existing links forward (see the body's docstring).

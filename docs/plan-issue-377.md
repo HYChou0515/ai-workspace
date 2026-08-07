@@ -89,7 +89,7 @@ class DocQuestion(Struct):
 
 - **P2 — 擴充 `CardDrafter` / card_gen digest**
   - 單一 LLM pass 產出 `{confident_cards, term_questions, description_questions}`（streaming，累積 chunks）。
-  - 三道護欄：跳過已有 card 的詞（沿用 `classify_against_existing`/`cards_for_collections`）、文件自己有解釋就不問、每份 cap N。
+  - 三道護欄：跳過已有 card 的詞（沿用 `classify_against_existing`/`cards_with_ids_for_collections`）、文件自己有解釋就不問、每份 cap N。
   - confident_cards 照舊落 job `artifact` 人審；questions 寫入 `DocQuestion`（詞類 collection 層去重併來源、描述帶 quote）。
 
 - **P3 — 觸發：collection 開關 ＋ 自動 hook**
@@ -121,7 +121,7 @@ class DocQuestion(Struct):
 ## 沿用既有機制（不重造輪子）
 
 - `card_drafter_llm`（現有 LLM）、`CardDrafter`/`CardGenCoordinator` 機制。
-- context card：`author/edit` custom action、`norm()`/`derive_norm_keys()`、`classify_against_existing`、`cards_for_collections`。
+- context card：`author/edit` custom action、`norm()`/`derive_norm_keys()`、`classify_against_existing`、`cards_with_ids_for_collections`。
 - `WikiFileStore`（每頁一個 `WikiPage`，id=`{collection_id}/{path}`）。
 - coordinator/JobType 樣式（`build_coordinators`、`partition_key`、`preserve_job_creator` 以 owner 身分寫回）。
 - specstar：indexed queries + `exp_aggregate_by`（page 聚合 scoped）、migration/backfill（若對既有 collection 需要）。

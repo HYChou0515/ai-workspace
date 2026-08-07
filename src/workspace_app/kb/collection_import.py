@@ -10,8 +10,10 @@ after the uploaded file, no settings/cards restored — so the importer doubles 
 a batch folder upload. ``created_by`` is the importing user (specstar stamps the
 acting user); the manifest's recorded uploader is informational only.
 
-``mode`` governs a path that already exists when importing into an EXISTING
-collection: ``overwrite`` (last-write-wins, the default) or ``skip``.
+``mode`` governs a COLLISION when importing into an EXISTING collection —
+``overwrite`` (last-write-wins, the default) or ``skip``. A document collides on
+its path; a context card collides on its key (#701), resolved by the same rule
+the authoring surfaces use.
 """
 
 from __future__ import annotations
@@ -22,11 +24,18 @@ import zipfile
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+import msgspec
 from specstar.types import ResourceIDNotFoundError
 
 from ..resources.kb import Collection, ContextCard, SourceDoc
 from .collection_export import MANIFEST_DIR, MANIFEST_PATH
-from .context_cards import derive_norm_keys
+from .context_cards import (
+    CardSnapshot,
+    cards_with_ids_for_collections,
+    derive_norm_keys,
+    effective_keys,
+    pick_upsert_target,
+)
 from .doc_id import canonical_path, encode_doc_id
 
 if TYPE_CHECKING:
@@ -71,33 +80,72 @@ def _create_collection(spec: SpecStar, settings: dict[str, Any], fallback_name: 
     return rev.resource_id
 
 
-def _restore_cards(spec: SpecStar, collection_id: str, cards: list[dict[str, Any]]) -> None:
+def _restore_cards(
+    spec: SpecStar, collection_id: str, cards: list[dict[str, Any]], mode: str
+) -> None:
+    """Restore the manifest's cards, obeying ``mode`` exactly as a colliding document
+    does (#701).
+
+    This used to create unconditionally, so a card was the one thing a round-trip
+    could not survive: re-importing an archive to correct a typo left the collection
+    with two of everything. The identity of a card is its key, and the rule for
+    resolving that — title fallback, first key with a hit wins — is not restated here
+    but shared with the authoring surfaces (``effective_keys`` /
+    ``pick_upsert_target``). It was the copy that made this diverge: this function
+    carried the title-fallback half of the rule and never the create-or-update half.
+
+    Targets come from a ``CardSnapshot`` of the collection as it stood BEFORE this
+    restore, never from live storage. A batch that resolved against live storage would
+    see its own writes, so two manifest cards sharing a key would collapse into one —
+    trading duplication for silent loss — and it would cost a query per key per card
+    on a collection that may hold thousands.
+    """
     rm = spec.get_resource_manager(ContextCard)
+    snapshot = CardSnapshot(cards_with_ids_for_collections(spec, [collection_id]))
     for card in cards:
-        keys = list(card.get("keys", []))
         title = card.get("title", "")
-        # Mirror the author action: an entry with no usable key falls back to its
-        # title so it stays findable.
-        if not derive_norm_keys(keys) and title.strip():
-            keys = [title]
+        keys = effective_keys(list(card.get("keys", [])), title)
         if not derive_norm_keys(keys):
             continue  # nothing to key on → unfindable; skip
-        rm.create(
-            ContextCard(
-                collection_id=collection_id,
-                keys=keys,
-                norm_keys=derive_norm_keys(keys),
-                title=title,
-                body=card.get("body", ""),
-                # #518: the manifest carries links as paths (see collection_export), so
-                # re-mint them as ids in the collection we are importing INTO — a doc id
-                # encodes its collection, so replaying the source's ids would land every
-                # link dangling.
-                reference_doc_ids=[
-                    encode_doc_id(collection_id, p) for p in card.get("reference_paths", [])
-                ],
-            )
+        target = pick_upsert_target(snapshot.candidates, keys)
+        if target is not None and mode == "skip":
+            # Claim even though nothing is written: the pairing is one-to-one either
+            # way. Without this a second manifest card under the same key re-resolves
+            # onto this same already-matched card and is skipped too — dropping a card
+            # that collided with nothing, where a document import under `skip` would
+            # have added it.
+            snapshot.claim(target[0])
+            continue  # same rule as a colliding path: what is already here stays
+        # #518: the manifest carries links as paths (see collection_export), so re-mint
+        # them as ids in the collection we are importing INTO — a doc id encodes its
+        # collection, so replaying the source's ids would land every link dangling.
+        # Tri-state, exactly as `update_context_card` defines it: the field ABSENT means
+        # the archive says nothing and the card keeps what it has, a list replaces, and
+        # an explicit `[]` clears. Silence is not a claim that there are no links, and
+        # deleting curated evidence on a re-import to fix a typo is precisely what that
+        # rule exists to prevent. A real export always writes the field, so round-trip
+        # fidelity is untouched; silence only ever protects a partial archive.
+        paths = card.get("reference_paths")
+        links = None if paths is None else [encode_doc_id(collection_id, p) for p in paths]
+        restored = ContextCard(
+            collection_id=collection_id,
+            keys=keys,
+            norm_keys=derive_norm_keys(keys),
+            title=title,
+            body=card.get("body", ""),
+            reference_doc_ids=list(links or []),
         )
+        if target is None:
+            rm.create(restored)
+        else:
+            # Pair one-to-one: a later manifest card under the same key must fall
+            # through to the NEXT card carrying it, or create, never re-target this one.
+            snapshot.claim(target[0])
+            if links is None:
+                restored = msgspec.structs.replace(
+                    restored, reference_doc_ids=list(target[1].reference_doc_ids)
+                )
+            rm.update(target[0], restored)
 
 
 def _doc_exists(spec: SpecStar, collection_id: str, path: str) -> bool:
@@ -151,5 +199,5 @@ def import_collection(
 
     for doc_id in document_ids:
         index_coordinator.enqueue(doc_id, collection_id)
-    _restore_cards(spec, collection_id, manifest.get("context_cards", []))
+    _restore_cards(spec, collection_id, manifest.get("context_cards", []), mode)
     return ImportResult(collection_id=collection_id, document_ids=document_ids)

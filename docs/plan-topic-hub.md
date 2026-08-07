@@ -66,7 +66,7 @@ term over the item's `collections`.
 
 **Changes.**
 - New tool `lookup_glossary(term|text)` in the tool registry, implemented over #106
-  primitives (`cards_for_collections` + `lookup`/`match`); reads `ctx.context.collection_ids`
+  primitives (`cards_with_ids_for_collections` + `lookup`/`match`); reads `ctx.context.collection_ids`
   (no `Retriever` needed).
 - Populate the App turn's `AgentToolContext.collection_ids` from `collections.json`
   (Phase 2 helper) — the only context wiring required, far less than `kb_search`.
