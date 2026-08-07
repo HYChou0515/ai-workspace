@@ -21,7 +21,7 @@ from workspace_app.kb.card_gen import (
 )
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
 from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
-from workspace_app.kb.context_cards import derive_norm_keys
+from workspace_app.kb.context_cards import derive_norm_keys, lookup
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.doc_questions import open_questions_for_collections
 from workspace_app.kb.reconcile import Reconciler, collection_wiki_text
@@ -959,6 +959,37 @@ async def test_commit_keeps_the_target_cards_reference_doc_ids():
     got = rm.get(target).data
     assert got.body == "new"  # the refresh landed…
     assert got.reference_doc_ids == ["doc-a"]  # …without stripping the curated links
+
+
+async def test_commit_creates_when_the_target_card_was_deleted_since_generation():
+    """`_existing_card` promises `None` for a card deleted since generation so the
+    commit falls back to a create. It caught only `ResourceIDNotFoundError`, and
+    specstar raises `ResourceIsDeletedError` for a SOFT delete — a sibling, not a
+    subclass — so a reviewer who deleted the target while the proposal sat in the
+    inbox got an exception instead of the promised fallback, and the whole commit
+    died with it. Same shape as #701's tombstone fence, one file over."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    target = _add_card(spec, cid, ["M4"], body="old")
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
+        [doc],
+    )
+    (p,) = coord.proposals(jid).proposals
+    assert p.mode == "update" and p.target_card_id == target
+    p.decision = "accepted"
+    coord.save_review(jid, [p])
+    spec.get_resource_manager(ContextCard).delete(target)  # reviewer deletes it meanwhile
+
+    res = coord.commit(jid)
+
+    assert res.created == 1 and res.updated == 0  # fell back to a create, as promised
+    # Asserted through `lookup`, not a raw listing: the tombstone is still a row, and
+    # what matters is what the term now resolves to.
+    assert [c.body for c in lookup(spec, cid, ["M4"])["M4"]] == ["new"]
 
 
 async def test_commit_skips_proposals_the_reviewer_did_not_accept():

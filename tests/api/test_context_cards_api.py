@@ -95,6 +95,50 @@ def test_edit_action_recomputes_norm_keys(harness):
     assert cards[0].collection_id == cid  # collection preserved across edit
 
 
+def test_editing_away_the_last_key_falls_back_to_the_title(harness):
+    """Clearing a card's terms must not make it unfindable.
+
+    `author` already falls back to the title, and so do `create_context_card` /
+    `update_context_card`. `edit` was the one surface that did not, so removing the
+    last term left `norm_keys` empty — the card still listed in the UI, still
+    editable, and reachable by no lookup, match or upsert ever again. Silent, and
+    undoable only by someone who guesses the cause.
+
+    #701 sank that fallback into `effective_keys`; this is the surface it had not
+    reached. Two definitions of what a card is keyed under is exactly the split the
+    issue set out to end.
+    """
+    cid = _collection(harness.spec)
+    harness.client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "title": "Metal 4", "body": "b"},
+    )
+    rid = _card_ids(harness.spec, cid)[0]
+
+    r = harness.client.post(
+        f"/context-card/{rid}/edit", json={"keys": [], "title": "Metal 4", "body": "b"}
+    )
+
+    assert r.status_code in (200, 201)
+    card = _cards(harness.spec, cid)[0]
+    assert card.norm_keys == ["metal 4"]  # still findable, by its title
+
+
+def test_author_action_stores_the_title_fallback_key_the_same_way_the_core_does(harness):
+    """The stored key is what a person sees in the editor, so the two surfaces must
+    not disagree about it. The route's own copy stripped the title; the shared
+    `effective_keys` does not — same `norm_keys`, different surface form."""
+    from workspace_app.kb.context_cards import effective_keys
+
+    cid = _collection(harness.spec)
+    harness.client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": [], "title": "  Metal 4  ", "body": "b"},
+    )
+
+    assert _cards(harness.spec, cid)[0].keys == effective_keys([], "  Metal 4  ")
+
+
 def test_edit_action_preserves_reference_doc_ids_when_omitted(harness):
     """#518 REGRESSION GUARD: the edit action rebuilds the whole card struct, so a
     field the FE form doesn't know about is erased on every save. The links must

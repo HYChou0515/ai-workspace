@@ -42,7 +42,7 @@ from collections.abc import Callable
 
 import msgspec
 from specstar import QB, Schema, SpecStar
-from specstar.types import ResourceIDNotFoundError, TaskStatus
+from specstar.types import ResourceNotFoundError, TaskStatus
 
 from ..resources import ContextCard, SourceDoc
 from .card_gen import (
@@ -99,7 +99,11 @@ def _existing_card(rm, resource_id: str) -> ContextCard | None:
     without a second read."""
     try:
         data = rm.get(resource_id).data
-    except ResourceIDNotFoundError:
+    except ResourceNotFoundError:
+        # #701: the PARENT of `ResourceIDNotFoundError` and `ResourceIsDeletedError`,
+        # which are siblings. Catching only the former meant a SOFT-deleted target —
+        # a reviewer deleting the card while its proposal sat in the inbox — raised
+        # instead of falling back to a create, and took the whole commit with it.
         return None
     assert isinstance(data, ContextCard)  # narrow Struct|Unset for ty
     return data

@@ -32,6 +32,7 @@ import {
 import { qk } from "../../api/queryKeys";
 import { mergeBlocked, screenFiles, type BlockedUpload } from "../../kb/uploadChecks";
 import { UploadBlockedList } from "./UploadBlockedList";
+import { ImportModeDialog } from "./ImportModeDialog";
 import { DialogProvider, useDialog } from "../../components/Dialog";
 import { Icon, type IconName } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
@@ -735,24 +736,13 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
           )}
 
           {importFile && (
-            <div className="kb-colpage__confirm" role="dialog" aria-label="Import into collection">
-              {/* The choice governs context cards as well as documents (#701): a card
-                  whose term already names one here is either replaced or left alone by
-                  the same click. Naming only documents asked about one thing and
-                  decided another. */}
-              <span>
-                Import “{importFile.name}” — for documents and cards that already exist?
-              </span>
-              <button type="button" className="kb-btn kb-btn--danger" disabled={importIntoMut.isPending} onClick={() => runImportInto("overwrite")}>
-                Overwrite
-              </button>
-              <button type="button" className="kb-btn" disabled={importIntoMut.isPending} onClick={() => runImportInto("skip")}>
-                Skip existing
-              </button>
-              <button type="button" className="kb-btn" onClick={() => setImportFile(null)}>
-                Cancel
-              </button>
-            </div>
+            <ImportModeDialog
+              fileName={importFile.name}
+              busy={importIntoMut.isPending}
+              onOverwrite={() => runImportInto("overwrite")}
+              onSkip={() => runImportInto("skip")}
+              onCancel={() => setImportFile(null)}
+            />
           )}
         </div>
       </div>

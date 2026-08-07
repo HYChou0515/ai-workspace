@@ -516,6 +516,28 @@ async def test_glossary_spends_the_cap_on_cards_it_will_actually_render(
     assert "LINKED." in out  # a slot spent on an already-injected card is not a slot
 
 
+async def test_glossary_reaches_a_text_matched_card_the_cap_deferred(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # The cap has to bound what gets RENDERED, so it belongs after the turn-level
+    # dedup on BOTH arms. `match_with_ids` truncated text hits before the dedup, and
+    # `match` is deterministic, so the same cap-worth of cards won the truncation every
+    # time: a card the search legitimately matched was never injected in the whole
+    # turn, and no later search could reach it either.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    for i in range(_GLOSSARY_INJECT_CAP + 1):
+        _card(spec, cid, [f"term{i:03d}"], title=f"T{i}", body=f"BODY{i:03d}.")
+    ctx = _glossary_ctx(spec, embedder, [cid])
+    names_every_term = " ".join(f"term{i:03d}" for i in range(_GLOSSARY_INJECT_CAP + 1))
+
+    first = _glossary_for_passages(ctx.context, [names_every_term], [])
+    second = _glossary_for_passages(ctx.context, [names_every_term], [])
+
+    injected = first + second
+    missing = [i for i in range(_GLOSSARY_INJECT_CAP + 1) if f"BODY{i:03d}." not in injected]
+    assert missing == []  # every matched card is reached within the turn
+
+
 async def test_glossary_injects_a_card_once_when_it_both_names_and_links(
     spec: SpecStar, embedder: HashEmbedder
 ):

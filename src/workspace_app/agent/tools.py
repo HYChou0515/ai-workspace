@@ -788,7 +788,13 @@ def _glossary_for_passages(
     )
 
     pairs = cards_with_ids_for_collections(spec, ctx.collection_ids)
-    hits = match_with_ids("\n".join(passage_texts), pairs, cap=_GLOSSARY_INJECT_CAP)
+    # Match WITHOUT truncating. The cap bounds what this search adds to the prompt, so
+    # it has to be applied to what will actually render — after the turn-level dedup,
+    # on both arms. Capping here instead spends slots on cards the turn already
+    # defined, and because `match` is deterministic the same cap-worth of cards wins
+    # every time: a card the search legitimately matched is never injected in the whole
+    # turn, and no later search reaches it either.
+    hits = match_with_ids("\n".join(passage_texts), pairs, cap=len(pairs))
     named = {rid for rid, _ in hits}
     returned = set(doc_ids)
     linked = [
@@ -801,7 +807,9 @@ def _glossary_for_passages(
     # nothing is spending it on nothing: a turn that already met the cap in text hits
     # would otherwise emit an empty block and still drop the linked cards — and a link
     # is the ONLY route to a card whose document never spells its term.
-    text_hits = [(rid, card) for rid, card in hits if rid not in ctx.injected_card_ids]
+    text_hits = [(rid, card) for rid, card in hits if rid not in ctx.injected_card_ids][
+        :_GLOSSARY_INJECT_CAP
+    ]
     linked = [(rid, card) for rid, card in linked if rid not in ctx.injected_card_ids]
     fresh = text_hits + linked[: max(0, _GLOSSARY_INJECT_CAP - len(text_hits))]
     cards = [card for _, card in fresh]
