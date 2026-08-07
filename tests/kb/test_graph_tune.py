@@ -884,11 +884,16 @@ def test_a_round_runs_the_judge_and_shows_the_reviser_its_verdict(tmp_path):
     llm = _Judging()
     run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
 
-    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
     assert card["judged_keep_share"] == 0.0
     assert card["judged_out"] == ["245°C"]
     (asked,) = llm.revision_prompts
     assert "judged_out" in asked
+    # …and at a glance, beside the number the beam actually selects on: a reader
+    # otherwise cannot tell whether the version the search chose is one the judge
+    # agreed with.
+    index = json.loads((rounds / "index.json").read_text())
+    assert index[0]["holdout"]["judged_keep_share"] == 0.0
 
 
 def test_a_round_uses_the_contrast_corpus_when_the_owner_supplies_one(tmp_path):
@@ -901,7 +906,7 @@ def test_a_round_uses_the_contrast_corpus_when_the_owner_supplies_one(tmp_path):
 
     run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
 
-    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
     assert card["ordinary"] == ["245°C"]
 
 
@@ -913,5 +918,5 @@ def test_without_a_contrast_corpus_the_round_says_nothing_about_ordinariness(tmp
 
     run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
 
-    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
     assert "ordinary" not in card and "ordinary_share" not in card

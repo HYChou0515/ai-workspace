@@ -660,11 +660,6 @@ def run_round(
     # The pool, not the batch: `tune_dir` is every document available, and the
     # frequency half of termhood must be estimated from all of it.
     tune = scorecard(here / "tune") | termhood(here / "tune", tune_dir)
-    # The two cheap opinions on the same vocabulary: a model asked the narrower
-    # question, and ordinary writing if the owner supplied any.
-    extracted = _extracted_names(here / "tune")
-    tune |= judge_names(reviser or llm, extracted)
-    tune |= weirdness(rounds_dir / "contrast", extracted)
     holdout: dict[str, Any] | None = None
     if holdout_every <= 1 or version % holdout_every == 0:
         # Before the extraction, so a run killed part-way keeps the probes it
@@ -679,10 +674,19 @@ def run_round(
             overlap_tokens=chunk_overlap,
             concurrency=concurrency,
         )
+        # The two name-level verdicts ride the holdout, not the batch. Both
+        # answer "is this NAME a thing", so on a set of documents that rotates
+        # every round their share moves with the draw rather than with the
+        # prompt — the same reason `lost_names` is measured here. It is also
+        # where the expensive check belongs: the judge costs a model call, and
+        # `--holdout-every` is already the knob for how often that is paid.
+        named = _extracted_names(here / "holdout")
         holdout = (
             scorecard(here / "holdout")
             | probe_score(here / "holdout", probes)
             | termhood(here / "holdout", holdout_dir)
+            | judge_names(reviser or llm, named)
+            | weirdness(rounds_dir / "contrast", named)
         )
     (here / "scorecard.json").write_text(
         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
@@ -801,12 +805,18 @@ def _write_index(rounds_dir: Path, history: list[Round]) -> None:
                     # search whose shape is invisible cannot be walked back.
                     "revised_from": r.parent,
                     "tune": {k: r.tune[k] for k in _HEADLINE},
-                    # The holdout row carries the downstream number too — it is
-                    # the one a person is actually looking for when they open
-                    # this file, and the only column that falls when the
-                    # criterion has tightened past useful.
+                    # The holdout row carries the two judgements as well as the
+                    # counts. `lookup_hit_rate` is the column that falls when the
+                    # criterion has tightened past useful — the one a person
+                    # opening this file is actually looking for — and
+                    # `judged_keep_share` is an INDEPENDENT opinion, which is
+                    # what lets a reader see whether the version the beam chose
+                    # is one the judge agreed with.
                     "holdout": (
-                        {k: r.holdout.get(k) for k in (*_HEADLINE, "lookup_hit_rate")}
+                        {
+                            k: r.holdout.get(k)
+                            for k in (*_HEADLINE, "lookup_hit_rate", "judged_keep_share")
+                        }
                         if r.holdout
                         else None
                     ),
