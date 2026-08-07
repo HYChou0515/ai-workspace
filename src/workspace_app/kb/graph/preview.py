@@ -104,6 +104,7 @@ def preview_samples(
     max_tokens: int = 256,
     overlap_tokens: int = 32,
     only: set[str] | None = None,
+    concurrency: int = 1,
 ) -> Graph:
     """Run the extraction over a folder of text files. No store, no collection.
 
@@ -141,6 +142,7 @@ def preview_samples(
         collection_id="",
         guidance=guidance,
         prompt=prompt,
+        concurrency=concurrency,
         on_document=lambda doc, built: append_progress(out_dir, doc, built),
     )
     write_preview(graph, docs, out_dir=out_dir)
@@ -316,6 +318,7 @@ def preview_collection(
     propose_with: ILlm | None = None,
     as_user: str | None = None,
     prompt: str | None = None,
+    concurrency: int = 1,
 ) -> Graph:
     """Build ``collection_id``'s graph in memory and write it to ``out_dir``.
 
@@ -340,6 +343,7 @@ def preview_collection(
         # diffing two runs would read as something the criterion did.
         decisions=read_decisions(spec),
         prompt=prompt,
+        concurrency=concurrency,
         on_document=lambda doc, built: append_progress(out_dir, doc, built),
     )
     write_preview(graph, docs, out_dir=out_dir)

@@ -212,6 +212,7 @@ def run_round(
     holdout_dir: Path,
     chunk_tokens: int = 256,
     chunk_overlap: int = 32,
+    concurrency: int = 1,
     reviser: ILlm | None = None,
     batch: int = 0,
     holdout_every: int = 1,
@@ -235,6 +236,7 @@ def run_round(
         prompt=current,
         max_tokens=chunk_tokens,
         overlap_tokens=chunk_overlap,
+        concurrency=concurrency,
         only=_batch(tune_dir, batch, seed=version),
     )
     tune = scorecard(here / "tune")
@@ -247,6 +249,7 @@ def run_round(
             prompt=current,
             max_tokens=chunk_tokens,
             overlap_tokens=chunk_overlap,
+            concurrency=concurrency,
         )
         holdout = scorecard(here / "holdout")
     (here / "scorecard.json").write_text(

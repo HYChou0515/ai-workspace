@@ -336,7 +336,8 @@ def test_a_collection_becomes_a_graph_in_one_call():
     from workspace_app.kb.graph.build import build_graph
 
     llm = _FakeLlm(
-        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
+        # both ends named as things, or the edge is a sentence parse and is dropped
+        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}, {"surface": "冷焊", "kind": "缺陷"}],'
         ' "relationships": [{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"}]}',
         '{"mentions": [{"surface": "回 焊 爐", "kind": "機台"}]}',
     )
@@ -351,10 +352,11 @@ def test_a_collection_becomes_a_graph_in_one_call():
     )
 
     assert {m.source_doc_id for m in graph.mentions} == {"deck-A", "deck-B"}
-    # both decks' spellings landed on ONE identity, and 機台 / 造成 are identities too
+    # both decks' spellings landed on ONE identity, and the kinds and the
+    # connecting word are identities too
     names = {e.canonical_name for e in graph.entities.values()}
-    assert names == {"回焊爐", "機台", "造成"}
-    assert len([link for link in graph.links if link.basis == "identical"]) == 2
+    assert names == {"回焊爐", "冷焊", "機台", "缺陷", "造成"}
+    assert len([link for link in graph.links if link.basis == "identical"]) == 3
 
 
 def test_the_same_evidence_twice_produces_the_same_graph():
@@ -662,6 +664,119 @@ def test_a_graph_says_whether_anyone_actually_asked_for_merge_proposals():
     # An empty answer from a model that WAS asked still counts as having asked.
     assert [link for link in asked.links if link.state == "pending"] == []
     assert run(ask=False).proposed is False
+
+
+def test_passages_can_be_extracted_several_at_a_time():
+    """One model call per passage, run serially, is the whole cost of a run —
+    measured at ~107 seconds per document on the real corpus. The calls do not
+    depend on each other, so the only reason they were serial is that nobody
+    said otherwise.
+
+    Asserted on CONCURRENCY, not on wall clock: a timing assertion on a machine
+    under load is a flaky test that teaches nothing."""
+    import threading
+
+    peak = 0
+    live = 0
+    lock = threading.Lock()
+
+    class _Slow(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            nonlocal peak, live
+            with lock:
+                live += 1
+                peak = max(peak, live)
+            try:
+                import time as _t
+
+                _t.sleep(0.05)
+                yield '{"mentions": [{"surface": "回焊爐"}]}', False
+            finally:
+                with lock:
+                    live -= 1
+
+    build_doc_graph(
+        _Slow(),
+        DocSource(doc_id="d", chunks=[(f"c{i}", f"t{i}") for i in range(8)]),
+        collection_id="c",
+        concurrency=4,
+    )
+
+    assert peak > 1, "the passages were still extracted one at a time"
+    assert peak <= 4, f"more calls were in flight ({peak}) than the limit allowed"
+
+
+def test_the_passages_keep_their_order_however_they_finish():
+    """Concurrency must not reorder them: passage order decides which kind and
+    which declared quote a mention keeps, and the order statements are written
+    in. A run that reordered would produce a different graph each time from the
+    same corpus."""
+    replies = [f'{{"mentions": [{{"surface": "w{i}"}}]}}' for i in range(6)]
+
+    class _OutOfOrder(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            import time as _t
+
+            index = int(prompt.rsplit("t", 1)[-1])
+            _t.sleep(0.02 * (6 - index))  # later passages answer FIRST
+            yield replies[index], False
+
+    graph = build_doc_graph(
+        _OutOfOrder(),
+        DocSource(doc_id="d", chunks=[(f"c{i}", f"t{i}") for i in range(6)]),
+        collection_id="c",
+        concurrency=6,
+    )
+
+    assert [m.surface for m in graph.mentions] == [f"w{i}" for i in range(6)]
+
+
+def test_a_connection_whose_ends_are_not_things_is_not_a_connection():
+    """The extractor was returning sentence parses rather than graph edges:
+    「第一個 —是→ 汽車」 from a passage that said "the first one is a car". 「第一個」
+    points at context and means nothing outside the sentence it came from; 「是」
+    is a copula, not a relation.
+
+    The rule is structural, not a guess about spelling: an edge joins two THINGS,
+    so an end that the same answer did not name as a thing is not an end. It also
+    means the connection layer inherits the criterion for free — improve what
+    counts as a thing and the edges improve with it, without a second rule to
+    keep in step.
+    """
+    llm = _FakeLlm(
+        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}, {"surface": "冷焊", "kind": "缺陷"}],'
+        ' "relationships": ['
+        '{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"},'
+        '{"subject": "第一個", "predicate": "是", "object": "汽車"}]}'
+    )
+
+    graph = build_doc_graph(
+        llm,
+        DocSource(doc_id="deck-A", chunks=[("c1", "回焊爐造成冷焊。第一個是汽車。")]),
+        collection_id="col-1",
+    )
+
+    assert [(r.subject, r.predicate, r.object) for r in graph.relationships] == [
+        ("回焊爐", "造成", "冷焊")
+    ]
+
+
+def test_a_connection_is_kept_when_a_LATER_passage_named_its_ends():
+    """The test is the whole DOCUMENT's things, not the passage's. A deck that
+    names the machine on slide one and states the connection on slide four is
+    the ordinary case, and judging per passage would throw it away."""
+    llm = _FakeLlm(
+        '{"mentions": [{"surface": "回焊爐"}, {"surface": "冷焊"}]}',
+        '{"relationships": [{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"}]}',
+    )
+
+    graph = build_doc_graph(
+        llm,
+        DocSource(doc_id="deck-A", chunks=[("c1", "回焊爐、冷焊"), ("c2", "回焊爐造成冷焊")]),
+        collection_id="col-1",
+    )
+
+    assert len(graph.relationships) == 1
 
 
 def test_a_decision_about_evidence_that_is_gone_is_dropped():

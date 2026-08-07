@@ -136,6 +136,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "written with word spaces, so a Chinese corpus gets passages several times this",
     )
     p.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        metavar="N",
+        help="extract N passages at once. One model call per passage IS the cost of a run, "
+        "and the calls do not depend on each other — the only reason they were serial is "
+        "that nobody said otherwise. Order is restored, so the graph is unchanged. Raise it "
+        "until the model server, not this process, is the thing that is busy",
+    )
+    p.add_argument(
         "--chunk-overlap",
         type=int,
         default=None,
@@ -216,6 +226,7 @@ def main() -> None:
             holdout_dir=args.tune_round / "holdout",
             chunk_tokens=tokens,
             chunk_overlap=overlap,
+            concurrency=args.concurrency,
             batch=args.batch,
             holdout_every=args.holdout_every,
         )
@@ -246,6 +257,7 @@ def main() -> None:
             prompt=prompt,
             max_tokens=tokens,
             overlap_tokens=overlap,
+            concurrency=args.concurrency,
         )
         _report(args.out_dir, graph, file=sys.stderr)
         return
@@ -306,6 +318,7 @@ def main() -> None:
         propose_with=llm if args.propose_merges else None,
         as_user=args.as_user,
         prompt=prompt,
+        concurrency=args.concurrency,
     )
     _report(args.out_dir, graph, file=sys.stderr)
 

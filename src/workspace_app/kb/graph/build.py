@@ -24,6 +24,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -107,6 +108,7 @@ def build_graph(
     decisions: Decisions | None = None,
     prompt: str | None = None,
     on_document: Callable[[DocSource, DocGraph], None] | None = None,
+    concurrency: int = 1,
 ) -> Graph:
     """Every document extracted, then the vocabulary built over all of it.
 
@@ -136,7 +138,12 @@ def build_graph(
     done = 0
     for index, doc in enumerate(docs, start=1):
         built = build_doc_graph(
-            llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt
+            llm,
+            doc,
+            collection_id=collection_id,
+            guidance=guidance,
+            prompt=prompt,
+            concurrency=concurrency,
         )
         per_doc.append(built)
         if on_document is not None:
@@ -193,6 +200,7 @@ def build_doc_graph(
     collection_id: str,
     guidance: str = "",
     prompt: str | None = None,
+    concurrency: int = 1,
 ) -> DocGraph:
     """Extract every chunk of ``doc`` and fold the result into its rows.
 
@@ -201,14 +209,17 @@ def build_doc_graph(
     the count is the only signal anything downstream has for how much a document
     cared about something. Counted per passage it would say nothing.
     """
-    extracted = [
-        (chunk_id, extract_entities(llm, text, guidance=guidance, prompt=prompt))
-        for chunk_id, text in doc.chunks
-    ]
+    extracted = _extract_all(llm, doc.chunks, guidance=guidance, prompt=prompt, at_once=concurrency)
+    mentions = _mentions(extracted, collection_id=collection_id, doc=doc)
     return DocGraph(
-        mentions=_mentions(extracted, collection_id=collection_id, doc=doc),
+        mentions=mentions,
         claims=_claims(extracted, collection_id=collection_id, doc=doc),
-        relationships=_relationships(extracted, collection_id=collection_id, doc=doc),
+        relationships=_relationships(
+            extracted,
+            collection_id=collection_id,
+            doc=doc,
+            things={m.norm_surface for m in mentions},
+        ),
         # ANY, not ALL. One readable passage is a real answer about the document,
         # even a smaller one than last time; none at all is silence, and silence
         # must not be recorded as "this document turned out to mention nothing".
@@ -217,14 +228,63 @@ def build_doc_graph(
     )
 
 
+def _extract_all(
+    llm: ILlm,
+    chunks: list[tuple[str, str]],
+    *,
+    guidance: str,
+    prompt: str | None,
+    at_once: int,
+) -> list[tuple[str, Extraction]]:
+    """Every passage extracted, in the DOCUMENT's order however they finish.
+
+    One model call per passage is the whole cost of a run, and the calls do not
+    depend on each other — the only reason they were serial is that nobody said
+    otherwise. `ILlm.collect` is blocking IO, so threads are the right tool and
+    the GIL is not in the way.
+
+    The order is restored before returning, and that is not cosmetic: passage
+    order decides which kind and which declared quote a mention keeps, and the
+    order every statement is written in. A run that returned them as they
+    completed would produce a different graph each time from the same corpus.
+    """
+    if at_once <= 1 or len(chunks) <= 1:
+        return [
+            (chunk_id, extract_entities(llm, text, guidance=guidance, prompt=prompt))
+            for chunk_id, text in chunks
+        ]
+    with ThreadPoolExecutor(max_workers=at_once) as pool:
+        futures = [
+            pool.submit(extract_entities, llm, text, guidance=guidance, prompt=prompt)
+            for _, text in chunks
+        ]
+        return [(chunk_id, f.result()) for (chunk_id, _), f in zip(chunks, futures, strict=True)]
+
+
 def _relationships(
     extracted: list[tuple[str, Extraction]],
     *,
     collection_id: str,
     doc: DocSource,
+    things: set[str],
 ) -> list[GraphRelationship]:
-    """What the document said connects two things, ends kept as surfaces."""
-    return [
+    """What the document said connects two THINGS, ends kept as surfaces.
+
+    An edge whose end the same answer did not name as a thing is dropped. The
+    extractor was returning sentence parses rather than graph edges — 「第一個
+    —是→ 汽車」 out of "the first one is a car", where 「第一個」 points at context
+    and means nothing outside the sentence it came from.
+
+    Structural, not a guess about spelling: an edge JOINS two things, so an end
+    that is not one is not an end. It also means this layer inherits the
+    criterion for what counts as a thing rather than needing its own — improve
+    that and the edges improve with it, with no second rule to keep in step.
+
+    Judged against the WHOLE document's things, not the passage's: a deck that
+    names the machine on slide one and states the connection on slide four is
+    the ordinary case.
+    """
+    kept = [
         GraphRelationship(
             collection_id=collection_id,
             source_doc_id=doc.doc_id,
@@ -240,7 +300,18 @@ def _relationships(
         )
         for chunk_id, extraction in extracted
         for rel in extraction.relationships
+        if norm_surface(rel.subject) in things and norm_surface(rel.object) in things
     ]
+    asked = sum(len(e.relationships) for _, e in extracted)
+    if asked > len(kept):
+        _LOGGER.info(
+            "graph build: %s — dropped %d of %d connections whose ends the document "
+            "never named as things",
+            doc.doc_id,
+            asked - len(kept),
+            asked,
+        )
+    return kept
 
 
 def _claims(
