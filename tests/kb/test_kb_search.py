@@ -596,6 +596,24 @@ async def test_glossary_ignores_a_card_linking_a_document_this_search_missed(
     assert "Delamination." not in out  # links doc-b, which it did not
 
 
+async def test_glossary_caps_how_many_text_matched_cards_one_search_injects(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    # The cap binds BOTH arms. Moving it after the dedup (so a slot is never spent on
+    # a card that renders nothing) must not quietly remove it from the text arm: a
+    # passage naming a hundred curated terms would otherwise hand the model all of
+    # them at once.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    for i in range(_GLOSSARY_INJECT_CAP + 10):
+        _card(spec, cid, [f"term{i:03d}"], title=f"T{i}", body="x.")
+    ctx = _glossary_ctx(spec, embedder, [cid])
+    names_every_term = " ".join(f"term{i:03d}" for i in range(_GLOSSARY_INJECT_CAP + 10))
+
+    out = _glossary_for_passages(ctx.context, [names_every_term], [])
+
+    assert out.count("###") <= _GLOSSARY_INJECT_CAP
+
+
 async def test_glossary_caps_how_many_linked_cards_one_search_injects(
     spec: SpecStar, embedder: HashEmbedder
 ):

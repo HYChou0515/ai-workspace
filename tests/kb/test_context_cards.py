@@ -261,6 +261,40 @@ def test_find_cards_by_key_is_membership_not_substring_and_scoped():
     assert find_cards_by_key(spec, b, "m4") == []  # other collection excluded
 
 
+def test_upsert_target_tries_every_key_not_just_the_first():
+    """ "多 key 時認哪一個" is one of the rules #701 consolidated, and it is a LOOP:
+    the FIRST key with a hit wins, so a later key still resolves when the earlier
+    ones name nothing.
+
+    Worth its own test because the consequence of narrowing it to the first key is
+    invisible — an upsert would simply create beside the card it should have
+    updated, which looks exactly like normal authoring until someone notices the
+    collection has two of everything. Every surface now shares this one loop, so a
+    silent change here is a silent change everywhere."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rid = _card(spec, cid, ["Metal 4"], body="four")
+
+    target = resolve_upsert_target(spec, cid, ["M4", "Metal 4"])  # first key names nothing
+
+    assert target is not None
+    assert target[0] == rid
+
+
+def test_upsert_target_reports_how_many_cards_share_the_matched_key():
+    """The count is what lets a review surface say "this term names several cards and
+    only the first is overwritten" instead of letting that pass silently."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _card(spec, cid, ["M4"], body="one")
+    _card(spec, cid, ["M4"], body="two")
+
+    target = resolve_upsert_target(spec, cid, ["M4"])
+
+    assert target is not None
+    assert target[2] == 2
+
+
 def test_a_long_card_body_is_truncated_rather_than_injected_whole():
     """Cards are injected automatically — on every kb_search, up to 50 at a time,
     without the agent asking. So one card someone pasted a spec into becomes a
