@@ -10,13 +10,9 @@
  * not lay out or cascade, so `getComputedStyle` cannot be trusted for either
  * the resolved value of a custom property or which of two declarations won.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readSrcFile } from "./readSrcFile";
 
-export const TOKENS_CSS = readFileSync(
-  fileURLToPath(new URL("../styles/tokens.css", import.meta.url)),
-  "utf8",
-);
+export const TOKENS_CSS = readSrcFile("styles/tokens.css");
 
 /** The light `:root` block and the dark `[data-theme="dark"]` override block. */
 export const LIGHT = /:root\s*\{[\s\S]*?\n\s*\}/;
@@ -44,24 +40,45 @@ export function contrast(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** The raw text of a custom property inside one block (`rgba(…)` / hex / `var(…)`). */
-export function rawValueIn(css: string, block: RegExp, name: string): string {
+/** The raw text of a custom property DECLARED in one block, or undefined. */
+function declaredIn(css: string, block: RegExp, name: string): string | undefined {
   const m = block.exec(css);
   if (!m) throw new Error(`block ${block} not found`);
-  const hit = new RegExp(`${name}:\\s*([^;]+);`).exec(m[0]);
-  if (!hit) throw new Error(`${name} not found in block`);
-  return hit[1].trim();
+  return new RegExp(`${name}:\\s*([^;]+);`).exec(m[0])?.[1].trim();
+}
+
+/** The raw text of a custom property inside one block (`rgba(…)` / hex / `var(…)`). */
+export function rawValueIn(css: string, block: RegExp, name: string): string {
+  const v = declaredIn(css, block, name);
+  if (v === undefined) throw new Error(`${name} not found in block`);
+  return v;
 }
 
 /**
- * Like `rawValueIn`, but follows `var(--other)` indirection within the same
- * block. `--cat-7-bg: var(--paper-2)` is the reason this exists: the neutral
+ * What a custom property resolves to under one theme.
+ *
+ * `[data-theme="dark"]` overrides only the tokens that need to flip; the rest
+ * still cascade down from `:root`. A lookup that does not fall back reports a
+ * token as missing when it is merely theme-invariant — `--info` and `--ink`
+ * are declared once and used by both themes.
+ */
+function underTheme(css: string, block: RegExp, name: string): string {
+  const own = declaredIn(css, block, name);
+  if (own !== undefined) return own;
+  const root = declaredIn(css, LIGHT, name);
+  if (root === undefined) throw new Error(`${name} is declared in no block`);
+  return root;
+}
+
+/**
+ * Like `rawValueIn`, but follows one token aliasing another within the same
+ * block. `--cat-7-bg` aliasing `--paper-2` is the reason this exists: the neutral
  * slot aliases a surface token instead of carrying its own hue, so a guard
  * that cannot dereference it simply skips the slot — which is how the neutral
  * slot stayed unmeasured.
  */
 export function resolveValueIn(css: string, block: RegExp, name: string, depth = 0): string {
-  const raw = rawValueIn(css, block, name);
+  const raw = underTheme(css, block, name);
   const alias = /^var\(\s*(--[\w-]+)\s*\)$/.exec(raw);
   if (!alias) return raw;
   if (depth > 8) throw new Error(`${name}: var() indirection does not terminate`);
@@ -110,9 +127,20 @@ export function over(fill: Rgba, surface: string): string {
   );
 }
 
+/** CSS `color-mix(in srgb, a, b <pct>%)` — `pct` is b's share, 0..1. */
+export function mixSrgb(a: string, b: string, pct: number): string {
+  const [ar, ag, ab] = parseFill(a);
+  const [br, bg, bb] = parseFill(b);
+  const at = (x: number, y: number) => Math.round(x * (1 - pct) + y * pct);
+  return (
+    "#" +
+    [at(ar, br), at(ag, bg), at(ab, bb)].map((c) => c.toString(16).padStart(2, "0")).join("")
+  );
+}
+
 /**
- * Resolve a CSS value that a component actually set — `var(--x)`, a bare hex,
- * or an `rgba()` — into the solid colour it paints as over `surface`.
+ * Resolve a CSS value that a component actually set — a token reference, a
+ * bare hex, or an `rgba()` — into the solid colour it paints as over `surface`.
  */
 export function paintedOver(css: string, block: RegExp, value: string, surface: string): string {
   const ref = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value.trim());

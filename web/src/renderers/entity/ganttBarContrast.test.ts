@@ -1,0 +1,251 @@
+// @vitest-environment happy-dom
+import "@testing-library/jest-dom/vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+
+import type { EntityInstance, EntityType } from "../../api/entities";
+import type { EntityViewProps } from "./types";
+import { GanttView } from "./GanttView";
+import {
+  DARK,
+  LIGHT,
+  TOKENS_CSS,
+  contrast,
+  mixSrgb,
+  paintedOver,
+  tokenIn,
+} from "../../test/contrast";
+import { ENTITY_VIEWS_CSS, effective, inheritedColor } from "../../test/cssRules";
+
+/**
+ * The text on a gantt bar has to be readable in BOTH themes.
+ *
+ * #690 gave the bar a `color_by` fill — `selectColor(...).bg`, a chip fill —
+ * but left the ink the bar wore when it was a solid blue slab. The two halves
+ * of that palette pair come from different files (the fill is an inline style
+ * in GanttView.tsx, the ink is a rule in entity-views.css), so nothing in the
+ * suite ever compared them: every existing assertion checks that the fill
+ * STRING matches selectColor, which it did, while the label rendered cream on
+ * a 93%-white fill at 1.07:1 and was invisible in light mode.
+ *
+ * So this guard resolves the pairing the way a browser would — inline style
+ * first, then the cascade — and takes the actual ratio. The floor is the 3:1
+ * the chip palette is already held to in styles/contrast.test.ts: a bar label
+ * is the same thing as a chip (`--text-xs`, weight 600, short) on the same
+ * fill, and holding it to a different number would mean the design system
+ * promises two things about one pairing.
+ */
+
+afterEach(cleanup);
+
+const type: EntityType = {
+  name: "issue",
+  records_path: "issues",
+  fields: [
+    { name: "title", role: "text" },
+    { name: "span", role: "daterange" },
+    { name: "assignee", role: "actor" },
+    {
+      name: "urgency",
+      role: "status",
+      values: ["critical", "high", "medium", "low"],
+      colors: { critical: "red", high: "amber", medium: "blue", low: "slate" },
+    },
+  ],
+  form: [],
+};
+const users = [{ id: "alice", name: "Alice Chen", section: "", email: "", photo_url: "" }];
+const SPAN = "2026-01-10/2026-01-20";
+
+const rec = (number: number, fields: Record<string, unknown>): EntityInstance => ({
+  number,
+  type_name: "issue",
+  fields,
+  body: "",
+  diagnostics: [],
+});
+
+function props(overrides: Partial<EntityViewProps> = {}): EntityViewProps {
+  return {
+    spec: { view: "gantt", entity: "issue", span: "span", label: "title" },
+    type,
+    entities: [],
+    onCreate: vi.fn(),
+    onPatch: vi.fn(),
+    ...overrides,
+  };
+}
+
+const THEMES = [
+  ["light", LIGHT],
+  ["dark", DARK],
+] as const;
+
+/** The opaque colour a resolved ink value denotes. */
+function inkHex(value: string, block: RegExp): string {
+  const ref = /^var\(\s*(--[\w-]+)\s*\)$/.exec(value.trim());
+  return ref ? tokenIn(TOKENS_CSS, block, ref[1]) : value.trim();
+}
+
+/**
+ * The ink an element inside the bar actually paints in.
+ *
+ * Order matters and is easy to get backwards: an element's OWN declaration
+ * beats anything it would otherwise inherit, so a `color` rule on the label
+ * wins over an inline `color` on the bar. Checking the bar's inline style
+ * first made this guard unable to see a label that pins its own ink — which
+ * is the entire defect — so it stays written in cascade order.
+ *
+ * `chain[0]` is the element's own selector; the rest are its ancestors.
+ */
+function resolvedInk(el: HTMLElement, bar: HTMLElement, chain: string[]): string {
+  if (el.style.color) return el.style.color; // inline on the element itself
+  const own = effective(ENTITY_VIEWS_CSS, chain[0], "color");
+  if (own && own !== "inherit") return own; // the element's own rule
+  if (bar.style.color) return bar.style.color; // inherited: inline on the bar
+  return inheritedColor(ENTITY_VIEWS_CSS, chain.slice(1)) || ""; // inherited: from CSS
+}
+
+/** Render one bar and hand back the element plus its label / assignee. */
+function renderBar(fields: Record<string, unknown>, spec: Partial<EntityViewProps["spec"]> = {}) {
+  render(
+    createElement(
+      GanttView,
+      props({
+        spec: {
+          view: "gantt",
+          entity: "issue",
+          span: "span",
+          label: "title",
+          assignee: "assignee",
+          assignee_display: "name",
+          ...spec,
+        } as EntityViewProps["spec"],
+        entities: [rec(1, { title: "A task", span: SPAN, ...fields })],
+        users,
+      }),
+    ),
+  );
+  const bar = screen.getByTestId("bar-1");
+  return {
+    bar,
+    // Looked up lazily: a record with no assignee renders no such node, and an
+    // eager query would fail the LABEL tests for a reason that is not theirs.
+    label: () => bar.querySelector(".ev-gantt__bar-label") as HTMLElement,
+    assignee: () => screen.getByTestId("bar-1-assignee") as HTMLElement,
+  };
+}
+
+describe("a coloured gantt bar's text (#690)", () => {
+  for (const urgency of ["critical", "high", "medium", "low"]) {
+    for (const [themeName, block] of THEMES) {
+      it(`keeps the ${urgency} label ≥3:1 on its own fill in ${themeName} mode`, () => {
+        const { bar, label } = renderBar({ urgency }, { color_by: "urgency" });
+
+        const surface = tokenIn(TOKENS_CSS, block, "--white"); // .ev-gantt__scroll
+        const fill = paintedOver(TOKENS_CSS, block, bar.style.background, surface);
+        const ink = resolvedInk(label(), bar, [".ev-gantt__bar-label", ".ev-gantt__bar"]);
+        expect(ink, "the label paints in no colour at all").not.toBe("");
+
+        const ratio = contrast(inkHex(ink, block), fill);
+        expect(
+          ratio,
+          `${urgency} label in ${themeName}: ${ink} on ${fill} = ${ratio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(3);
+      });
+
+      it(`keeps the ${urgency} assignee name ≥3:1 on its own fill in ${themeName} mode`, () => {
+        const { bar, assignee } = renderBar({ urgency, assignee: "alice" }, { color_by: "urgency" });
+
+        const surface = tokenIn(TOKENS_CSS, block, "--white");
+        const fill = paintedOver(TOKENS_CSS, block, bar.style.background, surface);
+        const ink = resolvedInk(assignee(), bar, [".ev-gantt__bar-assignee-name", ".ev-gantt__bar"]);
+
+        const ratio = contrast(inkHex(ink, block), fill);
+        expect(
+          ratio,
+          `${urgency} assignee in ${themeName}: ${ink} on ${fill} = ${ratio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(3);
+      });
+    }
+  }
+});
+
+describe("an uncoloured gantt bar's text (the default blue slab)", () => {
+  // No `color_by`, so the bar keeps its CSS gradient and there is no palette
+  // ink to inherit. `--white` used to serve here — a SURFACE token standing in
+  // for a foreground, which inverts with the theme and put near-black text on
+  // the blue bar at 2.88:1 in dark mode. Both ends of the gradient count: the
+  // ink has to survive the lightest AND the darkest point of the fill.
+  const gradientEnds = (block: RegExp) => {
+    const info = tokenIn(TOKENS_CSS, block, "--info");
+    const ink = tokenIn(TOKENS_CSS, block, "--ink");
+    return { top: info, bottom: mixSrgb(info, ink, 0.22) };
+  };
+
+  for (const [themeName, block] of THEMES) {
+    for (const part of ["label", "assignee"] as const) {
+      it(`keeps the ${part} ≥3:1 at both ends of the gradient in ${themeName} mode`, () => {
+        const rendered = renderBar({ assignee: "alice" });
+        const el = rendered[part]();
+        const chain =
+          part === "label"
+            ? [".ev-gantt__bar-label", ".ev-gantt__bar"]
+            : [".ev-gantt__bar-assignee-name", ".ev-gantt__bar"];
+        const ink = inkHex(resolvedInk(el, rendered.bar, chain), block);
+
+        const { top, bottom } = gradientEnds(block);
+        for (const [end, fill] of [
+          ["top", top],
+          ["bottom", bottom],
+        ] as const) {
+          const ratio = contrast(ink, fill);
+          expect(
+            ratio,
+            `${part} in ${themeName} at gradient ${end}: ${ink} on ${fill} = ${ratio.toFixed(2)}:1`,
+          ).toBeGreaterThanOrEqual(3);
+        }
+      });
+    }
+  }
+
+  for (const [themeName, block] of THEMES) {
+    it(`keeps a provisional (hollow) bar's label readable in ${themeName} mode`, () => {
+      // `[data-provisional]` is `background: transparent` + its own
+      // `color: var(--text-paper)` — a rule already written as though the bar
+      // carried the ink. The label used to pin `--text-dark` and win, so a
+      // hollow bar wrote cream on the white canvas: the same defect, on the
+      // one bar whose fill IS the canvas.
+      const ink = inheritedColor(ENTITY_VIEWS_CSS, [
+        ".ev-gantt__bar-label",
+        ".ev-gantt__bar[data-provisional]",
+        ".ev-gantt__bar",
+      ]);
+      expect(ink, "a provisional bar's label paints in no colour at all").toBeTruthy();
+
+      const canvas = tokenIn(TOKENS_CSS, block, "--white");
+      const ratio = contrast(inkHex(ink as string, block), canvas);
+      expect(
+        ratio,
+        `provisional label in ${themeName}: ${ink} on ${canvas} = ${ratio.toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(3);
+    });
+  }
+
+  it("never dresses bar text in a surface token", () => {
+    // The defect in one line: --white is a SURFACE. Reaching for it as a
+    // foreground is what made the ink flip the wrong way with the theme, and
+    // the neighbouring label rule already knew to use --text-dark instead.
+    for (const selector of [
+      ".ev-gantt__bar",
+      ".ev-gantt__bar-label",
+      ".ev-gantt__bar-assignee-name",
+    ]) {
+      const color = effective(ENTITY_VIEWS_CSS, selector, "color");
+      expect(color ?? "", `${selector} paints text in a surface token`).not.toMatch(
+        /var\(--(white|paper|paper-2|paper-3)\)/,
+      );
+    }
+  });
+});

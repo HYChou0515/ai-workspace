@@ -1115,6 +1115,12 @@ button.ev-card__status:focus-visible {
   /* task bars carry their own (blue) hue so they never blend into the red
    * accent "today" line; a soft vertical gradient reads calmer than a slab */
   background: linear-gradient(180deg, var(--info), color-mix(in srgb, var(--info), var(--ink) 22%));
+  /* THE BAR CARRIES THE INK; everything inside it inherits. A `color_by` bar
+   * overrides both halves together from the palette (GanttView barColor), so
+   * the fill and the text can never again come from different places — which
+   * is how #690 shipped cream text on a 93%-white chip fill. This default is
+   * for the gradient above: light text on a saturated slab, in both themes. */
+  color: var(--text-dark);
   border-radius: var(--radius-chip);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
   cursor: grab;
@@ -1129,26 +1135,28 @@ button.ev-card__status:focus-visible {
 .ev-gantt__bar[data-busy="1"] {
   cursor: default;
 }
-/* the task name rides inside the bar (light text on accent) so you read the
- * chart without cross-referencing the gutter; clipped when the bar is short. */
+/* the task name rides inside the bar so you read the chart without
+ * cross-referencing the gutter; clipped when the bar is short. */
 .ev-gantt__bar-label {
   padding: 0 var(--space-8);
   font-size: var(--text-xs);
   font-weight: 600;
-  color: var(--text-dark);
+  color: inherit;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
 }
 /* The assignee avatar sits at the right end of the bar (label ellipsises before
- * it). Sized to the ~16px bar interior + a light ring so it reads on the bar. */
+ * it). Sized to the ~16px bar interior + a ring in the bar's own ink so it
+ * reads on every fill — `--white` was a SURFACE token doing a foreground's job
+ * here, so the ring went dark on a dark bar the moment the theme flipped. */
 .ev-gantt__bar-avatar {
   width: 16px;
   height: 16px;
   margin-left: auto;
   margin-right: 3px;
-  border-color: var(--white);
+  border-color: currentColor;
   font-size: 0.5rem;
   pointer-events: none;
 }
@@ -1160,7 +1168,7 @@ button.ev-card__status:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--white);
+  color: inherit;
   font-size: var(--text-xs);
   pointer-events: none;
 }

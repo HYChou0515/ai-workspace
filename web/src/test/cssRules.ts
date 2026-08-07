@@ -8,13 +8,9 @@
  * declaration in the SAME block overrides — which is the exact defect the
  * sticky guard exists for.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { readSrcFile } from "./readSrcFile";
 
-export const ENTITY_VIEWS_CSS = readFileSync(
-  fileURLToPath(new URL("../styles/entity-views.css", import.meta.url)),
-  "utf8",
-);
+export const ENTITY_VIEWS_CSS = readSrcFile("styles/entity-views.css");
 
 /** The declarations of one rule, in source order. */
 export function ruleBody(css: string, selector: string): string {
