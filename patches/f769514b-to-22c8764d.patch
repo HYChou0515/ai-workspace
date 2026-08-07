@@ -526,10 +526,10 @@ index 00000000..72f5f663
 +    )
 diff --git a/src/workspace_app/graph_preview/__main__.py b/src/workspace_app/graph_preview/__main__.py
 new file mode 100644
-index 00000000..7b62b4a6
+index 00000000..e6ccaf29
 --- /dev/null
 +++ b/src/workspace_app/graph_preview/__main__.py
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,252 @@
 +"""CLI glue for the read-only graph preview (#697).
 +
 +    uv run python -m workspace_app.graph_preview <collection-id> -o ./graph-preview
@@ -547,7 +547,6 @@ index 00000000..7b62b4a6
 +
 +import argparse
 +import json
-+import logging
 +import sys
 +from pathlib import Path
 +
@@ -608,12 +607,6 @@ index 00000000..7b62b4a6
 +        "at; this is what tells the difference",
 +    )
 +    p.add_argument("--seed", type=int, default=0, help="fixes the sample draw (default 0)")
-+    p.add_argument(
-+        "-v",
-+        "--verbose",
-+        action="store_true",
-+        help="log every model reply that failed to parse, in full, not only its opening",
-+    )
 +    p.add_argument(
 +        "--tune-round",
 +        type=Path,
@@ -676,16 +669,6 @@ index 00000000..7b62b4a6
 +
 +def main() -> None:
 +    args = _parse_args()
-+    # Without this, Python's last-resort handler emits WARNING and above and
-+    # nothing else — so a run that takes half an hour shows one line, and that
-+    # line is a failure. Every INFO the extraction already emits was being
-+    # thrown away by the process that asked for it.
-+    logging.basicConfig(
-+        level=logging.DEBUG if args.verbose else logging.INFO,
-+        format="%(asctime)s %(levelname)s %(message)s",
-+        datefmt="%H:%M:%S",
-+        stream=sys.stderr,
-+    )
 +
 +    # The two paths that need no store at all, handled before anything opens one.
 +    if args.dump_prompt:
@@ -801,10 +784,10 @@ index 00000000..7b62b4a6
 +    main()
 diff --git a/src/workspace_app/kb/graph/build.py b/src/workspace_app/kb/graph/build.py
 new file mode 100644
-index 00000000..1fdeadc5
+index 00000000..ace33201
 --- /dev/null
 +++ b/src/workspace_app/kb/graph/build.py
-@@ -0,0 +1,886 @@
+@@ -0,0 +1,848 @@
 +"""#697 — turn a corpus into a graph, without a database anywhere in the middle.
 +
 +The graph could not be tuned. Extraction wipes and rewrites a document's rows
@@ -828,8 +811,6 @@ index 00000000..1fdeadc5
 +
 +from __future__ import annotations
 +
-+import logging
-+import time
 +from dataclasses import dataclass, field
 +from typing import Any
 +
@@ -845,8 +826,6 @@ index 00000000..1fdeadc5
 +from ..llm import ILlm
 +from .entity_extract import Extraction, extract_entities
 +from .normalize import norm_attribute, norm_period, norm_surface, norm_unit
-+
-+_LOGGER = logging.getLogger(__name__)
 +
 +
 +@dataclass(frozen=True)
@@ -924,44 +903,10 @@ index 00000000..1fdeadc5
 +    preview of a curated corpus shows every accepted merge come apart again, and
 +    a reader diffing two runs reads that as something the criterion did.
 +    """
-+    # Say what is happening WHILE it happens. Extraction is one model call per
-+    # passage over a whole corpus, so a run is tens of minutes with nothing to
-+    # show for itself — and a run that is failing every call looks exactly like a
-+    # run that is working, until it ends. The counts here are what tell them
-+    # apart at minute one instead of at minute thirty.
-+    started = time.monotonic()
-+    passages = sum(len(d.chunks) for d in docs)
-+    _LOGGER.info("graph build: %d documents, %d passages, one model call each", len(docs), passages)
-+    per_doc: list[DocGraph] = []
-+    done = 0
-+    for index, doc in enumerate(docs, start=1):
-+        built = build_doc_graph(
-+            llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt
-+        )
-+        per_doc.append(built)
-+        done += len(doc.chunks)
-+        _LOGGER.info(
-+            "graph build: %d/%d %s — %d passages, %d names, %d statements (%.0fs elapsed)",
-+            index,
-+            len(docs),
-+            doc.doc_id,
-+            len(doc.chunks),
-+            len(built.mentions),
-+            len(built.claims),
-+            time.monotonic() - started,
-+        )
-+    silent = [d.doc_id for d, g in zip(docs, per_doc, strict=True) if d.chunks and not g.mentions]
-+    if silent:
-+        # Named, not counted. A document that yielded nothing is either a
-+        # document about nothing or a model call that failed, and which one it
-+        # is can only be settled by going and looking at that document.
-+        _LOGGER.warning(
-+            "graph build: %d of %d documents yielded no names at all — %s%s",
-+            len(silent),
-+            len(docs),
-+            ", ".join(silent[:10]),
-+            "" if len(silent) <= 10 else f", and {len(silent) - 10} more",
-+        )
++    per_doc = [
++        build_doc_graph(llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt)
++        for doc in docs
++    ]
 +    mentions = [m for doc in per_doc for m in doc.mentions]
 +    relationships = [r for doc in per_doc for r in doc.relationships]
 +    vocabulary = build_vocabulary(
@@ -1917,7 +1862,7 @@ index bbe512c3..265e1c3e 100644
 +    persist_doc_graph(spec, graph)
 +    return len(graph.mentions), len(graph.claims)
 diff --git a/src/workspace_app/kb/graph/entity_extract.py b/src/workspace_app/kb/graph/entity_extract.py
-index aae599a9..97477d9e 100644
+index aae599a9..1e78683f 100644
 --- a/src/workspace_app/kb/graph/entity_extract.py
 +++ b/src/workspace_app/kb/graph/entity_extract.py
 @@ -36,8 +36,9 @@ _LOGGER = logging.getLogger(__name__)
@@ -2004,7 +1949,7 @@ index aae599a9..97477d9e 100644
      A reply that is neither the expected object nor a bare mention array — a
      refusal, commentary, a truncated generation — yields nothing rather than
      failing, so one bad passage cannot take down the batch it rides in. The bare
-@@ -175,10 +222,35 @@ def extract_entities(llm: ILlm, text: str) -> Extraction:
+@@ -175,10 +222,29 @@ def extract_entities(llm: ILlm, text: str) -> Extraction:
      in the passage. Without that check the requirement would be decoration: a
      model free to invent the sentence has given nobody anything to verify.
      """
@@ -2024,13 +1969,7 @@ index aae599a9..97477d9e 100644
 +    reply = llm.collect(
 +        template.format(text=text, guidance=block)
 +        if "{guidance}" in template
-+        else template.format(text=text),
-+        # #494: a reasoning model that runs out of tokens before closing
-+        # `</think>` puts its WHOLE reply — the JSON this has to parse — in the
-+        # reasoning channel, and no content delta ever arrives. Without this the
-+        # answer is simply not seen, and the run reports "no usable JSON": a
-+        # model that answered fine, read as a model that answered badly.
-+        recover_reasoning=True,
++        else template.format(text=text)
 +    )
      payload = _parse(reply)
      if payload is None:
@@ -2042,21 +1981,6 @@ index aae599a9..97477d9e 100644
      raw_mentions = payload.get("mentions")
      raw_aliases = payload.get("aliases")
      mentions: list[EntityMention] = []
-@@ -277,5 +349,13 @@ def _parse(reply: str) -> dict[str, Any] | None:
-             continue  # a lone object from INSIDE a bare array — try the array shape
-         if isinstance(data, list):
-             return {"mentions": data, "aliases": [], "relationships": [], "attributes": []}
--    _LOGGER.warning("extract_entities: no usable JSON in the reply, dropping the batch")
-+    # WITH the reply. A refusal, a think block that never closed and a
-+    # truncated generation all produce this one line and need different fixes,
-+    # so the line that names the symptom has to carry the evidence too.
-+    _LOGGER.warning(
-+        "extract_entities: no usable JSON in a %d-character reply, dropping this passage. "
-+        "It began: %r",
-+        len(reply),
-+        reply[:400],
-+    )
-     return None
 diff --git a/src/workspace_app/kb/graph/jobs.py b/src/workspace_app/kb/graph/jobs.py
 index 89e38c78..a5cb0d69 100644
 --- a/src/workspace_app/kb/graph/jobs.py
@@ -6063,10 +5987,10 @@ index f94743ef..0719e2ed 100644
  
      assert entity_page(spec, eid, as_user="alice").value_of == []
 diff --git a/tests/kb/test_graph_entity_extract.py b/tests/kb/test_graph_entity_extract.py
-index f073edbe..74581ea5 100644
+index f073edbe..d8ef3b43 100644
 --- a/tests/kb/test_graph_entity_extract.py
 +++ b/tests/kb/test_graph_entity_extract.py
-@@ -267,3 +267,164 @@ def test_the_prompt_never_gates_on_the_value_being_a_number():
+@@ -267,3 +267,119 @@ def test_the_prompt_never_gates_on_the_value_being_a_number():
      # ("part numbers" legitimately appears in the mention section — the word to
      # watch is the one that GATES on the value's type, not the word "number".)
      assert "verbatim" in prompt
@@ -6161,51 +6085,6 @@ index f073edbe..74581ea5 100644
 +# to be replaceable, not just extendable — and replaceable from a FILE, because
 +# writing a good one takes many passes and nobody does many passes through a
 +# Python constant.
-+
-+
-+class _Recorder(ILlm):
-+    """Records how `collect` was called, not only what it was asked."""
-+
-+    def __init__(self, reply: str = "{}") -> None:
-+        self._reply = reply
-+        self.kwargs: dict = {}
-+
-+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
-+        yield self._reply, False
-+
-+    def collect(self, prompt: str, on_chunk=None, **kw) -> str:  # noqa: ANN001
-+        self.kwargs = kw
-+        return self._reply
-+
-+
-+def test_the_extractor_recovers_a_reply_that_landed_in_the_reasoning_channel():
-+    """A reasoning model that runs out of tokens before closing `</think>` puts
-+    its WHOLE reply — the JSON this has to parse — in `reasoning_content`, and no
-+    content delta ever arrives. `collect` then returns "" and this reports "no
-+    usable JSON", which reads like a model that answered badly rather than one
-+    whose answer went down the other pipe.
-+
-+    Production runs reasoning models. Three other structured callers already ask
-+    for the recovery (#494); this one did not, and a run of it dropped batch
-+    after batch for half an hour saying only that.
-+    """
-+    llm = _Recorder()
-+    extract_entities(llm, "t")
-+    assert llm.kwargs.get("recover_reasoning") is True
-+
-+
-+def test_an_unparseable_reply_is_logged_with_enough_of_itself_to_diagnose(caplog):
-+    """"No usable JSON" without the reply names the symptom and withholds the
-+    evidence — a refusal, a think block and a truncated generation all produce
-+    that one line, and they need different fixes."""
-+    import logging
-+
-+    llm = _FakeLlm("I am sorry, I cannot help with that request.")
-+    with caplog.at_level(logging.WARNING, logger="workspace_app.kb.graph.entity_extract"):
-+        extract_entities(llm, "t")
-+
-+    logged = "\n".join(r.getMessage() for r in caplog.records)
-+    assert "I am sorry" in logged, f"the reply itself never reached the log: {logged!r}"
 +
 +
 +def test_a_supplied_prompt_replaces_the_built_in_one():
