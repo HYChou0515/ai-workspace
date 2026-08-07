@@ -1,0 +1,409 @@
+diff --git a/src/workspace_app/graph_preview/__main__.py b/src/workspace_app/graph_preview/__main__.py
+index 7b71e262..c7709ba1 100644
+--- a/src/workspace_app/graph_preview/__main__.py
++++ b/src/workspace_app/graph_preview/__main__.py
+@@ -135,6 +135,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+         "cut the way production cuts it. Pass a value to try a different cut — CJK is not "
+         "written with word spaces, so a Chinese corpus gets passages several times this",
+     )
++    p.add_argument(
++        "--concurrency",
++        type=int,
++        default=1,
++        metavar="N",
++        help="extract N passages at once. One model call per passage IS the cost of a run, "
++        "and the calls do not depend on each other — the only reason they were serial is "
++        "that nobody said otherwise. Order is restored, so the graph is unchanged. Raise it "
++        "until the model server, not this process, is the thing that is busy",
++    )
+     p.add_argument(
+         "--chunk-overlap",
+         type=int,
+@@ -216,6 +226,7 @@ def main() -> None:
+             holdout_dir=args.tune_round / "holdout",
+             chunk_tokens=tokens,
+             chunk_overlap=overlap,
++            concurrency=args.concurrency,
+             batch=args.batch,
+             holdout_every=args.holdout_every,
+         )
+@@ -246,6 +257,7 @@ def main() -> None:
+             prompt=prompt,
+             max_tokens=tokens,
+             overlap_tokens=overlap,
++            concurrency=args.concurrency,
+         )
+         _report(args.out_dir, graph, file=sys.stderr)
+         return
+@@ -306,6 +318,7 @@ def main() -> None:
+         propose_with=llm if args.propose_merges else None,
+         as_user=args.as_user,
+         prompt=prompt,
++        concurrency=args.concurrency,
+     )
+     _report(args.out_dir, graph, file=sys.stderr)
+ 
+diff --git a/src/workspace_app/kb/graph/build.py b/src/workspace_app/kb/graph/build.py
+index f56a708b..5cd158f4 100644
+--- a/src/workspace_app/kb/graph/build.py
++++ b/src/workspace_app/kb/graph/build.py
+@@ -24,6 +24,7 @@ from __future__ import annotations
+ import logging
+ import time
+ from collections.abc import Callable
++from concurrent.futures import ThreadPoolExecutor
+ from dataclasses import dataclass, field
+ from typing import Any
+ 
+@@ -107,6 +108,7 @@ def build_graph(
+     decisions: Decisions | None = None,
+     prompt: str | None = None,
+     on_document: Callable[[DocSource, DocGraph], None] | None = None,
++    concurrency: int = 1,
+ ) -> Graph:
+     """Every document extracted, then the vocabulary built over all of it.
+ 
+@@ -136,7 +138,12 @@ def build_graph(
+     done = 0
+     for index, doc in enumerate(docs, start=1):
+         built = build_doc_graph(
+-            llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt
++            llm,
++            doc,
++            collection_id=collection_id,
++            guidance=guidance,
++            prompt=prompt,
++            concurrency=concurrency,
+         )
+         per_doc.append(built)
+         if on_document is not None:
+@@ -193,6 +200,7 @@ def build_doc_graph(
+     collection_id: str,
+     guidance: str = "",
+     prompt: str | None = None,
++    concurrency: int = 1,
+ ) -> DocGraph:
+     """Extract every chunk of ``doc`` and fold the result into its rows.
+ 
+@@ -201,14 +209,17 @@ def build_doc_graph(
+     the count is the only signal anything downstream has for how much a document
+     cared about something. Counted per passage it would say nothing.
+     """
+-    extracted = [
+-        (chunk_id, extract_entities(llm, text, guidance=guidance, prompt=prompt))
+-        for chunk_id, text in doc.chunks
+-    ]
++    extracted = _extract_all(llm, doc.chunks, guidance=guidance, prompt=prompt, at_once=concurrency)
++    mentions = _mentions(extracted, collection_id=collection_id, doc=doc)
+     return DocGraph(
+-        mentions=_mentions(extracted, collection_id=collection_id, doc=doc),
++        mentions=mentions,
+         claims=_claims(extracted, collection_id=collection_id, doc=doc),
+-        relationships=_relationships(extracted, collection_id=collection_id, doc=doc),
++        relationships=_relationships(
++            extracted,
++            collection_id=collection_id,
++            doc=doc,
++            things={m.norm_surface for m in mentions},
++        ),
+         # ANY, not ALL. One readable passage is a real answer about the document,
+         # even a smaller one than last time; none at all is silence, and silence
+         # must not be recorded as "this document turned out to mention nothing".
+@@ -217,14 +228,63 @@ def build_doc_graph(
+     )
+ 
+ 
++def _extract_all(
++    llm: ILlm,
++    chunks: list[tuple[str, str]],
++    *,
++    guidance: str,
++    prompt: str | None,
++    at_once: int,
++) -> list[tuple[str, Extraction]]:
++    """Every passage extracted, in the DOCUMENT's order however they finish.
++
++    One model call per passage is the whole cost of a run, and the calls do not
++    depend on each other — the only reason they were serial is that nobody said
++    otherwise. `ILlm.collect` is blocking IO, so threads are the right tool and
++    the GIL is not in the way.
++
++    The order is restored before returning, and that is not cosmetic: passage
++    order decides which kind and which declared quote a mention keeps, and the
++    order every statement is written in. A run that returned them as they
++    completed would produce a different graph each time from the same corpus.
++    """
++    if at_once <= 1 or len(chunks) <= 1:
++        return [
++            (chunk_id, extract_entities(llm, text, guidance=guidance, prompt=prompt))
++            for chunk_id, text in chunks
++        ]
++    with ThreadPoolExecutor(max_workers=at_once) as pool:
++        futures = [
++            pool.submit(extract_entities, llm, text, guidance=guidance, prompt=prompt)
++            for _, text in chunks
++        ]
++        return [(chunk_id, f.result()) for (chunk_id, _), f in zip(chunks, futures, strict=True)]
++
++
+ def _relationships(
+     extracted: list[tuple[str, Extraction]],
+     *,
+     collection_id: str,
+     doc: DocSource,
++    things: set[str],
+ ) -> list[GraphRelationship]:
+-    """What the document said connects two things, ends kept as surfaces."""
+-    return [
++    """What the document said connects two THINGS, ends kept as surfaces.
++
++    An edge whose end the same answer did not name as a thing is dropped. The
++    extractor was returning sentence parses rather than graph edges — 「第一個
++    —是→ 汽車」 out of "the first one is a car", where 「第一個」 points at context
++    and means nothing outside the sentence it came from.
++
++    Structural, not a guess about spelling: an edge JOINS two things, so an end
++    that is not one is not an end. It also means this layer inherits the
++    criterion for what counts as a thing rather than needing its own — improve
++    that and the edges improve with it, with no second rule to keep in step.
++
++    Judged against the WHOLE document's things, not the passage's: a deck that
++    names the machine on slide one and states the connection on slide four is
++    the ordinary case.
++    """
++    kept = [
+         GraphRelationship(
+             collection_id=collection_id,
+             source_doc_id=doc.doc_id,
+@@ -240,7 +300,18 @@ def _relationships(
+         )
+         for chunk_id, extraction in extracted
+         for rel in extraction.relationships
++        if norm_surface(rel.subject) in things and norm_surface(rel.object) in things
+     ]
++    asked = sum(len(e.relationships) for _, e in extracted)
++    if asked > len(kept):
++        _LOGGER.info(
++            "graph build: %s — dropped %d of %d connections whose ends the document "
++            "never named as things",
++            doc.doc_id,
++            asked - len(kept),
++            asked,
++        )
++    return kept
+ 
+ 
+ def _claims(
+diff --git a/src/workspace_app/kb/graph/preview.py b/src/workspace_app/kb/graph/preview.py
+index 1268cd64..c726df15 100644
+--- a/src/workspace_app/kb/graph/preview.py
++++ b/src/workspace_app/kb/graph/preview.py
+@@ -104,6 +104,7 @@ def preview_samples(
+     max_tokens: int = 256,
+     overlap_tokens: int = 32,
+     only: set[str] | None = None,
++    concurrency: int = 1,
+ ) -> Graph:
+     """Run the extraction over a folder of text files. No store, no collection.
+ 
+@@ -141,6 +142,7 @@ def preview_samples(
+         collection_id="",
+         guidance=guidance,
+         prompt=prompt,
++        concurrency=concurrency,
+         on_document=lambda doc, built: append_progress(out_dir, doc, built),
+     )
+     write_preview(graph, docs, out_dir=out_dir)
+@@ -316,6 +318,7 @@ def preview_collection(
+     propose_with: ILlm | None = None,
+     as_user: str | None = None,
+     prompt: str | None = None,
++    concurrency: int = 1,
+ ) -> Graph:
+     """Build ``collection_id``'s graph in memory and write it to ``out_dir``.
+ 
+@@ -340,6 +343,7 @@ def preview_collection(
+         # diffing two runs would read as something the criterion did.
+         decisions=read_decisions(spec),
+         prompt=prompt,
++        concurrency=concurrency,
+         on_document=lambda doc, built: append_progress(out_dir, doc, built),
+     )
+     write_preview(graph, docs, out_dir=out_dir)
+diff --git a/src/workspace_app/kb/graph/tune.py b/src/workspace_app/kb/graph/tune.py
+index 74e30262..f5873b24 100644
+--- a/src/workspace_app/kb/graph/tune.py
++++ b/src/workspace_app/kb/graph/tune.py
+@@ -212,6 +212,7 @@ def run_round(
+     holdout_dir: Path,
+     chunk_tokens: int = 256,
+     chunk_overlap: int = 32,
++    concurrency: int = 1,
+     reviser: ILlm | None = None,
+     batch: int = 0,
+     holdout_every: int = 1,
+@@ -235,6 +236,7 @@ def run_round(
+         prompt=current,
+         max_tokens=chunk_tokens,
+         overlap_tokens=chunk_overlap,
++        concurrency=concurrency,
+         only=_batch(tune_dir, batch, seed=version),
+     )
+     tune = scorecard(here / "tune")
+@@ -247,6 +249,7 @@ def run_round(
+             prompt=current,
+             max_tokens=chunk_tokens,
+             overlap_tokens=chunk_overlap,
++            concurrency=concurrency,
+         )
+         holdout = scorecard(here / "holdout")
+     (here / "scorecard.json").write_text(
+diff --git a/tests/kb/test_graph_build.py b/tests/kb/test_graph_build.py
+index 81bf3f8c..783ddbbf 100644
+--- a/tests/kb/test_graph_build.py
++++ b/tests/kb/test_graph_build.py
+@@ -336,7 +336,8 @@ def test_a_collection_becomes_a_graph_in_one_call():
+     from workspace_app.kb.graph.build import build_graph
+ 
+     llm = _FakeLlm(
+-        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}],'
++        # both ends named as things, or the edge is a sentence parse and is dropped
++        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}, {"surface": "冷焊", "kind": "缺陷"}],'
+         ' "relationships": [{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"}]}',
+         '{"mentions": [{"surface": "回 焊 爐", "kind": "機台"}]}',
+     )
+@@ -351,10 +352,11 @@ def test_a_collection_becomes_a_graph_in_one_call():
+     )
+ 
+     assert {m.source_doc_id for m in graph.mentions} == {"deck-A", "deck-B"}
+-    # both decks' spellings landed on ONE identity, and 機台 / 造成 are identities too
++    # both decks' spellings landed on ONE identity, and the kinds and the
++    # connecting word are identities too
+     names = {e.canonical_name for e in graph.entities.values()}
+-    assert names == {"回焊爐", "機台", "造成"}
+-    assert len([link for link in graph.links if link.basis == "identical"]) == 2
++    assert names == {"回焊爐", "冷焊", "機台", "缺陷", "造成"}
++    assert len([link for link in graph.links if link.basis == "identical"]) == 3
+ 
+ 
+ def test_the_same_evidence_twice_produces_the_same_graph():
+@@ -664,6 +666,119 @@ def test_a_graph_says_whether_anyone_actually_asked_for_merge_proposals():
+     assert run(ask=False).proposed is False
+ 
+ 
++def test_passages_can_be_extracted_several_at_a_time():
++    """One model call per passage, run serially, is the whole cost of a run —
++    measured at ~107 seconds per document on the real corpus. The calls do not
++    depend on each other, so the only reason they were serial is that nobody
++    said otherwise.
++
++    Asserted on CONCURRENCY, not on wall clock: a timing assertion on a machine
++    under load is a flaky test that teaches nothing."""
++    import threading
++
++    peak = 0
++    live = 0
++    lock = threading.Lock()
++
++    class _Slow(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            nonlocal peak, live
++            with lock:
++                live += 1
++                peak = max(peak, live)
++            try:
++                import time as _t
++
++                _t.sleep(0.05)
++                yield '{"mentions": [{"surface": "回焊爐"}]}', False
++            finally:
++                with lock:
++                    live -= 1
++
++    build_doc_graph(
++        _Slow(),
++        DocSource(doc_id="d", chunks=[(f"c{i}", f"t{i}") for i in range(8)]),
++        collection_id="c",
++        concurrency=4,
++    )
++
++    assert peak > 1, "the passages were still extracted one at a time"
++    assert peak <= 4, f"more calls were in flight ({peak}) than the limit allowed"
++
++
++def test_the_passages_keep_their_order_however_they_finish():
++    """Concurrency must not reorder them: passage order decides which kind and
++    which declared quote a mention keeps, and the order statements are written
++    in. A run that reordered would produce a different graph each time from the
++    same corpus."""
++    replies = [f'{{"mentions": [{{"surface": "w{i}"}}]}}' for i in range(6)]
++
++    class _OutOfOrder(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            import time as _t
++
++            index = int(prompt.rsplit("t", 1)[-1])
++            _t.sleep(0.02 * (6 - index))  # later passages answer FIRST
++            yield replies[index], False
++
++    graph = build_doc_graph(
++        _OutOfOrder(),
++        DocSource(doc_id="d", chunks=[(f"c{i}", f"t{i}") for i in range(6)]),
++        collection_id="c",
++        concurrency=6,
++    )
++
++    assert [m.surface for m in graph.mentions] == [f"w{i}" for i in range(6)]
++
++
++def test_a_connection_whose_ends_are_not_things_is_not_a_connection():
++    """The extractor was returning sentence parses rather than graph edges:
++    「第一個 —是→ 汽車」 from a passage that said "the first one is a car". 「第一個」
++    points at context and means nothing outside the sentence it came from; 「是」
++    is a copula, not a relation.
++
++    The rule is structural, not a guess about spelling: an edge joins two THINGS,
++    so an end that the same answer did not name as a thing is not an end. It also
++    means the connection layer inherits the criterion for free — improve what
++    counts as a thing and the edges improve with it, without a second rule to
++    keep in step.
++    """
++    llm = _FakeLlm(
++        '{"mentions": [{"surface": "回焊爐", "kind": "機台"}, {"surface": "冷焊", "kind": "缺陷"}],'
++        ' "relationships": ['
++        '{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"},'
++        '{"subject": "第一個", "predicate": "是", "object": "汽車"}]}'
++    )
++
++    graph = build_doc_graph(
++        llm,
++        DocSource(doc_id="deck-A", chunks=[("c1", "回焊爐造成冷焊。第一個是汽車。")]),
++        collection_id="col-1",
++    )
++
++    assert [(r.subject, r.predicate, r.object) for r in graph.relationships] == [
++        ("回焊爐", "造成", "冷焊")
++    ]
++
++
++def test_a_connection_is_kept_when_a_LATER_passage_named_its_ends():
++    """The test is the whole DOCUMENT's things, not the passage's. A deck that
++    names the machine on slide one and states the connection on slide four is
++    the ordinary case, and judging per passage would throw it away."""
++    llm = _FakeLlm(
++        '{"mentions": [{"surface": "回焊爐"}, {"surface": "冷焊"}]}',
++        '{"relationships": [{"subject": "回焊爐", "predicate": "造成", "object": "冷焊"}]}',
++    )
++
++    graph = build_doc_graph(
++        llm,
++        DocSource(doc_id="deck-A", chunks=[("c1", "回焊爐、冷焊"), ("c2", "回焊爐造成冷焊")]),
++        collection_id="col-1",
++    )
++
++    assert len(graph.relationships) == 1
++
++
+ def test_a_decision_about_evidence_that_is_gone_is_dropped():
+     """A person merged two things and one has since left the corpus — the deck
+     was deleted, or a new criterion no longer names it. There is nothing left to
