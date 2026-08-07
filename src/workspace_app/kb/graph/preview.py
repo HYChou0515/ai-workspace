@@ -39,6 +39,7 @@ import re
 from collections import Counter
 from contextlib import ExitStack
 from pathlib import Path
+from random import Random
 from typing import Any
 
 import msgspec
@@ -58,6 +59,135 @@ from .paging import walk_rows
 # and deliberately reported beside the leading-digit count, which is the one
 # that catches a value carrying a unit.
 _ONLY_A_VALUE = re.compile(r"[0-9¥$%.,\s\-]+")
+
+
+def join_chunks(chunks: list[tuple[int, int, int, str]]) -> str:
+    """``(seq, start, end, text)`` back into the document's text.
+
+    Sampling dumps DOCUMENTS rather than chunks, so that how a document is CUT
+    stays a knob somebody can turn. It is one of the live suspects for why the
+    extractor answers at the level of "knowledge" and "structure" instead of
+    naming things: the chunker counts whitespace-separated tokens, and CJK is not
+    written with word spaces, so a Chinese corpus gets passages several times the
+    size the setting names — and asking a model what three pages are ABOUT gets
+    an answer about the topic, not a list of the things in it.
+
+    The overlap has to come off. The chunker advances by ``max_tokens -
+    overlap``, so consecutive chunks share their ends; concatenating naively
+    would hand the model the same sentences twice and inflate every count taken
+    from the result.
+
+    Cut by the CHAR SPANS rather than by re-tokenising, because the spans are
+    what the chunker recorded and re-deriving them here would be a second
+    implementation of its arithmetic. A chunker whose ``text`` is not the
+    verbatim span (the protocol allows folding in a heading breadcrumb) rejoins
+    approximately — the fidelity that matters for tuning a prompt is that no
+    passage arrives twice.
+    """
+    out: list[str] = []
+    cursor = 0
+    for _, start, end, text in sorted(chunks):
+        if end <= cursor:
+            continue  # wholly inside what is already written
+        out.append(text[max(0, cursor - start) :] if start < cursor else text)
+        cursor = end
+    return "".join(out)
+
+
+def preview_samples(
+    llm: ILlm,
+    sample_dir: Path,
+    *,
+    out_dir: Path,
+    guidance: str = "",
+    prompt: str | None = None,
+    max_tokens: int = 256,
+    overlap_tokens: int = 32,
+) -> Graph:
+    """Run the extraction over a folder of text files. No store, no collection.
+
+    The tuning half of the loop. Once a sample has been drawn from the real
+    corpus, iterating on a criterion should cost a model call per passage and
+    nothing else — no database, no permissions, no environment that has to be
+    reachable. Change the prompt, run this, diff the JSON.
+
+    The files are DOCUMENTS, and the cut happens here, so ``max_tokens`` is a
+    knob this loop can turn. That matters: the chunker counts whitespace-
+    separated tokens and CJK is not written with word spaces, so a Chinese
+    corpus gets passages several times the size the setting names — and a model
+    asked what three pages are ABOUT answers with the topic rather than the
+    things in it. Whether that is what makes the vocabulary read as 「知識」 and
+    「結構」 is a question this loop can now settle.
+    """
+    from ..chunker import FixedTokenChunker
+
+    chunker = FixedTokenChunker(max_tokens=max_tokens, overlap_tokens=overlap_tokens)
+    docs = [
+        DocSource(
+            doc_id=path.stem,
+            chunks=[(f"{path.stem}#{c.seq}", c.text) for c in chunker.chunk(path.read_text())],
+        )
+        for path in sorted(sample_dir.glob("*.txt"))
+    ]
+    graph = build_graph(llm, docs, collection_id="", guidance=guidance, prompt=prompt)
+    write_preview(graph, docs, out_dir=out_dir)
+    return graph
+
+
+def dump_samples(
+    spec: SpecStar,
+    collection_id: str,
+    *,
+    out_dir: Path,
+    tune: int = 200,
+    holdout: int = 100,
+    as_user: str | None = None,
+    seed: int = 0,
+) -> tuple[int, int]:
+    """Write a random slice of the corpus to ``out_dir`` as text. Returns how
+    many documents landed in each half.
+
+    This is the ONE read of the real corpus in the tuning loop. Everything after
+    it happens offline against these files, which is what makes iterating on a
+    criterion cheap — but only if the sample is real and unbiased. A handful of
+    passages somebody picked is a sample you can tune yourself into believing in.
+
+    Two halves, drawn once and disjoint. A criterion tuned against the passages
+    you looked at works on the passages you looked at; the holdout is what tells
+    the difference, and it is only worth having if the split happens here rather
+    than by whoever remembers to keep some back.
+
+    ``seed`` fixes the draw, so two people tuning against "the sample" are
+    looking at the same passages and a re-run after a crash does not quietly
+    change the set.
+
+    Read-only, like everything else here — and scoped the same way, so a sample
+    never contains a passage its taker could not open.
+    """
+    docs = _document_texts(spec, collection_id, as_user=as_user)
+    picked = sorted(docs)
+    Random(seed).shuffle(picked)
+    halves = {"tune": picked[:tune], "holdout": picked[tune : tune + holdout]}
+    for half, doc_ids in halves.items():
+        folder = out_dir / half
+        folder.mkdir(parents=True, exist_ok=True)
+        for doc_id in doc_ids:
+            (folder / f"{_safe_name(doc_id)}.txt").write_text(docs[doc_id])
+    return len(halves["tune"]), len(halves["holdout"])
+
+
+def _safe_name(doc_id: str) -> str:
+    """A document id as a filename. Ids are already slash-free (``kb.doc_id``
+    percent-encodes the natural key), so this only has to survive the rest."""
+    return "".join(c if c.isalnum() or c in "-_.%" else "_" for c in doc_id)[:120]
+
+
+def _document_texts(
+    spec: SpecStar, collection_id: str, *, as_user: str | None = None
+) -> dict[str, str]:
+    """Each document in the collection, rejoined from its chunks."""
+    _, sources = read_collection_sources(spec, collection_id, as_user=as_user)
+    return {doc.doc_id: join_chunks(doc.spans) for doc in sources if doc.spans}
 
 
 def read_collection_sources(
@@ -129,12 +259,12 @@ def _read_sources(
     assert isinstance(collection, Collection)
 
     krm = spec.get_resource_manager(DocChunk)
-    chunks: dict[str, list[tuple[int, str, str]]] = {}
+    chunks: dict[str, list[tuple[int, str, str, int, int]]] = {}
     for r in walk_rows(krm, QB["collection_id"] == collection_id):
         chunk = r.data
         assert isinstance(chunk, DocChunk)
         chunks.setdefault(chunk.source_doc_id, []).append(
-            (chunk.seq, r.info.resource_id, chunk.text)
+            (chunk.seq, r.info.resource_id, chunk.text, chunk.start, chunk.end)
         )
 
     docs: list[DocSource] = []
@@ -155,8 +285,9 @@ def _read_sources(
         docs.append(
             DocSource(
                 doc_id=doc_id,
-                chunks=[(cid, text) for _, cid, text in chunks[doc_id]],
+                chunks=[(cid, text) for _, cid, text, _, _ in chunks[doc_id]],
                 mirror=mirror,
+                spans=[(seq, start, end, text) for seq, _, text, start, end in chunks[doc_id]],
             )
         )
     return collection.graph_guidance, docs
@@ -171,6 +302,7 @@ def preview_collection(
     guidance: str | None = None,
     propose_with: ILlm | None = None,
     as_user: str | None = None,
+    prompt: str | None = None,
 ) -> Graph:
     """Build ``collection_id``'s graph in memory and write it to ``out_dir``.
 
@@ -192,6 +324,7 @@ def preview_collection(
         # has curated shows every accepted merge undone, which a reader
         # diffing two runs would read as something the criterion did.
         decisions=read_decisions(spec),
+        prompt=prompt,
     )
     write_preview(graph, docs, out_dir=out_dir)
     return graph

@@ -515,6 +515,161 @@ def test_the_summary_counts_the_names_that_are_really_measurements(tmp_path):
     assert summary["mentions_that_are_only_a_value"] == 2
 
 
+def test_a_documents_chunks_join_back_into_the_text_they_came_from():
+    """Sampling dumps DOCUMENTS, not chunks, so the chunk size stays a knob
+    somebody can turn — it is one of the live suspects for why the extractor
+    answers at the level of "knowledge" and "structure" rather than naming
+    things. Joining has to remove the overlap: the chunker advances by
+    `max_tokens - overlap`, so consecutive chunks share their ends, and a naive
+    concatenation would feed the model the same sentences twice.
+    """
+    from workspace_app.kb.chunker import FixedTokenChunker
+    from workspace_app.kb.graph.preview import join_chunks
+
+    canonical = " ".join(f"w{i}" for i in range(600))
+    chunks = FixedTokenChunker(max_tokens=64, overlap_tokens=16).chunk(canonical)
+    assert len(chunks) > 3, "this corpus does not exercise a single boundary"
+
+    rebuilt = join_chunks([(c.seq, c.start, c.end, c.text) for c in reversed(chunks)])
+
+    assert rebuilt == canonical
+
+
+def _many_docs(spec, n: int) -> str:
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(Collection(name="fab", use_graph=True)).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    krm = spec.get_resource_manager(DocChunk)
+    for i in range(n):
+        doc = f"deck-{i}"
+        with drm.using("bob"):
+            drm.create(
+                SourceDoc(
+                    collection_id=cid,
+                    path=f"{doc}.pptx",
+                    content=Binary(data=b"x"),
+                    collection_visibility="public",
+                    collection_created_by="bob",
+                ),
+                resource_id=doc,
+            )
+        for seq in range(2):
+            krm.create(
+                DocChunk(
+                    collection_id=cid,
+                    source_doc_id=doc,
+                    seq=seq,
+                    start=seq * 10,
+                    end=seq * 10 + 10,
+                    text=f"{doc}-p{seq} ",
+                )
+            )
+    return cid
+
+
+def test_sampling_splits_the_corpus_into_a_tuning_set_and_a_holdout(tmp_path):
+    """A criterion tuned on the passages you looked at is a criterion that works
+    on the passages you looked at. The holdout is what tells the difference —
+    so no document may appear in both, and drawing it has to be the same one
+    read, not a second trip that could see a corpus that moved."""
+    from workspace_app.kb.graph.preview import dump_samples
+
+    spec = make_spec(default_user=lambda: "bob")
+    _many_docs(spec, 10)
+    before = _snapshot(spec)
+
+    counts = dump_samples(spec, "collection:missing", out_dir=tmp_path, tune=1, holdout=1)
+    assert counts == (0, 0)  # an unreadable collection samples nothing
+
+    cid = next(
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in spec.get_resource_manager(Collection).list_resources(QB.all().build())
+    )
+    tune, holdout = dump_samples(spec, cid, out_dir=tmp_path, tune=6, holdout=3, seed=7)
+
+    assert (tune, holdout) == (6, 3)
+    tuned = {p.stem for p in (tmp_path / "tune").glob("*.txt")}
+    held = {p.stem for p in (tmp_path / "holdout").glob("*.txt")}
+    assert len(tuned) == 6 and len(held) == 3
+    assert not (tuned & held), "a document was in both sets, so the holdout proves nothing"
+    # the file is the document's text, rejoined
+    sample = next(iter(tuned))
+    assert (tmp_path / "tune" / f"{sample}.txt").read_text() == f"{sample}-p0 {sample}-p1 "
+    assert _snapshot(spec) == before, "sampling wrote to the store"
+
+
+def test_sampling_is_repeatable_for_a_seed(tmp_path):
+    """Two people tuning against 'the sample' have to be looking at the same
+    passages, and a re-run after a crash must not silently change the set."""
+    from workspace_app.kb.graph.preview import dump_samples
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _many_docs(spec, 10)
+
+    dump_samples(spec, cid, out_dir=tmp_path / "a", tune=4, holdout=2, seed=42)
+    dump_samples(spec, cid, out_dir=tmp_path / "b", tune=4, holdout=2, seed=42)
+
+    for half in ("tune", "holdout"):
+        assert {p.name for p in (tmp_path / "a" / half).glob("*")} == {
+            p.name for p in (tmp_path / "b" / half).glob("*")
+        }
+
+
+def test_a_folder_of_text_files_previews_without_a_store_at_all(tmp_path):
+    """The tuning half. Once a sample has been drawn, iterating on a criterion
+    should cost a model call per passage and nothing else — no database, no
+    permissions, no environment that has to be reachable."""
+    from workspace_app.kb.graph.preview import preview_samples
+
+    samples = tmp_path / "in"
+    samples.mkdir()
+    (samples / "deck-A.txt").write_text("回焊爐造成冷焊")
+    (samples / "deck-B.txt").write_text("回焊爐良率 98.7%")
+
+    graph = preview_samples(_FakeLlm(), samples, out_dir=tmp_path / "out")
+
+    assert {m.source_doc_id for m in graph.mentions} == {"deck-A", "deck-B"}
+    summary = json.loads((tmp_path / "out" / "summary.json").read_text())
+    assert summary["documents"] == 2
+
+
+def test_the_sample_run_cuts_the_documents_itself(tmp_path):
+    """So the chunk size is a knob this loop can turn — it is one of the live
+    suspects for why the extractor answers at the level of "knowledge" rather
+    than naming things, and it cannot be tested if the cut is baked into what
+    was dumped."""
+    from workspace_app.kb.graph.preview import preview_samples
+
+    samples = tmp_path / "in"
+    samples.mkdir()
+    (samples / "d.txt").write_text(" ".join(f"w{i}" for i in range(200)))
+
+    counts = []
+    for max_tokens in (25, 200):
+        graph = preview_samples(
+            _CountingLlm(counts),
+            samples,
+            out_dir=tmp_path / f"out{max_tokens}",
+            max_tokens=max_tokens,
+            overlap_tokens=0,
+        )
+        assert graph is not None
+    assert counts[0] > counts[1], "the chunk size did not change how the document was cut"
+
+
+class _CountingLlm(ILlm):
+    def __init__(self, sink: list[int]) -> None:
+        self._n = 0
+        self._sink = sink
+        sink.append(0)
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        self._n += 1
+        self._sink[-1] = self._n
+        yield _REPLY, False
+
+
 def test_a_collection_the_reader_cannot_open_previews_as_nothing():
     """Unreadable is indistinguishable from absent, by design — the scope hides
     the row rather than refusing it. A preview must not become the one channel

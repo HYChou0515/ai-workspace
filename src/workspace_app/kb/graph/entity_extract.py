@@ -96,6 +96,18 @@ _GUIDANCE_BLOCK = (
 )
 
 
+def built_in_prompt() -> str:
+    """The prompt as shipped, so a person can start from it rather than from a
+    blank file.
+
+    Handed out as a STRING rather than kept as an editable file in the repo: the
+    default has to travel with the package, and a prompt that lives on disk
+    beside the code is one an install can be missing. What a person edits is
+    their copy.
+    """
+    return _PROMPT
+
+
 @dataclass(frozen=True)
 class DeclaredAlias:
     """An equivalence the passage STATES, with the words that state it.
@@ -184,7 +196,9 @@ class EntityMention:
     kind: str = ""
 
 
-def extract_entities(llm: ILlm, text: str, *, guidance: str = "") -> Extraction:
+def extract_entities(
+    llm: ILlm, text: str, *, guidance: str = "", prompt: str | None = None
+) -> Extraction:
     """Extract the passage's mentions and the equivalences it declares. Never
     raises.
 
@@ -210,7 +224,21 @@ def extract_entities(llm: ILlm, text: str, *, guidance: str = "") -> Extraction:
     """
     guidance = guidance.strip()
     block = _GUIDANCE_BLOCK.format(guidance=guidance) if guidance else ""
-    reply = llm.collect(_PROMPT.format(text=text, guidance=block))
+    template = _PROMPT if prompt is None else prompt
+    if "{text}" not in template:
+        # Loudly, and before the model is called. Without it every passage
+        # extracts to nothing, and this function never raises — so the run would
+        # finish, report zero, and read exactly like a corpus that mentions
+        # nothing at all.
+        raise ValueError(
+            "the extraction prompt has no {text} placeholder, so no passage would "
+            "ever reach the model"
+        )
+    reply = llm.collect(
+        template.format(text=text, guidance=block)
+        if "{guidance}" in template
+        else template.format(text=text)
+    )
     payload = _parse(reply)
     if payload is None:
         # Empty AND marked unreadable. The lists alone would say "this passage

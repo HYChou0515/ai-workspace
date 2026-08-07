@@ -30,7 +30,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description="Build one collection's knowledge graph in memory and write it as JSON. "
         "Reads only — nothing is stored.",
     )
-    p.add_argument("collection_id", help="the collection to preview")
+    p.add_argument(
+        "collection_id",
+        nargs="?",
+        help="the collection to preview or sample from (omit with --samples)",
+    )
     p.add_argument(
         "-o",
         "--out-dir",
@@ -45,6 +49,53 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         help="a candidate extraction criterion to run INSTEAD of the collection's own, "
         "so it can be tried before it is committed anywhere",
+    )
+    p.add_argument(
+        "--samples",
+        type=Path,
+        default=None,
+        help="a folder of .txt files to run against INSTEAD of a collection. No store is "
+        "opened at all — this is the tuning half of the loop, and it is meant to be fast",
+    )
+    p.add_argument(
+        "--dump-samples",
+        type=int,
+        default=0,
+        metavar="N",
+        help="draw N documents at random from the collection and write them to <out>/tune/ "
+        "as text. One read-only read of the real corpus; everything after it runs offline",
+    )
+    p.add_argument(
+        "--holdout",
+        type=int,
+        default=0,
+        metavar="N",
+        help="draw a FURTHER N documents to <out>/holdout/, disjoint from the tuning set. "
+        "A criterion tuned on the passages you looked at works on the passages you looked "
+        "at; this is what tells the difference",
+    )
+    p.add_argument("--seed", type=int, default=0, help="fixes the sample draw (default 0)")
+    p.add_argument(
+        "--prompt-file",
+        type=Path,
+        default=None,
+        help="the WHOLE extraction prompt, replacing the built-in one. Must contain {text}; "
+        "{guidance} is optional. Start from --dump-prompt",
+    )
+    p.add_argument(
+        "--dump-prompt",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help="write the built-in extraction prompt to PATH and exit, as a starting point to edit",
+    )
+    p.add_argument(
+        "--chunk-tokens",
+        type=int,
+        default=256,
+        help="how large a passage the model is asked about, in whitespace tokens, when "
+        "running against --samples. CJK is not written with word spaces, so a Chinese "
+        "corpus gets passages several times this (default 256)",
     )
     p.add_argument(
         "--as-user",
@@ -62,8 +113,52 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
+def _report(out_dir, graph, *, file) -> None:
+    """The numbers, on stderr, so the JSON on disk stays the artefact."""
+    summary = json.loads((out_dir / "summary.json").read_text())
+    print(f"wrote {out_dir}/ — nothing was stored", file=file)
+    for key, value in summary.items():
+        if key != "kinds":
+            print(f"  {key}: {value}", file=file)
+    top = list(summary["kinds"].items())[:8]
+    print(f"  kinds (top {len(top)}): {', '.join(f'{k}×{n}' for k, n in top)}", file=file)
+    print(f"  identities: {len(graph.entities)}", file=file)
+
+
 def main() -> None:
     args = _parse_args()
+
+    # The two paths that need no store at all, handled before anything opens one.
+    if args.dump_prompt:
+        from ..kb.graph.entity_extract import built_in_prompt
+
+        args.dump_prompt.parent.mkdir(parents=True, exist_ok=True)
+        args.dump_prompt.write_text(built_in_prompt())
+        print(f"wrote {args.dump_prompt} — edit it, then pass --prompt-file", file=sys.stderr)
+        return
+
+    prompt = args.prompt_file.read_text() if args.prompt_file else None
+    if args.samples:
+        from ..factories import get_kb_llm as _llm_for_samples
+        from ..kb.graph.preview import preview_samples
+
+        settings = load(config_path=args.config)
+        llm = _llm_for_samples(settings)
+        if llm is None:
+            raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
+        graph = preview_samples(
+            llm,
+            args.samples,
+            out_dir=args.out_dir,
+            prompt=prompt,
+            max_tokens=args.chunk_tokens,
+        )
+        _report(args.out_dir, graph, file=sys.stderr)
+        return
+
+    if not args.collection_id:
+        raise SystemExit("give a collection id, or --samples <folder>")
+
     # Say which file is in force BEFORE anything reads it. `load()` falls back
     # to `./config.yaml` in the CURRENT directory and then to bundled defaults,
     # so the same command run from two directories reads two different corpora
@@ -88,6 +183,26 @@ def main() -> None:
         )
     guidance = args.guidance_file.read_text() if args.guidance_file else None
 
+    if args.dump_samples or args.holdout:
+        from ..kb.graph.preview import dump_samples
+
+        tune, held = dump_samples(
+            spec,
+            args.collection_id,
+            out_dir=args.out_dir,
+            tune=args.dump_samples,
+            holdout=args.holdout,
+            as_user=args.as_user,
+            seed=args.seed,
+        )
+        print(
+            f"wrote {tune} tuning and {held} holdout documents to {args.out_dir}/ — "
+            "nothing was stored. Iterate with --samples, and keep the holdout unread "
+            "until you think you are done",
+            file=sys.stderr,
+        )
+        return
+
     graph = preview_collection(
         spec,
         llm,
@@ -96,20 +211,9 @@ def main() -> None:
         guidance=guidance,
         propose_with=llm if args.propose_merges else None,
         as_user=args.as_user,
+        prompt=prompt,
     )
-    summary = json.loads((args.out_dir / "summary.json").read_text())
-    print(f"wrote {args.out_dir}/ — nothing was stored", file=sys.stderr)
-    for key, value in summary.items():
-        if key != "kinds":
-            print(f"  {key}: {value}", file=sys.stderr)
-    top = list(summary["kinds"].items())[:8]
-    print(f"  kinds (top {len(top)}): {', '.join(f'{k}×{n}' for k, n in top)}", file=sys.stderr)
-    print(f"  identities: {len(graph.entities)}", file=sys.stderr)
-    print(
-        "  note: identities are grouped over THIS collection only; production "
-        "groups across the whole corpus",
-        file=sys.stderr,
-    )
+    _report(args.out_dir, graph, file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -51,6 +51,10 @@ class DocSource:
     doc_id: str
     chunks: list[tuple[str, str]]  # (chunk_id, text)
     mirror: dict[str, Any] = field(default_factory=dict)
+    #: ``(seq, start, end, text)`` for each chunk — what the reader saw, kept so
+    #: the document can be rejoined for sampling. The graph never reads it: how a
+    #: document was CUT is an input to extraction, not a fact about the graph.
+    spans: list[tuple[int, int, int, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -96,6 +100,7 @@ def build_graph(
     guidance: str = "",
     propose_with: ILlm | None = None,
     decisions: Decisions | None = None,
+    prompt: str | None = None,
 ) -> Graph:
     """Every document extracted, then the vocabulary built over all of it.
 
@@ -109,7 +114,8 @@ def build_graph(
     a reader diffing two runs reads that as something the criterion did.
     """
     per_doc = [
-        build_doc_graph(llm, doc, collection_id=collection_id, guidance=guidance) for doc in docs
+        build_doc_graph(llm, doc, collection_id=collection_id, guidance=guidance, prompt=prompt)
+        for doc in docs
     ]
     mentions = [m for doc in per_doc for m in doc.mentions]
     relationships = [r for doc in per_doc for r in doc.relationships]
@@ -139,6 +145,7 @@ def build_doc_graph(
     *,
     collection_id: str,
     guidance: str = "",
+    prompt: str | None = None,
 ) -> DocGraph:
     """Extract every chunk of ``doc`` and fold the result into its rows.
 
@@ -148,7 +155,8 @@ def build_doc_graph(
     cared about something. Counted per passage it would say nothing.
     """
     extracted = [
-        (chunk_id, extract_entities(llm, text, guidance=guidance)) for chunk_id, text in doc.chunks
+        (chunk_id, extract_entities(llm, text, guidance=guidance, prompt=prompt))
+        for chunk_id, text in doc.chunks
     ]
     return DocGraph(
         mentions=_mentions(extracted, collection_id=collection_id, doc=doc),

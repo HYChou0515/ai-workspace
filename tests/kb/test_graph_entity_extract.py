@@ -347,3 +347,39 @@ def test_a_list_entry_that_is_not_an_object_is_skipped_not_fatal():
     assert [a.b for a in got.aliases] == ["錫膏檢查機"]
     assert [r.predicate for r in got.relationships] == ["檢查"]
     assert [c.attribute for c in got.attributes] == ["良率"]
+
+
+# ── the prompt itself, as something a person edits ───────────────────
+#
+# The criterion cannot win an argument with the sentence it is appended to. The
+# prompt opens with "List everything the passage below talks about — anything a
+# reader would consider a distinct thing", and a corpus's real answer to "what
+# deserves to exist here" often contradicts it outright. So the whole prompt has
+# to be replaceable, not just extendable — and replaceable from a FILE, because
+# writing a good one takes many passes and nobody does many passes through a
+# Python constant.
+
+
+def test_a_supplied_prompt_replaces_the_built_in_one():
+    llm = _FakeLlm("{}")
+    extract_entities(llm, "回焊爐 245°C", prompt="Name only the machines.\n\n{text}")
+    assert llm.prompts[0] == "Name only the machines.\n\n回焊爐 245°C"
+    assert "distinct thing" not in llm.prompts[0]
+
+
+def test_a_supplied_prompt_still_takes_the_corpus_criterion():
+    llm = _FakeLlm("{}")
+    extract_entities(llm, "t", prompt="Base.\n{guidance}\n{text}", guidance="只收機台。")
+    assert "只收機台。" in llm.prompts[0]
+
+
+def test_a_prompt_with_nowhere_to_put_the_passage_is_refused():
+    """Loudly, and before the model is called. Without `{text}` every passage
+    extracts to nothing, and `extract_entities` never raises — so the run would
+    finish, report zero, and read exactly like a corpus that mentions nothing."""
+    import pytest
+
+    llm = _FakeLlm("{}")
+    with pytest.raises(ValueError, match="text"):
+        extract_entities(llm, "t", prompt="Name only the machines.")
+    assert llm.prompts == []
