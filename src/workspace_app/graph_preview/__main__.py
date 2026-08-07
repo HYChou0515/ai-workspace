@@ -93,6 +93,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "both sets, so a later reader can see where tuning became overfitting and walk back",
     )
     p.add_argument(
+        "--batch",
+        type=int,
+        default=0,
+        metavar="N",
+        help="score only N documents drawn at random from DIR/tune each round (0 = all of "
+        "it). Faster per round, so more rounds fit in the time available — and each round "
+        "sees DIFFERENT passages, so the prompt cannot settle into one fixed set. Seeded by "
+        "the round, so a retry reads the same passages and the next round reads others",
+    )
+    p.add_argument(
+        "--holdout-every",
+        type=int,
+        default=1,
+        metavar="N",
+        help="run the holdout every Nth round (default every round). It has to be the SAME "
+        "documents every time or its trend is noise rather than a signal, which makes it "
+        "the expensive half once --batch is small. A round that skips it records nothing "
+        "rather than carrying the old number forward",
+    )
+    p.add_argument(
         "--prompt-file",
         type=Path,
         default=None,
@@ -178,6 +198,8 @@ def main() -> None:
             tune_dir=args.tune_round / "tune",
             holdout_dir=args.tune_round / "holdout",
             chunk_tokens=args.chunk_tokens,
+            batch=args.batch,
+            holdout_every=args.holdout_every,
         )
         print(f"scored v{version}, wrote v{version + 1}", file=sys.stderr)
         for row in json.loads((args.tune_round / "index.json").read_text()):

@@ -721,6 +721,21 @@ def test_a_run_that_stops_partway_still_leaves_what_it_had(tmp_path):
     assert len(lines) == 1, "the document that DID finish was lost with the one that did not"
 
 
+def test_a_retried_run_starts_its_progress_file_again(tmp_path):
+    """A killed round is retried by the next trigger — that is the design. But
+    appending to what the dead run left turns "23 documents done" into 23 rows
+    from one run and 23 from another, and the file stops being a record of what
+    this run produced."""
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _corpus(spec)
+
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path)
+    preview_collection(spec, _FakeLlm(), cid, out_dir=tmp_path)
+
+    lines = [x for x in (tmp_path / "progress.jsonl").read_text().splitlines() if x.strip()]
+    assert len(lines) == 2, f"the retry appended to the dead run's file: {len(lines)} rows"
+
+
 def test_a_collection_the_reader_cannot_open_previews_as_nothing():
     """Unreadable is indistinguishable from absent, by design — the scope hides
     the row rather than refusing it. A preview must not become the one channel

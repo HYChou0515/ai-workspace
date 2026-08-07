@@ -43,7 +43,7 @@ class Round:
     version: int
     prompt: str
     tune: dict[str, Any]
-    holdout: dict[str, Any]
+    holdout: dict[str, Any] | None
 
 
 def next_version(rounds_dir: Path) -> int:
@@ -143,7 +143,7 @@ Revise the prompt. Change what the evidence above says is wrong; leave what is
 working alone. Output the full revised prompt and nothing else."""
 
 
-def revision_prompt(current: str, tune: dict, holdout: dict, history: list[Round]) -> str:
+def revision_prompt(current: str, tune: dict, holdout: dict | None, history: list[Round]) -> str:
     """What the model is asked, in full.
 
     The HOLDOUT numbers are shown too, and labelled. A model told only how it did
@@ -151,17 +151,26 @@ def revision_prompt(current: str, tune: dict, holdout: dict, history: list[Round
     and neither would anyone reading its output later.
     """
     scores = (
-        "### On the passages being tuned against\n"
+        "### On the passages drawn for this round\n"
         + json.dumps(tune, ensure_ascii=False, indent=2)
         + "\n\n### On the held-out passages (NOT tuned against — if these stop "
         "improving while the ones above do, the prompt is learning the sample "
-        "rather than the corpus)\n" + json.dumps(holdout, ensure_ascii=False, indent=2)
+        "rather than the corpus)\n"
+        + (
+            json.dumps(holdout, ensure_ascii=False, indent=2)
+            if holdout
+            else "(not run this round — the history below carries the last time it was)"
+        )
     )
     rows = [
         f"- v{r.version}: tune per_doc={r.tune['mentions_per_document']} "
         f"digits={r.tune['mentions_starting_with_a_digit']} | "
-        f"holdout per_doc={r.holdout['mentions_per_document']} "
-        f"digits={r.holdout['mentions_starting_with_a_digit']}"
+        + (
+            f"holdout per_doc={r.holdout['mentions_per_document']} "
+            f"digits={r.holdout['mentions_starting_with_a_digit']}"
+            if r.holdout
+            else "holdout not run"
+        )
         for r in history
     ]
     return REVISE.format(
@@ -179,6 +188,8 @@ def run_round(
     holdout_dir: Path,
     chunk_tokens: int = 256,
     reviser: ILlm | None = None,
+    batch: int = 0,
+    holdout_every: int = 1,
 ) -> int:
     """Score the newest prompt, ask for a revision, file it as the next version.
 
@@ -192,10 +203,21 @@ def run_round(
     here.mkdir(parents=True, exist_ok=True)
     (here / "prompt.txt").write_text(current)
 
-    for half, folder in (("tune", tune_dir), ("holdout", holdout_dir)):
-        preview_samples(llm, folder, out_dir=here / half, prompt=current, max_tokens=chunk_tokens)
+    preview_samples(
+        llm,
+        tune_dir,
+        out_dir=here / "tune",
+        prompt=current,
+        max_tokens=chunk_tokens,
+        only=_batch(tune_dir, batch, seed=version),
+    )
     tune = scorecard(here / "tune")
-    holdout = scorecard(here / "holdout")
+    holdout: dict[str, Any] | None = None
+    if holdout_every <= 1 or version % holdout_every == 0:
+        preview_samples(
+            llm, holdout_dir, out_dir=here / "holdout", prompt=current, max_tokens=chunk_tokens
+        )
+        holdout = scorecard(here / "holdout")
     (here / "scorecard.json").write_text(
         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
     )
@@ -208,6 +230,28 @@ def run_round(
     nxt.mkdir(parents=True, exist_ok=True)
     (nxt / "prompt.txt").write_text(_usable(revised, fallback=current))
     return version
+
+
+def _batch(tune_dir: Path, size: int, *, seed: int) -> set[str] | None:
+    """Which documents this round reads, or ``None`` for all of them.
+
+    Drawing a few instead of reading the pool makes a round short enough to run
+    many times, and — more usefully — makes consecutive rounds see DIFFERENT
+    passages, so the prompt cannot settle into the peculiarities of one fixed
+    set. The tuning corpus stops being a thing to overfit and becomes a pool.
+
+    Seeded by the ROUND, so a retry after a crash reads the same passages while
+    the next round reads others. Both halves of that matter: without the first a
+    killed round changes the question it was answering; without the second the
+    batch is the whole set with extra steps.
+    """
+    if size <= 0:
+        return None
+    names = sorted(p.stem for p in tune_dir.glob("*.txt"))
+    if len(names) <= size:
+        return None
+    Random(seed).shuffle(names)
+    return set(names[:size])
 
 
 def _usable(revised: str, *, fallback: str) -> str:
@@ -256,7 +300,7 @@ def _write_index(rounds_dir: Path, history: list[Round]) -> None:
                 {
                     "version": r.version,
                     "tune": {k: r.tune[k] for k in _HEADLINE},
-                    "holdout": {k: r.holdout[k] for k in _HEADLINE},
+                    "holdout": {k: r.holdout[k] for k in _HEADLINE} if r.holdout else None,
                 }
                 for r in history
             ],

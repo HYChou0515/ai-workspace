@@ -181,3 +181,66 @@ def test_the_scorecard_shows_the_names_not_only_the_counts(tmp_path):
 
     card = scorecard(rounds / "v0" / "tune")
     assert card["kept"], "a scorecard with no names is a number nobody can check"
+
+
+def _pool(tmp_path, n: int):
+    tune = tmp_path / "tune"
+    tune.mkdir()
+    for i in range(n):
+        (tune / f"{i}.txt").write_text(f"回焊爐 RO-{i}")
+    holdout = tmp_path / "holdout"
+    holdout.mkdir()
+    (holdout / "h.txt").write_text("錫膏")
+    return tune, holdout
+
+
+def _read(rounds, version, half="tune"):
+    path = rounds / f"v{version}" / half / "progress.jsonl"
+    return {json.loads(x)["document"] for x in path.read_text().splitlines() if x.strip()}
+
+
+def test_a_round_can_score_a_mini_batch_instead_of_the_whole_tuning_set(tmp_path):
+    """Faster per round, so more rounds fit in a weekend — and each round sees a
+    DIFFERENT batch, so the prompt cannot learn one fixed set of passages. The
+    tuning set stops being a thing to overfit and becomes a pool to draw from."""
+    tune, holdout = _pool(tmp_path, 10)
+    rounds = tmp_path / "rounds"
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, batch=3)
+
+    assert len(_read(rounds, 0)) == 3
+
+
+def test_consecutive_rounds_draw_different_batches(tmp_path):
+    """A batch that never changes is the whole tuning set with extra steps."""
+    tune, holdout = _pool(tmp_path, 12)
+    rounds = tmp_path / "rounds"
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, batch=3)
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, batch=3)
+
+    assert _read(rounds, 0) != _read(rounds, 1), "every round drew the same batch"
+
+
+def test_the_holdout_can_be_run_less_often_than_the_batch(tmp_path):
+    """The holdout is the honest check, so it must stay the SAME documents every
+    time or its trend is noise — which makes it the expensive half once the batch
+    is small. Running it every few rounds keeps the trend comparable and stops it
+    dominating the cost."""
+    tune, holdout = _pool(tmp_path, 6)
+    rounds = tmp_path / "rounds"
+
+    for _ in range(3):
+        run_round(
+            _Extractor(),
+            rounds_dir=rounds,
+            tune_dir=tune,
+            holdout_dir=holdout,
+            batch=2,
+            holdout_every=2,
+        )
+
+    ran = [v for v in (0, 1, 2) if (rounds / f"v{v}" / "holdout" / "summary.json").is_file()]
+    assert ran == [0, 2], f"the holdout ran on {ran}, not every second round"
+    index = json.loads((rounds / "index.json").read_text())
+    assert index[1]["holdout"] is None, "a round that skipped the holdout must say so, not guess"

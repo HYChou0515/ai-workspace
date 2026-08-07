@@ -103,6 +103,7 @@ def preview_samples(
     prompt: str | None = None,
     max_tokens: int = 256,
     overlap_tokens: int = 32,
+    only: set[str] | None = None,
 ) -> Graph:
     """Run the extraction over a folder of text files. No store, no collection.
 
@@ -122,12 +123,17 @@ def preview_samples(
     from ..chunker import FixedTokenChunker
 
     chunker = FixedTokenChunker(max_tokens=max_tokens, overlap_tokens=overlap_tokens)
+    # A retry starts the record again rather than adding to what the dead run
+    # left: appending would turn "23 documents" into 23 rows from one run and 23
+    # from another, and the file would stop being a record of THIS run.
+    (out_dir / "progress.jsonl").unlink(missing_ok=True)
     docs = [
         DocSource(
             doc_id=path.stem,
             chunks=[(f"{path.stem}#{c.seq}", c.text) for c in chunker.chunk(path.read_text())],
         )
         for path in sorted(sample_dir.glob("*.txt"))
+        if only is None or path.stem in only
     ]
     graph = build_graph(
         llm,
@@ -320,6 +326,8 @@ def preview_collection(
     from .link import read_decisions  # noqa: PLC0415 — circular at module level
 
     stored_guidance, docs = read_collection_sources(spec, collection_id, as_user=as_user)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "progress.jsonl").unlink(missing_ok=True)
     graph = build_graph(
         llm,
         docs,
