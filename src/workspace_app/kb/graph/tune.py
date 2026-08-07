@@ -283,6 +283,67 @@ def termhood(out_dir: Path, pool_dir: Path) -> dict[str, Any]:
     return scored
 
 
+#: How many earlier prompts travel with the history. Enough that the model can
+#: see what it already tried; few enough that they do not crowd out the evidence.
+_CARRY = 2
+#: How many lost names the model is asked about. A long list reads as an order
+#: to undo the version wholesale, which is the opposite of the intent.
+_LOST_SHOWN = 25
+
+
+def lost_names(rounds_dir: Path, *, version: int) -> list[dict[str, Any]]:
+    """Names the previous version found on the HOLDOUT and this one does not.
+
+    The recall leg that costs the corpus owner nothing: the reference set is
+    produced by the loop itself, one version ago, so there is no list for anyone
+    to write and keep current.
+
+    Measured on the holdout because it is the SAME documents every round. On the
+    tuning batch a name disappears whenever the draw changes, and that is not
+    evidence about the prompt — it is evidence about the shuffle.
+
+    Compared against the most recent version that actually RAN the holdout, not
+    against ``version - 1``. With ``--holdout-every`` most rounds skip it, and
+    comparing against the round before would then find no reference at all and
+    report nothing lost — silence that reads exactly like a version that lost
+    nothing, on every round but one.
+    """
+
+    def mentions_of(v: int) -> list[dict[str, Any]] | None:
+        path = rounds_dir / f"v{v}" / "holdout" / "mentions.json"
+        return json.loads(path.read_text()) if path.is_file() else None
+
+    now = mentions_of(version)
+    if now is None:
+        return []
+    before = next(
+        (found for v in range(version - 1, -1, -1) if (found := mentions_of(v)) is not None), None
+    )
+    if before is None:
+        return []  # nothing to have lost it from
+
+    here = {m["norm_surface"] for m in now}
+    seen: set[str] = set()
+    lost: list[dict[str, Any]] = []
+    for mention in before:
+        key = mention["norm_surface"]
+        if key in here or key in seen:
+            continue
+        seen.add(key)
+        # The evidence, not just the name: whether a loss was right is the same
+        # two-dimensional question as termhood. Dropping something a document
+        # said seven times is suspicious; dropping something said once in a
+        # heading is the whole point.
+        lost.append(
+            {
+                "surface": mention["surface"],
+                "occurrences": int(mention.get("occurrences", 1)),
+                "quote": mention.get("declared_quote", ""),
+            }
+        )
+    return lost
+
+
 #: What a name has to BE, and the ones this corpus actually produced that it must
 #: not. Stated as a PROPERTY plus real observations, never as a list of good
 #: words: naming the good ones would mean guessing what the corpus is about from
@@ -347,7 +408,17 @@ run reports nothing.
 
 {scores}
 
-## History
+## What this version stopped finding, compared with the one before it
+
+These names were extracted from the held-out documents by an earlier prompt and
+are no longer extracted at all. The held-out documents do not change between
+rounds, so each of these is a consequence of a prompt edit and nothing else.
+Losing a name a document said many times is evidence you have gone too far;
+losing one said once in a heading is the intent. Judge each one.
+
+{lost}
+
+## History — what has already been tried
 
 {history}
 
@@ -361,12 +432,19 @@ def revision_prompt(
     holdout: dict | None,
     history: list[Round],
     examples: str = DEFAULT_EXAMPLES,
+    lost: list[dict[str, Any]] | None = None,
 ) -> str:
     """What the model is asked, in full.
 
     The HOLDOUT numbers are shown too, and labelled. A model told only how it did
     on the passages it was tuned against has no way to know it is overfitting,
     and neither would anyone reading its output later.
+
+    The recent prompts travel with their scores. Sending numbers alone leaves the
+    model hill-climbing blind — it cannot recognise a change it already made and
+    moved away from, so it undoes it, scores worse, redoes it, and oscillates.
+    Only the last few: the older ones have already been revised away from and
+    would crowd out the evidence.
     """
     scores = (
         "### On the passages drawn for this round\n"
@@ -391,10 +469,22 @@ def revision_prompt(
         )
         for r in history
     ]
+    for r in history[-_CARRY:]:
+        rows.append(f"\n### The prompt v{r.version} ran\n```\n{r.prompt.strip()}\n```")
+    dropped = lost or []
     return REVISE.format(
         examples=examples,
         current=current,
         scores=scores,
+        lost=(
+            "\n".join(
+                f"- {row['surface']}  (said {row['occurrences']}x in the document it came "
+                f"from)  “{row['quote']}”"
+                for row in dropped[:_LOST_SHOWN]
+            )
+            if dropped
+            else "(nothing — this version finds everything the previous one did)"
+        ),
         history="\n".join(rows) if rows else "(this is the first version)",
     )
 
@@ -472,6 +562,7 @@ def run_round(
             holdout,
             history,
             examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
+            lost=lost_names(rounds_dir, version=version),
         )
     )
     nxt = rounds_dir / f"v{version + 1}"

@@ -482,3 +482,159 @@ def test_the_reviser_is_shown_which_names_are_document_furniture(tmp_path):
     (asked,) = llm.revision_prompts
     assert "furniture" in asked
     assert "discriminative" in asked
+
+
+# --- P3: what this version STOPPED finding -----------------------------------
+#
+# The recall leg that needs nobody to write a list. Measured on the holdout,
+# because it is the same documents every time — so a name that disappears is
+# attributable to the prompt rather than to the draw.
+
+
+def test_the_names_this_version_lost_are_measured_on_the_holdout(tmp_path):
+    """On the tuning batch a name vanishes whenever the draw changes, which is
+    not evidence about the prompt. The holdout is fixed, so a disappearance
+    there has exactly one cause."""
+    from workspace_app.kb.graph.tune import lost_names
+
+    rounds = tmp_path / "rounds"
+    for version, reply in ((0, ["回焊爐", "錫膏"]), (1, ["回焊爐"])):
+        out = rounds / f"v{version}" / "holdout"
+        out.mkdir(parents=True)
+        (out / "mentions.json").write_text(
+            json.dumps(
+                [
+                    {"surface": n, "norm_surface": n, "occurrences": 7, "declared_quote": f"…{n}…"}
+                    for n in reply
+                ],
+                ensure_ascii=False,
+            )
+        )
+
+    assert [row["surface"] for row in lost_names(rounds, version=1)] == ["錫膏"]
+
+
+def test_a_lost_name_is_reported_with_the_evidence_needed_to_judge_it(tmp_path):
+    """Whether a loss was right is the two-dimensional question again: dropping
+    something a document said seven times is suspicious, dropping something said
+    once is the point. A bare list of names cannot be judged either way."""
+    from workspace_app.kb.graph.tune import lost_names
+
+    rounds = tmp_path / "rounds"
+    out = rounds / "v0" / "holdout"
+    out.mkdir(parents=True)
+    (out / "mentions.json").write_text(
+        json.dumps(
+            [
+                {
+                    "surface": "錫膏",
+                    "norm_surface": "錫膏",
+                    "occurrences": 7,
+                    "declared_quote": "…錫膏…",
+                }
+            ],
+            ensure_ascii=False,
+        )
+    )
+    (rounds / "v1" / "holdout").mkdir(parents=True)
+    (rounds / "v1" / "holdout" / "mentions.json").write_text("[]")
+
+    (row,) = lost_names(rounds, version=1)
+    assert row == {"surface": "錫膏", "occurrences": 7, "quote": "…錫膏…"}
+
+
+def test_the_first_version_has_lost_nothing(tmp_path):
+    """There is no earlier version to have lost it from, and reporting the whole
+    vocabulary as 'lost' would tell the model to undo a prompt it never ran."""
+    from workspace_app.kb.graph.tune import lost_names
+
+    rounds = tmp_path / "rounds"
+    (rounds / "v0" / "holdout").mkdir(parents=True)
+    (rounds / "v0" / "holdout" / "mentions.json").write_text("[]")
+
+    assert lost_names(rounds, version=0) == []
+
+
+def test_a_round_that_skipped_the_holdout_does_not_blind_the_comparison(tmp_path):
+    """With `--holdout-every` most rounds have no holdout to compare against.
+    Looking only at `version - 1` would find no reference and report nothing
+    lost — and "nothing lost" is indistinguishable from a version that really
+    lost nothing, so the leg would go quiet on every round but one."""
+    from workspace_app.kb.graph.tune import lost_names
+
+    rounds = tmp_path / "rounds"
+    for version, names in ((0, ["回焊爐", "錫膏"]), (2, ["回焊爐"])):
+        out = rounds / f"v{version}" / "holdout"
+        out.mkdir(parents=True)
+        (out / "mentions.json").write_text(
+            json.dumps(
+                [
+                    {"surface": n, "norm_surface": n, "occurrences": 3, "declared_quote": ""}
+                    for n in names
+                ],
+                ensure_ascii=False,
+            )
+        )
+    (rounds / "v1").mkdir()  # ran, but skipped the holdout
+
+    assert [row["surface"] for row in lost_names(rounds, version=2)] == ["錫膏"]
+
+
+def test_the_reviser_is_asked_to_justify_what_it_dropped(tmp_path):
+    """The model cannot pull back from a loss it is never told about, and this
+    is the leg that costs the corpus owner nothing to maintain — the reference
+    set is produced by the loop itself."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+    second = _Extractor(reply='{"mentions": [{"surface": "回焊爐", "kind": "機台"}]}')
+    run_round(second, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    (asked,) = second.revision_prompts
+    assert "245°C" in asked, "a name that disappeared was never put to the model"
+    assert "stopped finding" in asked
+
+
+# --- P4: the reviser must see the prompts it already tried -------------------
+
+
+def test_the_reviser_is_shown_the_text_of_earlier_prompts(tmp_path):
+    """Sending scores without the prompts that produced them leaves the model
+    hill-climbing blind: it undoes a change, scores worse, redoes it, and
+    oscillates. Two numbers per version cannot tell it what it already tried."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+
+    for revision in ("FIRST TRY\n{text}", "SECOND TRY\n{text}"):
+        run_round(
+            _Extractor(revision=revision), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout
+        )
+    third = _Extractor(revision="THIRD TRY\n{text}")
+    run_round(third, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    (asked,) = third.revision_prompts
+    # "SECOND TRY" is what this round ran and is shown anyway; "FIRST TRY" is
+    # the one it can only know about from the history.
+    assert "FIRST TRY" in asked, "the model cannot see what it already tried and moved away from"
+
+
+def test_only_the_most_recent_prompts_are_carried(tmp_path):
+    """Every prompt ever written would crowd out the evidence — and the oldest
+    are the least informative, having already been revised away from."""
+    from workspace_app.kb.graph.tune import Round, revision_prompt
+
+    card = {
+        "mentions_per_document": 9.0,
+        "distinct_names": 4,
+        "mentions": 9,
+        "mentions_starting_with_a_digit": 2,
+        "kinds": {},
+        "kept": [],
+    }
+    history = [Round(version=v, prompt=f"PROMPT_{v}", tune=card, holdout=card) for v in range(6)]
+
+    asked = revision_prompt("P {text}", card, card, history)
+
+    assert "PROMPT_5" in asked
+    assert "PROMPT_0" not in asked, "the whole history was pasted in"
