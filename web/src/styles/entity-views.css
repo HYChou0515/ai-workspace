@@ -1155,15 +1155,19 @@ button.ev-card__status:focus-visible {
   pointer-events: none;
 }
 /* The assignee avatar sits at the right end of the bar (label ellipsises before
- * it). Sized to the ~16px bar interior + a ring in the bar's own ink so it
- * reads on every fill — `--white` was a SURFACE token doing a foreground's job
- * here, so the ring went dark on a dark bar the moment the theme flipped. */
+ * it). Sized to the ~16px bar interior + a light ring so it reads on the solid
+ * bar. `--white` used to draw that ring — a SURFACE token doing a foreground's
+ * job, so it turned near-black the moment the theme flipped. `--text-dark` is
+ * the same "ink for dark fills" the label wears and does not flip.
+ *
+ * NOT `currentColor`: .ev-avatar sets its own `color` for the initials, so
+ * currentColor here would resolve to that accent, not to the bar's ink. */
 .ev-gantt__bar-avatar {
   width: 16px;
   height: 16px;
   margin-left: auto;
   margin-right: 3px;
-  border-color: currentColor;
+  border-color: var(--text-dark);
   font-size: 0.5rem;
   pointer-events: none;
 }

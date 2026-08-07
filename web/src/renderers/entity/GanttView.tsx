@@ -443,6 +443,7 @@ export function GanttView({
                   // this replaces was hiding the off-by-one: it made a same-day
                   // span look right while every longer bar stopped a day short.
                   const width = barColumns(ps, skip) * ppd;
+                  const c = barColor(row.e);
                   return (
                     <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
@@ -459,16 +460,7 @@ export function GanttView({
                         // arrive; and a zero-day drag commits nothing, so the two
                         // presses underneath write no span.
                         onDoubleClick={() => onOpenRecord?.(row.e.number)}
-                        style={(() => {
-                          const c = barColor(row.e);
-                          return {
-                            left,
-                            width,
-                            background: c?.bg,
-                            color: c?.fg,
-                            borderColor: c?.fg,
-                          };
-                        })()}
+                        style={{ left, width, background: c?.bg, color: c?.fg, borderColor: c?.fg }}
                       >
                         <span className="ev-gantt__bar-label">
                           {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}

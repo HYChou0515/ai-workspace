@@ -276,6 +276,33 @@ describe("an uncoloured gantt bar's text (the default blue slab)", () => {
     });
   }
 
+  for (const [themeName, block] of THEMES) {
+    it(`keeps the avatar's ring readable on the default bar in ${themeName} mode`, () => {
+      // Decorative, but it was the clearest symptom: a ring in `--white` is a
+      // white ring in light and a near-black one in dark, on the SAME blue bar.
+      // Note it cannot be `currentColor` — .ev-avatar sets its own colour for
+      // the initials, so currentColor would pick that up instead of the ink.
+      const ring = effective(ENTITY_VIEWS_CSS, ".ev-gantt__bar-avatar", "border-color");
+      expect(ring, "the avatar draws no ring").toBeTruthy();
+      expect(ring, "a ring in currentColor picks up the avatar's own accent").not.toBe(
+        "currentColor",
+      );
+
+      const info = tokenIn(TOKENS_CSS, block, "--info");
+      const darkest = mixSrgb(info, tokenIn(TOKENS_CSS, block, "--ink"), 0.22);
+      for (const [end, fill] of [
+        ["top", info],
+        ["bottom", darkest],
+      ] as const) {
+        const ratio = contrast(inkHex(ring as string, block), fill);
+        expect(
+          ratio,
+          `avatar ring in ${themeName} at gradient ${end}: ${ring} on ${fill} = ${ratio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    });
+  }
+
   it("never dresses bar text in a surface token", () => {
     // The defect in one line: --white is a SURFACE. Reaching for it as a
     // foreground is what made the ink flip the wrong way with the theme, and
