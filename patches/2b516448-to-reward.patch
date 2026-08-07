@@ -1356,7 +1356,7 @@ index 016d8df5..07e32d6e 100644
 +
 +    return ChunkerSettings(max_tokens=max_tokens, overlap=overlap)
 diff --git a/tests/kb/test_graph_tune.py b/tests/kb/test_graph_tune.py
-index 4c7d0618..1f666256 100644
+index 4c7d0618..dc735f8d 100644
 --- a/tests/kb/test_graph_tune.py
 +++ b/tests/kb/test_graph_tune.py
 @@ -31,16 +31,21 @@ _REPLY = (
@@ -1417,7 +1417,7 @@ index 4c7d0618..1f666256 100644
  
  
  def test_the_history_carries_both_columns_so_a_trend_is_visible():
-@@ -244,3 +272,651 @@ def test_the_holdout_can_be_run_less_often_than_the_batch(tmp_path):
+@@ -244,3 +272,762 @@ def test_the_holdout_can_be_run_less_often_than_the_batch(tmp_path):
      assert ran == [0, 2], f"the holdout ran on {ran}, not every second round"
      index = json.loads((rounds / "index.json").read_text())
      assert index[1]["holdout"] is None, "a round that skipped the holdout must say so, not guess"
@@ -2001,6 +2001,117 @@ index 4c7d0618..1f666256 100644
 +
 +    assert got["ordinary"] == ["訊息"], "a word ordinary writing also uses was called a term"
 +    assert got["ordinary_share"] == 0.5
++
++
++def test_the_beam_falls_back_to_the_latest_when_nothing_has_been_graded(tmp_path):
++    """With `--holdout-every` the very first rounds can all skip the holdout.
++    There is then no comparable score anywhere, and the honest move is to carry
++    on from the newest version rather than to refuse to revise at all."""
++    from workspace_app.kb.graph.tune import Round, pick_parent
++
++    history = [
++        Round(version=0, prompt="OLD", tune={}, holdout=None),
++        Round(version=1, prompt="NEWEST", tune={}, holdout=None),
++    ]
++
++    assert pick_parent(history).prompt == "NEWEST"
++
++
++def test_a_document_whose_probe_reply_is_unusable_costs_only_that_document(tmp_path):
++    """One model reply that cannot be parsed must not empty the probe set — the
++    set is drawn once and frozen, so a bad reply here is permanent."""
++    from workspace_app.kb.graph.tune import ensure_probes
++
++    class _Patchy(ILlm):
++        def __init__(self) -> None:
++            self.replies = iter(["no json here at all", "{oops not json}", '{"names": ["錫膏"]}'])
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            yield next(self.replies), False
++
++    holdout = tmp_path / "holdout"
++    holdout.mkdir()
++    for name in ("a", "b", "c"):
++        (holdout / f"{name}.txt").write_text("內容")
++
++    assert ensure_probes(_Patchy(), tmp_path / "rounds", holdout) == ["錫膏"]
++
++
++def test_a_judge_reply_that_is_json_but_not_verdicts_reports_nothing(tmp_path):
++    """Braces are not agreement. A shape that parses but carries no verdict is
++    the same non-answer as unparseable text, and must not read as zero."""
++    from workspace_app.kb.graph.tune import judge_names
++
++    class _Wrong(ILlm):
++        def __init__(self, reply: str) -> None:
++            self.reply = reply
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            yield self.reply, False
++
++    assert judge_names(_Wrong("{not: valid, json}"), ["回焊爐"]) == {}
++    assert judge_names(_Wrong('{"verdicts": [{"keep": true}]}'), ["回焊爐"]) == {}
++
++
++def test_a_batch_larger_than_the_pool_reads_everything(tmp_path):
++    """Asking for more documents than exist is not an error and must not narrow
++    the round to a random subset of what it was already going to read."""
++    from workspace_app.kb.graph.tune import _batch
++
++    pool = tmp_path / "tune"
++    pool.mkdir()
++    (pool / "only.txt").write_text("x")
++
++    assert _batch(pool, 50, seed=0) is None
++
++
++def test_a_name_the_previous_version_recorded_twice_is_reported_once(tmp_path):
++    """A name appears once per document, so anything found in several documents
++    arrives as several rows. Repeating it would make one loss look like many and
++    push the reviser to over-correct."""
++    from workspace_app.kb.graph.tune import lost_names
++
++    rounds = tmp_path / "rounds"
++    (rounds / "v0" / "holdout").mkdir(parents=True)
++    (rounds / "v0" / "holdout" / "mentions.json").write_text(
++        json.dumps(
++            [
++                {
++                    "surface": "錫膏",
++                    "norm_surface": "錫膏",
++                    "occurrences": 2,
++                    "declared_quote": "a",
++                },
++                {
++                    "surface": "錫膏",
++                    "norm_surface": "錫膏",
++                    "occurrences": 5,
++                    "declared_quote": "b",
++                },
++            ],
++            ensure_ascii=False,
++        )
++    )
++    (rounds / "v1" / "holdout").mkdir(parents=True)
++    (rounds / "v1" / "holdout" / "mentions.json").write_text("[]")
++
++    assert [row["surface"] for row in lost_names(rounds, version=1)] == ["錫膏"]
++
++
++def test_the_history_skips_a_version_that_was_never_scored(tmp_path):
++    """The newest version always exists as a prompt with no scorecard — it is
++    what the NEXT round will grade. Reading it as history would put an ungraded
++    prompt in the trend."""
++    from workspace_app.kb.graph.tune import _history
++
++    rounds = tmp_path / "rounds"
++    (rounds / "v0").mkdir(parents=True)
++    (rounds / "v0" / "prompt.txt").write_text("P0")
++    (rounds / "v0" / "scorecard.json").write_text(json.dumps({"tune": {}, "holdout": None}))
++    (rounds / "v1").mkdir()
++    (rounds / "v1" / "prompt.txt").write_text("P1 — written, never graded")
++
++    assert [r.version for r in _history(rounds, upto=1)] == [0]
 +
 +
 +def test_an_empty_extraction_reports_no_ordinariness_even_with_a_contrast_corpus(tmp_path):
