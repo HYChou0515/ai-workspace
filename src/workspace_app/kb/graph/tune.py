@@ -391,6 +391,92 @@ def lost_names(rounds_dir: Path, *, version: int) -> list[dict[str, Any]]:
     return lost
 
 
+#: How many extracted names the judge is asked about in one round. A sample, not
+#: the vocabulary: the point is a trend across rounds, and a trend does not need
+#: every name every time.
+_JUDGED = 40
+
+JUDGE = """Here are names a knowledge-graph extractor pulled out of a technical
+corpus. For each one, answer whether a reader could POINT AT IT or LOOK IT UP —
+a machine, a part or component number, a material, a named process step, a
+defect, a named parameter, a supplier.
+
+Answer no for section headings, generic categories, measured values, severity
+levels, counts, and words about knowledge itself. The test: if the word could
+appear in a document from any other field, the answer is no.
+
+NAMES
+{names}
+
+Answer as JSON and nothing else:
+{{"verdicts": [{{"name": "...", "keep": true}}, ...]}}"""
+
+
+def judge_names(llm: ILlm, names: list[str]) -> dict[str, Any]:
+    """A second opinion on a sample of what was extracted.
+
+    Asked a NARROWER question than the extractor was. "Could a person look this
+    up" is answerable in a way that "list everything this passage is about" is
+    not, and that asymmetry is the entire licence for a model to grade its own
+    family's work. It is not a reason to trust the verdict, so the rejected names
+    travel with the share and a person can see whether the judge was right.
+
+    An unusable reply reports NOTHING rather than zero: a parse failure and a
+    verdict of "keep none" are the same number and opposite facts, and read as
+    the second the reviser would loosen a criterion that was never assessed.
+    """
+    if not names:
+        return {}  # nothing was extracted; an empty graph must not buy a clean sheet here
+    reply = llm.collect(JUDGE.format(names="\n".join(f"- {n}" for n in names[:_JUDGED])))
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end < start:
+        return {}
+    try:
+        data = json.loads(reply[start : end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    verdicts = data.get("verdicts") if isinstance(data, dict) else None
+    if not isinstance(verdicts, list) or not verdicts:
+        return {}
+    rows = [v for v in verdicts if isinstance(v, dict) and "name" in v]
+    if not rows:
+        return {}
+    out = sorted(str(v["name"]) for v in rows if not v.get("keep"))
+    return {
+        "judged_keep_share": round((len(rows) - len(out)) / len(rows), 3),
+        "judged_out": out[:_PER_BUCKET],
+    }
+
+
+def weirdness(contrast_dir: Path, names: list[str]) -> dict[str, Any]:
+    """Which extracted names ordinary writing also uses.
+
+    The contrast-corpus idea behind the weirdness ratio (Ahmad et al., 1999): a
+    word frequent in the domain corpus AND in general language is general
+    language, whatever it looks like in isolation. This is what replaces a
+    blacklist properly — a blacklist teaches the model to avoid four particular
+    words, this describes the SHAPE, and the shape carries over to a corpus
+    nobody has looked at.
+
+    With no contrast corpus it reports NOTHING. Shipping a general-language
+    frequency table would be one more criterion written from outside the corpus,
+    which is the failure this whole issue exists to fix; the owner supplies
+    ordinary writing from their own world or this stays quiet.
+    """
+    # Nothing extracted is not "0% ordinary" — it is no evidence, and a share
+    # computed from it would divide by zero on the way to saying so.
+    if not names:
+        return {}
+    bodies = [path.read_text() for path in sorted(contrast_dir.glob("*.txt"))]
+    if not bodies:  # no corpus, or none supplied at all — glob tolerates both
+        return {}
+    ordinary = sorted({name for name in names if any(name in body for body in bodies)})
+    return {
+        "ordinary": ordinary[:_PER_BUCKET],
+        "ordinary_share": round(len(ordinary) / len(set(names)), 3),
+    }
+
+
 #: What a name has to BE, and the ones this corpus actually produced that it must
 #: not. Stated as a PROPERTY plus real observations, never as a list of good
 #: words: naming the good ones would mean guessing what the corpus is about from
@@ -574,6 +660,11 @@ def run_round(
     # The pool, not the batch: `tune_dir` is every document available, and the
     # frequency half of termhood must be estimated from all of it.
     tune = scorecard(here / "tune") | termhood(here / "tune", tune_dir)
+    # The two cheap opinions on the same vocabulary: a model asked the narrower
+    # question, and ordinary writing if the owner supplied any.
+    extracted = _extracted_names(here / "tune")
+    tune |= judge_names(reviser or llm, extracted)
+    tune |= weirdness(rounds_dir / "contrast", extracted)
     holdout: dict[str, Any] | None = None
     if holdout_every <= 1 or version % holdout_every == 0:
         # Before the extraction, so a run killed part-way keeps the probes it
@@ -647,6 +738,15 @@ def _batch(tune_dir: Path, size: int, *, seed: int) -> set[str] | None:
         return None
     Random(seed).shuffle(names)
     return set(names[:size])
+
+
+def _extracted_names(out_dir: Path) -> list[str]:
+    """The distinct surfaces one preview run produced, in a stable order."""
+    mentions = json.loads((out_dir / "mentions.json").read_text())
+    seen: dict[str, str] = {}
+    for mention in mentions:
+        seen.setdefault(mention["norm_surface"], mention["surface"])
+    return sorted(seen.values())
 
 
 def _usable(revised: str, *, fallback: str) -> str:

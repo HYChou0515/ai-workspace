@@ -770,3 +770,148 @@ def test_the_round_records_which_version_it_revised_from(tmp_path):
 
     index = json.loads((rounds / "index.json").read_text())
     assert "revised_from" in index[1]
+
+
+# --- P6: a judge, on a sample -------------------------------------------------
+#
+# Cheap enough to run every round, and asked a NARROWER question than the
+# extractor was: "could a person point at this or look it up" is answerable in a
+# way that "list everything this passage is about" is not. That asymmetry is the
+# whole licence for a model to grade its own family's work — it is not a reason
+# to trust the verdict, which is why the names travel with it.
+
+
+def test_the_judge_reports_the_share_it_would_keep_and_the_names_it_would_not(tmp_path):
+    from workspace_app.kb.graph.tune import judge_names
+
+    class _Judge(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield (
+                '{"verdicts": [{"name": "回焊爐", "keep": true}, {"name": "訊息", "keep": false}]}',
+                False,
+            )
+
+    got = judge_names(_Judge(), ["回焊爐", "訊息"])
+
+    assert got["judged_keep_share"] == 0.5
+    assert got["judged_out"] == ["訊息"]
+
+
+def test_a_judge_that_answers_unusably_reports_nothing_rather_than_zero(tmp_path):
+    """A parse failure and a verdict of "keep none" are the same number and
+    opposite facts. Reporting zero would tell the reviser to loosen a criterion
+    the judge never actually assessed."""
+    from workspace_app.kb.graph.tune import judge_names
+
+    class _Broken(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield "I think most of these are fine, honestly.", False
+
+    assert judge_names(_Broken(), ["回焊爐"]) == {}
+
+
+def test_the_judge_is_only_asked_about_names_that_were_extracted(tmp_path):
+    """No names, no call — an empty graph must not be able to buy a perfect
+    judged share by giving the judge nothing to reject."""
+    from workspace_app.kb.graph.tune import judge_names
+
+    class _NeverCalled(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            raise AssertionError("the judge was asked about an empty graph")
+            yield "", False  # pragma: no cover
+
+    assert judge_names(_NeverCalled(), []) == {}
+
+
+# --- P7: weirdness needs a contrast corpus, and it is the OWNER's ------------
+
+
+def test_weirdness_needs_no_contrast_corpus_to_run(tmp_path):
+    """The degenerate case has to be silence, not a wrong number. Without
+    something to contrast against there is no evidence about which words are
+    ordinary, and inventing a general-language frequency table would be one more
+    criterion written from outside the corpus."""
+    from workspace_app.kb.graph.tune import weirdness
+
+    assert weirdness(tmp_path / "absent", ["回焊爐"]) == {}
+
+
+def test_a_word_common_in_both_corpora_is_not_a_term(tmp_path):
+    """What replaces the blacklist for good. 「訊息」 is frequent in the domain
+    corpus AND in ordinary writing, so it is ordinary language; 「回焊爐」 is
+    frequent here and absent there. The shape generalises to a corpus nobody has
+    looked at, which four banned words never could."""
+    from workspace_app.kb.graph.tune import weirdness
+
+    contrast = tmp_path / "contrast"
+    contrast.mkdir()
+    (contrast / "a.txt").write_text("訊息 討論 訊息")
+    (contrast / "b.txt").write_text("訊息 一般的文章")
+
+    got = weirdness(contrast, ["回焊爐", "訊息"])
+
+    assert got["ordinary"] == ["訊息"], "a word ordinary writing also uses was called a term"
+    assert got["ordinary_share"] == 0.5
+
+
+def test_an_empty_extraction_reports_no_ordinariness_even_with_a_contrast_corpus(tmp_path):
+    """Not "0% ordinary" — no evidence. The share is a fraction of what was
+    extracted, so with nothing extracted there is nothing to take a fraction of,
+    and the honest answer is silence rather than a number that flatters an empty
+    graph."""
+    from workspace_app.kb.graph.tune import weirdness
+
+    contrast = tmp_path / "contrast"
+    contrast.mkdir()
+    (contrast / "a.txt").write_text("一般的文章")
+
+    assert weirdness(contrast, []) == {}
+
+
+def test_a_round_runs_the_judge_and_shows_the_reviser_its_verdict(tmp_path):
+    """The wiring, not the function. A judge nothing calls is a judge that never
+    graded anything, and the round would look identical."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+
+    class _Judging(_Extractor):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            if "POINT AT IT or LOOK IT UP" in prompt and "verdicts" in prompt:
+                yield '{"verdicts": [{"name": "245°C", "keep": false}]}', False
+            else:
+                yield from super().stream(prompt)
+
+    llm = _Judging()
+    run_round(llm, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
+    assert card["judged_keep_share"] == 0.0
+    assert card["judged_out"] == ["245°C"]
+    (asked,) = llm.revision_prompts
+    assert "judged_out" in asked
+
+
+def test_a_round_uses_the_contrast_corpus_when_the_owner_supplies_one(tmp_path):
+    """Dropping ordinary writing into `rounds/contrast/` is the whole interface.
+    Nothing to configure, and absent it the round is unchanged."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    (rounds / "contrast").mkdir(parents=True)
+    (rounds / "contrast" / "ordinary.txt").write_text("今天天氣很好 245°C 也很常見")
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
+    assert card["ordinary"] == ["245°C"]
+
+
+def test_without_a_contrast_corpus_the_round_says_nothing_about_ordinariness(tmp_path):
+    """Silence, not a guess. A default frequency table would be a criterion from
+    outside the corpus, which is the mistake being unlearned."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+
+    run_round(_Extractor(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
+    assert "ordinary" not in card and "ordinary_share" not in card
