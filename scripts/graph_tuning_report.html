@@ -53,13 +53,43 @@ h3 { font-size: 15px; margin: 0 0 2px; font-weight: 650; }
 p { margin: 0; max-width: 68ch; }
 section { display: flex; flex-direction: column; gap: 14px; }
 .lede { color: var(--muted); font-size: 17px; max-width: 62ch; }
-.stats {
-  display: flex; flex-wrap: wrap; gap: 30px; padding: 18px 0;
-  border-block: 1px solid var(--rule);
+.verdict {
+  border: 1px solid var(--rule); border-left: 3px solid var(--hold);
+  border-radius: 3px; background: var(--card); padding: 22px 26px; gap: 16px;
 }
+.pick { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; }
+.picklab {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
+  text-transform: uppercase; color: var(--muted);
+}
+.pickver {
+  font-family: var(--mono); font-size: 34px; font-weight: 700; color: var(--hold);
+  line-height: 1;
+}
+.pickpath { color: var(--muted); font-size: 13px; }
+.chain { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+.stats {
+  display: flex; flex-wrap: wrap; gap: 30px; padding: 16px 0 0;
+  border-top: 1px solid var(--rule);
+}
+.multiples {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 26px;
+}
+.sm { gap: 6px; }
+.sm h3 {
+  font-size: 14px; font-weight: 650; display: flex; flex-wrap: wrap;
+  align-items: baseline; gap: 8px;
+}
+.sm .pair {
+  font-family: var(--mono); font-size: 10.5px; font-weight: 400;
+  letter-spacing: .06em; color: var(--muted);
+}
+.sm figcaption { font-size: 12.5px; }
+.sm svg { min-width: 0; }
+.chosen { fill: none; stroke: var(--hold); stroke-width: 1.6; }
 .stat { display: flex; flex-direction: column; gap: 2px; }
 .stat b {
-  font-family: var(--mono); font-size: 26px; font-weight: 600;
+  font-family: var(--mono); font-size: 23px; font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .stat span { font-size: 12px; color: var(--muted); letter-spacing: .05em; }
@@ -148,13 +178,25 @@ footer {
     改寫、每一版都量、並且留下全部版本的結果。</p>
 </header>
 
-<div class="stats">
-  <div class="stat"><b>%%TOTAL%%</b><span>版本總數</span></div>
-  <div class="stat"><b>%%GRADED%%</b><span>經 holdout 評分</span></div>
-  <div class="stat"><b>%%BEST%%</b><span>目前最佳</span></div>
-  <div class="stat"><b>%%BEST_FITNESS%%</b><span>它的 fitness</span></div>
-  <div class="stat"><b>%%BEST_HIT%%</b><span>它的命中率</span></div>
-</div>
+<section class="verdict">
+  <div class="pick">
+    <div class="picklab">最後選定</div>
+    <div class="pickver">%%CHOSEN%%</div>
+    <div class="pickpath"><code>%%PROMPT_PATH%%</code></div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b>%%CHOSEN_FITNESS%%</b><span>fitness</span></div>
+    <div class="stat"><b>%%CHOSEN_HIT%%</b><span>命中率</span></div>
+    <div class="stat"><b>%%CHOSEN_CLEAN%%</b><span>好名字佔比</span></div>
+    <div class="stat"><b>%%CHOSEN_JUDGE%%</b><span>judge 留存率</span></div>
+    <div class="stat"><b>%%CHOSEN_PER_DOC%%</b><span>每篇抽出</span></div>
+  </div>
+  <p class="cap">在 %%TOTAL%% 個版本中,%%GRADED%% 個經過 holdout 評分。
+    選定的是 fitness 最高的那一版,不是最後跑完的那一版。</p>
+  <p class="cap">它的血統:<span class="chain">%%ANCESTRY%%</span>
+    (<code>↩</code> 代表 beam 放棄了一段分支,回頭從更好的版本重新長)</p>
+  <p class="cap">%%SINCE%%</p>
+</section>
 
 <section>
   <h2>怎麼訓練的</h2>
@@ -195,7 +237,7 @@ footer {
 <section>
   <h2>學習與過擬合</h2>
   <figure>
-    <div class="chart">%%CHART_LEARN%%</div>
+    <div class="chart">%%CHART_LEAD%%</div>
     <div class="key">
       <span class="h"><i></i>holdout(固定文件)</span>
       <span class="t"><i></i>tune(每輪換一批)</span>
@@ -208,15 +250,15 @@ footer {
 </section>
 
 <section>
-  <h2>有沒有收過頭</h2>
-  <figure>
-    <div class="chart">%%CHART_RECALL%%</div>
-    <figcaption><strong>命中率</strong>:一組在第一輪畫下、之後凍結的探針 ——
-      讀者事後會回來查的東西 —— 在圖裡查得到的比例。</figcaption>
-  </figure>
-  <p class="note">這是唯一一個<strong>收太緊就會下跌</strong>的指標。其他每一個數字在
-    「什麼都不抽」時都是滿分,所以只靠它們,迴圈會一路收緊到一無所有,而分數一路變漂亮。
-    這條線是防線。</p>
+  <h2>每一個指標的走勢</h2>
+  <p>縱軸各自依自己的資料縮放,不是固定 0–1 —— 開頭幾輪之後,真正的變化只有幾個百分點寬,
+    畫在滿高的軸上會變成一條看不出動靜的直線。實線是 holdout,虛線是每輪換一批的 tune,
+    圓點標的是選定的那一版。</p>
+  <div class="multiples">
+%%MULTIPLES%%
+  </div>
+  <p class="note"><strong>只有命中率是收太緊會下跌的。</strong>其他每一個數字在「什麼都不抽」時
+    都是滿分 —— 所以只看它們,迴圈會一路收緊到一無所有,而分數一路變漂亮。</p>
 </section>
 
 <section>
@@ -236,8 +278,8 @@ footer {
     beam 會回頭挑分數最好的那個當基底。</p>
 </section>
 
-<footer>最佳版本的提示詞在 <code>%%PROMPT_PATH%%</code>。
-  每一版的完整輸出、成績單與提示詞都留在各自的資料夾裡。</footer>
+<footer>每一版的完整輸出、成績單與提示詞都留在各自的資料夾裡,
+  所以任何一個結論都可以回去翻原始資料。</footer>
 
 </div>
 </body>
