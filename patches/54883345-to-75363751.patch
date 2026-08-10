@@ -1,0 +1,677 @@
+diff --git a/scripts/graph_tuning_report.html b/scripts/graph_tuning_report.html
+new file mode 100644
+index 00000000..f3b0b402
+--- /dev/null
++++ b/scripts/graph_tuning_report.html
+@@ -0,0 +1,286 @@
++<!doctype html>
++<html lang="zh-Hant">
++<head>
++<meta charset="utf-8">
++<meta name="viewport" content="width=device-width, initial-scale=1">
++<title>抽取判準的調校紀錄</title>
++<style>
++:root {
++  --paper: #f6f8f7;  --card: #ffffff;  --ink: #16201f;  --muted: #667573;
++  --rule: #dae1df;   --hold: #0f6f6a;  --tune: #b4762a;  --alarm: #a8322a;
++  --best: #9aa8a5;
++  --serif: "Iowan Old Style", "Source Han Serif TC", "Noto Serif TC", "Songti TC", Georgia, serif;
++  --sans: -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
++  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
++}
++@media (prefers-color-scheme: dark) {
++  :root:not([data-theme="light"]) {
++    --paper: #101615; --card: #161e1d; --ink: #e6ece9; --muted: #93a29f;
++    --rule: #2a3634; --hold: #4fbfb4; --tune: #d99b46; --alarm: #e07a6e; --best: #4a5a57;
++  }
++}
++:root[data-theme="dark"] {
++  --paper: #101615; --card: #161e1d; --ink: #e6ece9; --muted: #93a29f;
++  --rule: #2a3634; --hold: #4fbfb4; --tune: #d99b46; --alarm: #e07a6e; --best: #4a5a57;
++}
++* { box-sizing: border-box; }
++body {
++  margin: 0; background: var(--paper); color: var(--ink);
++  font-family: var(--sans); font-size: 16px; line-height: 1.7;
++  -webkit-font-smoothing: antialiased;
++}
++.wrap {
++  max-width: 860px; margin: 0 auto; padding: 56px 24px 96px;
++  display: flex; flex-direction: column; gap: 44px;
++}
++header {
++  display: flex; flex-direction: column; gap: 10px;
++  border-bottom: 1px solid var(--rule); padding-bottom: 26px;
++}
++.eyebrow {
++  font-family: var(--mono); font-size: 12px; letter-spacing: .13em;
++  text-transform: uppercase; color: var(--muted);
++}
++h1 {
++  font-family: var(--serif); font-size: 38px; line-height: 1.2;
++  margin: 0; text-wrap: balance; font-weight: 600;
++}
++h2 {
++  font-family: var(--serif); font-size: 25px; margin: 0 0 4px;
++  font-weight: 600; text-wrap: balance;
++}
++h3 { font-size: 15px; margin: 0 0 2px; font-weight: 650; }
++p { margin: 0; max-width: 68ch; }
++section { display: flex; flex-direction: column; gap: 14px; }
++.lede { color: var(--muted); font-size: 17px; max-width: 62ch; }
++.verdict {
++  border: 1px solid var(--rule); border-left: 3px solid var(--hold);
++  border-radius: 3px; background: var(--card); padding: 22px 26px; gap: 16px;
++}
++.pick { display: flex; flex-wrap: wrap; align-items: baseline; gap: 14px; }
++.picklab {
++  font-family: var(--mono); font-size: 11px; letter-spacing: .13em;
++  text-transform: uppercase; color: var(--muted);
++}
++.pickver {
++  font-family: var(--mono); font-size: 34px; font-weight: 700; color: var(--hold);
++  line-height: 1;
++}
++.pickpath { color: var(--muted); font-size: 13px; }
++.chain { font-family: var(--mono); font-size: 13px; color: var(--ink); }
++.stats {
++  display: flex; flex-wrap: wrap; gap: 30px; padding: 16px 0 0;
++  border-top: 1px solid var(--rule);
++}
++.multiples {
++  display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 26px;
++}
++.sm { gap: 6px; }
++.sm h3 {
++  font-size: 14px; font-weight: 650; display: flex; flex-wrap: wrap;
++  align-items: baseline; gap: 8px;
++}
++.sm .pair {
++  font-family: var(--mono); font-size: 10.5px; font-weight: 400;
++  letter-spacing: .06em; color: var(--muted);
++}
++.sm figcaption { font-size: 12.5px; }
++.sm svg { min-width: 0; }
++.chosen { fill: none; stroke: var(--hold); stroke-width: 1.6; }
++.stat { display: flex; flex-direction: column; gap: 2px; }
++.stat b {
++  font-family: var(--mono); font-size: 23px; font-weight: 600;
++  font-variant-numeric: tabular-nums;
++}
++.stat span { font-size: 12px; color: var(--muted); letter-spacing: .05em; }
++.steps { display: flex; flex-direction: column; gap: 0; counter-reset: s; }
++.step {
++  display: grid; grid-template-columns: 30px 1fr; gap: 14px;
++  padding: 13px 0; border-top: 1px solid var(--rule);
++}
++.step:last-child { border-bottom: 1px solid var(--rule); }
++.step::before {
++  counter-increment: s; content: counter(s);
++  font-family: var(--mono); font-size: 12px; color: var(--muted); padding-top: 4px;
++}
++.step p { color: var(--muted); font-size: 14.5px; }
++figure { margin: 0; display: flex; flex-direction: column; gap: 8px; }
++.chart {
++  background: var(--card); border: 1px solid var(--rule); border-radius: 3px;
++  padding: 10px 6px 2px; overflow-x: auto;
++}
++svg { display: block; width: 100%; height: auto; min-width: 460px; }
++.grid { stroke: var(--rule); stroke-width: 1; }
++.tick { fill: var(--muted); font-family: var(--mono); font-size: 10px; }
++.line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
++.line.hold, .dot.hold { stroke: var(--hold); }
++.line.tune { stroke: var(--tune); stroke-dasharray: 4 3; }
++.dot.hold { fill: var(--hold); }
++.dot.tune { fill: var(--tune); stroke: var(--tune); }
++.best { stroke: var(--best); stroke-width: 1; stroke-dasharray: 2 3; }
++.besttag { fill: var(--best); font-family: var(--mono); font-size: 10px; }
++.cap, figcaption { font-size: 13.5px; color: var(--muted); max-width: 68ch; }
++.key { display: flex; flex-wrap: wrap; gap: 20px; font-size: 13px; font-family: var(--mono); }
++.key i {
++  display: inline-block; width: 20px; height: 0; border-top: 2px solid;
++  vertical-align: middle; margin-right: 6px;
++}
++.key .h i { color: var(--hold); }
++.key .t i { color: var(--tune); border-top-style: dashed; }
++.note {
++  border-left: 2px solid var(--hold); padding: 2px 0 2px 16px;
++  color: var(--muted); font-size: 14.5px;
++}
++.warn {
++  border-left: 2px solid var(--alarm); padding: 2px 0 2px 16px;
++  color: var(--alarm); font-size: 14.5px;
++}
++.tablewrap {
++  overflow-x: auto; border: 1px solid var(--rule);
++  border-radius: 3px; background: var(--card);
++}
++table {
++  border-collapse: collapse; width: 100%; font-family: var(--mono);
++  font-size: 13px; font-variant-numeric: tabular-nums;
++}
++th, td {
++  padding: 7px 12px; text-align: right; white-space: nowrap;
++  border-bottom: 1px solid var(--rule);
++}
++th:first-child, td:first-child { text-align: left; }
++th {
++  font-weight: 600; color: var(--muted); font-size: 11px; letter-spacing: .05em;
++  position: sticky; top: 0; background: var(--card);
++}
++tr:last-child td { border-bottom: 0; }
++tr.is-best td { color: var(--hold); font-weight: 600; }
++code {
++  font-family: var(--mono); font-size: .92em;
++  background: color-mix(in srgb, var(--ink) 7%, transparent);
++  padding: 1px 5px; border-radius: 2px;
++}
++footer {
++  color: var(--muted); font-size: 13px;
++  border-top: 1px solid var(--rule); padding-top: 20px;
++}
++@media (prefers-reduced-motion: reduce) {
++  * { animation: none !important; transition: none !important; }
++}
++</style>
++</head>
++<body>
++<div class="wrap">
++
++<header>
++  <div class="eyebrow">Knowledge graph · extraction criterion</div>
++  <h1>抽取判準的調校紀錄</h1>
++  <p class="lede">知識圖譜的品質取決於一句話:什麼算是「一個東西」。這份紀錄是把那句話交給模型自己
++    改寫、每一版都量、並且留下全部版本的結果。</p>
++</header>
++
++<section class="verdict">
++  <div class="pick">
++    <div class="picklab">最後選定</div>
++    <div class="pickver">%%CHOSEN%%</div>
++    <div class="pickpath"><code>%%PROMPT_PATH%%</code></div>
++  </div>
++  <div class="stats">
++    <div class="stat"><b>%%CHOSEN_FITNESS%%</b><span>fitness</span></div>
++    <div class="stat"><b>%%CHOSEN_HIT%%</b><span>命中率</span></div>
++    <div class="stat"><b>%%CHOSEN_CLEAN%%</b><span>好名字佔比</span></div>
++    <div class="stat"><b>%%CHOSEN_JUDGE%%</b><span>judge 留存率</span></div>
++    <div class="stat"><b>%%CHOSEN_PER_DOC%%</b><span>每篇抽出</span></div>
++  </div>
++  <p class="cap">在 %%TOTAL%% 個版本中,%%GRADED%% 個經過 holdout 評分。
++    選定的是 fitness 最高的那一版,不是最後跑完的那一版。</p>
++  <p class="cap">它的血統:<span class="chain">%%ANCESTRY%%</span>
++    (<code>↩</code> 代表 beam 放棄了一段分支,回頭從更好的版本重新長)</p>
++  <p class="cap">%%SINCE%%</p>
++</section>
++
++<section>
++  <h2>怎麼訓練的</h2>
++  <p>沒有動任何模型權重。被優化的是<strong>提示詞本身</strong> —— 文獻上這條迴圈叫 OPRO /
++    ProTeGi,借用強化學習的詞彙來說:策略是那份文字,獎勵是下面三層分數,更新是把成績單交回
++    同一個模型請它重寫。</p>
++  <div class="steps">
++    <div class="step"><div>
++      <h3>一次讀取正式語料,之後全部離線</h3>
++      <p>從 collection 隨機抽出兩包互斥的文件:調校用的 pool,以及固定不動的 holdout。
++        此後每一輪都只讀這些純文字檔,不碰資料庫。</p>
++    </div></div>
++    <div class="step"><div>
++      <h3>每輪抽一小批,跑抽取</h3>
++      <p>從 pool 隨機抽幾篇跑,所以每輪看到的文件不同 —— 判準沒辦法安頓在某一組固定的段落上。</p>
++    </div></div>
++    <div class="step"><div>
++      <h3>三層獎勵,全部量在 holdout 上</h3>
++      <p>命中率(讀者會查的東西,圖裡找不找得到)、詞彙象限(家具與一次性雜訊的佔比)、
++        第二個模型的獨立判斷。holdout 文件固定,所以分數的變化只可能來自提示詞。</p>
++    </div></div>
++    <div class="step"><div>
++      <h3>把成績單交回模型,收下改寫版</h3>
++      <p>連同「這一版停止找到的名字」及其原文引句一起交回去,並附上最近幾版的提示詞全文,
++        免得它把剛丟掉的東西又撿回來。</p>
++    </div></div>
++    <div class="step"><div>
++      <h3>下一輪從最好的版本長出來,不是最新的</h3>
++      <p>Beam search。一次失敗的改寫只損失一輪,不會變成之後每一版的基底。
++        每一版都留在磁碟上,隨時可以回溯。</p>
++    </div></div>
++  </div>
++  <p class="note">整套設計刻意<strong>沒有黑名單</strong>。被排除的名字不再被抽出,就不再出現在
++    任何後續證據裡 —— 沒有任何一輪能發現那個排除是錯的。象限佔比與對照語料描述的是同一個失敗的
++    <em>形狀</em>,而形狀才推廣得到沒人看過的語料。</p>
++</section>
++
++<section>
++  <h2>學習與過擬合</h2>
++  <figure>
++    <div class="chart">%%CHART_LEAD%%</div>
++    <div class="key">
++      <span class="h"><i></i>holdout(固定文件)</span>
++      <span class="t"><i></i>tune(每輪換一批)</span>
++    </div>
++    <figcaption><strong>好名字的佔比</strong>(1 − 家具 − 一次性雜訊)。兩條一起上升 =
++      判準真的在變好;<strong>tune 上升而 holdout 不動,就是過擬合</strong> ——
++      提示詞學會的是那批反覆看到的文件,不是這個語料。</figcaption>
++  </figure>
++  <p class="%%DIVERGE_CLASS%%">%%DIVERGE%%</p>
++</section>
++
++<section>
++  <h2>每一個指標的走勢</h2>
++  <p>縱軸各自依自己的資料縮放,不是固定 0–1 —— 開頭幾輪之後,真正的變化只有幾個百分點寬,
++    畫在滿高的軸上會變成一條看不出動靜的直線。實線是 holdout,虛線是每輪換一批的 tune,
++    圓點標的是選定的那一版。</p>
++  <div class="multiples">
++%%MULTIPLES%%
++  </div>
++  <p class="note"><strong>只有命中率是收太緊會下跌的。</strong>其他每一個數字在「什麼都不抽」時
++    都是滿分 —— 所以只看它們,迴圈會一路收緊到一無所有,而分數一路變漂亮。</p>
++</section>
++
++<section>
++  <h2>逐版數據</h2>
++  <div class="tablewrap">
++  <table>
++    <thead><tr>
++      <th>版本</th><th>fitness</th><th>命中率</th><th>好名字·holdout</th>
++      <th>好名字·tune</th><th>judge</th><th>每篇抽出</th><th>由誰改寫</th>
++    </tr></thead>
++    <tbody>
++%%ROWS%%
++    </tbody>
++  </table>
++  </div>
++  <p class="cap">最近 25 版,新的在上。「由誰改寫」不一定是前一版 ——
++    beam 會回頭挑分數最好的那個當基底。</p>
++</section>
++
++<footer>每一版的完整輸出、成績單與提示詞都留在各自的資料夾裡,
++  所以任何一個結論都可以回去翻原始資料。</footer>
++
++</div>
++</body>
++</html>
+diff --git a/scripts/graph_tuning_report.py b/scripts/graph_tuning_report.py
+new file mode 100644
+index 00000000..fb985720
+--- /dev/null
++++ b/scripts/graph_tuning_report.py
+@@ -0,0 +1,379 @@
++"""#697 — turn a folder of tuning rounds into a report a person can hand round.
++
++    uv run python scripts/graph_tuning_report.py ./rounds report.html
++
++Reads what `--tune-round` left on disk and writes ONE self-contained HTML file:
++no network, no CDN, no webfont, so it survives being emailed.
++
++Three things make it readable rather than merely complete.
++
++**Every axis is scaled to its own data.** A share plotted on a fixed 0..1 axis
++is a flat line whenever the interesting movement is a few points wide — which,
++after the first handful of rounds, it always is. The axis states the range it
++chose, so a small change never masquerades as a large one.
++
++**The lead chart plots one measure on BOTH document sets.** The tuning batch
++rotates every round; the holdout never does. Two lines rising together is a
++criterion that generalises; the tuning line rising while the holdout flattens is
++the criterion learning the passages it kept being shown — the failure the
++holdout exists to expose, and one no single number can show.
++
++**The selection is stated, not implied.** Which version to keep is the question
++the whole run exists to answer, so it is a block near the top with its scores,
++its file, and the ancestry that produced it.
++
++The template is a sibling `.html` file substituted with `str.replace`, not
++`str.format`: a page is mostly CSS, CSS is mostly braces, and a template that
++makes a person double every one of them is a template they will eventually get
++wrong.
++"""
++
++from __future__ import annotations
++
++import html
++import json
++import pathlib
++import sys
++from typing import Any
++
++from workspace_app.kb.graph.tune import fitness
++
++TEMPLATE = pathlib.Path(__file__).with_suffix(".html")
++
++# Two plot shapes: the lead chart, and the small multiples below it.
++BIG = (760, 230, 52, 16, 16, 30)
++SMALL = (360, 150, 46, 12, 14, 26)
++
++#: How far the tuning line may sit above the holdout line before the report
++#: says so. Below this the two are moving together; above it they have parted.
++DIVERGED = 0.12
++#: How many versions the table lists. The charts carry the whole history; the
++#: table is for reading the recent ones closely.
++LISTED = 25
++
++Point = tuple[float, int | float]
++
++#: Every index worth a trend line, in the order a reader should meet them.
++#: ``both`` means the measure exists on the tuning batch as well, so the panel
++#: can show the pair — and a pair is the only way overfitting is visible.
++METRICS: tuple[tuple[str, str, str, str], ...] = (
++    ("lookup_hit_rate", "命中率", "holdout", "探針查得到的比例。收太緊唯一會下跌的數字"),
++    ("fitness", "fitness", "derived", "命中率 ×(1 − 家具 − 單次)。beam 挑版本的依據"),
++    ("furniture_share", "文件家具佔比", "both", "多數文件都有、每篇只提一次 —— 標題、欄名、泛稱"),
++    ("singleton_share", "一次性雜訊佔比", "both", "少數文件才有、而且只提一次 —— 值、路過的名詞"),
++    (
++        "discriminative_share",
++        "鑑別度高的佔比",
++        "both",
++        "少數文件才有、但那篇反覆提 —— 最有價值的一格",
++    ),
++    ("core_share", "核心主題佔比", "both", "多數文件都有、而且反覆提"),
++    ("judged_keep_share", "judge 留存率", "holdout", "另一個模型認為「查得到」的比例"),
++    (
++        "ordinary_share",
++        "與一般文章重疊",
++        "holdout",
++        "對照語料裡也常見的比例。沒放對照語料就不會出現",
++    ),
++    ("mentions_per_document", "每篇抽出幾個", "both", "量,不是質 —— 單獨看會獎勵什麼都不抽"),
++    ("distinct_names", "不重複名字數", "both", "與上一項分岔,代表每篇都在貢獻沒人重複的新名字"),
++    ("mentions_starting_with_a_digit", "數字開頭的名字", "both", "把量測值當東西的直接證據"),
++)
++
++
++def load(rounds_dir: pathlib.Path) -> list[dict[str, Any]]:
++    """Every version that has been scored, oldest first.
++
++    Sorted NUMERICALLY. `sorted(glob("v*"))` is lexicographic, which puts v10
++    before v2 and turns every line on every chart into a zigzag that still looks
++    like data.
++    """
++    out: list[dict[str, Any]] = []
++    folders = [p for p in rounds_dir.glob("v*") if p.name[1:].isdigit()]
++    for folder in sorted(folders, key=lambda p: int(p.name[1:])):
++        card = folder / "scorecard.json"
++        if not card.is_file():
++            continue  # written but never graded — that is the NEXT round's job
++        data = json.loads(card.read_text())
++        holdout = data.get("holdout")
++        parent = folder / "parent.txt"
++        out.append(
++            {
++                "v": int(folder.name[1:]),
++                "holdout": holdout,
++                "tune": data.get("tune") or {},
++                "parent": int(parent.read_text()) if parent.is_file() else None,
++                "fitness": fitness(holdout) if holdout else None,
++            }
++        )
++    return out
++
++
++def clean_share(card: dict[str, Any] | None) -> float | None:
++    """The share of names that are neither furniture nor one-off noise.
++
++    The two GOOD quadrants — the corpus's subject, and the names that
++    discriminate between its documents. `None` when the version predates the
++    quadrants, so an old row is left OFF the chart rather than drawn at zero: a
++    missing measurement plotted as zero invents a valley that never happened.
++    """
++    if not card or "furniture_share" not in card:
++        return None
++    noise = float(card.get("furniture_share", 0)) + float(card.get("singleton_share", 0))
++    return max(0.0, min(1.0, 1.0 - noise))
++
++
++def series_for(rows: list[dict[str, Any]], key: str, half: str) -> list[Point]:
++    """One metric's points, skipping versions that never measured it."""
++    out: list[Point] = []
++    for row in rows:
++        if key == "fitness":
++            value = row["fitness"]
++        else:
++            card = row["holdout"] if half == "holdout" else row["tune"]
++            value = (card or {}).get(key)
++        if value is not None:
++            out.append((row["v"], float(value)))
++    return out
++
++
++def bounds(series: list[list[Point]]) -> tuple[float, float] | None:
++    """The y range to draw, padded — never a fixed 0..1.
++
++    Most of these settle into a few points of movement after the opening rounds,
++    and on a full-height axis that reads as a flat line: the report would show a
++    run that changed nothing when the run changed what mattered.
++    """
++    ys = [y for points in series for _, y in points]
++    if not ys:
++        return None
++    low, high = float(min(ys)), float(max(ys))
++    if high - low < 1e-9:  # a constant series still deserves a visible line
++        pad = max(abs(high) * 0.1, 0.05)
++        return low - pad, high + pad
++    pad = (high - low) * 0.14
++    return low - pad, high + pad
++
++
++def tick_text(value: float) -> str:
++    if abs(value) >= 10:
++        return f"{value:.0f}"
++    return f"{value:.2f}".rstrip("0").rstrip(".")
++
++
++def panel(
++    series: list[tuple[str, list[Point]]],
++    xs: list[int],
++    *,
++    box: tuple[int, int, int, int, int, int],
++    best: int | None = None,
++    label_x: bool = True,
++) -> str:
++    """One chart, scaled to its own data."""
++    width, height, pad_l, pad_r, pad_t, pad_b = box
++    drawn = [points for _, points in series if points]
++    span = bounds(drawn)
++    if span is None:
++        return ""
++    low, high = span
++    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
++    x_span = (max(xs) - min(xs)) or 1
++
++    def at(x: float, y: float) -> tuple[float, float]:
++        px = pad_l + (x - min(xs)) / x_span * plot_w
++        py = pad_t + (1 - (y - low) / (high - low)) * plot_h
++        return px, py
++
++    bits: list[str] = []
++    for value in (low, (low + high) / 2, high):
++        _, py = at(min(xs), value)
++        bits.append(
++            f'<line class="grid" x1="{pad_l}" y1="{py:.1f}" x2="{width - pad_r}" y2="{py:.1f}"/>'
++        )
++        bits.append(
++            f'<text class="tick" x="{pad_l - 6}" y="{py + 3.5:.1f}" '
++            f'text-anchor="end">{tick_text(value)}</text>'
++        )
++    if best is not None and len(xs) > 1:
++        px, _ = at(best, low)
++        bits.append(
++            f'<line class="best" x1="{px:.1f}" y1="{pad_t}" x2="{px:.1f}" y2="{height - pad_b}"/>'
++        )
++    for token, points in series:
++        if len(points) < 2:
++            continue  # a single point is not a trend and draws as nothing anyway
++        placed = [at(x, y) for x, y in points]
++        path = " ".join(
++            ("M" if i == 0 else "L") + f"{x:.1f} {y:.1f}" for i, (x, y) in enumerate(placed)
++        )
++        bits.append(f'<path class="line {token}" d="{path}"/>')
++        ex, ey = placed[-1]
++        bits.append(f'<circle class="dot {token}" cx="{ex:.1f}" cy="{ey:.1f}" r="2.6"/>')
++        if best is not None:
++            for x, y in points:
++                if x == best:
++                    bx, by = at(x, y)
++                    bits.append(f'<circle class="chosen" cx="{bx:.1f}" cy="{by:.1f}" r="4"/>')
++    if label_x:
++        low_x, high_x = min(xs), max(xs)
++        for value in dict.fromkeys((low_x, (low_x + high_x) // 2, high_x)):
++            px, _ = at(value, low)
++            bits.append(
++                f'<text class="tick" x="{px:.1f}" y="{height - pad_b + 16}" '
++                f'text-anchor="middle">v{value}</text>'
++            )
++    return (
++        f'<svg viewBox="0 0 {width} {height}" role="img" preserveAspectRatio="xMidYMid meet">'
++        + "".join(bits)
++        + "</svg>"
++    )
++
++
++def cell(value: Any) -> str:
++    return "—" if value is None else f"{float(value):.3f}".rstrip("0").rstrip(".")
++
++
++def verdict(tune: list[Point], holdout: list[Point]) -> tuple[str, str]:
++    """The one sentence a reader wants: are the two lines still together?"""
++    if not tune or not holdout:
++        return "note", "只有一組文件量得到這個指標,分不出學習與過擬合。"
++    gap = float(tune[-1][1]) - float(holdout[-1][1])
++    if gap > DIVERGED:
++        return "warn", (
++            f"目前 tune 比 holdout 乾淨 {gap:.0%} —— 兩條線正在分開,"
++            "這是提示詞開始學那批反覆看到的文件的形狀。回頭看兩條線還併在一起的那幾版。"
++        )
++    return (
++        "note",
++        f"目前兩條線相距 {abs(gap):.0%},仍然一起移動 —— 學到的東西還推廣得到沒看過的文件。",
++    )
++
++
++def ancestry(rows: list[dict[str, Any]], target: int) -> str:
++    """How the chosen version was reached, back to the built-in prompt.
++
++    Consecutive stretches are collapsed. Written out in full, a hundred rounds
++    of ordinary descent is three lines of `v0 → v1 → v2 →` that hide the only
++    part worth seeing: where the beam went BACK, because that is where a
++    revision was bad enough to abandon.
++    """
++    by_version = {r["v"]: r for r in rows}
++    chain, seen = [target], {target}
++    while (row := by_version.get(chain[-1])) and row["parent"] is not None:
++        if row["parent"] in seen:  # a cycle cannot happen, but must not hang if it does
++            break
++        seen.add(row["parent"])
++        chain.append(row["parent"])
++    chain.reverse()
++
++    runs: list[list[int]] = [[chain[0]]]
++    for version in chain[1:]:
++        if version == runs[-1][-1] + 1:
++            runs[-1].append(version)
++        else:
++            runs.append([version])
++    parts = [f"v{r[0]}" if len(r) == 1 else f"v{r[0]}…v{r[-1]}" for r in runs]
++    tail = "" if len(runs) > 1 else f"(連續 {len(chain)} 代)"
++    return " ↩ ".join(parts) + tail
++
++
++def since_best(graded: list[dict[str, Any]], best_v: int | None) -> str:
++    """Whether the run has stopped finding anything better — the stop signal."""
++    if best_v is None:
++        return ""
++    later = [r for r in graded if r["v"] > best_v]
++    if not later:
++        return "它是最後評分的一版,所以還不知道後面會不會更好 —— 再跑幾輪。"
++    return f"在它之後又評了 {len(later)} 版,沒有一版更好 —— 迴圈已經停止進步。"
++
++
++def multiples(rows: list[dict[str, Any]], xs: list[int], best: int | None) -> str:
++    """One small chart per index, so nothing measured stays unlooked at."""
++    blocks: list[str] = []
++    for key, title, where, why in METRICS:
++        if key == "clean":
++            continue
++        series: list[tuple[str, list[Point]]] = [("hold", series_for(rows, key, "holdout"))]
++        if where == "both":
++            series.append(("tune", series_for(rows, key, "tune")))
++        svg = panel(series, xs, box=SMALL, best=best)
++        if not svg:
++            continue  # never measured in this run — silence, not an empty frame
++        pair = ' <span class="pair">holdout · tune</span>' if where == "both" else ""
++        blocks.append(
++            f'<figure class="sm"><h3>{html.escape(title)}{pair}</h3>'
++            f'<div class="chart">{svg}</div>'
++            f"<figcaption>{html.escape(why)}</figcaption></figure>"
++        )
++    return "\n".join(blocks)
++
++
++def render(rounds_dir: pathlib.Path) -> str:
++    rows = load(rounds_dir)
++    graded = [r for r in rows if r["holdout"]]
++    if not graded:
++        raise SystemExit(f"{rounds_dir} 裡沒有任何版本跑過 holdout")
++
++    xs = [r["v"] for r in graded]
++    clean_hold = [(r["v"], s) for r in graded if (s := clean_share(r["holdout"])) is not None]
++    clean_tune = [(r["v"], s) for r in graded if (s := clean_share(r["tune"])) is not None]
++    scored = [r for r in graded if r["fitness"] is not None]
++    best = max(scored, key=lambda r: r["fitness"]) if scored else None
++    best_v = best["v"] if best else None
++
++    body = []
++    for row in reversed(graded[-LISTED:]):
++        held = row["holdout"]
++        cells = [
++            f"v{row['v']}",
++            "—" if row["fitness"] is None else f"{row['fitness']:.3f}",
++            cell(held.get("lookup_hit_rate")),
++            cell(clean_share(held)),
++            cell(clean_share(row["tune"])),
++            cell(held.get("judged_keep_share")),
++            cell(held.get("mentions_per_document")),
++            "—" if row["parent"] is None else f"v{row['parent']}",
++        ]
++        mark = ' class="is-best"' if row["v"] == best_v else ""
++        body.append(f"<tr{mark}>" + "".join(f"<td>{html.escape(c)}</td>" for c in cells) + "</tr>")
++
++    diverge_class, diverge = verdict(clean_tune, clean_hold)
++    held = best["holdout"] if best else {}
++    page = TEMPLATE.read_text(encoding="utf-8")
++    for token, value in (
++        ("TOTAL", str(len(rows))),
++        ("GRADED", str(len(graded))),
++        ("CHOSEN", f"v{best_v}" if best_v is not None else "—"),
++        ("CHOSEN_FITNESS", f"{best['fitness']:.3f}" if best else "—"),
++        ("CHOSEN_HIT", cell(held.get("lookup_hit_rate"))),
++        ("CHOSEN_CLEAN", cell(clean_share(held) if best else None)),
++        ("CHOSEN_JUDGE", cell(held.get("judged_keep_share"))),
++        ("CHOSEN_PER_DOC", cell(held.get("mentions_per_document"))),
++        ("ANCESTRY", ancestry(rows, best_v) if best_v is not None else "—"),
++        ("SINCE", since_best(graded, best_v)),
++        (
++            "CHART_LEAD",
++            panel([("hold", clean_hold), ("tune", clean_tune)], xs, box=BIG, best=best_v),
++        ),
++        ("MULTIPLES", multiples(graded, xs, best_v)),
++        ("DIVERGE_CLASS", diverge_class),
++        ("DIVERGE", html.escape(diverge)),
++        ("ROWS", "\n".join(body)),
++        (
++            "PROMPT_PATH",
++            html.escape(f"{rounds_dir}/v{best_v}/prompt.txt" if best_v is not None else "—"),
++        ),
++    ):
++        page = page.replace(f"%%{token}%%", value)
++    return page
++
++
++def main() -> None:
++    rounds_dir = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "rounds")
++    out = pathlib.Path(sys.argv[2] if len(sys.argv) > 2 else "graph-tuning-report.html")
++    out.write_text(render(rounds_dir), encoding="utf-8")
++    print(f"wrote {out}", file=sys.stderr)
++
++
++if __name__ == "__main__":
++    main()
