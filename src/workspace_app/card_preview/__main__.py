@@ -63,6 +63,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "where tuning became overfitting and walk back",
     )
     p.add_argument(
+        "--from",
+        dest="samples_from",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="where tune/, holdout/ and probes.json live (default: the --tune-round dir). "
+        "Point both pipelines at ONE of these: they must read the same documents and be "
+        "scored against the same probes, while keeping their versions in separate folders",
+    )
+    p.add_argument(
         "--batch",
         type=int,
         default=0,
@@ -111,11 +121,13 @@ def main() -> None:
     if args.tune_round:
         from ..kb.cards.tune import run_round
 
+        shared = args.samples_from or args.tune_round
         version = run_round(
             llm,
             rounds_dir=args.tune_round,
-            tune_dir=args.tune_round / "tune",
-            holdout_dir=args.tune_round / "holdout",
+            tune_dir=shared / "tune",
+            holdout_dir=shared / "holdout",
+            probes_dir=shared,
             batch=args.batch,
             holdout_every=args.holdout_every,
             synthesis_prompt=(args.synthesis_prompt.read_text() if args.synthesis_prompt else None),

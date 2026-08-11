@@ -204,6 +204,7 @@ def run_round(
     tune_dir: Path,
     holdout_dir: Path,
     reviser: ILlm | None = None,
+    probes_dir: Path | None = None,
     batch: int = 0,
     holdout_every: int = 1,
     synthesis_prompt: str | None = None,
@@ -229,7 +230,10 @@ def run_round(
     if holdout_every <= 1 or version % holdout_every == 0:
         # Before the extraction, so a run killed part-way keeps the probes it
         # paid for: they are the one artefact here that must never be redrawn.
-        probes = ensure_probes(llm, rounds_dir, holdout_dir)
+        # The probe set lives with the SAMPLES, not with this loop's versions:
+        # the graph pipeline is scored against the same one, and two draws would
+        # be two yardsticks — which is the one thing a comparison cannot have.
+        probes = ensure_probes(llm, probes_dir or rounds_dir, holdout_dir)
         preview_samples(
             llm,
             holdout_dir,

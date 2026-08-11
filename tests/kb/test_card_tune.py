@@ -151,3 +151,29 @@ def test_the_holdout_can_be_run_less_often_than_the_batch(tmp_path):
     assert not (rounds / "v1" / "holdout").exists(), "the holdout ran on a round it should skip"
     index = json.loads((rounds / "index.json").read_text())
     assert index[1]["holdout"] is None, "a round that skipped it must say so, not guess"
+
+
+def test_card_versions_live_apart_from_the_samples_they_share(tmp_path):
+    """The two pipelines read the SAME documents and are scored against the SAME
+    probes — that is the whole basis for comparing them. Their versions must not
+    share a folder even so: both write `vN/prompt.txt` and `index.json`, so one
+    loop would silently overwrite the other's history."""
+    shared = tmp_path / "rounds"
+    shared.mkdir()
+    tune, holdout = _samples(shared)
+    (shared / "v0").mkdir()
+    (shared / "v0" / "prompt.txt").write_text("the graph loop's version, untouched")
+    mine = tmp_path / "rounds-cards"
+
+    run_round(
+        _Model(),
+        rounds_dir=mine,
+        tune_dir=tune,
+        holdout_dir=holdout,
+        probes_dir=shared,
+    )
+
+    assert (shared / "v0" / "prompt.txt").read_text() == "the graph loop's version, untouched"
+    assert "{text}" in (mine / "v0" / "prompt.txt").read_text()
+    assert (shared / "probes.json").is_file(), "the probe set belongs to the shared draw"
+    assert not (mine / "probes.json").exists(), "a second probe set is a second yardstick"
