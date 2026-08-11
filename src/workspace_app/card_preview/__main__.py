@@ -136,7 +136,9 @@ def main() -> None:
         synthesis_prompt=args.synthesis_prompt.read_text() if args.synthesis_prompt else None,
     )
     summary = json.loads((args.out_dir / "summary.json").read_text())
-    print(f"wrote {args.out_dir}/ — nothing was stored", file=sys.stderr)
+    print(
+        f"cards written to {args.out_dir}/  (the knowledge base was not touched)", file=sys.stderr
+    )
     for key, value in summary.items():
         print(f"  {key}: {value}", file=sys.stderr)
     thin = [c.title for c in cards if len(c.sources) == 1][:8]

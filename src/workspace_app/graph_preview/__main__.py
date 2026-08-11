@@ -171,7 +171,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _report(out_dir, graph, *, file) -> None:
     """The numbers, on stderr, so the JSON on disk stays the artefact."""
     summary = json.loads((out_dir / "summary.json").read_text())
-    print(f"wrote {out_dir}/ — nothing was stored", file=file)
+    print(f"graph written to {out_dir}/  (the knowledge base was not touched)", file=file)
     for key, value in summary.items():
         if key != "kinds":
             print(f"  {key}: {value}", file=file)
@@ -302,9 +302,9 @@ def main() -> None:
             seed=args.seed,
         )
         print(
-            f"wrote {tune} tuning and {held} holdout documents to {args.out_dir}/ — "
-            "nothing was stored. Iterate with --samples, and keep the holdout unread "
-            "until you think you are done",
+            f"wrote {tune} tuning and {held} holdout documents to {args.out_dir}/  "
+            "(read-only — the knowledge base was not touched). Iterate with --samples, "
+            "and keep the holdout unread until you think you are done",
             file=sys.stderr,
         )
         return
