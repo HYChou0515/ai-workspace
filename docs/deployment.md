@@ -556,11 +556,11 @@ RCA 的 system prompt 是純 markdown，存在
 | 做什麼 | 多常做 | 沒做會怎樣 |
 |---|---|---|
 | `TOOL_BUILDER_ID` — 給 sandbox-host、tool-builder、mcp-runner **同一個值** | 每次發版 | **整個第三方功能關閉**。沒有 ABI 錨就沒得比對，而不能比對就不該去抓——會掛上一個為別的底層 build 的 bundle，然後在使用者面前壞掉 |
-| `TOOL_ARTIFACT_HOSTS` — 憑證能被送到哪些網域（逗號分隔），給 sandbox-host 與 mcp-runner 映像 | 一次（換 artifact store 才改） | 憑證**永遠不會被送出**，private 的 GitLab project 抓不到。這是刻意的預設，理由見 §15.7 |
+| `TOOL_ARTIFACT_HOSTS` — 憑證能被送到哪些網域（逗號分隔），給 sandbox-host 與 mcp-runner 映像 | 一次（換 artifact store 才改） | 憑證**永遠不會被送出**，private 的 GitLab project 抓不到。這是刻意的預設，理由見 §15.8 |
 | `TOOL_ARTIFACT_TOKEN` — 讀 artifact 用 | 一次 | private 的抓不到（public 仍可）。**只有 host 需要**，app 從不持有 |
 | `TOOL_ARTIFACT_INSECURE_TLS` — 不檢查 artifact store 的 TLS 憑證 | 只在必要時 | 預設是**檢查**。內部 store 沒有可交給部署的 CA 時才設；代價見下方 |
-| `grant keygen --as <代號>` → 公鑰進 `TRUSTED_KEYS` → 發版（§15.6） | **每人**一次 | `TRUSTED_KEYS` 是空的 ⇒ 任何憑證都驗不過 ⇒ **一支第三方工具都上不了架** |
-| 發布 mcp-runner 映像（§15.7） | 每次發版 | 工程師沒辦法在自己的編輯器裡用這些工具。平台本身不受影響 |
+| `grant keygen --as <代號>` → 公鑰進 `TRUSTED_KEYS` → 發版（§15.7） | **每人**一次 | `TRUSTED_KEYS` 是空的 ⇒ 任何憑證都驗不過 ⇒ **一支第三方工具都上不了架** |
+| 發布 mcp-runner 映像（§15.8） | 每次發版 | 工程師沒辦法在自己的編輯器裡用這些工具。平台本身不受影響 |
 
 `TOOL_BUILDER_ID` 三個映像必須同一個值。不同步正是那道閘門存在的理由——它會擋下來，
 而不是讓它在執行期壞掉；有測試釘住三顆映像都帶這個旋鈕。
@@ -578,12 +578,12 @@ RCA 的 system prompt 是純 markdown，存在
 （sandbox-host、mcp-runner、operator 跑 `verify` 的 shell）需要；`build-tool` 和 app/API pods
 一個都不用——app 從不直連 artifact store。
 
-**每支工具要做的**是另一回事，而且只有兩件：發一張憑證（§15.6），以及把名字和網址寫進
+**每支工具要做的**是另一回事，而且只有兩件：發一張憑證（§15.7），以及把名字和網址寫進
 `app.json` 再發版（§15.2）。
 
 ### 15.2 上架一支新工具
 
-先發憑證（§15.6）再驗再登記。**憑證是作者 build 當下凍進 manifest 的**（`manifest.grant`），
+先發憑證（§15.7）再驗再登記。**憑證是作者 build 當下凍進 manifest 的**（`manifest.grant`），
 不是你事後掛上去的——所以一份在拿到憑證**之前**就做好的 artifact，不管網址多正確都會被拒絕，
 作者必須提交 `tool-certificate.token` 之後**重跑一次 CI**。順序錯了要重做的是他們那一趟。
 
@@ -609,7 +609,7 @@ accepted: wafer-history 1.4.2 (trend, compare) sha256=… , size granted by hych
 command」。
 
 `TOOL_ARTIFACT_HOSTS` 要一起帶：沒帶就不送 token，private 專案回的是 **404 而不是 403**，
-和「網址打錯」長得一模一樣（§15.8）。
+和「網址打錯」長得一模一樣（§15.9）。
 
 #### 第 2 步：寫進 `app.json` —— **兩個欄位都要**
 
@@ -658,19 +658,52 @@ command」。
 **名字是我們定的**，作者取什麼完全不參與（所以兩個作者都叫 `data-fetch` 也不會互相蓋掉，
 各發一張憑證、各取一個名字）。要一致的是這三個，其他都不必：
 
-1. 憑證的 `--tool`（§15.6）
+1. 憑證的 `--tool`（§15.7）
 2. `app.json` 裡 `external_tools` 的 key
 3. `app.json` 裡 `tools` 的那一項（bare，或 `<key>:cmd` 的前半）
 
 作者 `pyproject` 的 `name`、`[project.scripts]` 的進入點名稱**刻意不要求**跟上面一致——
 體積檢查和簽發者查詢都是不帶名字做的，綁了名字反而會出現「在一道閘門過、在下一道被拒」。
 
-### 15.3 換版本：不用做任何事
+### 15.3 一支工具什麼時候真的進到 sandbox 裡
+
+一句話決定了下面所有的行為：**掛載只發生在 `create` 那一刻，之後永不重建。**
+
+它分成兩段，發生在不同機器上，而且**只有第二段**會讓工具真的能被執行：
+
+| | 誰做 | 何時 | 結果 |
+|---|---|---|---|
+| **resolve** | app 問 host `POST /tools/resolve` | 每個 turn 開頭；另外開機時預熱一次 | 驗 builder/憑證、抓 bundle、解壓進 host 的 `ext/<sha>` 快取。**沒有任何 sandbox 因此拿到工具** |
+| **mount** | host 在 `create` 裡 | 建立一顆 sandbox 時，**僅此一次** | 對這次 spec 帶的每個 `{名字: sha}` 建一條 `.tools/<名字> → ext/<sha>` |
+
+所以「工具在快取裡」和「工具在某顆 sandbox 裡」是兩件事，前者不蘊含後者。
+
+**誰會建 sandbox**：agent turn、使用者手動開的終端機（`POST …/exec`）、workflow 的
+deterministic node、以及檔案操作撞到 sandbox 不見時的復原。四條路建出來的都是完整的
+sandbox，所以**任何一條都必須把工具帶上** —— 它們掛的是同一份東西：這個 item 的 App 在
+`app.json` 宣告的 `external_tools`。turn 唯一特別的地方是它剛好已經 resolve 過，所以用
+自己那次的 sha（好讓模型看到的 schema 和跑的 bundle 是同一份）。
+
+這條規則被違反過一次，症狀值得記住：只有 turn 帶了工具，於是**重新部署後誰先叫醒 sandbox，
+誰就決定了那顆 sandbox 一輩子有沒有第三方工具**——先開終端機再講話，工具就整個不見。
+
+**一顆活著的 sandbox 不會被追加工具。** 它的 `.tools` 是建立當下的快照，工具的加入、換版、
+移除都只影響**之後**建立的 sandbox。所以：
+
+- 剛註冊一支新工具 → 對既有 sandbox 無效，要等它被回收重建
+- 一個 turn 若發現它需要的 bundle 不在這顆 sandbox 裡，會把那支工具報成不可用**並附上原因**，
+  而不是交給模型一個不存在的啟動器（否則症狀是 `No such file or directory`，既不講工具名
+  也不講原因）
+
+### 15.4 換版本：不用做任何事
 
 網址指的是「最新的 artifact」，作者 push 完，**下一個開起來的 sandbox 就是新版**。
 不用改 repo、不用重新部署。
 
-### 15.4 退回某一版
+**活著的 sandbox 會繼續跑舊版**，這是刻意的：作者例行發版不該把正在用的人手上的工具抽走。
+代價是那顆 sandbox 的餘生裡，模型看到的 schema 可能比實際執行的 bundle 新一版。
+
+### 15.5 退回某一版
 
 把 `external_tools` 的網址從「最新」改成**指定那次 build** 的 artifact
 （GitLab 的 `/jobs/<job_id>/artifacts/…`），然後發版。sha 若還在該 host 的快取裡是秒回，
@@ -678,7 +711,7 @@ command」。
 
 > 「跟著最新」和「釘死某版」是**同一個欄位的兩種寫法**，沒有第二套機制。
 
-### 15.5 磁碟
+### 15.6 磁碟
 
 每支 bundle 約 150MB，而且**新舊版本會並存**（舊的留著，回滾才會是重掛而不是重抓）。
 用 `SANDBOX_HOST_TOOL_CACHE_MAX_BYTES` 設上限：超過就由舊到新淘汰，
@@ -686,7 +719,7 @@ command」。
 **沒設上限 = 不淘汰任何東西**（和這個 repo 其他限制的慣例一致:未設即無限)。要讓 reaper
 真的回收磁碟,就給一個數字——那時才會由舊到新淘汰沒被引用的版本。
 
-### 15.6 工具憑證(准入 + 體積)
+### 15.7 工具憑證(准入 + 體積)
 
 **每一支第三方工具都需要一張你簽的憑證。** 把網址貼進 `app.json` 不算核准——憑證才算。
 沒有憑證的 artifact，host 每次 resolve 都會拒絕。
@@ -796,7 +829,7 @@ accepted: wafer-data-fetch 1.4.2 (trend) sha256=… , size granted by hychou
 - 要下架**單一一支**工具 → 從 `app.json` 拿掉並發版
 - 要一次停掉**某人核准過的全部** → 從 `TRUSTED_KEYS` 拿掉他的金鑰並發版
 
-### 15.7 讓工程師用自己的 agent 跑同一支工具（MCP runner）
+### 15.8 讓工程師用自己的 agent 跑同一支工具（MCP runner）
 
 同一份 artifact，除了平台會拉，也可以被工程師自己的 agent（Claude Code／opencode／codex）
 透過 MCP 呼叫。**一顆 runner image 對應所有工具**，工具靠網址帶進來。
@@ -904,7 +937,7 @@ opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數�
   bind mount 的快取會變成 root 所有，使用者之後刪不掉;named volume 用
   `docker volume rm` 就清得掉。
 
-### 15.8 出事時怎麼查
+### 15.9 出事時怎麼查
 
 - **某支工具突然不見**：agent 的 prompt 裡會有一段「Tools that are unavailable right now」
   寫著原因。最常見的是 GitLab artifact 過期（作者的 CI 沒設 `expire_in: never`）。
@@ -918,7 +951,7 @@ opencode 的變數替換是 `{env:VAR}`（**不是** `${PWD}`），而且變數�
 - **`verify` 說 404，但同一個網址 `curl` 得到 200**：`curl` 無條件送 token，`verify` 只在
   hostname 出現在 `TOOL_ARTIFACT_HOSTS` 時才送。GitLab 對看不到的私有專案回 **404 而非 403**，
   所以「沒帶 token」和「網址錯」長得一模一樣。
-- **`No module named sandbox_host`**：映像的問題，不是 artifact 的問題。三個成因見 §15.7。
+- **`No module named sandbox_host`**：映像的問題，不是 artifact 的問題。三個成因見 §15.8。
 - **MCP client 一直 loading 然後失敗**：多半是 client 端的逾時（opencode 預設 5 秒），
   不是 server 壞掉。先在終端機直接跑設定裡那串 `docker run`，stderr 第一行會說實話——
   client 通常把它吃掉了。
