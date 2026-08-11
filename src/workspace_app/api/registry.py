@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -52,6 +52,11 @@ def _utcnow() -> datetime:
 class InvestigationSession:
     investigation_id: str
     handle: SandboxHandle | None = None
+    # #674: the third-party bundles `handle` was CREATED with, `{name: sha}`.
+    # `None` means UNKNOWN — this pod converged on a sandbox another pod built
+    # (#366), so it never saw what went in. Known-empty (`{}`) and unknown are
+    # deliberately different: only the first can say "that tool is not in here".
+    tools: dict[str, str] | None = None
     last_active: datetime = field(default_factory=_utcnow)
     # Serializes sandbox creation (ensure_handle) for this investigation. Turn
     # lifecycle (the in-flight agent turn) lives in ChatTurnEngine, not here.
@@ -183,7 +188,11 @@ class InvestigationRegistry:
                 "registry: rebuild io handle for item %s (file op hit sandbox-not-found)",
                 investigation_id,
             )
-            session.handle = await self._acquire(investigation_id)
+            # #674: no turn behind a file op, so nothing to mount — and the
+            # session records that as KNOWN-empty, not unknown. A turn that
+            # later finds its tool missing from here then says so, instead of
+            # handing the model a launcher this sandbox never received.
+            session.handle, session.tools = await self._acquire(investigation_id)
             await self._bump(investigation_id)
             session.last_active = _utcnow()
         return session.handle
@@ -192,6 +201,7 @@ class InvestigationRegistry:
         self,
         session: InvestigationSession,
         *,
+        tools: dict[str, str] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> SandboxHandle:
         # Lock so concurrent callers see a single Sandbox.create — without
@@ -216,8 +226,8 @@ class InvestigationRegistry:
                     "registry: ensure_handle acquiring sandbox for item %s (no live handle cached)",
                     session.investigation_id,
                 )
-                session.handle = await self._acquire(
-                    session.investigation_id, on_progress=on_progress
+                session.handle, session.tools = await self._acquire(
+                    session.investigation_id, tools=tools, on_progress=on_progress
                 )
             # Refresh the GLOBAL heartbeat on every wake/use (not just the first)
             # so another pod's idle reaper sees this item as live (#345).
@@ -262,9 +272,19 @@ class InvestigationRegistry:
         return True
 
     async def _acquire(
-        self, item: str, *, on_progress: Callable[[int, int], None] | None = None
-    ) -> SandboxHandle:
+        self,
+        item: str,
+        *,
+        tools: dict[str, str] | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> tuple[SandboxHandle, dict[str, str] | None]:
         """Materialise (or converge on) the item's single live sandbox handle.
+
+        Returns the handle AND the third-party bundles it was created with —
+        `None` when we converged on someone else's sandbox and so cannot know
+        (#674). The caller keeps that on the session because a sandbox mounts
+        its bundles once, at create, and a later turn has to be able to tell
+        "not in there" from "no idea".
 
         #366: when an address store is wired (http backend), the handle is SHARED
         across pods — so first converge on an already-claimed address; else
@@ -287,7 +307,9 @@ class InvestigationRegistry:
                         item,
                         existing.id,
                     )
-                    return existing  # a live shared sandbox → converge on ONE
+                    # A live shared sandbox → converge on ONE. Another pod built
+                    # it, so what it mounted is not ours to state.
+                    return existing, None
                 logger.info(
                     "registry: acquire item %s -> address %s dead, rebuilding",
                     item,
@@ -319,7 +341,14 @@ class InvestigationRegistry:
                     item,
                 )
                 raise
-        handle = await self.sandbox.create(self.spec_for(item), sandbox_id=item)
+        # #674: the item's own ceilings, plus THIS turn's third-party bundles.
+        # `spec_for` answers a question about the item and is asked on a cold
+        # acquire that may have no turn behind it at all (a file-op wake, a
+        # rebuild after the address died), so the bundles cannot come from
+        # there — they are what the turn resolved, and they travel with it.
+        handle = await self.sandbox.create(
+            replace(self.spec_for(item), tools=tools), sandbox_id=item
+        )
         logger.info(
             "registry: created sandbox handle %s for item %s (cold=%s)",
             handle.id,
@@ -354,13 +383,16 @@ class InvestigationRegistry:
                     handle.id,
                 )
                 await self.sandbox.kill(handle)  # lost the race — drop our orphan
-                return winner
+                return winner, None  # the winner is someone else's build
             logger.info(
                 "registry: won address CAS for item %s -> published handle %s",
                 item,
                 handle.id,
             )
-        return handle
+        # We built it, so we can state what went in — `{}` included, which is
+        # what lets a later turn say "that tool is not in here" rather than
+        # offering the model a launcher that does not exist.
+        return handle, dict(tools or {})
 
     async def has_live_sandbox(self, investigation_id: str) -> bool:
         """Whether this item is ALREADY holding a live sandbox.

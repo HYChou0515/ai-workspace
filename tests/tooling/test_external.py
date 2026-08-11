@@ -9,7 +9,13 @@ bundle that actually runs.
 
 from __future__ import annotations
 
-from workspace_app.tooling.external import prewarm_external_tools, resolve_external_tools
+from workspace_app.tooling.external import (
+    ExternalTools,
+    confine_to_mounted,
+    prewarm_external_tools,
+    resolve_external_tools,
+)
+from workspace_app.tooling.registry import PackageInfo
 
 
 class _Host:
@@ -151,3 +157,66 @@ async def test_prewarm_reports_what_will_be_missing_rather_than_staying_quiet() 
     unwarmed = await prewarm_external_tools(host, {"rca": {"legacy": "u"}})
 
     assert unwarmed == {"legacy": "404 — the artifact expired"}
+
+
+def _resolved(**shas: str) -> ExternalTools:
+    return ExternalTools(
+        packages=tuple(
+            PackageInfo(name=n, install_dir=f"../.tools/{n}", commands=()) for n in shas
+        ),
+        shas=dict(shas),
+    )
+
+
+def test_a_sandbox_that_predates_a_tool_does_not_get_it_offered() -> None:
+    """A sandbox mounts its bundles when it is CREATED, so a tool registered
+    while one was already up has no launcher in it. Offering it anyway is what
+    turns an operator's successful rollout into `No such file or directory` —
+    a message that names neither the tool nor the reason."""
+    confined = confine_to_mounted(_resolved(wafer="a" * 64), live=True, mounted={})
+
+    assert confined.shas == {}
+    assert [p.name for p in confined.packages] == []
+    assert "wafer" in confined.refused
+    assert "restart" in confined.refused["wafer"] or "recycle" in confined.refused["wafer"]
+
+
+def test_a_mounted_tool_is_offered_normally() -> None:
+    external = _resolved(wafer="a" * 64)
+
+    confined = confine_to_mounted(external, live=True, mounted={"wafer": "a" * 64})
+
+    assert confined.shas == {"wafer": "a" * 64}
+    assert [p.name for p in confined.packages] == ["wafer"]
+    assert confined.refused == {}
+
+
+def test_a_sandbox_holding_an_older_build_keeps_the_tool() -> None:
+    """The author released between this sandbox being created and this turn
+    resolving. That is the documented no-op path — they push, the NEXT sandbox
+    gets it — so the old bundle keeps serving this session rather than the tool
+    vanishing mid-conversation. Confinement is about a launcher that does not
+    exist, not about being a release behind."""
+    external = _resolved(wafer="b" * 64)
+
+    confined = confine_to_mounted(external, live=True, mounted={"wafer": "a" * 64})
+
+    assert confined is external
+    assert confined.refused == {}
+
+
+def test_nothing_is_confined_before_the_sandbox_exists() -> None:
+    # The common case: no sandbox yet, so THIS turn's create is what mounts
+    # them. Confining here would refuse every tool on every cold item.
+    external = _resolved(wafer="a" * 64)
+
+    assert confine_to_mounted(external, live=False, mounted=None) is external
+
+
+def test_an_unknown_mounted_set_is_left_alone_rather_than_guessed() -> None:
+    """Another pod created this sandbox (#366 address convergence), so this one
+    never learned what it mounted. `None` means UNKNOWN, not empty — refusing on
+    a guess would take working tools away from every multi-pod deployment."""
+    external = _resolved(wafer="a" * 64)
+
+    assert confine_to_mounted(external, live=True, mounted=None) is external

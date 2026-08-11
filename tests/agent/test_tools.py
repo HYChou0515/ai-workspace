@@ -151,9 +151,9 @@ async def test_ensure_sandbox_hands_restore_progress_sink_to_the_wake_hook_492()
     sandbox = MockSandbox()
     received: list[object] = []
 
-    async def wake(on_progress=None):
+    async def wake(on_progress=None, tools=None):
         received.append(on_progress)
-        return await sandbox.create(SandboxSpec())
+        return await sandbox.create(SandboxSpec(tools=tools))
 
     def sink(done: int, total: int) -> None:  # a turn's restore-progress sink
         return None
@@ -186,8 +186,8 @@ async def test_no_drift_between_file_tools_and_exec():
 
     files = WorkspaceFiles(fs, sandbox, _resolve)
 
-    async def wake(on_progress=None) -> SandboxHandle:  # mimic registry.ensure_handle
-        h = await sandbox.create(SandboxSpec())
+    async def wake(on_progress=None, tools=None) -> SandboxHandle:  # mimic ensure_handle
+        h = await sandbox.create(SandboxSpec(tools=tools))
         for p in await fs.ls("inv-1"):
             await sandbox.upload(h, await fs.read("inv-1", p), p)
         handle["inv-1"] = h
@@ -733,8 +733,8 @@ async def test_listed_path_works_verbatim_in_a_real_shell(tmp_path):
 
     files = WorkspaceFiles(MemoryFileStore(), sandbox, _resolve)
 
-    async def wake(on_progress=None) -> SandboxHandle:
-        h = await sandbox.create(SandboxSpec())
+    async def wake(on_progress=None, tools=None) -> SandboxHandle:
+        h = await sandbox.create(SandboxSpec(tools=tools))
         holder["inv-1"] = h
         return h
 
