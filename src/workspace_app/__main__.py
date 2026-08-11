@@ -182,7 +182,17 @@ def main() -> None:
             print(f"  tools: uv-run debug mode (live source via uv run) → {tools_root}")
         elif PACKAGES:
             packages = discover_packages(PREBUILT_DIR)
-            missing = set(PACKAGES) - {p.name for p in packages}
+            # A package whose SOURCE dir is absent was skipped by the prebuild on
+            # purpose — that is how a local-only sample (`rca-tools`) stays declared
+            # here while a fresh clone without it still runs, which the declaration's
+            # own comment promises. Judging it by the same condition the prebuild
+            # judges it by is what makes that promise true: this check used to demand
+            # every declared name, so a clone missing an optional source refused to
+            # boot with a message telling you to re-run a prebuild that had already
+            # decided to skip it. The guard still bites where it should — a package
+            # whose source IS present but was never built is still an error.
+            declared = {name for name, source in PACKAGES.items() if source.is_dir()}
+            missing = declared - {p.name for p in packages}
             if missing:
                 raise RuntimeError(
                     f"tool packages declared in PACKAGES but missing from prebuilt: "
