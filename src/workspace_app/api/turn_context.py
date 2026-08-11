@@ -37,7 +37,7 @@ from ..entity.catalog import discover_catalog
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tokens import CallLane
-from ..tooling.external import ExternalTools, resolve_external_tools
+from ..tooling.external import ExternalTools, confine_to_mounted, resolve_external_tools
 from .turns import history_items
 
 if TYPE_CHECKING:
@@ -278,15 +278,22 @@ class TurnContextBuilder:
             return 0
         return estimate_tokens(payload)
 
-    async def _external_tools(self, item_id: str) -> ExternalTools:
+    async def _external_tools(self, item_id: str, session: Any) -> ExternalTools:
         """#674: resolve this app's third-party tools, once, at the top of a turn.
 
         Before the sandbox exists, because the answer decides which tools the
         model is offered — and the sha it returns is what the sandbox is later
-        created with, so the two can never describe different bundles."""
+        created with, so the two can never describe different bundles.
+
+        When one ALREADY exists, though, its bundles were fixed when it was
+        created and the resolve cannot change them. So the mounted set becomes
+        the ceiling: a tool registered since, or released since, is reported as
+        unavailable with a reason rather than handed over as a launcher that
+        isn't there."""
         slug = self._locator.slug_of(item_id)
         declared = load_app_manifest(slug).agent.external_tools if slug else {}
-        return await resolve_external_tools(self._sandbox, declared)
+        external = await resolve_external_tools(self._sandbox, declared)
+        return confine_to_mounted(external, live=session.handle is not None, mounted=session.tools)
 
     def _common(
         self,
@@ -428,7 +435,7 @@ class TurnContextBuilder:
         lane so a new caller that forgets cannot spend a person's quota."""
         session = await self._registry.session(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
-        external = await self._external_tools(item_id)
+        external = await self._external_tools(item_id, session)
         return AgentToolContext(
             **self._common(
                 item_id,
@@ -501,7 +508,7 @@ class TurnContextBuilder:
         for a human/schedule run (a first-level write)."""
         session = await self._registry.session(item_id)
         logger.debug("turn-context: build workflow turn for %s", item_id)
-        external = await self._external_tools(item_id)
+        external = await self._external_tools(item_id, session)
         return AgentToolContext(
             **self._common(
                 item_id,

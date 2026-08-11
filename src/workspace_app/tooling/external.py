@@ -97,6 +97,59 @@ async def resolve_external_tools(sandbox: object, declared: Mapping[str, str]) -
     )
 
 
+def confine_to_mounted(
+    external: ExternalTools,
+    *,
+    live: bool,
+    mounted: dict[str, str] | None,
+) -> ExternalTools:
+    """What this turn may offer, given a sandbox that already exists.
+
+    A sandbox mounts its bundles when it is CREATED and never again, so a tool
+    that was not mounted then has no launcher inside it now. Offering it anyway
+    is what `../.tools/<name>/launch: No such file or directory` is — a message
+    that names neither the tool nor the reason, and reaches the model as if the
+    tool itself were broken. It is refused rather than dropped, because a
+    refusal carries a sentence the agent relays and a person can act on (#480);
+    an absence carries nothing.
+
+    ONLY absence. A tool mounted at a DIFFERENT sha is left alone deliberately:
+    an author releasing mid-session is the documented no-op path ("they push,
+    the next sandbox gets it"), and taking a working tool away for the rest of
+    a live session would make routine releases hurt the people using them. The
+    schemas can then be a release ahead of the bundle for one session's life —
+    the residual of pinning at create, not something this function should
+    convert into an outage.
+
+    `mounted=None` means UNKNOWN, not empty: another pod created this sandbox
+    (#366) and this one never learned what went into it. Guessing "empty" there
+    would take working tools away from every multi-pod deployment, so the
+    unknown case is left exactly as resolved."""
+    if not live or mounted is None or not external.shas:
+        return external
+    absent = [name for name in external.shas if name not in mounted]
+    if not absent:
+        return external
+    for name in absent:
+        logger.info("tool %s resolved but not mounted in this item's live sandbox", name)
+    return ExternalTools(
+        packages=tuple(p for p in external.packages if p.name not in absent),
+        shas={n: s for n, s in external.shas.items() if n not in absent},
+        refused={
+            **external.refused,
+            **{
+                name: (
+                    "this workspace was started before this tool was available, so "
+                    "it is not installed here. It works in a new workspace, or in "
+                    "this one once it has been idle long enough to be recycled."
+                )
+                for name in absent
+            },
+        },
+        stale=tuple(n for n in external.stale if n not in absent),
+    )
+
+
 async def prewarm_external_tools(
     sandbox: object,
     declared_by_app: Mapping[str, Mapping[str, str]],

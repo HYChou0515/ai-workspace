@@ -17,6 +17,14 @@ from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
 
+class _Session:
+    """A registry session with no sandbox yet — the cold case, where this
+    turn's create is what mounts the bundles."""
+
+    handle = None
+    tools: dict[str, str] | None = None
+
+
 class _Locator:
     def __init__(self, slug: str | None) -> None:
         self._slug = slug
@@ -66,7 +74,7 @@ async def test_an_app_that_declares_a_third_party_tool_gets_it_resolved(monkeypa
     )
     host = _Host()
 
-    external = await _builder(slug="rca", sandbox=host)._external_tools("item-1")
+    external = await _builder(slug="rca", sandbox=host)._external_tools("item-1", _Session())
 
     assert host.asked == [{"wafer-history": "https://g/m"}]
     assert external.shas == {"wafer-history": "a" * 64}
@@ -78,7 +86,7 @@ async def test_an_item_with_no_app_asks_for_nothing() -> None:
     # must not fabricate a lookup for it.
     host = _Host()
 
-    external = await _builder(slug=None, sandbox=host)._external_tools("item-1")
+    external = await _builder(slug=None, sandbox=host)._external_tools("item-1", _Session())
 
     assert host.asked == []
     assert external.shas == {}
