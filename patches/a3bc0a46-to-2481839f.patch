@@ -1,0 +1,117 @@
+diff --git a/src/workspace_app/kb/cards/tune.py b/src/workspace_app/kb/cards/tune.py
+index 5db59f6a..fa99d4de 100644
+--- a/src/workspace_app/kb/cards/tune.py
++++ b/src/workspace_app/kb/cards/tune.py
+@@ -112,10 +112,38 @@ def probe_score(out_dir: Path, names: list[str]) -> dict[str, Any]:
+     }
+ 
+ 
++#: What went wrong in the real corpus, quoted from the owner rather than
++#: imagined. Stated as SHAPES — a thing that was invented, a thing that failed to
++#: accumulate — never as a list of words to avoid: naming words would mean
++#: guessing what the corpus is about from outside it, and every criterion this
++#: project invented that way was wrong within a corpus or two.
++#:
++#: Overridable: drop an `examples.md` in the rounds folder and it replaces this.
++DEFAULT_EXAMPLES = """A statement earns its place only if a reader can put a
++finger on the sentence that makes it. These came out of the real corpus and are
++the failure being fixed:
++
++- A card for 蘋果 reading 蘋果是薔薇科蘋果屬 — no document ever mentioned 薔薇科
++  or 蘋果屬. The model filled the gap from what it already knew. That is the
++  failure: a knowledge base answering from general knowledge is not reporting
++  what the corpus says, and a reader cannot tell the two apart.
++- Several cards about 蘋果, each describing a different facet, because each
++  document wrote its own. One document said it is a fruit and another said it is
++  red, and both became cards.
++
++What the second one should have produced is ONE card reading 蘋果是紅色的水果 —
++every statement carried, combined into a sentence rather than listed side by
++side. Statements accumulate across documents; the card is written from
++all of them at once."""
++
+ REVISE = """You are improving the prompt that pulls STATEMENTS about terms out of
+ a technical corpus, for a glossary. Your whole output is the REVISED PROMPT — no
+ commentary, no explanation, no code fences.
+ 
++## What the corpus is, and what going wrong has looked like
++
++{examples}
++
+ ## What the prompt is for
+ 
+ Each document records what it STATES about a term, with the exact words that
+@@ -168,6 +196,7 @@ def revision_prompt(
+     rounds: list[Round],
+     *,
+     carry: int = 2,
++    examples: str = DEFAULT_EXAMPLES,
+ ) -> str:
+     """What the model is asked, in full.
+ 
+@@ -201,6 +230,7 @@ def revision_prompt(
+     for r in rounds[-carry:]:
+         rows.append(f"\n### The prompt v{r.version} ran\n```\n{r.prompt.strip()}\n```")
+     return REVISE.format(
++        examples=examples,
+         current=current,
+         scores=scores,
+         history="\n".join(rows) if rows else "(this is the first version)",
+@@ -263,8 +293,16 @@ def run_round(
+     write_index(rounds_dir, past, headline=_HEADLINE, holdout_only=("lookup_hit_rate",))
+ 
+     parent = pick_parent(past)
++    # Whoever owns the corpus knows its bad cards better than this file does.
++    notes = rounds_dir / "examples.md"
+     revised = (reviser or llm).collect(
+-        revision_prompt(parent.prompt, parent.tune, parent.holdout, past)
++        revision_prompt(
++            parent.prompt,
++            parent.tune,
++            parent.holdout,
++            past,
++            examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
++        )
+     )
+     nxt = rounds_dir / f"v{version + 1}"
+     nxt.mkdir(parents=True, exist_ok=True)
+diff --git a/tests/kb/test_card_tune.py b/tests/kb/test_card_tune.py
+index 4a3eed92..15d18b8b 100644
+--- a/tests/kb/test_card_tune.py
++++ b/tests/kb/test_card_tune.py
+@@ -177,3 +177,35 @@ def test_card_versions_live_apart_from_the_samples_they_share(tmp_path):
+     assert "{text}" in (mine / "v0" / "prompt.txt").read_text()
+     assert (shared / "probes.json").is_file(), "the probe set belongs to the shared draw"
+     assert not (mine / "probes.json").exists(), "a second probe set is a second yardstick"
++
++
++def test_the_reviser_is_shown_what_going_wrong_actually_looked_like(tmp_path):
++    """Abstract failure modes are not evidence. What made the graph loop work was
++    the corpus owner's OWN bad output quoted back — a model told "do not invent"
++    has nothing to compare against, and a criterion written from outside the
++    corpus is the mistake this whole design exists to unlearn."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    model = _Model()
++
++    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = model.revision_prompts
++    assert "薔薇科" in asked, "the invented-definition example never reached the reviser"
++    assert "紅色的水果" in asked, "nor did what the right answer looks like"
++
++
++def test_the_corpus_owner_can_replace_the_examples(tmp_path):
++    """Whoever owns the corpus knows what its bad cards look like; the built-in
++    text only has to be right enough to start."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    rounds.mkdir()
++    (rounds / "examples.md").write_text("我們的壞卡長這樣:工單編號被寫成一段流程說明。")
++    model = _Model()
++
++    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = model.revision_prompts
++    assert "工單編號" in asked
++    assert "薔薇科" not in asked, "the built-in examples were sent as well as theirs"
