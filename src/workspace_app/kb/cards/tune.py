@@ -33,7 +33,17 @@ from .preview import preview_samples
 #: criterion is doing, small enough to leave room for the prompt it must write.
 _SHOWN = 50
 
-_HEADLINE: tuple[str, ...] = ("cards", "statements_per_card", "grounded_rate")
+#: The columns `index.json` carries for every version, on BOTH document sets.
+#: `grounded_rate` is how much of what the model offered was really in the text
+#: — inventing, measured. `cards_from_one_document` is the proliferation the
+#: owner reported: several thin cards about one term instead of one that
+#: accumulated. `statements_per_card` is the same shape from the other side.
+_HEADLINE: tuple[str, ...] = (
+    "cards",
+    "statements_per_card",
+    "cards_from_one_document",
+    "grounded_rate",
+)
 
 
 def load_prompt(rounds_dir: Path, version: int) -> str:
