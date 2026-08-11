@@ -45,11 +45,89 @@ describe("parseViewSpec", () => {
   it("rejects malformed YAML", () => {
     expect(parseViewSpec("view: [unclosed")).toBeNull();
   });
-  it("rejects an unknown view kind", () => {
-    expect(parseViewSpec("view: pie\nentity: issue\n")).toBeNull();
+  // #698 — the parser answers "is this a view file?" and nothing else. It used
+  // to also own the list of kinds and the entity rule; both moved to the
+  // registry, so a second-party kind can exist. The two cases below assert the
+  // parser now KEEPS what it used to reject; that the user still gets told
+  // (unsupported-kind notice / missing-entity banner) is asserted end-to-end in
+  // viewKindPlugin.test.tsx, which goes through the file, not this function.
+  it("rejects a doc with no view kind at all — that is not a view file", () => {
+    expect(parseViewSpec("just: data\ncount: 3\n")).toBeNull();
+    expect(parseViewSpec("view: ''\nentity: issue\n")).toBeNull();
   });
-  it("rejects a record-bound spec with no entity", () => {
-    expect(parseViewSpec("view: table\n")).toBeNull();
+  it("keeps an unregistered view kind, leaving 'which kinds exist' to the registry (#698)", () => {
+    expect(parseViewSpec("view: pie\nentity: issue\n")).toMatchObject({ view: "pie", entity: "issue" });
+  });
+  it("keeps a spec with no entity, leaving 'is an entity required' to the kind (#698)", () => {
+    expect(parseViewSpec("view: table\n")).toMatchObject({ view: "table", entity: "" });
+  });
+  it("passes a plug-in's own top-level keys through verbatim (#698)", () => {
+    expect(parseViewSpec("view: acme-wafer\nsource: /data/wafer.csv\n")).toMatchObject({
+      view: "acme-wafer",
+      source: "/data/wafer.csv",
+    });
+  });
+  // #698 review: widening WHAT parses without widening what is VALIDATED handed
+  // arbitrary user YAML straight into fields typed `string`. `title` is rendered
+  // as a React child, so a mapping there threw and took the page down. Every
+  // named field the platform reads must survive a hostile document.
+  it("coerces the platform's own scalar fields, so a hostile document can't smuggle an object in", () => {
+    const spec = parseViewSpec(
+      ["view: table", "entity: issue", "title:", "  en: Hello", "  zh: 你好", "span: [1, 2]", "label:"].join("\n"),
+    );
+    expect(spec).not.toBeNull();
+    // a mapping, a list and a null all reach a React child as garbage — dropped
+    expect(spec?.title).toBeUndefined();
+    expect(spec?.span).toBeUndefined();
+    expect(spec?.label).toBeUndefined();
+  });
+  it("drops a non-list `columns` instead of handing a renderer something it can't map over", () => {
+    expect(parseViewSpec("view: table\nentity: issue\ncolumns: nope\n")?.columns).toBeUndefined();
+    expect(parseViewSpec("view: table\nentity: issue\ncolumns: [a, 2, b]\n")?.columns).toEqual(["a", "b"]);
+  });
+  // Coercion must reject the shapes that crash a renderer, not every shape that
+  // isn't a string — `title: 2026` is ordinary YAML and used to render fine.
+  it("keeps a numeric or boolean scalar rather than silently discarding it", () => {
+    expect(parseViewSpec("view: table\nentity: issue\ntitle: 2026\n")?.title).toBe("2026");
+    expect(parseViewSpec("view: table\nentity: issue\nlabel: 3\n")?.label).toBe("3");
+  });
+  // Reproduced from the shipped pm gantt file's own documented vocabulary: a
+  // blank `label:` parses as null and threw inside formatWeekLabel, because its
+  // default only fires for `undefined`.
+  it("coerces the `week:` block, whose fields all reach the gantt axis", () => {
+    const spec = parseViewSpec(["view: gantt", "entity: issue", "week:", "  start: monday", "  label:"].join("\n"));
+    expect(spec?.week?.start).toBe("monday");
+    expect(spec?.week?.label).toBeUndefined();
+    expect(parseViewSpec("view: gantt\nentity: issue\nweek: nope\n")?.week).toBeUndefined();
+  });
+  // Type-checking one field and not its neighbour just moves the crash: both of
+  // these produced the same bare "Invalid time value" from inside the axis.
+  it("rejects out-of-domain `week:` values, not merely non-strings", () => {
+    const spec = parseViewSpec(
+      ["view: gantt", "entity: issue", "week:", "  start: mon", "  epoch: yesterday"].join("\n"),
+    );
+    expect(spec?.week?.start).toBeUndefined(); // not a weekday
+    expect(spec?.week?.epoch).toBeUndefined(); // not a date
+  });
+  // All three shipped gantt files say in their own comments that a bare
+  // `week: {}` is already a valid rule. Dropping it lost the timeline's W-codes.
+  it("keeps an empty `week: {}` — every field has a default, as the shipped files promise", () => {
+    expect(parseViewSpec("view: gantt\nentity: issue\nweek: {}\n")?.week).toEqual({});
+  });
+  // The plug-in's view of a colliding key is asserted THROUGH THE CONTAINER, in
+  // viewKindPlugin.test.tsx — the parser-level shortcut here is what let a dead
+  // mechanism ship green. This one only pins the platform's own coercion.
+  it("drops a `columns:` list of mappings from the platform's own view of the spec", () => {
+    const spec = parseViewSpec(["view: acme-grid", "columns:", "  - key: lot", "    width: 80"].join("\n"));
+    expect(spec?.columns).toBeUndefined();
+  });
+  // A half-written `schedule:` used to reach Recalculate, which PATCHed a field
+  // literally named "undefined" onto every record in one click.
+  it("drops a `schedule:` block that doesn't name all three required fields", () => {
+    expect(parseViewSpec("view: gantt\nentity: issue\nschedule:\n  duration: est\n  flag: mode\n")?.schedule).toBeUndefined();
+    expect(
+      parseViewSpec("view: gantt\nentity: issue\nschedule:\n  span: when\n  duration: est\n  flag: mode\n")?.schedule,
+    ).toMatchObject({ span: "when", duration: "est", flag: "mode" });
   });
   it("normalises multi-level sort rules, defaulting dir + dropping malformed (#GH-projects)", () => {
     const spec = parseViewSpec(

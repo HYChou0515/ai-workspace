@@ -111,6 +111,9 @@ export function useUpdateItemField(slug: string, resourceRoute: string, item: Ap
 export function useSetItemPermission(slug: string, itemId: string) {
   const qc = useQueryClient();
   const mutation = useMutation({
+    // Surfaces `error` to the share dialog itself (see the docstring above), so
+    // the global notice would be the same 403 said twice.
+    meta: { silentError: true },
     mutationFn: (perm: ItemPermission) => api.setItemPermission(slug, itemId, perm),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.appItem(slug, itemId) });

@@ -15,7 +15,7 @@
 import { load as parseYaml } from "js-yaml";
 
 import type { EntityFieldSpec, EntityType } from "../../api/entities";
-import type { SortRule, ViewKind, ViewSpec } from "./types";
+import { RAW_DOC, type SortRule, type ViewKind, type ViewSpec } from "./types";
 
 /** Normalise a raw `sort:` value into clean `SortRule[]` — keep only entries with
  * a non-empty `field`, default `dir` to "asc", drop anything malformed. Returns
@@ -42,9 +42,23 @@ export function normalizeStringList(raw: unknown): string[] | undefined {
 }
 
 /** Parse a `views/*.ai.yaml` doc into a `ViewSpec`, or `null` when it isn't a
- * well-formed view (bad YAML, missing/unknown `view`, or — for the record-bound
- * kinds — no `entity`). The cross-type `health` view needs no `entity`. Never
- * throws — the container degrades to the raw text editor on `null` (§E). */
+ * view file at all (bad YAML, or no `view:` naming a kind). Never throws — the
+ * container degrades to the structured YAML tree on `null` (§E).
+ *
+ * This answers ONE question — "is this a view file?" — and nothing else (#698).
+ * It deliberately does NOT decide:
+ *
+ *   - whether the kind EXISTS. That is the registry's business; an unknown kind
+ *     parses fine so the dispatcher can render "Unsupported view kind: x". The
+ *     old hardcoded whitelist here made the registry's documented fallback
+ *     unreachable, and meant a second-party kind could never load.
+ *   - whether an `entity:` is REQUIRED. That is a property of the kind
+ *     (`ViewRenderer.needsEntity`), enforced by the dispatcher. A plug-in kind
+ *     that reads workspace files has no entity, and the old rule — required for
+ *     everything except a hardcoded `health` — made that unrepresentable.
+ *
+ * Unknown top-level keys ride through verbatim (the spread below), which is how
+ * a plug-in reads its own config, e.g. `source: /data/wafer.csv`. */
 export function parseViewSpec(text: string): ViewSpec | null {
   let doc: unknown;
   try {
@@ -55,17 +69,149 @@ export function parseViewSpec(text: string): ViewSpec | null {
   if (!doc || typeof doc !== "object") return null;
   const o = doc as Record<string, unknown>;
   const { view, entity } = o;
-  if (view !== "table" && view !== "board" && view !== "gantt" && view !== "health") return null;
-  if (view !== "health" && (typeof entity !== "string" || !entity)) return null;
-  const sort = normalizeSort(o.sort);
-  const hidden_fields = normalizeStringList(o.hidden_fields);
-  return {
+  if (typeof view !== "string" || !view) return null;
+  const spec: ViewSpec = {
+    // A plug-in's own keys ride through untouched at RUNTIME — they are its
+    // config. They are deliberately NOT on `ViewSpec` (an index signature there
+    // disarmed typo-checking for every named field), so a plug-in reads them
+    // with `viewParam` / `viewParamString`, which go to the original document.
     ...(o as ViewSpec),
+    // ...while the fields listed below are coerced, because this document is
+    // arbitrary user YAML. Widening which files parse (#698) without widening
+    // this was a real defect: `title:` as a mapping reached a React child and
+    // threw, and with no error boundary above it that blanks the page.
+    //
+    // This is an enumeration, not a schema — it covers what is listed here and
+    // nothing else. `color_by`, `always_week`, `weekday` and `day_of_month` are
+    // still carried raw (they degrade quietly rather than throwing). Adding a
+    // field to `ViewSpec` means adding it here too; see renderers/README.md.
     view: view as ViewKind,
-    entity: (entity as string) ?? "",
-    sort,
-    hidden_fields,
+    entity: str(entity) ?? "",
+    title: str(o.title),
+    group_by: str(o.group_by),
+    span: str(o.span),
+    label: str(o.label),
+    assignee: str(o.assignee),
+    assignee_display: assigneeDisplay(o.assignee_display),
+    skip_weekends: typeof o.skip_weekends === "boolean" ? o.skip_weekends : undefined,
+    columns: normalizeStringList(o.columns),
+    card: normalizeCard(o.card),
+    week: normalizeWeek(o.week),
+    schedule: normalizeSchedule(o.schedule),
+    sort: normalizeSort(o.sort),
+    hidden_fields: normalizeStringList(o.hidden_fields),
+    // rides along through every `{...spec}` the container does
+    [RAW_DOC]: o,
   };
+  return spec;
+}
+
+/** `week:` drives the gantt's time axis, and every field in it is a scalar the
+ * chart formats or matches on — a `label:` left blank (which the shipped file
+ * documents as an option) parsed as `null` and threw inside `formatWeekLabel`,
+ * because the default only fires for `undefined`. */
+function normalizeWeek(raw: unknown): ViewSpec["week"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  // Coerce the TYPE, then check the DOMAIN: `week: {start: mon}` survives a
+  // string check and then indexes a weekday table with a miss, producing
+  // `new Date(NaN)` and a bare "Invalid time value" from deep inside the axis.
+  // These are small closed enums written by hand in a YAML file; an unknown
+  // member is a typo, and falling back to the default beats a stack trace.
+  return {
+    start: oneOf(o.start, WEEKDAYS),
+    first_week: oneOf(o.first_week, ["jan1", "first_full", "iso"]),
+    reset: oneOf(o.reset, ["yearly", "none"]),
+    boundary: oneOf(o.boundary, ["new_year", "old_year", "by_today"]),
+    // Not an enum, but still fed to `Date.parse` — `epoch: yesterday` produced
+    // the same bare "Invalid time value" from inside the axis that `start: mon`
+    // did. Domain-checking one field and not its neighbour just moves the crash.
+    epoch: date(o.epoch),
+    label: str(o.label),
+  } as ViewSpec["week"];
+  // NOTE: an empty `week: {}` returns an empty rule, NOT undefined. Every field
+  // has a default, and all three shipped gantt files tell the user in their own
+  // comments that "a bare `week: {}` is already a valid rule" — dropping it
+  // silently cost the timeline its W-codes for anyone who took them at
+  // their word, or who commented the block's contents out.
+}
+
+/** Read a key the platform doesn't know about — a plug-in kind's own config,
+ * e.g. `viewParam(spec, "source")` for `source: /data/wafer.csv` (#698).
+ *
+ * This exists so `ViewSpec` does NOT need an index signature. With one, every
+ * named field lost its typo check and every `ViewSpec` literal lost excess-
+ * property checking; the cost landed on the whole codebase to serve plug-ins.
+ * Here the cast is in one audited place and the caller still has to narrow.
+ *
+ * It reads the ORIGINAL document (carried on the spec under `RAW_DOC`) so a
+ * plug-in key that collides with a platform one — `columns`, `card`, `sort`,
+ * `label`, … — still reads back the way its author wrote it, rather than the
+ * platform's coerced, often dropped, version. */
+export function viewParam(spec: ViewSpec, key: string): unknown {
+  const raw = spec[RAW_DOC];
+  if (raw && Object.hasOwn(raw, key)) return raw[key];
+  return (spec as unknown as Record<string, unknown>)[key];
+}
+
+/** Same, for the common case: a string value, or undefined if it isn't one. */
+export function viewParamString(spec: ViewSpec, key: string): string | undefined {
+  return str(viewParam(spec, key));
+}
+
+/** A YAML scalar the platform will render or match on. Numbers and booleans are
+ * stringified rather than dropped — `title: 2026` is a perfectly ordinary thing
+ * to write, and silently discarding it is a regression, not safety. What must
+ * not survive is a mapping or a list, which is what reached a React child and
+ * blanked the page. */
+function str(raw: unknown): string | undefined {
+  if (typeof raw === "string") return raw || undefined;
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  return undefined;
+}
+
+function assigneeDisplay(raw: unknown): ViewSpec["assignee_display"] {
+  return raw === "avatar" || raw === "name" || raw === "none" ? raw : undefined;
+}
+
+/** `schedule:` names the FIELDS the auto-scheduler writes, so a half-written
+ * block is worse than none: with `span:` missing, Recalculate used to PATCH a
+ * field literally named "undefined" onto every record in one click. All three
+ * required names must be present, or the view is simply not a scheduling one and
+ * the Recalculate affordance never appears. */
+function normalizeSchedule(raw: unknown): ViewSpec["schedule"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const span = str(o.span);
+  const duration = str(o.duration);
+  const flag = str(o.flag);
+  if (!span || !duration || !flag) return undefined;
+  return { span, duration, flag, unit: str(o.unit), anchor: str(o.anchor), assignee: str(o.assignee) };
+}
+
+const WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+/** A scalar that must be one of a small closed set, or nothing. Coercing the
+ * type alone isn't enough for a field that then indexes a lookup table. */
+function oneOf(raw: unknown, allowed: string[]): string | undefined {
+  const s = str(raw);
+  return s !== undefined && allowed.includes(s) ? s : undefined;
+}
+
+/** A scalar that must be a parseable date, or nothing — same reasoning as
+ * `oneOf`, for a field consumed by `Date.parse` rather than a lookup table. */
+function date(raw: unknown): string | undefined {
+  const s = str(raw);
+  return s !== undefined && !Number.isNaN(Date.parse(s)) ? s : undefined;
+}
+
+/** `card:` drives the board's title + badges, both rendered — so both are
+ * coerced, and a non-object `card:` is dropped rather than dereferenced. */
+function normalizeCard(raw: unknown): ViewSpec["card"] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const card = { title: str(o.title), badges: normalizeStringList(o.badges) };
+  return card.title === undefined && card.badges === undefined ? undefined : card;
 }
 
 /** Set (or remove) a TOP-LEVEL scalar `key` in a view file's raw YAML, preserving

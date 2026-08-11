@@ -199,7 +199,9 @@
 }
 .chat-rail__item {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
   padding: var(--space-8);
   border-radius: var(--radius-card);
   color: var(--text-paper);
@@ -213,14 +215,18 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.chat-rail__shared {
-  flex: 0 0 auto;
-  margin-left: var(--space-4);
-  padding: 0 var(--space-4);
-  border-radius: var(--radius-chip);
-  background: var(--paper-3);
+/* Who put this chat in my rail (shared-with-me rows only). Sits under the title
+   as a quiet second line — it identifies the row, it isn't a heading. */
+.chat-rail__item-by {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   color: var(--text-paper-d);
   font-size: var(--text-xs);
+  font-weight: 400; /* the active row bolds its title; this line stays quiet */
 }
 .chat-rail__item:hover {
   background: var(--paper-3);

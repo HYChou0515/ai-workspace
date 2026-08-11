@@ -278,6 +278,203 @@ def test_import_remints_card_links_against_the_target_collection():
     assert card.reference_doc_ids == [encode_doc_id(new_cid, "spec.md")]
 
 
+def _cards_in(spec: SpecStar, cid: str) -> list:
+    from workspace_app.resources.kb import ContextCard
+
+    rm = spec.get_resource_manager(ContextCard)
+    return [r.data for r in rm.list_resources((QB["collection_id"] == cid).build())]
+
+
+def _card_manifest(body: str) -> dict:
+    return {
+        "version": 1,
+        "collection": {"name": "C"},
+        "documents": [],
+        "context_cards": [{"keys": ["M4"], "title": "M4", "body": body}],
+    }
+
+
+def _import_into(client: TestClient, cid: str, zip_bytes: bytes, mode: str) -> None:
+    r = client.post(
+        f"/kb/collections/{cid}/import?mode={mode}",
+        files={"file": ("c.zip", zip_bytes, "application/zip")},
+    )
+    assert r.status_code == 200, r.text
+
+
+def _two_cards_one_key(body_a: str, body_b: str) -> dict:
+    return {
+        "version": 1,
+        "collection": {"name": "C"},
+        "documents": [],
+        "context_cards": [
+            {"keys": ["M4"], "title": "M4 (metal)", "body": body_a},
+            {"keys": ["M4"], "title": "M4 (process)", "body": body_b},
+        ],
+    }
+
+
+def test_import_skip_still_brings_in_a_manifest_card_that_collides_with_nothing():
+    """Skip protects what is already here; it does not discard what is not here.
+
+    A document import under `skip` still adds every non-colliding path, and a card has
+    to mean the same thing. The skipped card must still be CLAIMED, or a second
+    manifest entry under that key re-resolves onto the same already-matched card and is
+    skipped too — silently dropping a card that collided with nothing at all.
+    """
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "title": "existing", "body": "orig"},
+    )
+
+    _import_into(client, cid, _make_zip({}, manifest=_two_cards_one_key("a", "b")), "skip")
+
+    titles = sorted(c.title for c in _cards_in(spec, cid))
+    assert titles == ["M4 (process)", "existing"]  # the curated one kept, the spare added
+
+
+def test_import_keeps_both_cards_when_a_manifest_has_two_under_one_key():
+    """Several cards may share a key on purpose — the term names more than one thing,
+    which is why `resolve_upsert_target` reports how many carry the matched key.
+
+    So restoring must not resolve each manifest card against a store the restore loop
+    is itself filling: the second card would find the first and overwrite it, turning
+    a plain export→import into silent data loss. Targets are resolved against the
+    collection as it stood BEFORE the restore, and a card already claimed by an
+    earlier manifest entry is not offered to a later one."""
+    client, spec = _client_with_spec()
+    zbytes = _make_zip({}, manifest=_two_cards_one_key("metal", "process"))
+
+    new_cid = _import_new(client, zbytes)
+
+    assert sorted(c.title for c in _cards_in(spec, new_cid)) == ["M4 (metal)", "M4 (process)"]
+
+
+def test_reimporting_two_cards_under_one_key_updates_both_rather_than_adding_more():
+    """The pair above still has to be idempotent: the second import pairs each manifest
+    card with a different existing card instead of both landing on the first."""
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+
+    first = _make_zip({}, manifest=_two_cards_one_key("metal", "process"))
+    second = _make_zip({}, manifest=_two_cards_one_key("metal v2", "process v2"))
+    _import_into(client, cid, first, "overwrite")
+    _import_into(client, cid, second, "overwrite")
+
+    cards = _cards_in(spec, cid)
+    assert len(cards) == 2
+    assert sorted(c.body for c in cards) == ["metal v2", "process v2"]
+
+
+def _curated_card_with_a_link(client: TestClient) -> tuple[str, str]:
+    """A collection holding one document and an `M4` card that links it."""
+    from workspace_app.kb.doc_id import encode_doc_id
+
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("spec.md", b"the metal 4 spec", "text/markdown")},
+    )
+    link = encode_doc_id(cid, "spec.md")
+    client.post(
+        "/context-card/author",
+        json={
+            "collection_id": cid,
+            "keys": ["M4"],
+            "title": "M4",
+            "body": "old",
+            "reference_doc_ids": [link],
+        },
+    )
+    return cid, link
+
+
+def test_import_keeps_a_cards_links_when_the_archive_says_nothing_about_them():
+    """An archive that never mentions `reference_paths` is not claiming the card has no
+    links — it is saying nothing about them, and silence must not delete evidence.
+
+    This is `update_context_card`'s documented tri-state (#518: absent KEEPS, a list
+    replaces, `[]` clears), which #701's 定案 7 binds the importer to. The motivating
+    story is re-importing an archive to fix a typo: links curated AFTER the export
+    would otherwise vanish on the way back in — and they are exactly the data the
+    reverse injection in this same PR makes load-bearing for retrieval.
+    """
+    client, spec = _client_with_spec()
+    cid, link = _curated_card_with_a_link(client)
+
+    # `_card_manifest` carries no `reference_paths` key at all.
+    _import_into(client, cid, _make_zip({}, manifest=_card_manifest("new")), "overwrite")
+
+    (card,) = _cards_in(spec, cid)
+    assert card.body == "new"  # the definition the archive DID state is applied
+    assert card.reference_doc_ids == [link]  # the links it said nothing about survive
+
+
+def test_import_replaces_a_cards_links_when_the_archive_lists_them():
+    """Stating the links — even as an empty list — IS a claim, and replaces them. A real
+    export always writes the field, so an export→import round-trip stays faithful;
+    silence only protects hand-written or partial archives."""
+    client, spec = _client_with_spec()
+    cid, _link = _curated_card_with_a_link(client)
+    manifest = _card_manifest("new")
+    manifest["context_cards"][0]["reference_paths"] = []
+
+    _import_into(client, cid, _make_zip({}, manifest=manifest), "overwrite")
+
+    (card,) = _cards_in(spec, cid)
+    assert card.reference_doc_ids == []  # an explicit empty list clears
+
+
+def test_importing_the_same_zip_twice_does_not_duplicate_cards():
+    """#701: the round-trip has to be idempotent. Documents already were — they key on
+    path and honour the mode — but cards were created unconditionally, so re-importing
+    the same zip to correct a typo doubled every card in the collection."""
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    zbytes = _make_zip({}, manifest=_card_manifest("metal 4"))
+
+    _import_into(client, cid, zbytes, "overwrite")
+    _import_into(client, cid, zbytes, "overwrite")
+
+    assert len(_cards_in(spec, cid)) == 1
+
+
+def test_import_overwrite_updates_the_card_that_already_carries_the_key():
+    """Overwrite means the same thing for a card as for a document: the incoming one
+    wins. Identity is the key, mirroring `upsert_context_card`."""
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "title": "M4", "body": "old"},
+    )
+
+    _import_into(client, cid, _make_zip({}, manifest=_card_manifest("new")), "overwrite")
+
+    hits = client.post(f"/kb/collections/{cid}/context-cards/lookup", json={"terms": ["M4"]}).json()
+    assert hits["results"]["M4"][0]["body"] == "new"
+    assert len(_cards_in(spec, cid)) == 1  # updated in place, not added beside
+
+
+def test_import_skip_leaves_a_card_that_already_carries_the_key():
+    """Skip means the same thing for a card as for a document: what is already here
+    stays. A curated card is not silently replaced by an archive's older copy."""
+    client, spec = _client_with_spec()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "title": "M4", "body": "old"},
+    )
+
+    _import_into(client, cid, _make_zip({}, manifest=_card_manifest("new")), "skip")
+
+    hits = client.post(f"/kb/collections/{cid}/context-cards/lookup", json={"terms": ["M4"]}).json()
+    assert hits["results"]["M4"][0]["body"] == "old"
+    assert len(_cards_in(spec, cid)) == 1
+
+
 def test_import_restores_only_keyable_cards():
     client = _client()
     manifest = {

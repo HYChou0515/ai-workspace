@@ -11,7 +11,27 @@ import type { DayOfMonth, WeekdayFormat, WeekRule } from "./ganttScale";
 import type { ScheduleFields } from "./schedule";
 import type { RefIndex } from "./refTraversal";
 
-export type ViewKind = "table" | "board" | "gantt" | "health";
+/** The kinds this repo ships. NOT a gate — which kinds exist is the registry's
+ * business (#698), so a second-party kind is just another string, and a closed
+ * union here used to make a plug-in fail to compile.
+ *
+ * They are named constants rather than inline literals because `ViewKind` is now
+ * `string`: `spec.view === "gant"` no longer draws a type error, but
+ * `VIEW_KIND.gant` still does. Use these wherever the platform tests for one of
+ * its own kinds. */
+export const VIEW_KIND = {
+  table: "table",
+  board: "board",
+  gantt: "gantt",
+  /** Cross-type: rendered by the container ahead of the dispatcher, so it is
+   * not a registry entry — but the registry still reserves the name. */
+  health: "health",
+} as const;
+
+export type ViewKind = string;
+
+/** Key for the untouched parsed document carried on every `ViewSpec`. */
+export const RAW_DOC: unique symbol = Symbol("viewRawDoc");
 
 export type SortDir = "asc" | "desc";
 /** One tier of a multi-level sort (#GH-projects). Ties fall through to the next
@@ -60,6 +80,23 @@ export type ViewSpec = {
    * this renderer serves every app's entity types. */
   schedule?: ScheduleFields;
   card?: { title?: string; badges?: string[] };
+  /** The document this spec was parsed from, before the platform coerced its own
+   * fields (#698). `viewParam` reads it so a plug-in whose key collides with a
+   * platform one still gets what its author wrote.
+   *
+   * It is a SYMBOL because it has to survive `{...spec}` — the container spreads
+   * the spec to apply the View panel's overrides, and the first attempt at this
+   * (a WeakMap keyed on the spec object) was silently dead from that one line
+   * onward: the copy was never a key. A symbol property rides along with the
+   * value, stays out of `JSON.stringify` and `Object.keys`, and cannot be typo'd
+   * into by a plug-in. */
+  [RAW_DOC]?: Record<string, unknown>;
+  // #698 — a plug-in kind's OWN keys ride along verbatim at runtime
+  // (`parseViewSpec` spreads the whole document), but they are deliberately NOT
+  // declared here. An index signature would have made every field above
+  // unverifiable: `spec.weeek` and `view === "tabel"` would both compile, and
+  // excess-property checking would be off for every ViewSpec literal in the
+  // codebase. Plug-ins read their own keys through `viewParam(spec, "source")`.
 };
 
 /** The View settings panel's model (#GH-projects P3) — the effective, locally

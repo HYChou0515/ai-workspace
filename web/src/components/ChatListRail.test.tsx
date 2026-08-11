@@ -24,6 +24,15 @@ vi.mock("../hooks/useCreateChat", () => ({ useCreateChat: () => ({ mutate: newCh
 const chatActions = { rename: vi.fn(), remove: vi.fn(), busy: false };
 vi.mock("../hooks/useChatActions", () => ({ useChatActions: () => chatActions }));
 vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "me" }));
+const directory = [
+  { id: "me", name: "Me", section: "", email: "", photo_url: null },
+  { id: "someone-else", name: "Sam Teammate", section: "", email: "", photo_url: null },
+];
+vi.mock("../hooks/useUsers", () => ({
+  useUsers: () => directory,
+  useUser: (id: string) =>
+    directory.find((u) => u.id === id) ?? { id, name: id, section: "", email: "", photo_url: null },
+}));
 vi.mock("./ShareChatDialog", () => ({ ShareChatDialog: () => <div data-testid="share-dialog" /> }));
 
 afterEach(cleanup);
@@ -58,10 +67,10 @@ afterEach(() => {
   window.matchMedia = realMatchMedia;
 });
 
-function renderRail() {
+function renderRail(currentId = "rca-investigation/1") {
   return render(
     <MemoryRouter>
-      <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId="rca-investigation/1" />
+      <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId={currentId} />
     </MemoryRouter>,
   );
 }
@@ -111,6 +120,48 @@ describe("ChatListRail", () => {
     expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
     const row = screen.getByText("From a teammate").closest(".chat-rail__row") as HTMLElement;
     expect(within(row).queryByRole("button", { name: /Chat options/i })).not.toBeInTheDocument();
+  });
+
+  // A chat I didn't make shows up in my rail with only its title — nothing said
+  // where it came from, so "From a teammate" read like a chat I'd forgotten
+  // writing. The one thing that distinguishes it is who put it there.
+  it("names who shared each chat in the Shared with me tab", () => {
+    renderRail();
+    fireEvent.click(screen.getByRole("tab", { name: /Shared with me/i }));
+    const row = screen.getByText("From a teammate").closest(".chat-rail__row") as HTMLElement;
+    expect(within(row).getByText(/Shared by/i)).toHaveTextContent("Sam Teammate");
+  });
+
+  it("says nothing about sharing on my own chats", () => {
+    renderRail();
+    const row = screen.getByText("Oven drift").closest(".chat-rail__row") as HTMLElement;
+    expect(within(row).queryByText(/Shared by/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The tab used to be free-floating `useState("mine")` in a component that is
+   * destroyed on every navigation — `AppWorkspaceInner` renders "Loading…"
+   * instead of the workspace (rail included) whenever the item query hasn't
+   * answered yet, which is every first visit to a chat. So opening a chat from
+   * "Shared with me" landed you back on "My chats", with the chat you are
+   * actually reading nowhere in the list. Derive the tab from the chat you're
+   * in and it survives the remount — and a reload — for free.
+   */
+  it("opens on Shared with me when the chat you're in is one shared with you", () => {
+    renderRail("rca-investigation/9");
+    expect(screen.getByRole("tab", { name: /Shared with me/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByText("From a teammate")).toBeInTheDocument();
+    expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
+  });
+
+  it("still lets you cross to the other tab from a shared chat", () => {
+    renderRail("rca-investigation/9");
+    fireEvent.click(screen.getByRole("tab", { name: /My chats/i }));
+    expect(screen.getByText("Oven drift")).toBeInTheDocument();
+    expect(screen.queryByText("From a teammate")).not.toBeInTheDocument();
   });
 
   it("opens the share dialog from a chat's ⋯ menu", () => {

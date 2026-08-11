@@ -232,11 +232,17 @@ function ShellBody({
   // only the user id, so an admin (who the backend lets in) lost the entire
   // workspace to the `private` branch with nothing on screen to explain it.
   // read_chat gates the chat column below (a locked pane, not a mounted shell
-  // streaming 403s); read_content the IDE column; converse the composer.
+  // streaming 403s); read_content the IDE column; converse the composer;
+  // write_meta the controls that STORE a field on the item (env vars, tool /
+  // skill prefs, the attached preset — all one PATCH, all one verb). Withholding
+  // the callback is how that last one is expressed: the header already treats an
+  // absent `onSave*` as "this surface cannot persist", so there is no second rule
+  // about when to draw the button.
   const {
     canReadChat: _canReadChat,
     canSeeFiles: _canSeeFiles,
     canConverse: _canConverse,
+    canWriteMeta: _canWriteMeta,
   } = useItemAccess(item);
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
@@ -569,7 +575,7 @@ function ShellBody({
         <TopBar
           item={item}
           manifest={manifest}
-          onEditField={setField}
+          onEditField={_canWriteMeta ? setField : undefined}
           isNarrow={isNarrow}
           ideCollapsed={ideCollapsed}
           onToggleIde={toggleIde}
@@ -578,7 +584,7 @@ function ShellBody({
           chatCollapsed={chatCollapsed}
           onToggleChat={toggleChat}
           onCommandPalette={() => setPaletteOpen(true)}
-          onEdit={() => setEditOpen(true)}
+          onEdit={_canWriteMeta ? () => setEditOpen(true) : undefined}
         />
         {editOpen && (
           <EditItemModal
@@ -808,11 +814,22 @@ function ShellBody({
               appIcon={manifest.icon}
               appColor={manifest.color}
               attachedPreset={String(item.attached_preset ?? "")}
+              // NOT gated, deliberately. The model dropdown that carries this
+              // also carries the viewer's OWN settings — reasoning effort, KB
+              // search depth — which `write_meta` has no say over, so hiding it
+              // would confiscate those to protect one field inside it. A viewer
+              // who picks a preset here gets the write-failure notice instead.
               onAttachPreset={(preset) => setField("attached_preset", preset)}
-              onSaveToolPrefs={(prefs) => setField("attached_tool_prefs", prefs)}
-              onSaveSkillPrefs={(prefs) => setField("attached_skill_prefs", prefs)}
+              onSaveToolPrefs={
+                _canWriteMeta ? (prefs) => setField("attached_tool_prefs", prefs) : undefined
+              }
+              onSaveSkillPrefs={
+                _canWriteMeta ? (prefs) => setField("attached_skill_prefs", prefs) : undefined
+              }
               envVars={(item as unknown as { env_vars?: Record<string, string> }).env_vars ?? {}}
-              onSaveEnvVars={(envVars) => setField("env_vars", envVars)}
+              onSaveEnvVars={
+                _canWriteMeta ? (envVars) => setField("env_vars", envVars) : undefined
+              }
             />
             )}
           </div>
@@ -953,7 +970,10 @@ export function TopBar({
 }: {
   item: AppItem;
   manifest: AppManifest;
-  onEditField: (name: string, value: string) => void;
+  /** Commit one inline domain-field edit. Absent → the chips render read-only
+   * (`DomainFields` already treats it that way), which is what a viewer without
+   * `write_meta` must see. */
+  onEditField?: (name: string, value: string) => void;
   /** #fe-responsive: the SHELL decides this, from its own measured width — the
    * bar used to ask the viewport itself, which over-reports by the width of
    * whatever sits beside the shell (a chat-first App's 240px rail). */
@@ -969,7 +989,10 @@ export function TopBar({
   chatCollapsed: boolean;
   onToggleChat: () => void;
   onCommandPalette: () => void;
-  onEdit: () => void;
+  /** Open the details form. Absent → the caller may not store fields on this
+   * item (`write_meta`), so the gear is not drawn — the same "no callback, no
+   * affordance" rule `onEditField` above already follows. */
+  onEdit?: () => void;
 }) {
   // Owned here rather than in the roster popover below — see the `onManage` note.
   const [sharing, setSharing] = useState(false);
@@ -1048,15 +1071,17 @@ export function TopBar({
           onEditField={onEditField}
         />
         <IdChip resourceId={item.resource_id} />
-        <button
-          type="button"
-          onClick={onEdit}
-          title="Edit item details"
-          aria-label="Edit item details"
-          style={{ color: "var(--text-paper-d)", display: "inline-flex", alignItems: "center" }}
-        >
-          <Icon name="settings" size={13} />
-        </button>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            title="Edit item details"
+            aria-label="Edit item details"
+            style={{ color: "var(--text-paper-d)", display: "inline-flex", alignItems: "center" }}
+          >
+            <Icon name="settings" size={13} />
+          </button>
+        )}
       </div>
       <span style={{ flex: 1 }} />
 

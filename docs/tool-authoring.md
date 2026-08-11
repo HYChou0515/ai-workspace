@@ -40,6 +40,16 @@ wafer-history = "wafer_tools.cli:main"   # 必須「剛好一個」
 變得沒有答案，零個則沒東西可跑。一個 package 可以有**很多 command**——那是下一節的事，不是靠多個
 script 達成的。
 
+**不要設 `[tool.uv] package = false`。** 有些團隊把「要部署的東西不是可散布的套件」當成內規，
+但你的 repo 不是那種東西：uv 會把設了這個的專案當成 virtual project，**完全不建套件**，於是
+`[project.scripts]` 那支執行檔不存在，而 bundle 的啟動器要執行的正是它。build 會停在
+
+```
+FileNotFoundError: [Errno 2] No such file or directory: '.../.venv/bin/wafer-history'
+```
+
+會失敗總比發出一個跑不起來的 bundle 好，但那串訊息指的是路徑而不是原因，所以先寫在這裡。
+
 ## 2. 三段式契約
 
 你的 CLI 要能回答三種呼叫。前兩種是**給機器看的自我描述**，第三種才是幹活：
@@ -182,6 +192,7 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 | **smoke 沒過** | **build 失敗，而且不留下任何 artifact**（免得 CI 把壞的傳上去） |
 | 不是在 builder image 裡 build 的 | 平台拒絕掛載 |
 | `[project.scripts]` 不是剛好一個 / 沒有 `version` | build 失敗 |
+| 設了 `[tool.uv] package = false` | build 失敗——沒有進入點可執行（見 §1） |
 | **bundle 壓縮後超過 150MB** | build 失敗，並列出最重的幾樣；平台上架時也擋 |
 | **沒有平台憑證** | 平台拒絕執行——`tool-certificate.token` 是上架的前提，不只是體積的例外 |
 | manifest 裡的名字跟我們登記的不一樣 | 平台拒絕——代表這個網址指到了別支工具 |

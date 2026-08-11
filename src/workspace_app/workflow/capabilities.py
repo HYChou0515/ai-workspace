@@ -188,13 +188,11 @@ def create_context_card(
     #518: ``reference_doc_ids`` links the documents that back the card (``None`` ⇒ no
     links, today's behaviour).
     """
-    from ..kb.context_cards import derive_norm_keys
+    from ..kb.context_cards import derive_norm_keys, effective_keys
     from ..resources.kb import ContextCard
 
     collection_id = resolve_collection_id(spec, collection)
-    eff_keys = list(keys)
-    if not derive_norm_keys(eff_keys) and title.strip():
-        eff_keys = [title]
+    eff_keys = effective_keys(keys, title)
     rm = spec.get_resource_manager(ContextCard)
     with rm.using(user=user):
         rev = rm.create(
@@ -237,22 +235,25 @@ def update_context_card(
     ``None`` KEEPS the card's existing links, a list replaces them, ``[]`` clears. A
     caller that only means to refresh a definition must not cost the card the evidence
     someone curated onto it."""
-    from specstar.types import ResourceIDNotFoundError
+    from specstar.types import ResourceNotFoundError
 
-    from ..kb.context_cards import derive_norm_keys
+    from ..kb.context_cards import derive_norm_keys, effective_keys
     from ..resources.kb import ContextCard
 
     rm = spec.get_resource_manager(ContextCard)
     try:
         existing = rm.get(card_id).data
-    except ResourceIDNotFoundError as exc:
+    except ResourceNotFoundError as exc:
+        # The PARENT of both `ResourceIDNotFoundError` and `ResourceIsDeletedError`,
+        # which are siblings: catching only the former let a tombstone's raise escape
+        # to a caller with no reason to expect it (#701). Key-based resolution stopped
+        # handing out tombstones, but the agent surface passes an id it read earlier,
+        # so the id path answers for itself. Deleted is gone, whichever way it went.
         raise CardNotFound(card_id) from exc
     assert isinstance(existing, ContextCard)  # narrow Struct|Unset for ty
     if expected_body is not None and expected_body != existing.body:
         raise CardConflict(card_id)
-    eff_keys = list(keys)
-    if not derive_norm_keys(eff_keys) and title.strip():
-        eff_keys = [title]
+    eff_keys = effective_keys(keys, title)
     with rm.using(user=user):
         rm.update(
             card_id,
@@ -279,24 +280,19 @@ def find_overwrite_target(
     """The existing card a deterministic ``upsert_context_card(collection, keys, title)``
     would OVERWRITE, plus how many cards share the matched key (#205 — the diff "before").
 
-    Mirrors ``upsert``'s resolution EXACTLY so the snapshot the human reviews is what the
-    commit actually overwrites: same collection resolve, same ``eff_keys`` (title fallback),
-    the FIRST key with a hit wins and its first card is the target. Returns ``(None, 0)``
-    when no key matches — a brand-new card (no "before"). The second element is the count of
-    cards carrying the matched key: ``>1`` means the term is ambiguous (names several cards)
-    and only the first is overwritten — surfaced in the review summary so it isn't silent.
+    Shares ``upsert``'s resolution rather than mirroring it (``resolve_upsert_target``),
+    so the snapshot the human reviews is what the commit actually overwrites: same
+    collection resolve, same ``effective_keys`` (title fallback), the FIRST key with a hit
+    wins and its first card is the target. Returns ``(None, 0)`` when no key matches — a
+    brand-new card (no "before"). The second element is the count of cards carrying the
+    matched key: ``>1`` means the term is ambiguous (names several cards) and only the
+    first is overwritten — surfaced in the review summary so it isn't silent.
     """
-    from ..kb.context_cards import derive_norm_keys, find_cards_by_key
+    from ..kb.context_cards import effective_keys, resolve_upsert_target
 
     collection_id = resolve_collection_id(spec, collection)
-    eff_keys = list(keys)
-    if not derive_norm_keys(eff_keys) and title.strip():
-        eff_keys = [title]
-    for key in eff_keys:
-        existing = find_cards_by_key(spec, collection_id, key)
-        if existing:
-            return existing[0][1], len(existing)
-    return None, 0
+    target = resolve_upsert_target(spec, collection_id, effective_keys(keys, title))
+    return (None, 0) if target is None else (target[1], target[2])
 
 
 def upsert_context_card(
@@ -322,19 +318,12 @@ def upsert_context_card(
     card don't silently lost-update — consistency with the entity path, not a resource-by-
     resource ‘entity is guarded but a card is last-write-wins’ split. (The *agent* surface
     keeps its own create-refuses / update-with-read-guard pair.)"""
-    from ..kb.context_cards import derive_norm_keys, find_cards_by_key
+    from ..kb.context_cards import effective_keys, resolve_upsert_target
 
     collection_id = resolve_collection_id(spec, collection)
-    eff_keys = list(keys)
-    if not derive_norm_keys(eff_keys) and title.strip():
-        eff_keys = [title]
+    eff_keys = effective_keys(keys, title)
     for _ in range(retries + 1):
-        target: tuple[str, ContextCard] | None = None
-        for key in eff_keys:
-            existing = find_cards_by_key(spec, collection_id, key)
-            if existing:
-                target = existing[0]
-                break
+        target = resolve_upsert_target(spec, collection_id, eff_keys)
         if target is None:  # no card names this key yet → create (no conflict possible)
             return create_context_card(
                 spec,

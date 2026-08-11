@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+
+import { ENTITY_VIEWS_CSS, effective as effectiveIn } from "../../test/cssRules";
 
 /**
  * #690 P7 — the axis must stay put while a long project scrolls under it.
@@ -16,20 +16,8 @@ import { describe, expect, it } from "vitest";
  * What it cannot show is that the header holds — that needs layout. The
  * browser measurement is recorded in docs/plan-pm-gantt-urgency-and-axis.md §7.
  */
-const CSS = readFileSync(fileURLToPath(new URL("../../styles/entity-views.css", import.meta.url)), "utf8");
-
-/** The declarations of one rule, in source order — the cascade within a block
- * is last-wins, so order is the whole point. */
-function ruleBody(selector: string): string {
-  const at = CSS.indexOf(`${selector} {`);
-  expect(at, `${selector} is not in entity-views.css`).toBeGreaterThan(-1);
-  return CSS.slice(at, CSS.indexOf("\n}", at));
-}
-
-function effective(selector: string, property: string): string | undefined {
-  const hits = [...ruleBody(selector).matchAll(new RegExp(`^\\s*${property}\\s*:\\s*([^;]+);`, "gm"))];
-  return hits.at(-1)?.[1].trim();
-}
+const effective = (selector: string, property: string) =>
+  effectiveIn(ENTITY_VIEWS_CSS, selector, property);
 
 describe("the gantt axis sticks to the top of the chart", () => {
   it("is positioned sticky, after every other position declaration in its rule", () => {

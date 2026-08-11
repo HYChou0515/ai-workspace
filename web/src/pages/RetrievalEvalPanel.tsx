@@ -107,6 +107,8 @@ export function RetrievalEvalPanel() {
   const names = new Map((collections.data ?? []).map((c) => [c.resource_id, c.name]));
 
   const fire = useMutation({
+    // Renders its own error in the panel (`fire.isError` below).
+    meta: { silentError: true },
     mutationFn: async () => {
       const label = `run-${new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "")}`;
       const resp = await apiFetch("/eval-job", {

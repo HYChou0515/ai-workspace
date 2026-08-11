@@ -57,6 +57,8 @@ export function AppNewItem() {
   const me = useCurrentUser();
 
   const create = useMutation({
+    // Renders its own error under the form (`create.isError` below).
+    meta: { silentError: true },
     mutationFn: (values: Record<string, unknown>) => api.createAppItem(slug, values),
     onSuccess: (data) => {
       // Refresh the dashboard list (so the new item shows when you return) and

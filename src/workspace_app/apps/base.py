@@ -74,18 +74,27 @@ class WorkItemBase(Struct):
     fine here and worth knowing: nothing may depend on the order, and a UI that
     promised to preserve it would be promising something the store undoes.
 
-    This is the SOURCE OF TRUTH. The copy the tools actually read is a file in
-    the sandbox's infra area, rewritten once per turn — it cannot be the storage
-    because ``Sandbox.kill`` rmtrees the whole sandbox root (the idle reaper
-    fires it) and ``NfsArchive.persist``/``restore`` carry only the *workspace*,
-    so a sandbox-only file loses the user's keys the moment the item goes idle.
-    Deliberately NOT kept in the workspace either: ``read_file`` is
-    workspace-confined, and that confinement is the only thing standing between
-    the agent and a trivial read.
+    This is the SOURCE OF TRUTH, and the ONLY copy (#673). The values do not
+    land anywhere: they are named on the ``exec`` that dispatches a tool and
+    nowhere else (``tooling.registry._exec_tool``), read fresh per turn, so the
+    agent's own ``exec`` / ``python`` has nothing to inherit and no file to open.
+    An earlier design (#664) wrote them to a file in the sandbox's infra area;
+    it was removed because tool and agent share a uid, which made that file
+    readable by both or by neither.
 
-    Reading and writing ride the item's own ``permission`` (``write_meta``);
-    injection does not go through the UI, so a member who may not edit still
-    gets the variables in their turns."""
+    ACCESS IS ASYMMETRIC, and the asymmetry is the point to know:
+
+    * WRITING is ``write_meta`` — this field rides the item PATCH like every
+      other, so a Participant cannot set it (the FE withholds the panel to match,
+      `useItemAccess.canWriteMeta`).
+    * READING is ``read_meta`` — the values are a plain field on the item record
+      and are NOT redacted on the way out, so anyone who can open the item can
+      read them, and the panel shows them unmasked.
+    * USING is ``converse`` — injection does not go through the UI at all, so a
+      member who may not edit them still gets them in their turns.
+
+    Treat them as shared-with-the-item, not shared-with-the-owner: an API key put
+    here is visible to everyone the item is shared with."""
 
     external_refs: list[str] = field(default_factory=list)
     """Tier 1 (#700) — the external records this item has already absorbed, as

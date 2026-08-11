@@ -158,6 +158,30 @@ def test_manifest_carries_context_cards():
     assert cards[0]["body"] == "the 4th metal layer"
 
 
+def test_manifest_leaves_out_a_soft_deleted_card():
+    """Export is the fourth card-read path, and it has to obey the same `is_deleted`
+    fence as the other three (#701). Without it a deleted card rides the archive out
+    and is RESURRECTED by the import — live again in the target collection and quoted
+    to the model as authoritative, which is the exact outcome deleting it was meant to
+    prevent. A backup is not a place a deletion can be undone by accident."""
+    client = _client()
+    cid = client.post("/kb/collections", json={"name": "Glossary"}).json()["resource_id"]
+    for keys, body in ((["M4"], "kept"), (["M9"], "obsolete")):
+        client.post(
+            "/context-card/author",
+            json={"collection_id": cid, "keys": keys, "title": keys[0], "body": body},
+        )
+    rows = client.get("/context-card", params={"qb": f"QB['collection_id'] == '{cid}'"}).json()
+    gone = next(r["revision_info"]["resource_id"] for r in rows if r["data"]["body"] == "obsolete")
+    client.delete(f"/context-card/{gone}")  # specstar's soft delete
+
+    did = client.post(f"/kb/collections/{cid}/download/prepare").json()["download_id"]
+    zf = _zip(client.get(f"/kb/collections/{cid}/download/{did}").content)
+
+    cards = json.loads(zf.read(".kb-collection/manifest.json"))["context_cards"]
+    assert [c["body"] for c in cards] == ["kept"]
+
+
 def test_manifest_carries_card_links_as_paths_not_ids():
     """#518: a doc id encodes its collection, so exporting raw ids would guarantee a
     dangling link on import into a different collection. The manifest carries the

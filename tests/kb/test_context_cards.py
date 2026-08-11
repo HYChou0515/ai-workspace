@@ -3,10 +3,13 @@ from specstar.types import extract_trigram_index_field_infos
 from workspace_app.kb.context_cards import (
     build_vocab,
     card_context_block,
+    cards_with_ids_for_collections,
     derive_norm_keys,
+    find_cards_by_key,
     lookup,
     match,
     norm,
+    resolve_upsert_target,
     shown_card_count,
 )
 from workspace_app.resources import make_spec
@@ -90,6 +93,29 @@ def test_context_card_carries_reference_doc_ids():
         )
     )
     assert rm.get(rev.resource_id).data.reference_doc_ids == ["doc-a", "doc-b"]
+
+
+def test_a_soft_deleted_card_stops_answering_on_every_read_path():
+    """Deleting a card has to mean it stops speaking.
+
+    specstar's ``list_resources`` returns tombstones, so a soft-deleted card kept
+    answering on every path built on it: ``lookup`` returned it as a definition, the
+    pre-scan corpus injected it into an agent turn as authoritative, and
+    ``find_cards_by_key`` handed its id to an upsert — whose ``rm.update`` then raises
+    ``ResourceIsDeletedError`` at a caller with no reason to expect one.
+
+    The fence belongs in the queries themselves (``QB.is_deleted()``), not in each
+    caller: a Python-side filter is one more rule for every future reader to copy.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rid = _card(spec, cid, ["M4"], body="stale")
+    spec.get_resource_manager(ContextCard).delete(rid)
+
+    assert lookup(spec, cid, ["M4"])["M4"] == []
+    assert find_cards_by_key(spec, cid, "M4") == []
+    assert cards_with_ids_for_collections(spec, [cid]) == []
+    assert resolve_upsert_target(spec, cid, ["M4"]) is None
 
 
 def test_lookup_exact_hit_is_normalized():
@@ -233,6 +259,40 @@ def test_find_cards_by_key_is_membership_not_substring_and_scoped():
     assert find_cards_by_key(spec, a, "M4") == []  # "m4" is not the element "m40"
     _card(spec, a, ["M4"], body="in-a")
     assert find_cards_by_key(spec, b, "m4") == []  # other collection excluded
+
+
+def test_upsert_target_tries_every_key_not_just_the_first():
+    """ "多 key 時認哪一個" is one of the rules #701 consolidated, and it is a LOOP:
+    the FIRST key with a hit wins, so a later key still resolves when the earlier
+    ones name nothing.
+
+    Worth its own test because the consequence of narrowing it to the first key is
+    invisible — an upsert would simply create beside the card it should have
+    updated, which looks exactly like normal authoring until someone notices the
+    collection has two of everything. Every surface now shares this one loop, so a
+    silent change here is a silent change everywhere."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rid = _card(spec, cid, ["Metal 4"], body="four")
+
+    target = resolve_upsert_target(spec, cid, ["M4", "Metal 4"])  # first key names nothing
+
+    assert target is not None
+    assert target[0] == rid
+
+
+def test_upsert_target_reports_how_many_cards_share_the_matched_key():
+    """The count is what lets a review surface say "this term names several cards and
+    only the first is overwritten" instead of letting that pass silently."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _card(spec, cid, ["M4"], body="one")
+    _card(spec, cid, ["M4"], body="two")
+
+    target = resolve_upsert_target(spec, cid, ["M4"])
+
+    assert target is not None
+    assert target[2] == 2
 
 
 def test_a_long_card_body_is_truncated_rather_than_injected_whole():
