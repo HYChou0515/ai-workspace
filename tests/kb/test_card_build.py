@@ -1,0 +1,101 @@
+"""One card per term, its body derived from every statement the corpus makes.
+
+The failure this replaces: a body authored per document, then a winner picked
+between them. No document knows what the others say, so every facet but one is
+discarded — "蘋果是水果" and "蘋果是紅色" arrive from different documents and the
+second is dropped on the floor. Deriving the body from the accumulated
+statements makes the merge the normal case rather than a special one, and makes
+it re-runnable: another document arrives, the body is recomputed, nothing is
+overwritten because nothing was ever stored as the answer.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+
+from workspace_app.kb.cards.build import DocSource, build_cards
+from workspace_app.kb.llm import ILlm
+
+_SYNTHESIS_MARK = "STATEMENTS"
+
+
+class _Corpus(ILlm):
+    """Extracts per document by keyword; synthesises by joining what it is given."""
+
+    def __init__(self, per_document: dict[str, list[dict]]) -> None:
+        self._per_document = per_document
+        self.synthesis_prompts: list[str] = []
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        if _SYNTHESIS_MARK in prompt:
+            self.synthesis_prompts.append(prompt)
+            yield json.dumps({"title": "蘋果", "body": "蘋果是紅色的水果"}), False
+            return
+        for marker, cards in self._per_document.items():
+            if marker in prompt:
+                yield json.dumps({"cards": cards}, ensure_ascii=False), False
+                return
+        yield '{"cards": []}', False
+
+
+def _card(term: str, keys: list[str], claim: str, quote: str) -> dict:
+    return {"term": term, "keys": keys, "statements": [{"text": claim, "quote": quote}]}
+
+
+def test_two_documents_about_one_term_make_one_card_carrying_both_statements():
+    docs = [
+        DocSource(doc_id="a", text="蘋果是水果,常見於超市。"),
+        DocSource(doc_id="b", text="蘋果是紅色,也有青色品種。"),
+    ]
+    model = _Corpus(
+        {
+            "蘋果是水果": [_card("蘋果", ["蘋果", "Apple"], "是水果", "蘋果是水果")],
+            "蘋果是紅色": [_card("蘋果", ["蘋果"], "是紅色", "蘋果是紅色")],
+        }
+    )
+
+    (card,) = build_cards(model, docs)
+
+    assert sorted(s.text for s in card.statements) == ["是水果", "是紅色"]
+    assert card.body == "蘋果是紅色的水果"
+    assert card.sources == ["a", "b"], "the card must say which documents it rests on"
+
+
+def test_the_synthesiser_is_handed_every_statement_with_its_quote():
+    """It is asked to lose nothing and add nothing, and it can do neither unless
+    it holds the whole set. The quotes travel too: a claim summarised twice from
+    the same sentence should read as one thing, and only the source words show
+    that."""
+    docs = [
+        DocSource(doc_id="a", text="蘋果是水果,常見於超市。"),
+        DocSource(doc_id="b", text="蘋果是紅色,也有青色品種。"),
+    ]
+    model = _Corpus(
+        {
+            "蘋果是水果": [_card("蘋果", ["蘋果"], "是水果", "蘋果是水果")],
+            "蘋果是紅色": [_card("蘋果", ["蘋果"], "是紅色", "蘋果是紅色")],
+        }
+    )
+
+    build_cards(model, docs)
+
+    (asked,) = model.synthesis_prompts
+    assert "是水果" in asked and "是紅色" in asked
+    assert "蘋果是水果" in asked and "蘋果是紅色" in asked, "the quotes never reached it"
+
+
+def test_the_same_claim_from_two_documents_is_carried_once():
+    """A corpus repeats itself constantly — the same sentence appears in a spec
+    and in the deck that summarises it. Handing the synthesiser the claim twice
+    invites it to write the fact twice."""
+    docs = [
+        DocSource(doc_id="a", text="蘋果是水果。"),
+        DocSource(doc_id="b", text="蘋果是水果。"),
+    ]
+    model = _Corpus({"蘋果是水果": [_card("蘋果", ["蘋果"], "是水果", "蘋果是水果")]})
+
+    (card,) = build_cards(model, docs)
+
+    assert [s.text for s in card.statements] == ["是水果"]
+    assert card.sources == ["a", "b"], "both documents still count as evidence"

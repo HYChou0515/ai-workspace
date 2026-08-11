@@ -1,0 +1,138 @@
+"""All the documents → one card per term, its body derived from the evidence.
+
+Pure computation. This module holds no ``SpecStar`` and imports nothing that
+does, so "it cannot write to the store" is a property of the code rather than a
+promise about it — which is what makes it safe to run a candidate criterion
+against real documents.
+
+The body is DERIVED, never authored-then-chosen. That is the whole point: no
+document knows what the others say, so a definition written per document is one
+facet, and picking a winner between facets throws the rest away. Recomputing
+from the accumulated statements makes merging the normal case, and makes it
+re-runnable — a new document changes the body by being added to the evidence,
+not by overwriting an answer.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import msgspec
+
+from ..context_cards import derive_norm_keys, norm
+from ..llm import ILlm
+from .extract import Statement, TermCard, extract_cards
+
+_SYNTHESIS = (Path(__file__).parent / "prompts" / "card_synthesis.md").read_text(encoding="utf-8")
+
+
+class DocSource(msgspec.Struct, frozen=True):
+    """One document, as plain text. No store, no collection, no permissions."""
+
+    doc_id: str
+    text: str
+
+
+class Card(msgspec.Struct):
+    """One term, everything the corpus states about it, and the body that says so."""
+
+    keys: list[str]
+    title: str
+    body: str
+    statements: list[Statement]
+    sources: list[str]
+
+    @property
+    def norm_keys(self) -> list[str]:
+        return derive_norm_keys(self.keys)
+
+
+def built_in_synthesis_prompt() -> str:
+    """The prompt as shipped, so a person can start from it rather than a blank
+    file. Named apart from the ``synthesis_prompt`` PARAMETER below: same word,
+    opposite direction, and shadowing it inside ``build_cards`` would make the
+    default unreachable from the one place that needs it."""
+    return _SYNTHESIS
+
+
+def build_cards(
+    llm: ILlm,
+    docs: list[DocSource],
+    *,
+    extract_prompt: str | None = None,
+    synthesis_prompt: str | None = None,
+) -> list[Card]:
+    """Read every document, group what they said by term, write one body each."""
+    found: list[tuple[str, TermCard]] = [
+        (doc.doc_id, card)
+        for doc in docs
+        for card in extract_cards(llm, doc.text, prompt=extract_prompt)
+    ]
+    return [_synthesise(llm, group, prompt=synthesis_prompt) for group in _group(found)]
+
+
+def _group(found: list[tuple[str, TermCard]]) -> list[list[tuple[str, TermCard]]]:
+    """Cards that share ANY normalised key describe the same term.
+
+    Normalised the way `lookup_glossary` normalises, because two cards a reader
+    cannot tell apart at lookup time are the same card as far as the reader is
+    concerned.
+    """
+    groups: list[list[tuple[str, TermCard]]] = []
+    keys: list[set[str]] = []
+    for doc_id, card in found:
+        mine = set(derive_norm_keys(card.keys))
+        hit = next((i for i, ks in enumerate(keys) if ks & mine), None)
+        if hit is None:
+            groups.append([(doc_id, card)])
+            keys.append(mine)
+        else:
+            groups[hit].append((doc_id, card))
+            keys[hit] |= mine
+    return groups
+
+
+def _synthesise(llm: ILlm, group: list[tuple[str, TermCard]], *, prompt: str | None) -> Card:
+    statements: list[Statement] = []
+    seen: set[str] = set()
+    for _, card in group:
+        for statement in card.statements:
+            if statement.text not in seen:
+                seen.add(statement.text)
+                statements.append(statement)
+    keys: list[str] = []
+    seen_keys: set[str] = set()
+    for _, card in group:
+        for key in card.keys:
+            if (n := norm(key)) and n not in seen_keys:
+                seen_keys.add(n)
+                keys.append(key)
+    term = group[0][1].term
+    reply = llm.collect(
+        (prompt or _SYNTHESIS)
+        .replace("{term}", term)
+        .replace("{statements}", "\n".join(f"- {s.text}  「{s.quote}」" for s in statements))
+    )
+    title, body = _read(reply)
+    return Card(
+        keys=keys,
+        title=title or term,
+        body=body,
+        statements=statements,
+        # Which documents this rests on, so a reader can go and check.
+        sources=sorted({doc_id for doc_id, _ in group}),
+    )
+
+
+def _read(reply: str) -> tuple[str, str]:
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end < start:
+        return "", ""
+    try:
+        data = json.loads(reply[start : end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return "", ""
+    if not isinstance(data, dict):
+        return "", ""
+    return str(data.get("title", "")).strip(), str(data.get("body", "")).strip()
