@@ -189,10 +189,16 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
 | 怎麼宣告 | `PACKAGES` + `agent.tools` | `agent.external_tools`（名字 → artifact 網址）+ `agent.tools` |
 | 換版本 | 改 repo → 重新發版 | **作者 push 就好**，我們什麼都不用做 |
 | 新增／移除 | 改 repo → 重新發版 | 改 `app.json` → 重新發版 |
+| 挑部分 command | `agent.tools` 的 colon 語法 | **同一套** colon 語法，一樣寫在 `agent.tools` |
 | 執行時在哪 | `/opt/tools/builtin/<name>` | `/opt/tools/ext/<sha>`，掛成 `/.tools/<本地名>` |
+| 誰核准 | 進 repo 這件事本身 | 一張平台簽的憑證，作者 build 前就要有 |
+
+兩條路的 command 選取是同一段程式碼：一個 turn 把開機掃到的第一方套件、和這次 resolve 到的
+第三方套件併成同一個 list 才做選取，所以 `"pkg"` 收整包、`"pkg:cmd"` 只收一個，兩邊行為一致。
 
 第三方那條路的作者面文件是 [寫一支工具（外部作者）](tool-authoring.md)；
-我們這邊要做的事在 [部署與客製化](deployment.md) 的第三方工具一節。
+我們這邊要做的事在 [部署與客製化](deployment.md) 的 §15：一次性設定看 §15.1，
+**把一支工具放進 `app.json`（含只給部分 command）看 §15.2**，發憑證看 §15.6。
 
 **兩條路都到不了「使用者自建」**——見下一節。
 

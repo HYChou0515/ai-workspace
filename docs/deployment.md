@@ -581,24 +581,89 @@ RCA 的 system prompt 是純 markdown，存在
 **每支工具要做的**是另一回事，而且只有兩件：發一張憑證（§15.6），以及把名字和網址寫進
 `app.json` 再發版（§15.2）。
 
-### 15.2 上架一支新工具### 15.2 上架一支新工具
+### 15.2 上架一支新工具
+
+先發憑證（§15.6）再驗再登記。**憑證是作者 build 當下凍進 manifest 的**（`manifest.grant`），
+不是你事後掛上去的——所以一份在拿到憑證**之前**就做好的 artifact，不管網址多正確都會被拒絕，
+作者必須提交 `tool-certificate.token` 之後**重跑一次 CI**。順序錯了要重做的是他們那一趟。
+
+#### 第 1 步：驗
 
 ```sh
-# 1. 先驗（不會執行對方的程式碼，只做抓取 + 閘門 + 結構比對）
-TOOL_BUILDER_ID=<這個部署的值> TOOL_ARTIFACT_TOKEN=<你的 token> \
+TOOL_BUILDER_ID=<這個部署的值> \
+TOOL_ARTIFACT_TOKEN=<你的 token> \
+TOOL_ARTIFACT_HOSTS=gitlab.example \
   uv run python -m workspace_app.tooling.verify \
     'https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build-tool' \
     --name wafer-history
-
-# 2. 過了就登記進 app.json，然後發版
-#    "agent": { "tools": [..., "wafer-history"],
-#               "external_tools": { "wafer-history": "<同一個網址>" } }
 ```
 
-**名字是我們定的**（`external_tools` 的 key），而且它就是憑證上的 `tool`。作者的 command
-叫什麼完全不參與，所以兩個作者都叫 `data-fetch` 也不會互相蓋掉——各發一張憑證、各取一個名字。
+不會執行對方的程式碼，只做抓取 + 閘門 + 結構比對。跑的是 host 每次 resolve 用的**同一組**
+`check_compatible` + `admit`，所以 exit 0 就代表正式環境收得下。過了會印：
 
-先發憑證（§15.6）再登記：沒有憑證的 artifact，`verify` 和 host 都會拒絕。
+```
+accepted: wafer-history 1.4.2 (trend, compare) sha256=… , size granted by hychou
+```
+
+**括號裡那串是這支工具的 command 名單**，第 2 步會用到——那是唯一的來源，見下面「只給部分
+command」。
+
+`TOOL_ARTIFACT_HOSTS` 要一起帶：沒帶就不送 token，private 專案回的是 **404 而不是 403**，
+和「網址打錯」長得一模一樣（§15.8）。
+
+#### 第 2 步：寫進 `app.json` —— **兩個欄位都要**
+
+```json
+"agent": {
+  "tools": ["…", "wafer-history"],
+  "external_tools": { "wafer-history": "<第 1 步驗過的同一個網址>" }
+}
+```
+
+兩個欄位回答**不同的問題**，而且少寫哪一半都**不會有任何錯誤訊息**：
+
+| 欄位 | 回答什麼 | 只寫這個會怎樣 |
+|---|---|---|
+| `external_tools` | bytes 從哪來 | 這支工具根本不會被 resolve；`tools` 裡那個名字對不到任何套件，靜默跳過 |
+| `tools` | 誰可以用它 | host 照抓、照驗憑證、照解壓掛載，但選 command 的那一步選不到它 → **模型一個 command 都拿不到，而且哪裡都不會抱怨** |
+
+`external_tools` 的 key **不可以含冒號**——那個字串同時是憑證比對用的 `tool`，也是 sandbox 裡
+`../.tools/<名字>` 的路徑。
+
+#### 只給部分 command
+
+和第一方套件同一套 colon 語法，而且寫在 **`tools`**（`external_tools` 沒有放它的位置）：
+
+```json
+"agent": {
+  "tools": ["wafer-history:trend"],
+  "external_tools": { "wafer-history": "<網址>" }
+}
+```
+
+第一方和第三方走的是**同一條**選取邏輯——一個 turn 會把開機掃到的套件和這次 resolve 到的
+第三方套件併成同一個 list 才交出去，所以它根本不分內外。
+
+再收窄還有兩層，用的是同一組字串：profile 的 `_profile.json`，以及 per-item 的工具挑選。
+
+> ⚠️ **command 名字打錯是靜默跳過**——只留一行 debug log，不會啟動失敗、UI 也不會少一塊，
+> 症狀就只是「那個工具沒出現」。第一方至少還能翻 `.workspace-tools/<名字>/commands.json`；
+> 第三方**沒有本機檔案可翻**，名單只有第 1 步 `verify` 輸出括號裡那一串。別用猜的。
+
+> ⚠️ 挑 command 是**我們這端**做的，host 不知道你只要其中兩個：bundle 一樣整包下載、整包掛載。
+> colon 語法省的是模型的 context，不是磁碟。
+
+#### 名字要一致的三個地方
+
+**名字是我們定的**，作者取什麼完全不參與（所以兩個作者都叫 `data-fetch` 也不會互相蓋掉，
+各發一張憑證、各取一個名字）。要一致的是這三個，其他都不必：
+
+1. 憑證的 `--tool`（§15.6）
+2. `app.json` 裡 `external_tools` 的 key
+3. `app.json` 裡 `tools` 的那一項（bare，或 `<key>:cmd` 的前半）
+
+作者 `pyproject` 的 `name`、`[project.scripts]` 的進入點名稱**刻意不要求**跟上面一致——
+體積檢查和簽發者查詢都是不帶名字做的，綁了名字反而會出現「在一道閘門過、在下一道被拒」。
 
 ### 15.3 換版本：不用做任何事
 
