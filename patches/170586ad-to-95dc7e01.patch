@@ -1,0 +1,703 @@
+diff --git a/docs/deployment.md b/docs/deployment.md
+index 6f0e3c1d..fc8834dc 100644
+--- a/docs/deployment.md
++++ b/docs/deployment.md
+@@ -581,24 +581,89 @@ RCA 的 system prompt 是純 markdown，存在
+ **每支工具要做的**是另一回事，而且只有兩件：發一張憑證（§15.6），以及把名字和網址寫進
+ `app.json` 再發版（§15.2）。
+ 
+-### 15.2 上架一支新工具### 15.2 上架一支新工具
++### 15.2 上架一支新工具
++
++先發憑證（§15.6）再驗再登記。**憑證是作者 build 當下凍進 manifest 的**（`manifest.grant`），
++不是你事後掛上去的——所以一份在拿到憑證**之前**就做好的 artifact，不管網址多正確都會被拒絕，
++作者必須提交 `tool-certificate.token` 之後**重跑一次 CI**。順序錯了要重做的是他們那一趟。
++
++#### 第 1 步：驗
+ 
+ ```sh
+-# 1. 先驗（不會執行對方的程式碼，只做抓取 + 閘門 + 結構比對）
+-TOOL_BUILDER_ID=<這個部署的值> TOOL_ARTIFACT_TOKEN=<你的 token> \
++TOOL_BUILDER_ID=<這個部署的值> \
++TOOL_ARTIFACT_TOKEN=<你的 token> \
++TOOL_ARTIFACT_HOSTS=gitlab.example \
+   uv run python -m workspace_app.tooling.verify \
+     'https://gitlab.example/api/v4/projects/7/jobs/artifacts/main/raw/dist/tool.manifest.json?job=build-tool' \
+     --name wafer-history
++```
++
++不會執行對方的程式碼，只做抓取 + 閘門 + 結構比對。跑的是 host 每次 resolve 用的**同一組**
++`check_compatible` + `admit`，所以 exit 0 就代表正式環境收得下。過了會印：
++
++```
++accepted: wafer-history 1.4.2 (trend, compare) sha256=… , size granted by hychou
++```
++
++**括號裡那串是這支工具的 command 名單**，第 2 步會用到——那是唯一的來源，見下面「只給部分
++command」。
++
++`TOOL_ARTIFACT_HOSTS` 要一起帶：沒帶就不送 token，private 專案回的是 **404 而不是 403**，
++和「網址打錯」長得一模一樣（§15.8）。
++
++#### 第 2 步：寫進 `app.json` —— **兩個欄位都要**
++
++```json
++"agent": {
++  "tools": ["…", "wafer-history"],
++  "external_tools": { "wafer-history": "<第 1 步驗過的同一個網址>" }
++}
++```
+ 
+-# 2. 過了就登記進 app.json，然後發版
+-#    "agent": { "tools": [..., "wafer-history"],
+-#               "external_tools": { "wafer-history": "<同一個網址>" } }
++兩個欄位回答**不同的問題**，而且少寫哪一半都**不會有任何錯誤訊息**：
++
++| 欄位 | 回答什麼 | 只寫這個會怎樣 |
++|---|---|---|
++| `external_tools` | bytes 從哪來 | 這支工具根本不會被 resolve；`tools` 裡那個名字對不到任何套件，靜默跳過 |
++| `tools` | 誰可以用它 | host 照抓、照驗憑證、照解壓掛載，但選 command 的那一步選不到它 → **模型一個 command 都拿不到，而且哪裡都不會抱怨** |
++
++`external_tools` 的 key **不可以含冒號**——那個字串同時是憑證比對用的 `tool`，也是 sandbox 裡
++`../.tools/<名字>` 的路徑。
++
++#### 只給部分 command
++
++和第一方套件同一套 colon 語法，而且寫在 **`tools`**（`external_tools` 沒有放它的位置）：
++
++```json
++"agent": {
++  "tools": ["wafer-history:trend"],
++  "external_tools": { "wafer-history": "<網址>" }
++}
+ ```
+ 
+-**名字是我們定的**（`external_tools` 的 key），而且它就是憑證上的 `tool`。作者的 command
+-叫什麼完全不參與，所以兩個作者都叫 `data-fetch` 也不會互相蓋掉——各發一張憑證、各取一個名字。
++第一方和第三方走的是**同一條**選取邏輯——一個 turn 會把開機掃到的套件和這次 resolve 到的
++第三方套件併成同一個 list 才交出去，所以它根本不分內外。
++
++再收窄還有兩層，用的是同一組字串：profile 的 `_profile.json`，以及 per-item 的工具挑選。
++
++> ⚠️ **command 名字打錯是靜默跳過**——只留一行 debug log，不會啟動失敗、UI 也不會少一塊，
++> 症狀就只是「那個工具沒出現」。第一方至少還能翻 `.workspace-tools/<名字>/commands.json`；
++> 第三方**沒有本機檔案可翻**，名單只有第 1 步 `verify` 輸出括號裡那一串。別用猜的。
++
++> ⚠️ 挑 command 是**我們這端**做的，host 不知道你只要其中兩個：bundle 一樣整包下載、整包掛載。
++> colon 語法省的是模型的 context，不是磁碟。
++
++#### 名字要一致的三個地方
++
++**名字是我們定的**，作者取什麼完全不參與（所以兩個作者都叫 `data-fetch` 也不會互相蓋掉，
++各發一張憑證、各取一個名字）。要一致的是這三個，其他都不必：
++
++1. 憑證的 `--tool`（§15.6）
++2. `app.json` 裡 `external_tools` 的 key
++3. `app.json` 裡 `tools` 的那一項（bare，或 `<key>:cmd` 的前半）
+ 
+-先發憑證（§15.6）再登記：沒有憑證的 artifact，`verify` 和 host 都會拒絕。
++作者 `pyproject` 的 `name`、`[project.scripts]` 的進入點名稱**刻意不要求**跟上面一致——
++體積檢查和簽發者查詢都是不帶名字做的，綁了名字反而會出現「在一道閘門過、在下一道被拒」。
+ 
+ ### 15.3 換版本：不用做任何事
+ 
+diff --git a/docs/extending-the-platform.md b/docs/extending-the-platform.md
+index 3edd7ea1..74ab6d98 100644
+--- a/docs/extending-the-platform.md
++++ b/docs/extending-the-platform.md
+@@ -189,10 +189,16 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
+ | 怎麼宣告 | `PACKAGES` + `agent.tools` | `agent.external_tools`（名字 → artifact 網址）+ `agent.tools` |
+ | 換版本 | 改 repo → 重新發版 | **作者 push 就好**，我們什麼都不用做 |
+ | 新增／移除 | 改 repo → 重新發版 | 改 `app.json` → 重新發版 |
++| 挑部分 command | `agent.tools` 的 colon 語法 | **同一套** colon 語法，一樣寫在 `agent.tools` |
+ | 執行時在哪 | `/opt/tools/builtin/<name>` | `/opt/tools/ext/<sha>`，掛成 `/.tools/<本地名>` |
++| 誰核准 | 進 repo 這件事本身 | 一張平台簽的憑證，作者 build 前就要有 |
++
++兩條路的 command 選取是同一段程式碼：一個 turn 把開機掃到的第一方套件、和這次 resolve 到的
++第三方套件併成同一個 list 才做選取，所以 `"pkg"` 收整包、`"pkg:cmd"` 只收一個，兩邊行為一致。
+ 
+ 第三方那條路的作者面文件是 [寫一支工具（外部作者）](tool-authoring.md)；
+-我們這邊要做的事在 [部署與客製化](deployment.md) 的第三方工具一節。
++我們這邊要做的事在 [部署與客製化](deployment.md) 的 §15：一次性設定看 §15.1，
++**把一支工具放進 `app.json`（含只給部分 command）看 §15.2**，發憑證看 §15.6。
+ 
+ **兩條路都到不了「使用者自建」**——見下一節。
+ 
+diff --git a/scripts/check_agent_relative_paths.py b/scripts/check_agent_relative_paths.py
+index c42ebc6e..10bedb1c 100644
+--- a/scripts/check_agent_relative_paths.py
++++ b/scripts/check_agent_relative_paths.py
+@@ -122,8 +122,8 @@ async def _run_once(model: str, base_url: str, root: Path, verbose: bool = False
+     # Seed while COLD so the wake restores it — the same path a real upload takes.
+     await files.write("ws-live", _DATA_PATH, _CSV.encode())
+ 
+-    async def wake(on_progress=None) -> SandboxHandle:
+-        h = await sandbox.create(SandboxSpec())
++    async def wake(on_progress=None, tools=None) -> SandboxHandle:
++        h = await sandbox.create(SandboxSpec(tools=tools))
+         await sync.restore("ws-live", h, on_progress=on_progress)
+         holder["ws-live"] = h
+         return h
+diff --git a/src/workspace_app/agent/context.py b/src/workspace_app/agent/context.py
+index e32e99e0..cfd47821 100644
+--- a/src/workspace_app/agent/context.py
++++ b/src/workspace_app/agent/context.py
+@@ -126,8 +126,18 @@ class AgentToolContext:
+     # #492 P11: the wake hook receives the turn's restore-progress sink so a cold
+     # wake's snapshot restore can stream (done, total) back to the turn. Callers
+     # that don't care (tests) accept it and ignore it.
++    #
++    # #674: and this turn's third-party bundles, `{name: sha}`, because the hook
++    # owner (the registry) builds the spec from the ITEM and cannot know what
++    # this turn resolved. It is a parameter rather than something the hook reads
++    # off the ctx so that the two create paths below cannot drift: whichever one
++    # runs, the bundles mounted are `sandbox_spec.tools`.
+     ensure_sandbox_via: (
+-        Callable[[Callable[[int, int], None] | None], Awaitable[SandboxHandle]] | None
++        Callable[
++            [Callable[[int, int], None] | None, dict[str, str] | None],
++            Awaitable[SandboxHandle],
++        ]
++        | None
+     ) = None
+     # The investigation's attached AgentConfig (model + prompt) for this
+     # turn; when set, LitellmAgentRunner uses it instead of its default.
+@@ -471,7 +481,13 @@ class AgentToolContext:
+             if self.ensure_sandbox_via is not None:
+                 # #492 P11: hand the wake hook the restore-progress sink so a slow
+                 # cold-wake restore streams "還原中 N/M" to the turn.
+-                self.handle = await self.ensure_sandbox_via(self.on_restore_progress)
++                # #674: and this turn's bundles — the same ones whose schemas the
++                # model was handed a moment ago. Reading them off `sandbox_spec`
++                # (rather than passing them in separately) is what keeps this
++                # branch and the one below mounting the same thing.
++                self.handle = await self.ensure_sandbox_via(
++                    self.on_restore_progress, self.sandbox_spec.tools
++                )
+             else:
+                 self.handle = await self.sandbox.create(self.sandbox_spec)
+             # Eagerly install the allowed packages into the fresh sandbox
+diff --git a/src/workspace_app/api/registry.py b/src/workspace_app/api/registry.py
+index 6819e449..5d96ad53 100644
+--- a/src/workspace_app/api/registry.py
++++ b/src/workspace_app/api/registry.py
+@@ -14,7 +14,7 @@ import asyncio
+ import contextlib
+ import logging
+ from collections.abc import Awaitable, Callable
+-from dataclasses import dataclass, field
++from dataclasses import dataclass, field, replace
+ from datetime import UTC, datetime, timedelta
+ from typing import Protocol
+ 
+@@ -52,6 +52,11 @@ def _utcnow() -> datetime:
+ class InvestigationSession:
+     investigation_id: str
+     handle: SandboxHandle | None = None
++    # #674: the third-party bundles `handle` was CREATED with, `{name: sha}`.
++    # `None` means UNKNOWN — this pod converged on a sandbox another pod built
++    # (#366), so it never saw what went in. Known-empty (`{}`) and unknown are
++    # deliberately different: only the first can say "that tool is not in here".
++    tools: dict[str, str] | None = None
+     last_active: datetime = field(default_factory=_utcnow)
+     # Serializes sandbox creation (ensure_handle) for this investigation. Turn
+     # lifecycle (the in-flight agent turn) lives in ChatTurnEngine, not here.
+@@ -183,7 +188,11 @@ class InvestigationRegistry:
+                 "registry: rebuild io handle for item %s (file op hit sandbox-not-found)",
+                 investigation_id,
+             )
+-            session.handle = await self._acquire(investigation_id)
++            # #674: no turn behind a file op, so nothing to mount — and the
++            # session records that as KNOWN-empty, not unknown. A turn that
++            # later finds its tool missing from here then says so, instead of
++            # handing the model a launcher this sandbox never received.
++            session.handle, session.tools = await self._acquire(investigation_id)
+             await self._bump(investigation_id)
+             session.last_active = _utcnow()
+         return session.handle
+@@ -192,6 +201,7 @@ class InvestigationRegistry:
+         self,
+         session: InvestigationSession,
+         *,
++        tools: dict[str, str] | None = None,
+         on_progress: Callable[[int, int], None] | None = None,
+     ) -> SandboxHandle:
+         # Lock so concurrent callers see a single Sandbox.create — without
+@@ -216,8 +226,8 @@ class InvestigationRegistry:
+                     "registry: ensure_handle acquiring sandbox for item %s (no live handle cached)",
+                     session.investigation_id,
+                 )
+-                session.handle = await self._acquire(
+-                    session.investigation_id, on_progress=on_progress
++                session.handle, session.tools = await self._acquire(
++                    session.investigation_id, tools=tools, on_progress=on_progress
+                 )
+             # Refresh the GLOBAL heartbeat on every wake/use (not just the first)
+             # so another pod's idle reaper sees this item as live (#345).
+@@ -262,10 +272,20 @@ class InvestigationRegistry:
+         return True
+ 
+     async def _acquire(
+-        self, item: str, *, on_progress: Callable[[int, int], None] | None = None
+-    ) -> SandboxHandle:
++        self,
++        item: str,
++        *,
++        tools: dict[str, str] | None = None,
++        on_progress: Callable[[int, int], None] | None = None,
++    ) -> tuple[SandboxHandle, dict[str, str] | None]:
+         """Materialise (or converge on) the item's single live sandbox handle.
+ 
++        Returns the handle AND the third-party bundles it was created with —
++        `None` when we converged on someone else's sandbox and so cannot know
++        (#674). The caller keeps that on the session because a sandbox mounts
++        its bundles once, at create, and a later turn has to be able to tell
++        "not in there" from "no idea".
++
+         #366: when an address store is wired (http backend), the handle is SHARED
+         across pods — so first converge on an already-claimed address; else
+         create + restore and CLAIM the shared slot (published AFTER restore), and
+@@ -287,7 +307,9 @@ class InvestigationRegistry:
+                         item,
+                         existing.id,
+                     )
+-                    return existing  # a live shared sandbox → converge on ONE
++                    # A live shared sandbox → converge on ONE. Another pod built
++                    # it, so what it mounted is not ours to state.
++                    return existing, None
+                 logger.info(
+                     "registry: acquire item %s -> address %s dead, rebuilding",
+                     item,
+@@ -319,7 +341,14 @@ class InvestigationRegistry:
+                     item,
+                 )
+                 raise
+-        handle = await self.sandbox.create(self.spec_for(item), sandbox_id=item)
++        # #674: the item's own ceilings, plus THIS turn's third-party bundles.
++        # `spec_for` answers a question about the item and is asked on a cold
++        # acquire that may have no turn behind it at all (a file-op wake, a
++        # rebuild after the address died), so the bundles cannot come from
++        # there — they are what the turn resolved, and they travel with it.
++        handle = await self.sandbox.create(
++            replace(self.spec_for(item), tools=tools), sandbox_id=item
++        )
+         logger.info(
+             "registry: created sandbox handle %s for item %s (cold=%s)",
+             handle.id,
+@@ -354,13 +383,16 @@ class InvestigationRegistry:
+                     handle.id,
+                 )
+                 await self.sandbox.kill(handle)  # lost the race — drop our orphan
+-                return winner
++                return winner, None  # the winner is someone else's build
+             logger.info(
+                 "registry: won address CAS for item %s -> published handle %s",
+                 item,
+                 handle.id,
+             )
+-        return handle
++        # We built it, so we can state what went in — `{}` included, which is
++        # what lets a later turn say "that tool is not in here" rather than
++        # offering the model a launcher that does not exist.
++        return handle, dict(tools or {})
+ 
+     async def has_live_sandbox(self, investigation_id: str) -> bool:
+         """Whether this item is ALREADY holding a live sandbox.
+diff --git a/src/workspace_app/api/turn_context.py b/src/workspace_app/api/turn_context.py
+index 93f037e0..a2027148 100644
+--- a/src/workspace_app/api/turn_context.py
++++ b/src/workspace_app/api/turn_context.py
+@@ -37,7 +37,7 @@ from ..entity.catalog import discover_catalog
+ from ..sandbox.protocol import Sandbox, SandboxSpec
+ from ..sync import SandboxSync
+ from ..tokens import CallLane
+-from ..tooling.external import ExternalTools, resolve_external_tools
++from ..tooling.external import ExternalTools, confine_to_mounted, resolve_external_tools
+ from .turns import history_items
+ 
+ if TYPE_CHECKING:
+@@ -278,15 +278,22 @@ class TurnContextBuilder:
+             return 0
+         return estimate_tokens(payload)
+ 
+-    async def _external_tools(self, item_id: str) -> ExternalTools:
++    async def _external_tools(self, item_id: str, session: Any) -> ExternalTools:
+         """#674: resolve this app's third-party tools, once, at the top of a turn.
+ 
+         Before the sandbox exists, because the answer decides which tools the
+         model is offered — and the sha it returns is what the sandbox is later
+-        created with, so the two can never describe different bundles."""
++        created with, so the two can never describe different bundles.
++
++        When one ALREADY exists, though, its bundles were fixed when it was
++        created and the resolve cannot change them. So the mounted set becomes
++        the ceiling: a tool registered since, or released since, is reported as
++        unavailable with a reason rather than handed over as a launcher that
++        isn't there."""
+         slug = self._locator.slug_of(item_id)
+         declared = load_app_manifest(slug).agent.external_tools if slug else {}
+-        return await resolve_external_tools(self._sandbox, declared)
++        external = await resolve_external_tools(self._sandbox, declared)
++        return confine_to_mounted(external, live=session.handle is not None, mounted=session.tools)
+ 
+     def _common(
+         self,
+@@ -351,8 +358,10 @@ class TurnContextBuilder:
+             # (so idle-kill/close_all can find it) and the restore-after-create
+             # hook fires. #492 P11: forward the turn's restore-progress sink so a
+             # cold-wake restore streams "還原中 N/M" into this turn's stream.
+-            ensure_sandbox_via=lambda on_progress: self._registry.ensure_handle(
+-                session, on_progress=on_progress
++            # #674: and the bundles, which arrive from `sandbox_spec` above — the
++            # registry composes the item's spec and has no turn to ask.
++            ensure_sandbox_via=lambda on_progress, tools: self._registry.ensure_handle(
++                session, tools=tools, on_progress=on_progress
+             ),
+             agent_config=agent_config,
+             run_subagent=run_subagent,
+@@ -426,7 +435,7 @@ class TurnContextBuilder:
+         lane so a new caller that forgets cannot spend a person's quota."""
+         session = await self._registry.session(item_id)
+         logger.debug("turn-context: build chat turn for %s", item_id)
+-        external = await self._external_tools(item_id)
++        external = await self._external_tools(item_id, session)
+         return AgentToolContext(
+             **self._common(
+                 item_id,
+@@ -499,7 +508,7 @@ class TurnContextBuilder:
+         for a human/schedule run (a first-level write)."""
+         session = await self._registry.session(item_id)
+         logger.debug("turn-context: build workflow turn for %s", item_id)
+-        external = await self._external_tools(item_id)
++        external = await self._external_tools(item_id, session)
+         return AgentToolContext(
+             **self._common(
+                 item_id,
+diff --git a/src/workspace_app/tooling/external.py b/src/workspace_app/tooling/external.py
+index 4b1d5dad..70d718a8 100644
+--- a/src/workspace_app/tooling/external.py
++++ b/src/workspace_app/tooling/external.py
+@@ -97,6 +97,59 @@ async def resolve_external_tools(sandbox: object, declared: Mapping[str, str]) -
+     )
+ 
+ 
++def confine_to_mounted(
++    external: ExternalTools,
++    *,
++    live: bool,
++    mounted: dict[str, str] | None,
++) -> ExternalTools:
++    """What this turn may offer, given a sandbox that already exists.
++
++    A sandbox mounts its bundles when it is CREATED and never again, so a tool
++    that was not mounted then has no launcher inside it now. Offering it anyway
++    is what `../.tools/<name>/launch: No such file or directory` is — a message
++    that names neither the tool nor the reason, and reaches the model as if the
++    tool itself were broken. It is refused rather than dropped, because a
++    refusal carries a sentence the agent relays and a person can act on (#480);
++    an absence carries nothing.
++
++    ONLY absence. A tool mounted at a DIFFERENT sha is left alone deliberately:
++    an author releasing mid-session is the documented no-op path ("they push,
++    the next sandbox gets it"), and taking a working tool away for the rest of
++    a live session would make routine releases hurt the people using them. The
++    schemas can then be a release ahead of the bundle for one session's life —
++    the residual of pinning at create, not something this function should
++    convert into an outage.
++
++    `mounted=None` means UNKNOWN, not empty: another pod created this sandbox
++    (#366) and this one never learned what went into it. Guessing "empty" there
++    would take working tools away from every multi-pod deployment, so the
++    unknown case is left exactly as resolved."""
++    if not live or mounted is None or not external.shas:
++        return external
++    absent = [name for name in external.shas if name not in mounted]
++    if not absent:
++        return external
++    for name in absent:
++        logger.info("tool %s resolved but not mounted in this item's live sandbox", name)
++    return ExternalTools(
++        packages=tuple(p for p in external.packages if p.name not in absent),
++        shas={n: s for n, s in external.shas.items() if n not in absent},
++        refused={
++            **external.refused,
++            **{
++                name: (
++                    "this workspace was started before this tool was available, so "
++                    "it is not installed here. It works in a new workspace, or in "
++                    "this one once it has been idle long enough to be recycled."
++                )
++                for name in absent
++            },
++        },
++        stale=tuple(n for n in external.stale if n not in absent),
++    )
++
++
+ async def prewarm_external_tools(
+     sandbox: object,
+     declared_by_app: Mapping[str, Mapping[str, str]],
+diff --git a/tests/agent/conftest.py b/tests/agent/conftest.py
+index 6a4d169b..08387d9d 100644
+--- a/tests/agent/conftest.py
++++ b/tests/agent/conftest.py
+@@ -26,8 +26,8 @@ def ctx() -> RunContextWrapper[AgentToolContext]:
+ 
+     files = WorkspaceFiles(filestore, sandbox, _resolve)
+ 
+-    async def wake(on_progress=None) -> SandboxHandle:
+-        h = await sandbox.create(SandboxSpec())
++    async def wake(on_progress=None, tools=None) -> SandboxHandle:
++        h = await sandbox.create(SandboxSpec(tools=tools))
+         await sync.restore("ws-test", h, on_progress=on_progress)
+         holder["ws-test"] = h
+         return h
+diff --git a/tests/agent/test_make_deck_tool.py b/tests/agent/test_make_deck_tool.py
+index ce0e3277..cfca5d61 100644
+--- a/tests/agent/test_make_deck_tool.py
++++ b/tests/agent/test_make_deck_tool.py
+@@ -163,8 +163,8 @@ def _make_ctx(deck_vlm, sandbox=None, sink=None):
+ 
+     files = WorkspaceFiles(filestore, sandbox, _resolve)
+ 
+-    async def wake(on_progress=None) -> SandboxHandle:
+-        h = await sandbox.create(SandboxSpec())
++    async def wake(on_progress=None, tools=None) -> SandboxHandle:
++        h = await sandbox.create(SandboxSpec(tools=tools))
+         await sync.restore("ws-test", h, on_progress=on_progress)
+         holder["ws-test"] = h
+         return h
+diff --git a/tests/agent/test_tools.py b/tests/agent/test_tools.py
+index d12d640f..314ed29d 100644
+--- a/tests/agent/test_tools.py
++++ b/tests/agent/test_tools.py
+@@ -151,9 +151,9 @@ async def test_ensure_sandbox_hands_restore_progress_sink_to_the_wake_hook_492()
+     sandbox = MockSandbox()
+     received: list[object] = []
+ 
+-    async def wake(on_progress=None):
++    async def wake(on_progress=None, tools=None):
+         received.append(on_progress)
+-        return await sandbox.create(SandboxSpec())
++        return await sandbox.create(SandboxSpec(tools=tools))
+ 
+     def sink(done: int, total: int) -> None:  # a turn's restore-progress sink
+         return None
+@@ -186,8 +186,8 @@ async def test_no_drift_between_file_tools_and_exec():
+ 
+     files = WorkspaceFiles(fs, sandbox, _resolve)
+ 
+-    async def wake(on_progress=None) -> SandboxHandle:  # mimic registry.ensure_handle
+-        h = await sandbox.create(SandboxSpec())
++    async def wake(on_progress=None, tools=None) -> SandboxHandle:  # mimic ensure_handle
++        h = await sandbox.create(SandboxSpec(tools=tools))
+         for p in await fs.ls("inv-1"):
+             await sandbox.upload(h, await fs.read("inv-1", p), p)
+         handle["inv-1"] = h
+@@ -733,8 +733,8 @@ async def test_listed_path_works_verbatim_in_a_real_shell(tmp_path):
+ 
+     files = WorkspaceFiles(MemoryFileStore(), sandbox, _resolve)
+ 
+-    async def wake(on_progress=None) -> SandboxHandle:
+-        h = await sandbox.create(SandboxSpec())
++    async def wake(on_progress=None, tools=None) -> SandboxHandle:
++        h = await sandbox.create(SandboxSpec(tools=tools))
+         holder["inv-1"] = h
+         return h
+ 
+diff --git a/tests/api/test_turn_external_tools.py b/tests/api/test_turn_external_tools.py
+index 240738a2..d2b81ec6 100644
+--- a/tests/api/test_turn_external_tools.py
++++ b/tests/api/test_turn_external_tools.py
+@@ -10,7 +10,19 @@ from __future__ import annotations
+ 
+ from typing import Any
+ 
++from workspace_app.agent.context import AgentToolContext
++from workspace_app.api.registry import InvestigationRegistry
+ from workspace_app.api.turn_context import TurnContextBuilder
++from workspace_app.sandbox.mock import MockSandbox
++from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
++
++
++class _Session:
++    """A registry session with no sandbox yet — the cold case, where this
++    turn's create is what mounts the bundles."""
++
++    handle = None
++    tools: dict[str, str] | None = None
+ 
+ 
+ class _Locator:
+@@ -62,7 +74,7 @@ async def test_an_app_that_declares_a_third_party_tool_gets_it_resolved(monkeypa
+     )
+     host = _Host()
+ 
+-    external = await _builder(slug="rca", sandbox=host)._external_tools("item-1")
++    external = await _builder(slug="rca", sandbox=host)._external_tools("item-1", _Session())
+ 
+     assert host.asked == [{"wafer-history": "https://g/m"}]
+     assert external.shas == {"wafer-history": "a" * 64}
+@@ -74,7 +86,62 @@ async def test_an_item_with_no_app_asks_for_nothing() -> None:
+     # must not fabricate a lookup for it.
+     host = _Host()
+ 
+-    external = await _builder(slug=None, sandbox=host)._external_tools("item-1")
++    external = await _builder(slug=None, sandbox=host)._external_tools("item-1", _Session())
+ 
+     assert host.asked == []
+     assert external.shas == {}
++
++
++class _RecordingSandbox(MockSandbox):
++    """Records the spec every `create` was called with.
++
++    The assertion this file was missing is about what `create` RECEIVES, not
++    about what the turn believed it had asked for — the two were free to
++    disagree, and did."""
++
++    def __init__(self) -> None:
++        super().__init__()
++        self.specs: list[SandboxSpec] = []
++
++    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
++        self.specs.append(spec)
++        return await super().create(spec, sandbox_id)
++
++
++async def test_the_shas_this_turn_resolved_reach_the_sandbox_it_creates() -> None:
++    """#674's load-bearing invariant, tested at the seam that breaks it.
++
++    Resolving at the top of a turn is only worth doing because the sandbox then
++    mounts THOSE bundles. Schema and mount are different code paths, so a turn
++    can resolve perfectly, hand the model a tool, and give it a launcher that
++    does not exist — which is what `../.tools/<name>/launch: No such file or
++    directory` is. The registry owns the item's ceilings and knows nothing about
++    the turn, so the turn's answer has to travel WITH the wake."""
++    sandbox = _RecordingSandbox()
++    registry = InvestigationRegistry(
++        sandbox=sandbox,
++        # Mirrors `create_app._spec_for`: the App's resolved ceilings, looked up
++        # per item, with no idea what this turn resolved.
++        spec_for=lambda _item: SandboxSpec(cpu_cores=2.0, memory_bytes=1 << 30),
++    )
++    session = await registry.session("item-1")
++    shas = {"wafer-history": "a" * 64}
++    ctx = AgentToolContext(
++        investigation_id="item-1",
++        sandbox=sandbox,
++        sandbox_spec=SandboxSpec(tools=shas),
++        # Wired the way `TurnContextBuilder._common` wires it.
++        ensure_sandbox_via=lambda on_progress, tools: registry.ensure_handle(
++            session, tools=tools, on_progress=on_progress
++        ),
++    )
++
++    await ctx.ensure_sandbox()
++
++    assert sandbox.specs, "the turn never created a sandbox"
++    created = sandbox.specs[-1]
++    assert created.tools == shas, "the turn's third-party bundles never reached create"
++    # The turn owns `tools`; the registry still owns everything else about this
++    # item's sandbox, so carrying one must not flatten the other.
++    assert created.cpu_cores == 2.0
++    assert created.memory_bytes == 1 << 30
+diff --git a/tests/api/test_turn_queue.py b/tests/api/test_turn_queue.py
+index 02b138df..7e5650aa 100644
+--- a/tests/api/test_turn_queue.py
++++ b/tests/api/test_turn_queue.py
+@@ -293,7 +293,7 @@ async def test_app_turn_warms_the_sandbox_at_turn_start():
+     sandbox is only ever spun up when the user actually sends a message.)"""
+     warmed: list[object] = []
+ 
+-    async def fake_warm(_on_progress):
++    async def fake_warm(_on_progress, _tools=None):
+         handle = object()
+         warmed.append(handle)
+         return handle
+diff --git a/tests/tooling/test_external.py b/tests/tooling/test_external.py
+index fa31deb4..07903d98 100644
+--- a/tests/tooling/test_external.py
++++ b/tests/tooling/test_external.py
+@@ -9,7 +9,13 @@ bundle that actually runs.
+ 
+ from __future__ import annotations
+ 
+-from workspace_app.tooling.external import prewarm_external_tools, resolve_external_tools
++from workspace_app.tooling.external import (
++    ExternalTools,
++    confine_to_mounted,
++    prewarm_external_tools,
++    resolve_external_tools,
++)
++from workspace_app.tooling.registry import PackageInfo
+ 
+ 
+ class _Host:
+@@ -151,3 +157,66 @@ async def test_prewarm_reports_what_will_be_missing_rather_than_staying_quiet()
+     unwarmed = await prewarm_external_tools(host, {"rca": {"legacy": "u"}})
+ 
+     assert unwarmed == {"legacy": "404 — the artifact expired"}
++
++
++def _resolved(**shas: str) -> ExternalTools:
++    return ExternalTools(
++        packages=tuple(
++            PackageInfo(name=n, install_dir=f"../.tools/{n}", commands=()) for n in shas
++        ),
++        shas=dict(shas),
++    )
++
++
++def test_a_sandbox_that_predates_a_tool_does_not_get_it_offered() -> None:
++    """A sandbox mounts its bundles when it is CREATED, so a tool registered
++    while one was already up has no launcher in it. Offering it anyway is what
++    turns an operator's successful rollout into `No such file or directory` —
++    a message that names neither the tool nor the reason."""
++    confined = confine_to_mounted(_resolved(wafer="a" * 64), live=True, mounted={})
++
++    assert confined.shas == {}
++    assert [p.name for p in confined.packages] == []
++    assert "wafer" in confined.refused
++    assert "restart" in confined.refused["wafer"] or "recycle" in confined.refused["wafer"]
++
++
++def test_a_mounted_tool_is_offered_normally() -> None:
++    external = _resolved(wafer="a" * 64)
++
++    confined = confine_to_mounted(external, live=True, mounted={"wafer": "a" * 64})
++
++    assert confined.shas == {"wafer": "a" * 64}
++    assert [p.name for p in confined.packages] == ["wafer"]
++    assert confined.refused == {}
++
++
++def test_a_sandbox_holding_an_older_build_keeps_the_tool() -> None:
++    """The author released between this sandbox being created and this turn
++    resolving. That is the documented no-op path — they push, the NEXT sandbox
++    gets it — so the old bundle keeps serving this session rather than the tool
++    vanishing mid-conversation. Confinement is about a launcher that does not
++    exist, not about being a release behind."""
++    external = _resolved(wafer="b" * 64)
++
++    confined = confine_to_mounted(external, live=True, mounted={"wafer": "a" * 64})
++
++    assert confined is external
++    assert confined.refused == {}
++
++
++def test_nothing_is_confined_before_the_sandbox_exists() -> None:
++    # The common case: no sandbox yet, so THIS turn's create is what mounts
++    # them. Confining here would refuse every tool on every cold item.
++    external = _resolved(wafer="a" * 64)
++
++    assert confine_to_mounted(external, live=False, mounted=None) is external
++
++
++def test_an_unknown_mounted_set_is_left_alone_rather_than_guessed() -> None:
++    """Another pod created this sandbox (#366 address convergence), so this one
++    never learned what it mounted. `None` means UNKNOWN, not empty — refusing on
++    a guess would take working tools away from every multi-pod deployment."""
++    external = _resolved(wafer="a" * 64)
++
++    assert confine_to_mounted(external, live=True, mounted=None) is external
