@@ -78,6 +78,15 @@ class InvestigationRegistry:
     # One source, not a constant-plus-override pair — two ways to answer the
     # same question is how they end up disagreeing.
     spec_for: Callable[[str], SandboxSpec] = _bare_spec
+    # #674: this item's third-party bundles, `{name: sha}`, for the wakes that
+    # have no turn behind them — the human terminal, a workflow's deterministic
+    # node, the file-op rebuild. What a sandbox mounts is a property of the ITEM
+    # (its App's declared `external_tools`), and it is fixed at create and never
+    # rebuilt, so whichever entry point happens to wake it first must not get to
+    # decide the item has no tools for that sandbox's whole life. A turn still
+    # states its own — those are pinned to the resolve whose schemas the model
+    # was handed. None ⇒ not wired (tests / no apps), and nothing is mounted.
+    tools_for: Callable[[str], Awaitable[dict[str, str]]] | None = None
     # Who a live sandbox is charged to (the item's `owner` field). Wired for the
     # per-person limits; None ⇒ nothing is charged, and the heartbeat row stays
     # the plain liveness signal it was before.
@@ -253,6 +262,26 @@ class InvestigationRegistry:
             memory_bytes=spec.memory_bytes or 0,
         )
 
+    async def _declared_tools(self, item: str) -> dict[str, str] | None:
+        """What this item's App declares, for a wake with no turn to ask.
+
+        Best effort: an artifact store that is down must not stop a person
+        opening a terminal. The sandbox then comes up without that tool, which
+        the session records as known-empty — so the next turn says WHY it is
+        missing rather than handing the model a launcher that isn't there."""
+        if self.tools_for is None:
+            return None
+        try:
+            return await self.tools_for(item)
+        except Exception:  # noqa: BLE001 - a wake must not fail on someone else's outage
+            logger.warning(
+                "registry: could not resolve third-party tools for item %s; "
+                "creating the sandbox without them",
+                item,
+                exc_info=True,
+            )
+            return None
+
     async def _alive(self, handle: SandboxHandle) -> bool:
         """True when the sandbox behind ``handle`` still EXISTS — a cheap probe.
 
@@ -341,13 +370,16 @@ class InvestigationRegistry:
                     item,
                 )
                 raise
-        # #674: the item's own ceilings, plus THIS turn's third-party bundles.
-        # `spec_for` answers a question about the item and is asked on a cold
-        # acquire that may have no turn behind it at all (a file-op wake, a
-        # rebuild after the address died), so the bundles cannot come from
-        # there — they are what the turn resolved, and they travel with it.
+        # #674: the item's own ceilings, plus the third-party bundles to mount.
+        # A turn states them (pinned to the resolve whose schemas the model was
+        # given); every other wake — terminal, workflow node, file-op rebuild —
+        # says nothing and we ask what the ITEM declares, because mounting
+        # happens once, at create, and cannot be repaired later. `{}` from a
+        # caller is an ANSWER, not a gap: an app with no third-party tools must
+        # not pay for a resolve on every wake.
+        mounted = tools if tools is not None else await self._declared_tools(item)
         handle = await self.sandbox.create(
-            replace(self.spec_for(item), tools=tools), sandbox_id=item
+            replace(self.spec_for(item), tools=mounted), sandbox_id=item
         )
         logger.info(
             "registry: created sandbox handle %s for item %s (cold=%s)",
@@ -392,7 +424,7 @@ class InvestigationRegistry:
         # We built it, so we can state what went in — `{}` included, which is
         # what lets a later turn say "that tool is not in here" rather than
         # offering the model a launcher that does not exist.
-        return handle, dict(tools or {})
+        return handle, dict(mounted or {})
 
     async def has_live_sandbox(self, investigation_id: str) -> bool:
         """Whether this item is ALREADY holding a live sandbox.

@@ -145,3 +145,54 @@ async def test_the_shas_this_turn_resolved_reach_the_sandbox_it_creates() -> Non
     # item's sandbox, so carrying one must not flatten the other.
     assert created.cpu_cores == 2.0
     assert created.memory_bytes == 1 << 30
+
+
+async def test_a_sandbox_woken_without_a_turn_still_mounts_the_items_tools() -> None:
+    """What a sandbox mounts is a property of the ITEM, not of whoever woke it.
+
+    Three of the four things that create one have no turn behind them — the
+    human terminal (`POST …/exec`), a workflow's deterministic node, and the
+    file-op rebuild — and a sandbox mounts its bundles exactly once, at create.
+    So whichever of them happens to win the race after a restart must not get to
+    decide that this item has no third-party tools for the rest of that
+    sandbox's life. A turn still supplies its OWN shas, because those are pinned
+    to the resolve whose schemas the model was given; everyone else asks."""
+    sandbox = _RecordingSandbox()
+    shas = {"wafer-history": "a" * 64}
+
+    async def declared(_item_id: str) -> dict[str, str]:
+        return dict(shas)
+
+    registry = InvestigationRegistry(
+        sandbox=sandbox,
+        spec_for=lambda _item: SandboxSpec(cpu_cores=2.0),
+        tools_for=declared,
+    )
+    session = await registry.session("item-1")
+
+    # The terminal / workflow / file-op shape: a wake with nothing to say about
+    # tools.
+    await registry.ensure_handle(session)
+
+    assert sandbox.specs[-1].tools == shas, "a turn-less wake mounted no tools"
+    assert session.tools == shas
+    assert sandbox.specs[-1].cpu_cores == 2.0
+
+
+async def test_a_turn_that_states_its_tools_is_not_second_guessed() -> None:
+    """An explicit `{}` is an answer, not a gap: an app that declares no
+    third-party tools must not make every wake pay for a resolve."""
+    sandbox = _RecordingSandbox()
+    asked: list[str] = []
+
+    async def declared(item_id: str) -> dict[str, str]:
+        asked.append(item_id)
+        return {"surprise": "b" * 64}
+
+    registry = InvestigationRegistry(sandbox=sandbox, tools_for=declared)
+    session = await registry.session("item-1")
+
+    await registry.ensure_handle(session, tools={})
+
+    assert asked == []
+    assert sandbox.specs[-1].tools == {}

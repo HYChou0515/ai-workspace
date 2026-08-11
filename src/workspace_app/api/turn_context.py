@@ -62,6 +62,21 @@ RunSubagent = Callable[..., Awaitable[tuple[str, "list[Citation]"]]]
 logger = logging.getLogger(__name__)
 
 
+async def resolve_item_tools(sandbox: Sandbox, locator: ItemLocator, item_id: str) -> ExternalTools:
+    """#674: what this item's App declares as third-party tools, resolved.
+
+    A module function rather than a builder method because TWO callers need the
+    same answer and they are not both turns: a turn (which then confines it to
+    what the live sandbox actually mounts), and the registry, for the wakes that
+    have no turn at all. Written once, because "which bundles does this item
+    get" answered in two places is a rule that eventually disagrees with
+    itself — and the way it disagrees is a tool that exists in some sandboxes
+    and not others depending on who opened them."""
+    slug = locator.slug_of(item_id)
+    declared = load_app_manifest(slug).agent.external_tools if slug else {}
+    return await resolve_external_tools(sandbox, declared)
+
+
 class TurnContextBuilder:
     """Assemble the per-turn ``AgentToolContext`` for an RCA turn, holding the
     app-lifetime service bundle once so the two turn surfaces don't each capture
@@ -290,9 +305,7 @@ class TurnContextBuilder:
         the ceiling: a tool registered since, or released since, is reported as
         unavailable with a reason rather than handed over as a launcher that
         isn't there."""
-        slug = self._locator.slug_of(item_id)
-        declared = load_app_manifest(slug).agent.external_tools if slug else {}
-        external = await resolve_external_tools(self._sandbox, declared)
+        external = await resolve_item_tools(self._sandbox, self._locator, item_id)
         return confine_to_mounted(external, live=session.handle is not None, mounted=session.tools)
 
     def _common(
