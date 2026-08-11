@@ -293,7 +293,7 @@ async def test_app_turn_warms_the_sandbox_at_turn_start():
     sandbox is only ever spun up when the user actually sends a message.)"""
     warmed: list[object] = []
 
-    async def fake_warm(_on_progress):
+    async def fake_warm(_on_progress, _tools=None):
         handle = object()
         warmed.append(handle)
         return handle

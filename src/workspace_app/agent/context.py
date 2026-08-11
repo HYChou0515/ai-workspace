@@ -126,8 +126,18 @@ class AgentToolContext:
     # #492 P11: the wake hook receives the turn's restore-progress sink so a cold
     # wake's snapshot restore can stream (done, total) back to the turn. Callers
     # that don't care (tests) accept it and ignore it.
+    #
+    # #674: and this turn's third-party bundles, `{name: sha}`, because the hook
+    # owner (the registry) builds the spec from the ITEM and cannot know what
+    # this turn resolved. It is a parameter rather than something the hook reads
+    # off the ctx so that the two create paths below cannot drift: whichever one
+    # runs, the bundles mounted are `sandbox_spec.tools`.
     ensure_sandbox_via: (
-        Callable[[Callable[[int, int], None] | None], Awaitable[SandboxHandle]] | None
+        Callable[
+            [Callable[[int, int], None] | None, dict[str, str] | None],
+            Awaitable[SandboxHandle],
+        ]
+        | None
     ) = None
     # The investigation's attached AgentConfig (model + prompt) for this
     # turn; when set, LitellmAgentRunner uses it instead of its default.
@@ -471,7 +481,13 @@ class AgentToolContext:
             if self.ensure_sandbox_via is not None:
                 # #492 P11: hand the wake hook the restore-progress sink so a slow
                 # cold-wake restore streams "還原中 N/M" to the turn.
-                self.handle = await self.ensure_sandbox_via(self.on_restore_progress)
+                # #674: and this turn's bundles — the same ones whose schemas the
+                # model was handed a moment ago. Reading them off `sandbox_spec`
+                # (rather than passing them in separately) is what keeps this
+                # branch and the one below mounting the same thing.
+                self.handle = await self.ensure_sandbox_via(
+                    self.on_restore_progress, self.sandbox_spec.tools
+                )
             else:
                 self.handle = await self.sandbox.create(self.sandbox_spec)
             # Eagerly install the allowed packages into the fresh sandbox

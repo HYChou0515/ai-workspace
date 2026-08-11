@@ -26,8 +26,8 @@ def ctx() -> RunContextWrapper[AgentToolContext]:
 
     files = WorkspaceFiles(filestore, sandbox, _resolve)
 
-    async def wake(on_progress=None) -> SandboxHandle:
-        h = await sandbox.create(SandboxSpec())
+    async def wake(on_progress=None, tools=None) -> SandboxHandle:
+        h = await sandbox.create(SandboxSpec(tools=tools))
         await sync.restore("ws-test", h, on_progress=on_progress)
         holder["ws-test"] = h
         return h

@@ -14,7 +14,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -192,6 +192,7 @@ class InvestigationRegistry:
         self,
         session: InvestigationSession,
         *,
+        tools: dict[str, str] | None = None,
         on_progress: Callable[[int, int], None] | None = None,
     ) -> SandboxHandle:
         # Lock so concurrent callers see a single Sandbox.create — without
@@ -217,7 +218,7 @@ class InvestigationRegistry:
                     session.investigation_id,
                 )
                 session.handle = await self._acquire(
-                    session.investigation_id, on_progress=on_progress
+                    session.investigation_id, tools=tools, on_progress=on_progress
                 )
             # Refresh the GLOBAL heartbeat on every wake/use (not just the first)
             # so another pod's idle reaper sees this item as live (#345).
@@ -262,7 +263,11 @@ class InvestigationRegistry:
         return True
 
     async def _acquire(
-        self, item: str, *, on_progress: Callable[[int, int], None] | None = None
+        self,
+        item: str,
+        *,
+        tools: dict[str, str] | None = None,
+        on_progress: Callable[[int, int], None] | None = None,
     ) -> SandboxHandle:
         """Materialise (or converge on) the item's single live sandbox handle.
 
@@ -319,7 +324,14 @@ class InvestigationRegistry:
                     item,
                 )
                 raise
-        handle = await self.sandbox.create(self.spec_for(item), sandbox_id=item)
+        # #674: the item's own ceilings, plus THIS turn's third-party bundles.
+        # `spec_for` answers a question about the item and is asked on a cold
+        # acquire that may have no turn behind it at all (a file-op wake, a
+        # rebuild after the address died), so the bundles cannot come from
+        # there — they are what the turn resolved, and they travel with it.
+        handle = await self.sandbox.create(
+            replace(self.spec_for(item), tools=tools), sandbox_id=item
+        )
         logger.info(
             "registry: created sandbox handle %s for item %s (cold=%s)",
             handle.id,

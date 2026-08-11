@@ -122,8 +122,8 @@ async def _run_once(model: str, base_url: str, root: Path, verbose: bool = False
     # Seed while COLD so the wake restores it — the same path a real upload takes.
     await files.write("ws-live", _DATA_PATH, _CSV.encode())
 
-    async def wake(on_progress=None) -> SandboxHandle:
-        h = await sandbox.create(SandboxSpec())
+    async def wake(on_progress=None, tools=None) -> SandboxHandle:
+        h = await sandbox.create(SandboxSpec(tools=tools))
         await sync.restore("ws-live", h, on_progress=on_progress)
         holder["ws-live"] = h
         return h

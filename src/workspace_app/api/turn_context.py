@@ -351,8 +351,10 @@ class TurnContextBuilder:
             # (so idle-kill/close_all can find it) and the restore-after-create
             # hook fires. #492 P11: forward the turn's restore-progress sink so a
             # cold-wake restore streams "還原中 N/M" into this turn's stream.
-            ensure_sandbox_via=lambda on_progress: self._registry.ensure_handle(
-                session, on_progress=on_progress
+            # #674: and the bundles, which arrive from `sandbox_spec` above — the
+            # registry composes the item's spec and has no turn to ask.
+            ensure_sandbox_via=lambda on_progress, tools: self._registry.ensure_handle(
+                session, tools=tools, on_progress=on_progress
             ),
             agent_config=agent_config,
             run_subagent=run_subagent,
