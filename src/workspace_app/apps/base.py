@@ -96,6 +96,61 @@ class WorkItemBase(Struct):
     Treat them as shared-with-the-item, not shared-with-the-owner: an API key put
     here is visible to everyone the item is shared with."""
 
+    external_refs: list[str] = field(default_factory=list)
+    """Tier 1 (#700) — the external records this item has already absorbed, as
+    opaque ``<system>:<record-id>`` strings (e.g. ``"legacy-rca:12345"``).
+    Declared here rather than opted into, for the same reason as ``env_vars``:
+    any App can be handed work by an outside system, so this is a platform
+    capability, not one App's domain field.
+
+    It exists to answer ONE question — "has this item already taken this
+    record?" — which is what stops a legacy site's button from sprawling one
+    real-world problem across N items, each holding a fraction of the context.
+    Several external records may converge onto one item (the whole point: the
+    outside system splits a problem into pieces that only a human can regroup),
+    and the SAME record may legitimately appear on several items.
+
+    "At most once per item" is the CALLER'S contract, not a guarantee this field
+    makes. Nothing here rejects a duplicate — a create carrying the same ref
+    twice stores it twice, and so does a repeated RFC 6902 ``add``. The platform
+    is an opaque store for these strings; the recording procedure in
+    ``docs/external-handoff.md`` gets the property by re-reading before it
+    writes. Anything relying on uniqueness must not assume this field enforces it.
+
+    The value is opaque: it is compared, never parsed. The platform assigns no
+    meaning to the ``<system>`` half beyond "the caller says these came from
+    different places".
+
+    **NOTHING MAY QUERY THIS FIELD**, and the reason is not the one you might
+    expect from ``CLAUDE.md``'s ``.contains`` note — that trap needs a field to
+    BE indexed while having lost its ``list[...]`` annotation, which is the
+    opposite precondition. Measured here instead: because the field is absent
+    from every ``INDEXED_FIELDS`` there is no ``indexed_data`` entry for the
+    predicate to match, so a filter on it returns **zero rows** — identically on
+    the in-memory and SQL backends. specstar does not swallow it in silence:
+    ``_validate_query_fields`` warns that the condition "matches nothing, so the
+    query will under-return" (and a deployment may set ``on_unindexed_query`` to
+    ``error`` to make it raise). But a warning in a server log is not a guard,
+    which is why the ban is enforced by tests.
+
+    Zero rows is the dangerous answer for the question this field exists to
+    settle. "Which items already absorbed record X?" answered with nothing reads
+    as "none of them", so the caller hands the analysis over again and creates
+    the duplicate item this whole design exists to prevent — with a warning
+    nobody reads in production as the only trace.
+
+    Callers therefore fetch a page of items and filter the records they already
+    hold, which costs zero extra round trips because a listed record carries its
+    own ``external_refs``. Two guards keep it that way: no App may index the
+    field, and no module here may mention it outside this definition.
+
+    (Indexing it would in fact make a query CORRECT — the annotation is
+    ``list[str]``, so specstar registers a list field and ``.contains`` becomes
+    exact membership. It stays un-indexed because there is no server-side query
+    to justify the write-time cost, not because indexing is unsafe. If a real
+    query need ever appears, index it deliberately and delete these guards —
+    do not smuggle a filter past them.)"""
+
     permission: Permission | None = None
     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
     governs collections / KbChat: ``visibility`` decides whether the per-verb grant

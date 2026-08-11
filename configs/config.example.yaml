@@ -79,6 +79,16 @@
 #                              # (`GET .../stream?since=<seq>`). 0 disables replay
 #                              # (a reconnect degrades to store re-hydrate).
 #                              # ~200KB/session, only while a session is live.
+#   cors_allowed_origins: []   # #700: browser origins allowed to call this API
+#                              # cross-site — needed when an outside system hands
+#                              # work over FROM ITS OWN PAGE (e.g. a legacy
+#                              # analysis site whose button creates or adds to a
+#                              # work item). Empty (default) = no CORS layer at
+#                              # all, byte-identical to today. List origins
+#                              # explicitly, e.g. ["https://legacy-rca.corp"]:
+#                              # the caller is identified by the shared session
+#                              # cookie, so credentials must be allowed, and
+#                              # browsers refuse to pair that with a `*` wildcard.
 
 # ─── sandbox (agent execution environment) ──── [MUST] · [SCALE] ────
 # sandbox:

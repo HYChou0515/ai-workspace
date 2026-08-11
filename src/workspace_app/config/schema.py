@@ -63,6 +63,13 @@ class ServerSettings:
     # due headless runs. 0 (default) ⇒ off — time-triggered workflows are opt-in per deploy.
     # A CAS lease per (trigger, window) means only one pod fires each window when several run.
     trigger_check_interval_sec: int = 0
+    # #700: browser origins allowed to call this API cross-site, for outside systems
+    # that hand work over from their own page (e.g. a legacy analysis site whose
+    # button creates or adds to a work item). Empty (default) ⇒ no CORS layer at
+    # all, exactly today's behaviour. Origins are listed explicitly rather than
+    # wildcarded because the caller is identified by the shared session cookie,
+    # which requires `allow_credentials`, and browsers refuse that with `*`.
+    cors_allowed_origins: list[str] = field(default_factory=list)
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────

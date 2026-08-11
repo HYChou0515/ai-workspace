@@ -77,6 +77,82 @@ def _is_readonly_path(path: str) -> bool:
     return _READONLY_DIR in path.strip("/").split("/")
 
 
+def _workspace_path(raw: str) -> str:
+    """Normalise a client-supplied workspace path, refusing any that climbs out.
+
+    #700: nothing here normalised, and the two layers below do not either —
+    ``files.write`` joins onto the workspace root and the local sandbox's
+    ``_resolve`` does ``cwd / remote_path.lstrip("/")``. Starlette collapses a
+    LITERAL ``../`` before routing, so that form was already refused and the gap
+    looked closed; a **percent-encoded** ``..%2F`` arrives intact and the OS
+    resolves it at write time. The write then lands beside the workspace in the
+    infra area (alongside ``.ready`` and the per-sandbox ``.home``) or, with
+    enough segments, inside another item's directory on the shared scratch volume.
+
+    Rejecting a ``..`` segment outright rather than resolving it: a path that
+    normalises back inside (``a/b/../c``) is legitimate but vanishingly rare from
+    a real client, and "no ``..`` ever" is a rule that can be read off the code,
+    whereas "resolves to somewhere inside" invites the next person to re-derive
+    the containment check. A filename that merely CONTAINS dots
+    (``report..final.csv``) is untouched — only whole segments count.
+
+    Callers, named rather than described. Every previous attempt to state this as
+    a RULE ("no ``..`` ever", then "every route that takes a client path", then
+    "…to the workspace store") was falsified by the next reviewer, because a rule
+    invites the reader to assume coverage the code does not have. A list can be
+    checked against ``grep``:
+
+    * ``write_file`` / ``read_file`` / ``delete_file`` — the ``{path:path}`` URL routes
+    * ``make_dir`` — the JSON body path
+    * ``move_file`` / ``copy_file`` — BOTH sides of each
+    * ``list_files`` / ``list_tree`` / ``prepare_files_download`` — via
+      ``_workspace_prefix``, which keeps ``""`` meaning "whole workspace"
+
+    Known NOT to pass through here, deliberately or otherwise:
+    ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store
+    path — verified: it only ever indexes a dict in ``KernelService``);
+    ``api/workflow_routes.py::_staged_run_uploads``, which uses
+    ``kb.doc_id.canonical_path`` — a different model that RESOLVES ``..`` rather
+    than refusing it; and ``api/chat_send.py``'s attachment paths, which have no
+    containment check at all. The last one is a gap, not a decision.
+
+    The body routes were missed on the first pass and are the worse case:
+    Starlette's URL normalisation never runs on a body, so there even a LITERAL
+    ``../`` survived.
+
+    ``strip`` and not ``lstrip``: a trailing slash must not change what a path
+    MEANS. That is not cosmetic — the first version of this helper used
+    ``lstrip`` and silently dropped the trailing-slash normalisation the body
+    routes already had, so ``"/folder/"`` stopped naming the directory
+    ``/folder``. Moving a file onto an existing directory went from a refusal to
+    a SUCCESS that deleted the source and left a file whose stored path was
+    ``/folder/`` beside the directory ``/folder`` — indistinguishable in the file
+    tree, which splits on ``/`` and drops empty segments. Reachable from the
+    rename box in the UI, and covered now by
+    ``tests/api/test_file_path_normalisation.py``.
+    """
+    norm = "/" + raw.strip("/")
+    if any(segment == ".." for segment in norm.split("/")):
+        raise HTTPException(status_code=400, detail="path may not contain a '..' segment")
+    return norm
+
+
+def _workspace_prefix(prefix: str) -> str:
+    """``_workspace_path`` for the listing/download ``prefix`` parameter, which
+    is a client path to the store like any other but was reaching the sandbox
+    unchecked.
+
+    It goes to ``sandbox.walk``, whose ``_resolve`` is ``cwd / prefix.lstrip("/")``,
+    so on the shared-dir local backend a crafted prefix enumerates a SIBLING
+    item's files — paths and sizes. Reading them back is already refused (that
+    is the ``{path:path}`` guard), so this closes the enumeration half of the
+    same chain.
+
+    Empty stays empty: ``""`` means "the whole workspace" to every consumer, and
+    normalising it to ``"/"`` would change what a plain listing asks for."""
+    return _workspace_path(prefix) if prefix else prefix
+
+
 async def _stream_upload_to_store(
     workspace_id: str,
     path: str,
@@ -228,7 +304,7 @@ def register_file_routes(
         # snapshot record's inline size) — NEVER by reading each file's bytes, so
         # a 600-file tree costs one listing, not 600 full-content downloads.
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        entries = await files.stat_all(investigation_id, prefix)
+        entries = await files.stat_all(investigation_id, _workspace_prefix(prefix))
         return [
             _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
             for p, size in sorted(entries)
@@ -257,7 +333,7 @@ def register_file_routes(
         `dirs` still comes back separately rather than being derived client-side,
         because an EMPTY directory appears in no file path."""
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        entries, dirs = await files.tree(investigation_id, prefix)
+        entries, dirs = await files.tree(investigation_id, _workspace_prefix(prefix))
         return _WorkspaceTree(
             files=[
                 _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
@@ -306,7 +382,7 @@ def register_file_routes(
         Reading routes warm→sandbox / cold→snapshot via the facade; only the
         compression runs off the event loop."""
         investigation_id = locator.require_access(slug, item_id, "read_content")
-        members = await _collect_download_members(investigation_id, prefix)
+        members = await _collect_download_members(investigation_id, _workspace_prefix(prefix))
         download_id, size = await prepare_zip(lambda out: write_zip_members(out, members))
         logger.info(
             "file_routes: prepared download %s of %r for item %s (%d bytes)",
@@ -339,7 +415,7 @@ def register_file_routes(
     )
     async def write_file(slug: str, item_id: str, path: str, request: Request) -> Response:
         investigation_id = locator.require_access(slug, item_id, "edit_content")
-        norm = "/" + path.lstrip("/")
+        norm = _workspace_path(path)
         if _is_readonly_path(norm):
             # #205: the `.readonly/` snapshot the human diffs against is not hand-editable.
             raise HTTPException(status_code=403, detail="this file is read-only")
@@ -370,7 +446,7 @@ def register_file_routes(
     )
     async def make_dir(slug: str, item_id: str, body: _MkdirBody) -> Response:
         investigation_id = locator.require_access(slug, item_id, "add_content")
-        norm = "/" + body.path.strip("/")
+        norm = _workspace_path(body.path)
         try:
             await files.mkdir(investigation_id, norm)
         except FileExists as exc:
@@ -438,8 +514,8 @@ def register_file_routes(
     )
     async def move_file(slug: str, item_id: str, body: _MoveBody) -> Response:
         investigation_id = locator.require_access(slug, item_id, "edit_content")
-        src = "/" + body.from_.strip("/")
-        dst = "/" + body.to.strip("/")
+        src = _workspace_path(body.from_)
+        dst = _workspace_path(body.to)
         await _transfer(investigation_id, src, dst, copy=False)
         activity.record(
             "file_moved",
@@ -456,8 +532,8 @@ def register_file_routes(
     )
     async def copy_file(slug: str, item_id: str, body: _MoveBody) -> Response:
         investigation_id = locator.require_access(slug, item_id, "add_content")
-        src = "/" + body.from_.strip("/")
-        dst = "/" + body.to.strip("/")
+        src = _workspace_path(body.from_)
+        dst = _workspace_path(body.to)
         await _transfer(investigation_id, src, dst, copy=True)
         activity.record(
             "file_copied",
@@ -555,7 +631,7 @@ def register_file_routes(
     )
     async def delete_file(slug: str, item_id: str, path: str) -> Response:
         investigation_id = locator.require_access(slug, item_id, "edit_content")
-        norm = "/" + path.lstrip("/")
+        norm = _workspace_path(path)
         if await files.is_dir(investigation_id, norm):
             await files.rmdir(investigation_id, norm)
             activity.record(
@@ -588,8 +664,9 @@ def register_file_routes(
         investigation_id = locator.require_access(slug, item_id, "read_content")
         import mimetypes
 
+        norm = _workspace_path(path)
         try:
-            data = await files.read(investigation_id, "/" + path.lstrip("/"))
+            data = await files.read(investigation_id, norm)
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         # Issue #40: extension → MIME first so workspace markdown reports
@@ -598,7 +675,15 @@ def register_file_routes(
         # (the browser offers a download). Unknown extension → fall back
         # to the previous UTF-8 sniff so text-with-unknown-extension
         # still renders in the file viewer.
-        guessed, _ = mimetypes.guess_type(path)
+        #
+        # Guess from the NORMALISED path, not the raw one. `GET /files/logo.png/`
+        # finds the file (the read is normalised) but `splitext` sees no extension
+        # on a string ending in `/`, so the raw form fell through to the sniff and
+        # answered `application/octet-stream` — a download prompt where the user
+        # expected an inlined image, with a 200 hiding it. That contradicted this
+        # module's own rule that a trailing slash must not change what a path
+        # means, one line after enforcing it.
+        guessed, _ = mimetypes.guess_type(norm)
         if guessed:
             media_type = guessed
         else:
