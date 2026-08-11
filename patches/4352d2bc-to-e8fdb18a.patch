@@ -1,0 +1,1475 @@
+diff --git a/src/workspace_app/card_preview/__main__.py b/src/workspace_app/card_preview/__main__.py
+index 6379d7be..868833eb 100644
+--- a/src/workspace_app/card_preview/__main__.py
++++ b/src/workspace_app/card_preview/__main__.py
+@@ -52,6 +52,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+         metavar="DIR",
+         help="write both built-in prompts to DIR and exit, as a starting point to edit",
+     )
++    p.add_argument(
++        "--tune-round",
++        type=Path,
++        default=None,
++        metavar="DIR",
++        help="run ONE prompt-improvement round in DIR: score the newest unscored extraction "
++        "prompt on DIR/tune and DIR/holdout, ask the model for a revision, file it as the next "
++        "version. Every version is kept and scored on both sets, so a later reader can see "
++        "where tuning became overfitting and walk back",
++    )
++    p.add_argument(
++        "--batch",
++        type=int,
++        default=0,
++        metavar="N",
++        help="score only N documents drawn at random from DIR/tune each round (0 = all of it)",
++    )
++    p.add_argument(
++        "--holdout-every", type=int, default=1, metavar="N", help="run the holdout every Nth round"
++    )
+     p.add_argument("-v", "--verbose", action="store_true")
+     return p.parse_args(argv)
+ 
+@@ -77,8 +97,8 @@ def main() -> None:
+         )
+         return
+ 
+-    if not args.samples:
+-        raise SystemExit("give --samples <folder>, or --dump-prompts <dir>")
++    if not (args.samples or args.tune_round):
++        raise SystemExit("give --samples <folder>, --tune-round <dir>, or --dump-prompts <dir>")
+ 
+     settings = load(config_path=args.config)
+     llm = get_kb_llm(settings)
+@@ -88,6 +108,26 @@ def main() -> None:
+         # that defines nothing.
+         raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
+ 
++    if args.tune_round:
++        from ..kb.cards.tune import run_round
++
++        version = run_round(
++            llm,
++            rounds_dir=args.tune_round,
++            tune_dir=args.tune_round / "tune",
++            holdout_dir=args.tune_round / "holdout",
++            batch=args.batch,
++            holdout_every=args.holdout_every,
++            synthesis_prompt=(args.synthesis_prompt.read_text() if args.synthesis_prompt else None),
++        )
++        print(f"scored v{version}, wrote v{version + 1}", file=sys.stderr)
++        for row in json.loads((args.tune_round / "index.json").read_text()):
++            print(
++                f"  v{row['version']}: tune {row['tune']} | holdout {row['holdout']}",
++                file=sys.stderr,
++            )
++        return
++
+     cards = preview_samples(
+         llm,
+         args.samples,
+diff --git a/src/workspace_app/kb/cards/build.py b/src/workspace_app/kb/cards/build.py
+index 98def449..8ebcb1a9 100644
+--- a/src/workspace_app/kb/cards/build.py
++++ b/src/workspace_app/kb/cards/build.py
+@@ -22,7 +22,7 @@ import msgspec
+ 
+ from ..context_cards import derive_norm_keys, norm
+ from ..llm import ILlm
+-from .extract import Statement, TermCard, extract_cards
++from .extract import Statement, TermCard, extract
+ 
+ _SYNTHESIS = (Path(__file__).parent / "prompts" / "card_synthesis.md").read_text(encoding="utf-8")
+ 
+@@ -56,6 +56,40 @@ def built_in_synthesis_prompt() -> str:
+     return _SYNTHESIS
+ 
+ 
++class Build(msgspec.Struct, frozen=True):
++    """The cards, and what the extraction cost to get them.
++
++    ``offered`` counts the claims the model put forward; ``grounded`` counts the
++    ones whose quote was really in the document. Everything that survives is
++    grounded BY CONSTRUCTION, so without the pair the criterion always measures
++    as perfect however much it invented — and inventing is the failure this whole
++    design exists to remove.
++    """
++
++    cards: list[Card]
++    offered: int
++    grounded: int
++
++
++def build(
++    llm: ILlm,
++    docs: list[DocSource],
++    *,
++    extract_prompt: str | None = None,
++    synthesis_prompt: str | None = None,
++) -> Build:
++    """Read every document, group what they said by term, write one body each."""
++    found: list[tuple[str, TermCard]] = []
++    offered = grounded = 0
++    for doc in docs:
++        got = extract(llm, doc.text, prompt=extract_prompt)
++        offered += got.proposed
++        grounded += got.kept
++        found.extend((doc.doc_id, card) for card in got.cards)
++    cards = [_synthesise(llm, group, prompt=synthesis_prompt) for group in _group(found)]
++    return Build(cards=cards, offered=offered, grounded=grounded)
++
++
+ def build_cards(
+     llm: ILlm,
+     docs: list[DocSource],
+@@ -63,13 +97,8 @@ def build_cards(
+     extract_prompt: str | None = None,
+     synthesis_prompt: str | None = None,
+ ) -> list[Card]:
+-    """Read every document, group what they said by term, write one body each."""
+-    found: list[tuple[str, TermCard]] = [
+-        (doc.doc_id, card)
+-        for doc in docs
+-        for card in extract_cards(llm, doc.text, prompt=extract_prompt)
+-    ]
+-    return [_synthesise(llm, group, prompt=synthesis_prompt) for group in _group(found)]
++    """The cards alone, for callers with no use for the extraction counts."""
++    return build(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt).cards
+ 
+ 
+ def _group(found: list[tuple[str, TermCard]]) -> list[list[tuple[str, TermCard]]]:
+diff --git a/src/workspace_app/kb/cards/extract.py b/src/workspace_app/kb/cards/extract.py
+index 2a270931..e52d3203 100644
+--- a/src/workspace_app/kb/cards/extract.py
++++ b/src/workspace_app/kb/cards/extract.py
+@@ -35,32 +35,61 @@ class TermCard(msgspec.Struct, frozen=True):
+     statements: list[Statement]
+ 
+ 
++class Extraction(msgspec.Struct, frozen=True):
++    """What one document yielded, and what it cost to get there.
++
++    ``proposed`` and ``kept`` are the whole reason this type exists. Dropping an
++    ungrounded claim silently makes the criterion look perfect — everything that
++    survives is grounded BY CONSTRUCTION, so "how much does this prompt invent"
++    reads as zero no matter how much it invented. The gap between the two is the
++    direct measurement, and it is what the tuning loop steers on.
++    """
++
++    cards: list[TermCard]
++    proposed: int
++    kept: int
++
++
+ def built_in_prompt() -> str:
+     """The prompt as shipped, so a person can start from it rather than a blank
+     file."""
+     return _PROMPT
+ 
+ 
+-def extract_cards(llm: ILlm, text: str, *, prompt: str | None = None) -> list[TermCard]:
+-    """The terms this passage states something about."""
++def extract(llm: ILlm, text: str, *, prompt: str | None = None) -> Extraction:
++    """What this document states, and how much of what was offered survived."""
+     template = prompt or _PROMPT
+     reply = llm.collect(template.replace("{text}", text))
+     return _parse(reply, text)
+ 
+ 
+-def _parse(reply: str, text: str) -> list[TermCard]:
++def extract_cards(llm: ILlm, text: str, *, prompt: str | None = None) -> list[TermCard]:
++    """The terms this passage states something about."""
++    return extract(llm, text, prompt=prompt).cards
++
++
++def _parse(reply: str, text: str) -> Extraction:
++    empty = Extraction(cards=[], proposed=0, kept=0)
+     start, end = reply.find("{"), reply.rfind("}")
+     if start == -1 or end < start:
+-        return []
++        return empty
+     try:
+         # The slice starts at a "{", so whatever parses out of it is an object.
+         data = json.loads(reply[start : end + 1])
+     except (json.JSONDecodeError, ValueError):
+-        return []
++        return empty
+     cards = data.get("cards")
+     if not isinstance(cards, list):
+-        return []
+-    return [card for raw in cards if (card := _card(raw, text)) is not None]
++        return empty
++    proposed = sum(
++        len(raw["statements"])
++        for raw in cards
++        if isinstance(raw, dict) and isinstance(raw.get("statements"), list)
++    )
++    kept = [card for raw in cards if (card := _card(raw, text)) is not None]
++    return Extraction(
++        cards=kept, proposed=proposed, kept=sum(len(c.statements) for c in kept)
++    )
+ 
+ 
+ def _card(raw: Any, text: str) -> TermCard | None:
+diff --git a/src/workspace_app/kb/cards/preview.py b/src/workspace_app/kb/cards/preview.py
+index f358b1dc..d251d691 100644
+--- a/src/workspace_app/kb/cards/preview.py
++++ b/src/workspace_app/kb/cards/preview.py
+@@ -18,27 +18,38 @@ from typing import Any
+ import msgspec
+ 
+ from ..llm import ILlm
+-from .build import Card, DocSource, build_cards
++from .build import Build, Card, DocSource, build
+ 
+ 
+-def read_samples(sample_dir: Path) -> list[DocSource]:
+-    """Every `.txt` in the folder, in a stable order."""
++def read_samples(sample_dir: Path, *, only: set[str] | None = None) -> list[DocSource]:
++    """Every `.txt` in the folder, in a stable order — or just the named ones.
++
++    ``only`` is how a tuning round reads a mini-batch: fewer model calls per
++    round, and a different draw each round so the prompt cannot settle into one
++    fixed set of documents.
++    """
+     return [
+         DocSource(doc_id=path.stem, text=path.read_text(encoding="utf-8"))
+         for path in sorted(sample_dir.glob("*.txt"))
++        if only is None or path.stem in only
+     ]
+ 
+ 
+-def summarise(cards: list[Card], docs: list[DocSource]) -> dict[str, Any]:
++def summarise(built: Build, docs: list[DocSource]) -> dict[str, Any]:
+     """The numbers a person checks before reading anything.
+ 
+     ``statements_per_card`` is the one to watch: a card resting on a single
+     statement from a single document is the shape that used to proliferate —
+     several thin cards about one term instead of one that accumulated.
+     """
++    cards = built.cards
+     statements = sum(len(c.statements) for c in cards)
+     return {
+         "documents": len(docs),
++        # What the model put forward, and how much of it was really in the text.
++        # The rate is the direct measurement of inventing — see `Build`.
++        "statements_offered": built.offered,
++        "grounded_rate": round(built.grounded / built.offered, 3) if built.offered else 0.0,
+         "cards": len(cards),
+         "statements": statements,
+         "statements_per_card": round(statements / len(cards), 2) if cards else 0.0,
+@@ -56,20 +67,21 @@ def preview_samples(
+     out_dir: Path,
+     extract_prompt: str | None = None,
+     synthesis_prompt: str | None = None,
++    only: set[str] | None = None,
+ ) -> list[Card]:
+     """Build the cards for a folder of documents and write them out."""
+-    docs = read_samples(sample_dir)
+-    cards = build_cards(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt)
+-    write_preview(cards, docs, out_dir=out_dir)
+-    return cards
++    docs = read_samples(sample_dir, only=only)
++    built = build(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt)
++    write_preview(built, docs, out_dir=out_dir)
++    return built.cards
+ 
+ 
+-def write_preview(cards: list[Card], docs: list[DocSource], *, out_dir: Path) -> None:
++def write_preview(built: Build, docs: list[DocSource], *, out_dir: Path) -> None:
+     """One file per layer, in a deterministic order, so two runs either side of a
+     criterion change diff to the change."""
+     out_dir.mkdir(parents=True, exist_ok=True)
+-    ordered = sorted(cards, key=lambda c: c.norm_keys[:1] or [""])
+-    _dump(out_dir / "summary.json", summarise(cards, docs))
++    ordered = sorted(built.cards, key=lambda c: c.norm_keys[:1] or [""])
++    _dump(out_dir / "summary.json", summarise(built, docs))
+     # `to_builtins`, not `structs.asdict`: a Card holds Statement structs, and
+     # asdict flattens only the top level — the nested ones would reach json.dumps
+     # as objects and land on disk as their repr, unreadable and undiffable.
+diff --git a/src/workspace_app/kb/cards/tune.py b/src/workspace_app/kb/cards/tune.py
+new file mode 100644
+index 00000000..118eec0c
+--- /dev/null
++++ b/src/workspace_app/kb/cards/tune.py
+@@ -0,0 +1,256 @@
++"""The model revising the card EXTRACTION prompt, one version per run.
++
++Same harness as the graph criterion (``kb.tuning``), different reward — because
++what a good card criterion does is not what a good entity criterion does.
++
++**The reward is built around one asymmetry.** A claim whose quote is not in the
++document is dropped before it reaches a card, so everything that survives is
++grounded BY CONSTRUCTION: measuring the surviving cards can never show a prompt
++inventing. What shows it is the ratio of what the model OFFERED to what was
++grounded, and that is the number this loop steers on.
++
++The synthesis prompt is not tuned here. It reads whatever extraction produced,
++so tuning both at once would make each round's evidence a moving target for the
++other; extraction gates everything, so extraction goes first.
++"""
++
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++from ..context_cards import norm
++from ..llm import ILlm
++from ..tuning import Round, ensure_probes, history, next_version, usable, write_index
++from ..tuning import batch as draw_batch
++from ..tuning import load_prompt as _load_prompt
++from ..tuning import pick_parent as _pick_best
++from .extract import built_in_prompt
++from .preview import preview_samples
++
++#: How many terms the model is shown from each set. Enough to see what the
++#: criterion is doing, small enough to leave room for the prompt it must write.
++_SHOWN = 50
++
++_HEADLINE: tuple[str, ...] = ("cards", "statements_per_card", "grounded_rate")
++
++
++def load_prompt(rounds_dir: Path, version: int) -> str:
++    """The prompt a version ran with — the built-in one when nothing is filed."""
++    return _load_prompt(rounds_dir, version, default=built_in_prompt())
++
++
++def fitness(card: dict[str, Any]) -> float:
++    """One number for comparing versions: what it FINDS, discounted by inventing.
++
++    MULTIPLIED, not subtracted — the same trap as on the graph side. A prompt
++    that extracts nothing offers nothing, so its grounded rate is a perfect 1.0
++    by vacuity; subtracting an invention penalty would hand it the win. As a
++    factor, a version that answers no probe scores zero however clean it looks.
++    """
++    return float(card.get("lookup_hit_rate", 0.0)) * float(card.get("grounded_rate", 0.0))
++
++
++def pick_parent(rounds: list[Round]) -> Round:
++    """The version the next revision is written from — the best by :func:`fitness`."""
++    return _pick_best(rounds, fitness)
++
++
++def scorecard(out_dir: Path, *, shown: int = _SHOWN) -> dict[str, Any]:
++    """The numbers plus the TERMS, read back off a preview run.
++
++    The terms are not decoration. A criterion that refuses more scores better on
++    every count here, so counts alone point at carding nothing; seeing which
++    terms are still there is what stops that.
++    """
++    summary = json.loads((out_dir / "summary.json").read_text())
++    cards = json.loads((out_dir / "cards.json").read_text())
++    return {
++        **{k: summary[k] for k in ("documents", "cards", "statements", "statements_per_card")},
++        "statements_offered": summary["statements_offered"],
++        # The direct measurement of inventing. Everything that survives the quote
++        # gate is grounded, so this is the only place the invention shows.
++        "grounded_rate": summary["grounded_rate"],
++        "sources_per_card": summary["sources_per_card"],
++        # Cards standing on a single document are the shape that used to
++        # proliferate: several thin cards about one term instead of one that
++        # accumulated.
++        "cards_from_one_document": summary["cards_from_one_document"],
++        "terms": sorted(c["title"] for c in cards)[:shown],
++    }
++
++
++def probe_score(out_dir: Path, names: list[str]) -> dict[str, Any]:
++    """Would ``lookup_glossary`` find a card for each probe?
++
++    The one number that FALLS when the criterion tightens past useful. Matched
++    through ``context_cards.norm`` against the card's own keys — the exact rule
++    the lookup uses, so this measures what a reader would actually experience.
++
++    The probe file is the SAME one the graph loop draws. They extract
++    independently; scoring them against one set is what makes the two runs
++    comparable at all.
++    """
++    cards = json.loads((out_dir / "cards.json").read_text())
++    keys = {n for card in cards for key in card["keys"] if (n := norm(key))}
++    missed = [name for name in names if norm(name) not in keys]
++    return {
++        "lookup_hit_rate": round((len(names) - len(missed)) / len(names), 3) if names else 0.0,
++        "probes_total": len(names),
++        "probes_missed": missed,
++    }
++
++
++REVISE = """You are improving the prompt that pulls STATEMENTS about terms out of
++a technical corpus, for a glossary. Your whole output is the REVISED PROMPT — no
++commentary, no explanation, no code fences.
++
++## What the prompt is for
++
++Each document records what it STATES about a term, with the exact words that
++state it. A later pass turns all the statements about one term into its
++definition. So this prompt is not writing definitions; it is collecting evidence.
++
++## The two ways it goes wrong
++
++**Inventing.** A claim the document does not make. Every claim must carry a quote
++copied character-for-character from the document, and a claim whose quote is not
++found is DISCARDED before it reaches a card. `grounded_rate` below is how much of
++what the last version offered survived that check — it is the direct measurement
++of inventing, and the only one, because everything that survives is grounded by
++construction.
++
++**Refusing.** Extracting nothing makes `grounded_rate` a perfect 1.0 by vacuity
++and every other count look tidy. It is the WORST outcome. `lookup_hit_rate` is
++the guard: the share of terms a reader would actually look up that ended up with
++a card. If it falls, you have gone too far.
++
++## What the prompt must still do
++
++Keep the JSON output contract EXACTLY as it is — the same keys (`cards`, and per
++card `term` / `keys` / `statements`, and per statement `text` / `quote`), and the
++`{{text}}` placeholder at the end. Anything that parses differently is discarded
++and the whole run reports nothing.
++
++## The prompt you are revising
++
++```
++{current}
++```
++
++## What it produced
++
++{scores}
++
++## History — what has already been tried
++
++{history}
++
++Revise the prompt. Change what the evidence above says is wrong; leave what is
++working alone. Output the full revised prompt and nothing else."""
++
++
++def revision_prompt(
++    current: str,
++    tune: dict[str, Any],
++    holdout: dict[str, Any] | None,
++    rounds: list[Round],
++    *,
++    carry: int = 2,
++) -> str:
++    """What the model is asked, in full.
++
++    The recent prompts travel with their scores. Numbers alone leave it hill-
++    climbing blind: it cannot recognise a change it already made and moved away
++    from, so it undoes it, scores worse, redoes it, and oscillates.
++    """
++    scores = (
++        "### On the documents drawn for this round\n"
++        + json.dumps(tune, ensure_ascii=False, indent=2)
++        + "\n\n### On the held-out documents (NOT tuned against — if these stop "
++        "improving while the ones above do, the prompt is learning the sample "
++        "rather than the corpus)\n"
++        + (
++            json.dumps(holdout, ensure_ascii=False, indent=2)
++            if holdout
++            else "(not run this round — the history below carries the last time it was)"
++        )
++    )
++    rows = [
++        f"- v{r.version}: tune grounded={r.tune.get('grounded_rate')} "
++        f"cards={r.tune.get('cards')} | "
++        + (
++            f"holdout hit={r.holdout.get('lookup_hit_rate')} "
++            f"grounded={r.holdout.get('grounded_rate')}"
++            if r.holdout
++            else "holdout not run"
++        )
++        for r in rounds
++    ]
++    for r in rounds[-carry:]:
++        rows.append(f"\n### The prompt v{r.version} ran\n```\n{r.prompt.strip()}\n```")
++    return REVISE.format(
++        current=current,
++        scores=scores,
++        history="\n".join(rows) if rows else "(this is the first version)",
++    )
++
++
++def run_round(
++    llm: ILlm,
++    *,
++    rounds_dir: Path,
++    tune_dir: Path,
++    holdout_dir: Path,
++    reviser: ILlm | None = None,
++    batch: int = 0,
++    holdout_every: int = 1,
++    synthesis_prompt: str | None = None,
++) -> int:
++    """Score the newest extraction prompt, ask for a revision, file it as next."""
++    version = next_version(rounds_dir)
++    current = load_prompt(rounds_dir, version)
++    here = rounds_dir / f"v{version}"
++    here.mkdir(parents=True, exist_ok=True)
++    (here / "prompt.txt").write_text(current)
++
++    preview_samples(
++        llm,
++        tune_dir,
++        out_dir=here / "tune",
++        extract_prompt=current,
++        synthesis_prompt=synthesis_prompt,
++        only=draw_batch(tune_dir, batch, seed=version),
++    )
++    tune = scorecard(here / "tune")
++
++    holdout: dict[str, Any] | None = None
++    if holdout_every <= 1 or version % holdout_every == 0:
++        # Before the extraction, so a run killed part-way keeps the probes it
++        # paid for: they are the one artefact here that must never be redrawn.
++        probes = ensure_probes(llm, rounds_dir, holdout_dir)
++        preview_samples(
++            llm,
++            holdout_dir,
++            out_dir=here / "holdout",
++            extract_prompt=current,
++            synthesis_prompt=synthesis_prompt,
++        )
++        holdout = scorecard(here / "holdout") | probe_score(here / "holdout", probes)
++    (here / "scorecard.json").write_text(
++        json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
++    )
++
++    past = history(rounds_dir, upto=version)
++    write_index(rounds_dir, past, headline=_HEADLINE, holdout_only=("lookup_hit_rate",))
++
++    parent = pick_parent(past)
++    revised = (reviser or llm).collect(
++        revision_prompt(parent.prompt, parent.tune, parent.holdout, past)
++    )
++    nxt = rounds_dir / f"v{version + 1}"
++    nxt.mkdir(parents=True, exist_ok=True)
++    (nxt / "prompt.txt").write_text(usable(revised, fallback=parent.prompt, required=("{text}",)))
++    (nxt / "parent.txt").write_text(str(parent.version))
++    return version
+diff --git a/src/workspace_app/kb/graph/tune.py b/src/workspace_app/kb/graph/tune.py
+index 196462bf..467b9972 100644
+--- a/src/workspace_app/kb/graph/tune.py
++++ b/src/workspace_app/kb/graph/tune.py
+@@ -22,12 +22,15 @@ kept names beside the numbers.
+ from __future__ import annotations
+ 
+ import json
+-from dataclasses import dataclass
+ from pathlib import Path
+ from random import Random
+ from typing import Any
+ 
+ from ..llm import ILlm
++from ..tuning import Round, ensure_probes, history, next_version, usable, write_index
++from ..tuning import batch as draw_batch
++from ..tuning import load_prompt as _load_prompt
++from ..tuning import pick_parent as _pick_best
+ from .entity_extract import built_in_prompt
+ from .normalize import norm_surface
+ from .preview import preview_samples
+@@ -36,41 +39,6 @@ from .preview import preview_samples
+ #: criterion is doing, small enough to leave room for the prompt it must write.
+ _SHOWN = 60
+ 
+-#: Drawing the probe set. Deliberately a NARROWER question than extraction:
+-#: "name a few things a reader would look up" is answerable in a way that "list
+-#: everything this passage is about" is not, and that asymmetry is the only
+-#: reason a model may grade its own family's work here. It is not a licence to
+-#: trust it — the set is written to disk in plain text so the corpus owner can
+-#: strike out whatever was never reasonable.
+-PROBES = """Below is one document from a technical corpus.
+-
+-Name up to {per_doc} things in it that a reader would come back to look up later —
+-something they would type into a search box expecting a page about that thing. A
+-machine, a part or component number, a material, a named process step, a defect,
+-a supplier.
+-
+-NOT section headings, NOT generic categories, NOT measured values, NOT words
+-about knowledge itself. The test: if the word could appear in a document from any
+-other field, it is not one of these.
+-
+-Answer as JSON and nothing else: {{"names": ["...", "..."]}}
+-
+-DOCUMENT
+-{text}"""
+-
+-
+-@dataclass(frozen=True)
+-class Round:
+-    """One version: the prompt it used, and how it scored on both sets."""
+-
+-    version: int
+-    prompt: str
+-    tune: dict[str, Any]
+-    holdout: dict[str, Any] | None
+-    #: Which version this one's prompt was written from. Not always the version
+-    #: before it — see :func:`pick_parent`.
+-    parent: int | None = None
+-
+ 
+ def fitness(card: dict[str, Any]) -> float:
+     """One number for comparing versions: what it FINDS, discounted by clutter.
+@@ -87,52 +55,14 @@ def fitness(card: dict[str, Any]) -> float:
+     return hit * max(0.0, 1.0 - noise)
+ 
+ 
+-def pick_parent(history: list[Round]) -> Round:
+-    """The version the next revision is written from — the best one, not the last.
+-
+-    Single-line hill climbing has no way back. A bad revision becomes the base
+-    for the next one, and the good version it came from stays on disk but out of
+-    play, so one unlucky edit can cost every round after it. Keeping the whole
+-    scored history in contention is what a beam is for (ProTeGi, arXiv
+-    2305.03495, whose own runs overfit a mini-batch around iteration 3-4 and
+-    which selects across a beam rather than a line for this reason).
+-
+-    Only versions the HOLDOUT graded are eligible. A version scored on its own
+-    mini-batch is not comparable with one scored on the fixed set — choosing
+-    between them would reward a lucky draw, which is the failure the holdout
+-    exists to prevent.
+-
+-    Ties go to the later version: on a plateau the loop should keep moving
+-    forward rather than re-deriving from the same old parent for ever.
+-    """
+-    graded = [r for r in history if r.holdout is not None]
+-    if not graded:
+-        return history[-1]
+-    best = graded[0]
+-    for candidate in graded[1:]:
+-        assert candidate.holdout is not None and best.holdout is not None
+-        if fitness(candidate.holdout) >= fitness(best.holdout):
+-            best = candidate
+-    return best
+-
+-
+-def next_version(rounds_dir: Path) -> int:
+-    """The version this run will SCORE — the newest one nothing has scored yet.
+-
+-    Not "one past the highest", because a round leaves TWO versions behind: the
+-    one it scored and the revision it was handed. Counting folders would skip the
+-    revision, which is the only thing the round produced that is new.
+-    """
+-    written = {int(p.name[1:]) for p in rounds_dir.glob("v*") if p.name[1:].isdigit()}
+-    scored = {v for v in written if (rounds_dir / f"v{v}" / "scorecard.json").is_file()}
+-    pending = sorted(written - scored)
+-    return pending[0] if pending else 0
++def pick_parent(rounds: list[Round]) -> Round:
++    """The version the next revision is written from — the best by :func:`fitness`."""
++    return _pick_best(rounds, fitness)
+ 
+ 
+ def load_prompt(rounds_dir: Path, version: int) -> str:
+     """The prompt a version ran with — the built-in one when nothing is filed."""
+-    path = rounds_dir / f"v{version}" / "prompt.txt"
+-    return path.read_text() if path.is_file() else built_in_prompt()
++    return _load_prompt(rounds_dir, version, default=built_in_prompt())
+ 
+ 
+ def scorecard(out_dir: Path, *, seed: int = 0) -> dict[str, Any]:
+@@ -158,53 +88,6 @@ def scorecard(out_dir: Path, *, seed: int = 0) -> dict[str, Any]:
+     }
+ 
+ 
+-def ensure_probes(llm: ILlm, rounds_dir: Path, holdout_dir: Path, *, per_doc: int = 3) -> list[str]:
+-    """The frozen probe set: names a reader would come back to look up.
+-
+-    Drawn ONCE, from the holdout, and never again. A target redrawn each round is
+-    not a target — an improvement and a re-draw would be the same shape in the
+-    numbers, and nobody reading the run later could tell which they were seeing.
+-
+-    Kept as plain text on purpose. Whoever owns the corpus can delete a probe
+-    that was never reasonable, and this will not write over them.
+-    """
+-    path = rounds_dir / "probes.json"
+-    if path.is_file():
+-        names = json.loads(path.read_text())["names"]
+-        assert isinstance(names, list)
+-        return [str(n) for n in names]
+-
+-    drawn: list[str] = []
+-    for doc in sorted(holdout_dir.glob("*.txt")):
+-        drawn.extend(
+-            _probe_names(llm.collect(PROBES.format(per_doc=per_doc, text=doc.read_text())))
+-        )
+-    seen: set[str] = set()
+-    unique: list[str] = []
+-    for name in drawn:
+-        key = norm_surface(name)
+-        if key and key not in seen:
+-            seen.add(key)
+-            unique.append(name)
+-    rounds_dir.mkdir(parents=True, exist_ok=True)
+-    path.write_text(json.dumps({"names": unique}, ensure_ascii=False, indent=2) + "\n")
+-    return unique
+-
+-
+-def _probe_names(reply: str) -> list[str]:
+-    """The names out of one reply, or none — a model that answers unusably costs
+-    this document's probes, not the run."""
+-    start, end = reply.find("{"), reply.rfind("}")
+-    if start == -1 or end < start:
+-        return []
+-    try:
+-        data = json.loads(reply[start : end + 1])
+-    except (json.JSONDecodeError, ValueError):
+-        return []
+-    names = data.get("names") if isinstance(data, dict) else None
+-    return [str(n) for n in names if str(n).strip()] if isinstance(names, list) else []
+-
+-
+ def probe_score(out_dir: Path, names: list[str]) -> dict[str, Any]:
+     """Would ``lookup_entity`` find each probe in the graph this version built?
+ 
+@@ -655,7 +538,7 @@ def run_round(
+         max_tokens=chunk_tokens,
+         overlap_tokens=chunk_overlap,
+         concurrency=concurrency,
+-        only=_batch(tune_dir, batch, seed=version),
++        only=draw_batch(tune_dir, batch, seed=version),
+     )
+     # The pool, not the batch: `tune_dir` is every document available, and the
+     # frequency half of termhood must be estimated from all of it.
+@@ -692,13 +575,18 @@ def run_round(
+         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
+     )
+ 
+-    history = _history(rounds_dir, upto=version)
+-    _write_index(rounds_dir, history)
++    past = history(rounds_dir, upto=version)
++    write_index(
++        rounds_dir,
++        past,
++        headline=_HEADLINE,
++        holdout_only=("lookup_hit_rate", "judged_keep_share"),
++    )
+ 
+     # The beam: revise the best version so far, which is not always this one.
+     # Its own evidence travels with it, so the prompt and the scores the model is
+     # asked to reason about describe the same run.
+-    parent = pick_parent(history)
++    parent = pick_parent(past)
+ 
+     # Whoever owns the corpus knows its vocabulary better than this file does.
+     notes = rounds_dir / "examples.md"
+@@ -707,14 +595,14 @@ def run_round(
+             parent.prompt,
+             parent.tune,
+             parent.holdout,
+-            history,
++            past,
+             examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
+             lost=lost_names(rounds_dir, version=version),
+         )
+     )
+     nxt = rounds_dir / f"v{version + 1}"
+     nxt.mkdir(parents=True, exist_ok=True)
+-    (nxt / "prompt.txt").write_text(_usable(revised, fallback=parent.prompt))
++    (nxt / "prompt.txt").write_text(usable(revised, fallback=parent.prompt, required=("{text}",)))
+     # Which version this one grew from. Without it the folder is unreadable: v7
+     # written from v3 looks exactly like v7 written from v6, and the shape of the
+     # search — the whole reason a beam is worth having — is invisible.
+@@ -722,28 +610,6 @@ def run_round(
+     return version
+ 
+ 
+-def _batch(tune_dir: Path, size: int, *, seed: int) -> set[str] | None:
+-    """Which documents this round reads, or ``None`` for all of them.
+-
+-    Drawing a few instead of reading the pool makes a round short enough to run
+-    many times, and — more usefully — makes consecutive rounds see DIFFERENT
+-    passages, so the prompt cannot settle into the peculiarities of one fixed
+-    set. The tuning corpus stops being a thing to overfit and becomes a pool.
+-
+-    Seeded by the ROUND, so a retry after a crash reads the same passages while
+-    the next round reads others. Both halves of that matter: without the first a
+-    killed round changes the question it was answering; without the second the
+-    batch is the whole set with extra steps.
+-    """
+-    if size <= 0:
+-        return None
+-    names = sorted(p.stem for p in tune_dir.glob("*.txt"))
+-    if len(names) <= size:
+-        return None
+-    Random(seed).shuffle(names)
+-    return set(names[:size])
+-
+-
+ def _extracted_names(out_dir: Path) -> list[str]:
+     """The distinct surfaces one preview run produced, in a stable order."""
+     mentions = json.loads((out_dir / "mentions.json").read_text())
+@@ -753,81 +619,8 @@ def _extracted_names(out_dir: Path) -> list[str]:
+     return sorted(seen.values())
+ 
+ 
+-def _usable(revised: str, *, fallback: str) -> str:
+-    """The revision, or the prompt it was meant to replace.
+-
+-    A model that drops `{text}` produces a prompt under which every passage
+-    extracts to nothing — and the extractor never raises, so the next round would
+-    score a silent zero and revise from THAT. Keeping the previous prompt makes a
+-    bad revision cost one round instead of ending the run.
+-    """
+-    body = revised.strip()
+-    if body.startswith("```"):
+-        body = body.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+-    return body if "{text}" in body else fallback
+-
+-
+-def _history(rounds_dir: Path, *, upto: int) -> list[Round]:
+-    out: list[Round] = []
+-    for version in range(upto + 1):
+-        card = rounds_dir / f"v{version}" / "scorecard.json"
+-        if not card.is_file():
+-            continue
+-        data = json.loads(card.read_text())
+-        parent = rounds_dir / f"v{version}" / "parent.txt"
+-        out.append(
+-            Round(
+-                version=version,
+-                prompt=(rounds_dir / f"v{version}" / "prompt.txt").read_text(),
+-                tune=data["tune"],
+-                holdout=data["holdout"],
+-                parent=int(parent.read_text()) if parent.is_file() else None,
+-            )
+-        )
+-    return out
+-
+-
+-def _write_index(rounds_dir: Path, history: list[Round]) -> None:
+-    """One row per version, so the whole run reads at a glance.
+-
+-    This is what a person coming back to a folder of rounds actually opens, and
+-    it is the only place tune and holdout sit side by side — which is where
+-    overfitting shows up as a shape rather than as a number somebody has to go
+-    and compare by hand.
+-    """
+-    (rounds_dir / "index.json").write_text(
+-        json.dumps(
+-            [
+-                {
+-                    "version": r.version,
+-                    # Which version's prompt this one was written from. The beam
+-                    # means that is not always the version before it, and a
+-                    # search whose shape is invisible cannot be walked back.
+-                    "revised_from": r.parent,
+-                    "tune": {k: r.tune[k] for k in _HEADLINE},
+-                    # The holdout row carries the two judgements as well as the
+-                    # counts. `lookup_hit_rate` is the column that falls when the
+-                    # criterion has tightened past useful — the one a person
+-                    # opening this file is actually looking for — and
+-                    # `judged_keep_share` is an INDEPENDENT opinion, which is
+-                    # what lets a reader see whether the version the beam chose
+-                    # is one the judge agreed with.
+-                    "holdout": (
+-                        {
+-                            k: r.holdout.get(k)
+-                            for k in (*_HEADLINE, "lookup_hit_rate", "judged_keep_share")
+-                        }
+-                        if r.holdout
+-                        else None
+-                    ),
+-                }
+-                for r in history
+-            ],
+-            ensure_ascii=False,
+-            indent=2,
+-        )
+-        + "\n"
+-    )
+-
+-
+-_HEADLINE = ("mentions_per_document", "distinct_names", "mentions_starting_with_a_digit")
++_HEADLINE: tuple[str, ...] = (
++    "mentions_per_document",
++    "distinct_names",
++    "mentions_starting_with_a_digit",
++)
+diff --git a/src/workspace_app/kb/tuning.py b/src/workspace_app/kb/tuning.py
+new file mode 100644
+index 00000000..95135742
+--- /dev/null
++++ b/src/workspace_app/kb/tuning.py
+@@ -0,0 +1,264 @@
++"""The bookkeeping every prompt-tuning loop needs, with no opinion about scoring.
++
++Which prompt a round grades, where the versions live, which one the next
++revision is written from, what the index file looks like — none of that depends
++on WHAT is being extracted. The graph criterion and the card criterion are
++deliberately separate pipelines (see ``docs/plan-context-card-evidence.md``:
++they are being compared, so sharing an extractor would make them share a failure
++mode). Sharing the harness is the opposite — it makes the comparison fairer,
++because neither side wins by being searched more thoroughly than the other.
++
++What stays with each task is the scorecard, the reward, and the meta-prompt.
++Those are the whole substance; this is the filing cabinet.
++"""
++
++from __future__ import annotations
++
++import json
++import unicodedata
++from collections.abc import Callable
++from dataclasses import dataclass
++from pathlib import Path
++from random import Random
++from typing import Any
++
++from .llm import ILlm
++
++
++def _key(text: str) -> str:
++    """Deduping only — each pipeline matches probes with ITS OWN normaliser,
++    the one its lookup tool uses. This just stops the same name being drawn
++    twice under two spellings."""
++    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
++
++
++@dataclass(frozen=True)
++class Round:
++    """One version: the prompt it ran, and how it scored on both sets."""
++
++    version: int
++    prompt: str
++    tune: dict[str, Any]
++    holdout: dict[str, Any] | None
++    #: Which version this one's prompt was written from. Not always the version
++    #: before it — see :func:`pick_parent`.
++    parent: int | None = None
++
++
++def next_version(rounds_dir: Path) -> int:
++    """The version this run will SCORE — the newest one nothing has scored yet.
++
++    Not "one past the highest", because a round leaves TWO versions behind: the
++    one it scored and the revision it was handed. Counting folders would skip the
++    revision, which is the only thing the round produced that is new.
++    """
++    written = {int(p.name[1:]) for p in rounds_dir.glob("v*") if p.name[1:].isdigit()}
++    scored = {v for v in written if (rounds_dir / f"v{v}" / "scorecard.json").is_file()}
++    pending = sorted(written - scored)
++    return pending[0] if pending else 0
++
++
++def load_prompt(rounds_dir: Path, version: int, *, default: str) -> str:
++    """The prompt a version ran with — the built-in one when nothing is filed."""
++    path = rounds_dir / f"v{version}" / "prompt.txt"
++    return path.read_text() if path.is_file() else default
++
++
++def pick_parent(history: list[Round], fitness: Callable[[dict[str, Any]], float]) -> Round:
++    """The version the next revision is written from — the best one, not the last.
++
++    Single-line hill climbing has no way back. A bad revision becomes the base
++    for the next one, and the good version it came from stays on disk but out of
++    play, so one unlucky edit can cost every round after it. Keeping the whole
++    scored history in contention is what a beam is for (ProTeGi, arXiv
++    2305.03495, whose own runs overfit a mini-batch around iteration 3-4 and
++    which selects across a beam rather than a line for this reason).
++
++    Only versions the HOLDOUT graded are eligible. A version scored on its own
++    mini-batch is not comparable with one scored on the fixed set — choosing
++    between them would reward a lucky draw, which is the failure the holdout
++    exists to prevent.
++
++    Ties go to the later version: on a plateau the loop should keep moving
++    forward rather than re-deriving from the same old parent for ever.
++    """
++    graded = [r for r in history if r.holdout is not None]
++    if not graded:
++        return history[-1]
++    best = graded[0]
++    for candidate in graded[1:]:
++        assert candidate.holdout is not None and best.holdout is not None
++        if fitness(candidate.holdout) >= fitness(best.holdout):
++            best = candidate
++    return best
++
++
++def history(rounds_dir: Path, *, upto: int) -> list[Round]:
++    """Every version up to and including ``upto`` that has been scored."""
++    out: list[Round] = []
++    for version in range(upto + 1):
++        card = rounds_dir / f"v{version}" / "scorecard.json"
++        if not card.is_file():
++            continue
++        data = json.loads(card.read_text())
++        parent = rounds_dir / f"v{version}" / "parent.txt"
++        out.append(
++            Round(
++                version=version,
++                prompt=(rounds_dir / f"v{version}" / "prompt.txt").read_text(),
++                tune=data["tune"],
++                holdout=data["holdout"],
++                parent=int(parent.read_text()) if parent.is_file() else None,
++            )
++        )
++    return out
++
++
++def write_index(
++    rounds_dir: Path,
++    rounds: list[Round],
++    *,
++    headline: tuple[str, ...],
++    holdout_only: tuple[str, ...] = (),
++) -> None:
++    """One row per version, so the whole run reads at a glance.
++
++    This is what a person coming back to a folder of rounds actually opens, and
++    it is the only place tune and holdout sit side by side — which is where
++    overfitting shows up as a shape rather than as a number somebody has to go
++    and compare by hand.
++    """
++    (rounds_dir / "index.json").write_text(
++        json.dumps(
++            [
++                {
++                    "version": r.version,
++                    # Which version's prompt this one was written from. The beam
++                    # means that is not always the version before it, and a
++                    # search whose shape is invisible cannot be walked back.
++                    "revised_from": r.parent,
++                    "tune": {k: r.tune.get(k) for k in headline},
++                    "holdout": (
++                        {k: r.holdout.get(k) for k in (*headline, *holdout_only)}
++                        if r.holdout
++                        else None
++                    ),
++                }
++                for r in rounds
++            ],
++            ensure_ascii=False,
++            indent=2,
++        )
++        + "\n"
++    )
++
++
++def batch(pool_dir: Path, size: int, *, seed: int) -> set[str] | None:
++    """Which documents this round reads, or ``None`` for all of them.
++
++    Drawing a few instead of reading the pool makes a round short enough to run
++    many times, and — more usefully — makes consecutive rounds see DIFFERENT
++    passages, so the prompt cannot settle into the peculiarities of one fixed
++    set. The tuning corpus stops being a thing to overfit and becomes a pool.
++
++    Seeded by the ROUND, so a retry after a crash reads the same passages while
++    the next round reads others. Both halves of that matter: without the first a
++    killed round changes the question it was answering; without the second the
++    batch is the whole set with extra steps.
++    """
++    if size <= 0:
++        return None
++    names = sorted(p.stem for p in pool_dir.glob("*.txt"))
++    if len(names) <= size:
++        return None
++    Random(seed).shuffle(names)
++    return set(names[:size])
++
++
++def usable(revised: str, *, fallback: str, required: tuple[str, ...]) -> str:
++    """The revision, or the prompt it was meant to replace.
++
++    A revision that dropped a placeholder produces a prompt under which every
++    document extracts to nothing — and nothing raises, so the next round would
++    score a silent zero and revise from THAT. Keeping the previous prompt makes a
++    bad revision cost one round instead of ending the run.
++    """
++    body = revised.strip()
++    if body.startswith("```"):
++        body = body.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
++    return body if all(slot in body for slot in required) else fallback
++
++
++#: Drawing the probe set. Deliberately a NARROWER question than extraction:
++#: "name a few things a reader would look up" is answerable in a way that "list
++#: everything this passage is about" is not, and that asymmetry is the only
++#: reason a model may grade its own family's work here. It is not a licence to
++#: trust it — the set is written to disk in plain text so the corpus owner can
++#: strike out whatever was never reasonable.
++PROBES = """Below is one document from a technical corpus.
++
++Name up to {per_doc} things in it that a reader would come back to look up later —
++something they would type into a search box expecting a page about that thing. A
++machine, a part or component number, a material, a named process step, a defect,
++a supplier.
++
++NOT section headings, NOT generic categories, NOT measured values, NOT words
++about knowledge itself. The test: if the word could appear in a document from any
++other field, it is not one of these.
++
++Answer as JSON and nothing else: {{"names": ["...", "..."]}}
++
++DOCUMENT
++{text}"""
++
++
++def ensure_probes(llm: ILlm, rounds_dir: Path, holdout_dir: Path, *, per_doc: int = 3) -> list[str]:
++    """The frozen probe set: names a reader would come back to look up.
++
++    Drawn ONCE, from the holdout, and never again. A target redrawn each round is
++    not a target — an improvement and a re-draw would be the same shape in the
++    numbers, and nobody reading the run later could tell which they were seeing.
++
++    Kept as plain text on purpose. Whoever owns the corpus can delete a probe
++    that was never reasonable, and this will not write over them.
++
++    Shared between the graph and the card pipelines ON PURPOSE. They extract
++    independently — that is the experiment — but "what would a reader look up in
++    these documents" belongs to the documents, not to either pipeline, and one
++    set scored against both is the only way the comparison means anything.
++    """
++    path = rounds_dir / "probes.json"
++    if path.is_file():
++        names = json.loads(path.read_text())["names"]
++        assert isinstance(names, list)
++        return [str(n) for n in names]
++
++    drawn: list[str] = []
++    for doc in sorted(holdout_dir.glob("*.txt")):
++        drawn.extend(
++            _probe_names(llm.collect(PROBES.format(per_doc=per_doc, text=doc.read_text())))
++        )
++    seen: set[str] = set()
++    unique: list[str] = []
++    for name in drawn:
++        key = _key(name)
++        if key and key not in seen:
++            seen.add(key)
++            unique.append(name)
++    rounds_dir.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps({"names": unique}, ensure_ascii=False, indent=2) + "\n")
++    return unique
++
++
++def _probe_names(reply: str) -> list[str]:
++    """The names out of one reply, or none — a model that answers unusably costs
++    this document's probes, not the run."""
++    start, end = reply.find("{"), reply.rfind("}")
++    if start == -1 or end < start:
++        return []
++    try:
++        data = json.loads(reply[start : end + 1])
++    except (json.JSONDecodeError, ValueError):
++        return []
++    names = data.get("names") if isinstance(data, dict) else None
++    return [str(n) for n in names if str(n).strip()] if isinstance(names, list) else []
+diff --git a/tests/kb/test_card_extract.py b/tests/kb/test_card_extract.py
+index 097d5da5..4efecc1c 100644
+--- a/tests/kb/test_card_extract.py
++++ b/tests/kb/test_card_extract.py
+@@ -130,3 +130,32 @@ def test_the_prompt_handed_out_to_edit_is_the_one_that_runs():
+     extract_cards(model, "回焊爐")
+ 
+     assert model.prompts[0] == built_in_prompt().replace("{text}", "回焊爐")
++
++
++def test_the_claims_that_failed_the_quote_gate_are_COUNTED_not_just_dropped():
++    """Silently dropping them makes the criterion look perfect: everything that
++    survives is grounded by construction, so "how grounded is this prompt" reads
++    100% however much it invented. The ratio of proposed to kept is the direct
++    measurement of inventing, and it is the number the tuning loop steers on."""
++    from workspace_app.kb.cards.extract import extract
++
++    document = "回焊爐是一種加熱設備。"
++    model = _Model(
++        _reply(
++            {
++                "term": "回焊爐",
++                "keys": ["回焊爐"],
++                "statements": [
++                    {"text": "是一種加熱設備", "quote": "回焊爐是一種加熱設備"},
++                    {"text": "屬於薔薇科", "quote": "回焊爐屬於薔薇科"},
++                    {"text": "很貴", "quote": ""},
++                ],
++            }
++        )
++    )
++
++    got = extract(model, document)
++
++    assert got.proposed == 3
++    assert got.kept == 1
++    assert [s.text for c in got.cards for s in c.statements] == ["是一種加熱設備"]
+diff --git a/tests/kb/test_card_preview.py b/tests/kb/test_card_preview.py
+index 1e84f7b1..a2d27a0a 100644
+--- a/tests/kb/test_card_preview.py
++++ b/tests/kb/test_card_preview.py
+@@ -76,3 +76,45 @@ def test_the_summary_counts_what_a_person_would_check_first(tmp_path):
+     assert summary["cards"] == 1
+     assert summary["statements"] == 1
+     assert summary["statements_per_card"] == 1.0
++
++
++class _Inventive(ILlm):
++    """Offers two claims per document; only one is actually in the text."""
++
++    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++        if "STATEMENTS" in prompt:
++            yield json.dumps({"title": "回焊爐", "body": "一種加熱設備"}), False
++        elif "回焊爐是一種加熱設備" in prompt:
++            yield (
++                json.dumps(
++                    {
++                        "cards": [
++                            {
++                                "term": "回焊爐",
++                                "keys": ["回焊爐"],
++                                "statements": [
++                                    {"text": "是一種加熱設備", "quote": "回焊爐是一種加熱設備"},
++                                    {"text": "屬於薔薇科", "quote": "回焊爐屬於薔薇科"},
++                                ],
++                            }
++                        ]
++                    },
++                    ensure_ascii=False,
++                ),
++                False,
++            )
++        else:
++            yield '{"cards": []}', False
++
++
++def test_the_summary_says_how_much_of_what_was_offered_was_grounded(tmp_path):
++    """The one number that measures inventing. Everything surviving the gate is
++    grounded BY CONSTRUCTION, so without this the criterion always looks perfect
++    and the loop has nothing to steer on."""
++    out = tmp_path / "out"
++
++    preview_samples(_Inventive(), _samples(tmp_path), out_dir=out)
++
++    summary = json.loads((out / "summary.json").read_text())
++    assert summary["statements_offered"] == 2
++    assert summary["grounded_rate"] == 0.5
+diff --git a/tests/kb/test_card_tune.py b/tests/kb/test_card_tune.py
+new file mode 100644
+index 00000000..6d3b1e72
+--- /dev/null
++++ b/tests/kb/test_card_tune.py
+@@ -0,0 +1,153 @@
++"""Training the card extraction prompt, one version per run.
++
++The reward turns on one asymmetry: a claim whose quote is not in the document is
++dropped before it reaches a card, so everything that survives is grounded BY
++CONSTRUCTION. Measuring the surviving cards can never catch a prompt inventing.
++Only the ratio of what was OFFERED to what was grounded can — which is why the
++extractor counts its own losses, and why that count is what this loop steers on.
++"""
++
++from __future__ import annotations
++
++import json
++from collections.abc import Iterator
++
++from workspace_app.kb.cards.tune import run_round
++from workspace_app.kb.llm import ILlm
++
++
++class _Model(ILlm):
++    """Offers `invented` extra ungrounded claims alongside a real one."""
++
++    def __init__(self, *, invented: int = 0, revision: str = "REVISED\n{text}") -> None:
++        self._invented = invented
++        self._revision = revision
++        self.revision_prompts: list[str] = []
++
++    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++        if "REVISED PROMPT" in prompt:
++            self.revision_prompts.append(prompt)
++            yield self._revision, False
++        elif "look up later" in prompt:
++            yield '{"names": ["回焊爐", "錫膏"]}', False
++        elif "STATEMENTS" in prompt:
++            yield json.dumps({"title": "回焊爐", "body": "一種加熱設備"}), False
++        else:
++            statements = [{"text": "是一種加熱設備", "quote": "回焊爐是一種加熱設備"}]
++            statements += [
++                {"text": f"編造 {i}", "quote": f"這句話不在文件裡 {i}"}
++                for i in range(self._invented)
++            ]
++            yield (
++                json.dumps(
++                    {"cards": [{"term": "回焊爐", "keys": ["回焊爐"], "statements": statements}]},
++                    ensure_ascii=False,
++                ),
++                False,
++            )
++
++
++def _samples(tmp_path):
++    for half in ("tune", "holdout"):
++        folder = tmp_path / half
++        folder.mkdir()
++        (folder / "d.txt").write_text("回焊爐是一種加熱設備。")
++    return tmp_path / "tune", tmp_path / "holdout"
++
++
++def test_a_round_files_the_prompt_it_ran_and_the_one_it_got_back(tmp_path):
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    version = run_round(_Model(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    assert version == 0
++    assert "{text}" in (rounds / "v0" / "prompt.txt").read_text()
++    assert (rounds / "v1" / "prompt.txt").read_text() == "REVISED\n{text}"
++
++
++def test_the_scorecard_measures_inventing_by_what_was_offered(tmp_path):
++    """Three claims put forward, one of them really in the text. Scoring the
++    cards alone would report a perfectly grounded run."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    run_round(_Model(invented=2), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["tune"]
++    assert card["statements_offered"] == 3
++    assert card["statements"] == 1
++    assert card["grounded_rate"] == 0.333
++
++
++def test_the_probe_set_is_the_one_the_graph_loop_uses(tmp_path):
++    """Both pipelines are scored against the SAME frozen probes. They extract
++    independently — that is the experiment being run — so a shared yardstick is
++    the only thing that makes the two runs comparable."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    run_round(_Model(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    assert json.loads((rounds / "probes.json").read_text())["names"] == ["回焊爐", "錫膏"]
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
++    assert card["lookup_hit_rate"] == 0.5, "回焊爐 got a card, 錫膏 did not"
++    assert card["probes_missed"] == ["錫膏"]
++
++
++def test_a_version_that_cards_nothing_cannot_win_on_being_clean(tmp_path):
++    """Refusing everything offers nothing, so its grounded rate is a perfect 1.0
++    by vacuity. Multiplying by the hit rate is what stops that being the top
++    score — the same trap, and the same fix, as on the graph side."""
++    from workspace_app.kb.cards.tune import fitness
++
++    empty = {"grounded_rate": 1.0, "lookup_hit_rate": 0.0}
++    messy = {"grounded_rate": 0.4, "lookup_hit_rate": 0.8}
++
++    assert fitness(messy) > fitness(empty)
++
++
++def test_the_reviser_is_told_both_ways_the_prompt_can_fail(tmp_path):
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    model = _Model(invented=1)
++
++    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = model.revision_prompts
++    assert "grounded_rate" in asked
++    assert "lookup_hit_rate" in asked
++    assert "WORST" in asked, "nothing told it that extracting nothing is the worst outcome"
++
++
++def test_a_probe_matches_the_way_lookup_glossary_matches(tmp_path):
++    """`lookup_glossary` folds width and case before comparing, so a probe that
++    differs from the card's key only that way IS answerable. Scoring it stricter
++    than the tool being modelled would report a miss no reader could ever
++    experience — and send the loop chasing it."""
++    from workspace_app.kb.cards.tune import probe_score
++
++    out = tmp_path / "out"
++    out.mkdir()
++    (out / "cards.json").write_text(
++        '[{"keys": ["AOI"], "title": "AOI", "body": "", "statements": [], "sources": []}]'
++    )
++
++    assert probe_score(out, ["ＡＯＩ"])["lookup_hit_rate"] == 1.0
++
++
++def test_the_holdout_can_be_run_less_often_than_the_batch(tmp_path):
++    """The holdout has to be the SAME documents every time or its trend is noise
++    rather than a signal — which makes it the expensive half once the batch is
++    small. A round that skips it records nothing rather than carrying the last
++    number forward as if it were fresh."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    for _ in range(2):
++        run_round(_Model(), rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout, holdout_every=2)
++
++    assert (rounds / "v0" / "holdout").is_dir()
++    assert not (rounds / "v1" / "holdout").exists(), "the holdout ran on a round it should skip"
++    index = json.loads((rounds / "index.json").read_text())
++    assert index[1]["holdout"] is None, "a round that skipped it must say so, not guess"
+diff --git a/tests/kb/test_graph_tune.py b/tests/kb/test_graph_tune.py
+index dc735f8d..ea94a47b 100644
+--- a/tests/kb/test_graph_tune.py
++++ b/tests/kb/test_graph_tune.py
+@@ -176,7 +176,7 @@ def test_the_corpus_owner_can_replace_the_examples(tmp_path):
+ def test_the_history_carries_both_columns_so_a_trend_is_visible():
+     """The model is asked to improve on what came before, so it has to be able
+     to see whether 'before' was improving on the corpus or only on the sample."""
+-    from workspace_app.kb.graph.tune import Round
++    from workspace_app.kb.tuning import Round
+ 
+     card = {
+         "mentions_per_document": 9.0,
+@@ -651,7 +651,8 @@ def test_a_round_revises_from_the_best_scoring_version_not_the_last_one(tmp_path
+     """The revision is filed as the next version either way — the beam decides
+     which PARENT it is written from, so a regression costs one round instead of
+     becoming the base everything after it is measured against."""
+-    from workspace_app.kb.graph.tune import Round, pick_parent
++    from workspace_app.kb.graph.tune import pick_parent
++    from workspace_app.kb.tuning import Round
+ 
+     def card(hit_rate: float) -> dict:
+         return {"lookup_hit_rate": hit_rate, "furniture_share": 0.1, "mentions_per_document": 8.0}
+@@ -667,7 +668,8 @@ def test_a_round_revises_from_the_best_scoring_version_not_the_last_one(tmp_path
+ def test_the_beam_only_looks_at_versions_the_holdout_actually_scored(tmp_path):
+     """A version graded only on its own mini-batch cannot be compared with one
+     graded on the fixed set — picking between them would reward a lucky draw."""
+-    from workspace_app.kb.graph.tune import Round, pick_parent
++    from workspace_app.kb.graph.tune import pick_parent
++    from workspace_app.kb.tuning import Round
+ 
+     def card(hit_rate: float) -> dict:
+         return {"lookup_hit_rate": hit_rate, "furniture_share": 0.1, "mentions_per_document": 8.0}
+@@ -687,7 +689,8 @@ def test_a_version_that_found_nothing_never_wins_the_beam(tmp_path):
+     something — the noise has to be a discount on what was found, not a debt
+     against it. These numbers are the discriminating case: subtracting makes the
+     empty version score higher."""
+-    from workspace_app.kb.graph.tune import Round, pick_parent
++    from workspace_app.kb.graph.tune import pick_parent
++    from workspace_app.kb.tuning import Round
+ 
+     empty = {"lookup_hit_rate": 0.0, "furniture_share": 0.0, "singleton_share": 0.0}
+     messy = {"lookup_hit_rate": 0.6, "furniture_share": 0.5, "singleton_share": 0.2}
+@@ -858,7 +861,8 @@ def test_the_beam_falls_back_to_the_latest_when_nothing_has_been_graded(tmp_path
+     """With `--holdout-every` the very first rounds can all skip the holdout.
+     There is then no comparable score anywhere, and the honest move is to carry
+     on from the newest version rather than to refuse to revise at all."""
+-    from workspace_app.kb.graph.tune import Round, pick_parent
++    from workspace_app.kb.graph.tune import pick_parent
++    from workspace_app.kb.tuning import Round
+ 
+     history = [
+         Round(version=0, prompt="OLD", tune={}, holdout=None),
+@@ -907,7 +911,7 @@ def test_a_judge_reply_that_is_json_but_not_verdicts_reports_nothing(tmp_path):
+ def test_a_batch_larger_than_the_pool_reads_everything(tmp_path):
+     """Asking for more documents than exist is not an error and must not narrow
+     the round to a random subset of what it was already going to read."""
+-    from workspace_app.kb.graph.tune import _batch
++    from workspace_app.kb.tuning import batch as _batch
+ 
+     pool = tmp_path / "tune"
+     pool.mkdir()
+@@ -953,7 +957,7 @@ def test_the_history_skips_a_version_that_was_never_scored(tmp_path):
+     """The newest version always exists as a prompt with no scorecard — it is
+     what the NEXT round will grade. Reading it as history would put an ungraded
+     prompt in the trend."""
+-    from workspace_app.kb.graph.tune import _history
++    from workspace_app.kb.tuning import history as _history
+ 
+     rounds = tmp_path / "rounds"
+     (rounds / "v0").mkdir(parents=True)
