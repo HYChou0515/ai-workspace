@@ -1,0 +1,384 @@
+diff --git a/src/workspace_app/card_preview/__main__.py b/src/workspace_app/card_preview/__main__.py
+index 868833eb..c1f6e308 100644
+--- a/src/workspace_app/card_preview/__main__.py
++++ b/src/workspace_app/card_preview/__main__.py
+@@ -62,6 +62,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+         "version. Every version is kept and scored on both sets, so a later reader can see "
+         "where tuning became overfitting and walk back",
+     )
++    p.add_argument(
++        "--from",
++        dest="samples_from",
++        type=Path,
++        default=None,
++        metavar="DIR",
++        help="where tune/, holdout/ and probes.json live (default: the --tune-round dir). "
++        "Point both pipelines at ONE of these: they must read the same documents and be "
++        "scored against the same probes, while keeping their versions in separate folders",
++    )
+     p.add_argument(
+         "--batch",
+         type=int,
+@@ -72,6 +82,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+     p.add_argument(
+         "--holdout-every", type=int, default=1, metavar="N", help="run the holdout every Nth round"
+     )
++    p.add_argument(
++        "--concurrency",
++        type=int,
++        default=1,
++        metavar="N",
++        help="read N documents at once, and write up N terms at once. The calls do not "
++        "depend on each other; raise it until the model server, not this process, is the "
++        "thing that is busy",
++    )
+     p.add_argument("-v", "--verbose", action="store_true")
+     return p.parse_args(argv)
+ 
+@@ -111,13 +130,16 @@ def main() -> None:
+     if args.tune_round:
+         from ..kb.cards.tune import run_round
+ 
++        shared = args.samples_from or args.tune_round
+         version = run_round(
+             llm,
+             rounds_dir=args.tune_round,
+-            tune_dir=args.tune_round / "tune",
+-            holdout_dir=args.tune_round / "holdout",
++            tune_dir=shared / "tune",
++            holdout_dir=shared / "holdout",
++            probes_dir=shared,
+             batch=args.batch,
+             holdout_every=args.holdout_every,
++            concurrency=args.concurrency,
+             synthesis_prompt=(args.synthesis_prompt.read_text() if args.synthesis_prompt else None),
+         )
+         print(f"scored v{version}, wrote v{version + 1}", file=sys.stderr)
+@@ -134,9 +156,12 @@ def main() -> None:
+         out_dir=args.out_dir,
+         extract_prompt=args.extract_prompt.read_text() if args.extract_prompt else None,
+         synthesis_prompt=args.synthesis_prompt.read_text() if args.synthesis_prompt else None,
++        concurrency=args.concurrency,
+     )
+     summary = json.loads((args.out_dir / "summary.json").read_text())
+-    print(f"wrote {args.out_dir}/ — nothing was stored", file=sys.stderr)
++    print(
++        f"cards written to {args.out_dir}/  (the knowledge base was not touched)", file=sys.stderr
++    )
+     for key, value in summary.items():
+         print(f"  {key}: {value}", file=sys.stderr)
+     thin = [c.title for c in cards if len(c.sources) == 1][:8]
+diff --git a/src/workspace_app/graph_preview/__main__.py b/src/workspace_app/graph_preview/__main__.py
+index c7709ba1..d3430e75 100644
+--- a/src/workspace_app/graph_preview/__main__.py
++++ b/src/workspace_app/graph_preview/__main__.py
+@@ -171,7 +171,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+ def _report(out_dir, graph, *, file) -> None:
+     """The numbers, on stderr, so the JSON on disk stays the artefact."""
+     summary = json.loads((out_dir / "summary.json").read_text())
+-    print(f"wrote {out_dir}/ — nothing was stored", file=file)
++    print(f"graph written to {out_dir}/  (the knowledge base was not touched)", file=file)
+     for key, value in summary.items():
+         if key != "kinds":
+             print(f"  {key}: {value}", file=file)
+@@ -302,9 +302,9 @@ def main() -> None:
+             seed=args.seed,
+         )
+         print(
+-            f"wrote {tune} tuning and {held} holdout documents to {args.out_dir}/ — "
+-            "nothing was stored. Iterate with --samples, and keep the holdout unread "
+-            "until you think you are done",
++            f"wrote {tune} tuning and {held} holdout documents to {args.out_dir}/  "
++            "(read-only — the knowledge base was not touched). Iterate with --samples, "
++            "and keep the holdout unread until you think you are done",
+             file=sys.stderr,
+         )
+         return
+diff --git a/src/workspace_app/kb/cards/build.py b/src/workspace_app/kb/cards/build.py
+index 8ebcb1a9..45c6bc76 100644
+--- a/src/workspace_app/kb/cards/build.py
++++ b/src/workspace_app/kb/cards/build.py
+@@ -16,6 +16,7 @@ not by overwriting an answer.
+ from __future__ import annotations
+ 
+ import json
++from concurrent.futures import ThreadPoolExecutor
+ from pathlib import Path
+ 
+ import msgspec
+@@ -77,28 +78,60 @@ def build(
+     *,
+     extract_prompt: str | None = None,
+     synthesis_prompt: str | None = None,
++    concurrency: int = 1,
+ ) -> Build:
+-    """Read every document, group what they said by term, write one body each."""
++    """Read every document, group what they said by term, write one body each.
++
++    Both halves run ``concurrency`` calls at a time. Neither depends on the
++    other's answer — a document is read without reference to any other, and a
++    term is written up without reference to any other term — so serial was never
++    a requirement, and a tuning loop pays for it round after round.
++
++    Order is RESTORED either way. It decides which document a card names first
++    and the order its statements are carried in, so a run that let completion
++    order through would build a different glossary each time from one corpus.
++    """
++    extracted = _each(
++        [doc.text for doc in docs],
++        lambda text: extract(llm, text, prompt=extract_prompt),
++        concurrency,
++    )
+     found: list[tuple[str, TermCard]] = []
+     offered = grounded = 0
+-    for doc in docs:
+-        got = extract(llm, doc.text, prompt=extract_prompt)
++    for doc, got in zip(docs, extracted, strict=True):
+         offered += got.proposed
+         grounded += got.kept
+         found.extend((doc.doc_id, card) for card in got.cards)
+-    cards = [_synthesise(llm, group, prompt=synthesis_prompt) for group in _group(found)]
++    cards = _each(
++        _group(found), lambda g: _synthesise(llm, g, prompt=synthesis_prompt), concurrency
++    )
+     return Build(cards=cards, offered=offered, grounded=grounded)
+ 
+ 
++def _each(items, work, concurrency: int):
++    """``work`` over every item, up to ``concurrency`` at once, in input order."""
++    if concurrency <= 1 or len(items) <= 1:
++        return [work(item) for item in items]
++    with ThreadPoolExecutor(max_workers=concurrency) as pool:
++        return [future.result() for future in [pool.submit(work, item) for item in items]]
++
++
+ def build_cards(
+     llm: ILlm,
+     docs: list[DocSource],
+     *,
+     extract_prompt: str | None = None,
+     synthesis_prompt: str | None = None,
++    concurrency: int = 1,
+ ) -> list[Card]:
+     """The cards alone, for callers with no use for the extraction counts."""
+-    return build(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt).cards
++    return build(
++        llm,
++        docs,
++        extract_prompt=extract_prompt,
++        synthesis_prompt=synthesis_prompt,
++        concurrency=concurrency,
++    ).cards
+ 
+ 
+ def _group(found: list[tuple[str, TermCard]]) -> list[list[tuple[str, TermCard]]]:
+diff --git a/src/workspace_app/kb/cards/extract.py b/src/workspace_app/kb/cards/extract.py
+index e52d3203..a1d10f38 100644
+--- a/src/workspace_app/kb/cards/extract.py
++++ b/src/workspace_app/kb/cards/extract.py
+@@ -87,9 +87,7 @@ def _parse(reply: str, text: str) -> Extraction:
+         if isinstance(raw, dict) and isinstance(raw.get("statements"), list)
+     )
+     kept = [card for raw in cards if (card := _card(raw, text)) is not None]
+-    return Extraction(
+-        cards=kept, proposed=proposed, kept=sum(len(c.statements) for c in kept)
+-    )
++    return Extraction(cards=kept, proposed=proposed, kept=sum(len(c.statements) for c in kept))
+ 
+ 
+ def _card(raw: Any, text: str) -> TermCard | None:
+diff --git a/src/workspace_app/kb/cards/preview.py b/src/workspace_app/kb/cards/preview.py
+index d251d691..be35c496 100644
+--- a/src/workspace_app/kb/cards/preview.py
++++ b/src/workspace_app/kb/cards/preview.py
+@@ -68,10 +68,17 @@ def preview_samples(
+     extract_prompt: str | None = None,
+     synthesis_prompt: str | None = None,
+     only: set[str] | None = None,
++    concurrency: int = 1,
+ ) -> list[Card]:
+     """Build the cards for a folder of documents and write them out."""
+     docs = read_samples(sample_dir, only=only)
+-    built = build(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt)
++    built = build(
++        llm,
++        docs,
++        extract_prompt=extract_prompt,
++        synthesis_prompt=synthesis_prompt,
++        concurrency=concurrency,
++    )
+     write_preview(built, docs, out_dir=out_dir)
+     return built.cards
+ 
+diff --git a/src/workspace_app/kb/cards/tune.py b/src/workspace_app/kb/cards/tune.py
+index 118eec0c..5db59f6a 100644
+--- a/src/workspace_app/kb/cards/tune.py
++++ b/src/workspace_app/kb/cards/tune.py
+@@ -33,7 +33,17 @@ from .preview import preview_samples
+ #: criterion is doing, small enough to leave room for the prompt it must write.
+ _SHOWN = 50
+ 
+-_HEADLINE: tuple[str, ...] = ("cards", "statements_per_card", "grounded_rate")
++#: The columns `index.json` carries for every version, on BOTH document sets.
++#: `grounded_rate` is how much of what the model offered was really in the text
++#: — inventing, measured. `cards_from_one_document` is the proliferation the
++#: owner reported: several thin cards about one term instead of one that
++#: accumulated. `statements_per_card` is the same shape from the other side.
++_HEADLINE: tuple[str, ...] = (
++    "cards",
++    "statements_per_card",
++    "cards_from_one_document",
++    "grounded_rate",
++)
+ 
+ 
+ def load_prompt(rounds_dir: Path, version: int) -> str:
+@@ -204,8 +214,10 @@ def run_round(
+     tune_dir: Path,
+     holdout_dir: Path,
+     reviser: ILlm | None = None,
++    probes_dir: Path | None = None,
+     batch: int = 0,
+     holdout_every: int = 1,
++    concurrency: int = 1,
+     synthesis_prompt: str | None = None,
+ ) -> int:
+     """Score the newest extraction prompt, ask for a revision, file it as next."""
+@@ -221,6 +233,7 @@ def run_round(
+         out_dir=here / "tune",
+         extract_prompt=current,
+         synthesis_prompt=synthesis_prompt,
++        concurrency=concurrency,
+         only=draw_batch(tune_dir, batch, seed=version),
+     )
+     tune = scorecard(here / "tune")
+@@ -229,13 +242,17 @@ def run_round(
+     if holdout_every <= 1 or version % holdout_every == 0:
+         # Before the extraction, so a run killed part-way keeps the probes it
+         # paid for: they are the one artefact here that must never be redrawn.
+-        probes = ensure_probes(llm, rounds_dir, holdout_dir)
++        # The probe set lives with the SAMPLES, not with this loop's versions:
++        # the graph pipeline is scored against the same one, and two draws would
++        # be two yardsticks — which is the one thing a comparison cannot have.
++        probes = ensure_probes(llm, probes_dir or rounds_dir, holdout_dir)
+         preview_samples(
+             llm,
+             holdout_dir,
+             out_dir=here / "holdout",
+             extract_prompt=current,
+             synthesis_prompt=synthesis_prompt,
++            concurrency=concurrency,
+         )
+         holdout = scorecard(here / "holdout") | probe_score(here / "holdout", probes)
+     (here / "scorecard.json").write_text(
+diff --git a/tests/kb/test_card_build.py b/tests/kb/test_card_build.py
+index dd1d07f5..26a888e3 100644
+--- a/tests/kb/test_card_build.py
++++ b/tests/kb/test_card_build.py
+@@ -141,3 +141,72 @@ def test_the_synthesis_prompt_handed_out_to_edit_carries_both_slots():
+ 
+     assert "{term}" in built_in_synthesis_prompt()
+     assert "{statements}" in built_in_synthesis_prompt()
++
++
++def test_documents_are_read_several_at_a_time():
++    """One model call per document IS the cost of a round, and the calls do not
++    depend on each other. Serial was never a requirement — just nobody said
++    otherwise, and a tuning loop is round-count times round-time."""
++    import threading
++    import time
++
++    lock = threading.Lock()
++    live = peak = 0
++
++    class _Slow(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            nonlocal live, peak
++            if _SYNTHESIS_MARK in prompt:
++                yield json.dumps({"title": "t", "body": "b"}), False
++                return
++            with lock:
++                live += 1
++                peak = max(peak, live)
++            try:
++                time.sleep(0.05)
++                yield '{"cards": []}', False
++            finally:
++                with lock:
++                    live -= 1
++
++    docs = [DocSource(doc_id=f"d{i}", text=f"文件 {i}") for i in range(8)]
++    build_cards(_Slow(), docs, concurrency=4)
++
++    assert peak > 1, "the documents were still read one at a time"
++    assert peak <= 4, f"more calls were in flight ({peak}) than the limit allowed"
++
++
++def test_the_documents_keep_their_order_however_they_finish():
++    """Order decides which document a card names as its first source and the
++    order statements are carried in. A run that reordered would produce a
++    different glossary each time from the same corpus."""
++    import time
++
++    class _OutOfOrder(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if _SYNTHESIS_MARK in prompt:
++                yield json.dumps({"title": "t", "body": "b"}), False
++                return
++            index = int(prompt.rsplit("文件 ", 1)[-1])
++            time.sleep(0.02 * (6 - index))  # later documents answer FIRST
++            yield (
++                json.dumps(
++                    {
++                        "cards": [
++                            {
++                                "term": f"w{index}",
++                                "keys": [f"w{index}"],
++                                "statements": [{"text": "x", "quote": f"文件 {index}"}],
++                            }
++                        ]
++                    },
++                    ensure_ascii=False,
++                ),
++                False,
++            )
++
++    docs = [DocSource(doc_id=f"d{i}", text=f"文件 {i}") for i in range(6)]
++
++    cards = build_cards(_OutOfOrder(), docs, concurrency=6)
++
++    assert [c.statements[0].quote for c in cards] == [f"文件 {i}" for i in range(6)]
+diff --git a/tests/kb/test_card_tune.py b/tests/kb/test_card_tune.py
+index 6d3b1e72..4a3eed92 100644
+--- a/tests/kb/test_card_tune.py
++++ b/tests/kb/test_card_tune.py
+@@ -151,3 +151,29 @@ def test_the_holdout_can_be_run_less_often_than_the_batch(tmp_path):
+     assert not (rounds / "v1" / "holdout").exists(), "the holdout ran on a round it should skip"
+     index = json.loads((rounds / "index.json").read_text())
+     assert index[1]["holdout"] is None, "a round that skipped it must say so, not guess"
++
++
++def test_card_versions_live_apart_from_the_samples_they_share(tmp_path):
++    """The two pipelines read the SAME documents and are scored against the SAME
++    probes — that is the whole basis for comparing them. Their versions must not
++    share a folder even so: both write `vN/prompt.txt` and `index.json`, so one
++    loop would silently overwrite the other's history."""
++    shared = tmp_path / "rounds"
++    shared.mkdir()
++    tune, holdout = _samples(shared)
++    (shared / "v0").mkdir()
++    (shared / "v0" / "prompt.txt").write_text("the graph loop's version, untouched")
++    mine = tmp_path / "rounds-cards"
++
++    run_round(
++        _Model(),
++        rounds_dir=mine,
++        tune_dir=tune,
++        holdout_dir=holdout,
++        probes_dir=shared,
++    )
++
++    assert (shared / "v0" / "prompt.txt").read_text() == "the graph loop's version, untouched"
++    assert "{text}" in (mine / "v0" / "prompt.txt").read_text()
++    assert (shared / "probes.json").is_file(), "the probe set belongs to the shared draw"
++    assert not (mine / "probes.json").exists(), "a second probe set is a second yardstick"
