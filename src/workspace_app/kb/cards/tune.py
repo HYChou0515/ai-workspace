@@ -112,9 +112,37 @@ def probe_score(out_dir: Path, names: list[str]) -> dict[str, Any]:
     }
 
 
+#: What went wrong in the real corpus, quoted from the owner rather than
+#: imagined. Stated as SHAPES — a thing that was invented, a thing that failed to
+#: accumulate — never as a list of words to avoid: naming words would mean
+#: guessing what the corpus is about from outside it, and every criterion this
+#: project invented that way was wrong within a corpus or two.
+#:
+#: Overridable: drop an `examples.md` in the rounds folder and it replaces this.
+DEFAULT_EXAMPLES = """A statement earns its place only if a reader can put a
+finger on the sentence that makes it. These came out of the real corpus and are
+the failure being fixed:
+
+- A card for 蘋果 reading 蘋果是薔薇科蘋果屬 — no document ever mentioned 薔薇科
+  or 蘋果屬. The model filled the gap from what it already knew. That is the
+  failure: a knowledge base answering from general knowledge is not reporting
+  what the corpus says, and a reader cannot tell the two apart.
+- Several cards about 蘋果, each describing a different facet, because each
+  document wrote its own. One document said it is a fruit and another said it is
+  red, and both became cards.
+
+What the second one should have produced is ONE card reading 蘋果是紅色的水果 —
+every statement carried, combined into a sentence rather than listed side by
+side. Statements accumulate across documents; the card is written from
+all of them at once."""
+
 REVISE = """You are improving the prompt that pulls STATEMENTS about terms out of
 a technical corpus, for a glossary. Your whole output is the REVISED PROMPT — no
 commentary, no explanation, no code fences.
+
+## What the corpus is, and what going wrong has looked like
+
+{examples}
 
 ## What the prompt is for
 
@@ -168,6 +196,7 @@ def revision_prompt(
     rounds: list[Round],
     *,
     carry: int = 2,
+    examples: str = DEFAULT_EXAMPLES,
 ) -> str:
     """What the model is asked, in full.
 
@@ -201,6 +230,7 @@ def revision_prompt(
     for r in rounds[-carry:]:
         rows.append(f"\n### The prompt v{r.version} ran\n```\n{r.prompt.strip()}\n```")
     return REVISE.format(
+        examples=examples,
         current=current,
         scores=scores,
         history="\n".join(rows) if rows else "(this is the first version)",
@@ -263,8 +293,16 @@ def run_round(
     write_index(rounds_dir, past, headline=_HEADLINE, holdout_only=("lookup_hit_rate",))
 
     parent = pick_parent(past)
+    # Whoever owns the corpus knows its bad cards better than this file does.
+    notes = rounds_dir / "examples.md"
     revised = (reviser or llm).collect(
-        revision_prompt(parent.prompt, parent.tune, parent.holdout, past)
+        revision_prompt(
+            parent.prompt,
+            parent.tune,
+            parent.holdout,
+            past,
+            examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
+        )
     )
     nxt = rounds_dir / f"v{version + 1}"
     nxt.mkdir(parents=True, exist_ok=True)

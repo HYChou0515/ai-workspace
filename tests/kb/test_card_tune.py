@@ -177,3 +177,35 @@ def test_card_versions_live_apart_from_the_samples_they_share(tmp_path):
     assert "{text}" in (mine / "v0" / "prompt.txt").read_text()
     assert (shared / "probes.json").is_file(), "the probe set belongs to the shared draw"
     assert not (mine / "probes.json").exists(), "a second probe set is a second yardstick"
+
+
+def test_the_reviser_is_shown_what_going_wrong_actually_looked_like(tmp_path):
+    """Abstract failure modes are not evidence. What made the graph loop work was
+    the corpus owner's OWN bad output quoted back — a model told "do not invent"
+    has nothing to compare against, and a criterion written from outside the
+    corpus is the mistake this whole design exists to unlearn."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    model = _Model()
+
+    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    (asked,) = model.revision_prompts
+    assert "薔薇科" in asked, "the invented-definition example never reached the reviser"
+    assert "紅色的水果" in asked, "nor did what the right answer looks like"
+
+
+def test_the_corpus_owner_can_replace_the_examples(tmp_path):
+    """Whoever owns the corpus knows what its bad cards look like; the built-in
+    text only has to be right enough to start."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    rounds.mkdir()
+    (rounds / "examples.md").write_text("我們的壞卡長這樣:工單編號被寫成一段流程說明。")
+    model = _Model()
+
+    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    (asked,) = model.revision_prompts
+    assert "工單編號" in asked
+    assert "薔薇科" not in asked, "the built-in examples were sent as well as theirs"
