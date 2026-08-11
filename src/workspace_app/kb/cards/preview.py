@@ -18,27 +18,38 @@ from typing import Any
 import msgspec
 
 from ..llm import ILlm
-from .build import Card, DocSource, build_cards
+from .build import Build, Card, DocSource, build
 
 
-def read_samples(sample_dir: Path) -> list[DocSource]:
-    """Every `.txt` in the folder, in a stable order."""
+def read_samples(sample_dir: Path, *, only: set[str] | None = None) -> list[DocSource]:
+    """Every `.txt` in the folder, in a stable order — or just the named ones.
+
+    ``only`` is how a tuning round reads a mini-batch: fewer model calls per
+    round, and a different draw each round so the prompt cannot settle into one
+    fixed set of documents.
+    """
     return [
         DocSource(doc_id=path.stem, text=path.read_text(encoding="utf-8"))
         for path in sorted(sample_dir.glob("*.txt"))
+        if only is None or path.stem in only
     ]
 
 
-def summarise(cards: list[Card], docs: list[DocSource]) -> dict[str, Any]:
+def summarise(built: Build, docs: list[DocSource]) -> dict[str, Any]:
     """The numbers a person checks before reading anything.
 
     ``statements_per_card`` is the one to watch: a card resting on a single
     statement from a single document is the shape that used to proliferate —
     several thin cards about one term instead of one that accumulated.
     """
+    cards = built.cards
     statements = sum(len(c.statements) for c in cards)
     return {
         "documents": len(docs),
+        # What the model put forward, and how much of it was really in the text.
+        # The rate is the direct measurement of inventing — see `Build`.
+        "statements_offered": built.offered,
+        "grounded_rate": round(built.grounded / built.offered, 3) if built.offered else 0.0,
         "cards": len(cards),
         "statements": statements,
         "statements_per_card": round(statements / len(cards), 2) if cards else 0.0,
@@ -56,20 +67,21 @@ def preview_samples(
     out_dir: Path,
     extract_prompt: str | None = None,
     synthesis_prompt: str | None = None,
+    only: set[str] | None = None,
 ) -> list[Card]:
     """Build the cards for a folder of documents and write them out."""
-    docs = read_samples(sample_dir)
-    cards = build_cards(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt)
-    write_preview(cards, docs, out_dir=out_dir)
-    return cards
+    docs = read_samples(sample_dir, only=only)
+    built = build(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt)
+    write_preview(built, docs, out_dir=out_dir)
+    return built.cards
 
 
-def write_preview(cards: list[Card], docs: list[DocSource], *, out_dir: Path) -> None:
+def write_preview(built: Build, docs: list[DocSource], *, out_dir: Path) -> None:
     """One file per layer, in a deterministic order, so two runs either side of a
     criterion change diff to the change."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    ordered = sorted(cards, key=lambda c: c.norm_keys[:1] or [""])
-    _dump(out_dir / "summary.json", summarise(cards, docs))
+    ordered = sorted(built.cards, key=lambda c: c.norm_keys[:1] or [""])
+    _dump(out_dir / "summary.json", summarise(built, docs))
     # `to_builtins`, not `structs.asdict`: a Card holds Statement structs, and
     # asdict flattens only the top level — the nested ones would reach json.dumps
     # as objects and land on disk as their repr, unreadable and undiffable.

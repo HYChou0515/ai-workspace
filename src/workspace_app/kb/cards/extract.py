@@ -35,32 +35,61 @@ class TermCard(msgspec.Struct, frozen=True):
     statements: list[Statement]
 
 
+class Extraction(msgspec.Struct, frozen=True):
+    """What one document yielded, and what it cost to get there.
+
+    ``proposed`` and ``kept`` are the whole reason this type exists. Dropping an
+    ungrounded claim silently makes the criterion look perfect — everything that
+    survives is grounded BY CONSTRUCTION, so "how much does this prompt invent"
+    reads as zero no matter how much it invented. The gap between the two is the
+    direct measurement, and it is what the tuning loop steers on.
+    """
+
+    cards: list[TermCard]
+    proposed: int
+    kept: int
+
+
 def built_in_prompt() -> str:
     """The prompt as shipped, so a person can start from it rather than a blank
     file."""
     return _PROMPT
 
 
-def extract_cards(llm: ILlm, text: str, *, prompt: str | None = None) -> list[TermCard]:
-    """The terms this passage states something about."""
+def extract(llm: ILlm, text: str, *, prompt: str | None = None) -> Extraction:
+    """What this document states, and how much of what was offered survived."""
     template = prompt or _PROMPT
     reply = llm.collect(template.replace("{text}", text))
     return _parse(reply, text)
 
 
-def _parse(reply: str, text: str) -> list[TermCard]:
+def extract_cards(llm: ILlm, text: str, *, prompt: str | None = None) -> list[TermCard]:
+    """The terms this passage states something about."""
+    return extract(llm, text, prompt=prompt).cards
+
+
+def _parse(reply: str, text: str) -> Extraction:
+    empty = Extraction(cards=[], proposed=0, kept=0)
     start, end = reply.find("{"), reply.rfind("}")
     if start == -1 or end < start:
-        return []
+        return empty
     try:
         # The slice starts at a "{", so whatever parses out of it is an object.
         data = json.loads(reply[start : end + 1])
     except (json.JSONDecodeError, ValueError):
-        return []
+        return empty
     cards = data.get("cards")
     if not isinstance(cards, list):
-        return []
-    return [card for raw in cards if (card := _card(raw, text)) is not None]
+        return empty
+    proposed = sum(
+        len(raw["statements"])
+        for raw in cards
+        if isinstance(raw, dict) and isinstance(raw.get("statements"), list)
+    )
+    kept = [card for raw in cards if (card := _card(raw, text)) is not None]
+    return Extraction(
+        cards=kept, proposed=proposed, kept=sum(len(c.statements) for c in kept)
+    )
 
 
 def _card(raw: Any, text: str) -> TermCard | None:

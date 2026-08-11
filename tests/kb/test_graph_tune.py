@@ -176,7 +176,7 @@ def test_the_corpus_owner_can_replace_the_examples(tmp_path):
 def test_the_history_carries_both_columns_so_a_trend_is_visible():
     """The model is asked to improve on what came before, so it has to be able
     to see whether 'before' was improving on the corpus or only on the sample."""
-    from workspace_app.kb.graph.tune import Round
+    from workspace_app.kb.tuning import Round
 
     card = {
         "mentions_per_document": 9.0,
@@ -651,7 +651,8 @@ def test_a_round_revises_from_the_best_scoring_version_not_the_last_one(tmp_path
     """The revision is filed as the next version either way — the beam decides
     which PARENT it is written from, so a regression costs one round instead of
     becoming the base everything after it is measured against."""
-    from workspace_app.kb.graph.tune import Round, pick_parent
+    from workspace_app.kb.graph.tune import pick_parent
+    from workspace_app.kb.tuning import Round
 
     def card(hit_rate: float) -> dict:
         return {"lookup_hit_rate": hit_rate, "furniture_share": 0.1, "mentions_per_document": 8.0}
@@ -667,7 +668,8 @@ def test_a_round_revises_from_the_best_scoring_version_not_the_last_one(tmp_path
 def test_the_beam_only_looks_at_versions_the_holdout_actually_scored(tmp_path):
     """A version graded only on its own mini-batch cannot be compared with one
     graded on the fixed set — picking between them would reward a lucky draw."""
-    from workspace_app.kb.graph.tune import Round, pick_parent
+    from workspace_app.kb.graph.tune import pick_parent
+    from workspace_app.kb.tuning import Round
 
     def card(hit_rate: float) -> dict:
         return {"lookup_hit_rate": hit_rate, "furniture_share": 0.1, "mentions_per_document": 8.0}
@@ -687,7 +689,8 @@ def test_a_version_that_found_nothing_never_wins_the_beam(tmp_path):
     something — the noise has to be a discount on what was found, not a debt
     against it. These numbers are the discriminating case: subtracting makes the
     empty version score higher."""
-    from workspace_app.kb.graph.tune import Round, pick_parent
+    from workspace_app.kb.graph.tune import pick_parent
+    from workspace_app.kb.tuning import Round
 
     empty = {"lookup_hit_rate": 0.0, "furniture_share": 0.0, "singleton_share": 0.0}
     messy = {"lookup_hit_rate": 0.6, "furniture_share": 0.5, "singleton_share": 0.2}
@@ -858,7 +861,8 @@ def test_the_beam_falls_back_to_the_latest_when_nothing_has_been_graded(tmp_path
     """With `--holdout-every` the very first rounds can all skip the holdout.
     There is then no comparable score anywhere, and the honest move is to carry
     on from the newest version rather than to refuse to revise at all."""
-    from workspace_app.kb.graph.tune import Round, pick_parent
+    from workspace_app.kb.graph.tune import pick_parent
+    from workspace_app.kb.tuning import Round
 
     history = [
         Round(version=0, prompt="OLD", tune={}, holdout=None),
@@ -907,7 +911,7 @@ def test_a_judge_reply_that_is_json_but_not_verdicts_reports_nothing(tmp_path):
 def test_a_batch_larger_than_the_pool_reads_everything(tmp_path):
     """Asking for more documents than exist is not an error and must not narrow
     the round to a random subset of what it was already going to read."""
-    from workspace_app.kb.graph.tune import _batch
+    from workspace_app.kb.tuning import batch as _batch
 
     pool = tmp_path / "tune"
     pool.mkdir()
@@ -953,7 +957,7 @@ def test_the_history_skips_a_version_that_was_never_scored(tmp_path):
     """The newest version always exists as a prompt with no scorecard — it is
     what the NEXT round will grade. Reading it as history would put an ungraded
     prompt in the trend."""
-    from workspace_app.kb.graph.tune import _history
+    from workspace_app.kb.tuning import history as _history
 
     rounds = tmp_path / "rounds"
     (rounds / "v0").mkdir(parents=True)

@@ -22,7 +22,7 @@ import msgspec
 
 from ..context_cards import derive_norm_keys, norm
 from ..llm import ILlm
-from .extract import Statement, TermCard, extract_cards
+from .extract import Statement, TermCard, extract
 
 _SYNTHESIS = (Path(__file__).parent / "prompts" / "card_synthesis.md").read_text(encoding="utf-8")
 
@@ -56,6 +56,40 @@ def built_in_synthesis_prompt() -> str:
     return _SYNTHESIS
 
 
+class Build(msgspec.Struct, frozen=True):
+    """The cards, and what the extraction cost to get them.
+
+    ``offered`` counts the claims the model put forward; ``grounded`` counts the
+    ones whose quote was really in the document. Everything that survives is
+    grounded BY CONSTRUCTION, so without the pair the criterion always measures
+    as perfect however much it invented — and inventing is the failure this whole
+    design exists to remove.
+    """
+
+    cards: list[Card]
+    offered: int
+    grounded: int
+
+
+def build(
+    llm: ILlm,
+    docs: list[DocSource],
+    *,
+    extract_prompt: str | None = None,
+    synthesis_prompt: str | None = None,
+) -> Build:
+    """Read every document, group what they said by term, write one body each."""
+    found: list[tuple[str, TermCard]] = []
+    offered = grounded = 0
+    for doc in docs:
+        got = extract(llm, doc.text, prompt=extract_prompt)
+        offered += got.proposed
+        grounded += got.kept
+        found.extend((doc.doc_id, card) for card in got.cards)
+    cards = [_synthesise(llm, group, prompt=synthesis_prompt) for group in _group(found)]
+    return Build(cards=cards, offered=offered, grounded=grounded)
+
+
 def build_cards(
     llm: ILlm,
     docs: list[DocSource],
@@ -63,13 +97,8 @@ def build_cards(
     extract_prompt: str | None = None,
     synthesis_prompt: str | None = None,
 ) -> list[Card]:
-    """Read every document, group what they said by term, write one body each."""
-    found: list[tuple[str, TermCard]] = [
-        (doc.doc_id, card)
-        for doc in docs
-        for card in extract_cards(llm, doc.text, prompt=extract_prompt)
-    ]
-    return [_synthesise(llm, group, prompt=synthesis_prompt) for group in _group(found)]
+    """The cards alone, for callers with no use for the extraction counts."""
+    return build(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt).cards
 
 
 def _group(found: list[tuple[str, TermCard]]) -> list[list[tuple[str, TermCard]]]:

@@ -52,6 +52,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="DIR",
         help="write both built-in prompts to DIR and exit, as a starting point to edit",
     )
+    p.add_argument(
+        "--tune-round",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="run ONE prompt-improvement round in DIR: score the newest unscored extraction "
+        "prompt on DIR/tune and DIR/holdout, ask the model for a revision, file it as the next "
+        "version. Every version is kept and scored on both sets, so a later reader can see "
+        "where tuning became overfitting and walk back",
+    )
+    p.add_argument(
+        "--batch",
+        type=int,
+        default=0,
+        metavar="N",
+        help="score only N documents drawn at random from DIR/tune each round (0 = all of it)",
+    )
+    p.add_argument(
+        "--holdout-every", type=int, default=1, metavar="N", help="run the holdout every Nth round"
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -77,8 +97,8 @@ def main() -> None:
         )
         return
 
-    if not args.samples:
-        raise SystemExit("give --samples <folder>, or --dump-prompts <dir>")
+    if not (args.samples or args.tune_round):
+        raise SystemExit("give --samples <folder>, --tune-round <dir>, or --dump-prompts <dir>")
 
     settings = load(config_path=args.config)
     llm = get_kb_llm(settings)
@@ -87,6 +107,26 @@ def main() -> None:
         # preview without one would write empty files and read like a corpus
         # that defines nothing.
         raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
+
+    if args.tune_round:
+        from ..kb.cards.tune import run_round
+
+        version = run_round(
+            llm,
+            rounds_dir=args.tune_round,
+            tune_dir=args.tune_round / "tune",
+            holdout_dir=args.tune_round / "holdout",
+            batch=args.batch,
+            holdout_every=args.holdout_every,
+            synthesis_prompt=(args.synthesis_prompt.read_text() if args.synthesis_prompt else None),
+        )
+        print(f"scored v{version}, wrote v{version + 1}", file=sys.stderr)
+        for row in json.loads((args.tune_round / "index.json").read_text()):
+            print(
+                f"  v{row['version']}: tune {row['tune']} | holdout {row['holdout']}",
+                file=sys.stderr,
+            )
+        return
 
     cards = preview_samples(
         llm,

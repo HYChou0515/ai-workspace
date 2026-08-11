@@ -22,12 +22,15 @@ kept names beside the numbers.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from random import Random
 from typing import Any
 
 from ..llm import ILlm
+from ..tuning import Round, ensure_probes, history, next_version, usable, write_index
+from ..tuning import batch as draw_batch
+from ..tuning import load_prompt as _load_prompt
+from ..tuning import pick_parent as _pick_best
 from .entity_extract import built_in_prompt
 from .normalize import norm_surface
 from .preview import preview_samples
@@ -35,41 +38,6 @@ from .preview import preview_samples
 #: How many surfaces the model is shown from each set. Enough to see what the
 #: criterion is doing, small enough to leave room for the prompt it must write.
 _SHOWN = 60
-
-#: Drawing the probe set. Deliberately a NARROWER question than extraction:
-#: "name a few things a reader would look up" is answerable in a way that "list
-#: everything this passage is about" is not, and that asymmetry is the only
-#: reason a model may grade its own family's work here. It is not a licence to
-#: trust it — the set is written to disk in plain text so the corpus owner can
-#: strike out whatever was never reasonable.
-PROBES = """Below is one document from a technical corpus.
-
-Name up to {per_doc} things in it that a reader would come back to look up later —
-something they would type into a search box expecting a page about that thing. A
-machine, a part or component number, a material, a named process step, a defect,
-a supplier.
-
-NOT section headings, NOT generic categories, NOT measured values, NOT words
-about knowledge itself. The test: if the word could appear in a document from any
-other field, it is not one of these.
-
-Answer as JSON and nothing else: {{"names": ["...", "..."]}}
-
-DOCUMENT
-{text}"""
-
-
-@dataclass(frozen=True)
-class Round:
-    """One version: the prompt it used, and how it scored on both sets."""
-
-    version: int
-    prompt: str
-    tune: dict[str, Any]
-    holdout: dict[str, Any] | None
-    #: Which version this one's prompt was written from. Not always the version
-    #: before it — see :func:`pick_parent`.
-    parent: int | None = None
 
 
 def fitness(card: dict[str, Any]) -> float:
@@ -87,52 +55,14 @@ def fitness(card: dict[str, Any]) -> float:
     return hit * max(0.0, 1.0 - noise)
 
 
-def pick_parent(history: list[Round]) -> Round:
-    """The version the next revision is written from — the best one, not the last.
-
-    Single-line hill climbing has no way back. A bad revision becomes the base
-    for the next one, and the good version it came from stays on disk but out of
-    play, so one unlucky edit can cost every round after it. Keeping the whole
-    scored history in contention is what a beam is for (ProTeGi, arXiv
-    2305.03495, whose own runs overfit a mini-batch around iteration 3-4 and
-    which selects across a beam rather than a line for this reason).
-
-    Only versions the HOLDOUT graded are eligible. A version scored on its own
-    mini-batch is not comparable with one scored on the fixed set — choosing
-    between them would reward a lucky draw, which is the failure the holdout
-    exists to prevent.
-
-    Ties go to the later version: on a plateau the loop should keep moving
-    forward rather than re-deriving from the same old parent for ever.
-    """
-    graded = [r for r in history if r.holdout is not None]
-    if not graded:
-        return history[-1]
-    best = graded[0]
-    for candidate in graded[1:]:
-        assert candidate.holdout is not None and best.holdout is not None
-        if fitness(candidate.holdout) >= fitness(best.holdout):
-            best = candidate
-    return best
-
-
-def next_version(rounds_dir: Path) -> int:
-    """The version this run will SCORE — the newest one nothing has scored yet.
-
-    Not "one past the highest", because a round leaves TWO versions behind: the
-    one it scored and the revision it was handed. Counting folders would skip the
-    revision, which is the only thing the round produced that is new.
-    """
-    written = {int(p.name[1:]) for p in rounds_dir.glob("v*") if p.name[1:].isdigit()}
-    scored = {v for v in written if (rounds_dir / f"v{v}" / "scorecard.json").is_file()}
-    pending = sorted(written - scored)
-    return pending[0] if pending else 0
+def pick_parent(rounds: list[Round]) -> Round:
+    """The version the next revision is written from — the best by :func:`fitness`."""
+    return _pick_best(rounds, fitness)
 
 
 def load_prompt(rounds_dir: Path, version: int) -> str:
     """The prompt a version ran with — the built-in one when nothing is filed."""
-    path = rounds_dir / f"v{version}" / "prompt.txt"
-    return path.read_text() if path.is_file() else built_in_prompt()
+    return _load_prompt(rounds_dir, version, default=built_in_prompt())
 
 
 def scorecard(out_dir: Path, *, seed: int = 0) -> dict[str, Any]:
@@ -156,53 +86,6 @@ def scorecard(out_dir: Path, *, seed: int = 0) -> dict[str, Any]:
         "kinds": dict(list(summary["kinds"].items())[:12]),
         "kept": sorted(names[:_SHOWN]),
     }
-
-
-def ensure_probes(llm: ILlm, rounds_dir: Path, holdout_dir: Path, *, per_doc: int = 3) -> list[str]:
-    """The frozen probe set: names a reader would come back to look up.
-
-    Drawn ONCE, from the holdout, and never again. A target redrawn each round is
-    not a target — an improvement and a re-draw would be the same shape in the
-    numbers, and nobody reading the run later could tell which they were seeing.
-
-    Kept as plain text on purpose. Whoever owns the corpus can delete a probe
-    that was never reasonable, and this will not write over them.
-    """
-    path = rounds_dir / "probes.json"
-    if path.is_file():
-        names = json.loads(path.read_text())["names"]
-        assert isinstance(names, list)
-        return [str(n) for n in names]
-
-    drawn: list[str] = []
-    for doc in sorted(holdout_dir.glob("*.txt")):
-        drawn.extend(
-            _probe_names(llm.collect(PROBES.format(per_doc=per_doc, text=doc.read_text())))
-        )
-    seen: set[str] = set()
-    unique: list[str] = []
-    for name in drawn:
-        key = norm_surface(name)
-        if key and key not in seen:
-            seen.add(key)
-            unique.append(name)
-    rounds_dir.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"names": unique}, ensure_ascii=False, indent=2) + "\n")
-    return unique
-
-
-def _probe_names(reply: str) -> list[str]:
-    """The names out of one reply, or none — a model that answers unusably costs
-    this document's probes, not the run."""
-    start, end = reply.find("{"), reply.rfind("}")
-    if start == -1 or end < start:
-        return []
-    try:
-        data = json.loads(reply[start : end + 1])
-    except (json.JSONDecodeError, ValueError):
-        return []
-    names = data.get("names") if isinstance(data, dict) else None
-    return [str(n) for n in names if str(n).strip()] if isinstance(names, list) else []
 
 
 def probe_score(out_dir: Path, names: list[str]) -> dict[str, Any]:
@@ -655,7 +538,7 @@ def run_round(
         max_tokens=chunk_tokens,
         overlap_tokens=chunk_overlap,
         concurrency=concurrency,
-        only=_batch(tune_dir, batch, seed=version),
+        only=draw_batch(tune_dir, batch, seed=version),
     )
     # The pool, not the batch: `tune_dir` is every document available, and the
     # frequency half of termhood must be estimated from all of it.
@@ -692,13 +575,18 @@ def run_round(
         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
     )
 
-    history = _history(rounds_dir, upto=version)
-    _write_index(rounds_dir, history)
+    past = history(rounds_dir, upto=version)
+    write_index(
+        rounds_dir,
+        past,
+        headline=_HEADLINE,
+        holdout_only=("lookup_hit_rate", "judged_keep_share"),
+    )
 
     # The beam: revise the best version so far, which is not always this one.
     # Its own evidence travels with it, so the prompt and the scores the model is
     # asked to reason about describe the same run.
-    parent = pick_parent(history)
+    parent = pick_parent(past)
 
     # Whoever owns the corpus knows its vocabulary better than this file does.
     notes = rounds_dir / "examples.md"
@@ -707,41 +595,19 @@ def run_round(
             parent.prompt,
             parent.tune,
             parent.holdout,
-            history,
+            past,
             examples=notes.read_text() if notes.is_file() else DEFAULT_EXAMPLES,
             lost=lost_names(rounds_dir, version=version),
         )
     )
     nxt = rounds_dir / f"v{version + 1}"
     nxt.mkdir(parents=True, exist_ok=True)
-    (nxt / "prompt.txt").write_text(_usable(revised, fallback=parent.prompt))
+    (nxt / "prompt.txt").write_text(usable(revised, fallback=parent.prompt, required=("{text}",)))
     # Which version this one grew from. Without it the folder is unreadable: v7
     # written from v3 looks exactly like v7 written from v6, and the shape of the
     # search — the whole reason a beam is worth having — is invisible.
     (nxt / "parent.txt").write_text(str(parent.version))
     return version
-
-
-def _batch(tune_dir: Path, size: int, *, seed: int) -> set[str] | None:
-    """Which documents this round reads, or ``None`` for all of them.
-
-    Drawing a few instead of reading the pool makes a round short enough to run
-    many times, and — more usefully — makes consecutive rounds see DIFFERENT
-    passages, so the prompt cannot settle into the peculiarities of one fixed
-    set. The tuning corpus stops being a thing to overfit and becomes a pool.
-
-    Seeded by the ROUND, so a retry after a crash reads the same passages while
-    the next round reads others. Both halves of that matter: without the first a
-    killed round changes the question it was answering; without the second the
-    batch is the whole set with extra steps.
-    """
-    if size <= 0:
-        return None
-    names = sorted(p.stem for p in tune_dir.glob("*.txt"))
-    if len(names) <= size:
-        return None
-    Random(seed).shuffle(names)
-    return set(names[:size])
 
 
 def _extracted_names(out_dir: Path) -> list[str]:
@@ -753,81 +619,8 @@ def _extracted_names(out_dir: Path) -> list[str]:
     return sorted(seen.values())
 
 
-def _usable(revised: str, *, fallback: str) -> str:
-    """The revision, or the prompt it was meant to replace.
-
-    A model that drops `{text}` produces a prompt under which every passage
-    extracts to nothing — and the extractor never raises, so the next round would
-    score a silent zero and revise from THAT. Keeping the previous prompt makes a
-    bad revision cost one round instead of ending the run.
-    """
-    body = revised.strip()
-    if body.startswith("```"):
-        body = body.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    return body if "{text}" in body else fallback
-
-
-def _history(rounds_dir: Path, *, upto: int) -> list[Round]:
-    out: list[Round] = []
-    for version in range(upto + 1):
-        card = rounds_dir / f"v{version}" / "scorecard.json"
-        if not card.is_file():
-            continue
-        data = json.loads(card.read_text())
-        parent = rounds_dir / f"v{version}" / "parent.txt"
-        out.append(
-            Round(
-                version=version,
-                prompt=(rounds_dir / f"v{version}" / "prompt.txt").read_text(),
-                tune=data["tune"],
-                holdout=data["holdout"],
-                parent=int(parent.read_text()) if parent.is_file() else None,
-            )
-        )
-    return out
-
-
-def _write_index(rounds_dir: Path, history: list[Round]) -> None:
-    """One row per version, so the whole run reads at a glance.
-
-    This is what a person coming back to a folder of rounds actually opens, and
-    it is the only place tune and holdout sit side by side — which is where
-    overfitting shows up as a shape rather than as a number somebody has to go
-    and compare by hand.
-    """
-    (rounds_dir / "index.json").write_text(
-        json.dumps(
-            [
-                {
-                    "version": r.version,
-                    # Which version's prompt this one was written from. The beam
-                    # means that is not always the version before it, and a
-                    # search whose shape is invisible cannot be walked back.
-                    "revised_from": r.parent,
-                    "tune": {k: r.tune[k] for k in _HEADLINE},
-                    # The holdout row carries the two judgements as well as the
-                    # counts. `lookup_hit_rate` is the column that falls when the
-                    # criterion has tightened past useful — the one a person
-                    # opening this file is actually looking for — and
-                    # `judged_keep_share` is an INDEPENDENT opinion, which is
-                    # what lets a reader see whether the version the beam chose
-                    # is one the judge agreed with.
-                    "holdout": (
-                        {
-                            k: r.holdout.get(k)
-                            for k in (*_HEADLINE, "lookup_hit_rate", "judged_keep_share")
-                        }
-                        if r.holdout
-                        else None
-                    ),
-                }
-                for r in history
-            ],
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n"
-    )
-
-
-_HEADLINE = ("mentions_per_document", "distinct_names", "mentions_starting_with_a_digit")
+_HEADLINE: tuple[str, ...] = (
+    "mentions_per_document",
+    "distinct_names",
+    "mentions_starting_with_a_digit",
+)

@@ -130,3 +130,32 @@ def test_the_prompt_handed_out_to_edit_is_the_one_that_runs():
     extract_cards(model, "回焊爐")
 
     assert model.prompts[0] == built_in_prompt().replace("{text}", "回焊爐")
+
+
+def test_the_claims_that_failed_the_quote_gate_are_COUNTED_not_just_dropped():
+    """Silently dropping them makes the criterion look perfect: everything that
+    survives is grounded by construction, so "how grounded is this prompt" reads
+    100% however much it invented. The ratio of proposed to kept is the direct
+    measurement of inventing, and it is the number the tuning loop steers on."""
+    from workspace_app.kb.cards.extract import extract
+
+    document = "回焊爐是一種加熱設備。"
+    model = _Model(
+        _reply(
+            {
+                "term": "回焊爐",
+                "keys": ["回焊爐"],
+                "statements": [
+                    {"text": "是一種加熱設備", "quote": "回焊爐是一種加熱設備"},
+                    {"text": "屬於薔薇科", "quote": "回焊爐屬於薔薇科"},
+                    {"text": "很貴", "quote": ""},
+                ],
+            }
+        )
+    )
+
+    got = extract(model, document)
+
+    assert got.proposed == 3
+    assert got.kept == 1
+    assert [s.text for c in got.cards for s in c.statements] == ["是一種加熱設備"]
