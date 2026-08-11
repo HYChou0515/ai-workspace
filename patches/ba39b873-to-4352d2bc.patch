@@ -1,0 +1,948 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 3d5360ab..6182c1dc 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -82,6 +82,7 @@ omit = [
+     "src/workspace_app/worker/__main__.py",  # #312: settings-driven composition + CLI glue
+     "src/workspace_app/changelog/__main__.py",  # #441: git-log walk + file IO glue
+     "src/workspace_app/graph_preview/__main__.py",  # #697: settings-driven CLI glue
++    "src/workspace_app/card_preview/__main__.py",  # cards: settings-driven CLI glue
+ ]
+ # parallel + sitecustomize's process_startup() let each pytest-xdist worker
+ # subprocess record its own .coverage.* file; `coverage combine` merges them.
+diff --git a/src/workspace_app/card_preview/__init__.py b/src/workspace_app/card_preview/__init__.py
+new file mode 100644
+index 00000000..c2e1f542
+--- /dev/null
++++ b/src/workspace_app/card_preview/__init__.py
+@@ -0,0 +1,12 @@
++"""Offline preview for the context-card criterion.
++
++    uv run python -m workspace_app.card_preview --samples ./rounds/tune -o ./out
++
++Runs the computation production would run (``kb.cards.build.build_cards``) over
++plain text files and writes JSON. It opens no store — the module it calls holds
++no ``SpecStar`` — so there is nothing it could write to even by mistake.
++
++The sample folder is the one ``graph_preview --dump-samples`` produces. Drawing
++the documents is the one read of the real corpus, and both pipelines read the
++same draw, which is what makes their outputs comparable.
++"""
+diff --git a/src/workspace_app/card_preview/__main__.py b/src/workspace_app/card_preview/__main__.py
+new file mode 100644
+index 00000000..6379d7be
+--- /dev/null
++++ b/src/workspace_app/card_preview/__main__.py
+@@ -0,0 +1,108 @@
++"""CLI glue for the read-only card preview.
++
++Settings-driven composition, omitted from coverage like the other CLI roots; the
++seams it calls are unit-tested in ``kb.cards``.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import logging
++import sys
++from pathlib import Path
++
++from ..config.loader import load
++from ..factories import get_kb_llm
++from ..kb.cards.build import built_in_synthesis_prompt
++from ..kb.cards.extract import built_in_prompt
++from ..kb.cards.preview import preview_samples
++
++
++def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
++    p = argparse.ArgumentParser(
++        prog="python -m workspace_app.card_preview",
++        description="Build context cards from a folder of text files and write them as JSON. "
++        "Reads only — nothing is stored.",
++    )
++    p.add_argument(
++        "--samples",
++        type=Path,
++        required=False,
++        help="a folder of .txt files — the one `graph_preview --dump-samples` wrote",
++    )
++    p.add_argument("-o", "--out-dir", type=Path, default=Path("./card-preview"))
++    p.add_argument("--config", type=Path, default=None, help="path to config.yaml")
++    p.add_argument(
++        "--extract-prompt",
++        type=Path,
++        default=None,
++        help="the WHOLE extraction prompt, replacing the built-in one. Must contain {text}",
++    )
++    p.add_argument(
++        "--synthesis-prompt",
++        type=Path,
++        default=None,
++        help="the WHOLE synthesis prompt. Must contain {term} and {statements}",
++    )
++    p.add_argument(
++        "--dump-prompts",
++        type=Path,
++        default=None,
++        metavar="DIR",
++        help="write both built-in prompts to DIR and exit, as a starting point to edit",
++    )
++    p.add_argument("-v", "--verbose", action="store_true")
++    return p.parse_args(argv)
++
++
++def main() -> None:
++    args = _parse_args()
++    logging.basicConfig(
++        level=logging.DEBUG if args.verbose else logging.INFO,
++        format="%(asctime)s %(levelname)s %(message)s",
++        datefmt="%H:%M:%S",
++        stream=sys.stderr,
++    )
++
++    if args.dump_prompts:
++        args.dump_prompts.mkdir(parents=True, exist_ok=True)
++        (args.dump_prompts / "card_extraction.md").write_text(built_in_prompt(), encoding="utf-8")
++        (args.dump_prompts / "card_synthesis.md").write_text(
++            built_in_synthesis_prompt(), encoding="utf-8"
++        )
++        print(
++            f"wrote both prompts to {args.dump_prompts} — edit them, then pass them back",
++            file=sys.stderr,
++        )
++        return
++
++    if not args.samples:
++        raise SystemExit("give --samples <folder>, or --dump-prompts <dir>")
++
++    settings = load(config_path=args.config)
++    llm = get_kb_llm(settings)
++    if llm is None:
++        # Loudly, and before anything runs: extraction IS the model call, so a
++        # preview without one would write empty files and read like a corpus
++        # that defines nothing.
++        raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
++
++    cards = preview_samples(
++        llm,
++        args.samples,
++        out_dir=args.out_dir,
++        extract_prompt=args.extract_prompt.read_text() if args.extract_prompt else None,
++        synthesis_prompt=args.synthesis_prompt.read_text() if args.synthesis_prompt else None,
++    )
++    summary = json.loads((args.out_dir / "summary.json").read_text())
++    print(f"wrote {args.out_dir}/ — nothing was stored", file=sys.stderr)
++    for key, value in summary.items():
++        print(f"  {key}: {value}", file=sys.stderr)
++    thin = [c.title for c in cards if len(c.sources) == 1][:8]
++    if thin:
++        print(f"  cards resting on ONE document: {', '.join(thin)}", file=sys.stderr)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/workspace_app/kb/cards/__init__.py b/src/workspace_app/kb/cards/__init__.py
+new file mode 100644
+index 00000000..a9d38b47
+--- /dev/null
++++ b/src/workspace_app/kb/cards/__init__.py
+@@ -0,0 +1,12 @@
++"""Context cards built the way the knowledge graph is: evidence, then derivation.
++
++Deliberately SEPARATE from ``kb.graph``, which extracts overlapping evidence from
++the same documents. Merging them would save a model pass — and would make the two
++approaches share a failure mode at the layer most likely to have one, which is
++exactly the comparison the owner is currently running. The duplication is the
++experiment; see ``docs/plan-context-card-evidence.md``.
++
++Also separate from the live ``kb.card_gen`` pipeline: nothing here opens a store,
++so a criterion can be tried against real documents offline without writing
++anything anywhere.
++"""
+diff --git a/src/workspace_app/kb/cards/build.py b/src/workspace_app/kb/cards/build.py
+new file mode 100644
+index 00000000..98def449
+--- /dev/null
++++ b/src/workspace_app/kb/cards/build.py
+@@ -0,0 +1,138 @@
++"""All the documents → one card per term, its body derived from the evidence.
++
++Pure computation. This module holds no ``SpecStar`` and imports nothing that
++does, so "it cannot write to the store" is a property of the code rather than a
++promise about it — which is what makes it safe to run a candidate criterion
++against real documents.
++
++The body is DERIVED, never authored-then-chosen. That is the whole point: no
++document knows what the others say, so a definition written per document is one
++facet, and picking a winner between facets throws the rest away. Recomputing
++from the accumulated statements makes merging the normal case, and makes it
++re-runnable — a new document changes the body by being added to the evidence,
++not by overwriting an answer.
++"""
++
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import msgspec
++
++from ..context_cards import derive_norm_keys, norm
++from ..llm import ILlm
++from .extract import Statement, TermCard, extract_cards
++
++_SYNTHESIS = (Path(__file__).parent / "prompts" / "card_synthesis.md").read_text(encoding="utf-8")
++
++
++class DocSource(msgspec.Struct, frozen=True):
++    """One document, as plain text. No store, no collection, no permissions."""
++
++    doc_id: str
++    text: str
++
++
++class Card(msgspec.Struct):
++    """One term, everything the corpus states about it, and the body that says so."""
++
++    keys: list[str]
++    title: str
++    body: str
++    statements: list[Statement]
++    sources: list[str]
++
++    @property
++    def norm_keys(self) -> list[str]:
++        return derive_norm_keys(self.keys)
++
++
++def built_in_synthesis_prompt() -> str:
++    """The prompt as shipped, so a person can start from it rather than a blank
++    file. Named apart from the ``synthesis_prompt`` PARAMETER below: same word,
++    opposite direction, and shadowing it inside ``build_cards`` would make the
++    default unreachable from the one place that needs it."""
++    return _SYNTHESIS
++
++
++def build_cards(
++    llm: ILlm,
++    docs: list[DocSource],
++    *,
++    extract_prompt: str | None = None,
++    synthesis_prompt: str | None = None,
++) -> list[Card]:
++    """Read every document, group what they said by term, write one body each."""
++    found: list[tuple[str, TermCard]] = [
++        (doc.doc_id, card)
++        for doc in docs
++        for card in extract_cards(llm, doc.text, prompt=extract_prompt)
++    ]
++    return [_synthesise(llm, group, prompt=synthesis_prompt) for group in _group(found)]
++
++
++def _group(found: list[tuple[str, TermCard]]) -> list[list[tuple[str, TermCard]]]:
++    """Cards that share ANY normalised key describe the same term.
++
++    Normalised the way `lookup_glossary` normalises, because two cards a reader
++    cannot tell apart at lookup time are the same card as far as the reader is
++    concerned.
++    """
++    groups: list[list[tuple[str, TermCard]]] = []
++    keys: list[set[str]] = []
++    for doc_id, card in found:
++        mine = set(derive_norm_keys(card.keys))
++        hit = next((i for i, ks in enumerate(keys) if ks & mine), None)
++        if hit is None:
++            groups.append([(doc_id, card)])
++            keys.append(mine)
++        else:
++            groups[hit].append((doc_id, card))
++            keys[hit] |= mine
++    return groups
++
++
++def _synthesise(llm: ILlm, group: list[tuple[str, TermCard]], *, prompt: str | None) -> Card:
++    statements: list[Statement] = []
++    seen: set[str] = set()
++    for _, card in group:
++        for statement in card.statements:
++            if statement.text not in seen:
++                seen.add(statement.text)
++                statements.append(statement)
++    keys: list[str] = []
++    seen_keys: set[str] = set()
++    for _, card in group:
++        for key in card.keys:
++            if (n := norm(key)) and n not in seen_keys:
++                seen_keys.add(n)
++                keys.append(key)
++    term = group[0][1].term
++    reply = llm.collect(
++        (prompt or _SYNTHESIS)
++        .replace("{term}", term)
++        .replace("{statements}", "\n".join(f"- {s.text}  「{s.quote}」" for s in statements))
++    )
++    title, body = _read(reply)
++    return Card(
++        keys=keys,
++        title=title or term,
++        body=body,
++        statements=statements,
++        # Which documents this rests on, so a reader can go and check.
++        sources=sorted({doc_id for doc_id, _ in group}),
++    )
++
++
++def _read(reply: str) -> tuple[str, str]:
++    start, end = reply.find("{"), reply.rfind("}")
++    if start == -1 or end < start:
++        return "", ""
++    try:
++        # The slice starts at a "{", so whatever parses out of it is an object —
++        # no isinstance guard here, it could never be false.
++        data = json.loads(reply[start : end + 1])
++    except (json.JSONDecodeError, ValueError):
++        return "", ""
++    return str(data.get("title", "")).strip(), str(data.get("body", "")).strip()
+diff --git a/src/workspace_app/kb/cards/extract.py b/src/workspace_app/kb/cards/extract.py
+new file mode 100644
+index 00000000..2a270931
+--- /dev/null
++++ b/src/workspace_app/kb/cards/extract.py
+@@ -0,0 +1,92 @@
++"""One document → what it STATES about the terms it uses.
++
++Not a written definition. A document cannot know what the rest of the corpus
++says, so any definition it authors is one facet, and a pipeline that then picks
++a winner between facets throws the others away. What a document can supply is a
++claim plus the sentence that makes it; those accumulate, and the definition is
++derived from all of them later.
++"""
++
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++import msgspec
++
++from ..llm import ILlm
++
++_PROMPT = (Path(__file__).parent / "prompts" / "card_extraction.md").read_text(encoding="utf-8")
++
++
++class Statement(msgspec.Struct, frozen=True):
++    """One claim a document makes about a term, and the words that make it."""
++
++    text: str
++    quote: str
++
++
++class TermCard(msgspec.Struct, frozen=True):
++    """Everything ONE document had to say about ONE term."""
++
++    term: str
++    keys: list[str]
++    statements: list[Statement]
++
++
++def built_in_prompt() -> str:
++    """The prompt as shipped, so a person can start from it rather than a blank
++    file."""
++    return _PROMPT
++
++
++def extract_cards(llm: ILlm, text: str, *, prompt: str | None = None) -> list[TermCard]:
++    """The terms this passage states something about."""
++    template = prompt or _PROMPT
++    reply = llm.collect(template.replace("{text}", text))
++    return _parse(reply, text)
++
++
++def _parse(reply: str, text: str) -> list[TermCard]:
++    start, end = reply.find("{"), reply.rfind("}")
++    if start == -1 or end < start:
++        return []
++    try:
++        # The slice starts at a "{", so whatever parses out of it is an object.
++        data = json.loads(reply[start : end + 1])
++    except (json.JSONDecodeError, ValueError):
++        return []
++    cards = data.get("cards")
++    if not isinstance(cards, list):
++        return []
++    return [card for raw in cards if (card := _card(raw, text)) is not None]
++
++
++def _card(raw: Any, text: str) -> TermCard | None:
++    if not isinstance(raw, dict):
++        return None
++    term = str(raw.get("term", "")).strip()
++    if not term:
++        return None
++    keys = [str(k).strip() for k in raw.get("keys", []) if str(k).strip()]
++    statements = [
++        Statement(text=claim, quote=quote)
++        for s in raw.get("statements", [])
++        if isinstance(s, dict)
++        and (claim := str(s.get("text", "")).strip())
++        # The gate. A claim whose quote is not in the document is not a claim
++        # the document made — and a model free to invent the sentence it is
++        # quoting has given nobody anything to check, which would make the
++        # whole requirement decoration.
++        #
++        # Non-empty FIRST: "" is a substring of every document, so the
++        # membership test alone waves through a claim that quoted nothing —
++        # which is the shape a model reaches for when it has a claim it cannot
++        # source, i.e. exactly the one being kept out.
++        and (quote := str(s.get("quote", "")).strip())
++        and quote in text
++    ]
++    # A term with nothing left to say about it is not a card. Keeping it would
++    # put a headword in the glossary that answers nothing when looked up.
++    return TermCard(term=term, keys=keys or [term], statements=statements) if statements else None
+diff --git a/src/workspace_app/kb/cards/preview.py b/src/workspace_app/kb/cards/preview.py
+new file mode 100644
+index 00000000..f358b1dc
+--- /dev/null
++++ b/src/workspace_app/kb/cards/preview.py
+@@ -0,0 +1,84 @@
++"""Run the card criterion over a folder of text files and write the result.
++
++The tuning half of the loop. Once documents have been drawn out of the corpus
++once, trying a criterion should cost a model call per document and nothing else
++— no database, no permissions, no environment that has to be reachable.
++
++The sample folder is the SAME one `graph_preview --dump-samples` writes. That is
++deliberate: the two pipelines stay independent in what they extract, but reading
++the same documents is what makes their results comparable at all.
++"""
++
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++import msgspec
++
++from ..llm import ILlm
++from .build import Card, DocSource, build_cards
++
++
++def read_samples(sample_dir: Path) -> list[DocSource]:
++    """Every `.txt` in the folder, in a stable order."""
++    return [
++        DocSource(doc_id=path.stem, text=path.read_text(encoding="utf-8"))
++        for path in sorted(sample_dir.glob("*.txt"))
++    ]
++
++
++def summarise(cards: list[Card], docs: list[DocSource]) -> dict[str, Any]:
++    """The numbers a person checks before reading anything.
++
++    ``statements_per_card`` is the one to watch: a card resting on a single
++    statement from a single document is the shape that used to proliferate —
++    several thin cards about one term instead of one that accumulated.
++    """
++    statements = sum(len(c.statements) for c in cards)
++    return {
++        "documents": len(docs),
++        "cards": len(cards),
++        "statements": statements,
++        "statements_per_card": round(statements / len(cards), 2) if cards else 0.0,
++        "sources_per_card": (
++            round(sum(len(c.sources) for c in cards) / len(cards), 2) if cards else 0.0
++        ),
++        "cards_from_one_document": sum(1 for c in cards if len(c.sources) == 1),
++    }
++
++
++def preview_samples(
++    llm: ILlm,
++    sample_dir: Path,
++    *,
++    out_dir: Path,
++    extract_prompt: str | None = None,
++    synthesis_prompt: str | None = None,
++) -> list[Card]:
++    """Build the cards for a folder of documents and write them out."""
++    docs = read_samples(sample_dir)
++    cards = build_cards(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt)
++    write_preview(cards, docs, out_dir=out_dir)
++    return cards
++
++
++def write_preview(cards: list[Card], docs: list[DocSource], *, out_dir: Path) -> None:
++    """One file per layer, in a deterministic order, so two runs either side of a
++    criterion change diff to the change."""
++    out_dir.mkdir(parents=True, exist_ok=True)
++    ordered = sorted(cards, key=lambda c: c.norm_keys[:1] or [""])
++    _dump(out_dir / "summary.json", summarise(cards, docs))
++    # `to_builtins`, not `structs.asdict`: a Card holds Statement structs, and
++    # asdict flattens only the top level — the nested ones would reach json.dumps
++    # as objects and land on disk as their repr, unreadable and undiffable.
++    _dump(out_dir / "cards.json", [msgspec.to_builtins(c) for c in ordered])
++
++
++def _dump(path: Path, payload: Any) -> None:
++    # Indented and non-ASCII-preserving: a person reads these, and a corpus
++    # written in Chinese would otherwise arrive as escape sequences.
++    path.write_text(
++        json.dumps(payload, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8"
++    )
+diff --git a/src/workspace_app/kb/cards/prompts/card_extraction.md b/src/workspace_app/kb/cards/prompts/card_extraction.md
+new file mode 100644
+index 00000000..f3af027b
+--- /dev/null
++++ b/src/workspace_app/kb/cards/prompts/card_extraction.md
+@@ -0,0 +1,41 @@
++You are reading one document from a technical corpus and recording what it
++STATES about the terms it uses.
++
++You are not writing definitions. You are recording claims, each with the words
++from the document that make it. Another pass will turn the accumulated claims
++about a term into its definition — it will have claims from documents you cannot
++see, so a definition written here would be one facet of several and would be
++thrown away.
++
++Work through the terms a reader of this collection might not already know:
++domain-specific terms, abbreviations, acronyms, proper nouns, internal code
++names, Chinese/English name pairs. For each one the document says something
++about, record:
++
++- `term`: the surface form the document uses.
++- `keys`: every surface form a reader might search for, EACH as its own string —
++  the abbreviation, the full name, the English and Chinese forms. Readers look
++  cards up by exact match, so list "M4" and "Metal 4" as two keys; never collapse
++  them into one, and never write a sentence as a key.
++- `statements`: what this document says about the term. For each:
++  - `text`: the claim, in your own concise words.
++  - `quote`: the passage from the document that states it, copied EXACTLY —
++    character for character, in the document's own script and spelling.
++
++Record only what the document says. If you would have to draw on knowledge from
++outside this document to write a claim, that claim belongs to someone else's
++knowledge base, not this one — leave it out. A term the document merely uses,
++without saying anything about it, has no statements: leave the term out
++entirely rather than recording an empty card.
++
++Every quote is checked against the document and a claim whose quote is not found
++is discarded, so paraphrasing a quote loses the claim it was carrying.
++
++Output ONLY a JSON object of this exact shape — no prose, no code fence:
++
++{"cards": [{"term": "...", "keys": ["...", "..."], "statements": [{"text": "...", "quote": "..."}]}]}
++
++If the document states nothing about any such term, output {"cards": []}.
++
++Document:
++{text}
+diff --git a/src/workspace_app/kb/cards/prompts/card_synthesis.md b/src/workspace_app/kb/cards/prompts/card_synthesis.md
+new file mode 100644
+index 00000000..3610c0b8
+--- /dev/null
++++ b/src/workspace_app/kb/cards/prompts/card_synthesis.md
+@@ -0,0 +1,30 @@
++Below is everything a technical corpus states about one term, gathered from
++every document that mentioned it. Each line is a claim followed by the exact
++words from the document that make it.
++
++Write the term's card: one short definition that carries ALL of these claims and
++nothing else.
++
++TERM
++{term}
++
++STATEMENTS
++{statements}
++
++Two rules, and they are the whole task:
++
++- **Lose nothing.** Every claim above must be represented. Two claims about the
++  same term usually combine into one sentence rather than sitting side by side —
++  "is a fruit" and "is red" become "a red fruit", not "It is a fruit. It is
++  red."
++- **Add nothing.** Do not draw on anything you know about this term from outside
++  the statements above, however obvious it seems. What the corpus did not say is
++  not part of this card; a reader who wanted general knowledge would not be
++  looking here.
++
++Write 1–3 sentences. State what the thing IS, not where it appeared. Use the
++corpus's own vocabulary — if the statements say 回焊爐, the card says 回焊爐.
++
++Output ONLY a JSON object of this exact shape — no prose, no code fence:
++
++{"title": "...", "body": "..."}
+diff --git a/tests/kb/test_card_build.py b/tests/kb/test_card_build.py
+new file mode 100644
+index 00000000..dd1d07f5
+--- /dev/null
++++ b/tests/kb/test_card_build.py
+@@ -0,0 +1,143 @@
++"""One card per term, its body derived from every statement the corpus makes.
++
++The failure this replaces: a body authored per document, then a winner picked
++between them. No document knows what the others say, so every facet but one is
++discarded — "蘋果是水果" and "蘋果是紅色" arrive from different documents and the
++second is dropped on the floor. Deriving the body from the accumulated
++statements makes the merge the normal case rather than a special one, and makes
++it re-runnable: another document arrives, the body is recomputed, nothing is
++overwritten because nothing was ever stored as the answer.
++"""
++
++from __future__ import annotations
++
++import json
++from collections.abc import Iterator
++
++from workspace_app.kb.cards.build import DocSource, build_cards
++from workspace_app.kb.llm import ILlm
++
++_SYNTHESIS_MARK = "STATEMENTS"
++
++
++class _Corpus(ILlm):
++    """Extracts per document by keyword; synthesises by joining what it is given."""
++
++    def __init__(self, per_document: dict[str, list[dict]]) -> None:
++        self._per_document = per_document
++        self.synthesis_prompts: list[str] = []
++
++    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++        if _SYNTHESIS_MARK in prompt:
++            self.synthesis_prompts.append(prompt)
++            yield json.dumps({"title": "蘋果", "body": "蘋果是紅色的水果"}), False
++            return
++        for marker, cards in self._per_document.items():
++            if marker in prompt:
++                yield json.dumps({"cards": cards}, ensure_ascii=False), False
++                return
++        yield '{"cards": []}', False
++
++
++def _card(term: str, keys: list[str], claim: str, quote: str) -> dict:
++    return {"term": term, "keys": keys, "statements": [{"text": claim, "quote": quote}]}
++
++
++def test_two_documents_about_one_term_make_one_card_carrying_both_statements():
++    docs = [
++        DocSource(doc_id="a", text="蘋果是水果,常見於超市。"),
++        DocSource(doc_id="b", text="蘋果是紅色,也有青色品種。"),
++    ]
++    model = _Corpus(
++        {
++            "蘋果是水果": [_card("蘋果", ["蘋果", "Apple"], "是水果", "蘋果是水果")],
++            "蘋果是紅色": [_card("蘋果", ["蘋果"], "是紅色", "蘋果是紅色")],
++        }
++    )
++
++    (card,) = build_cards(model, docs)
++
++    assert sorted(s.text for s in card.statements) == ["是水果", "是紅色"]
++    assert card.body == "蘋果是紅色的水果"
++    assert card.sources == ["a", "b"], "the card must say which documents it rests on"
++
++
++def test_the_synthesiser_is_handed_every_statement_with_its_quote():
++    """It is asked to lose nothing and add nothing, and it can do neither unless
++    it holds the whole set. The quotes travel too: a claim summarised twice from
++    the same sentence should read as one thing, and only the source words show
++    that."""
++    docs = [
++        DocSource(doc_id="a", text="蘋果是水果,常見於超市。"),
++        DocSource(doc_id="b", text="蘋果是紅色,也有青色品種。"),
++    ]
++    model = _Corpus(
++        {
++            "蘋果是水果": [_card("蘋果", ["蘋果"], "是水果", "蘋果是水果")],
++            "蘋果是紅色": [_card("蘋果", ["蘋果"], "是紅色", "蘋果是紅色")],
++        }
++    )
++
++    build_cards(model, docs)
++
++    (asked,) = model.synthesis_prompts
++    assert "是水果" in asked and "是紅色" in asked
++    assert "蘋果是水果" in asked and "蘋果是紅色" in asked, "the quotes never reached it"
++
++
++def test_the_same_claim_from_two_documents_is_carried_once():
++    """A corpus repeats itself constantly — the same sentence appears in a spec
++    and in the deck that summarises it. Handing the synthesiser the claim twice
++    invites it to write the fact twice."""
++    docs = [
++        DocSource(doc_id="a", text="蘋果是水果。"),
++        DocSource(doc_id="b", text="蘋果是水果。"),
++    ]
++    model = _Corpus({"蘋果是水果": [_card("蘋果", ["蘋果"], "是水果", "蘋果是水果")]})
++
++    (card,) = build_cards(model, docs)
++
++    assert [s.text for s in card.statements] == ["是水果"]
++    assert card.sources == ["a", "b"], "both documents still count as evidence"
++
++
++class _Synth(_Corpus):
++    """A corpus whose synthesis step answers with something unusable."""
++
++    def __init__(self, reply: str) -> None:
++        super().__init__({"蘋果是水果": [_card("蘋果", ["蘋果"], "是水果", "蘋果是水果")]})
++        self._reply = reply
++
++    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++        if _SYNTHESIS_MARK in prompt:
++            yield self._reply, False
++        else:
++            yield from super().stream(prompt)
++
++
++def test_an_unusable_synthesis_leaves_the_evidence_intact():
++    """The statements are the durable part; the body is derived from them and can
++    be derived again. A synthesis that fails must not take the evidence with it —
++    the card still records what the documents said and which ones they were."""
++    docs = [DocSource(doc_id="a", text="蘋果是水果。")]
++
++    (card,) = build_cards(_Synth("I am not sure how to combine these."), docs)
++
++    assert card.body == ""
++    assert [s.text for s in card.statements] == ["是水果"]
++    assert card.title == "蘋果", "with no synthesised title the term itself still names the card"
++
++
++def test_a_synthesis_reply_of_the_wrong_shape_is_read_as_no_body():
++    docs = [DocSource(doc_id="a", text="蘋果是水果。")]
++
++    for reply in ('{"title": ', '{"title": }', '{"nope": 1}', "no json here"):
++        (card,) = build_cards(_Synth(reply), docs)
++        assert card.body == "", reply
++
++
++def test_the_synthesis_prompt_handed_out_to_edit_carries_both_slots():
++    from workspace_app.kb.cards.build import built_in_synthesis_prompt
++
++    assert "{term}" in built_in_synthesis_prompt()
++    assert "{statements}" in built_in_synthesis_prompt()
+diff --git a/tests/kb/test_card_extract.py b/tests/kb/test_card_extract.py
+new file mode 100644
+index 00000000..097d5da5
+--- /dev/null
++++ b/tests/kb/test_card_extract.py
+@@ -0,0 +1,132 @@
++"""Context cards, extracted as EVIDENCE rather than as written definitions.
++
++A document does not know what the rest of the corpus says, so a definition
++authored per document can only ever be one facet — and the pipeline that then
++picks a winner between facets loses the rest. What a document CAN supply is what
++it states, in its own words, with the sentence that states it. Those accumulate;
++the definition is derived from them.
++
++So the unit here is a `Statement`: a claim about a term, and the verbatim quote
++that backs it. A claim whose quote is not in the document is not a claim the
++document made, and it is dropped — the same gate the graph extractor already
++applies to declared aliases, and it matters more here, because a card's entire
++authority is that quote.
++"""
++
++from __future__ import annotations
++
++import json
++from collections.abc import Iterator
++
++from workspace_app.kb.cards.extract import extract_cards
++from workspace_app.kb.llm import ILlm
++
++
++class _Model(ILlm):
++    def __init__(self, reply: str) -> None:
++        self._reply = reply
++        self.prompts: list[str] = []
++
++    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++        self.prompts.append(prompt)
++        yield self._reply, False
++
++
++def _reply(*cards: dict) -> str:
++    return json.dumps({"cards": list(cards)}, ensure_ascii=False)
++
++
++def test_a_term_the_document_defines_becomes_a_card_carrying_the_sentence():
++    """The tracer bullet: what a document says about a term, plus the words that
++    say it."""
++    document = "本廠使用回焊爐進行焊接。回焊爐是一種加熱設備。"
++    model = _Model(
++        _reply(
++            {
++                "term": "回焊爐",
++                "keys": ["回焊爐", "Reflow Oven"],
++                "statements": [{"text": "是一種加熱設備", "quote": "回焊爐是一種加熱設備"}],
++            }
++        )
++    )
++
++    (card,) = extract_cards(model, document)
++
++    assert card.term == "回焊爐"
++    assert card.keys == ["回焊爐", "Reflow Oven"]
++    assert [s.text for s in card.statements] == ["是一種加熱設備"]
++    assert card.statements[0].quote == "回焊爐是一種加熱設備"
++
++
++def test_a_claim_whose_quote_is_not_in_the_document_is_dropped():
++    """The whole defence against invented definitions, and it costs no model
++    call. A model free to invent the sentence it is quoting has given nobody
++    anything to check — the requirement would be decoration. The graph extractor
++    already gates declared aliases this way; a card needs it more, because the
++    quote is the card's entire authority."""
++    document = "本廠使用回焊爐進行焊接。回焊爐是一種加熱設備。"
++    model = _Model(
++        _reply(
++            {
++                "term": "回焊爐",
++                "keys": ["回焊爐"],
++                "statements": [
++                    {"text": "是一種加熱設備", "quote": "回焊爐是一種加熱設備"},
++                    {"text": "屬於 SMT 產線的迴焊段", "quote": "回焊爐屬於 SMT 產線的迴焊段"},
++                ],
++            }
++        )
++    )
++
++    (card,) = extract_cards(model, document)
++
++    assert [s.text for s in card.statements] == ["是一種加熱設備"]
++
++
++def test_a_claim_with_no_quote_at_all_is_dropped():
++    """The empty string is a substring of every document, so "the quote must
++    appear in the text" waves through a claim that quoted nothing — the one
++    shape a model reaches for when it has a claim it cannot source."""
++    document = "本廠使用回焊爐進行焊接。"
++    model = _Model(
++        _reply(
++            {
++                "term": "回焊爐",
++                "keys": ["回焊爐"],
++                "statements": [{"text": "是薔薇科的一種", "quote": ""}],
++            }
++        )
++    )
++
++    assert extract_cards(model, document) == []
++
++
++def test_a_reply_that_is_not_usable_costs_this_document_and_nothing_else():
++    """One document out of hundreds answers with prose, or with truncated JSON.
++    Raising would end the run; returning nothing loses that document only."""
++    replies = (
++        "I could not find any terms.",  # no JSON at all
++        '{"cards": [',  # braces never closed
++        '{"cards": [}',  # braces closed, contents unparseable
++        '{"cards": "not a list"}',  # parses, wrong shape
++    )
++    for reply in replies:
++        assert extract_cards(_Model(reply), "回焊爐是一種加熱設備。") == [], reply
++
++
++def test_entries_that_are_not_cards_are_skipped_rather_than_fatal():
++    """Small models put strings and half-filled objects in the array they were
++    asked to fill with cards."""
++    model = _Model(json.dumps({"cards": ["回焊爐", {"keys": ["x"]}, {"term": "  "}]}))
++
++    assert extract_cards(model, "回焊爐是一種加熱設備。") == []
++
++
++def test_the_prompt_handed_out_to_edit_is_the_one_that_runs():
++    """`--dump-prompts` exists so a person starts from the real thing."""
++    from workspace_app.kb.cards.extract import built_in_prompt
++
++    model = _Model('{"cards": []}')
++    extract_cards(model, "回焊爐")
++
++    assert model.prompts[0] == built_in_prompt().replace("{text}", "回焊爐")
+diff --git a/tests/kb/test_card_preview.py b/tests/kb/test_card_preview.py
+new file mode 100644
+index 00000000..1e84f7b1
+--- /dev/null
++++ b/tests/kb/test_card_preview.py
+@@ -0,0 +1,78 @@
++"""Running a candidate criterion against real documents, offline.
++
++The point of the whole split: `build_cards` holds no store, so a folder of text
++files drawn once from the corpus can be run against as often as a person likes,
++and iterating costs a model call per document and nothing else. What lands on
++disk is what a person diffs between attempts.
++"""
++
++from __future__ import annotations
++
++import json
++from collections.abc import Iterator
++
++from workspace_app.kb.cards.preview import preview_samples
++from workspace_app.kb.llm import ILlm
++
++
++class _Corpus(ILlm):
++    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++        if "STATEMENTS" in prompt:
++            yield json.dumps({"title": "回焊爐", "body": "一種加熱設備"}), False
++        elif "回焊爐是一種加熱設備" in prompt:
++            yield (
++                (
++                    json.dumps(
++                        {
++                            "cards": [
++                                {
++                                    "term": "回焊爐",
++                                    "keys": ["回焊爐"],
++                                    "statements": [
++                                        {"text": "是一種加熱設備", "quote": "回焊爐是一種加熱設備"}
++                                    ],
++                                }
++                            ]
++                        },
++                        ensure_ascii=False,
++                    )
++                ),
++                False,
++            )
++        else:
++            yield '{"cards": []}', False
++
++
++def _samples(tmp_path):
++    folder = tmp_path / "tune"
++    folder.mkdir()
++    (folder / "a.txt").write_text("回焊爐是一種加熱設備。")
++    (folder / "b.txt").write_text("這份文件沒有定義任何東西。")
++    return folder
++
++
++def test_a_folder_of_documents_becomes_cards_on_disk(tmp_path):
++    out = tmp_path / "out"
++
++    cards = preview_samples(_Corpus(), _samples(tmp_path), out_dir=out)
++
++    (card,) = cards
++    assert card.body == "一種加熱設備"
++    written = json.loads((out / "cards.json").read_text())
++    assert written[0]["keys"] == ["回焊爐"]
++    assert written[0]["statements"][0]["quote"] == "回焊爐是一種加熱設備"
++
++
++def test_the_summary_counts_what_a_person_would_check_first(tmp_path):
++    """Documents read, cards produced, and how much evidence each rests on —
++    a card standing on one statement from one document is the shape that used
++    to proliferate."""
++    out = tmp_path / "out"
++
++    preview_samples(_Corpus(), _samples(tmp_path), out_dir=out)
++
++    summary = json.loads((out / "summary.json").read_text())
++    assert summary["documents"] == 2
++    assert summary["cards"] == 1
++    assert summary["statements"] == 1
++    assert summary["statements_per_card"] == 1.0
