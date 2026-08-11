@@ -569,6 +569,29 @@ def test_update_context_card_missing_id_raises_card_not_found(spec_instance: Spe
         )
 
 
+def test_update_context_card_treats_a_deleted_card_as_not_found(spec_instance: SpecStar):
+    """A deleted card is gone as far as a caller is concerned, whichever way it went.
+
+    specstar raises `ResourceIsDeletedError` for a tombstone — a SIBLING of
+    `ResourceIDNotFoundError`, not a subclass — so catching only the latter let it
+    escape raw to a caller with no reason to expect it. Key-based resolution stopped
+    handing out tombstones (#701), but the agent surface passes an id it read earlier,
+    so the id path still has to answer for itself."""
+    from workspace_app.kb.context_cards import derive_norm_keys
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow.capabilities import CardNotFound, update_context_card
+
+    cid = _collection(spec_instance)
+    rm = spec_instance.get_resource_manager(ContextCard)
+    rid = rm.create(
+        ContextCard(collection_id=cid, keys=["M4"], norm_keys=derive_norm_keys(["M4"]), body="b")
+    ).resource_id
+    rm.delete(rid)
+
+    with pytest.raises(CardNotFound):
+        update_context_card(spec_instance, card_id=rid, keys=["M4"], title="", body="b2", user="u")
+
+
 def test_update_context_card_stale_expected_body_raises_conflict(spec_instance: SpecStar):
     """#111 concurrency guard: when the caller passes the body it believes is current
     and it no longer matches what's stored, the update is blocked — forcing the AI to

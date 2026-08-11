@@ -1649,8 +1649,9 @@ def register_kb_routes(
         mode: str = Query("overwrite"),
     ) -> CollectionImported:
         """Merge an exported zip INTO an existing collection. `mode` decides a
-        path collision: `overwrite` (last-write-wins) or `skip`. 404 unknown
-        collection, 400 bad mode."""
+        collision — `overwrite` (last-write-wins) or `skip` — for a document
+        colliding on its path AND a context card colliding on its key (#701).
+        404 unknown collection, 400 bad mode."""
         if mode not in ("overwrite", "skip"):
             raise HTTPException(status_code=400, detail="mode must be 'overwrite' or 'skip'")
         _authorize_collection(collection_id, "add_content")  # #262 (404 unknown / hidden)
