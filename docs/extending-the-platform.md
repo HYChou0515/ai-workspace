@@ -198,7 +198,8 @@ def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
 
 第三方那條路的作者面文件是 [寫一支工具（外部作者）](tool-authoring.md)；
 我們這邊要做的事在 [部署與客製化](deployment.md) 的 §15：一次性設定看 §15.1，
-**把一支工具放進 `app.json`（含只給部分 command）看 §15.2**，發憑證看 §15.6。
+**把一支工具放進 `app.json`（含只給部分 command）看 §15.2**，
+**一支工具什麼時候真的進到 sandbox 裡看 §15.3**，發憑證看 §15.7。
 
 **兩條路都到不了「使用者自建」**——見下一節。
 
