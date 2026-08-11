@@ -17,6 +17,20 @@ from pathlib import Path
 _REPO = Path(__file__).resolve().parents[2]
 
 
+def _section(doc: str, title: str) -> str:
+    """The `###` subsection whose heading contains `title`, up to the next one.
+
+    By title, not by number. These assertions are about what the runbook SAYS,
+    and a section number is not part of that — pinning them to `### 15.6` meant
+    that inserting one subsection above made three of them read the disk
+    section instead, and fail for having the right words missing from the wrong
+    text. The heading a reader would look for is the stable handle."""
+    heading = next(line for line in doc.splitlines() if line.startswith("### ") and title in line)
+    start = doc.index(heading)
+    end = doc.find("\n### ", start + 1)
+    return doc[start:] if end == -1 else doc[start:end]
+
+
 def _bases(dockerfile: Path) -> list[str]:
     text = dockerfile.read_text("utf-8")
     return [m.group(1) for m in re.finditer(r"^FROM\s+(\S+)", text, re.MULTILINE)]
@@ -358,7 +372,7 @@ def test_the_grant_runbook_says_the_name_is_ours_to_choose() -> None:
     certificate, so the name is one we pick. The runbook has to say that, or
     someone will still go looking for the author's."""
     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
-    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
+    section = _section(doc, "工具憑證")
 
     assert "這是**你**取的" in section
     assert "和作者的 command 叫什麼無關" in section
@@ -368,7 +382,7 @@ def test_the_grant_runbook_covers_the_two_ways_a_source_is_written_wrong() -> No
     """Both are refused by the command, but an operator who reads why first
     does not have to be refused at all."""
     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
-    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
+    section = _section(doc, "工具憑證")
 
     assert "回滾" in section  # too narrow: pinning breaks
     assert "只給網域" in section  # too broad
@@ -380,7 +394,7 @@ def test_the_grant_runbook_is_walkable_alone() -> None:
     the commands run, that a new key needs a release before it does anything,
     what to tell the author, and how to confirm it worked."""
     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
-    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
+    section = _section(doc, "工具憑證")
 
     assert "uv run python -m workspace_app.tooling.grant keygen" in section
     assert "發版之後才生效" in section
@@ -406,7 +420,7 @@ def test_the_deployment_docs_separate_setup_from_per_tool_work() -> None:
     tool. It is five things done once and two done per tool, and a doc that
     does not say so turns onboarding a tool into an afternoon."""
     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
-    section = doc[doc.index("### 15.1") : doc.index("### 15.2")]
+    section = _section(doc, "一次性設定")
 
     assert "不是**每支工具" in section
     # The three that were previously undocumented or buried elsewhere.
