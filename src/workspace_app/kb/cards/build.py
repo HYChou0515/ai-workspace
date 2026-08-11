@@ -130,9 +130,9 @@ def _read(reply: str) -> tuple[str, str]:
     if start == -1 or end < start:
         return "", ""
     try:
+        # The slice starts at a "{", so whatever parses out of it is an object —
+        # no isinstance guard here, it could never be false.
         data = json.loads(reply[start : end + 1])
     except (json.JSONDecodeError, ValueError):
-        return "", ""
-    if not isinstance(data, dict):
         return "", ""
     return str(data.get("title", "")).strip(), str(data.get("body", "")).strip()

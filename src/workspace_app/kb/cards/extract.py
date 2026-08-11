@@ -53,10 +53,11 @@ def _parse(reply: str, text: str) -> list[TermCard]:
     if start == -1 or end < start:
         return []
     try:
+        # The slice starts at a "{", so whatever parses out of it is an object.
         data = json.loads(reply[start : end + 1])
     except (json.JSONDecodeError, ValueError):
         return []
-    cards = data.get("cards") if isinstance(data, dict) else None
+    cards = data.get("cards")
     if not isinstance(cards, list):
         return []
     return [card for raw in cards if (card := _card(raw, text)) is not None]

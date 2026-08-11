@@ -99,3 +99,45 @@ def test_the_same_claim_from_two_documents_is_carried_once():
 
     assert [s.text for s in card.statements] == ["是水果"]
     assert card.sources == ["a", "b"], "both documents still count as evidence"
+
+
+class _Synth(_Corpus):
+    """A corpus whose synthesis step answers with something unusable."""
+
+    def __init__(self, reply: str) -> None:
+        super().__init__({"蘋果是水果": [_card("蘋果", ["蘋果"], "是水果", "蘋果是水果")]})
+        self._reply = reply
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        if _SYNTHESIS_MARK in prompt:
+            yield self._reply, False
+        else:
+            yield from super().stream(prompt)
+
+
+def test_an_unusable_synthesis_leaves_the_evidence_intact():
+    """The statements are the durable part; the body is derived from them and can
+    be derived again. A synthesis that fails must not take the evidence with it —
+    the card still records what the documents said and which ones they were."""
+    docs = [DocSource(doc_id="a", text="蘋果是水果。")]
+
+    (card,) = build_cards(_Synth("I am not sure how to combine these."), docs)
+
+    assert card.body == ""
+    assert [s.text for s in card.statements] == ["是水果"]
+    assert card.title == "蘋果", "with no synthesised title the term itself still names the card"
+
+
+def test_a_synthesis_reply_of_the_wrong_shape_is_read_as_no_body():
+    docs = [DocSource(doc_id="a", text="蘋果是水果。")]
+
+    for reply in ('{"title": ', '{"title": }', '{"nope": 1}', "no json here"):
+        (card,) = build_cards(_Synth(reply), docs)
+        assert card.body == "", reply
+
+
+def test_the_synthesis_prompt_handed_out_to_edit_carries_both_slots():
+    from workspace_app.kb.cards.build import built_in_synthesis_prompt
+
+    assert "{term}" in built_in_synthesis_prompt()
+    assert "{statements}" in built_in_synthesis_prompt()

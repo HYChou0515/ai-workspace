@@ -99,3 +99,34 @@ def test_a_claim_with_no_quote_at_all_is_dropped():
     )
 
     assert extract_cards(model, document) == []
+
+
+def test_a_reply_that_is_not_usable_costs_this_document_and_nothing_else():
+    """One document out of hundreds answers with prose, or with truncated JSON.
+    Raising would end the run; returning nothing loses that document only."""
+    replies = (
+        "I could not find any terms.",  # no JSON at all
+        '{"cards": [',  # braces never closed
+        '{"cards": [}',  # braces closed, contents unparseable
+        '{"cards": "not a list"}',  # parses, wrong shape
+    )
+    for reply in replies:
+        assert extract_cards(_Model(reply), "回焊爐是一種加熱設備。") == [], reply
+
+
+def test_entries_that_are_not_cards_are_skipped_rather_than_fatal():
+    """Small models put strings and half-filled objects in the array they were
+    asked to fill with cards."""
+    model = _Model(json.dumps({"cards": ["回焊爐", {"keys": ["x"]}, {"term": "  "}]}))
+
+    assert extract_cards(model, "回焊爐是一種加熱設備。") == []
+
+
+def test_the_prompt_handed_out_to_edit_is_the_one_that_runs():
+    """`--dump-prompts` exists so a person starts from the real thing."""
+    from workspace_app.kb.cards.extract import built_in_prompt
+
+    model = _Model('{"cards": []}')
+    extract_cards(model, "回焊爐")
+
+    assert model.prompts[0] == built_in_prompt().replace("{text}", "回焊爐")
