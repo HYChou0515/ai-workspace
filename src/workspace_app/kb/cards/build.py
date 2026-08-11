@@ -16,6 +16,7 @@ not by overwriting an answer.
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import msgspec
@@ -77,17 +78,42 @@ def build(
     *,
     extract_prompt: str | None = None,
     synthesis_prompt: str | None = None,
+    concurrency: int = 1,
 ) -> Build:
-    """Read every document, group what they said by term, write one body each."""
+    """Read every document, group what they said by term, write one body each.
+
+    Both halves run ``concurrency`` calls at a time. Neither depends on the
+    other's answer — a document is read without reference to any other, and a
+    term is written up without reference to any other term — so serial was never
+    a requirement, and a tuning loop pays for it round after round.
+
+    Order is RESTORED either way. It decides which document a card names first
+    and the order its statements are carried in, so a run that let completion
+    order through would build a different glossary each time from one corpus.
+    """
+    extracted = _each(
+        [doc.text for doc in docs],
+        lambda text: extract(llm, text, prompt=extract_prompt),
+        concurrency,
+    )
     found: list[tuple[str, TermCard]] = []
     offered = grounded = 0
-    for doc in docs:
-        got = extract(llm, doc.text, prompt=extract_prompt)
+    for doc, got in zip(docs, extracted, strict=True):
         offered += got.proposed
         grounded += got.kept
         found.extend((doc.doc_id, card) for card in got.cards)
-    cards = [_synthesise(llm, group, prompt=synthesis_prompt) for group in _group(found)]
+    cards = _each(
+        _group(found), lambda g: _synthesise(llm, g, prompt=synthesis_prompt), concurrency
+    )
     return Build(cards=cards, offered=offered, grounded=grounded)
+
+
+def _each(items, work, concurrency: int):
+    """``work`` over every item, up to ``concurrency`` at once, in input order."""
+    if concurrency <= 1 or len(items) <= 1:
+        return [work(item) for item in items]
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        return [future.result() for future in [pool.submit(work, item) for item in items]]
 
 
 def build_cards(
@@ -96,9 +122,16 @@ def build_cards(
     *,
     extract_prompt: str | None = None,
     synthesis_prompt: str | None = None,
+    concurrency: int = 1,
 ) -> list[Card]:
     """The cards alone, for callers with no use for the extraction counts."""
-    return build(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt).cards
+    return build(
+        llm,
+        docs,
+        extract_prompt=extract_prompt,
+        synthesis_prompt=synthesis_prompt,
+        concurrency=concurrency,
+    ).cards
 
 
 def _group(found: list[tuple[str, TermCard]]) -> list[list[tuple[str, TermCard]]]:

@@ -141,3 +141,72 @@ def test_the_synthesis_prompt_handed_out_to_edit_carries_both_slots():
 
     assert "{term}" in built_in_synthesis_prompt()
     assert "{statements}" in built_in_synthesis_prompt()
+
+
+def test_documents_are_read_several_at_a_time():
+    """One model call per document IS the cost of a round, and the calls do not
+    depend on each other. Serial was never a requirement — just nobody said
+    otherwise, and a tuning loop is round-count times round-time."""
+    import threading
+    import time
+
+    lock = threading.Lock()
+    live = peak = 0
+
+    class _Slow(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            nonlocal live, peak
+            if _SYNTHESIS_MARK in prompt:
+                yield json.dumps({"title": "t", "body": "b"}), False
+                return
+            with lock:
+                live += 1
+                peak = max(peak, live)
+            try:
+                time.sleep(0.05)
+                yield '{"cards": []}', False
+            finally:
+                with lock:
+                    live -= 1
+
+    docs = [DocSource(doc_id=f"d{i}", text=f"文件 {i}") for i in range(8)]
+    build_cards(_Slow(), docs, concurrency=4)
+
+    assert peak > 1, "the documents were still read one at a time"
+    assert peak <= 4, f"more calls were in flight ({peak}) than the limit allowed"
+
+
+def test_the_documents_keep_their_order_however_they_finish():
+    """Order decides which document a card names as its first source and the
+    order statements are carried in. A run that reordered would produce a
+    different glossary each time from the same corpus."""
+    import time
+
+    class _OutOfOrder(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            if _SYNTHESIS_MARK in prompt:
+                yield json.dumps({"title": "t", "body": "b"}), False
+                return
+            index = int(prompt.rsplit("文件 ", 1)[-1])
+            time.sleep(0.02 * (6 - index))  # later documents answer FIRST
+            yield (
+                json.dumps(
+                    {
+                        "cards": [
+                            {
+                                "term": f"w{index}",
+                                "keys": [f"w{index}"],
+                                "statements": [{"text": "x", "quote": f"文件 {index}"}],
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ),
+                False,
+            )
+
+    docs = [DocSource(doc_id=f"d{i}", text=f"文件 {i}") for i in range(6)]
+
+    cards = build_cards(_OutOfOrder(), docs, concurrency=6)
+
+    assert [c.statements[0].quote for c in cards] == [f"文件 {i}" for i in range(6)]

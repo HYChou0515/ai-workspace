@@ -68,10 +68,17 @@ def preview_samples(
     extract_prompt: str | None = None,
     synthesis_prompt: str | None = None,
     only: set[str] | None = None,
+    concurrency: int = 1,
 ) -> list[Card]:
     """Build the cards for a folder of documents and write them out."""
     docs = read_samples(sample_dir, only=only)
-    built = build(llm, docs, extract_prompt=extract_prompt, synthesis_prompt=synthesis_prompt)
+    built = build(
+        llm,
+        docs,
+        extract_prompt=extract_prompt,
+        synthesis_prompt=synthesis_prompt,
+        concurrency=concurrency,
+    )
     write_preview(built, docs, out_dir=out_dir)
     return built.cards
 

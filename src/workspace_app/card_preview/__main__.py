@@ -82,6 +82,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--holdout-every", type=int, default=1, metavar="N", help="run the holdout every Nth round"
     )
+    p.add_argument(
+        "--concurrency",
+        type=int,
+        default=1,
+        metavar="N",
+        help="read N documents at once, and write up N terms at once. The calls do not "
+        "depend on each other; raise it until the model server, not this process, is the "
+        "thing that is busy",
+    )
     p.add_argument("-v", "--verbose", action="store_true")
     return p.parse_args(argv)
 
@@ -130,6 +139,7 @@ def main() -> None:
             probes_dir=shared,
             batch=args.batch,
             holdout_every=args.holdout_every,
+            concurrency=args.concurrency,
             synthesis_prompt=(args.synthesis_prompt.read_text() if args.synthesis_prompt else None),
         )
         print(f"scored v{version}, wrote v{version + 1}", file=sys.stderr)
@@ -146,6 +156,7 @@ def main() -> None:
         out_dir=args.out_dir,
         extract_prompt=args.extract_prompt.read_text() if args.extract_prompt else None,
         synthesis_prompt=args.synthesis_prompt.read_text() if args.synthesis_prompt else None,
+        concurrency=args.concurrency,
     )
     summary = json.loads((args.out_dir / "summary.json").read_text())
     print(

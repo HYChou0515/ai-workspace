@@ -87,9 +87,7 @@ def _parse(reply: str, text: str) -> Extraction:
         if isinstance(raw, dict) and isinstance(raw.get("statements"), list)
     )
     kept = [card for raw in cards if (card := _card(raw, text)) is not None]
-    return Extraction(
-        cards=kept, proposed=proposed, kept=sum(len(c.statements) for c in kept)
-    )
+    return Extraction(cards=kept, proposed=proposed, kept=sum(len(c.statements) for c in kept))
 
 
 def _card(raw: Any, text: str) -> TermCard | None:

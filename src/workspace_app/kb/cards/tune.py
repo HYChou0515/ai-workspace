@@ -207,6 +207,7 @@ def run_round(
     probes_dir: Path | None = None,
     batch: int = 0,
     holdout_every: int = 1,
+    concurrency: int = 1,
     synthesis_prompt: str | None = None,
 ) -> int:
     """Score the newest extraction prompt, ask for a revision, file it as next."""
@@ -222,6 +223,7 @@ def run_round(
         out_dir=here / "tune",
         extract_prompt=current,
         synthesis_prompt=synthesis_prompt,
+        concurrency=concurrency,
         only=draw_batch(tune_dir, batch, seed=version),
     )
     tune = scorecard(here / "tune")
@@ -240,6 +242,7 @@ def run_round(
             out_dir=here / "holdout",
             extract_prompt=current,
             synthesis_prompt=synthesis_prompt,
+            concurrency=concurrency,
         )
         holdout = scorecard(here / "holdout") | probe_score(here / "holdout", probes)
     (here / "scorecard.json").write_text(
