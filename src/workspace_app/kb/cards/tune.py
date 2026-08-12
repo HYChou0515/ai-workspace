@@ -184,7 +184,9 @@ Answer as JSON and nothing else:
 {{"verdicts": [{{"title": "...", "defines": true}}, ...]}}"""
 
 
-def defines_score(llm: ILlm, cards: list[dict[str, Any]]) -> dict[str, Any]:
+def defines_score(
+    llm: ILlm, cards: list[dict[str, Any]], *, prompt: str | None = None
+) -> dict[str, Any]:
     """Does each card tell a reader what its term IS?
 
     Neither of the other numbers can see this. 「H2O2 是這次的材料」 really is in
@@ -202,7 +204,7 @@ def defines_score(llm: ILlm, cards: list[dict[str, Any]]) -> dict[str, Any]:
     if not cards:
         return {}  # an empty glossary must not buy a clean sheet here
     listed = "\n".join(f"- {c.get('title', '')}: {c.get('body', '')}" for c in cards[:_JUDGED])
-    reply = llm.collect(DEFINES.replace("{cards}", listed))
+    reply = llm.collect((prompt or DEFINES).replace("{cards}", listed))
     start, end = reply.find("{"), reply.rfind("}")
     if start == -1 or end < start:
         return {}

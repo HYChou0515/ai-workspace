@@ -83,6 +83,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--holdout-every", type=int, default=1, metavar="N", help="run the holdout every Nth round"
     )
     p.add_argument(
+        "--review",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="draw a random sample of cards into DIR/review.json for a person to mark. "
+        "Pre-filled with the judge's own verdict, so only the ones you DISAGREE with "
+        "need an answer",
+    )
+    p.add_argument(
+        "--calibrate",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="run ONE calibration round against DIR/review.json: score the newest judge "
+        "criterion against the person's marks, hand it the cards it got wrong, and file "
+        "the revision as the next version under DIR/judge/",
+    )
+    p.add_argument(
+        "--cards", type=Path, default=None, help="the cards.json a --review sample is drawn from"
+    )
+    p.add_argument(
+        "--sample", type=int, default=20, metavar="N", help="how many cards --review draws"
+    )
+    p.add_argument(
         "--concurrency",
         type=int,
         default=1,
@@ -116,8 +140,11 @@ def main() -> None:
         )
         return
 
-    if not (args.samples or args.tune_round):
-        raise SystemExit("give --samples <folder>, --tune-round <dir>, or --dump-prompts <dir>")
+    if not (args.samples or args.tune_round or args.review or args.calibrate):
+        raise SystemExit(
+            "give --samples <folder>, --tune-round <dir>, --review <dir>, "
+            "--calibrate <dir>, or --dump-prompts <dir>"
+        )
 
     settings = load(config_path=args.config)
     llm = get_kb_llm(settings)
@@ -126,6 +153,51 @@ def main() -> None:
         # preview without one would write empty files and read like a corpus
         # that defines nothing.
         raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
+
+    if args.review:
+        import random
+
+        from ..kb.cards.tune import defines_score
+
+        source = args.cards or (args.review / "cards.json")
+        cards = json.loads(source.read_text())
+        random.Random(0).shuffle(cards)  # not the first N — cards.json is key-sorted
+        sample = [{"title": c["title"], "body": c["body"]} for c in cards[: args.sample]]
+        rejected = set(defines_score(llm, sample).get("does_not_define", []))
+        args.review.mkdir(parents=True, exist_ok=True)
+        (args.review / "review.json").write_text(
+            json.dumps(
+                [{**c, "judge": c["title"] not in rejected, "ok": None} for c in sample],
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        print(
+            f"{args.review}/review.json — {len(sample)} cards, the judge's verdict filled in.",
+            file=sys.stderr,
+        )
+        print(
+            '  Mark ONLY the ones you disagree with: set "ok" to true or false.',
+            file=sys.stderr,
+        )
+        print("  Leave null where the judge got it right.", file=sys.stderr)
+        return
+
+    if args.calibrate:
+        from ..kb.cards.calibrate import calibrate
+
+        version = calibrate(llm, rounds_dir=args.calibrate)
+        for row in json.loads((args.calibrate / "judge" / "index.json").read_text()):
+            wrong = f"   still wrong on: {', '.join(row['disagreed'])}" if row["disagreed"] else ""
+            print(
+                f"  judge v{row['version']}: agreed with you on "
+                f"{row['agreement']}/{row['reviewed']}  ({row['agreement_rate']}){wrong}",
+                file=sys.stderr,
+            )
+        print(f"wrote judge v{version + 1} — run again to score it", file=sys.stderr)
+        return
 
     if args.tune_round:
         from ..kb.cards.tune import run_round
