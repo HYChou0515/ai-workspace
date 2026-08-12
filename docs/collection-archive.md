@@ -123,9 +123,14 @@ curl -N -X POST "$BASE/kb/chats/$CHAT/messages" \
 `scripts/check_collection_archive.py` 會把上面整條路實際跑過並斷言結果 —— 建 archive、匯入、等索引、查代號、確認卡片的連結指向真的文件、再匯一次確認卡片沒有變兩張:
 
 ```bash
+# 只想看格式:產一個範例 zip 就停,不需要任何服務
+uv run python scripts/check_collection_archive.py --keep /tmp/sample.zip --archive-only
+
+# 對一台跑起來的服務走完整條路
 uv run python scripts/check_collection_archive.py --base-url http://127.0.0.1:8000
-uv run python scripts/check_collection_archive.py --ask     # 加上夾圖提問(需要 VLM)
-uv run python scripts/check_collection_archive.py --keep /tmp/sample.zip   # 順便留下範例 zip
+uv run python scripts/check_collection_archive.py --ask     # 再加上夾圖提問(需要 VLM)
 ```
 
-任何一步不如預期就以非零離開,所以它也可以當煙霧測試用。想看格式長什麼樣,最快的方式是 `--keep` 之後直接解開那個 zip。
+任何一步不如預期就以非零離開,所以它也可以當煙霧測試用。
+
+**想理解格式,解開一個真的 zip 比讀上面的說明快。** 這也是 `--archive-only` 存在的原因:看格式不該先要求你有一台跑起來的服務。

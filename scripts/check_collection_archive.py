@@ -196,13 +196,23 @@ def main() -> int:
     ap.add_argument("--code", default="M4", help="the term the seeded card is keyed under")
     ap.add_argument("--ask", action="store_true", help="also run the image question (needs a VLM)")
     ap.add_argument("--keep", metavar="PATH", help="also write the archive here, to inspect it")
+    ap.add_argument(
+        "--archive-only",
+        action="store_true",
+        help="write --keep and stop — no server needed. The fastest way to see the "
+        "format is to unzip a real one rather than read a description of it.",
+    )
     args = ap.parse_args()
+    if args.archive_only and not args.keep:
+        ap.error("--archive-only needs --keep PATH to write to")
 
     zip_bytes = build_archive(code=args.code)
     if args.keep:
         with open(args.keep, "wb") as fh:
             fh.write(zip_bytes)
         _say("archive written", args.keep)
+        if args.archive_only:
+            return 0
 
     # Every backend route is mounted under `/api`; only the SPA is served at the root.
     api_root = args.base_url.rstrip("/") + "/api"
