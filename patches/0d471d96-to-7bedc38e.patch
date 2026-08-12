@@ -1,0 +1,1639 @@
+diff --git a/docs/adding-an-app.md b/docs/adding-an-app.md
+index cb6ffc91..36050c21 100644
+--- a/docs/adding-an-app.md
++++ b/docs/adding-an-app.md
+@@ -56,6 +56,7 @@ apps/<slug>/
+ | `function.workspace` | file IDE(tree + editor + file tools)。`false` → 只有 chat 的 shell |
+ | `function.sandbox` | exec + package tools。不需要 terminal;控制 exec 相關功能的開啟 |
+ | `function.terminal` | 人用的 shell 分頁。**需要 `sandbox: true`** |
++| `resources` | 這個 App 的**一個** item 可以用多少 `{cpu, memory, disk}`。三個欄位各自可省略,見下 |
+ | `agent.prompt_file` | base system prompt 的路徑(相對於 App 目錄) |
+ | `agent.tools` | App 的 tool **上限**;profile 可以收窄成其子集 |
+ | `agent.picker` | `[{preset, name}]`——model picker;`preset` ∈ `config.yaml` 的 `agents.presets` |
+@@ -73,6 +74,38 @@ apps/<slug>/
+ `sandbox: false`,都會讓開機大聲失敗。`_template` App 出貨時帶
+ `sandbox: false` + 只有 file 的 tools,用來示範一個 workspace-only(無 sandbox)的 App。
+ 
++### `resources`：這個 App 一個 item 吃多少
++
++一個資料分析 App 需要的記憶體本來就比聊天 App 多,而這件事屬於 App 自己,不屬於部署端一張
++按 slug 排的表——那種表新增 App 時沒人會記得改。所以 **App 宣告胃口,部署端定天花板**,就像
++k8s 的 Pod `requests` 對上 namespace 的 `LimitRange`。
++
++```jsonc
++// src/workspace_app/apps/<slug>/app.json
++"resources": {
++  "cpu": 2,           // 核心數
++  "memory": "2G",
++  "disk": "10G"       // 這是**一個 item 的 workspace** 上限,不是全 App 加總
++}
++```
++
++**三個欄位各自獨立、各自可省略。** 只在意記憶體就只寫 `memory`,cpu / disk 會各自往下掉到
++部署端的 `resources.per_app.default`,再掉到今天的舊旋鈕
++(`sandbox.isolation.*` / `filestore.workspace_quota`)。**什麼都不寫的 App 行為跟今天完全一樣**
++——目前四個內建 App 都沒有宣告。
++
++三件出手前要知道的事:
++
++- **超過天花板是開機失敗,不是默默截斷。** 超過 `resources.per_app.max` 會讓服務起不來,錯誤
++  訊息裡有 App 名字。「設定寫 4 核、實際只拿到 2 核」這種靜默失效的旋鈕,這個 codebase 不出貨。
++- **`cpu` / `memory` 由 sandbox 後端執行。** 正式環境是 `kind: http`,所以**改完要重新部署
++  sandbox-host**,否則 app.json 設了也沒有效果。`disk` 由本體執行,不受此限。
++- **`disk: "0"` 是「明確無上限」,會停止往下掉;`cpu: 0` 是「沒宣告」,會繼續往下掉。** 這個
++  不對稱是刻意的——零核心不是任何人的本意,零 disk 上限卻是。
++
++部署端那一半(`per_app.default` / `per_app.max`、以及**每個人**的總量與特規使用者)寫在
++[設定指南 §6.5](configuration.md)。
++
+ ## `model.py` 合約
+ 
+ 匯出 `MODEL`(一個 `WorkItemBase` 子類)+ `INDEXED_FIELDS`:
+diff --git a/docs/configuration.md b/docs/configuration.md
+index d2e1c582..d25aa543 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -82,8 +82,9 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
+ | **設管理員（能讀所有 collection）** | `server.superusers: ["alice@example.com"]` |
+ | **讓外部系統的網頁把工作交棒進來** | `server.cors_allowed_origins: ["https://legacy-rca.corp"]`；沒設的話瀏覽器會在請求送出前就擋掉（串接方式見[從外部系統交棒進來](external-handoff.md)） |
+ | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
+-| **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**） |
+-| **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上） |
++| **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**）。見 §6.5 |
++| **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上）。見 §6.5 |
++| **給某個人開特例額度** | superuser 在 `/my-resources` 頁尾的「個人額度」區塊設定（或 `PUT /admin/user-resources/{user_id}`）；逐維度覆寫、不用重啟。見 §6.5 |
+ | **換嵌入模型** | `kb.embedder.model` + 設 `KB_EMBED_DIM` 或 `KB_EMBED_MODEL`（**改維度＝要重建索引**） |
+ | **調 KB 檢索深度（recall vs 延遲）** | `kb.retrieval.enhancements`（`expand` / `hyde` / `rerank`） |
+ | **關掉 KB 的 multi-query/HyDE/rerank** | `kb.retrieval_llm: null` |
+@@ -243,6 +244,93 @@ sandbox:
+ 
+ ---
+ 
++## 6.5 資源額度（per-App / per-user）★重點
++
++兩個問題,兩套機制:**一個 App 的 item 能吃多少**(App 宣告 × 部署端封頂),以及
++**一個人跨所有 App 總共能吃多少**(部署端的 `per_user`,可對個人開特例)。
++
++`disk` 與 `cpu`/`memory` 的性質不同,所以做法也不同:
++
++|  | `disk` | `cpu` / `memory` / `count` |
++|---|---|---|
++| 性質 | **存量**——持久,sandbox 死了還在 | **流量**——只在 sandbox 活著時存在 |
++| 機制 | 寫入時檢查,**只擋成長** | 開新 sandbox 時的**准入控制** |
++| 回收 | 刪檔就回來 | sandbox 被回收就**自己**回來(綁探活,不是計數器) |
++
++「只擋成長」是可用性要求不是效能取捨:**縮小、同大小覆寫、刪除永遠放行**,否則一個人一旦
++滿了就再也清不回來。
++
++### 三層解析
++
++```yaml
++resources:
++  per_app:
++    default: { cpu: 1.0, memory: 512M, disk: 80M }   # App 沒宣告時吃這個
++    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過,超過=開機失敗
++  per_user:
++    count: 3          # 同時活著的 sandbox 個數
++    cpu: 6.0          # 那些活著的 sandbox 加總核心
++    memory: 8G        # 加總記憶體
++    disk: 50G         # 名下**所有 item** 的 workspace 加總
++```
++
++順序是 **app.json 的 `resources` ◇ `per_app.default` ◇ 今天的舊旋鈕**
++(`sandbox.isolation.*` / `filestore.workspace_quota`),**逐維度**各自往下掉。
++App 那一半怎麼寫見 [新增一個 App](adding-an-app.md#resources這個-app-一個-item-吃多少)。
++
++**整段不寫 = 完全維持今天的行為**:`per_app` 落到舊旋鈕,`per_user` 全零 ⇒ 每個維度都無上限,
++等於沒有准入控制。**`0` / 空字串一律是「這個維度不設限」,不是「額度為零」。**
++
++### 特規使用者（個人覆寫）
++
++一個數字套用到所有人一定不夠——總會有人要跑大東西。所以讀取是 **個人覆寫 ◇ 全站預設**,
++而且**逐維度**:只設 `count` 就只有 count 變,cpu/memory/disk 照吃全站預設。
++
++覆寫在 **`/my-resources` 的「個人額度（管理員）」區塊**設定——只有 superuser 看得到它,一般人連入口都沒有。底下的端點是同一套,要腳本化時直接用:
++
++```bash
++GET    /admin/user-resources/{user_id}   # 查某人目前的有效額度
++PUT    /admin/user-resources/{user_id}   # 設覆寫,body 只帶要改的維度,例如 {"count": 10}
++DELETE /admin/user-resources/{user_id}   # 清掉覆寫,回全站預設
++```
++
++- 不是 superuser 會拿到 **404 而不是 403**——「某人有沒有被開特例」本身不該外洩。
++- **不用重啟**:下 PUT 的那個 pod 立即生效,其他 replica 最多 **5 秒**(memo TTL,沒有跨 pod
++  失效廣播;宣稱「立即」會是這個部署形狀給不出的東西)。
++- superuser 名單是 `server.superusers`(§4 的區塊地圖)。
++
++### 撞到上限會發生什麼
++
++**直接拒絕,不會自動幫使用者讓位**(不會 LRU 回收他自己的 sandbox)。三種 507,`detail.error`
++不同因為**補救方式不同**:
++
++| `error` | 什麼滿了 | 使用者要做什麼 |
++|---|---|---|
++| `workspace_quota_exceeded` | **這個 item** 的 disk | 刪這個 item 裡的檔案 |
++| `user_quota_exceeded` | 這個人**所有 item** 的 disk 加總 | 要刪的檔案可能在**別的 item** |
++| `sandbox_quota_exceeded` | 活著的 sandbox `count`/`cpu`/`memory`(`detail.dimension` 指明哪一個) | 關掉某個執行環境 |
++
++擋在**使用者訊息存進去之前**(`chat_send.send`)、terminal 的 `POST /exec`、以及 workflow 執行;
++**item 已經有活著的 sandbox 就直接放行**,那格他早就佔著了。排程觸發的 headless workflow 一樣
++會被擋,但會留下可見的失敗紀錄——定時任務靜靜沒跑比擋下來更危險。
++
++被擋的人自己解決的地方是 **`/my-resources`**:列出活著的執行環境(附**關閉**鈕)與各 item 的
++儲存用量,兩者都配一條用量對上限的量表。實測一輪:`per_user.count: 1` 時第二個 item 的 exec 回
++`507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes","used":2,"limit":1.0}` → 進畫面顯示
++`Live environments 1 / 1` → 按 Close → `0 / 1 · No live environments` → 同一個 exec 回 200。
++
++superuser 在同一頁的最下方多一個**個人額度**區塊,可以直接把某個人調高(見上一節)。
++
++### 兩個要知道的前提
++
++- **`cpu` / `memory` 的執行者是 sandbox 後端。** 正式環境是 `kind: http`,所以**沒有重新部署
++  sandbox-host 就完全沒有效果**。`disk` 由本體執行,不受影響。這也是整套裡唯一沒有在真 host
++  上驗證過的一段。
++- ⚠️ **債務人是 item 的 `owner`,而那個欄位目前誰都能改**(issue #687 仍 OPEN)。它**不是**
++  權限擁有者(權限走 specstar 的 `created_by`),所以把 `owner` 設給別人**不會失去任何控制權**
++  ——item 照樣是你的,只有帳單跑到對方頭上。**在 #687 落地前,以上額度全部可被繞過。** 這是
++  知情的取捨(額度先做、鎖定後補),不是疏漏。
++
+ ## 7. `agents`：心智模型與雷區
+ 
+ 這是最容易搞混、也最常改的區塊。心智模型：
+diff --git a/docs/plan-pm-entity-body-edit.md b/docs/plan-pm-entity-body-edit.md
+new file mode 100644
+index 00000000..431cc06c
+--- /dev/null
++++ b/docs/plan-pm-entity-body-edit.md
+@@ -0,0 +1,198 @@
++# Plan — a person cannot edit an entity record's body, and the board card hides its number
++
++Two reports, one of them not yet diagnosed. They are unrelated except that both live in
++the PM app's views, so they share a branch and nothing else.
++
++## Report 1 — "the issue body cannot be edited; the AI can, I can't"
++
++Confirmed with the reporter: the **Edit** button is reachable, the form opens, and the
++markdown body **cannot be typed into**.
++
++### What the code says
++
++The editor exists and is wired end to end. The write path is not missing — it is *gated*:
++
++```
++EntityFileEditor.tsx:175   readOnly={!canWrite}          # the Monaco body editor
++  ← EntityRecordPane / EntityRecordModal / AiYamlRenderer   pass canWrite through
++    ← useItemCanWrite(slug, itemId)                      hooks/useItemCanWrite.ts
++      ← useItemAccess(item).canWrite                     hooks/useItemAccess.ts:83
++        ← canWriteItem(perm, me, item.created_by, isSuperuser, groups)
++                                                         lib/itemPermission.ts:130
++```
++
++`canWriteItem` reads as correct, and in this order:
++
++1. superuser → true
++2. `me === created_by` → true (the owner controls their resource)
++3. no permission, or `visibility: public` → true
++4. `visibility: private` and not the owner → **false**
++5. `restricted` → true only if a write verb grants this user or one of their groups
++
++The API half is fine too: `PUT .../entities/{type}/{number}` takes a `body`
++(`schemas.py::_EntityUpdateBody`) and passes it to `store.patch` (`entity_routes.py:242`);
++`api/real.ts::getAppItem` does lift `created_by` off `revision_info`.
++
++**Why the AI is not blocked by any of this**: the agent writes through the entity tool
++into `EntityStore.patch` directly. `canWrite` is a *UI* gate — the asymmetry the reporter
++noticed is exactly what the layering predicts, and is not itself the bug.
++
++### The four candidates, and why only data can separate them
++
++Every one of these produces the reported symptom, and the code cannot tell them apart:
++
++| # | Cause | Would mean |
++|---|---|---|
++| A | The item was created by someone else (or by a seeding path) and is `private` | Working as designed; the bug is that nothing SAYS so |
++| B | `created_by` comes back empty | Owner-bypass silently never fires — a real bug |
++| C | `me` and `created_by` are not the same shape of id (SSO is not wired yet) | Owner-bypass never matches — a real bug |
++| D | `restricted` without a write verb for this user | Working as designed; same disclosure gap as A |
++
++**Phase 1 answers this before any code is written.** Guessing here would mean fixing a
++permission check that is correct, or "fixing" a disclosure gap that is really a lookup bug.
++
++### Phase 1 — RESULT: the permission theory is dead
++
++Two findings, and together they close this line of enquiry.
++
++**`created_by` is present.** Probed against a running app: the envelope carries
++`revision_info.created_by = "alice"` (and `meta.created_by` too), which is exactly what
++`api/real.ts::getAppItem` reads. **Candidate B is out.** The same probe confirms a freshly
++created item is `visibility: private` — so the owner bypass is the ONLY thing letting its
++creator write, which is what made B and C plausible in the first place.
++
++**But `canWrite` must already be true.** `EntityRecordView.tsx:60` renders the Edit button
++as `{canWrite && (…)}` — with `canWrite` false there is no button to press. The reporter
++presses it. Therefore `canWrite === true`, `readOnly={!canWrite}` is not engaged, and
++**A, C and D are out as well**.
++
++That also disposes of the framing this plan started from: the AI/human asymmetry is not a
++permission difference. Both sides are allowed to write. The block is somewhere in the
++editing surface itself.
++
++**Remaining candidates**, all inside the form rather than around it:
++
++| # | Cause | Distinguishing symptom |
++|---|---|---|
++| E | The Monaco body editor fails to mount / initialise | the FIELDS above it still accept typing |
++| F | The surface being used is not `EntityFileEditor` at all | there is no separate body area, only frontmatter fields |
++| G | Typing works but the save is rejected / silently dropped | text goes in, does not survive |
++
++One question separates them, and it is the next thing to ask rather than guess:
++**in that same edit form, can the FIELDS (status, assignee, …) be changed?**
++
++### Superseded — the original four candidates
++
++The reporter runs one snippet on the affected item's page; it reads four values and
++changes nothing:
++
++```js
++(async () => {
++  const me = await (await fetch('/api/me')).json();
++  const id = location.pathname.split('/').pop();
++  const it = await (await fetch(`/api/pm-item/${id}`)).json();
++  console.log({ me,
++                created_by: it.revision_info?.created_by,
++                visibility: it.data?.permission?.visibility ?? '(absent)',
++                permission: it.data?.permission });
++})()
++```
++
++(The resource route is `manifest.resource_route`; if `pm-item` 404s, read the right one
++from `GET /api/apps/pm`.)
++
++Outcome decides Phase 2:
++
++- **B or C** → the owner bypass is broken. Fix the lookup, and add a test that a record's
++  own creator can type in the body — asserted through the rendered editor, not by calling
++  `canWriteItem` directly, or it will pass while the real path stays broken.
++- **A or D** → the permission answer is right and the DEFECT IS THE SILENCE. A `readOnly`
++  Monaco with no explanation is indistinguishable from a broken page; the reporter's own
++  words were "I can't edit", not "I am not allowed to edit". Show who may grant access and
++  what to ask for, in the same shape as the platform's other refusals.
++
++### Phase 3 — the other bodies
++
++Every body editor is the same component, so they break and heal together. What differs is
++the gate each container passes in, and that is what needs checking one by one:
++
++- `AiYamlRenderer` — the board / table / gantt views
++- `RecordFileRenderer` — a record opened as a file
++- `EntityRecordModal` — the double-click modal (#680)
++
++Separately, a **work item's own `description`** is NOT this path: it rides the item PATCH,
++checked against `write_meta` alone, which is strictly narrower than `canWrite`. A user who
++passes the entity gate can still be refused there. The env-var panel already fell through
++exactly this gap, so it gets its own check rather than an assumption.
++
++## Phase 2 — RESOLVED: the cause was `<label>`, and permissions were never involved
++
++The remaining candidates were E (the body editor fails to mount), F (a different surface
++than assumed) and G (the save is dropped). It is **E, with a cause worth naming precisely**:
++the body's Monaco was wrapped in a `<label>`.
++
++A `<label>` promises to hand focus to *its native control* when clicked. Monaco is not a
++native control — it is divs plus a hidden textarea — so the wrapper intercepted the click
++and the caret never landed. The frontmatter fields above it, which ARE native inputs, kept
++working, which is exactly the reported shape ("the fields are fine, the body is not").
++
++It was the only one of its kind. The raw-YAML Monaco twenty lines up in the same file uses
++a `<div>` with the same class, and the six other `MonacoEditor` call sites use no wrapper
++at all. Nothing is lost by dropping it — Monaco carries its own `ariaLabel`.
++
++**Why every test stayed green**: this suite MOCKS Monaco as a plain textarea, and a
++textarea inside a label behaves perfectly. The defect was structurally unreachable from the
++test that covers this component, so the guard added with the fix is structural too
++(`closest("label")` must be null), and it is mutation-verified — restoring the `<label>`
++turns exactly that test red.
++
++The disclosure work this phase would have needed under candidates A/D is **not** needed:
++nobody was refused anything.
++
++## Phase 3 — DONE: no second instance
++
++Scanned every `<label>` in `web/src` for a non-native control inside it.
++
++- `EntityFileEditor:125` wraps `RoleField`, and every widget it can render is native:
++  `select` / `actor` / `ref` are `<select>`, date and the rest are `<input>`, and
++  `readonly` is a non-interactive `<span>`. No defect.
++- Every other `<label>` in the codebase wraps a native `<input>` (checkboxes, radios).
++- The six other `MonacoEditor` call sites wrap it in nothing.
++
++**One edge case, recorded and deliberately not fixed**: the `daterange` widget renders TWO
++`<input type=date>` under a single `<label>`, so clicking the label focuses only the first.
++Pre-existing, cosmetic, and not the reported symptom — folding it into this fix would mix an
++unrelated change into a branch whose point is one precise cause.
++
++The work item's own `description` was also checked and is a separate path (item PATCH,
++gated on `write_meta`, narrower than `canWrite`). It is unaffected by any of this, because
++none of this turned out to be about permissions.
++
++## Report 2 — the board card should show `#33`
++
++Independent of the above and much smaller. `BoardView.tsx:237` today:
++
++```tsx
++{fieldText(entity.fields[titleField]) || `#${entity.number}`}
++```
++
++The number is a **fallback for a missing title**, so a card that has a title never shows
++its number — and the number is what a person says out loud ("look at 33"). Wanted: the
++number always present, muted, ahead of the title.
++
++### Phase 4 — show it
++
++Render the number as its own muted span before the title, keep the existing fallback for
++an untitled record (without printing the number twice). Two things to get right rather
++than assume:
++
++- **Contrast**: muted still has to clear the project's graded contrast bar. Verify in BOTH
++  themes — dark hides light's palette defects, which is how #690 shipped unreadable text
++  with unit tests green.
++- The card is a drag handle and double-click opens the record; the number must not become
++  a click target that eats either gesture.
++
++## Order
++
++Phase 4 first — it depends on nothing and is visible immediately. Phase 1 needs the
++reporter, and Phases 2 and 3 cannot honestly be written until it answers.
+diff --git a/src/workspace_app/api/quota_routes.py b/src/workspace_app/api/quota_routes.py
+index 2f6a663b..83b2429b 100644
+--- a/src/workspace_app/api/quota_routes.py
++++ b/src/workspace_app/api/quota_routes.py
+@@ -55,6 +55,27 @@ class _Limits(BaseModel):
+     disk_bytes: int = 0
+ 
+ 
++class _Override(BaseModel):
++    """One person's exception, RAW — a dimension left at 0/"" is one they do not
++    have an exception for. Deliberately not merged with the deploy default: the
++    list exists to answer "who is above the baseline, and in what", and merging
++    would make every row look overridden in every dimension."""
++
++    user_id: str
++    count: int = 0
++    cpu: float = 0.0
++    memory: str = ""
++    disk: str = ""
++
++
++class _Overrides(BaseModel):
++    """The exceptions, plus the baseline they are exceptions TO — one payload,
++    because a number is meaningless without the default beside it."""
++
++    defaults: _Limits
++    overrides: list[_Override] = []
++
++
+ class _MyResources(BaseModel):
+     """Everything the panel renders. Usage and limits together, so the FE never
+     has to pair up two calls that could disagree."""
+@@ -166,6 +187,31 @@ def register_quota_routes(
+         if activity is not None:
+             await activity.forget(item_id)
+ 
++    # Registered BEFORE the `/{user_id}` route: a bare GET on the collection
++    # would otherwise be matched as a person literally called "".
++    @app.get("/admin/user-resources")
++    async def admin_list() -> _Overrides:
++        """Everyone above the deploy default, and the default itself.
++
++        The by-id read only answers "does THIS person have an exception", so an
++        operator could only find one they already knew about — leaving "who is
++        above the baseline?" unanswerable, which is the question someone
++        inheriting the system actually has."""
++        _require_admin(get_user_id(), superusers)
++        d = user_limits.default
++        return _Overrides(
++            defaults=_Limits(
++                count=d.count,
++                cpu=d.cpu,
++                memory_bytes=parse_size(d.memory),
++                disk_bytes=parse_size(d.disk),
++            ),
++            overrides=[
++                _Override(user_id=uid, count=o.count, cpu=o.cpu, memory=o.memory, disk=o.disk)
++                for uid, o in await user_limits.list_overrides()
++            ],
++        )
++
+     @app.get("/admin/user-resources/{user_id}")
+     async def admin_get(user_id: str) -> _MyResources:
+         _require_admin(get_user_id(), superusers)
+diff --git a/src/workspace_app/quota/user_limits.py b/src/workspace_app/quota/user_limits.py
+index 9139d13c..5e894110 100644
+--- a/src/workspace_app/quota/user_limits.py
++++ b/src/workspace_app/quota/user_limits.py
+@@ -26,6 +26,7 @@ import time
+ 
+ from msgspec import Struct
+ from specstar import SpecStar
++from specstar.query import QB
+ from specstar.types import (
+     DuplicateResourceError,
+     ResourceIDNotFoundError,
+@@ -144,6 +145,44 @@ class UserLimits:
+         with contextlib.suppress(DuplicateResourceError):
+             rm.create(rec, resource_id=user_id, status=RevisionStatus.draft)
+ 
++    async def list_overrides(self) -> list[tuple[str, PerUserResources]]:
++        """Everyone who has an exception, and what it grants — sorted by id.
++
++        Without this an operator can only ask "does THIS person have one", which
++        means you can only find an exception you already knew about. "Who is
++        above the default?" is the question an admin inheriting the system
++        actually has, and it had no answer.
++
++        Returns the RAW override, not the resolved limits: a dimension left at
++        0/"" here is one the person does not have an exception for, and
++        flattening that against the default would make every row look
++        overridden in every dimension.
++        """
++        return await asyncio.to_thread(self._list_sync)
++
++    def _list_sync(self) -> list[tuple[str, PerUserResources]]:
++        rm = self._spec.get_resource_manager(_UserQuota)
++        # `is_deleted == False` is NOT optional: `clear_for` soft-deletes (it
++        # calls `rm.delete`), and `list_resources` returns soft-deleted rows —
++        # so without this, an exception someone REVOKED stays on the list for
++        # ever, and the page would report privileges nobody holds. Same trap the
++        # activity ledger documents; it bites the same way here.
++        query = (QB.is_deleted() == False).build()  # noqa: E712
++        out: list[tuple[str, PerUserResources]] = []
++        for rev in rm.list_resources(query):
++            data = rev.data
++            assert isinstance(data, _UserQuota)
++            out.append(
++                (
++                    data.user_id,
++                    PerUserResources(
++                        count=data.count, cpu=data.cpu, memory=data.memory, disk=data.disk
++                    ),
++                )
++            )
++        out.sort(key=lambda row: row[0])
++        return out
++
+     async def clear_for(self, user_id: str) -> None:
+         """Drop an override so the person falls back to the deploy default."""
+         await asyncio.to_thread(self._clear_sync, user_id)
+diff --git a/tests/quota/test_routes.py b/tests/quota/test_routes.py
+index 06ed1726..cc2d8cc8 100644
+--- a/tests/quota/test_routes.py
++++ b/tests/quota/test_routes.py
+@@ -149,6 +149,48 @@ def test_an_override_is_per_dimension():
+         assert limits["disk_bytes"] == 1024**3
+ 
+ 
++def test_the_admin_can_see_who_is_above_the_default_without_knowing_their_id():
++    """The by-id read only answers "does THIS person have one", so an operator
++    could only find an exception they already knew about."""
++    with _app(PerUserResources(count=1, disk="1G"), me="root") as (client, _spec):
++        client.put("/admin/user-resources/alice", json={"count": 9})
++        client.put("/admin/user-resources/bob", json={"memory": "8G"})
++
++        body = client.get("/admin/user-resources").json()
++        assert [o["user_id"] for o in body["overrides"]] == ["alice", "bob"]
++        # RAW, not merged: bob has no count exception, so it reads 0 rather than
++        # the deploy's 1 — otherwise every row would look overridden everywhere.
++        by_id = {o["user_id"]: o for o in body["overrides"]}
++        assert (by_id["alice"]["count"], by_id["alice"]["memory"]) == (9, "")
++        assert (by_id["bob"]["count"], by_id["bob"]["memory"]) == (0, "8G")
++        # and the baseline they are exceptions TO, so a number means something
++        assert body["defaults"] == {
++            "count": 1,
++            "cpu": 0.0,
++            "memory_bytes": 0,
++            "disk_bytes": 1024**3,
++        }
++
++
++def test_a_revoked_exception_leaves_the_list():
++    """`clear_for` SOFT-deletes and `list_resources` returns soft-deleted rows,
++    so without an `is_deleted` filter the page would keep reporting privileges
++    nobody holds — the same trap the activity ledger documents."""
++    with _app(PerUserResources(count=1), me="root") as (client, _spec):
++        client.put("/admin/user-resources/alice", json={"count": 9})
++        assert len(client.get("/admin/user-resources").json()["overrides"]) == 1
++
++        client.delete("/admin/user-resources/alice")
++        assert client.get("/admin/user-resources").json()["overrides"] == []
++
++
++def test_only_an_admin_can_list_the_exceptions():
++    """404 rather than 403, like the by-id read: whether anyone has an exception
++    is not something an ordinary caller should be able to probe."""
++    with _app(PerUserResources(count=1), me="alice") as (client, _spec):
++        assert client.get("/admin/user-resources").status_code == 404
++
++
+ def test_a_non_admin_cannot_read_or_set_anyones_limits():
+     """404 rather than 403 — whether a person has an exception is not something
+     to let a non-admin probe for."""
+diff --git a/web/src/api/myResources.ts b/web/src/api/myResources.ts
+index 512e24fe..9b14efd5 100644
+--- a/web/src/api/myResources.ts
++++ b/web/src/api/myResources.ts
+@@ -50,9 +50,35 @@ export type MyResources = {
+   disk_tracked: boolean;
+ };
+ 
++/** One person's override, as an admin sets it. Every dimension is optional in
++ * the same "0 / empty means not stated" sense the rest of this feature uses —
++ * an override says only what it changes, and the unset dimensions keep falling
++ * through to the deploy default. */
++export type UserQuotaOverride = {
++  count?: number;
++  cpu?: number;
++  memory?: string;
++  disk?: string;
++};
++
++/** The exceptions, plus the baseline they are exceptions TO. One payload: a
++ * person's "9" means nothing without the default beside it. */
++export type OverrideList = {
++  defaults: ResourceLimits;
++  overrides: ({ user_id: string } & Required<UserQuotaOverride>)[];
++};
++
+ export type MyResourcesApi = {
+   get(): Promise<MyResources>;
+   closeEnvironment(itemId: string): Promise<void>;
++  /** Superuser only. Null on 404, like `adminGet`. */
++  adminList(): Promise<OverrideList | null>;
++  /** Superuser only. Resolves to null on 404 — which the backend also returns to
++   * a NON-superuser, deliberately, so that "who has an exception" is not
++   * something an ordinary caller can probe. */
++  adminGet(userId: string): Promise<MyResources | null>;
++  adminSet(userId: string, limits: UserQuotaOverride): Promise<void>;
++  adminClear(userId: string): Promise<void>;
+ };
+ 
+ export const myResourcesApi: MyResourcesApi = {
+@@ -65,4 +91,30 @@ export const myResourcesApi: MyResourcesApi = {
+       method: "DELETE",
+     });
+   },
++  async adminList() {
++    try {
++      const r = await apiFetch("/admin/user-resources");
++      return (await r.json()) as OverrideList;
++    } catch {
++      return null;
++    }
++  },
++  async adminGet(userId: string) {
++    try {
++      const r = await apiFetch(`/admin/user-resources/${encodeURIComponent(userId)}`);
++      return (await r.json()) as MyResources;
++    } catch {
++      return null;
++    }
++  },
++  async adminSet(userId: string, limits: UserQuotaOverride) {
++    await apiFetch(`/admin/user-resources/${encodeURIComponent(userId)}`, {
++      method: "PUT",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify(limits),
++    });
++  },
++  async adminClear(userId: string) {
++    await apiFetch(`/admin/user-resources/${encodeURIComponent(userId)}`, { method: "DELETE" });
++  },
+ };
+diff --git a/web/src/api/queryKeys.ts b/web/src/api/queryKeys.ts
+index 2ec06e50..b0ac3398 100644
+--- a/web/src/api/queryKeys.ts
++++ b/web/src/api/queryKeys.ts
+@@ -23,6 +23,9 @@ export const qk = {
+   // Invalidate after closing an environment, and after any 507 — being refused
+   // is precisely when the panel's numbers are what the user needs.
+   myResources: ["myResources"] as const,
++  // Who is above the deploy default (superuser only). Separate from
++  // `myResources`: it answers a different question, for a different person.
++  userOverrides: ["userOverrides"] as const,
+ 
+   investigations: ["investigations"] as const,
+   investigation: (id: string) => ["investigation", id] as const,
+diff --git a/web/src/lib/i18n.tsx b/web/src/lib/i18n.tsx
+index 6248ae90..be16814e 100644
+--- a/web/src/lib/i18n.tsx
++++ b/web/src/lib/i18n.tsx
+@@ -837,7 +837,40 @@ export const messages = {
+   "resources.live.close": { "zh-TW": "關閉", en: "Close" },
+   "resources.live.count": { "zh-TW": "{n} 個", en: "{n}" },
+   "resources.live.cores": { "zh-TW": "{n} 核", en: "{n} cores" },
++  // English needs the singular; Chinese has no plural form, so both keys carry
++  // the same string there rather than pretending the distinction exists.
++  "resources.live.cores_one": { "zh-TW": "{n} 核", en: "{n} core" },
++  // ── superuser: per-person allowances ──────────────────────────────────
++  "resources.admin.heading": { "zh-TW": "個人額度（管理員）", en: "Per-person allowances (admin)" },
++  "resources.admin.intro": {
++    "zh-TW": "把某個人的額度調得比站台預設高。只填要放寬的維度,留空的沿用站台預設。",
++    en: "Raise one person above the site default. Fill only the dimensions you want to change; blank ones keep the default.",
++  },
++  "resources.admin.user": { "zh-TW": "使用者 id", en: "User id" },
++  "resources.admin.lookup": { "zh-TW": "查詢", en: "Look up" },
++  "resources.admin.save": { "zh-TW": "儲存", en: "Save" },
++  "resources.admin.clear": { "zh-TW": "清除覆寫", en: "Clear override" },
++  "resources.admin.count": { "zh-TW": "同時執行環境上限", en: "Live environment limit" },
++  "resources.admin.cpu": { "zh-TW": "CPU 核心上限", en: "CPU core limit" },
++  "resources.admin.memory": { "zh-TW": "記憶體上限", en: "Memory limit" },
++  "resources.admin.disk": { "zh-TW": "儲存空間上限", en: "Storage limit" },
++  "resources.admin.effective": { "zh-TW": "目前有效額度", en: "Effective now" },
++  "resources.admin.unlimited": { "zh-TW": "無上限", en: "unlimited" },
++  "resources.admin.saved": { "zh-TW": "已套用,不需重啟。", en: "Applied — no restart needed." },
++  "resources.admin.defaults": { "zh-TW": "站台預設", en: "Site default" },
++  "resources.admin.who": { "zh-TW": "目前有特例的人", en: "People with an exception" },
++  "resources.admin.none": {
++    "zh-TW": "目前沒有人有特例——所有人都吃站台預設。",
++    en: "Nobody has an exception — everyone is on the site default.",
++  },
++  "resources.admin.notfound": {
++    "zh-TW": "查不到這個使用者(或你沒有權限)。",
++    en: "No such user, or you don't have permission.",
++  },
+   "resources.memory": { "zh-TW": "記憶體", en: "Memory" },
++  "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
++  "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
++  "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
+   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
+   "resources.disk.untracked": {
+     "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",
+diff --git a/web/src/main.tsx b/web/src/main.tsx
+index f6f95a3c..6ef1abed 100644
+--- a/web/src/main.tsx
++++ b/web/src/main.tsx
+@@ -27,6 +27,7 @@ import "./styles/topic-hub.css";
+ import "./styles/entity-views.css";
+ import "./styles/chat-rail.css";
+ import "./styles/sheet.css";
++import "./styles/my-resources.css";
+ // #698 — second-party view kinds register themselves on import. This runs
+ // before the first render below, which it must: the registry is a plain map, so
+ // a kind added after a view has painted would not appear in it.
+diff --git a/web/src/pages/MyResourcesPage.test.tsx b/web/src/pages/MyResourcesPage.test.tsx
+index 02ae1ef7..e15d691c 100644
+--- a/web/src/pages/MyResourcesPage.test.tsx
++++ b/web/src/pages/MyResourcesPage.test.tsx
+@@ -8,13 +8,16 @@
+  */
+ 
+ import "@testing-library/jest-dom/vitest";
+-import { cleanup, render, screen, waitFor } from "@testing-library/react";
++import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+ import userEvent from "@testing-library/user-event";
+ import { afterEach, describe, expect, it, vi } from "vitest";
+ 
+-import type { MyResources, MyResourcesApi } from "../api/myResources";
++import type { MyResources, MyResourcesApi, UserQuotaOverride } from "../api/myResources";
+ import { MemoryRouter } from "react-router-dom";
+ 
++vi.mock("../api", () => ({ api: { getMe: vi.fn(async () => ({ id: "alice", is_superuser: false, groups: [] })) } }));
++
++import { api } from "../api";
+ import { QueryWrap } from "../test/queryWrapper";
+ import { MyResourcesPage, formatAgainstLimit, formatBytes } from "./MyResourcesPage";
+ 
+@@ -40,10 +43,48 @@ function data(over: Partial<MyResources> = {}): MyResources {
+   };
+ }
+ 
++/** A double that models the real endpoints' CONTRACT, not just their shape:
++ * `adminGet` answers null the way the backend's 404 does (for an unknown user
++ * AND for a caller who isn't a superuser — it does not distinguish, so that
++ * "who has an exception" can't be probed), and `adminSet` REPLACES the whole
++ * override, which is what makes pre-filling the form from effective limits a
++ * bug rather than a convenience. */
+ function client(over: Partial<MyResourcesApi> = {}): MyResourcesApi {
++  const overrides = new Map<string, UserQuotaOverride>();
+   return {
+     get: vi.fn(async () => data()),
+     closeEnvironment: vi.fn(async () => {}),
++    adminList: vi.fn(async () => ({
++      defaults: { count: 2, cpu: 0, memory_bytes: 0, disk_bytes: 1024 },
++      // only the dimensions actually granted — the route returns the RAW
++      // override, so an ungranted dimension is 0/"" and not the default
++      overrides: [...overrides.entries()].map(([user_id, o]) => ({
++        user_id,
++        count: o.count ?? 0,
++        cpu: o.cpu ?? 0,
++        memory: o.memory ?? "",
++        disk: o.disk ?? "",
++      })),
++    })),
++    adminGet: vi.fn(async (userId: string) => {
++      if (userId !== "bob") return null;
++      const o = overrides.get(userId);
++      return data({
++        owner: userId,
++        limits: {
++          count: o?.count || 2,
++          cpu: o?.cpu || 0,
++          memory_bytes: 0,
++          disk_bytes: 1024,
++        },
++      });
++    }),
++    adminSet: vi.fn(async (userId: string, limits: UserQuotaOverride) => {
++      overrides.set(userId, limits); // replace, never merge
++    }),
++    adminClear: vi.fn(async (userId: string) => {
++      overrides.delete(userId);
++    }),
+     ...over,
+   };
+ }
+@@ -93,6 +134,33 @@ describe("MyResourcesPage", () => {
+     await waitFor(() => expect(screen.getByText(/目前沒有執行中的環境/)).toBeTruthy());
+   });
+ 
++  // Any of the three can refuse a turn on its own, so each needs its own
++  // reading. They used to share one line and ONE bar — and that bar tracked
++  // `count`, so it could sit at 50% while cpu was at 25% and mean neither.
++  it("gives cpu and memory their own reading, not a share of the count's", async () => {
++    const d = data({ limits: { count: 2, cpu: 4, memory_bytes: 2048, disk_bytes: 1024 } });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    expect(await screen.findByText("CPU")).toBeInTheDocument();
++    expect(screen.getByText("2 / 4")).toBeInTheDocument();
++    expect(screen.getByText("512 B / 2.0 KB")).toBeInTheDocument();
++    // one bar per dimension: 3 live + 1 storage
++    expect(document.querySelectorAll(".meter")).toHaveLength(4);
++  });
++
++  // Hiding an unlimited dimension hid its USAGE too, so on a deploy that caps
++  // only the environment count you could not find out how much cpu you held.
++  it("still reports usage for a dimension with no limit", async () => {
++    const d = data({ limits: { count: 2, cpu: 0, memory_bytes: 0, disk_bytes: 1024 } });
++    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
++
++    expect(await screen.findByText("CPU")).toBeInTheDocument();
++    expect(screen.getByText("2")).toBeInTheDocument(); // used, with no denominator
++    expect(screen.getAllByText("（無上限）").length).toBeGreaterThan(0);
++    // no bar where there is nothing to be a fraction of: count + storage only
++    expect(document.querySelectorAll(".meter")).toHaveLength(2);
++  });
++
+   it("says how to free disk, because deleting happens in the item", async () => {
+     render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
+     expect(await screen.findByText(/刪除永遠不受額度限制/)).toBeTruthy();
+@@ -108,6 +176,96 @@ describe("MyResourcesPage", () => {
+   });
+ });
+ 
++describe("per-person overrides (superuser)", () => {
++  const asUser = (isSuperuser: boolean) =>
++    vi.mocked(api.getMe).mockResolvedValue({ id: "root", is_superuser: isSuperuser, groups: [] });
++
++  it("is invisible to a normal user — the backend would 404 it anyway", async () => {
++    asUser(false);
++    render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
++    await screen.findAllByText("Line 3 stoppage");
++    expect(screen.queryByText(/個人額度/)).not.toBeInTheDocument();
++  });
++
++  it("lets a superuser raise one person, and says it needs no restart", async () => {
++    asUser(true);
++    const c = client();
++    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
++
++    await userEvent.type(await screen.findByLabelText("使用者 id"), "bob");
++    await userEvent.type(screen.getByLabelText("同時執行環境上限"), "5");
++    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
++
++    expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 5, cpu: 0, memory: "", disk: "" });
++    expect(await screen.findByText(/不需重啟/)).toBeInTheDocument();
++  });
++
++  // The read endpoint returns EFFECTIVE limits and `PUT` replaces all four
++  // dimensions. Pre-filling the form from what was read would submit inherited
++  // values back as explicit overrides — pinning this person to today's defaults
++  // for ever. Blank must stay blank.
++  it("does not turn the person's inherited limits into pinned overrides", async () => {
++    asUser(true);
++    const c = client();
++    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
++
++    await userEvent.type(await screen.findByLabelText("使用者 id"), "bob");
++    await userEvent.click(screen.getByRole("button", { name: "查詢" }));
++    // bob's effective disk is 1024 B, read back and shown...
++    await screen.findByText(/目前有效額度/);
++    // ...but the disk field stays empty, so saving only `count` leaves disk on
++    // the deploy default rather than freezing it at 1024.
++    expect(screen.getByLabelText("儲存空間上限")).toHaveValue("");
++
++    await userEvent.type(screen.getByLabelText("同時執行環境上限"), "9");
++    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
++    expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 9, cpu: 0, memory: "", disk: "" });
++  });
++
++  // Without a list, an operator can only confirm an exception they already
++  // suspect — "who has one?" had no answer at all.
++  it("names who is above the baseline, and what the baseline is", async () => {
++    asUser(true);
++    const c = client();
++    await c.adminSet("bob", { count: 9, cpu: 0, memory: "", disk: "" });
++    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
++
++    expect(await screen.findByText(/^站台預設:/)).toHaveTextContent("同時執行環境上限 2");
++    expect(screen.getByText("bob")).toBeInTheDocument();
++    // only the dimension actually granted — not every dimension merged against
++    // the default, which would make everyone look overridden everywhere
++    expect(screen.getByText(/同時執行環境上限 9$/)).toBeInTheDocument();
++  });
++
++  it("says plainly when nobody has an exception", async () => {
++    asUser(true);
++    render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
++    expect(await screen.findByText(/目前沒有人有特例/)).toBeInTheDocument();
++  });
++
++  it("revokes an exception straight from the list", async () => {
++    asUser(true);
++    const c = client();
++    await c.adminSet("bob", { count: 9, cpu: 0, memory: "", disk: "" });
++    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
++
++    const row = (await screen.findByText("bob")).closest("li")!;
++    await userEvent.click(within(row).getByRole("button", { name: "清除覆寫" }));
++
++    expect(c.adminClear).toHaveBeenCalledWith("bob");
++    await waitFor(() => expect(screen.getByText(/目前沒有人有特例/)).toBeInTheDocument());
++  });
++
++  it("says so when the id matches nobody, rather than showing an empty form", async () => {
++    asUser(true);
++    render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
++
++    await userEvent.type(await screen.findByLabelText("使用者 id"), "nobody");
++    await userEvent.click(screen.getByRole("button", { name: "查詢" }));
++    expect(await screen.findByText(/查不到這個使用者/)).toBeInTheDocument();
++  });
++});
++
+ describe("formatting", () => {
+   it("renders bytes at a readable scale", () => {
+     expect(formatBytes(0)).toBe("0 B");
+diff --git a/web/src/pages/MyResourcesPage.tsx b/web/src/pages/MyResourcesPage.tsx
+index a0238f87..ccbb32c2 100644
+--- a/web/src/pages/MyResourcesPage.tsx
++++ b/web/src/pages/MyResourcesPage.tsx
+@@ -12,12 +12,14 @@
+  */
+ 
+ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
++import { useState } from "react";
+ import { Link } from "react-router-dom";
+ 
+ import { useT } from "../lib/i18n";
+ 
+-import { type MyResourcesApi, myResourcesApi } from "../api/myResources";
++import { type MyResources, type MyResourcesApi, type OverrideList as OverrideListDTO, myResourcesApi } from "../api/myResources";
+ import { qk } from "../api/queryKeys";
++import { useIsSuperuser } from "../hooks/useIsSuperuser";
+ 
+ /** Bytes → a short human string. Sizes here span KB to tens of GB. */
+ export function formatBytes(n: number): string {
+@@ -47,6 +49,37 @@ function Meter({ used, limit }: { used: number; limit: number }) {
+   );
+ }
+ 
++/** One dimension: what it is, how much of it you hold, and how close that is to
++ * your ceiling.
++ *
++ * An UNLIMITED dimension still shows its usage — with no denominator and no bar,
++ * because there is nothing to be a fraction of. It used to be hidden entirely,
++ * so on a deploy that caps only the environment count you could not find out how
++ * much cpu or memory you were holding at all. */
++function Gauge({
++  label,
++  used,
++  limit,
++  format,
++}: {
++  label: string;
++  used: number;
++  limit: number;
++  format: (n: number) => string;
++}) {
++  const t = useT();
++  return (
++    <div className="gauge">
++      <p className="summary">
++        <span className="gauge-label">{label}</span>
++        <span className="gauge-value">{formatAgainstLimit(used, limit, format)}</span>
++        {limit ? null : <span className="detail">{t("resources.gauge.unlimited")}</span>}
++      </p>
++      <Meter used={used} limit={limit} />
++    </div>
++  );
++}
++
+ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResourcesApi }) {
+   const t = useT();
+   const qc = useQueryClient();
+@@ -69,14 +102,29 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
+ 
+       <section aria-labelledby="live-heading">
+         <h2 id="live-heading">{t("resources.live.heading")}</h2>
+-        <p className="summary">
+-          {formatAgainstLimit(data.live.length, limits.count, (n) => t("resources.live.count", { n }))}
+-          {limits.cpu ? ` · CPU ${formatAgainstLimit(data.cpu_in_use, limits.cpu, (n) => `${n}`)}` : ""}
+-          {limits.memory_bytes
+-            ? ` · ${t("resources.memory")} ${formatAgainstLimit(data.memory_in_use, limits.memory_bytes, formatBytes)}`
+-            : ""}
+-        </p>
+-        <Meter used={data.live.length} limit={limits.count} />
++        {/* Three dimensions, three gauges. They used to share one line and ONE
++            bar — and that bar tracked only `count`, so at "1 / 2 · CPU 1 / 4" it
++            sat at 50% while cpu was at 25%: a reader takes the bar as "how full
++            am I" and it answered one dimension of three. Any of them can refuse
++            a turn on its own, so each shows its own. */}
++        <Gauge
++          label={t("resources.gauge.count")}
++          used={data.live.length}
++          limit={limits.count}
++          format={(n) => t("resources.live.count", { n })}
++        />
++        <Gauge
++          label={t("resources.gauge.cpu")}
++          used={data.cpu_in_use}
++          limit={limits.cpu}
++          format={(n) => `${n}`}
++        />
++        <Gauge
++          label={t("resources.memory")}
++          used={data.memory_in_use}
++          limit={limits.memory_bytes}
++          format={formatBytes}
++        />
+         {data.live.length === 0 ? (
+           <p className="empty">{t("resources.live.empty")}</p>
+         ) : (
+@@ -85,11 +133,18 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
+               <li key={env.item_id}>
+                 <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
+                 <span className="detail">
+-                  {env.cpu_cores ? t("resources.live.cores", { n: env.cpu_cores }) : ""}
++                  {env.cpu_cores
++                    ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
++                        n: env.cpu_cores,
++                      })
++                    : ""}
+                   {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
+                 </span>
+                 <button
+                   type="button"
++                  className="btn"
++                  data-variant="secondary"
++                  data-size="sm"
+                   onClick={() => close.mutate(env.item_id)}
+                   disabled={close.isPending}
+                 >
+@@ -109,10 +164,12 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
+           <p className="empty">{t("resources.disk.untracked")}</p>
+         ) : (
+           <>
+-            <p className="summary">
+-              {formatAgainstLimit(data.disk_in_use, limits.disk_bytes, formatBytes)}
+-            </p>
+-            <Meter used={data.disk_in_use} limit={limits.disk_bytes} />
++            <Gauge
++              label={t("resources.disk.heading")}
++              used={data.disk_in_use}
++              limit={limits.disk_bytes}
++              format={formatBytes}
++            />
+           </>
+         )}
+         {!data.disk_tracked ? null : data.workspaces.length === 0 ? (
+@@ -132,6 +189,229 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
+         )}
+         {data.disk_tracked ? <p className="hint">{t("resources.disk.hint")}</p> : null}
+       </section>
++
++      <AdminOverrides client={client} />
+     </div>
+   );
+ }
++
++/**
++ * Raise one person above the site default (#688 P7). Superuser only — and the
++ * backend answers 404, not 403, to everyone else, so this section simply does
++ * not render rather than offering a control that would be refused.
++ *
++ * The form starts EMPTY on purpose and does not pre-fill from the person's
++ * current numbers. `PUT` is replace-semantics — it rewrites all four dimensions
++ * — and the read endpoint returns EFFECTIVE limits (override merged over the
++ * deploy default), so pre-filling would submit inherited values back as explicit
++ * overrides and quietly pin them: a later change to the site default would then
++ * skip everyone who had ever been edited here. Blank means "keep the default",
++ * which is the same thing the backend's own 0/"" sentinel means.
++ */
++function AdminOverrides({ client }: { client: MyResourcesApi }) {
++  const t = useT();
++  const isSuperuser = useIsSuperuser();
++  const [userId, setUserId] = useState("");
++  const [form, setForm] = useState({ count: "", cpu: "", memory: "", disk: "" });
++  const [looked, setLooked] = useState<MyResources | null | undefined>(undefined);
++  const [saved, setSaved] = useState(false);
++  const list = useQuery({
++    queryKey: qk.userOverrides,
++    queryFn: () => client.adminList(),
++    enabled: isSuperuser,
++  });
++
++  if (!isSuperuser) return null;
++
++  const refreshList = () => void list.refetch();
++
++  const lookup = async () => {
++    setSaved(false);
++    setLooked(userId ? await client.adminGet(userId) : undefined);
++  };
++  const save = async () => {
++    await client.adminSet(userId, {
++      count: form.count ? Number(form.count) : 0,
++      cpu: form.cpu ? Number(form.cpu) : 0,
++      memory: form.memory,
++      disk: form.disk,
++    });
++    setSaved(true);
++    setLooked(await client.adminGet(userId));
++    refreshList();
++  };
++  const clear = async () => {
++    await client.adminClear(userId);
++    setForm({ count: "", cpu: "", memory: "", disk: "" });
++    setSaved(true);
++    setLooked(await client.adminGet(userId));
++    refreshList();
++  };
++
++  const clearOne = async (u: string) => {
++    await client.adminClear(u);
++    refreshList();
++    if (u === userId) setLooked(await client.adminGet(u));
++  };
++
++  const amount = (n: number, fmt: (v: number) => string) => (n ? fmt(n) : t("resources.admin.unlimited"));
++
++  return (
++    <section className="admin" aria-labelledby="admin-heading">
++      <h2 id="admin-heading">{t("resources.admin.heading")}</h2>
++      <p className="hint">{t("resources.admin.intro")}</p>
++
++      {list.data ? <OverrideList data={list.data} onClear={(u) => void clearOne(u)} /> : null}
++
++      <div className="admin-row">
++        <span className="admin-field">
++          <label htmlFor="q-user">{t("resources.admin.user")}</label>
++          <input id="q-user" value={userId} onChange={(e) => setUserId(e.target.value)} />
++        </span>
++        <button type="button" className="btn" data-variant="secondary" data-size="sm" onClick={() => void lookup()}>
++          {t("resources.admin.lookup")}
++        </button>
++      </div>
++
++      {looked === null ? <p className="hint">{t("resources.admin.notfound")}</p> : null}
++      {looked ? (
++        <p className="hint">
++          {t("resources.admin.effective")}: {t("resources.admin.count")} {amount(looked.limits.count, String)} ·{" "}
++          {t("resources.admin.cpu")} {amount(looked.limits.cpu, String)} · {t("resources.admin.memory")}{" "}
++          {amount(looked.limits.memory_bytes, formatBytes)} · {t("resources.admin.disk")}{" "}
++          {amount(looked.limits.disk_bytes, formatBytes)}
++        </p>
++      ) : null}
++
++      <div className="admin-row">
++        <span className="admin-field">
++          <label htmlFor="q-count">{t("resources.admin.count")}</label>
++          <input
++            id="q-count"
++            type="number"
++            min="0"
++            value={form.count}
++            onChange={(e) => setForm({ ...form, count: e.target.value })}
++          />
++        </span>
++        <span className="admin-field">
++          <label htmlFor="q-cpu">{t("resources.admin.cpu")}</label>
++          <input
++            id="q-cpu"
++            type="number"
++            min="0"
++            step="0.5"
++            value={form.cpu}
++            onChange={(e) => setForm({ ...form, cpu: e.target.value })}
++          />
++        </span>
++        <span className="admin-field">
++          <label htmlFor="q-mem">{t("resources.admin.memory")}</label>
++          <input
++            id="q-mem"
++            placeholder="8G"
++            value={form.memory}
++            onChange={(e) => setForm({ ...form, memory: e.target.value })}
++          />
++        </span>
++        <span className="admin-field">
++          <label htmlFor="q-disk">{t("resources.admin.disk")}</label>
++          <input
++            id="q-disk"
++            placeholder="50G"
++            value={form.disk}
++            onChange={(e) => setForm({ ...form, disk: e.target.value })}
++          />
++        </span>
++      </div>
++
++      <div className="admin-row">
++        <button
++          type="button"
++          className="btn"
++          data-variant="primary"
++          data-size="sm"
++          disabled={!userId}
++          onClick={() => void save()}
++        >
++          {t("resources.admin.save")}
++        </button>
++        <button
++          type="button"
++          className="btn"
++          data-variant="secondary"
++          data-size="sm"
++          disabled={!userId}
++          onClick={() => void clear()}
++        >
++          {t("resources.admin.clear")}
++        </button>
++        {saved ? <span className="detail">{t("resources.admin.saved")}</span> : null}
++      </div>
++    </section>
++  );
++}
++
++/**
++ * Who is above the baseline, and the baseline itself.
++ *
++ * The by-id lookup below can only confirm an exception you already suspect, so
++ * without this an operator inheriting the system cannot answer "who has one?".
++ * Rows show the RAW override — only the dimensions actually granted — because
++ * merging them against the default would make every row look overridden in
++ * every dimension, which is the opposite of what this list is for.
++ */
++function OverrideList({
++  data,
++  onClear,
++}: {
++  data: OverrideListDTO;
++  onClear: (userId: string) => void;
++}) {
++  const t = useT();
++  const d = data.defaults;
++  const dims = (o: OverrideListDTO["overrides"][number]) =>
++    [
++      o.count ? `${t("resources.admin.count")} ${o.count}` : "",
++      o.cpu ? `${t("resources.admin.cpu")} ${o.cpu}` : "",
++      o.memory ? `${t("resources.admin.memory")} ${o.memory}` : "",
++      o.disk ? `${t("resources.admin.disk")} ${o.disk}` : "",
++    ]
++      .filter(Boolean)
++      .join(" · ");
++  const def = (n: number, fmt: (v: number) => string) =>
++    n ? fmt(n) : t("resources.admin.unlimited");
++
++  return (
++    <>
++      <p className="hint">
++        {t("resources.admin.defaults")}: {t("resources.admin.count")} {def(d.count, String)} ·{" "}
++        {t("resources.admin.cpu")} {def(d.cpu, String)} · {t("resources.admin.memory")}{" "}
++        {def(d.memory_bytes, formatBytes)} · {t("resources.admin.disk")}{" "}
++        {def(d.disk_bytes, formatBytes)}
++      </p>
++      <h3 className="admin-sub">{t("resources.admin.who")}</h3>
++      {data.overrides.length === 0 ? (
++        <p className="empty">{t("resources.admin.none")}</p>
++      ) : (
++        <ul>
++          {data.overrides.map((o) => (
++            <li key={o.user_id}>
++              <span className="who">{o.user_id}</span>
++              <span className="detail">{dims(o)}</span>
++              <button
++                type="button"
++                className="btn"
++                data-variant="secondary"
++                data-size="sm"
++                onClick={() => onClear(o.user_id)}
++              >
++                {t("resources.admin.clear")}
++              </button>
++            </li>
++          ))}
++        </ul>
++      )}
++    </>
++  );
++}
+diff --git a/web/src/renderers/entity/BoardView.test.tsx b/web/src/renderers/entity/BoardView.test.tsx
+index 67b9d7b0..782f5256 100644
+--- a/web/src/renderers/entity/BoardView.test.tsx
++++ b/web/src/renderers/entity/BoardView.test.tsx
+@@ -204,4 +204,36 @@ describe("BoardView (#451)", () => {
+       expect(screen.getByTestId("card-1")).toHaveAttribute("aria-disabled", "false");
+     });
+   });
++
++  describe("record number on the card", () => {
++    it("shows the number alongside the title, not only when the title is missing", () => {
++      board({ entities: [issue(33, { title: "Fix the login loop", status: "open" })] });
++
++      const card = within(screen.getByTestId("card-33"));
++      // The number is what people say out loud ("look at 33"), so a titled card
++      // has to carry it too — it used to be a fallback for an empty title and
++      // therefore invisible on every card that had one.
++      expect(card.getByText("#33")).toBeInTheDocument();
++      expect(card.getByText("Fix the login loop")).toBeInTheDocument();
++    });
++
++    it("does not print the number twice when the record has no title", () => {
++      board({ entities: [issue(7, { status: "open" })] });
++
++      expect(within(screen.getByTestId("card-7")).getAllByText("#7")).toHaveLength(1);
++    });
++
++    it("keeps the number out of the way of the card's gestures", () => {
++      const onOpenRecord = vi.fn();
++      board({ entities: [issue(33, { title: "A", status: "open" })], onOpenRecord });
++
++      // The card is a drag handle and a double-click target, so the number must
++      // not become a control that eats either gesture. It stays readable to a
++      // screen reader on purpose — it is the record's identity, and on an
++      // untitled card it is the ONLY thing naming it.
++      const num = within(screen.getByTestId("card-33")).getByText("#33");
++      expect(num.closest("button")).toBeNull();
++      expect(num.tagName).toBe("SPAN");
++    });
++  });
+ });
+diff --git a/web/src/renderers/entity/BoardView.tsx b/web/src/renderers/entity/BoardView.tsx
+index d4ce1add..71ac6174 100644
+--- a/web/src/renderers/entity/BoardView.tsx
++++ b/web/src/renderers/entity/BoardView.tsx
+@@ -234,7 +234,17 @@ function Card({
+       {...listeners}
+     >
+       <div className="ev-card__head">
+-        <div className="ev-card__title">{fieldText(entity.fields[titleField]) || `#${entity.number}`}</div>
++        {/* The number is the record's spoken name ("look at 33"), so it rides
++            every card — it used to be a FALLBACK for a missing title, which
++            meant every card that had a title hid the one thing people say out
++            loud. Muted and ahead of the title; not a control, because the card
++            itself is the drag handle and the double-click target. */}
++        <div className="ev-card__title">
++          <span className="ev-card__num">#{entity.number}</span>
++          {fieldText(entity.fields[titleField]) && (
++            <span className="ev-card__label">{fieldText(entity.fields[titleField])}</span>
++          )}
++        </div>
+         {(canOpen || canOpenFile) && (
+           // Isolate the menu from the card's drag listeners — a pointerdown here
+           // must not arm a drag — and from its open gesture, so double-clicking
+diff --git a/web/src/renderers/entity/EntityFileEditor.test.tsx b/web/src/renderers/entity/EntityFileEditor.test.tsx
+index d4bfe43b..7461f8d9 100644
+--- a/web/src/renderers/entity/EntityFileEditor.test.tsx
++++ b/web/src/renderers/entity/EntityFileEditor.test.tsx
+@@ -60,6 +60,25 @@ describe("EntityFileEditor (§C2)", () => {
+     expect(screen.queryByLabelText("issues")).not.toBeInTheDocument();
+   });
+ 
++  it("does not wrap the body editor in a <label> (it is not a native control)", () => {
++    // The reported symptom: fields typed fine, the body did not. The body's
++    // Monaco was the only one in the codebase wrapped in a `<label>` — the YAML
++    // editor ten lines above it in this same file uses a `<div>` with the same
++    // class, and the six other MonacoEditor call sites use none.
++    //
++    // A `<label>` promises "click me and I hand focus to my control". Monaco is
++    // not a native control — it is divs plus a hidden textarea — so the wrapper
++    // intercepts the click and the caret never lands where the user aimed.
++    //
++    // This assertion is structural because the behaviour it guards cannot be
++    // reached from here: this suite MOCKS Monaco as a plain textarea, and a
++    // textarea inside a label behaves perfectly. That mock is why the defect
++    // survived every green run.
++    render(<EntityFileEditor type={issueType} record={record} onSave={vi.fn()} />);
++
++    expect(screen.getByLabelText("body").closest("label")).toBeNull();
++  });
++
+   it("saves the frontmatter patch + body through onSave (§B1)", () => {
+     const onSave = vi.fn();
+     render(<EntityFileEditor type={issueType} record={record} onSave={onSave} />);
+diff --git a/web/src/renderers/entity/EntityFileEditor.tsx b/web/src/renderers/entity/EntityFileEditor.tsx
+index 7ee2350e..7e9c5d24 100644
+--- a/web/src/renderers/entity/EntityFileEditor.tsx
++++ b/web/src/renderers/entity/EntityFileEditor.tsx
+@@ -164,7 +164,14 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, r
+         </div>
+       )}
+ 
+-      <label className="ev-editor__field">
++      {/* A DIV, not a label — matching the YAML editor above and every other
++          MonacoEditor call site. A `<label>` promises to hand focus to its
++          native control on click; Monaco is not one (divs plus a hidden
++          textarea), so wrapping it intercepted the click and the caret never
++          landed. That is why the body could not be typed into while the
++          frontmatter fields, which ARE native inputs, were fine. Monaco carries
++          its own `ariaLabel`, so nothing is lost by dropping the label. */}
++      <div className="ev-editor__field">
+         <span className="ev-editor__label">Body</span>
+         {/* Free-writing markdown body in the shared Monaco editor (§C2). */}
+         <MonacoEditor
+@@ -176,7 +183,7 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, r
+           autoHeight
+           minHeight={160}
+         />
+-      </label>
++      </div>
+     </div>
+   );
+ }
+diff --git a/web/src/styles/contrast.test.ts b/web/src/styles/contrast.test.ts
+index db69f606..9d81f2fd 100644
+--- a/web/src/styles/contrast.test.ts
++++ b/web/src/styles/contrast.test.ts
+@@ -51,3 +51,24 @@ describe("categorical chip contrast (#GH-projects B / #4)", () => {
+     });
+   }
+ });
++
++/**
++ * The board card's record number (#PM). It renders on the CARD surface, not the
++ * page surface, and in `--text-paper-d` — a tier brighter than the d2 guarded
++ * above, so the test above does not cover it. Guarded in BOTH themes on purpose:
++ * #690 shipped text that was unreadable in light mode because the colour had only
++ * ever been eyeballed in dark, and the unit tests stayed green throughout.
++ */
++describe("board card number contrast", () => {
++  it("clears a 4:1 floor on the card surface in light mode", () => {
++    const ink = tokenIn(TOKENS_CSS, LIGHT, "--text-paper-d");
++    const card = tokenIn(TOKENS_CSS, LIGHT, "--white");
++    expect(contrast(ink, card)).toBeGreaterThanOrEqual(4);
++  });
++
++  it("clears a 4:1 floor on the card surface in dark mode", () => {
++    const ink = tokenIn(TOKENS_CSS, DARK, "--text-paper-d");
++    const card = tokenIn(TOKENS_CSS, DARK, "--white");
++    expect(contrast(ink, card)).toBeGreaterThanOrEqual(4);
++  });
++});
+diff --git a/web/src/styles/entity-views.css b/web/src/styles/entity-views.css
+index d6628e6c..5d6d8b3c 100644
+--- a/web/src/styles/entity-views.css
++++ b/web/src/styles/entity-views.css
+@@ -758,6 +758,16 @@
+   line-height: var(--leading-body-sm);
+   min-width: 0;
+ }
++/* The record number, on every card. Muted so the title still leads, but present
++   even when the title is long — it is the handle people use out loud ("look at
++   33") and the only name an untitled record has. `--text-paper-d` is the shared
++   muted ink, defined in BOTH themes, so this cannot repeat #690 where a colour
++   picked for dark was unreadable in light. */
++.ev-card__num {
++  color: var(--text-paper-d);
++  font-weight: 500;
++  margin-inline-end: var(--space-4);
++}
+ /* ⋯ card menu trigger — quiet until the card is hovered / the menu is open. */
+ .ev-card__menu {
+   flex: none;
+diff --git a/web/src/styles/my-resources.css b/web/src/styles/my-resources.css
+new file mode 100644
+index 00000000..5ccea5d8
+--- /dev/null
++++ b/web/src/styles/my-resources.css
+@@ -0,0 +1,213 @@
++/* `/my-resources` — the page every quota refusal points at (#692).
++ *
++ * It shipped with a full vocabulary of semantic classes and no stylesheet, so
++ * the meter was two zero-height divs (a person could not see how close to the
++ * limit they were) and each row read as one run of text:
++ * "quota demo A1 cores · 512 MB Close".
++ *
++ * Its own file rather than base.css: base is the app-wide reset + shared
++ * primitives, and these classes belong to one page. Same call as sheet.css /
++ * topic-hub.css. Imported from main.tsx alongside those.
++ *
++ * Tokens only — `no-undefined-tokens.test.ts` fails the build on a `var()` that
++ * names nothing, and a literal hex here would not follow the theme.
++ */
++
++.page {
++  max-width: 760px;
++  margin: 0 auto;
++  padding: var(--space-32) var(--space-24) var(--space-64);
++}
++
++.page > h1 {
++  font-size: var(--text-display-md);
++  margin: 0 0 var(--space-32);
++}
++
++.page > section + section {
++  margin-top: var(--space-32);
++}
++
++.page > section > h2 {
++  font-size: var(--text-body-lg);
++  margin: 0 0 var(--space-8);
++}
++
++/* One row per dimension: name on the left, the number on the right, its own bar
++   underneath. Three dimensions used to share one line and one bar, which made
++   the bar mean whichever of them it happened to be tracking. */
++.page .gauge + .gauge {
++  margin-top: var(--space-12);
++}
++
++.page .summary {
++  display: flex;
++  align-items: baseline;
++  gap: var(--space-8);
++  margin: 0 0 var(--space-4);
++  font-size: var(--text-body);
++  color: var(--text-paper);
++}
++
++.page .gauge-label {
++  flex: 1;
++  min-width: 0;
++}
++
++.page .gauge-value {
++  font-variant-numeric: tabular-nums;
++}
++
++.page .empty {
++  margin: 0;
++  font-size: var(--text-body-sm);
++  color: var(--text-paper-d);
++}
++
++/* The bar. `--paper-3` is the same track colour the app's other inset surfaces
++   use; the fill is the accent so it reads as "yours", not as an alert — being
++   near a limit is normal, not an error. */
++.meter {
++  height: 6px;
++  background: var(--paper-3);
++  border-radius: var(--radius-chip);
++  overflow: hidden;
++  margin-bottom: var(--space-12);
++}
++
++.meter-fill {
++  height: 100%;
++  background: var(--accent);
++  transition: width 0.2s;
++}
++
++/* One row per environment / workspace: name grows, specs sit next to it, the
++   action is pushed to the end. The gap is what stopped "quota demo A" and
++   "1 core" reading as one word. */
++.page ul {
++  list-style: none;
++  margin: 0;
++  padding: 0;
++}
++
++.page ul > li {
++  display: flex;
++  align-items: center;
++  gap: var(--space-12);
++  padding: var(--space-12) 0;
++  border-top: 1px solid var(--paper-3);
++}
++
++.page ul > li > a {
++  flex: 1;
++  min-width: 0;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.page .detail {
++  font-size: var(--text-body-sm);
++  color: var(--text-paper-d);
++  white-space: nowrap;
++}
++
++.page .hint {
++  margin: var(--space-16) 0 0;
++  font-size: var(--text-body-sm);
++  color: var(--text-paper-d);
++}
++
++/* ── superuser: per-person overrides ─────────────────────────────────────
++   Only rendered for a superuser, so it is styled as a distinct block rather
++   than another list — the reader should be able to tell at a glance that this
++   half is about SOMEONE ELSE'S allowance, not their own usage. */
++.page .admin {
++  margin-top: var(--space-48);
++  padding: var(--space-16);
++  border: 1px solid var(--paper-3);
++  border-radius: var(--radius-card);
++  background: var(--paper-2);
++}
++
++.page .admin > h2 {
++  margin-top: 0;
++}
++
++.page .admin-sub {
++  font-size: var(--text-body-sm);
++  margin: var(--space-16) 0 var(--space-4);
++  color: var(--text-paper);
++}
++
++/* The person an exception belongs to leads the row; what they were granted sits
++   next to it, and Clear is pushed to the end — same shape as the usage rows
++   above, so the page reads as one thing. */
++.page .admin .who {
++  flex: 1;
++  min-width: 0;
++  font-weight: 500;
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
++.page .admin ul > li {
++  border-top-color: var(--paper-3);
++  padding: var(--space-8) 0;
++}
++
++/* The list ends and the "grant a new one" form begins — without a break they
++   read as one control, and the last row's Clear sits next to the form's. */
++.page .admin ul + .admin-row {
++  margin-top: var(--space-16);
++  padding-top: var(--space-16);
++  border-top: 1px solid var(--paper-3);
++}
++
++.page .admin-row {
++  display: flex;
++  align-items: center;
++  gap: var(--space-8) var(--space-16);
++  flex-wrap: wrap;
++}
++
++/* A label and its input wrap as ONE unit. Without this the row broke between
++   them — "Memory limit" ended a line and its box started the next, next to a
++   different field's label. */
++.page .admin-field {
++  display: inline-flex;
++  align-items: center;
++  gap: var(--space-8);
++}
++
++.page .admin-row input {
++  font: inherit;
++  height: 28px;
++  padding: 0 8px;
++  border: 1px solid var(--paper-3);
++  border-radius: var(--radius-btn);
++  background: var(--paper);
++  color: var(--text-paper);
++}
++
++.page .admin-row input[type="number"] {
++  width: 90px;
++}
++
++.page .admin-row label {
++  font-size: var(--text-body-sm);
++  color: var(--text-paper-d);
++}
++
++/* Which dimensions are this person's own and which fall through to the deploy
++   default — an override page that cannot show the difference makes it
++   impossible to tell who actually has an exception. */
++.page .admin .overridden {
++  color: var(--text-paper);
++  font-weight: 500;
++}
++
++.page .admin .inherited {
++  color: var(--text-paper-d2);
++}
