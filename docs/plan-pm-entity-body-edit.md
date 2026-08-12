@@ -125,6 +125,49 @@ checked against `write_meta` alone, which is strictly narrower than `canWrite`. 
 passes the entity gate can still be refused there. The env-var panel already fell through
 exactly this gap, so it gets its own check rather than an assumption.
 
+## Phase 2 — RESOLVED: the cause was `<label>`, and permissions were never involved
+
+The remaining candidates were E (the body editor fails to mount), F (a different surface
+than assumed) and G (the save is dropped). It is **E, with a cause worth naming precisely**:
+the body's Monaco was wrapped in a `<label>`.
+
+A `<label>` promises to hand focus to *its native control* when clicked. Monaco is not a
+native control — it is divs plus a hidden textarea — so the wrapper intercepted the click
+and the caret never landed. The frontmatter fields above it, which ARE native inputs, kept
+working, which is exactly the reported shape ("the fields are fine, the body is not").
+
+It was the only one of its kind. The raw-YAML Monaco twenty lines up in the same file uses
+a `<div>` with the same class, and the six other `MonacoEditor` call sites use no wrapper
+at all. Nothing is lost by dropping it — Monaco carries its own `ariaLabel`.
+
+**Why every test stayed green**: this suite MOCKS Monaco as a plain textarea, and a
+textarea inside a label behaves perfectly. The defect was structurally unreachable from the
+test that covers this component, so the guard added with the fix is structural too
+(`closest("label")` must be null), and it is mutation-verified — restoring the `<label>`
+turns exactly that test red.
+
+The disclosure work this phase would have needed under candidates A/D is **not** needed:
+nobody was refused anything.
+
+## Phase 3 — DONE: no second instance
+
+Scanned every `<label>` in `web/src` for a non-native control inside it.
+
+- `EntityFileEditor:125` wraps `RoleField`, and every widget it can render is native:
+  `select` / `actor` / `ref` are `<select>`, date and the rest are `<input>`, and
+  `readonly` is a non-interactive `<span>`. No defect.
+- Every other `<label>` in the codebase wraps a native `<input>` (checkboxes, radios).
+- The six other `MonacoEditor` call sites wrap it in nothing.
+
+**One edge case, recorded and deliberately not fixed**: the `daterange` widget renders TWO
+`<input type=date>` under a single `<label>`, so clicking the label focuses only the first.
+Pre-existing, cosmetic, and not the reported symptom — folding it into this fix would mix an
+unrelated change into a branch whose point is one precise cause.
+
+The work item's own `description` was also checked and is a separate path (item PATCH,
+gated on `write_meta`, narrower than `canWrite`). It is unaffected by any of this, because
+none of this turned out to be about permissions.
+
 ## Report 2 — the board card should show `#33`
 
 Independent of the above and much smaller. `BoardView.tsx:237` today:
