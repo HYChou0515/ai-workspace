@@ -17,6 +17,7 @@ from ..factories import get_kb_llm
 from ..kb.cards.build import built_in_synthesis_prompt
 from ..kb.cards.extract import built_in_prompt
 from ..kb.cards.preview import preview_samples
+from ..kb.cards.tune import DEFINES
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -104,6 +105,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--cards", type=Path, default=None, help="the cards.json a --review sample is drawn from"
     )
     p.add_argument(
+        "--judge-from",
+        type=Path,
+        default=None,
+        metavar="DIR",
+        help="use the criterion calibrated in DIR, and skip the cards DIR already reviewed. "
+        "This is how a FRESH batch checks a calibrated judge: the cards it was fitted on "
+        "cannot tell you whether it learnt your standard or just those twenty answers",
+    )
+    p.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        metavar="N",
+        help="which sample --review draws. Change it for every fresh batch",
+    )
+    p.add_argument(
         "--sample", type=int, default=20, metavar="N", help="how many cards --review draws"
     )
     p.add_argument(
@@ -157,13 +174,18 @@ def main() -> None:
     if args.review:
         import random
 
+        from ..kb.cards.calibrate import best_judge_prompt
         from ..kb.cards.tune import defines_score
 
+        home = args.judge_from or args.review
+        already = home / "review.json"
+        seen = {r["title"] for r in json.loads(already.read_text())} if already.is_file() else set()
         source = args.cards or (args.review / "cards.json")
-        cards = json.loads(source.read_text())
-        random.Random(0).shuffle(cards)  # not the first N — cards.json is key-sorted
+        cards = [c for c in json.loads(source.read_text()) if c["title"] not in seen]
+        random.Random(args.seed).shuffle(cards)  # not the first N — cards.json is key-sorted
         sample = [{"title": c["title"], "body": c["body"]} for c in cards[: args.sample]]
-        rejected = set(defines_score(llm, sample).get("does_not_define", []))
+        criterion = best_judge_prompt(home)
+        rejected = set(defines_score(llm, sample, prompt=criterion).get("does_not_define", []))
         args.review.mkdir(parents=True, exist_ok=True)
         (args.review / "review.json").write_text(
             json.dumps(
@@ -174,8 +196,12 @@ def main() -> None:
             + "\n",
             encoding="utf-8",
         )
+        fitted = (
+            "the criterion you calibrated" if criterion != DEFINES else "the built-in criterion"
+        )
         print(
-            f"{args.review}/review.json — {len(sample)} cards, the judge's verdict filled in.",
+            f"{args.review}/review.json — {len(sample)} cards, judged by {fitted}"
+            + (f", skipping the {len(seen)} already reviewed in {home}" if seen else ""),
             file=sys.stderr,
         )
         print(

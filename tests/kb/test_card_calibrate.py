@@ -208,3 +208,45 @@ def test_a_version_whose_score_was_deleted_is_skipped_not_fatal(tmp_path):
     # erase the versions that came after it from the record.
     index = _json.loads((rounds / "judge" / "index.json").read_text())
     assert [row["version"] for row in index] == [0, 1]
+
+
+def _filed(home, version, prompt, rate):
+    (home / f"v{version}").mkdir(parents=True)
+    (home / f"v{version}" / "prompt.txt").write_text(prompt)
+    (home / f"v{version}" / "scorecard.json").write_text(
+        json.dumps({"reviewed": 20, "agreement": int(rate * 20), "agreement_rate": rate})
+    )
+
+
+def test_the_criterion_that_agreed_most_is_the_one_that_gets_used(tmp_path):
+    """The BEST, not the newest. Calibration is a single line with no beam, so a
+    revision that agreed LESS than its parent is still the most recent thing on
+    disk — and using it would quietly undo the calibration."""
+    from workspace_app.kb.cards.calibrate import best_judge_prompt
+
+    home = tmp_path / "rounds-cards" / "judge"
+    _filed(home, 0, "FIRST {cards}", 0.6)
+    _filed(home, 1, "BEST {cards}", 0.9)
+    _filed(home, 2, "WORSE {cards}", 0.7)
+
+    assert best_judge_prompt(tmp_path / "rounds-cards") == "BEST {cards}"
+
+
+def test_with_nothing_calibrated_the_built_in_criterion_stands(tmp_path):
+    from workspace_app.kb.cards.calibrate import best_judge_prompt
+    from workspace_app.kb.cards.tune import DEFINES
+
+    assert best_judge_prompt(tmp_path / "never-calibrated") == DEFINES
+
+
+def test_an_unscored_revision_is_not_eligible(tmp_path):
+    """Every round leaves a revision nothing has graded yet. Picking it would
+    score the corpus with a criterion no person ever agreed to."""
+    from workspace_app.kb.cards.calibrate import best_judge_prompt
+
+    home = tmp_path / "rounds-cards" / "judge"
+    _filed(home, 0, "GRADED {cards}", 0.8)
+    (home / "v1").mkdir()
+    (home / "v1" / "prompt.txt").write_text("UNGRADED {cards}")
+
+    assert best_judge_prompt(tmp_path / "rounds-cards") == "GRADED {cards}"

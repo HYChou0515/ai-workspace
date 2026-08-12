@@ -361,3 +361,33 @@ def test_every_shape_of_unusable_verdict_reports_nothing():
         "{}",  # an object with no verdicts key
     ):
         assert defines_score(_Says(reply), cards) == {}, reply
+
+
+def test_the_round_scores_cards_with_the_criterion_the_owner_calibrated(tmp_path):
+    """Calibrating a judge nothing consults is a way to spend an afternoon."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+    judge = rounds / "judge" / "v0"
+    judge.mkdir(parents=True)
+    judge.joinpath("prompt.txt").write_text("THE OWNER'S OWN CRITERION\n{cards}")
+    judge.joinpath("scorecard.json").write_text(
+        json.dumps({"reviewed": 20, "agreement": 19, "agreement_rate": 0.95})
+    )
+
+    class _Watching(_Model):
+        def __init__(self) -> None:
+            super().__init__()
+            self.judged_with: list[str] = []
+
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            if "OWN CRITERION" in prompt or "do they know what" in prompt:
+                self.judged_with.append(prompt)
+                yield '{"verdicts": [{"title": "回焊爐", "defines": true}]}', False
+            else:
+                yield from super().stream(prompt)
+
+    model = _Watching()
+    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    (asked,) = model.judged_with
+    assert asked.startswith("THE OWNER'S OWN CRITERION"), "the built-in criterion was used instead"

@@ -90,6 +90,32 @@ def judge_prompt(rounds_dir: Path, version: int) -> str:
     return _load_prompt(rounds_dir / "judge", version, default=DEFINES)
 
 
+def best_judge_prompt(rounds_dir: Path) -> str:
+    """The calibrated criterion that agreed with the person most.
+
+    The BEST, not the newest: calibration is a single line with no beam, so a
+    revision that agreed less than its parent is still the most recent thing on
+    disk. Only SCORED versions are eligible — every round leaves a revision
+    nothing has graded, and using that would score the corpus with a criterion no
+    person ever agreed to.
+
+    The built-in criterion when nothing has been calibrated, so a corpus whose
+    owner has not done that yet still gets a number — just an unvalidated one.
+    """
+    best: tuple[float, str] | None = None
+    for folder in sorted(
+        (p for p in (rounds_dir / "judge").glob("v*") if p.name[1:].isdigit()),
+        key=lambda p: int(p.name[1:]),
+    ):
+        card, prompt = folder / "scorecard.json", folder / "prompt.txt"
+        if not (card.is_file() and prompt.is_file()):
+            continue
+        rate = float(json.loads(card.read_text()).get("agreement_rate", 0.0))
+        if best is None or rate >= best[0]:
+            best = (rate, prompt.read_text())
+    return best[1] if best else DEFINES
+
+
 def calibrate(llm: ILlm, *, rounds_dir: Path) -> int:
     """One calibration round: score the newest criterion, revise it, file the next.
 

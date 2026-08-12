@@ -387,10 +387,16 @@ def run_round(
         # judges CARDS, so on a document set that changes every round its share
         # moves with the draw rather than with the prompt.
         built = json.loads((here / "holdout" / "cards.json").read_text())
+        # The criterion the OWNER calibrated, not the one shipped with the code.
+        # Scoring with an uncalibrated judge is how a loop spends a weekend
+        # chasing a standard nobody agreed to.
+        from .calibrate import best_judge_prompt
+
+        criterion = best_judge_prompt(rounds_dir)
         holdout = (
             scorecard(here / "holdout")
             | probe_score(here / "holdout", probes)
-            | defines_score(reviser or llm, built)
+            | defines_score(reviser or llm, built, prompt=criterion)
         )
     (here / "scorecard.json").write_text(
         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
