@@ -30,9 +30,7 @@ def _version(data: bytes) -> str:
 
 
 class MockSandbox:
-    def __init__(
-        self, *, cpu_cores: float | None = None, memory_bytes: int | None = None
-    ) -> None:
+    def __init__(self, *, cpu_cores: float | None = None, memory_bytes: int | None = None) -> None:
         # What this stand-in claims to enforce when a spec states nothing.
         # None = "caps nothing", the truth for a mock; a test standing in for a
         # real backend (all of which DO cap) passes the ceilings it models.
