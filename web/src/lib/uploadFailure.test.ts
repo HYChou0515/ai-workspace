@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { quotaKind } from "./quotaFailure";
+import { quotaKind, quotaKinds } from "./quotaFailure";
 import { uploadFailureKey } from "./uploadFailure";
 
 describe("uploadFailureKey", () => {
@@ -44,5 +44,25 @@ describe("quotaKind", () => {
   it("is null for anything that is not a quota", () => {
     expect(quotaKind(413, undefined)).toBeNull();
     expect(quotaKind(undefined, "user_quota_exceeded")).toBeNull();
+  });
+});
+
+describe("quotaKinds — more than one limit at its cap", () => {
+  // Telling someone about one limit at a time produces a sequence that reads as
+  // a bug: they free disk, resend, and are told something different. Each
+  // message was true; the first implied acting on it would let the turn through.
+  it("names every limit the refusal listed, primary first", () => {
+    expect(quotaKinds(507, "sandbox_quota_exceeded", ["workspace_quota_exceeded"])).toEqual([
+      "environment",
+      "workspace",
+    ]);
+  });
+
+  it("is just the one when only one bound", () => {
+    expect(quotaKinds(507, "user_quota_exceeded", undefined)).toEqual(["user"]);
+  });
+
+  it("stays empty for anything that is not a quota", () => {
+    expect(quotaKinds(404, undefined, undefined)).toEqual([]);
   });
 });

@@ -813,6 +813,22 @@ export const messages = {
     "zh-TW": "沒有送出:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再送一次。",
     en: "Not sent — you're out of space across all your items. Open My resources to see where it went, then send again.",
   },
+  // When MORE than one limit is at its cap. Appended after whichever message
+  // led, so the person is not sent to fix one limit, only to be told about the
+  // next one on the retry. They name the page for the same reason the primary
+  // messages do — `ResourceLinkText` turns that name into the link.
+  "resources.also.environment": {
+    "zh-TW": "另外,你同時開啟的執行環境也已達上限——到「我的資源」關掉一個。",
+    en: "You are also at your limit for live environments — close one in My resources.",
+  },
+  "resources.also.user": {
+    "zh-TW": "另外,你所有項目的空間總量也滿了——到「我的資源」看是哪些項目佔用。",
+    en: "You are also out of space across all your items — see where it went in My resources.",
+  },
+  "resources.also.workspace": {
+    "zh-TW": "另外,這個項目的工作區空間也滿了,請先刪除不需要的檔案。",
+    en: "This item's workspace is also full — delete files you no longer need.",
+  },
   "chat.send.workspaceFull": {
     "zh-TW": "沒有送出:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
     en: "Not sent — this item's workspace is full. Delete files you no longer need first.",

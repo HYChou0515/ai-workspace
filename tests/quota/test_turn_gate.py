@@ -30,7 +30,9 @@ ONE_CORE = ResourceLimits(cpu_cores=1.0, memory_bytes=512 * 1024**2, disk_bytes=
 
 
 @contextlib.contextmanager
-def _app(limits: PerUserResources) -> Iterator[tuple[ApiTestClient, SpecStar]]:
+def _app(
+    limits: PerUserResources, *, app_resources: dict[str, ResourceLimits] | None = None
+) -> Iterator[tuple[ApiTestClient, SpecStar]]:
     """An app driven through its LIFESPAN on purpose: the heartbeat row that
     doubles as the per-person ledger is registered there (after `spec.apply`, so
     its CRUD routes stay private). A bare client would exercise a store whose
@@ -41,7 +43,7 @@ def _app(limits: PerUserResources) -> Iterator[tuple[ApiTestClient, SpecStar]]:
         sandbox=MockSandbox(),
         filestore=SpecstarFileStore(spec),
         runner=ScriptedAgentRunner([]),
-        app_resources={"rca": ONE_CORE},
+        app_resources=app_resources or {"rca": ONE_CORE},
         per_user_resources=limits,
     )
     with ApiTestClient(app) as client:
@@ -128,3 +130,27 @@ def test_the_terminal_is_gated_too():
         )
         assert refused.status_code == 507
         assert refused.json()["detail"]["error"] == "sandbox_quota_exceeded"
+
+
+def test_a_refusal_names_every_limit_that_is_at_its_cap():
+    """The two gates ran in a fixed order and only the FIRST to fire was
+    reported. Someone both out of disk and at their environment limit was told
+    to delete files, did, sent again — and was then told something else. Each
+    refusal is true on its own; the SEQUENCE is what reads as a bug, because the
+    first message implies acting on it will let the turn through."""
+    tiny = ResourceLimits(cpu_cores=1.0, memory_bytes=512 * 1024**2, disk_bytes=64)
+    with _app(PerUserResources(count=1), app_resources={"rca": tiny}) as (client, spec):
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        _wake(client, first)  # at the environment limit…
+        # …and this item's workspace is exactly full
+        put = client.put(f"/a/rca/items/{second}/files/big.bin", content=b"x" * 64)
+        assert put.status_code in (200, 204), put.text
+
+        refused = client.post(f"/a/rca/items/{second}/messages", json={"content": "go"})
+        assert refused.status_code == 507
+        detail = refused.json()["detail"]
+        # The environment leads: closing one is a single click on a page the
+        # message links to, while freeing disk means going into the item.
+        assert detail["error"] == "sandbox_quota_exceeded"
+        assert detail["also"] == ["workspace_quota_exceeded"]

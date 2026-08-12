@@ -45,6 +45,11 @@ export const RESOURCE_LINK_KEYS = [
   "workspace.overQuota.env",
   "workspace.upload.userFull",
   "workspace.upload.envFull",
+  // The "and also" clauses (a refusal can name more than one limit). The
+  // workspace one is absent for the same reason its primary is: its remedy is
+  // this item's own files, not anything on `/my-resources`.
+  "resources.also.environment",
+  "resources.also.user",
 ] as const satisfies readonly MsgKey[];
 
 export function ResourceLinkText({ text }: { text: string }) {

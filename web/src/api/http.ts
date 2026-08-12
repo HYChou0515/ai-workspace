@@ -54,6 +54,8 @@ export class HttpError extends Error {
      * look in the wrong place.
      */
     public code?: string,
+    /** Other limits the SAME refusal named — see `errorInfo`. */
+    public also?: string[],
   ) {
     super(message);
     this.name = "HttpError";
@@ -62,11 +64,28 @@ export class HttpError extends Error {
 
 /** Read the structured error code out of a JSON error body, if there is one. */
 export async function errorCode(resp: Response): Promise<string | undefined> {
+  return (await errorInfo(resp)).code;
+}
+
+/**
+ * The error code AND any other limits the same refusal named (`also`).
+ *
+ * A turn is gated on more than one rule and can be refused by several at once.
+ * Reporting only the first produced a sequence that reads as a bug: free disk,
+ * resend, get told about a different limit.
+ */
+export async function errorInfo(
+  resp: Response,
+): Promise<{ code?: string; also?: string[] }> {
   try {
     const body = await resp.clone().json();
     const detail = body?.detail;
-    return typeof detail?.error === "string" ? detail.error : undefined;
+    const code = typeof detail?.error === "string" ? detail.error : undefined;
+    const also = Array.isArray(detail?.also)
+      ? detail.also.filter((c: unknown): c is string => typeof c === "string")
+      : undefined;
+    return { code, also };
   } catch {
-    return undefined; // not JSON, or no body — the status is all we have
+    return {}; // not JSON, or no body — the status is all we have
   }
 }

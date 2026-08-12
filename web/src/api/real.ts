@@ -14,7 +14,7 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { API_PREFIX, apiFetch, HttpError, errorCode } from "./http";
+import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -560,10 +560,12 @@ export const realApi: ApiClient = {
       // Sending a message is the OTHER place a `sandbox_quota_exceeded` comes
       // from, and it is the primary interface — a bare "messages failed: 507"
       // is a status with no remedy attached.
+      const info = await errorInfo(resp);
       throw new HttpError(
         resp.status,
         `messages failed: ${resp.status}`,
-        await errorCode(resp),
+        info.code,
+        info.also,
       );
     }
   },

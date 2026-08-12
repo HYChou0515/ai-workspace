@@ -92,6 +92,7 @@ from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .tools_routes import register_tools_routes
 from .turn_context import TurnContextBuilder, resolve_item_tools
+from .turn_gate import TurnRefused, quota_body
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
@@ -836,62 +837,32 @@ def create_app(
         app.add_middleware(perf_trace.PerfTraceMiddleware)
 
     @app.exception_handler(WorkspaceFull)
-    async def _workspace_full(_request: Request, exc: WorkspaceFull) -> JSONResponse:
-        """#538: one handler so every route that writes reports a full workspace
-        the same way — 507 with the numbers the FE needs to say "delete
-        something". Registering it here rather than try/except-ing each route is
-        what stops the next write endpoint from silently going ungated, which is
-        exactly how copy/move/the IDE save escaped the original quota."""
-        return JSONResponse(
-            status_code=507,
-            content={
-                "detail": {
-                    "error": "workspace_quota_exceeded",
-                    "used": exc.used,
-                    "quota": exc.quota,
-                    "attempted": exc.attempted,
-                }
-            },
-        )
-
     @app.exception_handler(UserDiskFull)
-    async def _user_disk_full(_request: Request, exc: UserDiskFull) -> JSONResponse:
-        """The per-person sibling of the full-workspace 507. Reported separately
-        because the remedy is different: the space to free may be in a completely
-        different item, so an FE that said "this workspace is full" would send
-        the user looking in the wrong place."""
-        return JSONResponse(
-            status_code=507,
-            content={
-                "detail": {
-                    "error": "user_quota_exceeded",
-                    "used": exc.used,
-                    "quota": exc.quota,
-                    "attempted": exc.attempted,
-                }
-            },
-        )
-
     @app.exception_handler(SandboxQuotaExceeded)
-    async def _sandbox_quota(_request: Request, exc: SandboxQuotaExceeded) -> JSONResponse:
-        """The cpu/memory sibling of the full-workspace 507. Same reasoning for
-        registering it centrally: a gate added at a new entry point should be
-        reported the same way without anyone remembering to convert it.
+    async def _quota_refused(_request: Request, exc: Exception) -> JSONResponse:
+        """#538: one handler so every route reports "you are holding as much as
+        you may hold" the same way — 507 with the numbers the FE needs to say
+        what to do. Registering it here rather than try/except-ing each route is
+        what stops the next write endpoint from silently going ungated, which is
+        exactly how copy/move/the IDE save escaped the original quota.
 
-        507 rather than 429: this is not "slow down", it is "you are holding as
-        much as you may hold" — the fix is to close something, and the body says
-        which dimension bound so the FE can point at the right list."""
-        return JSONResponse(
-            status_code=507,
-            content={
-                "detail": {
-                    "error": "sandbox_quota_exceeded",
-                    "dimension": exc.dimension,
-                    "used": exc.used,
-                    "limit": exc.limit,
-                }
-            },
-        )
+        Three rules share the status and need three different remedies (this
+        item's files / another item's files / a live environment), so the body
+        carries a CODE. They share one handler but not one wording: the body is
+        built by `turn_gate.quota_body`, the same function the combined refusal
+        below uses, so a fourth entry point cannot invent a fourth spelling.
+
+        507 rather than 429: this is not "slow down", it is "you are at your
+        limit" — the fix is to free something, not to wait."""
+        return JSONResponse(status_code=507, content={"detail": quota_body(exc)})
+
+    @app.exception_handler(TurnRefused)
+    async def _turn_refused(_request: Request, exc: TurnRefused) -> JSONResponse:
+        """More than one limit is at its cap. Same shape as one refusal plus an
+        `also` list, so a client that only knows `error` still behaves exactly as
+        it did — and one that reads `also` can stop sending people to fix one
+        limit at a time."""
+        return JSONResponse(status_code=507, content={"detail": exc.body()})
 
     @app.exception_handler(SandboxBusy)
     async def _sandbox_busy(_request: Request, exc: SandboxBusy) -> JSONResponse:
