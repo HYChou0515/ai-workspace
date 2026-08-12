@@ -1,0 +1,230 @@
+diff --git a/src/workspace_app/card_preview/__main__.py b/src/workspace_app/card_preview/__main__.py
+index 58a57d38..42440009 100644
+--- a/src/workspace_app/card_preview/__main__.py
++++ b/src/workspace_app/card_preview/__main__.py
+@@ -17,6 +17,7 @@ from ..factories import get_kb_llm
+ from ..kb.cards.build import built_in_synthesis_prompt
+ from ..kb.cards.extract import built_in_prompt
+ from ..kb.cards.preview import preview_samples
++from ..kb.cards.tune import DEFINES
+ 
+ 
+ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+@@ -103,6 +104,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+     p.add_argument(
+         "--cards", type=Path, default=None, help="the cards.json a --review sample is drawn from"
+     )
++    p.add_argument(
++        "--judge-from",
++        type=Path,
++        default=None,
++        metavar="DIR",
++        help="use the criterion calibrated in DIR, and skip the cards DIR already reviewed. "
++        "This is how a FRESH batch checks a calibrated judge: the cards it was fitted on "
++        "cannot tell you whether it learnt your standard or just those twenty answers",
++    )
++    p.add_argument(
++        "--seed",
++        type=int,
++        default=0,
++        metavar="N",
++        help="which sample --review draws. Change it for every fresh batch",
++    )
+     p.add_argument(
+         "--sample", type=int, default=20, metavar="N", help="how many cards --review draws"
+     )
+@@ -157,13 +174,18 @@ def main() -> None:
+     if args.review:
+         import random
+ 
++        from ..kb.cards.calibrate import best_judge_prompt
+         from ..kb.cards.tune import defines_score
+ 
++        home = args.judge_from or args.review
++        already = home / "review.json"
++        seen = {r["title"] for r in json.loads(already.read_text())} if already.is_file() else set()
+         source = args.cards or (args.review / "cards.json")
+-        cards = json.loads(source.read_text())
+-        random.Random(0).shuffle(cards)  # not the first N — cards.json is key-sorted
++        cards = [c for c in json.loads(source.read_text()) if c["title"] not in seen]
++        random.Random(args.seed).shuffle(cards)  # not the first N — cards.json is key-sorted
+         sample = [{"title": c["title"], "body": c["body"]} for c in cards[: args.sample]]
+-        rejected = set(defines_score(llm, sample).get("does_not_define", []))
++        criterion = best_judge_prompt(home)
++        rejected = set(defines_score(llm, sample, prompt=criterion).get("does_not_define", []))
+         args.review.mkdir(parents=True, exist_ok=True)
+         (args.review / "review.json").write_text(
+             json.dumps(
+@@ -174,8 +196,12 @@ def main() -> None:
+             + "\n",
+             encoding="utf-8",
+         )
++        fitted = (
++            "the criterion you calibrated" if criterion != DEFINES else "the built-in criterion"
++        )
+         print(
+-            f"{args.review}/review.json — {len(sample)} cards, the judge's verdict filled in.",
++            f"{args.review}/review.json — {len(sample)} cards, judged by {fitted}"
++            + (f", skipping the {len(seen)} already reviewed in {home}" if seen else ""),
+             file=sys.stderr,
+         )
+         print(
+@@ -183,6 +209,11 @@ def main() -> None:
+             file=sys.stderr,
+         )
+         print("  Leave null where the judge got it right.", file=sys.stderr)
++        print(
++            "  If you stop part way, DELETE the rows you never looked at — a row left "
++            "null counts as your agreement, and rows you did not read would inflate the score.",
++            file=sys.stderr,
++        )
+         return
+ 
+     if args.calibrate:
+diff --git a/src/workspace_app/kb/cards/calibrate.py b/src/workspace_app/kb/cards/calibrate.py
+index 407601da..304c0790 100644
+--- a/src/workspace_app/kb/cards/calibrate.py
++++ b/src/workspace_app/kb/cards/calibrate.py
+@@ -90,6 +90,32 @@ def judge_prompt(rounds_dir: Path, version: int) -> str:
+     return _load_prompt(rounds_dir / "judge", version, default=DEFINES)
+ 
+ 
++def best_judge_prompt(rounds_dir: Path) -> str:
++    """The calibrated criterion that agreed with the person most.
++
++    The BEST, not the newest: calibration is a single line with no beam, so a
++    revision that agreed less than its parent is still the most recent thing on
++    disk. Only SCORED versions are eligible — every round leaves a revision
++    nothing has graded, and using that would score the corpus with a criterion no
++    person ever agreed to.
++
++    The built-in criterion when nothing has been calibrated, so a corpus whose
++    owner has not done that yet still gets a number — just an unvalidated one.
++    """
++    best: tuple[float, str] | None = None
++    for folder in sorted(
++        (p for p in (rounds_dir / "judge").glob("v*") if p.name[1:].isdigit()),
++        key=lambda p: int(p.name[1:]),
++    ):
++        card, prompt = folder / "scorecard.json", folder / "prompt.txt"
++        if not (card.is_file() and prompt.is_file()):
++            continue
++        rate = float(json.loads(card.read_text()).get("agreement_rate", 0.0))
++        if best is None or rate >= best[0]:
++            best = (rate, prompt.read_text())
++    return best[1] if best else DEFINES
++
++
+ def calibrate(llm: ILlm, *, rounds_dir: Path) -> int:
+     """One calibration round: score the newest criterion, revise it, file the next.
+ 
+diff --git a/src/workspace_app/kb/cards/tune.py b/src/workspace_app/kb/cards/tune.py
+index 10fe675a..d2360999 100644
+--- a/src/workspace_app/kb/cards/tune.py
++++ b/src/workspace_app/kb/cards/tune.py
+@@ -387,10 +387,16 @@ def run_round(
+         # judges CARDS, so on a document set that changes every round its share
+         # moves with the draw rather than with the prompt.
+         built = json.loads((here / "holdout" / "cards.json").read_text())
++        # The criterion the OWNER calibrated, not the one shipped with the code.
++        # Scoring with an uncalibrated judge is how a loop spends a weekend
++        # chasing a standard nobody agreed to.
++        from .calibrate import best_judge_prompt
++
++        criterion = best_judge_prompt(rounds_dir)
+         holdout = (
+             scorecard(here / "holdout")
+             | probe_score(here / "holdout", probes)
+-            | defines_score(reviser or llm, built)
++            | defines_score(reviser or llm, built, prompt=criterion)
+         )
+     (here / "scorecard.json").write_text(
+         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
+diff --git a/tests/kb/test_card_calibrate.py b/tests/kb/test_card_calibrate.py
+index 2d3669e6..d2ed9bed 100644
+--- a/tests/kb/test_card_calibrate.py
++++ b/tests/kb/test_card_calibrate.py
+@@ -208,3 +208,45 @@ def test_a_version_whose_score_was_deleted_is_skipped_not_fatal(tmp_path):
+     # erase the versions that came after it from the record.
+     index = _json.loads((rounds / "judge" / "index.json").read_text())
+     assert [row["version"] for row in index] == [0, 1]
++
++
++def _filed(home, version, prompt, rate):
++    (home / f"v{version}").mkdir(parents=True)
++    (home / f"v{version}" / "prompt.txt").write_text(prompt)
++    (home / f"v{version}" / "scorecard.json").write_text(
++        json.dumps({"reviewed": 20, "agreement": int(rate * 20), "agreement_rate": rate})
++    )
++
++
++def test_the_criterion_that_agreed_most_is_the_one_that_gets_used(tmp_path):
++    """The BEST, not the newest. Calibration is a single line with no beam, so a
++    revision that agreed LESS than its parent is still the most recent thing on
++    disk — and using it would quietly undo the calibration."""
++    from workspace_app.kb.cards.calibrate import best_judge_prompt
++
++    home = tmp_path / "rounds-cards" / "judge"
++    _filed(home, 0, "FIRST {cards}", 0.6)
++    _filed(home, 1, "BEST {cards}", 0.9)
++    _filed(home, 2, "WORSE {cards}", 0.7)
++
++    assert best_judge_prompt(tmp_path / "rounds-cards") == "BEST {cards}"
++
++
++def test_with_nothing_calibrated_the_built_in_criterion_stands(tmp_path):
++    from workspace_app.kb.cards.calibrate import best_judge_prompt
++    from workspace_app.kb.cards.tune import DEFINES
++
++    assert best_judge_prompt(tmp_path / "never-calibrated") == DEFINES
++
++
++def test_an_unscored_revision_is_not_eligible(tmp_path):
++    """Every round leaves a revision nothing has graded yet. Picking it would
++    score the corpus with a criterion no person ever agreed to."""
++    from workspace_app.kb.cards.calibrate import best_judge_prompt
++
++    home = tmp_path / "rounds-cards" / "judge"
++    _filed(home, 0, "GRADED {cards}", 0.8)
++    (home / "v1").mkdir()
++    (home / "v1" / "prompt.txt").write_text("UNGRADED {cards}")
++
++    assert best_judge_prompt(tmp_path / "rounds-cards") == "GRADED {cards}"
+diff --git a/tests/kb/test_card_tune.py b/tests/kb/test_card_tune.py
+index 7a5871c3..459dcf94 100644
+--- a/tests/kb/test_card_tune.py
++++ b/tests/kb/test_card_tune.py
+@@ -361,3 +361,33 @@ def test_every_shape_of_unusable_verdict_reports_nothing():
+         "{}",  # an object with no verdicts key
+     ):
+         assert defines_score(_Says(reply), cards) == {}, reply
++
++
++def test_the_round_scores_cards_with_the_criterion_the_owner_calibrated(tmp_path):
++    """Calibrating a judge nothing consults is a way to spend an afternoon."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    judge = rounds / "judge" / "v0"
++    judge.mkdir(parents=True)
++    judge.joinpath("prompt.txt").write_text("THE OWNER'S OWN CRITERION\n{cards}")
++    judge.joinpath("scorecard.json").write_text(
++        json.dumps({"reviewed": 20, "agreement": 19, "agreement_rate": 0.95})
++    )
++
++    class _Watching(_Model):
++        def __init__(self) -> None:
++            super().__init__()
++            self.judged_with: list[str] = []
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "OWN CRITERION" in prompt or "do they know what" in prompt:
++                self.judged_with.append(prompt)
++                yield '{"verdicts": [{"title": "回焊爐", "defines": true}]}', False
++            else:
++                yield from super().stream(prompt)
++
++    model = _Watching()
++    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = model.judged_with
++    assert asked.startswith("THE OWNER'S OWN CRITERION"), "the built-in criterion was used instead"
