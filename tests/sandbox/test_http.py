@@ -32,6 +32,7 @@ from workspace_app.sandbox.http_client import (
 )
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import (
+    EnforcedLimits,
     SandboxBusy,
     SandboxHandle,
     SandboxNotFound,
@@ -180,6 +181,18 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
 
         return StreamingResponse(gen(), media_type="application/x-ndjson")
 
+    @app.get("/healthz")
+    async def healthz() -> dict[str, object]:
+        # The host publishes the ceilings it applies to a sandbox whose spec
+        # states nothing — its own `SANDBOX_HOST_*`. Only the host knows them,
+        # and without them the app charges an owner nothing for a sandbox the
+        # host really did cap.
+        return {
+            "status": "ok",
+            "capabilities": ["resource-defaults"],
+            "defaults": {"cpu_cores": 1.5, "memory_bytes": 768 * 1024**2},
+        }
+
     return app
 
 
@@ -208,6 +221,17 @@ async def test_create_returns_unique_handles(http_sandbox: HttpSandbox):
     h1 = await http_sandbox.create(SandboxSpec())
     h2 = await http_sandbox.create(SandboxSpec())
     assert h1.id != h2.id
+
+
+async def test_an_unstated_ceiling_is_charged_at_what_the_host_enforces(
+    http_sandbox: HttpSandbox,
+):
+    """`None` in the spec means "host, use your own" — and it does. The app
+    cannot read another service's environment, so the host advertises it; before
+    that, an owner was charged nothing for a sandbox really held under a cgroup."""
+    assert await http_sandbox.effective_limits(SandboxSpec()) == EnforcedLimits(
+        cpu_cores=1.5, memory_bytes=768 * 1024**2
+    )
 
 
 @pytest.fixture

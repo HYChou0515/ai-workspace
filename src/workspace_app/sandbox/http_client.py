@@ -26,6 +26,7 @@ import httpx
 from tenacity import AsyncRetrying, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from .protocol import (
+    EnforcedLimits,
     ExecResult,
     FileEntry,
     OutputSink,
@@ -114,6 +115,48 @@ class HttpSandbox:
         )
         self._io_retry = io_retry or IoRetryPolicy()
         self._sleep = sleep or asyncio.sleep
+        # What the host says it enforces when a spec states nothing. Fetched
+        # once and remembered: it is a property of the host's deployment, not of
+        # any one sandbox, and the tally asks on every heartbeat.
+        self._host_defaults: EnforcedLimits | None = None
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        """What the HOST will really cap this sandbox at.
+
+        The app cannot read another service's environment, so it asks. A host
+        too old to advertise (or one that is momentarily unreachable) leaves the
+        request's own `None`s in place — the pre-existing behaviour, which
+        charges nothing. That is a visible under-count rather than an invented
+        number, and `SandboxHostCapabilityCheck` is what tells the operator the
+        host image is behind."""
+        if self._host_defaults is None:
+            self._host_defaults = await self._fetch_host_defaults()
+        host = self._host_defaults
+        return EnforcedLimits(
+            cpu_cores=host.cpu_cores if spec.cpu_cores is None else spec.cpu_cores,
+            memory_bytes=host.memory_bytes if spec.memory_bytes is None else spec.memory_bytes,
+        )
+
+    async def _fetch_host_defaults(self) -> EnforcedLimits:
+        """The host's advertised ceilings, or empty ones when it cannot say.
+
+        Deliberately swallows every failure: this is an accounting refinement,
+        and a host that is down must not turn every heartbeat into an error —
+        liveness is decided elsewhere. An empty answer is NOT cached as final;
+        `_host_defaults` keeps it, so a redeployed host is picked up by the next
+        process. (A restart is already required to change those numbers.)"""
+        try:
+            resp = await self._client.get(f"{self._base_url}/healthz", timeout=10.0)
+            resp.raise_for_status()
+            got = resp.json().get("defaults") or {}
+        except Exception:  # noqa: BLE001 — an unreachable host must not break the tally
+            logger.warning("sandbox-http: host did not advertise its resource defaults")
+            return EnforcedLimits(cpu_cores=None, memory_bytes=None)
+        cpu, mem = got.get("cpu_cores"), got.get("memory_bytes")
+        return EnforcedLimits(
+            cpu_cores=None if cpu is None else float(cpu),
+            memory_bytes=None if mem is None else int(mem),
+        )
 
     async def _request(
         self, handle: SandboxHandle, method: str, suffix: str, **kwargs: Any

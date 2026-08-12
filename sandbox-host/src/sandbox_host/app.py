@@ -56,6 +56,10 @@ _CAPABILITIES = frozenset(
         # `create` restores the item's durable archive and marks readiness before
         # returning; `persist` is gated on that marker (#492).
         "host-managed-archive",
+        # `/healthz` publishes the ceilings this host applies when a spec states
+        # nothing. Its absence means the app cannot know what a sandbox costs its
+        # owner and charges zero — visibly under-counting rather than guessing.
+        "resource-defaults",
     }
 )
 
@@ -370,7 +374,22 @@ def make_host_app(
 
     @app.get("/healthz")
     async def healthz() -> dict[str, object]:
-        return {"status": "ok", "version": _version(), "capabilities": sorted(_CAPABILITIES)}
+        # `defaults` is what this host caps a sandbox at when the app states
+        # nothing. The app charges a sandbox's owner for what it holds and
+        # cannot read this service's `SANDBOX_HOST_*`, so without this it could
+        # only charge the request — and an App that declared nothing held a core
+        # for free. Asked of the SANDBOX rather than re-read from settings, so
+        # the number published is the one the cgroup gets.
+        enforced = await sandbox.effective_limits(SandboxSpec())
+        return {
+            "status": "ok",
+            "version": _version(),
+            "capabilities": sorted(_CAPABILITIES),
+            "defaults": {
+                "cpu_cores": enforced.cpu_cores,
+                "memory_bytes": enforced.memory_bytes,
+            },
+        }
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:

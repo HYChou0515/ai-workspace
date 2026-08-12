@@ -251,15 +251,23 @@ class InvestigationRegistry:
         Cost and debtor ride the SAME row as liveness on purpose: the per-person
         cpu/memory tally is only ever "sum the sandboxes that are alive", and a
         separate ledger would need its own answer to "is it alive" — two answers
-        to that question is how a quota starts charging for things that are gone."""
+        to that question is how a quota starts charging for things that are gone.
+
+        The cost is what the BACKEND will enforce, not what the spec requested.
+        A spec's `None` means "backend, apply your own ceiling", and every real
+        backend does — a cgroup at `SANDBOX_HOST_CPU_CORES` / `sandbox.isolation.*`.
+        Charging the request read those `None`s as zero, so an App that declared
+        nothing held a core for free: `/my-resources` showed "CPU 0" beside a
+        live environment, and a per-person cpu/memory cap summed zeros and could
+        never bind."""
         if self.activity is None:
             return
-        spec = self.spec_for(item)
+        enforced = await self.sandbox.effective_limits(self.spec_for(item))
         await self.activity.bump(
             item,
             owner=self.owner_of(item) or "",
-            cpu_milli=int((spec.cpu_cores or 0) * 1000),
-            memory_bytes=spec.memory_bytes or 0,
+            cpu_milli=int((enforced.cpu_cores or 0) * 1000),
+            memory_bytes=enforced.memory_bytes or 0,
         )
 
     async def _declared_tools(self, item: str) -> dict[str, str] | None:

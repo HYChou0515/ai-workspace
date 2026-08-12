@@ -846,7 +846,10 @@ export const messages = {
     "zh-TW": "把某個人的額度調得比站台預設高。只填要放寬的維度,留空的沿用站台預設。",
     en: "Raise one person above the site default. Fill only the dimensions you want to change; blank ones keep the default.",
   },
-  "resources.admin.user": { "zh-TW": "使用者 id", en: "User id" },
+  // The person an exception is for. Now a directory pick, so the label names
+  // the person rather than the identifier they happen to be stored under.
+  "resources.admin.user": { "zh-TW": "對象", en: "Person" },
+  "resources.admin.userSearch": { "zh-TW": "搜尋姓名、id、單位…", en: "Search name, id, section…" },
   "resources.admin.lookup": { "zh-TW": "查詢", en: "Look up" },
   "resources.admin.save": { "zh-TW": "儲存", en: "Save" },
   "resources.admin.clear": { "zh-TW": "清除覆寫", en: "Clear override" },

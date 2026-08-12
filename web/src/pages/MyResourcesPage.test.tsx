@@ -15,7 +15,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MyResources, MyResourcesApi, UserQuotaOverride } from "../api/myResources";
 import { MemoryRouter } from "react-router-dom";
 
-vi.mock("../api", () => ({ api: { getMe: vi.fn(async () => ({ id: "alice", is_superuser: false, groups: [] })) } }));
+vi.mock("../api", () => ({
+  api: {
+    getMe: vi.fn(async () => ({ id: "alice", is_superuser: false, groups: [] })),
+    // The company directory the person-picker reads. Two people, so a test can
+    // show that picking one targets THAT id rather than whatever was typed.
+    getUsers: vi.fn(async () => [
+      { id: "bob", name: "Bob Chen", section: "Reflow", email: "bob@example.com" },
+      { id: "carol", name: "Carol Wu", section: "Etch", email: "carol@example.com" },
+    ]),
+  },
+}));
 
 import { api } from "../api";
 import { QueryWrap } from "../test/queryWrapper";
@@ -187,12 +197,27 @@ describe("per-person overrides (superuser)", () => {
     expect(screen.queryByText(/個人額度/)).not.toBeInTheDocument();
   });
 
+  // An exception is granted to a PERSON, and the directory is what knows who
+  // exists. Typing a raw id meant a typo silently created an allowance for
+  // nobody — it saves fine, shows up in the list, and never binds to a user.
+  it("grants the exception to whoever was picked from the directory", async () => {
+    asUser(true);
+    const c = client();
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
+    await userEvent.type(screen.getByLabelText("同時執行環境上限"), "5");
+    await userEvent.click(screen.getByRole("button", { name: "儲存" }));
+
+    expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 5, cpu: 0, memory: "", disk: "" });
+  });
+
   it("lets a superuser raise one person, and says it needs no restart", async () => {
     asUser(true);
     const c = client();
     render(<MyResourcesPage client={c} />, { wrapper: Wrap });
 
-    await userEvent.type(await screen.findByLabelText("使用者 id"), "bob");
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
     await userEvent.type(screen.getByLabelText("同時執行環境上限"), "5");
     await userEvent.click(screen.getByRole("button", { name: "儲存" }));
 
@@ -209,7 +234,7 @@ describe("per-person overrides (superuser)", () => {
     const c = client();
     render(<MyResourcesPage client={c} />, { wrapper: Wrap });
 
-    await userEvent.type(await screen.findByLabelText("使用者 id"), "bob");
+    await userEvent.click(await screen.findByRole("button", { name: /Bob Chen/ }));
     await userEvent.click(screen.getByRole("button", { name: "查詢" }));
     // bob's effective disk is 1024 B, read back and shown...
     await screen.findByText(/目前有效額度/);
@@ -256,11 +281,15 @@ describe("per-person overrides (superuser)", () => {
     await waitFor(() => expect(screen.getByText(/目前沒有人有特例/)).toBeInTheDocument());
   });
 
-  it("says so when the id matches nobody, rather than showing an empty form", async () => {
+  // Picking from the directory does not make this case go away: the directory
+  // and the backend are different sources, so a listed person the backend has
+  // never seen still has to read as "no such user" rather than a blank form
+  // that looks ready to save.
+  it("says so when the person matches nobody the backend knows", async () => {
     asUser(true);
     render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
 
-    await userEvent.type(await screen.findByLabelText("使用者 id"), "nobody");
+    await userEvent.click(await screen.findByRole("button", { name: /Carol Wu/ }));
     await userEvent.click(screen.getByRole("button", { name: "查詢" }));
     expect(await screen.findByText(/查不到這個使用者/)).toBeInTheDocument();
   });

@@ -64,6 +64,28 @@ class SandboxHandle:
 
 
 @dataclass(frozen=True)
+class EnforcedLimits:
+    """What a backend will ACTUALLY apply for a given spec — each `None` in the
+    request replaced by the ceiling this backend was configured with.
+
+    Deliberately NOT `SandboxSpec`. There, `None` means "not stated, you decide";
+    here it means "this backend enforces nothing on that dimension", and the two
+    answers are needed by different callers. What travels to `create` has to stay
+    the REQUEST (sending a number we invented would silently override the
+    backend's own configuration — for the http host, its `SANDBOX_HOST_*`). What
+    the per-person tally charges has to be the DECISION, because a sandbox held
+    under a 1-core cgroup costs its owner a core whether or not any App wrote
+    that number down. Reading the request for both is what made `/my-resources`
+    report "CPU 0" beside a live environment.
+
+    `0` keeps the meaning it has everywhere else here: explicitly unbounded.
+    """
+
+    cpu_cores: float | None
+    memory_bytes: int | None
+
+
+@dataclass(frozen=True)
 class SandboxSpec:
     """Everything `create()` needs to provision a sandbox."""
 
@@ -177,6 +199,25 @@ class Sandbox(Protocol):
         process/pod sharing the storage reattaches to (not wipes) the existing
         files. #345: the local sandbox keys an item's working dir by item id on
         a shared volume, so every pod resolves the same dir for an item."""
+        ...
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        """The ceilings this backend will REALLY apply for `spec` — each `None`
+        in the request replaced by whatever it was configured with.
+
+        A backend that caps nothing returns `None`s and nothing is charged — the
+        honest answer for the mock and the plain local process.
+
+        Async only because ONE backend has to ask: the http host applies its own
+        `SANDBOX_HOST_*`, which lives in another service's environment, so the
+        only truthful source is the host itself. It answers from a cached
+        advertisement rather than per call, so this stays cheap enough for the
+        heartbeat to ask every time — and asking every time is what keeps it
+        correct when the host is redeployed with different numbers.
+
+        This exists because "what was requested" and "what will be enforced" are
+        different questions over the same fields, and the quota needs the second.
+        See `EnforcedLimits`."""
         ...
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:

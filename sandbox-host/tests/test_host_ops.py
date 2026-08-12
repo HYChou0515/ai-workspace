@@ -144,3 +144,21 @@ async def test_healthz_names_the_behaviours_this_build_has():
     # HOME pointed at the sandbox's own `.home`, created and owned on the spot.
     assert "per-exec-home" in body["capabilities"]
     assert isinstance(body["version"], str)
+
+
+async def test_healthz_publishes_the_ceilings_this_host_will_apply():
+    """The app charges a sandbox's owner for what it holds, and a sandbox whose
+    spec states nothing is still capped — by THIS host's `SANDBOX_HOST_*`. Those
+    live in this service's environment, where the app cannot read them, so it
+    could only charge the request: an App that declared nothing held a core for
+    free. The number published here is the enforcer's own answer, not a second
+    copy of the config, so the two cannot drift."""
+    app = make_host_app(
+        MockSandbox(cpu_cores=1.0, memory_bytes=512 * 1024**2), advertise_url="http://h"
+    )
+    async with _client(app) as c:
+        body = (await c.get("/healthz")).json()
+    assert body["defaults"] == {"cpu_cores": 1.0, "memory_bytes": 512 * 1024**2}
+    # Named, so an app talking to a host too old to say can tell "not advertised"
+    # from "advertised as nothing" and report a stale image instead of charging 0.
+    assert "resource-defaults" in body["capabilities"]
