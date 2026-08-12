@@ -1,0 +1,2319 @@
+diff --git a/configs/config.example.yaml b/configs/config.example.yaml
+index 473f5b71..a19eaa90 100644
+--- a/configs/config.example.yaml
++++ b/configs/config.example.yaml
+@@ -79,6 +79,16 @@
+ #                              # (`GET .../stream?since=<seq>`). 0 disables replay
+ #                              # (a reconnect degrades to store re-hydrate).
+ #                              # ~200KB/session, only while a session is live.
++#   cors_allowed_origins: []   # #700: browser origins allowed to call this API
++#                              # cross-site — needed when an outside system hands
++#                              # work over FROM ITS OWN PAGE (e.g. a legacy
++#                              # analysis site whose button creates or adds to a
++#                              # work item). Empty (default) = no CORS layer at
++#                              # all, byte-identical to today. List origins
++#                              # explicitly, e.g. ["https://legacy-rca.corp"]:
++#                              # the caller is identified by the shared session
++#                              # cookie, so credentials must be allowed, and
++#                              # browsers refuse to pair that with a `*` wildcard.
+ 
+ # ─── sandbox (agent execution environment) ──── [MUST] · [SCALE] ────
+ # sandbox:
+diff --git a/docs/configuration.md b/docs/configuration.md
+index 5a7fe704..d2e1c582 100644
+--- a/docs/configuration.md
++++ b/docs/configuration.md
+@@ -80,6 +80,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
+ | **上多 pod（k8s）** | `sandbox.kind: http` + `sandbox.http.base_url` ＋ 共享 filestore ＋ 共享 MQ backend（見 [§5 階梯 C](#c-多-pod-k8s)） |
+ | **把 job runner 拆出 API** | `server.run_consumers: false`，另跑 worker pod（[§8 訊息佇列](#8-訊息佇列-message-queue)） |
+ | **設管理員（能讀所有 collection）** | `server.superusers: ["alice@example.com"]` |
++| **讓外部系統的網頁把工作交棒進來** | `server.cors_allowed_origins: ["https://legacy-rca.corp"]`；沒設的話瀏覽器會在請求送出前就擋掉（串接方式見[從外部系統交棒進來](external-handoff.md)） |
+ | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
+ | **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**） |
+ | **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上） |
+@@ -100,7 +101,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
+ 
+ | 區塊 | 是什麼 | 一般會不會動 |
+ |---|---|---|
+-| `server` | 監聽位址、`default_user`、`superusers`、`run_consumers`、cancel 輪詢 | 上線常改 superusers / run_consumers |
++| `server` | 監聽位址、`default_user`、`superusers`、`run_consumers`、cancel 輪詢、`cors_allowed_origins` | 上線常改 superusers / run_consumers |
+ | `sandbox` | **agent 執行環境**（見 [§6](#6-sandbox-執行環境重點)） | 多 pod 一定改 |
+ | `tools` | RCA 工具包怎麼佈署（`prebuilt` / `uv-run`） | 開發時改 |
+ | `filestore` | 檔案儲存（`memory` / `specstar`）＋ 配額 / GC | 上線一定改 |
+diff --git a/docs/external-handoff.md b/docs/external-handoff.md
+new file mode 100644
+index 00000000..3b7d9093
+--- /dev/null
++++ b/docs/external-handoff.md
+@@ -0,0 +1,276 @@
++# 從外部系統把工作交棒進來（給外部系統的開發團隊）
++
++你有一套既有的系統，使用者在上面做完一輪分析，想在這個平台上讓 AI 接力往下做。
++這頁講你要打哪幾支 API、以及三個會讓你安靜踩到的地雷。
++
++**平台這邊不需要為你新增任何端點。** 下面用到的全部是現成的路由，你只要照順序打。
++
++## 先講清楚這件事的形狀
++
++一個真實問題，在你那邊常常被拆成好幾筆分析；在這邊我們希望它們**收斂成同一個工作項目**
++（item），這樣 AI 才有完整的上下文可以接力。
++
++但**哪幾筆算同一題，只有人知道** —— 你那邊沒有欄位可以把它們串起來，所以平台不會替你猜。
++正確的作法是：**讓使用者在你的畫面上挑**要接到哪個既有 item，或開一個新的。
++
++| 規則 | 意思 |
++|---|---|
++| 多對一 | 多筆你那邊的分析，可以收斂到同一個 item |
++| 同 item 不重複 | 同一筆分析已經進過某個 item，就不要再進一次 |
++| 跨 item 不限制 | 同一筆分析要同時掛到兩個不同 item，是允許的 |
++
++## 你要做的四件事
++
++以下路徑都在 `/api` 底下。RCA app 的資料模型路徑是 `rca-investigation`；
++其他 app 各有各的模型名稱，可以從 `/api/openapi.json` 查到。
++
++### 1. 列出候選 item（給使用者挑）
++
++```
++GET /api/rca-investigation
++      ?limit=100
++      &sorts=[{"type":"meta","key":"updated_time","direction":"-"},
++              {"type":"meta","key":"resource_id","direction":"+"}]
++```
++
++回來長這樣（外層是信封，`data` 是 item 本身）：
++
++```json
++[
++  {
++    "data": {
++      "title": "烤箱溫度飄移",
++      "external_refs": ["legacy-rca:12345", "legacy-rca:12346"],
++      "severity": "P1",
++      "status": "triaging"
++    },
++    "revision_info": {
++      "resource_id": "rca-investigation:0f3c…",
++      "revision_id": "rca-investigation:0f3c…:7"
++    }
++  }
++]
++```
++
++兩個欄位你後面都會用到：
++
++- **`revision_info.resource_id`** 就是 item 的 id，第 2、3 步全部要用它。
++- **`revision_info.revision_id`** 是這一版的版本號，第 2a 步記錄編號時要帶（見地雷四）。
++
++> **不要打 `/api/rca-investigation/data`。** 那支只回 `data` 本體、**沒有 id**，
++> 你會做出一個畫得出清單、卻無法對使用者點的那一列做任何事的畫面。
++
++「這筆分析是不是已經進過某個 item」**你在自己的前端就能判斷完**，
++不用多打任何一支 API：把使用者這次要交棒的編號，拿去比對每筆 `data.external_refs` 就好。
++已經進過的那個 item，就在畫面上標示或停用。
++
++排序請照上面帶**兩個** key：主要用 `updated_time`（最後被動過的排最前面，
++理由見地雷二），次要用 `resource_id`。次要那個是為了讓「同一次查詢」的順序有定數 ——
++兩筆時間戳一樣時不會每次重新整理都跳來跳去。
++
++**但它擋不住翻頁漏項，這點請務必看地雷五。**
++
++### 2a. 使用者挑了既有 item → 上傳檔案，再記一筆
++
++上傳（原始位元組直接放 body，不是 multipart）：
++
++```
++PUT /api/a/rca/items/{item_id}/files/legacy-rca-12346/readings.csv
++Content-Type: application/octet-stream
++<檔案內容>
++→ 204 No Content
++```
++
++**建議每一筆分析放進自己的資料夾**，名字用 `<系統代號>-<編號>/`（上面例子的 `legacy-rca-12346/`）。
++平台不強制，但同一個 item 會累積好幾筆交棒，沒有前綴的話兩筆分析只要有同名檔案就會互相覆蓋，
++而且事後看不出哪個檔案屬於哪一筆。
++
++路徑只有一個限制：**不能有 `..` 這一段**（會回 `400`）。
++檔名裡有點沒關係（`report..final.csv` 可以），只有整段是 `..` 才擋。
++
++其他回應碼：`400` 路徑含 `..`、`404` item 不存在或你完全看不到它、
++`403` 你看得到這個 item 但沒有寫入權限（或路徑落在唯讀的 `.readonly/` 底下）、
++`410` item 已被刪除、`413` 單檔超過大小上限、`507` 工作區容量不足。
++
++記錄這個 item 已經吸收了這筆分析。**這一步請照下面的三個步驟做，不要只送一個 PATCH**：
++
++```
++① 先讀目前狀態
++GET /api/rca-investigation/{item_id}
++→ {"data": {"external_refs": [...]}, "revision_info": {"revision_id": "...:7"}}
++
++② 如果編號已經在 data.external_refs 裡 → 什麼都不用做，結束
++   （這一步讓整個動作可以安全重試，見地雷四）
++
++③ 帶著剛剛讀到的版本號送出追加
++PATCH /api/rca-investigation/{item_id}?expected_revision_id=<剛剛的 revision_id>
++Content-Type: application/json
++
++[{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:12346"}]
++
++→ 200  成功
++→ 412  在你讀完到寫入之間有別人先寫了 → 回到 ① 重做（重試上限建議 20 次）
++```
++
++用 `add` 到 `/-`，**不要**把整份 `external_refs` 重送一次 —— 那會直接蓋掉別人的紀錄。
++
++`expected_revision_id` 也可以改用 HTTP 標準的 `If-Match` 標頭，效果相同。
++
++### 2b. 使用者要開新的 item
++
++```
++POST /api/a/rca/items
++Content-Type: application/json
++
++{
++  "title": "烤箱溫度飄移",
++  "permission": {"visibility": "public"},
++  "severity": "P1"
++}
++→ {"resource_id": "rca-investigation:...", "seeded": ["/SOP.md", ...]}
++```
++
++拿到 `resource_id` 之後，**接下來完全照 2a 做**：先逐檔上傳，最後才記錄編號。
++
++> **建立時請不要順手帶 `external_refs`。** 這個欄位在建立時就能填，但別用 ——
++> 如果編號在檔案之前就寫進去，而你的程式在上傳途中掛掉（網路斷、瀏覽器被關），
++> 就會留下一個**宣稱已經收了這筆分析、實際上一個檔案都沒有**的 item。
++> 更糟的是使用者下次再按，畫面會因為編號已經在裡面而把它標成「已經進過了」，
++> 於是這筆分析**再也補不進去**。
++> 先傳檔、後記編號，中途掛掉就只是「還沒記錄」，重來一次就好 —— 檔案路徑一樣，覆蓋上去即可。
++
++### 3. 把使用者送過去
++
++```
++https://<平台網址>/a/rca/{item_id}
++```
++
++**請在檔案都上傳完之後才跳轉**，這樣使用者一到就看得到完整的東西，
++不會看到一個半空的工作區。
++
++## 五個地雷
++
++### 地雷一：`limit` 不帶，就等於全撈
++
++這邊的 `limit` 預設值是一個哨兵值（約 42.9 億），**不是頁大小**。
++你忘了帶 `limit=100`，這支 API 會安靜地把整張表撈給你 —— 不會報錯，只會越來越慢。
++**每一次都要明確帶 `limit`。**
++
++### 地雷二：排序用 `created_time` 會讓收斂失效
++
++清單有上限，所以掉出範圍的 item 使用者就看不到 —— 看不到就會再開一個新的，
++於是同一題又散開了，正是這整套機制要防的事。
++
++用 `updated_time` 排序可以大幅減輕這個問題：**每交棒一次，那個 item 就會回到最前面**。
++所以「同一題被交棒好幾次」這個主要情境，第二次以後一定找得到第一次的落點。
++
++不過有個限制要先告訴你，免得你以為它比實際更聰明：**只有「記錄編號」那一步會更新時間戳**。
++上傳檔案不會，使用者在平台上跟 AI 對話、改檔案也不會。
++所以一個「不是從你們那邊交棒過來、但有人天天在用」的 item，
++仍然會慢慢沉下去。對你們的流程影響不大（你們碰得到的都是交棒過的），
++但如果哪天使用者反映「我明明一直在用的案子找不到」，原因就在這裡。
++
++### 地雷三：`permission` 不帶，item 生下來只有自己看得到
++
++建立 item 時如果**沒有**明確帶 `permission`，它預設是私人的。
++你不會收到任何錯誤，但你的使用者的同事在清單上**看不到這個 item**，
++於是同事會自己再開一個 —— 同一題又裂成兩個，而且沒有任何徵兆。
++
++所以建立時請明確帶：
++
++```json
++"permission": {"visibility": "public"}
++```
++
++**但請先讓你們的資安/主管知道 `public` 實際的意思**：它不只是「大家看得到」，
++而是**大家都能動**。實測任何登入者都可以對一個 public 的 item：
++上傳／覆蓋檔案（`204`）、改標題（`200`）、甚至改掉負責人欄位（`200`）；
++只有刪除擋得住（`403`，僅限建立者）。跟 AI 對話、執行程式的權限也一樣是開的。
++
++現階段這是刻意的選擇 —— 先讓收斂成立、上線好排查 —— 之後會收緊。
++如果你們的分析內容含客訴、良率或供應商資訊，這件事要先講清楚再上線。
++
++### 地雷四：單獨一個 PATCH 會安靜地掉紀錄
++
++記錄編號那一步在伺服器端是「讀出來 → 改 → 寫回去」。兩個人幾乎同時把各自的分析
++交棒到**同一個 item**，兩個請求都會回 `200`，但其中一筆編號就這樣消失了。
++
++這不是小事：使用者是靠這份清單判斷「這筆進過了沒」，
++掉了一筆就等於「還沒進過」→ 同一份分析被交棒第二次 → 又多一個 item。
++
++所以第 2a 步要照那三個步驟做：**先讀版本號 → 帶著版本號寫 → 遇到 412 就重來**。
++
++**重試是安全的**，因為步驟 ② 會先檢查編號在不在。這點很重要 ——
++`add` 這個寫法本身不是冪等的，你如果逾時了直接重送同一個 PATCH（很自然的作法），
++就會把同一個編號記兩次。有步驟 ② 擋著，整個動作重做幾次都沒關係。
++
++> **還有一段我們自己還沒解決的殘餘風險**，先告訴你：平台底層的版本檢查是
++> 「先比對、再寫入」，中間沒有交易保護，所以在多台伺服器的正式環境下，
++> 即使照上面做，仍有很小的機率兩個寫入都通過檢查而掉一筆。
++> 重試把窗口縮得很小但沒有完全關掉。
++> 目前的建議是：跳轉過去之後如果使用者發現編號沒記到，**再按一次就好** ——
++> 因為步驟 ② 的關係，重按不會產生重複。我們正在往上游追這個問題。
++
++### 地雷五：用 `offset` 往下翻頁會漏掉 item（這條先前我們寫錯了）
++
++先更正一件事：這份文件之前說「帶上 `resource_id` 次要排序，翻頁就不會跳過 item」。
++**那是錯的**，我們實測後把它收回。
++
++原因是 `updated_time` 會變。你翻第二頁的那一刻，如果有人剛好交棒到一個原本在第二頁的 item，
++它會跳到第一頁的位置，把整個視窗往後推 —— 於是有一筆從第一頁滑到第二頁的**空隙**裡，兩頁都看不到它。
++實測（每頁 2 筆、共 4 筆）：
++
++```
++原本順序        : d, c, b, a
++第一頁 offset=0 : d, c
++   ← 這時有人交棒到 a
++第二頁 offset=2 : c, b        ← c 重複出現，而 a 從頭到尾沒出現過
++```
++
++次要排序 `resource_id` 解決的是「時間戳相同時順序不定」，不是這個。這兩件事常被混為一談。
++
++**怎麼辦：**
++
++- **主要情境不需要翻頁。** 你要找的是「最近交棒過的案子」，那一定在第一頁 ——
++  每交棒一次它就回到最前面。`limit=100` 對這個用途綽綽有餘，這也是我們建議的預設做法。
++- **真的要往下翻**，就整個換成不會變的排序鍵重新查：
++  `sorts=[{"type":"meta","key":"created_time","direction":"-"},{"type":"meta","key":"resource_id","direction":"+"}]`。
++  `created_time` 是建立時間、永遠不動，所以翻幾頁都不會漏。
++  代價是順序變成「依建立時間」，最近交棒的不會浮上來 —— 所以請當成「瀏覽全部」的模式，
++  跟第一頁的「最近在動的」分開看待。
++
++不要試圖在同一次翻頁流程裡混用兩種排序，那會同時拿到兩者的缺點。
++
++## 一件請你不要做的事
++
++**不要拿 `external_refs` 當查詢條件**（例如想問「這個編號被哪些 item 收過」）。
++
++這個欄位刻意沒有建索引，所以對它下條件時，條件會在進資料庫之前就被**丟掉**：
++你會拿到 `200`，然後是一份**空清單**。不會報錯，不會有任何徵兆。
++
++而空清單正好是這裡最糟的答案。你問的是「這個編號被哪些 item 收過」，
++拿到空的，你的畫面就會顯示「沒有人收過」→ 使用者於是開一個新的 item →
++同一題又多一份。這正是整套機制要防的事，卻由一個看起來很正常的查詢造成。
++
++正確做法就是第 1 步：撈一頁回去，在你自己的前端比對。
++
++## 平台這邊要配合的一件事
++
++你的網頁要能打這邊的 API，我們必須先把你的網域加進白名單，否則瀏覽器會在請求送出前就擋掉。
++請把你的來源網址（例如 `https://legacy-rca.corp`）給維運，設定在：
++
++```yaml
++server:
++  cors_allowed_origins:
++    - "https://legacy-rca.corp"
++```
++
++身分沿用共用登入，所以**你不需要、也不應該在參數裡帶使用者 id** ——
++從瀏覽器打過來，這邊自己就知道是誰。
++
++## 編號格式
++
++`external_refs` 的每個值請用 `<系統代號>:<紀錄編號>`，例如 `legacy-rca:12345`。
++
++平台把它當成不透明字串：只比對，永不解析。`<系統代號>` 的作用只是讓不同來源系統的編號
++不會互撞，你自己取一個穩定的名字即可。
+diff --git a/docs/plan-external-handoff.md b/docs/plan-external-handoff.md
+new file mode 100644
+index 00000000..ba3ea9b5
+--- /dev/null
++++ b/docs/plan-external-handoff.md
+@@ -0,0 +1,431 @@
++# Plan — External-system handoff into an App work item (no new concepts)
++
++## Problem
++
++A legacy analysis site (the old RCA web app) wants a button that hands its finished
++analysis over to this platform's RCA app, so the agent can carry the investigation
++forward. The naive shape is "button → `POST /a/rca/items`", and that is exactly the
++failure the owners are worried about: `create_app_item` mints
++`f"{rm.resource_name}:{uuid.uuid4()}"` on every call (`api/item_routes.py`), so it is
++**non-idempotent by construction**. Press it five times for one real-world problem and
++you get five work items, each holding a fifth of the context — the handoff destroys the
++very continuity it exists to provide.
++
++The obvious cure — derive a dedupe key from the source and reuse the item it maps to —
++**does not apply here**. The legacy side splits one real problem into several separate
++analyses and carries **no field that links them** (established during grilling; there is
++no case number, no work order, nothing). The grouping exists only in a person's head.
++So automatic convergence is impossible, and "which item does this belong to" can only be
++answered by the person pressing the button.
++
++That reframes the job: the platform's task is not to *decide* the grouping but to *make
++the human's decision cheap and repeatable* — show them what already exists, and remember
++what has already been handed over so the same analysis is not imported twice.
++
++## What this is deliberately NOT
++
++There is **no "import" concept** in this design. Broken into pieces, the request contains
++three things, and two of them already have names here:
++
++| The thing | What it already is |
++|---|---|
++| Put files in at creation time | **seeding** — `apps/seeding.py::seed_item`, how every profile's starter content arrives |
++| Put files into an existing item | **writing a file** — `PUT /a/{slug}/items/{id}/files/{path}` (already streaming) |
++| Remember which external records this item already absorbed | **nothing yet — this is the only gap** |
++
++So this plan adds **one field** and **no endpoints**. No `/handoff` route, no
++`import_path`, no `/imports/` directory, no new vocabulary for reviewers to learn. The
++legacy site composes the flow out of routes that already exist.
++
++## Goal
++
++A legacy system can hand an analysis to any App's work item — creating a new one or
++adding to one the user picks — and the platform remembers what it absorbed, so a second
++press against the same item is a no-op the caller can detect **before** uploading a
++single byte.
++
++Non-goals: automatic grouping (impossible, see above); any UI on this side (the picker
++lives in the legacy page); server-side search/pagination of the item list (the caller
++pages client-side — see Phase 1 rationale).
++
++## Locked decisions
++
++Established by grilling; each replaced a plausible alternative that is recorded under
++[Rejected alternatives](#rejected-alternatives).
++
++| # | Decision |
++|---|---|
++| 1 | **No automatic matching.** The user picks the target item (or creates one) in the legacy picker. |
++| 2 | **Many-to-one.** Several legacy analyses converge onto one work item. |
++| 3 | **Idempotency key = (item, external ref).** Same ref already on that item ⇒ do nothing. |
++| 4 | **The same ref MAY appear on several items.** Per-item uniqueness only; not globally unique. |
++| 5 | **Identity comes from the shared login.** The legacy *browser* calls us, so the session rides along; nothing carries a user id in a parameter. |
++| 6 | **Files travel by upload**, through the existing streaming `PUT`. The default workspace quota is 20 GB (`config/schema.py`), not a constraint at MB scale — though a deployment may have lowered it. |
++| 7 | **Item created first, files written, ref recorded LAST, then the browser navigates.** Not one combined multipart create — and never `external_refs` at create time, or a handoff that dies mid-upload leaves an item claiming an analysis it does not hold, which the picker then greys out so it can never be retried. |
++| 8 | **Nothing runs on arrival.** No auto-sent turn, no prefilled prompt, no edit to `/brief.md`. |
++| 9 | **Permission is passed explicitly as `public`** by the caller, overriding the private-by-default. To be tightened later, once the flow is proven in production. |
++| 10 | **Generic, not RCA-specific.** No `slug` is special-cased; the field lives on `WorkItemBase`. |
++| 11 | **The ref field is NOT indexed.** The caller fetches a page of items and filters client-side, so no server-side query exists to justify an index. |
++| 12 | **The caller fetches the newest 100 items** and pages further itself if it needs to. |
++
++### Why decision 11 has teeth
++
++Not indexing is not merely "skipping an optimisation" — it **forbids a query**. But the
++first version of this section got the mechanism backwards, and the wrong reason shipped
++into the caller-facing doc, the field's docstring and a guard test's failure message. It
++is corrected here rather than quietly reworded, because the wrong version was persuasive.
++
++**What was claimed:** an un-indexed `.contains` degrades on SQL backends to a substring
++`LIKE`, so `"legacy-rca:1"` would match `"legacy-rca:12345"`, staying exact in the
++in-memory backend the tests use — green in CI, wrong in production.
++
++**What actually happens** (measured against the running API, two items, one holding
++exactly `legacy-rca:1`): the condition never reaches SQL at all. Because the field is in no
++`indexed_fields` there is no `indexed_data` entry for the predicate to match, so the query
++returns **`200` with zero rows**, identically on memory and SQL. It is not swallowed in
++silence — `_validate_query_fields` warns that the condition "matches nothing, so the query
++will under-return", and `on_unindexed_query=error` would make it raise — but a warning in a
++server log is not a guard, which is why the ban is enforced by tests. The control — the same query
++shape over the indexed `severity` — returns both rows, so the query machinery is fine.
++
++The `CLAUDE.md` note the plan leaned on describes the *opposite* precondition: that trap
++needs the field to **be** in `indexed_fields` while having lost its `list[...]`
++annotation. Ours is annotated `list[str]`, so indexing it would auto-register a list field
++and `.contains` would be exact — **indexing would make a query correct, not dangerous**.
++
++The conclusion survives, for a better reason. Zero rows is the worst possible answer to the
++only question this field exists to settle: "which items already absorbed record X?"
++answered with nothing reads as "none", so the caller re-imports and creates the duplicate
++item this design exists to prevent — with an unread warning as the sole trace. So: **no
++code may query this field**; the client filters the page it already fetched. The field
++stays un-indexed because there is no server-side query to justify the write-time cost — not
++because indexing is unsafe. Two guards hold the line together (no App indexes it; no module
++mentions it outside its definition), and if a genuine query need ever appears the honest
++move is to index it deliberately and delete both guards, not to smuggle a filter past them.
++
++### Why decision 12 needs `updated_time`, not `created_time`
++
++Capping the list re-opens the original wound from a side door: if the target item has
++fallen past the cap, the user cannot see it, so they create a new one — item sprawl again.
++Sorting by **`updated_time` descending** greatly reduces it, at zero cost: recording a
++handoff bumps the timestamp, so each successive handoff returns that item to the front —
++which covers the main case, "one problem handed over several times".
++
++**Corrected from the original claim, which was measurably too generous.** It said
++"absorbing a handoff writes files *and* appends a ref, which bumps the timestamp, so an
++item that is being actively worked is pushed back to the front". Only the ref append does
++it. Measured: uploading a file into the older of two items left the order unchanged;
++appending a ref to it moved it to the front. `updated_time` belongs to the item row, and
++only `item_routes.py` and the generic CRUD patch write it — files live in the FileStore and
++chat turns write `Conversation`, so neither touches it. So an item created by hand and
++worked in daily, never handed to from outside, sinks exactly as it would under
++`created_time`. For the caller's own flow this is fine (everything it touches has been
++handed to), but the sentence "actively worked items stay at the front" is not true in
++general and should not be relied on. Both helpers are specstar built-ins
++(`QB.created_time()` / `QB.updated_time()`, `specstar/query.py`), so **no index is needed
++for the sort either** — the same pattern already in use at `api/kb_routes.py:2043`.
++
++## Interface contract (what the legacy site calls)
++
++Everything below already exists except the field in step 1's response.
++
++**1 — List candidates.** specstar's generated CRUD, newest first, capped. The
++exact shape below is what the routes actually accept — verified against a running
++app, not inferred; the first draft of this plan guessed `GET /{model}?sort=-updated_time`
++and was wrong on both the path and the parameter:
++
++```
++GET /api/rca-investigation
++      ?limit=100
++      &sorts=[{"type":"meta","key":"updated_time","direction":"-"},
++              {"type":"meta","key":"resource_id","direction":"+"}]
++```
++
++Two corrections that arrived from review, both of which had shipped in the
++caller-facing doc:
++
++- It must be the **envelope** listing, not `/data`. `/data` returns the struct
++  alone — **no resource id** — so a picker built on it can render the rows and
++  then act on none of them, since every later step keys off the id. The id is at
++  `revision_info.resource_id`, which is where this platform's own frontend reads
++  it from (`web/src/api/real.ts`). The contract double missed this because it
++  only ever consumed `title` from the listing and took the id from the create
++  response — it never played the one move the integration depends on.
++- The sort carries a **tiebreaker** (`resource_id`), which makes a single query's
++  order deterministic when timestamps collide. It does **not** make `offset`
++  paging safe, and an earlier revision of this plan and the caller guide both
++  claimed it did. Measured, four items at two per page: page 1 returns `d, c`; a
++  handoff then touches `a` (which was on page 2), lifting it to the front; page 2
++  at `offset=2` returns `c, b`. The caller sees `d, c, c, b` and **never sees
++  `a`** — the design's own worst outcome, since an item the picker never shows is
++  one the user re-creates.
++
++  The mistake was reading half of the cited precedent. `api/kb_routes.py:2030`
++  does pair its sort with `resource_id`, but its comment says *why* it also sorts
++  on `created_time`: "Sort by **IMMUTABLE** keys BEFORE paging … **NOT
++  `updated_time`**: re-ingest / re-index bumps it, so a doc indexing *between*
++  the FE's offset fetches would jump to the front and slide the window,
++  double-counting one row and dropping another (#184)." Decision 12 deliberately
++  chooses the mutable key, so it inherits exactly the hazard that comment exists
++  to warn about — the tiebreaker was never the mitigation.
++
++  Not fixable while keeping decision 12, and it does not need to be: the primary
++  use is "find the recently-handed-to item", which is on page one by
++  construction. The guide now tells callers that paging past page one requires
++  re-querying under `created_time` (immutable, so stable) and treats that as a
++  separate "browse everything" mode.
++
++Each returned record carries its own `external_refs`, because non-indexed fields are still
++part of the record. The picker therefore decides everything locally: which items exist,
++which of them already absorbed this analysis (grey those out — this is decision 3, resolved
++without a single extra request), and how to sort or filter them for display.
++
++> **Trap:** specstar's default `limit` is a sentinel (~4.29e9), **not** a page size. Omit
++> `limit` and the call silently degrades to fetching everything, nullifying decision 12.
++
++**2a — User picked an existing item:** upload each file (raw body, not multipart;
++`204` on success), then record the ref — read-first, under an optimistic lock,
++retrying on `412`.
++
++```
++PUT   /api/a/{slug}/items/{id}/files/{path}
++
++GET   /api/rca-investigation/{id}                     → data.external_refs, revision_info.revision_id
++      ↳ ref already present? stop, nothing to do      (this is what makes a retry safe)
++PATCH /api/rca-investigation/{id}?expected_revision_id=<that revision_id>
++      [{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:12345"}]
++      → 200 done · 412 someone wrote first, re-read and retry
++```
++
++**2b — User wants a new item:** create it, then upload, then record the ref
++exactly as in 2a.
++
++```
++POST /api/a/{slug}/items
++     { ...app fields..., "permission": {"visibility": "public"} }
++```
++
++Both blocks were wrong until this revision, in ways the rest of the plan already
++forbade — this is the section an integrator copies, so it is worth naming what
++changed. 2a showed a bare single `PATCH`: it answers `200` and silently loses a
++concurrent append, and being a non-idempotent `add`, a retried timeout records the
++ref twice. 2b passed `external_refs` at create time, which decision 7 forbids: a
++handoff dying mid-upload leaves an item claiming an analysis it does not hold, and
++since the picker greys out anything already absorbed, that analysis can never be
++retried into it. The caller-facing guide and the contract double were both
++corrected earlier; this block was not, so the design record still taught the
++failure the guide warns against.
++
++**3 — Navigate** the browser to `/a/{slug}/{itemId}`. Files are already in place, so the
++user never sees a half-populated workspace.
++
++The caller-facing version of all this is [`external-handoff.md`](external-handoff.md).
++
++**Ref format:** `<system>:<record-id>`, e.g. `legacy-rca:12345`. Opaque to the platform —
++never parsed, only compared.
++
++**File layout:** the platform imposes no structure — where in the workspace a handoff puts
++its files is the caller's choice. The contract doc *recommends* `<system>-<record-id>/` as a
++path prefix so several handoffs into one item cannot collide; that is guidance, not a rule.
++
++The one thing the platform does enforce is containment: a path segment of `..` is refused
++with `400` on every route that writes a client path **into the workspace store**
++(`api/file_routes.py::_workspace_path`) — the `{path:path}` URL routes plus `mkdir` /
++`move` / `copy`.
++
++Deliberately not "every route that takes a client path", which is what this sentence said
++until a veracity pass falsified it — the same overclaim the `_workspace_path` docstring made
++and that `7d0cb700`'s own thesis is about ("claimed 'no `..` ever' was a rule you could read
++off the code. It was not"). Two routes outside that set take a client path: the
++`/notebooks/{notebook_path:path}` ones, where the path is a kernel session key rather than a
++store path, and `api/workflow_routes.py::_staged_run_uploads`, which takes a workspace path
++from a multipart filename and guards it with `kb.doc_id.canonical_path` — a different
++containment model that **resolves** `..` instead of refusing it, so `a/b/../c` is accepted
++there. Worth knowing before anyone states a platform-wide containment rule.
++That is not a layout rule — it stops a path from leaving the workspace at all — but it is
++the single constraint a caller can actually hit, so it belongs stated here rather than
++discovered.
++
++## Phases
++
++Flat integers, one commit each, TDD throughout (`/tdd`): every phase starts from a test
++that fails for the stated reason.
++
++### Phase 1 — `external_refs` on `WorkItemBase`
++
++Add `external_refs: list[str] = []` as a Tier 1 field (a platform capability every App
++gets, like `env_vars` — decision 10), deliberately **absent** from `INDEXED_FIELDS`.
++
++Red tests:
++
++1. `POST /a/{slug}/items` with `external_refs` → reading the item back returns them.
++2. A listed record carries `external_refs` — without this the client-side filter of
++   decision 11 has nothing to filter on, so this test *is* the design.
++3. `PATCH` with `{"op":"add","path":"/external_refs/-",...}` **appends**; a pre-existing
++   ref survives. (JSON Patch is RFC 6902 here — `crud/route_templates/patch.py` — so the
++   payload is a diff, not a whole-record replace. This is materially safer than the
++   `#587` class of bug, but the guarantee needs a test, not an assumption.)
++4. Two concurrent appends of *different* refs to one item: both survive. This is the one
++   test that can genuinely fail — if specstar's patch is read-modify-write without
++   row-level protection, one append is lost. If it fails, the fix is a retry-on-revision
++   loop in the caller contract, documented in Phase 3; **do not** paper over it by making
++   the client send the whole list, which reintroduces last-writer-wins.
++
++   **Outcome (this prediction was right, and the first version of the test hid it).**
++   The original test used `asyncio.gather`, which cannot fail here: the patch route's
++   critical section is synchronous, so two coroutines on one event loop never interleave.
++   It recorded a false pass and the Phase 3 follow-up was never triggered. Re-run with
++   threads, 8 concurrent appends lose refs **with every request returning 200**.
++
++   The loss is probabilistic, and an earlier version of this line ("lose 2–3 refs", echoed
++   by commit `41c9ea89` as "fails on the first run") reported a bad draw as if it were the
++   norm. Measured properly, 30 rounds of the pre-fix one-shot patch: **10 rounds lost
++   nothing**, median 1, range 0–5. So a single round is a coin flip, not a demonstration —
++   which is exactly why the surviving `xfail` repeats ten times rather than once. The
++   conclusion is unaffected and independently confirmed: the retry loop measurably helps
++   (5/20 rounds clean before, 11/20 after) and measurably does not close the hole (9/20
++   still lose a ref).
++
++   The retry-on-revision loop is now in the contract and measurably helps, but it does
++   **not** close the hole: `expected_revision_id` is enforced in
++   `specstar/resource_manager/core.py` as check-then-write with no transaction spanning
++   the comparison and the write, so two writers can both pass the check. Measured after
++   the fix: 5 runs → 2 pass, 3 still lose a ref. Single-pod is unaffected (one event loop
++   serialises the synchronous section); multi-pod, the documented production shape, is
++   not. The test stays in the suite as a non-strict `xfail` so it announces itself the day
++   the upstream primitive becomes atomic. **This belongs upstream in specstar** — there is
++   no correct fix at this layer, because the only cross-pod primitive available is the
++   non-atomic CAS itself.
++
++   The retry loop still earns its place for a second reason: it re-reads before writing and
++   returns early when the ref is already present, which makes the whole call idempotent.
++   Without that, a caller that times out on a request which actually landed — the ordinary
++   thing to do — records the ref twice, and "at most once per item" was until now a rule
++   nothing enforced.
++
++No migration: the field is new, so every existing row's correct value is the empty list,
++and nothing queries it.
++
++### Phase 2 — CORS, configurable
++
++The legacy browser cannot call us today — there is no `CORSMiddleware` anywhere in
++`api/app.py`. Add `server.cors_allowed_origins: list[str] = []` to the config schema and
++mount the middleware **only when the list is non-empty**, so no existing deployment or
++test changes behaviour.
++
++Red tests:
++
++1. Empty config → no CORS headers (default deployments unchanged).
++2. Configured origin → preflight `OPTIONS` returns that origin and
++   `Access-Control-Allow-Credentials: true`.
++3. Unlisted origin → no allow header.
++
++`allow_credentials=True` is mandatory (decision 5 rides on the session cookie) and
++browsers forbid pairing it with `*`, so origins must be listed explicitly. Ship the
++default empty and let the operators fill in the legacy hostname at deploy time.
++
++### Phase 3 — Integration contract doc
++
++`docs/external-handoff.md` (added to the mkdocs nav), addressed to the *calling* team:
++the four steps above, the ref format, the recommended path prefix, and the two traps
++promoted to prominence — the `limit` sentinel, and the fact that `permission` must be
++sent explicitly or the item is born private and invisible to everyone else, which
++silently defeats the whole convergence goal.
++
++### Phase 4 — End-to-end proof, from the caller's side
++
++This phase exists because **nothing in this work is visible in our own UI** — the picker
++lives in the legacy page, so "it merged" proves nothing about whether it works. The
++deliverable is an integration test that plays the legacy site's part: list → create with
++public permission (never with refs — decision 7) → upload two files → record the ref →
++assert the second press against the same item is detectable as already-absorbed → assert
++the workspace file tree shows the files under the recommended prefix. It must also pick
++the row it acts on **out of the listing**, not out of the create response: taking the id
++from the create call is how the first version of this test missed that the listing it
++recommended carries no id at all.
++
++Per the project's contract-double rule, this must model **the other side's actual request
++sequence**, not merely assert that our handlers do not crash. A test that only says "we
++did not do anything wrong" is immune to the regressions that matter here.
++
++### Platform changes this work made beyond the field itself
++
++A note on the one that needed an operator answer rather than a code decision: the
++trailing-slash normalisation was briefly wrong on this branch, and any row written under a
++trailing-slash key during that window would now be worse than cosmetic — the canonical form
++resolves to the sibling file, so deleting the trailing-slash path destroys the good one, and
++a phantom without a sibling is unaddressable while still counting toward the quota. **The
++durable store was queried: zero rows end in `/`**, so no migration ships. Recorded because
++"we decided it was fine" and "we counted and it was zero" age very differently.
++
++Both are outside the "one field, no endpoints" headline and were not in any phase, so the
++design record names them rather than leaving them to `git log`:
++
++- **`ResourceIsDeletedError` → `410` for every hand-written route** (`api/app.py`). specstar's
++  generated CRUD already answered `410`; the hand-written routes let it escape as a `500`.
++  A list-then-act integration makes "deleted in between" its most likely race, and the caller
++  has to tell "that item is gone" apart from "the platform is down". One handler, the same
++  shape as the existing `WorkspaceFull` / `FileNotFound` ones — so it changes the answer for
++  files, chat and entities too, not only the handoff path.
++- **`..` path segments refused with `400`** (`api/file_routes.py::_workspace_path`) on every
++  route that takes a client path, URL or JSON body. Pre-existing hole, fixed here because
++  this work is what first opens those routes to a cross-origin cookie-authenticated caller —
++  and the guide tells that caller to build a path segment out of an external record id the
++  platform explicitly declines to parse.
++
++## Risks and accepted trade-offs
++
++1. **Items beyond the first 100 are invisible to the picker**, so a long-dormant
++   investigation can still spawn a duplicate. Mitigated to near-zero by the `updated_time`
++   sort (see above); fully solved only by server-side search, which is deliberately out of
++   scope.
++2. **The same analysis may be attached to several items** (decision 4). Chosen knowingly:
++   it buys flexibility at the cost of one analysis's discussion potentially living in two
++   places.
++3. **`public` (decision 9) is world-WRITABLE, not merely world-readable.** This risk was
++   originally written as "visible company-wide", which understates what is being accepted
++   and is the sentence a reviewer would rely on when judging whether "tighten it later" is
++   tolerable. `perm/authorize.py` grants every verb except `change_permission` under
++   `public`. Measured, as a second user against someone else's public item: upload or
++   overwrite any file `204`, rewrite the title `200`, **reassign `owner` `200`**; only
++   delete is refused (`403`, creator-only). `converse`, `execute` and `use_terminal` come
++   with it, so each handoff item is also a shell any employee can drive. Still accepted for
++   the rollout — but on those terms, not the softer ones.
++4. **Client-side filtering gets heavier as item counts grow.** Known, not an oversight.
++   The remedy (index + migrate) is understood; the trigger should be a measurement, not a
++   guess.
++5. **Concurrent appends** — see Phase 1 test 4. Measured, and it does lose refs; the
++   residual hole is upstream and documented there.
++
++6. **The per-user disk quota lands on one person.** Decision 6 reasoned only about
++   `filestore.workspace_quota` and missed the second cap: `quota/disk_ledger.py` charges an
++   item's bytes to its `owner`, summed across every item in that person's name (#688).
++   Convergence is the whole point of this design, so N colleagues' uploads all land in one
++   item — created by whoever pressed first — and every one of them is charged to that
++   person's budget. When it trips, the uploader gets a `507` naming a quota they cannot see
++   and cannot clear, because the space is in other items belonging to someone else. And
++   since `owner` is a plain PATCHable field on a `public` item (risk 3), anyone can move
++   the debt onto anyone else — which is #687, and is why #687 gates this quota having any
++   force at all.
++
++## Rejected alternatives
++
++- **Derive a dedupe key from the legacy side** — no field links the analyses that belong
++  to one problem. The premise simply does not hold.
++- **A dedicated `/handoff` endpoint (+ `import_path`, `/imports/` layout)** — invented a
++  concept the platform does not need. Two of the three underlying actions already have
++  names here; the third is a field, not a protocol.
++- **One multipart request that creates the item and carries the files** — the
++  "already absorbed, do nothing" answer must arrive *before* the upload, or users transfer
++  megabytes only to be told it was unnecessary. It would also force `create` from JSON to
++  multipart for no gain.
++- **Globally unique refs (block attaching to a second item)** — rejected in favour of
++  flexibility (decision 4).
++- **Move the ref when re-attached elsewhere** — a mis-click silently relocates a
++  colleague's data.
++- **Auto-start a turn, or prefill the composer, on arrival** — rejected; arrival is silent
++  (decision 8).
++- **Append an arrival note to `/brief.md`** — rejected by the owner.
++- **Index `external_refs`** — no server-side query exists to justify it, and indexing
++  carries a migration obligation. See "Why decision 11 has teeth".
++- **Fetch every visible item** — replaced by the newest-100 cap (decision 12).
+diff --git a/mkdocs.yml b/mkdocs.yml
+index 33861009..35910cec 100644
+--- a/mkdocs.yml
++++ b/mkdocs.yml
+@@ -109,6 +109,7 @@ nav:
+       - 擴充平台（Tools / Skills / Workflows）: extending-the-platform.md
+       - 寫一支工具（外部作者）: tool-authoring.md
+       - 寫一個 View Kind（維運方）: view-kind-authoring.md
++      - 從外部系統交棒進來（外部團隊）: external-handoff.md
+       - 撰寫 Workflow: workflows-authoring.md
+       - 共創 Skills: skills-authoring.md
+       - 發布與更新紀錄: releasing.md
+diff --git a/src/workspace_app/__main__.py b/src/workspace_app/__main__.py
+index 9a47f3d8..2104b868 100644
+--- a/src/workspace_app/__main__.py
++++ b/src/workspace_app/__main__.py
+@@ -310,6 +310,7 @@ def main() -> None:
+             kb_cluster_sweep_seconds=settings.kb.cluster.sweep_interval_seconds,
+             monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
+             root_path=settings.server.root_path,
++            cors_allowed_origins=settings.server.cors_allowed_origins,
+             read_file_max_lines=settings.read_file.max_lines,
+             read_file_max_chars=settings.read_file.max_chars,
+             tool_output_max_chars=settings.exec.tool_output_max_chars,
+diff --git a/src/workspace_app/api/app.py b/src/workspace_app/api/app.py
+index 0bf0568e..6372b7ca 100644
+--- a/src/workspace_app/api/app.py
++++ b/src/workspace_app/api/app.py
+@@ -2,7 +2,7 @@ from __future__ import annotations
+ 
+ import logging
+ import time
+-from collections.abc import Awaitable, Callable, Mapping
++from collections.abc import Awaitable, Callable, Mapping, Sequence
+ from datetime import UTC, datetime, timedelta
+ from importlib.metadata import PackageNotFoundError
+ from importlib.metadata import version as importlib_version
+@@ -11,8 +11,10 @@ from typing import Any, cast
+ 
+ from agents.tracing import set_trace_processors
+ from fastapi import APIRouter, FastAPI, Request, Response
++from fastapi.middleware.cors import CORSMiddleware
+ from fastapi.responses import JSONResponse
+ from specstar import SpecStar
++from specstar.types import ResourceIsDeletedError
+ 
+ from ..agent.config_catalog import AgentConfigCatalog
+ from ..config.schema import EnhancementSettings, OffHoursSettings, PerUserResources
+@@ -411,6 +413,14 @@ def create_app(
+     # runs. None ⇒ the sweeper is off (the safe default — headless triggered runs are opt-in
+     # per deploy). A real deploy sets a cadence (e.g. 60 s) to enable time-triggered workflows.
+     trigger_check_interval: timedelta | None = None,
++    # #700: browser origins allowed to call this API cross-site. An outside system
++    # (e.g. a legacy analysis site) hands work over FROM ITS OWN PAGE, so the request
++    # is cross-origin and the browser blocks it before our code runs unless we say
++    # otherwise. Empty (the default) ⇒ no CORS layer at all, so a deployment that
++    # never opts in behaves exactly as before. Origins must be listed explicitly:
++    # the caller's identity is the shared session cookie, which needs
++    # `allow_credentials`, and browsers refuse to pair that with a `*` wildcard.
++    cors_allowed_origins: Sequence[str] = (),
+ ) -> FastAPI:
+     logger.info(
+         "boot: composing app (run_consumers=%s, host_managed_durable=%s)",
+@@ -789,6 +799,22 @@ def create_app(
+         swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
+     )
+ 
++    # #700: only mounted when a deployment actually names origins, so the default
++    # deployment carries no CORS layer and its responses are byte-identical to
++    # before. `allow_credentials` is not optional here — the caller is identified
++    # by the shared session cookie, and a cookie-bearing cross-origin request is
++    # refused unless the response allows credentials. That in turn forbids a `*`
++    # wildcard (browsers reject the pair), which is why origins are an explicit
++    # list rather than a boolean.
++    if cors_allowed_origins:
++        app.add_middleware(
++            CORSMiddleware,
++            allow_origins=list(cors_allowed_origins),
++            allow_credentials=True,
++            allow_methods=["*"],
++            allow_headers=["*"],
++        )
++
+     # Version-skew handshake: EVERY response (errors included) carries the
+     # backend version so the SPA — which bakes its own build version — can spot
+     # a cached old bundle talking to a new api and reload itself at a safe
+@@ -907,6 +933,20 @@ def create_app(
+             content={"detail": {"error": "file_not_found", "message": str(exc)}},
+         )
+ 
++    @app.exception_handler(ResourceIsDeletedError)
++    async def _resource_gone(_request: Request, exc: ResourceIsDeletedError) -> JSONResponse:
++        """#700: an item was soft-deleted between a client listing it and acting
++        on it. specstar's own CRUD routes already answer 410 for this, but every
++        HAND-WRITTEN route that resolves an item (the file ops, chat, entities)
++        let it escape as a bare 500 — so the most likely race in a list-then-act
++        integration was indistinguishable from the platform being down. Same
++        shape as the FileNotFound handler above: one handler, so no route has to
++        remember, and the answer matches what the generated routes already give."""
++        return JSONResponse(
++            status_code=410,
++            content={"detail": {"error": "resource_deleted", "message": str(exc)}},
++        )
++
+     # #177: EVERY backend route registers on this prefixed router — specstar's
+     # CRUD routes (via apply(router=…)) and all hand-written ones. It's included
+     # onto `app` exactly once, just before the SPA mount at the end of create_app.
+diff --git a/src/workspace_app/api/file_routes.py b/src/workspace_app/api/file_routes.py
+index 860386c8..ddd9652e 100644
+--- a/src/workspace_app/api/file_routes.py
++++ b/src/workspace_app/api/file_routes.py
+@@ -77,6 +77,82 @@ def _is_readonly_path(path: str) -> bool:
+     return _READONLY_DIR in path.strip("/").split("/")
+ 
+ 
++def _workspace_path(raw: str) -> str:
++    """Normalise a client-supplied workspace path, refusing any that climbs out.
++
++    #700: nothing here normalised, and the two layers below do not either —
++    ``files.write`` joins onto the workspace root and the local sandbox's
++    ``_resolve`` does ``cwd / remote_path.lstrip("/")``. Starlette collapses a
++    LITERAL ``../`` before routing, so that form was already refused and the gap
++    looked closed; a **percent-encoded** ``..%2F`` arrives intact and the OS
++    resolves it at write time. The write then lands beside the workspace in the
++    infra area (alongside ``.ready`` and the per-sandbox ``.home``) or, with
++    enough segments, inside another item's directory on the shared scratch volume.
++
++    Rejecting a ``..`` segment outright rather than resolving it: a path that
++    normalises back inside (``a/b/../c``) is legitimate but vanishingly rare from
++    a real client, and "no ``..`` ever" is a rule that can be read off the code,
++    whereas "resolves to somewhere inside" invites the next person to re-derive
++    the containment check. A filename that merely CONTAINS dots
++    (``report..final.csv``) is untouched — only whole segments count.
++
++    Callers, named rather than described. Every previous attempt to state this as
++    a RULE ("no ``..`` ever", then "every route that takes a client path", then
++    "…to the workspace store") was falsified by the next reviewer, because a rule
++    invites the reader to assume coverage the code does not have. A list can be
++    checked against ``grep``:
++
++    * ``write_file`` / ``read_file`` / ``delete_file`` — the ``{path:path}`` URL routes
++    * ``make_dir`` — the JSON body path
++    * ``move_file`` / ``copy_file`` — BOTH sides of each
++    * ``list_files`` / ``list_tree`` / ``prepare_files_download`` — via
++      ``_workspace_prefix``, which keeps ``""`` meaning "whole workspace"
++
++    Known NOT to pass through here, deliberately or otherwise:
++    ``/notebooks/{notebook_path:path}`` (a kernel session key, never a store
++    path — verified: it only ever indexes a dict in ``KernelService``);
++    ``api/workflow_routes.py::_staged_run_uploads``, which uses
++    ``kb.doc_id.canonical_path`` — a different model that RESOLVES ``..`` rather
++    than refusing it; and ``api/chat_send.py``'s attachment paths, which have no
++    containment check at all. The last one is a gap, not a decision.
++
++    The body routes were missed on the first pass and are the worse case:
++    Starlette's URL normalisation never runs on a body, so there even a LITERAL
++    ``../`` survived.
++
++    ``strip`` and not ``lstrip``: a trailing slash must not change what a path
++    MEANS. That is not cosmetic — the first version of this helper used
++    ``lstrip`` and silently dropped the trailing-slash normalisation the body
++    routes already had, so ``"/folder/"`` stopped naming the directory
++    ``/folder``. Moving a file onto an existing directory went from a refusal to
++    a SUCCESS that deleted the source and left a file whose stored path was
++    ``/folder/`` beside the directory ``/folder`` — indistinguishable in the file
++    tree, which splits on ``/`` and drops empty segments. Reachable from the
++    rename box in the UI, and covered now by
++    ``tests/api/test_file_path_normalisation.py``.
++    """
++    norm = "/" + raw.strip("/")
++    if any(segment == ".." for segment in norm.split("/")):
++        raise HTTPException(status_code=400, detail="path may not contain a '..' segment")
++    return norm
++
++
++def _workspace_prefix(prefix: str) -> str:
++    """``_workspace_path`` for the listing/download ``prefix`` parameter, which
++    is a client path to the store like any other but was reaching the sandbox
++    unchecked.
++
++    It goes to ``sandbox.walk``, whose ``_resolve`` is ``cwd / prefix.lstrip("/")``,
++    so on the shared-dir local backend a crafted prefix enumerates a SIBLING
++    item's files — paths and sizes. Reading them back is already refused (that
++    is the ``{path:path}`` guard), so this closes the enumeration half of the
++    same chain.
++
++    Empty stays empty: ``""`` means "the whole workspace" to every consumer, and
++    normalising it to ``"/"`` would change what a plain listing asks for."""
++    return _workspace_path(prefix) if prefix else prefix
++
++
+ async def _stream_upload_to_store(
+     workspace_id: str,
+     path: str,
+@@ -228,7 +304,7 @@ def register_file_routes(
+         # snapshot record's inline size) — NEVER by reading each file's bytes, so
+         # a 600-file tree costs one listing, not 600 full-content downloads.
+         investigation_id = locator.require_access(slug, item_id, "read_content")
+-        entries = await files.stat_all(investigation_id, prefix)
++        entries = await files.stat_all(investigation_id, _workspace_prefix(prefix))
+         return [
+             _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
+             for p, size in sorted(entries)
+@@ -257,7 +333,7 @@ def register_file_routes(
+         `dirs` still comes back separately rather than being derived client-side,
+         because an EMPTY directory appears in no file path."""
+         investigation_id = locator.require_access(slug, item_id, "read_content")
+-        entries, dirs = await files.tree(investigation_id, prefix)
++        entries, dirs = await files.tree(investigation_id, _workspace_prefix(prefix))
+         return _WorkspaceTree(
+             files=[
+                 _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
+@@ -306,7 +382,7 @@ def register_file_routes(
+         Reading routes warm→sandbox / cold→snapshot via the facade; only the
+         compression runs off the event loop."""
+         investigation_id = locator.require_access(slug, item_id, "read_content")
+-        members = await _collect_download_members(investigation_id, prefix)
++        members = await _collect_download_members(investigation_id, _workspace_prefix(prefix))
+         download_id, size = await prepare_zip(lambda out: write_zip_members(out, members))
+         logger.info(
+             "file_routes: prepared download %s of %r for item %s (%d bytes)",
+@@ -339,7 +415,7 @@ def register_file_routes(
+     )
+     async def write_file(slug: str, item_id: str, path: str, request: Request) -> Response:
+         investigation_id = locator.require_access(slug, item_id, "edit_content")
+-        norm = "/" + path.lstrip("/")
++        norm = _workspace_path(path)
+         if _is_readonly_path(norm):
+             # #205: the `.readonly/` snapshot the human diffs against is not hand-editable.
+             raise HTTPException(status_code=403, detail="this file is read-only")
+@@ -370,7 +446,7 @@ def register_file_routes(
+     )
+     async def make_dir(slug: str, item_id: str, body: _MkdirBody) -> Response:
+         investigation_id = locator.require_access(slug, item_id, "add_content")
+-        norm = "/" + body.path.strip("/")
++        norm = _workspace_path(body.path)
+         try:
+             await files.mkdir(investigation_id, norm)
+         except FileExists as exc:
+@@ -438,8 +514,8 @@ def register_file_routes(
+     )
+     async def move_file(slug: str, item_id: str, body: _MoveBody) -> Response:
+         investigation_id = locator.require_access(slug, item_id, "edit_content")
+-        src = "/" + body.from_.strip("/")
+-        dst = "/" + body.to.strip("/")
++        src = _workspace_path(body.from_)
++        dst = _workspace_path(body.to)
+         await _transfer(investigation_id, src, dst, copy=False)
+         activity.record(
+             "file_moved",
+@@ -456,8 +532,8 @@ def register_file_routes(
+     )
+     async def copy_file(slug: str, item_id: str, body: _MoveBody) -> Response:
+         investigation_id = locator.require_access(slug, item_id, "add_content")
+-        src = "/" + body.from_.strip("/")
+-        dst = "/" + body.to.strip("/")
++        src = _workspace_path(body.from_)
++        dst = _workspace_path(body.to)
+         await _transfer(investigation_id, src, dst, copy=True)
+         activity.record(
+             "file_copied",
+@@ -555,7 +631,7 @@ def register_file_routes(
+     )
+     async def delete_file(slug: str, item_id: str, path: str) -> Response:
+         investigation_id = locator.require_access(slug, item_id, "edit_content")
+-        norm = "/" + path.lstrip("/")
++        norm = _workspace_path(path)
+         if await files.is_dir(investigation_id, norm):
+             await files.rmdir(investigation_id, norm)
+             activity.record(
+@@ -588,8 +664,9 @@ def register_file_routes(
+         investigation_id = locator.require_access(slug, item_id, "read_content")
+         import mimetypes
+ 
++        norm = _workspace_path(path)
+         try:
+-            data = await files.read(investigation_id, "/" + path.lstrip("/"))
++            data = await files.read(investigation_id, norm)
+         except FileNotFound as exc:
+             raise HTTPException(status_code=404, detail=str(exc)) from exc
+         # Issue #40: extension → MIME first so workspace markdown reports
+@@ -598,7 +675,15 @@ def register_file_routes(
+         # (the browser offers a download). Unknown extension → fall back
+         # to the previous UTF-8 sniff so text-with-unknown-extension
+         # still renders in the file viewer.
+-        guessed, _ = mimetypes.guess_type(path)
++        #
++        # Guess from the NORMALISED path, not the raw one. `GET /files/logo.png/`
++        # finds the file (the read is normalised) but `splitext` sees no extension
++        # on a string ending in `/`, so the raw form fell through to the sniff and
++        # answered `application/octet-stream` — a download prompt where the user
++        # expected an inlined image, with a 200 hiding it. That contradicted this
++        # module's own rule that a trailing slash must not change what a path
++        # means, one line after enforcing it.
++        guessed, _ = mimetypes.guess_type(norm)
+         if guessed:
+             media_type = guessed
+         else:
+diff --git a/src/workspace_app/apps/base.py b/src/workspace_app/apps/base.py
+index d6eec4bd..4724b745 100644
+--- a/src/workspace_app/apps/base.py
++++ b/src/workspace_app/apps/base.py
+@@ -96,6 +96,61 @@ class WorkItemBase(Struct):
+     Treat them as shared-with-the-item, not shared-with-the-owner: an API key put
+     here is visible to everyone the item is shared with."""
+ 
++    external_refs: list[str] = field(default_factory=list)
++    """Tier 1 (#700) — the external records this item has already absorbed, as
++    opaque ``<system>:<record-id>`` strings (e.g. ``"legacy-rca:12345"``).
++    Declared here rather than opted into, for the same reason as ``env_vars``:
++    any App can be handed work by an outside system, so this is a platform
++    capability, not one App's domain field.
++
++    It exists to answer ONE question — "has this item already taken this
++    record?" — which is what stops a legacy site's button from sprawling one
++    real-world problem across N items, each holding a fraction of the context.
++    Several external records may converge onto one item (the whole point: the
++    outside system splits a problem into pieces that only a human can regroup),
++    and the SAME record may legitimately appear on several items.
++
++    "At most once per item" is the CALLER'S contract, not a guarantee this field
++    makes. Nothing here rejects a duplicate — a create carrying the same ref
++    twice stores it twice, and so does a repeated RFC 6902 ``add``. The platform
++    is an opaque store for these strings; the recording procedure in
++    ``docs/external-handoff.md`` gets the property by re-reading before it
++    writes. Anything relying on uniqueness must not assume this field enforces it.
++
++    The value is opaque: it is compared, never parsed. The platform assigns no
++    meaning to the ``<system>`` half beyond "the caller says these came from
++    different places".
++
++    **NOTHING MAY QUERY THIS FIELD**, and the reason is not the one you might
++    expect from ``CLAUDE.md``'s ``.contains`` note — that trap needs a field to
++    BE indexed while having lost its ``list[...]`` annotation, which is the
++    opposite precondition. Measured here instead: because the field is absent
++    from every ``INDEXED_FIELDS`` there is no ``indexed_data`` entry for the
++    predicate to match, so a filter on it returns **zero rows** — identically on
++    the in-memory and SQL backends. specstar does not swallow it in silence:
++    ``_validate_query_fields`` warns that the condition "matches nothing, so the
++    query will under-return" (and a deployment may set ``on_unindexed_query`` to
++    ``error`` to make it raise). But a warning in a server log is not a guard,
++    which is why the ban is enforced by tests.
++
++    Zero rows is the dangerous answer for the question this field exists to
++    settle. "Which items already absorbed record X?" answered with nothing reads
++    as "none of them", so the caller hands the analysis over again and creates
++    the duplicate item this whole design exists to prevent — with a warning
++    nobody reads in production as the only trace.
++
++    Callers therefore fetch a page of items and filter the records they already
++    hold, which costs zero extra round trips because a listed record carries its
++    own ``external_refs``. Two guards keep it that way: no App may index the
++    field, and no module here may mention it outside this definition.
++
++    (Indexing it would in fact make a query CORRECT — the annotation is
++    ``list[str]``, so specstar registers a list field and ``.contains`` becomes
++    exact membership. It stays un-indexed because there is no server-side query
++    to justify the write-time cost, not because indexing is unsafe. If a real
++    query need ever appears, index it deliberately and delete these guards —
++    do not smuggle a filter past them.)"""
++
+     permission: Permission | None = None
+     """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
+     governs collections / KbChat: ``visibility`` decides whether the per-verb grant
+diff --git a/src/workspace_app/config/schema.py b/src/workspace_app/config/schema.py
+index 955c2035..db29859b 100644
+--- a/src/workspace_app/config/schema.py
++++ b/src/workspace_app/config/schema.py
+@@ -63,6 +63,13 @@ class ServerSettings:
+     # due headless runs. 0 (default) ⇒ off — time-triggered workflows are opt-in per deploy.
+     # A CAS lease per (trigger, window) means only one pod fires each window when several run.
+     trigger_check_interval_sec: int = 0
++    # #700: browser origins allowed to call this API cross-site, for outside systems
++    # that hand work over from their own page (e.g. a legacy analysis site whose
++    # button creates or adds to a work item). Empty (default) ⇒ no CORS layer at
++    # all, exactly today's behaviour. Origins are listed explicitly rather than
++    # wildcarded because the caller is identified by the shared session cookie,
++    # which requires `allow_credentials`, and browsers refuse that with `*`.
++    cors_allowed_origins: list[str] = field(default_factory=list)
+ 
+ 
+ # ─── sandbox ────────────────────────────────────────────────────────────
+diff --git a/tests/api/test_cors.py b/tests/api/test_cors.py
+new file mode 100644
+index 00000000..eb28ba56
+--- /dev/null
++++ b/tests/api/test_cors.py
+@@ -0,0 +1,121 @@
++"""#700 — cross-origin access for an outside system's browser.
++
++The handoff is driven from the legacy site's own page, so the call carries the
++shared session cookie and arrives from a DIFFERENT origin. Without CORS the
++browser refuses it before our code ever runs, which makes the whole feature
++zero. Origins are configured per deployment and default to empty, so nothing
++changes for a deployment that never opts in.
++"""
++
++from __future__ import annotations
++
++from collections.abc import AsyncIterator
++
++from workspace_app.agent.config_catalog import AgentConfigCatalog
++from workspace_app.agent.context import AgentToolContext
++from workspace_app.api import RunDone, create_app
++from workspace_app.api.events import AgentEvent
++from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import TestClient
++
++_LEGACY = "https://legacy-rca.example.com"
++
++
++class _Runner:
++    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
++        yield RunDone()
++
++
++def _client(**kwargs) -> TestClient:
++    return TestClient(
++        create_app(
++            spec=make_spec(default_user="u"),
++            sandbox=MockSandbox(),
++            filestore=MemoryFileStore(),
++            runner=_Runner(),
++            agent_config_catalog=AgentConfigCatalog(),
++            **kwargs,
++        )
++    )
++
++
++def _preflight(client: TestClient, origin: str, *, method: str = "GET", headers: str = ""):
++    ask = {"Origin": origin, "Access-Control-Request-Method": method}
++    if headers:
++        ask["Access-Control-Request-Headers"] = headers
++    return client.options("/api/a/rca/items", headers=ask)
++
++
++def test_a_configured_origin_may_call_us_with_credentials():
++    """Credentials must be allowed explicitly: the caller's identity is the
++    shared session cookie, and a cookie-bearing cross-origin request is refused
++    unless the response says so."""
++    r = _preflight(_client(cors_allowed_origins=[_LEGACY]), _LEGACY)
++
++    assert r.headers.get("access-control-allow-origin") == _LEGACY
++    assert r.headers.get("access-control-allow-credentials") == "true"
++
++
++def test_every_method_the_handoff_actually_uses_is_allowed():
++    """GET is the ONE method this feature does not need a preflight for, so
++    testing only GET tests only the case that cannot break. The handoff creates
++    (POST), uploads (PUT) and records (PATCH); if any of those is refused at
++    preflight the whole integration is dead in a real browser while every test
++    here still passes.
++    """
++    client = _client(cors_allowed_origins=[_LEGACY])
++
++    for method in ("POST", "PUT", "PATCH"):
++        r = _preflight(client, _LEGACY, method=method)
++        allowed = r.headers.get("access-control-allow-methods", "")
++        assert r.status_code == 200, f"{method}: {r.status_code} {r.text}"
++        assert r.headers.get("access-control-allow-origin") == _LEGACY, method
++        # A concrete method, not a `*` escape hatch: paired with
++        # allow_credentials a literal `*` is invalid to browsers anyway, so
++        # accepting it here would let a real regression through.
++        assert method in allowed, f"{method} not in {allowed!r}"
++
++
++def test_the_content_type_header_the_handoff_sends_is_allowed():
++    """The create and the record steps both post JSON, and `Content-Type:
++    application/json` is not a CORS-safelisted VALUE — the browser asks for the
++    header at preflight and refuses the request if the answer omits it.
++
++    Documentation, not a guard, and labelled so nobody counts it twice.
++    Starlette's `CORSMiddleware` does `sorted(SAFELISTED_HEADERS | set(...))`
++    with `Content-Type` in that safelist, so this header is allowed for EVERY
++    value of `allow_headers` — measured: narrowing it to `["authorization"]` or
++    to `[]` leaves this test green. What it does catch (a broken method
++    allowance, the layer disappearing) the two tests around it already catch.
++    It stays because the browser fact is worth recording next to the preflight
++    that depends on it — not because it is protecting anything."""
++    client = _client(cors_allowed_origins=[_LEGACY])
++
++    r = _preflight(client, _LEGACY, method="POST", headers="content-type")
++
++    # The status matters as much as the header: a refused header makes the
++    # preflight itself fail (400), which asserting only on the echoed
++    # allow-headers value would miss.
++    assert r.status_code == 200, f"{r.status_code}: {r.text}"
++    allowed = r.headers.get("access-control-allow-headers", "").lower()
++    assert "content-type" in allowed, allowed
++
++
++def test_an_unlisted_origin_is_not_granted_access():
++    """The allowance is a list, not a switch — turning it on for the legacy site
++    must not open the API to every other site the user has a tab of."""
++    r = _preflight(_client(cors_allowed_origins=[_LEGACY]), "https://somewhere-else.example.com")
++
++    assert r.headers.get("access-control-allow-origin") is None
++
++
++def test_without_configured_origins_no_cors_layer_exists():
++    """Every existing deployment passes nothing, so it must keep behaving exactly
++    as it did — no headers, no preflight handling, nothing added to the stack."""
++    r = _preflight(_client(), _LEGACY)
++
++    assert r.headers.get("access-control-allow-origin") is None
++    assert r.headers.get("access-control-allow-credentials") is None
+diff --git a/tests/api/test_external_handoff_contract.py b/tests/api/test_external_handoff_contract.py
+new file mode 100644
+index 00000000..1b5373d7
+--- /dev/null
++++ b/tests/api/test_external_handoff_contract.py
+@@ -0,0 +1,414 @@
++"""#700 — the handoff, played from the CALLING side.
++
++Nothing about this feature is visible in our own UI: the picker lives in the
++outside system's page, so "it merged" proves nothing. What has to hold is that
++the sequence a legacy site actually issues — list, create or pick, upload,
++record — works end to end against routes that already exist.
++
++So this is a contract double: it models the other side's real request sequence,
++including the parts we do not control (the exact `sorts` JSON, the raw-body PUT,
++the RFC 6902 patch). A test that only asserted our handlers do not crash would
++be immune to the regressions that matter here.
++"""
++
++from __future__ import annotations
++
++import json
++from collections.abc import AsyncIterator
++from concurrent.futures import ThreadPoolExecutor
++
++import pytest
++
++from workspace_app.agent.config_catalog import AgentConfigCatalog
++from workspace_app.agent.context import AgentToolContext
++from workspace_app.api import RunDone, create_app
++from workspace_app.api.events import AgentEvent
++from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import TestClient
++
++_NEWEST_FIRST = json.dumps(
++    [
++        {"type": "meta", "key": "updated_time", "direction": "-"},
++        # Tiebreaker: makes ONE query's order deterministic when timestamps
++        # collide. It does NOT make `offset` paging safe — that needs an
++        # immutable sort key, see the paging test below. Conflating the two is
++        # the mistake this comment used to make.
++        {"type": "meta", "key": "resource_id", "direction": "+"},
++    ]
++)
++
++# What a caller must switch to in order to page past the first page. `created_time`
++# never moves, so a concurrent handoff cannot slide the window between fetches.
++_STABLE_FOR_PAGING = json.dumps(
++    [
++        {"type": "meta", "key": "created_time", "direction": "-"},
++        {"type": "meta", "key": "resource_id", "direction": "+"},
++    ]
++)
++
++
++class _Runner:
++    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
++        yield RunDone()
++
++
++class _LegacySite:
++    """The calling side, expressed as the four moves it actually makes.
++
++    Written as the caller sees the platform — no imports of our internals, no
++    resource-manager peeking — so if a route, parameter name or status code
++    drifts, this breaks in the same way the real integration would.
++    """
++
++    def __init__(self, client: TestClient, slug: str = "rca") -> None:
++        self._c = client
++        self._slug = slug
++
++    def list_candidates(self, limit: int = 100) -> list[dict]:
++        """The picker's only read: newest-touched first, explicitly capped.
++
++        Reads the ENVELOPE listing, not the `/data` one. `/data` returns the
++        struct alone — no resource id — so a picker built on it can render rows
++        and then do nothing with the one the user clicks. The id lives in
++        `revision_info`, which is also where this platform's own frontend reads
++        it from (`web/src/api/real.ts`).
++        """
++        r = self._c.get(
++            "/rca-investigation",
++            params={"limit": limit, "sorts": _NEWEST_FIRST},
++        )
++        assert r.status_code == 200, r.text
++        return [{"id": row["revision_info"]["resource_id"], **row["data"]} for row in r.json()]
++
++    def already_absorbed(self, items: list[dict], ref: str) -> list[str]:
++        """Answered from the page already fetched — never a query (the field is
++        deliberately un-indexed, so a query would be silently wrong on SQL)."""
++        return [it["title"] for it in items if ref in it["external_refs"]]
++
++    def open_new_item(self, title: str) -> str:
++        """Create the item WITHOUT the ref — it is recorded last, once the files
++        are in.
++
++        Naming the analysis at create time looks tidier and is a trap: a handoff
++        that dies mid-upload leaves an item CLAIMING an analysis it does not
++        hold, and because the picker greys out anything already absorbed, that
++        analysis can never be retried into it. Recording last means a crash
++        leaves "not yet recorded", and a re-run overwrites the same paths.
++        """
++        r = self._c.post(
++            f"/a/{self._slug}/items",
++            json={
++                "title": title,
++                # Explicit, because the default is private — an item nobody else
++                # can see cannot be the thing colleagues converge on.
++                "permission": {"visibility": "public"},
++            },
++        )
++        assert r.status_code == 200, r.text
++        return r.json()["resource_id"]
++
++    def open_new_item_and_record(self, title: str, ref: str) -> str:
++        """The whole 2b flow for tests that only need an item to exist: create,
++        then record. Still in the correct order — never `external_refs` at
++        create time."""
++        item_id = self.open_new_item(title)
++        self.record_absorbed(item_id, ref)
++        return item_id
++
++    def upload(self, item_id: str, ref: str, name: str, body: bytes) -> None:
++        """One folder per source record, so several handoffs cannot collide."""
++        folder = ref.replace(":", "-")
++        r = self._c.put(f"/a/{self._slug}/items/{item_id}/files/{folder}/{name}", content=body)
++        assert r.status_code == 204, r.text
++
++    def record_absorbed(self, item_id: str, ref: str, *, attempts: int = 20) -> None:
++        """Record the ref under an optimistic lock, and make the whole call safe
++        to repeat.
++
++        Two properties the naive one-shot append does not have:
++
++        **No lost update.** The server's patch is a read-modify-write, so two
++        appends landing together silently keep one and drop the other — both
++        answering 200. `expected_revision_id` converts that into a 412 the
++        caller can retry against fresh state.
++
++        **Idempotent.** RFC 6902 `add` to `/-` appends unconditionally, so a
++        caller that times out on a request which actually landed — the ordinary
++        thing to do — would record the ref twice. Re-reading first and returning
++        early when the ref is already present makes a retry a no-op, which is
++        what the platform means by "at most once per item".
++        """
++        for _ in range(attempts):
++            env = self._c.get(f"/rca-investigation/{item_id}")
++            assert env.status_code == 200, env.text
++            body = env.json()
++            if ref in body["data"]["external_refs"]:
++                return
++            r = self._c.patch(
++                f"/rca-investigation/{item_id}",
++                params={"expected_revision_id": body["revision_info"]["revision_id"]},
++                json=[{"op": "add", "path": "/external_refs/-", "value": ref}],
++            )
++            if r.status_code == 200:
++                return
++            assert r.status_code == 412, r.text  # 412 = someone else got there first; retry
++        raise AssertionError(f"could not record {ref} after {attempts} attempts")
++
++    def files_in(self, item_id: str) -> set[str]:
++        r = self._c.get(f"/a/{self._slug}/items/{item_id}/files")
++        assert r.status_code == 200, r.text
++        return {e["path"] for e in r.json()}
++
++
++def _app_for(who: dict[str, str]):
++    """One store, a switchable caller — the same shape as two people sharing a
++    deployment. `default_user` and `get_user_id` read the SAME source so the
++    creator we record and the actor we authorize can never diverge."""
++    spec = make_spec(default_user=lambda: who["user"])
++    return create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=MemoryFileStore(),
++        runner=_Runner(),
++        agent_config_catalog=AgentConfigCatalog(),
++        get_user_id=lambda: who["user"],
++    )
++
++
++def test_two_analyses_from_the_legacy_site_converge_on_one_item():
++    """The whole point of #700: pressing the button twice for one real problem
++    lands both analyses in ONE workspace instead of sprawling into two."""
++    who = {"user": "alice"}
++    legacy = _LegacySite(TestClient(_app_for(who)))
++
++    # First analysis: nothing exists yet, so the user opens an item.
++    assert legacy.list_candidates() == []
++    item_id = legacy.open_new_item("Oven drift")
++    legacy.upload(item_id, "legacy-rca:1", "readings.csv", b"t,v\n1,9\n")
++    legacy.record_absorbed(item_id, "legacy-rca:1")
++
++    # Second analysis, same real-world problem: the user picks that item.
++    candidates = legacy.list_candidates()
++    assert [c["title"] for c in candidates] == ["Oven drift"]
++    assert legacy.already_absorbed(candidates, "legacy-rca:2") == []
++    # Act on the row the USER CLICKED — the id has to come out of the listing,
++    # not out of a create response the picker never sees. This is the move that
++    # makes or breaks the integration, so the double must play it.
++    picked = candidates[0]["id"]
++    assert picked == item_id
++    legacy.upload(picked, "legacy-rca:2", "pareto.png", b"\x89PNG")
++    legacy.record_absorbed(picked, "legacy-rca:2")
++
++    # One item holds both analyses, each in its own folder.
++    absorbed = legacy.list_candidates()[0]["external_refs"]
++    assert absorbed == ["legacy-rca:1", "legacy-rca:2"]
++    assert legacy.files_in(item_id) >= {
++        "/legacy-rca-1/readings.csv",
++        "/legacy-rca-2/pareto.png",
++    }
++
++
++def test_a_second_press_of_the_same_analysis_is_recognisable_as_already_taken():
++    """Decision 3: same record, same item ⇒ do nothing. The caller must be able
++    to tell BEFORE uploading, or the user transfers megabytes for nothing."""
++    who = {"user": "alice"}
++    legacy = _LegacySite(TestClient(_app_for(who)))
++    legacy.open_new_item_and_record("Oven drift", "legacy-rca:1")
++
++    assert legacy.already_absorbed(legacy.list_candidates(), "legacy-rca:1") == ["Oven drift"]
++
++
++def test_absorbing_an_analysis_pulls_the_item_back_to_the_front_of_the_page():
++    """Decision 12 caps the listing, which re-opens the sprawl risk from the
++    side: an item past the cap is invisible, so the user opens another one.
++    Sorting by *last touched* is what closes it — an item being actively worked
++    is pushed back to the front — so the ordering is load-bearing, not cosmetic.
++    Created-time order would leave it buried exactly when it matters most."""
++    who = {"user": "alice"}
++    legacy = _LegacySite(TestClient(_app_for(who)))
++    older = legacy.open_new_item_and_record("Oven drift", "legacy-rca:1")
++    legacy.open_new_item_and_record("Coater streaks", "legacy-rca:2")
++
++    assert [c["title"] for c in legacy.list_candidates()] == ["Coater streaks", "Oven drift"]
++
++    legacy.record_absorbed(older, "legacy-rca:3")  # a second analysis lands on the older item
++
++    assert [c["title"] for c in legacy.list_candidates()] == ["Oven drift", "Coater streaks"]
++
++
++def test_a_stale_revision_is_refused_instead_of_silently_overwriting():
++    """The precondition that makes a lost update *detectable*.
++
++    Without it, two appends landing together both answer 200 and one simply
++    vanishes. With it, the loser is told (412) and can retry against fresh
++    state. This is the mechanism `record_absorbed` is built on, so it gets a
++    deterministic test of its own rather than being inferred from a race.
++    """
++    who = {"user": "alice"}
++    client = TestClient(_app_for(who))
++    legacy = _LegacySite(client)
++    item_id = legacy.open_new_item_and_record("Oven drift", "legacy-rca:0")
++    stale = client.get(f"/rca-investigation/{item_id}").json()["revision_info"]["revision_id"]
++
++    first = client.patch(
++        f"/rca-investigation/{item_id}",
++        params={"expected_revision_id": stale},
++        json=[{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:1"}],
++    )
++    second = client.patch(
++        f"/rca-investigation/{item_id}",
++        params={"expected_revision_id": stale},  # now one revision behind
++        json=[{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:2"}],
++    )
++
++    assert first.status_code == 200
++    assert second.status_code == 412, second.text
++    assert legacy.list_candidates()[0]["external_refs"] == ["legacy-rca:0", "legacy-rca:1"]
++
++
++def test_recording_the_same_analysis_twice_is_a_no_op():
++    """RFC 6902 `add` to `/-` appends unconditionally, so a caller that times
++    out on a request which actually landed — the ordinary thing to do — would
++    record the ref twice. "At most once per item" has to be enforced by the
++    recording step, not hoped for."""
++    who = {"user": "alice"}
++    legacy = _LegacySite(TestClient(_app_for(who)))
++    item_id = legacy.open_new_item_and_record("Oven drift", "legacy-rca:0")
++
++    legacy.record_absorbed(item_id, "legacy-rca:1")
++    legacy.record_absorbed(item_id, "legacy-rca:1")  # the retry
++    legacy.record_absorbed(item_id, "legacy-rca:1")
++
++    assert legacy.list_candidates()[0]["external_refs"] == ["legacy-rca:0", "legacy-rca:1"]
++
++
++@pytest.mark.xfail(
++    reason=(
++        "Upstream: specstar's optimistic lock is check-then-write, not atomic — "
++        "resource_manager/core.py reads current_revision_id, compares, and only "
++        "then writes, with no transaction spanning the two. Two writers can both "
++        "pass the check and the second overwrites the first, so a ref is lost "
++        "while both requests answer 200. Retrying on 412 (what record_absorbed "
++        "does) narrows the window but cannot close it. Single-pod deploys are "
++        "unaffected — the patch route's critical section is synchronous, so one "
++        "event loop serialises it — but multi-pod, the documented production "
++        "shape, is not. Kept executing rather than deleted so the day the "
++        "upstream primitive becomes atomic, this XPASSes and tells us — which "
++        "only works because it repeats: see the docstring."
++    ),
++    strict=False,
++)
++def test_parallel_handoffs_to_one_item_keep_every_ref():
++    """Several people hand analyses to the SAME item at the same moment.
++
++    A lost ref is not cosmetic: the caller decides "already absorbed?" from this
++    list, so losing one reads as "not absorbed yet" and the analysis is handed
++    over a second time — precisely the sprawl this design exists to prevent.
++
++    Threads, not `asyncio.gather`: the patch route's critical section is
++    synchronous, so coroutines on one event loop cannot interleave and a
++    gather-based test can never fail however broken the server is. That is
++    exactly the false pass this replaces.
++
++    REPEATED, and that is the point of this version. One round loses a ref only
++    about half the time (measured: 9 losses in 20 rounds with the shipped retry
++    loop), so a single-round xfail XPASSes at random — and a signal that fires by
++    coin flip announces nothing. That is the same defect as the `asyncio.gather`
++    version it replaced, with the polarity flipped: there a test that could never
++    fail, here a test that passes for no reason. Ten rounds make the loss
++    reliable (~1 - 0.55^10), so an XPASS becomes evidence rather than noise — and
++    the day the upstream primitive turns atomic this flips to a STABLE xpass,
++    which is the announcement the xfail is kept alive to make.
++    """
++
++    def one_round() -> tuple[list[str], list[str]]:
++        legacy = _LegacySite(TestClient(_app_for({"user": "alice"})))
++        item_id = legacy.open_new_item_and_record("Oven drift", "legacy-rca:0")
++        incoming = [f"legacy-rca:{i}" for i in range(1, 9)]
++
++        with ThreadPoolExecutor(max_workers=len(incoming)) as pool:
++            list(pool.map(lambda ref: legacy.record_absorbed(item_id, ref), incoming))
++
++        got = sorted(legacy.list_candidates()[0]["external_refs"])
++        return got, sorted(["legacy-rca:0", *incoming])
++
++    rounds = 10
++    for round_no in range(rounds):
++        got, want = one_round()
++        assert got == want, (
++            f"round {round_no + 1}/{rounds} lost {sorted(set(want) - set(got))} "
++            "— every request answered 200"
++        )
++
++
++def test_paging_past_the_first_page_needs_an_immutable_sort_key():
++    """Decision 12 sorts by `updated_time` — a key a concurrent handoff MUTATES.
++
++    So an item can slide across the page boundary between two `offset` fetches
++    and be seen by neither. Measured with the mutable key: page 1 gives `d, c`;
++    a handoff then touches `a` (on page 2), lifting it to the front; page 2 at
++    `offset=2` gives `c, b` — the caller sees `d, c, c, b` and never sees `a`.
++    The `resource_id` tiebreaker does not prevent this, it only settles ties
++    within one query; an earlier version of the guide claimed otherwise.
++
++    An item the picker never shows is one the user re-creates, which is the
++    sprawl this design exists to stop. Since decision 12 keeps the mutable key
++    for page one (where it is exactly right), the guide tells callers to
++    re-query under `created_time` to page. This pins that the escape hatch is
++    genuinely stable — swap the sort back to `updated_time` and it fails.
++    """
++    who = {"user": "alice"}
++    client = TestClient(_app_for(who))
++    legacy = _LegacySite(client)
++    ids = {name: legacy.open_new_item(name) for name in ("a", "b", "c", "d")}
++
++    def page(offset: int) -> list[str]:
++        rows = client.get(
++            "/rca-investigation",
++            params={"limit": 2, "offset": offset, "sorts": _STABLE_FOR_PAGING},
++        ).json()
++        return [r["data"]["title"] for r in rows]
++
++    first = page(0)
++    # A handoff lands on the OLDEST item, which sits on page two — the exact
++    # interleaving that loses a row when the sort key is the mutable one.
++    legacy.record_absorbed(ids["a"], "legacy-rca:1")
++    second = page(2)
++
++    assert sorted(first + second) == ["a", "b", "c", "d"], (first, second)
++
++
++def test_uploading_into_a_deleted_item_says_it_is_gone_rather_than_crashing():
++    """The picker lists, the user picks, and in between someone deletes the item.
++
++    A plausible race given the list-then-act shape this integration is built on.
++    The caller needs to tell "that item is gone, offer to open a new one" apart
++    from "the platform is broken, retry later" — and a 500 says the second.
++    Reading and patching a deleted item already answer 410; the upload path did
++    not, so the outside team's most likely race looked like an outage.
++    """
++    who = {"user": "alice"}
++    client = TestClient(_app_for(who))
++    legacy = _LegacySite(client)
++    item_id = legacy.open_new_item("Oven drift")
++    assert client.delete(f"/rca-investigation/{item_id}").status_code in (200, 204)
++
++    r = client.put(f"/a/rca/items/{item_id}/files/legacy-rca-1/readings.csv", content=b"x")
++
++    assert r.status_code == 410, f"expected 410 Gone, got {r.status_code}"
++
++
++def test_a_colleague_sees_the_item_so_convergence_survives_across_people():
++    """Convergence has to hold between people, not just within one account —
++    an item a colleague cannot see is one they will silently duplicate."""
++    who = {"user": "alice"}
++    app = _app_for(who)
++    _LegacySite(TestClient(app)).open_new_item_and_record("Oven drift", "legacy-rca:1")
++
++    who["user"] = "bob"
++    seen = _LegacySite(TestClient(app)).list_candidates()
++
++    assert [c["title"] for c in seen] == ["Oven drift"]
+diff --git a/tests/api/test_external_refs.py b/tests/api/test_external_refs.py
+new file mode 100644
+index 00000000..f849dd38
+--- /dev/null
++++ b/tests/api/test_external_refs.py
+@@ -0,0 +1,212 @@
++"""#700 — a work item remembers which external records it has absorbed.
++
++A legacy system hands an analysis over by creating (or adding to) a work item.
++`create_app_item` mints a fresh uuid every call, so without a record of what has
++already been handed over, one real-world problem sprawls into N items. The record
++is a plain list of opaque `<system>:<record-id>` strings on `WorkItemBase` —
++deliberately NOT indexed, because nothing may query it. Measured, and NOT the
++`substring LIKE` story an earlier version of this docstring told (that trap needs
++the opposite precondition): un-indexed, the predicate has no `indexed_data` to
++match, so it returns **zero rows** on every backend. Zero rows is the worst
++answer here — "which items already absorbed record X?" answered with nothing
++reads as "none", so the caller re-imports and creates the duplicate item this
++design exists to prevent. The caller fetches a page of items and filters the
++records it already holds.
++"""
++
++from __future__ import annotations
++
++from collections.abc import AsyncIterator
++from pathlib import Path
++
++from workspace_app.agent.config_catalog import AgentConfigCatalog
++from workspace_app.agent.context import AgentToolContext
++from workspace_app.api import RunDone, create_app
++from workspace_app.api.events import AgentEvent
++from workspace_app.apps.rca.model import RcaInvestigation
++from workspace_app.filestore.memory import MemoryFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import TestClient
++
++
++class _Runner:
++    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
++        yield RunDone()
++
++
++def _app_and_spec():
++    spec = make_spec(default_user="u")
++    return (
++        create_app(
++            spec=spec,
++            sandbox=MockSandbox(),
++            filestore=MemoryFileStore(),
++            runner=_Runner(),
++            agent_config_catalog=AgentConfigCatalog(),
++        ),
++        spec,
++    )
++
++
++def test_create_item_keeps_the_external_refs_it_was_handed():
++    """The handoff's whole point: an item created FROM a legacy analysis carries
++    that analysis's id, so a later handoff can tell it was already absorbed."""
++    app, spec = _app_and_spec()
++
++    r = TestClient(app).post(
++        "/a/rca/items",
++        json={"title": "Oven drift", "external_refs": ["legacy-rca:12345"]},
++    )
++
++    assert r.status_code == 200
++    got = spec.get_resource_manager(RcaInvestigation).get(r.json()["resource_id"]).data
++    assert got.external_refs == ["legacy-rca:12345"]
++
++
++def test_listed_records_carry_their_external_refs():
++    """The caller decides "already absorbed?" from the page it fetched, so the
++    refs must ride along IN the listing. Without this the design collapses into
++    a per-ref query — the one thing the un-indexed field forbids.
++
++    Asserted against the ENVELOPE listing, the one a picker must actually use:
++    `/data` also carries the refs but has no resource id, so a caller cannot act
++    on the row it just filtered. Testing the shape nobody may use would leave the
++    real one uncovered here."""
++    app, _ = _app_and_spec()
++    client = TestClient(app)
++    client.post("/a/rca/items", json={"title": "From legacy", "external_refs": ["legacy-rca:1"]})
++    client.post("/a/rca/items", json={"title": "Opened by hand"})
++
++    rows = client.get("/rca-investigation?limit=100").json()
++
++    by_title = {row["data"]["title"]: row for row in rows}
++    assert by_title["From legacy"]["data"]["external_refs"] == ["legacy-rca:1"]
++    assert by_title["Opened by hand"]["data"]["external_refs"] == []
++    assert by_title["From legacy"]["revision_info"]["resource_id"]
++
++
++def test_appending_a_ref_keeps_the_ones_already_there():
++    """Handing a SECOND analysis to an item must not erase the first. The
++    contract says append via RFC 6902 `add` to `/-` — a diff, never a
++    whole-list replace, which is what makes concurrent handoffs survivable."""
++    app, spec = _app_and_spec()
++    client = TestClient(app)
++    item_id = client.post(
++        "/a/rca/items",
++        json={"title": "Oven drift", "external_refs": ["legacy-rca:1"]},
++    ).json()["resource_id"]
++
++    r = client.patch(
++        f"/rca-investigation/{item_id}",
++        json=[{"op": "add", "path": "/external_refs/-", "value": "legacy-rca:2"}],
++    )
++
++    assert r.status_code == 200, r.text
++    got = spec.get_resource_manager(RcaInvestigation).get(item_id).data
++    assert got.external_refs == ["legacy-rca:1", "legacy-rca:2"]
++
++
++def test_no_app_indexes_external_refs():
++    """Keep the field out of every index, so the pair of guards stays coherent.
++
++    The real hazard is the sibling test below (nothing may QUERY it). This one
++    exists because the two decisions have to move together: indexing the field
++    is what would make a query start returning real answers, so an index added
++    without deleting the query ban leaves the codebase asserting two things at
++    once. Adding it must therefore be a deliberate act that breaks a test and
++    gets argued for — not a passing optimisation.
++    """
++    from workspace_app.apps.registry import _app_models
++
++    def _names(fields) -> list[str]:
++        # IndexedFields entries are a bare name, a (name, type) pair, or an
++        # IndexableField carrying one.
++        out = []
++        for f in fields:
++            if isinstance(f, str):
++                out.append(f)
++            elif isinstance(f, tuple):
++                out.append(f[0])
++            else:
++                out.append(getattr(f, "name", ""))
++        return out
++
++    offenders = {
++        slug: _names(indexed)
++        for slug, (_model, indexed) in _app_models().items()
++        if "external_refs" in _names(indexed)
++    }
++
++    assert not offenders, (
++        f"{sorted(offenders)} index external_refs. That is not wrong in itself — an "
++        "indexed list[str] field answers .contains exactly — but it only makes sense "
++        "together with deleting the no-query guard, so make it one deliberate change."
++    )
++
++
++def test_nothing_in_the_app_queries_external_refs():
++    """The guard that matters: a filter on this field returns ZERO ROWS.
++
++    Because it is in no `INDEXED_FIELDS` there is no `indexed_data` for the
++    predicate to match, so it returns nothing on every backend; specstar warns
++    that such a query "will under-return". Verified against the running API: two
++    items, one holding exactly
++    `legacy-rca:1`, filtered by `contains legacy-rca:1` → `200` with `[]`, while
++    the same query shape over the indexed `severity` returns both rows.
++
++    Zero rows is the worst possible answer here. "Which items already absorbed
++    record X?" answered with nothing reads as "none", so the caller re-imports and
++    creates the duplicate item this design exists to prevent — with a warning
++    nobody reads in production as the only trace.
++
++    A source-text check, deliberately: it costs one mention to trip, and the
++    alternative (waiting for someone to notice an empty result) is exactly the
++    silence being guarded against.
++    """
++    src = Path(__file__).resolve().parents[2] / "src" / "workspace_app"
++
++    mentions = sorted(
++        p.relative_to(src).as_posix()
++        for p in src.rglob("*.py")
++        if "external_refs" in p.read_text(encoding="utf-8")
++    )
++
++    assert mentions == ["apps/base.py"], (
++        f"external_refs is referenced in {mentions}. It may be declared, never filtered "
++        "on: an un-indexed field yields zero rows, which for a dedupe check reads as "
++        "'not absorbed yet' and produces a duplicate item."
++    )
++
++
++def test_every_app_can_be_handed_work_from_outside():
++    """Being handed work by an outside system is a platform capability, not one
++    App's feature — so it is declared on the base and every App has it, without
++    anyone special-casing a slug."""
++    from workspace_app.apps.registry import registered_apps
++
++    apps = registered_apps()
++
++    assert apps, "no Apps discovered — this guard would pass vacuously"
++    assert all("external_refs" in m.__struct_fields__ for m in apps.values())
++
++
++def test_one_analysis_may_be_attached_to_a_second_item():
++    """Decision 4: uniqueness is PER ITEM, not global. Two investigations may
++    legitimately both draw on the same source analysis, so nothing may reject
++    the second attachment."""
++    app, spec = _app_and_spec()
++    client = TestClient(app)
++    shared = "legacy-rca:1"
++
++    first = client.post(
++        "/a/rca/items", json={"title": "Oven drift", "external_refs": [shared]}
++    ).json()["resource_id"]
++    second = client.post(
++        "/a/rca/items", json={"title": "Coater streaks", "external_refs": [shared]}
++    ).json()["resource_id"]
++
++    rm = spec.get_resource_manager(RcaInvestigation)
++    assert rm.get(first).data.external_refs == [shared]
++    assert rm.get(second).data.external_refs == [shared]
+diff --git a/tests/api/test_file_path_normalisation.py b/tests/api/test_file_path_normalisation.py
+new file mode 100644
+index 00000000..0df50cab
+--- /dev/null
++++ b/tests/api/test_file_path_normalisation.py
+@@ -0,0 +1,107 @@
++"""A trailing slash must not change what a file operation means.
++
++Regression guard. The `..` containment check was added by REPLACING the three
++JSON-body routes' own normalisation, and the replacement was not equivalent:
++they had used `strip("/")`, the shared helper used `lstrip("/")`. Trailing
++slashes survived, and `"/folder/"` stopped being the same path as `"/folder"`.
++
++The worst case was silent data loss with no error: moving a file onto an
++existing directory used to be refused (409); afterwards it succeeded, the source
++file was gone, and the workspace held a FILE whose stored path was `/folder/`
++sitting beside the DIRECTORY `/folder`. The file tree splits on "/" and drops
++empty segments, so both render as the same name at the same level.
++
++Reachable from the shipped UI, not just an API client: `FileTree.commitRename`
++collapses runs of slashes but does not strip a trailing one, so renaming to
++`foo/` takes this path.
++
++**No migration was needed.** Rows stored under a trailing-slash key would have
++been left behind by the window this was live, and they would be worse than
++cosmetic: the canonical form now resolves to the sibling file, so a `DELETE` of
++the trailing-slash path destroys the good file and keeps the phantom, and a
++phantom with no sibling is unaddressable by any API call while still counting
++toward the workspace quota. The operator checked the durable store — **zero rows
++end in `/`** — so nothing exists to migrate. That is a point-in-time answer about
++the environment queried, not a property the schema enforces; if a deployment
++turns up that ran the affected build for longer, count again before assuming.
++"""
++
++from __future__ import annotations
++
++from workspace_app.api import ScriptedAgentRunner, create_app
++from workspace_app.filestore.specstar_impl import SpecstarFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import TestClient
++from .conftest import register_rca_item
++
++
++def _client_and_item():
++    spec = make_spec()
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=SpecstarFileStore(spec),
++        runner=ScriptedAgentRunner([]),
++    )
++    return TestClient(app), register_rca_item(spec)
++
++
++def _paths(client: TestClient, iid: str) -> set[str]:
++    return {e["path"] for e in client.get(f"/a/rca/items/{iid}/files").json()}
++
++
++def test_moving_a_file_onto_an_existing_directory_is_still_refused():
++    """The data-loss case. `to` naming a directory must stay a conflict — not
++    become a successful move to a path that merely looks like that directory."""
++    client, iid = _client_and_item()
++    client.put(f"/a/rca/items/{iid}/files/seed.txt", content=b"precious")
++    client.post(f"/a/rca/items/{iid}/files/mkdir", json={"path": "/folder"})
++
++    r = client.post(f"/a/rca/items/{iid}/files/move", json={"from": "/seed.txt", "to": "/folder/"})
++
++    assert r.status_code == 409, r.text
++    assert "/seed.txt" in _paths(client, iid), "the source file must survive a refused move"
++
++
++def test_a_trailing_slash_names_the_same_file():
++    """`/moved.txt/` and `/moved.txt` must not become two different files."""
++    client, iid = _client_and_item()
++    client.put(f"/a/rca/items/{iid}/files/seed.txt", content=b"x")
++
++    r = client.post(
++        f"/a/rca/items/{iid}/files/move", json={"from": "/seed.txt", "to": "/moved.txt/"}
++    )
++
++    assert r.status_code == 204, r.text
++    assert "/moved.txt" in _paths(client, iid)
++
++
++def test_mkdir_treats_a_trailing_slash_as_the_same_directory():
++    """`/notes` and `/notes/` name one directory, so making it twice leaves ONE.
++
++    `mkdir` is idempotent by design (it only 409s on `FileExists`), so the status
++    code is not the tell — the count is. Without the trailing-slash
++    normalisation this produced two entries, `/notes` and `/notes/`, which the
++    file tree renders as two folders with the same name at the same level."""
++    client, iid = _client_and_item()
++
++    first = client.post(f"/a/rca/items/{iid}/files/mkdir", json={"path": "/notes"})
++    second = client.post(f"/a/rca/items/{iid}/files/mkdir", json={"path": "/notes/"})
++
++    assert (first.status_code, second.status_code) == (204, 204), (first.text, second.text)
++    dirs = client.get(f"/a/rca/items/{iid}/tree").json()["dirs"]
++    assert [d for d in dirs if "notes" in d] == ["/notes"], dirs
++
++
++def test_a_directory_can_still_be_moved_by_its_trailing_slash_form():
++    """Callers write `{"from": "/d/"}` to mean the directory; that used to work
++    and must keep working — the guard broke it into a 404."""
++    client, iid = _client_and_item()
++    client.put(f"/a/rca/items/{iid}/files/d/inner.txt", content=b"x")
++
++    r = client.post(f"/a/rca/items/{iid}/files/move", json={"from": "/d/", "to": "/e/"})
++
++    assert r.status_code == 204, r.text
++    assert "/e/inner.txt" in _paths(client, iid)
+diff --git a/tests/api/test_file_path_traversal.py b/tests/api/test_file_path_traversal.py
+new file mode 100644
+index 00000000..770286b0
+--- /dev/null
++++ b/tests/api/test_file_path_traversal.py
+@@ -0,0 +1,189 @@
++"""A workspace path may not climb out of the workspace.
++
++`PUT .../files/{path:path}` normalises nothing: Starlette collapses a literal
++`../`, so the plain form is already refused, but a **percent-encoded** `..%2F`
++arrives intact and is joined straight onto the workspace root. On a warm local /
++isolated sandbox the OS then resolves it, so the write lands beside the
++workspace in the infra area (next to `.ready` and the per-sandbox `.home`) or,
++with enough segments, inside another item's directory on the shared scratch
++volume.
++
++This became worth fixing now rather than later because #700 opens these routes
++to a cross-origin, cookie-authenticated browser caller for the first time, and
++tells that caller to build the path segment out of an external record id whose
++format the platform explicitly declines to validate.
++"""
++
++from __future__ import annotations
++
++import pytest
++
++from workspace_app.api import ScriptedAgentRunner, create_app
++from workspace_app.filestore.specstar_impl import SpecstarFileStore
++from workspace_app.resources import make_spec
++from workspace_app.sandbox.mock import MockSandbox
++
++from ._client import TestClient
++from .conftest import register_rca_item
++
++
++def _client_and_item():
++    spec = make_spec()
++    app = create_app(
++        spec=spec,
++        sandbox=MockSandbox(),
++        filestore=SpecstarFileStore(spec),
++        runner=ScriptedAgentRunner([]),
++    )
++    return TestClient(app), register_rca_item(spec)
++
++
++@pytest.mark.parametrize(
++    "escaping",
++    [
++        "..%2F..%2Fescaped.csv",  # percent-encoded, survives Starlette's normalisation
++        "sub%2F..%2F..%2Fescaped.csv",  # climbs back out after descending
++        "a/b/..%2F..%2F..%2Fescaped.csv",  # mixed literal and encoded
++    ],
++)
++def test_an_upload_cannot_write_outside_the_workspace(escaping: str):
++    client, iid = _client_and_item()
++
++    r = client.put(f"/a/rca/items/{iid}/files/{escaping}", content=b"PWNED")
++
++    assert r.status_code == 400, f"{escaping} → {r.status_code}"
++    listed = {e["path"] for e in client.get(f"/a/rca/items/{iid}/files").json()}
++    assert not any(".." in p for p in listed), listed
++
++
++@pytest.mark.parametrize("method", ["GET", "DELETE"])
++def test_reading_or_deleting_cannot_reach_outside_the_workspace(method: str):
++    """The two call sites the first version of this file left uncovered.
++
++    Writing out is the obvious hole, so it got the tests; reading and deleting
++    are the ones that matter more. `WorkspaceFiles.read`/`delete` normalise via
++    `abs_path`, which does not touch `..`, and hand the path straight to the
++    sandbox — so on a warm local sandbox, whose items are sibling directories on
++    one shared volume, an unguarded GET is another item's file leaving the
++    building and an unguarded DELETE is another item's file gone.
++
++    Measured before this test existed: removing the guard from either route left
++    all 46 tests across the file-route suites green. The route guard is the only
++    defence, so it needs a test that dies with it.
++    """
++    client, iid = _client_and_item()
++    escaping = "..%2F..%2Fother-item%2Froot%2Fsecret.csv"
++
++    r = client.request(method, f"/a/rca/items/{iid}/files/{escaping}")
++
++    assert r.status_code == 400, f"{method} → {r.status_code}: {r.text}"
++
++
++def test_a_trailing_slash_url_resolves_to_the_same_stored_file():
++    """The URL half of the normalisation fix, which had no test of its own.
++
++    Verified by mutation: putting only the `{path:path}` routes back on `lstrip`
++    left every file-route test green, so this half could be reverted silently.
++    Before the fix `PUT /files/a.txt/` stored a distinct `/a.txt/` that
++    `GET /files/a.txt` then 404'd on — the file existed and was unreachable by
++    its own name."""
++    client, iid = _client_and_item()
++
++    put = client.put(f"/a/rca/items/{iid}/files/report.md/", content=b"# hi")
++
++    assert put.status_code == 204, put.text
++    assert {e["path"] for e in client.get(f"/a/rca/items/{iid}/files").json()} == {"/report.md"}
++
++    canonical = client.get(f"/a/rca/items/{iid}/files/report.md")
++    assert canonical.status_code == 200, canonical.text
++    assert canonical.content == b"# hi"
++
++    # Fetch it back through the TRAILING-SLASH form too — that is where the
++    # normalisation has to hold, and asserting only on the canonical form tests
++    # the one spelling that cannot break. The content type has to follow the
++    # normalised path as well: `splitext` sees no extension on a string ending in
++    # `/`, so guessing from the raw path answers octet-stream and the browser
++    # offers a download for a file it should render — with a 200 hiding it.
++    via_slash = client.get(f"/a/rca/items/{iid}/files/report.md/")
++    assert via_slash.status_code == 200, via_slash.text
++    assert via_slash.content == b"# hi"
++    assert via_slash.headers["content-type"].startswith("text/markdown"), via_slash.headers
++
++
++def test_the_json_body_routes_are_guarded_too():
++    """The routes that take a path in a JSON BODY, not the URL.
++
++    These are the worse case: Starlette's URL normalisation never runs on a body,
++    so here even a LITERAL `../` survives — no percent-encoding needed. Guarding
++    only the `{path:path}` routes left `mkdir`, `move` and `copy` writing outside
++    the workspace, while the guard's own docstring claimed "no `..` ever" was a
++    rule you could read off the code.
++    """
++    client, iid = _client_and_item()
++    assert client.put(f"/a/rca/items/{iid}/files/seed.txt", content=b"hello").status_code == 204
++
++    mkdir = client.post(f"/a/rca/items/{iid}/files/mkdir", json={"path": "../escaped"})
++    copy = client.post(
++        f"/a/rca/items/{iid}/files/copy", json={"from": "/seed.txt", "to": "../esc.txt"}
++    )
++    move = client.post(
++        f"/a/rca/items/{iid}/files/move", json={"from": "/seed.txt", "to": "../mv.txt"}
++    )
++    reach_out = client.post(
++        f"/a/rca/items/{iid}/files/copy", json={"from": "../../secret.txt", "to": "/stolen.txt"}
++    )
++
++    assert [mkdir.status_code, copy.status_code, move.status_code] == [400, 400, 400]
++    assert reach_out.status_code == 400, "the SOURCE side must be guarded as well"
++    listed = {e["path"] for e in client.get(f"/a/rca/items/{iid}/files").json()}
++    assert not any(".." in p for p in listed), listed
++    tree = client.get(f"/a/rca/items/{iid}/tree").json()
++    assert not any(".." in d for d in tree.get("dirs", [])), tree
++
++
++@pytest.mark.parametrize("route", ["files", "tree", "files/download/prepare"])
++def test_the_listing_prefix_cannot_enumerate_another_item(route: str):
++    """`prefix` is a client path to the store, and it was reaching the sandbox
++    unchecked.
++
++    It lands in `sandbox.walk`, whose `_resolve` is `cwd / prefix.lstrip("/")` —
++    so on the shared-dir local backend a crafted prefix lists a SIBLING item's
++    files, with sizes. Reading them back is already refused, so this is the
++    enumeration half of the same chain; a docstring claiming the containment rule
++    was complete is what kept it unexamined for three rounds."""
++    client, iid = _client_and_item()
++
++    r = client.request(
++        "POST" if route.endswith("prepare") else "GET",
++        f"/a/rca/items/{iid}/{route}",
++        params={"prefix": "/../../other-item/root"},
++    )
++
++    assert r.status_code == 400, f"{route} → {r.status_code}: {r.text}"
++
++
++@pytest.mark.parametrize("route", ["files", "tree"])
++def test_an_empty_prefix_still_means_the_whole_workspace(route: str):
++    """The guard must not change what a plain listing asks for — `""` is what
++    every consumer sends for "everything", and normalising it to `/` would be a
++    different question."""
++    client, iid = _client_and_item()
++    client.put(f"/a/rca/items/{iid}/files/seed.txt", content=b"x")
++
++    r = client.get(f"/a/rca/items/{iid}/{route}")
++
++    assert r.status_code == 200, r.text
++    body = r.json()
++    paths = {e["path"] for e in (body if route == "files" else body["files"])}
++    assert "/seed.txt" in paths, body
++
++
++def test_a_dot_dot_inside_a_name_is_still_allowed():
++    """Only path SEGMENTS that are `..` escape; a filename that merely contains
++    dots is ordinary and must keep working, or this guard breaks real uploads."""
++    client, iid = _client_and_item()
++
++    r = client.put(f"/a/rca/items/{iid}/files/report..final.csv", content=b"ok")
++
++    assert r.status_code == 204, r.text
++    assert client.get(f"/a/rca/items/{iid}/files/report..final.csv").content == b"ok"
+diff --git a/tests/config/test_server_settings_are_wired.py b/tests/config/test_server_settings_are_wired.py
+new file mode 100644
+index 00000000..c78977cb
+--- /dev/null
++++ b/tests/config/test_server_settings_are_wired.py
+@@ -0,0 +1,36 @@
++"""Every `server.*` knob must actually reach the composition root.
++
++A configuration field that no builder reads is worse than a missing feature: it
++is documented, an operator sets it, nothing happens, and there is no error to
++follow. The dataclass is the single source of truth for what a deploy can tune,
++so adding a field there without consuming it in `__main__` is the defect this
++test names.
++
++Deliberately a source-text check rather than a per-field assertion: the point is
++to cover fields that do not exist yet, so a future knob is caught the day it is
++added instead of the day someone notices it does nothing.
++"""
++
++from __future__ import annotations
++
++import dataclasses
++from pathlib import Path
++
++from workspace_app.config.schema import ServerSettings
++
++_COMPOSITION_ROOT = Path(__file__).resolve().parents[2] / "src" / "workspace_app" / "__main__.py"
++
++
++def test_every_server_setting_is_read_by_the_composition_root():
++    source = _COMPOSITION_ROOT.read_text(encoding="utf-8")
++
++    unread = [
++        f.name
++        for f in dataclasses.fields(ServerSettings)
++        if f"settings.server.{f.name}" not in source
++    ]
++
++    assert not unread, (
++        f"{unread} exist in ServerSettings but nothing in __main__.py reads them — "
++        "an operator can set them and nothing will happen"
++    )
+diff --git a/tests/tooling/test_builder_image.py b/tests/tooling/test_builder_image.py
+index 91f2ea80..adef0b7f 100644
+--- a/tests/tooling/test_builder_image.py
++++ b/tests/tooling/test_builder_image.py
+@@ -17,6 +17,20 @@ from pathlib import Path
+ _REPO = Path(__file__).resolve().parents[2]
+ 
+ 
++def _section(doc: str, title: str) -> str:
++    """The `###` subsection whose heading contains `title`, up to the next one.
++
++    By title, not by number. These assertions are about what the runbook SAYS,
++    and a section number is not part of that — pinning them to `### 15.6` meant
++    that inserting one subsection above made three of them read the disk
++    section instead, and fail for having the right words missing from the wrong
++    text. The heading a reader would look for is the stable handle."""
++    heading = next(line for line in doc.splitlines() if line.startswith("### ") and title in line)
++    start = doc.index(heading)
++    end = doc.find("\n### ", start + 1)
++    return doc[start:] if end == -1 else doc[start:end]
++
++
+ def _bases(dockerfile: Path) -> list[str]:
+     text = dockerfile.read_text("utf-8")
+     return [m.group(1) for m in re.finditer(r"^FROM\s+(\S+)", text, re.MULTILINE)]
+@@ -358,7 +372,7 @@ def test_the_grant_runbook_says_the_name_is_ours_to_choose() -> None:
+     certificate, so the name is one we pick. The runbook has to say that, or
+     someone will still go looking for the author's."""
+     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+-    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
++    section = _section(doc, "工具憑證")
+ 
+     assert "這是**你**取的" in section
+     assert "和作者的 command 叫什麼無關" in section
+@@ -368,7 +382,7 @@ def test_the_grant_runbook_covers_the_two_ways_a_source_is_written_wrong() -> No
+     """Both are refused by the command, but an operator who reads why first
+     does not have to be refused at all."""
+     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+-    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
++    section = _section(doc, "工具憑證")
+ 
+     assert "回滾" in section  # too narrow: pinning breaks
+     assert "只給網域" in section  # too broad
+@@ -380,7 +394,7 @@ def test_the_grant_runbook_is_walkable_alone() -> None:
+     the commands run, that a new key needs a release before it does anything,
+     what to tell the author, and how to confirm it worked."""
+     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+-    section = doc[doc.index("### 15.6") : doc.index("### 15.7")]
++    section = _section(doc, "工具憑證")
+ 
+     assert "uv run python -m workspace_app.tooling.grant keygen" in section
+     assert "發版之後才生效" in section
+@@ -406,7 +420,7 @@ def test_the_deployment_docs_separate_setup_from_per_tool_work() -> None:
+     tool. It is five things done once and two done per tool, and a doc that
+     does not say so turns onboarding a tool into an afternoon."""
+     doc = (_REPO / "docs" / "deployment.md").read_text("utf-8")
+-    section = doc[doc.index("### 15.1") : doc.index("### 15.2")]
++    section = _section(doc, "一次性設定")
+ 
+     assert "不是**每支工具" in section
+     # The three that were previously undocumented or buried elsewhere.
