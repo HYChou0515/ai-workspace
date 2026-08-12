@@ -38,12 +38,19 @@ _SHOWN = 50
 #: — inventing, measured. `cards_from_one_document` is the proliferation the
 #: owner reported: several thin cards about one term instead of one that
 #: accumulated. `statements_per_card` is the same shape from the other side.
+#: How many cards the judge is asked about in one round. A sample: the point is
+#: a trend across rounds, and a trend does not need every card every time.
+_JUDGED = 40
+
 _HEADLINE: tuple[str, ...] = (
     "cards",
     "statements_per_card",
     "cards_from_one_document",
     "grounded_rate",
 )
+#: Only the holdout carries these: one is scored against probes drawn from the
+#: holdout, the other is a card-level verdict that would move with the draw.
+_HOLDOUT_ONLY: tuple[str, ...] = ("lookup_hit_rate", "defines_rate")
 
 
 def load_prompt(rounds_dir: Path, version: int) -> str:
@@ -54,12 +61,21 @@ def load_prompt(rounds_dir: Path, version: int) -> str:
 def fitness(card: dict[str, Any]) -> float:
     """One number for comparing versions: what it FINDS, discounted by inventing.
 
-    MULTIPLIED, not subtracted — the same trap as on the graph side. A prompt
-    that extracts nothing offers nothing, so its grounded rate is a perfect 1.0
-    by vacuity; subtracting an invention penalty would hand it the win. As a
-    factor, a version that answers no probe scores zero however clean it looks.
+    Three factors, MULTIPLIED — the same trap as on the graph side. A prompt that
+    extracts nothing offers nothing, so its grounded rate is a perfect 1.0 by
+    vacuity; subtracting a penalty would hand it the win. As factors, a version
+    that answers no probe scores zero however clean it looks.
+
+    ``defines_rate`` defaults to 1.0 when absent, because absent means the judge
+    could not be read — not that the cards were bad. It is the one input
+    here that is not prompt-controlled, so reading its silence as failure would
+    punish a version for something it did not do.
     """
-    return float(card.get("lookup_hit_rate", 0.0)) * float(card.get("grounded_rate", 0.0))
+    return (
+        float(card.get("lookup_hit_rate", 0.0))
+        * float(card.get("grounded_rate", 0.0))
+        * float(card.get("defines_rate", 1.0))
+    )
 
 
 def pick_parent(rounds: list[Round]) -> Round:
@@ -128,13 +144,82 @@ the failure being fixed:
   failure: a knowledge base answering from general knowledge is not reporting
   what the corpus says, and a reader cannot tell the two apart.
 - Several cards about 蘋果, each describing a different facet, because each
-  document wrote its own. One document said it is a fruit and another said it is
+  document wrote its own.
+- A card reading 「H2O2 是這次的材料」 — true, quotable, and worthless. It records
+  which run used the material rather than what the material IS, and 這次 cannot
+  be resolved by anyone reading the card.
+- A card titled 「14k ratio」 whose body reads "increased from 7% in wave 1 to 20%
+  in wave 2". Nothing is invented and nothing is ambiguous; it simply answers a
+  different question from the one a reader opening it had. What the ratio IS
+  never appears. One document said it is a fruit and another said it is
   red, and both became cards.
 
 What the second one should have produced is ONE card reading 蘋果是紅色的水果 —
 every statement carried, combined into a sentence rather than listed side by
 side. Statements accumulate across documents; the card is written from
 all of them at once."""
+
+DEFINES = """Below are glossary cards. You are shown the cards ONLY — not the
+documents they came from, which is exactly what a reader looking a term up will
+have.
+
+Someone typed the term into a search box because they did not know what it
+meant. For each card, answer one question: after reading it, do they know what
+the term IS?
+
+Answer no in two cases, and they are the ones that actually happen:
+
+- The card describes ONE OCCASION rather than the thing. 「H2O2 是這次的材料」 —
+  這次 points at the document it came from, so outside that document it points at
+  nothing. Same for 本批 / 目前 / 上述 / 如前所示.
+- The card reports a FINDING or a MEASUREMENT instead of a meaning. A card titled
+  「14k ratio」 whose body is "increased from 7% in wave 1 to 20% in wave 2" tells
+  a reader what happened to it and never what it is. The number may well matter —
+  it just does not answer the question this card was opened to answer.
+
+CARDS
+{cards}
+
+Answer as JSON and nothing else:
+{{"verdicts": [{{"title": "...", "defines": true}}, ...]}}"""
+
+
+def defines_score(llm: ILlm, cards: list[dict[str, Any]]) -> dict[str, Any]:
+    """Does each card tell a reader what its term IS?
+
+    Neither of the other numbers can see this. 「H2O2 是這次的材料」 really is in
+    the text, so it is perfectly grounded; "14k ratio increased from 7% to 20%"
+    resolves fine on its own, so it is perfectly standalone. Both leave a reader
+    who typed the term knowing no more than before.
+
+    What catches them is reading the card WITHOUT its source and asking the
+    reader's question — so the judge is handed the bodies alone, never the
+    documents.
+
+    An unusable reply reports NOTHING rather than zero: a parse failure and "none
+    of them stand alone" are the same number and opposite facts.
+    """
+    if not cards:
+        return {}  # an empty glossary must not buy a clean sheet here
+    listed = "\n".join(f"- {c.get('title', '')}: {c.get('body', '')}" for c in cards[:_JUDGED])
+    reply = llm.collect(DEFINES.replace("{cards}", listed))
+    start, end = reply.find("{"), reply.rfind("}")
+    if start == -1 or end < start:
+        return {}
+    try:
+        data = json.loads(reply[start : end + 1])
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    verdicts = data.get("verdicts")
+    rows = [v for v in verdicts if isinstance(v, dict)] if isinstance(verdicts, list) else []
+    if not rows:
+        return {}
+    out = sorted(str(v.get("title", "")) for v in rows if not v.get("defines"))
+    return {
+        "defines_rate": round((len(rows) - len(out)) / len(rows), 3),
+        "does_not_define": out[:_JUDGED],
+    }
+
 
 REVISE = """You are improving the prompt that pulls STATEMENTS about terms out of
 a technical corpus, for a glossary. Your whole output is the REVISED PROMPT — no
@@ -158,6 +243,18 @@ found is DISCARDED before it reaches a card. `grounded_rate` below is how much o
 what the last version offered survived that check — it is the direct measurement
 of inventing, and the only one, because everything that survives is grounded by
 construction.
+
+**Answering a question nobody asked.** Someone types a term in because they do
+not know what it means. Two shapes leave them no wiser, and both are quotable
+and perfectly grounded, so the quote gate cannot catch either:
+
+- the occasion instead of the thing — 「H2O2 是這次的材料」, where 這次 points at
+  the source document and so, outside it, at nothing;
+- a finding instead of a meaning — a 「14k ratio」 card whose body is "increased
+  from 7% in wave 1 to 20% in wave 2". The number may matter; it is not what the
+  term MEANS, and the card was opened to find that out.
+
+`defines_rate` below is the share of cards that answer the reader's question.
 
 **Refusing.** Extracting nothing makes `grounded_rate` a perfect 1.0 by vacuity
 and every other count look tidy. It is the WORST outcome. `lookup_hit_rate` is
@@ -284,13 +381,21 @@ def run_round(
             synthesis_prompt=synthesis_prompt,
             concurrency=concurrency,
         )
-        holdout = scorecard(here / "holdout") | probe_score(here / "holdout", probes)
+        # The card-level verdict rides the holdout, not the rotating batch: it
+        # judges CARDS, so on a document set that changes every round its share
+        # moves with the draw rather than with the prompt.
+        built = json.loads((here / "holdout" / "cards.json").read_text())
+        holdout = (
+            scorecard(here / "holdout")
+            | probe_score(here / "holdout", probes)
+            | defines_score(reviser or llm, built)
+        )
     (here / "scorecard.json").write_text(
         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
     )
 
     past = history(rounds_dir, upto=version)
-    write_index(rounds_dir, past, headline=_HEADLINE, holdout_only=("lookup_hit_rate",))
+    write_index(rounds_dir, past, headline=_HEADLINE, holdout_only=_HOLDOUT_ONLY)
 
     parent = pick_parent(past)
     # Whoever owns the corpus knows its bad cards better than this file does.

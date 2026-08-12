@@ -22,6 +22,26 @@ about, record:
   - `quote`: the passage from the document that states it, copied EXACTLY —
     character for character, in the document's own script and spelling.
 
+Record only claims about WHAT THE TERM IS — claims that would still mean the
+same thing in a document you have not read. A reader looking the term up later
+has this card and nothing else.
+
+「H2O2 是一種氧化劑」 is such a claim. Two kinds are not, and both are true
+sentences you could quote exactly:
+
+- **The occasion instead of the thing.** 「H2O2 是這次的材料」 — 這次 points at this
+  document's own occasion, so outside it the sentence points at nothing. Same for
+  本批 / 目前 / 我們這邊 / 上述.
+- **A finding instead of a meaning.** "14k ratio increased from 7% in wave 1 to
+  20% in wave 2" says what HAPPENED to the thing. A reader who looked the term up
+  wanted to know what it IS; measurements, trends and results are not that,
+  however important they are.
+
+If the only thing a document says about a term is which run used it or what it
+measured, that term gets no statement from this document. Leaving it out is the
+right answer — another document may define it, and the card is written from all
+of them together.
+
 Record only what the document says. If you would have to draw on knowledge from
 outside this document to write a claim, that claim belongs to someone else's
 knowledge base, not this one — leave it out. A term the document merely uses,

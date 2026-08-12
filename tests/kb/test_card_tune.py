@@ -209,3 +209,155 @@ def test_the_corpus_owner_can_replace_the_examples(tmp_path):
     (asked,) = model.revision_prompts
     assert "工單編號" in asked
     assert "薔薇科" not in asked, "the built-in examples were sent as well as theirs"
+
+
+# --- a card must say something about the TERM, not about one occasion ---------
+#
+# 「H2O2 是這次的材料」 is a true, quotable, perfectly grounded sentence and a
+# useless card: "這次" points at the document it came from, so outside that
+# document it points at nothing. The quote gate cannot catch it — the sentence
+# really is in the text. What catches it is reading the card WITHOUT the
+# document and asking whether anything survives.
+
+
+def test_the_judge_sees_the_card_alone_and_not_the_document():
+    """Handing it the source would let it resolve 「這次」 from context — which is
+    exactly the thing a reader looking the term up will not have."""
+    from workspace_app.kb.cards.tune import defines_score
+
+    class _Judge(ILlm):
+        def __init__(self) -> None:
+            self.asked: list[str] = []
+
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            self.asked.append(prompt)
+            yield '{"verdicts": [{"title": "H2O2", "defines": false}]}', False
+
+    judge = _Judge()
+    cards = [{"title": "H2O2", "body": "是這次的材料"}]
+
+    got = defines_score(judge, cards)
+
+    assert got["defines_rate"] == 0.0
+    assert got["does_not_define"] == ["H2O2"]
+    (asked,) = judge.asked
+    assert "是這次的材料" in asked
+    assert "H2O2 是這次的材料。本次實驗" not in asked, "the source document was handed over too"
+
+
+def test_a_judge_that_answers_unusably_reports_nothing_rather_than_zero():
+    """A parse failure and "none of them stand alone" are the same number and
+    opposite facts."""
+    from workspace_app.kb.cards.tune import defines_score
+
+    class _Broken(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield "Hard to say, really.", False
+
+    assert defines_score(_Broken(), [{"title": "H2O2", "body": "x"}]) == {}
+
+
+def test_no_cards_means_no_judgement_rather_than_a_clean_sheet():
+    from workspace_app.kb.cards.tune import defines_score
+
+    class _NeverCalled(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            raise AssertionError("the judge was asked about an empty glossary")
+            yield "", False  # pragma: no cover
+
+    assert defines_score(_NeverCalled(), []) == {}
+
+
+def test_a_glossary_of_useless_but_grounded_cards_does_not_win():
+    """Every card quotable, every probe answered, and every card meaningless out
+    of context. Without standalone in the fitness the loop would call that a
+    perfect run."""
+    from workspace_app.kb.cards.tune import fitness
+
+    episodic = {"lookup_hit_rate": 1.0, "grounded_rate": 1.0, "defines_rate": 0.1}
+    useful = {"lookup_hit_rate": 0.7, "grounded_rate": 0.8, "defines_rate": 0.9}
+
+    assert fitness(useful) > fitness(episodic)
+
+
+def test_the_round_judges_the_cards_it_built(tmp_path):
+    """The wiring, not the function."""
+    tune, holdout = _samples(tmp_path)
+    rounds = tmp_path / "rounds"
+
+    class _Judging(_Model):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            if "do they know what" in prompt:
+                yield '{"verdicts": [{"title": "回焊爐", "defines": true}]}', False
+            else:
+                yield from super().stream(prompt)
+
+    model = _Judging()
+    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
+
+    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
+    assert card["defines_rate"] == 1.0
+    (asked,) = model.revision_prompts
+    assert "defines_rate" in asked
+
+
+def test_the_extraction_prompt_asks_for_claims_that_outlive_the_document():
+    """The prompt is where this is actually fixed; the number only tells the loop
+    whether the fix worked."""
+    from workspace_app.kb.cards.extract import built_in_prompt
+
+    text = built_in_prompt()
+    assert "這次" in text or "this run" in text or "occasion" in text
+
+
+def test_a_card_that_reports_a_finding_does_not_define_its_term():
+    """The second shape, and the one a standalone reading misses: "14k ratio
+    increased from 7% in wave 1 to 20% in wave 2" resolves perfectly well on its
+    own. Nothing is invented and nothing is ambiguous — it just answers a
+    different question from the one a reader opening the card had."""
+    from workspace_app.kb.cards.tune import DEFINES, defines_score
+
+    class _Judge(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield '{"verdicts": [{"title": "14k ratio", "defines": false}]}', False
+
+    got = defines_score(
+        _Judge(),
+        [{"title": "14k ratio", "body": "increased from 7% in wave 1 to 20% in wave 2"}],
+    )
+
+    assert got["defines_rate"] == 0.0
+    assert got["does_not_define"] == ["14k ratio"]
+    assert "FINDING" in DEFINES, "the judge was never told this shape counts"
+
+
+def test_the_extraction_prompt_turns_findings_away_too():
+    """The prompt is where it is actually fixed; the number only says whether the
+    fix worked."""
+    from workspace_app.kb.cards.extract import built_in_prompt
+
+    assert "14k ratio" in built_in_prompt()
+
+
+def test_every_shape_of_unusable_verdict_reports_nothing():
+    """Braces are not agreement. A reply that parses but carries no verdict is
+    the same non-answer as unparseable text, and neither may read as zero — that
+    would tell the reviser to loosen a criterion nothing ever assessed."""
+    from workspace_app.kb.cards.tune import defines_score
+
+    class _Says(ILlm):
+        def __init__(self, reply: str) -> None:
+            self.reply = reply
+
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield self.reply, False
+
+    cards = [{"title": "H2O2", "body": "x"}]
+    for reply in (
+        "no json at all",  # nothing to slice
+        '{"verdicts": [}',  # braces closed, contents unparseable
+        '{"verdicts": "not a list"}',  # parses, wrong shape
+        '{"verdicts": ["a string"]}',  # a list, but of nothing usable
+        "{}",  # an object with no verdicts key
+    ):
+        assert defines_score(_Says(reply), cards) == {}, reply
