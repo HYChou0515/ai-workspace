@@ -1,0 +1,1013 @@
+diff --git a/src/workspace_app/card_preview/__main__.py b/src/workspace_app/card_preview/__main__.py
+index c1f6e308..42440009 100644
+--- a/src/workspace_app/card_preview/__main__.py
++++ b/src/workspace_app/card_preview/__main__.py
+@@ -17,6 +17,7 @@ from ..factories import get_kb_llm
+ from ..kb.cards.build import built_in_synthesis_prompt
+ from ..kb.cards.extract import built_in_prompt
+ from ..kb.cards.preview import preview_samples
++from ..kb.cards.tune import DEFINES
+ 
+ 
+ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+@@ -82,6 +83,46 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+     p.add_argument(
+         "--holdout-every", type=int, default=1, metavar="N", help="run the holdout every Nth round"
+     )
++    p.add_argument(
++        "--review",
++        type=Path,
++        default=None,
++        metavar="DIR",
++        help="draw a random sample of cards into DIR/review.json for a person to mark. "
++        "Pre-filled with the judge's own verdict, so only the ones you DISAGREE with "
++        "need an answer",
++    )
++    p.add_argument(
++        "--calibrate",
++        type=Path,
++        default=None,
++        metavar="DIR",
++        help="run ONE calibration round against DIR/review.json: score the newest judge "
++        "criterion against the person's marks, hand it the cards it got wrong, and file "
++        "the revision as the next version under DIR/judge/",
++    )
++    p.add_argument(
++        "--cards", type=Path, default=None, help="the cards.json a --review sample is drawn from"
++    )
++    p.add_argument(
++        "--judge-from",
++        type=Path,
++        default=None,
++        metavar="DIR",
++        help="use the criterion calibrated in DIR, and skip the cards DIR already reviewed. "
++        "This is how a FRESH batch checks a calibrated judge: the cards it was fitted on "
++        "cannot tell you whether it learnt your standard or just those twenty answers",
++    )
++    p.add_argument(
++        "--seed",
++        type=int,
++        default=0,
++        metavar="N",
++        help="which sample --review draws. Change it for every fresh batch",
++    )
++    p.add_argument(
++        "--sample", type=int, default=20, metavar="N", help="how many cards --review draws"
++    )
+     p.add_argument(
+         "--concurrency",
+         type=int,
+@@ -116,8 +157,11 @@ def main() -> None:
+         )
+         return
+ 
+-    if not (args.samples or args.tune_round):
+-        raise SystemExit("give --samples <folder>, --tune-round <dir>, or --dump-prompts <dir>")
++    if not (args.samples or args.tune_round or args.review or args.calibrate):
++        raise SystemExit(
++            "give --samples <folder>, --tune-round <dir>, --review <dir>, "
++            "--calibrate <dir>, or --dump-prompts <dir>"
++        )
+ 
+     settings = load(config_path=args.config)
+     llm = get_kb_llm(settings)
+@@ -127,6 +171,65 @@ def main() -> None:
+         # that defines nothing.
+         raise SystemExit("no retrieval LLM is configured (kb.retrieval_llm)")
+ 
++    if args.review:
++        import random
++
++        from ..kb.cards.calibrate import best_judge_prompt
++        from ..kb.cards.tune import defines_score
++
++        home = args.judge_from or args.review
++        already = home / "review.json"
++        seen = {r["title"] for r in json.loads(already.read_text())} if already.is_file() else set()
++        source = args.cards or (args.review / "cards.json")
++        cards = [c for c in json.loads(source.read_text()) if c["title"] not in seen]
++        random.Random(args.seed).shuffle(cards)  # not the first N — cards.json is key-sorted
++        sample = [{"title": c["title"], "body": c["body"]} for c in cards[: args.sample]]
++        criterion = best_judge_prompt(home)
++        rejected = set(defines_score(llm, sample, prompt=criterion).get("does_not_define", []))
++        args.review.mkdir(parents=True, exist_ok=True)
++        (args.review / "review.json").write_text(
++            json.dumps(
++                [{**c, "judge": c["title"] not in rejected, "ok": None} for c in sample],
++                ensure_ascii=False,
++                indent=2,
++            )
++            + "\n",
++            encoding="utf-8",
++        )
++        fitted = (
++            "the criterion you calibrated" if criterion != DEFINES else "the built-in criterion"
++        )
++        print(
++            f"{args.review}/review.json — {len(sample)} cards, judged by {fitted}"
++            + (f", skipping the {len(seen)} already reviewed in {home}" if seen else ""),
++            file=sys.stderr,
++        )
++        print(
++            '  Mark ONLY the ones you disagree with: set "ok" to true or false.',
++            file=sys.stderr,
++        )
++        print("  Leave null where the judge got it right.", file=sys.stderr)
++        print(
++            "  If you stop part way, DELETE the rows you never looked at — a row left "
++            "null counts as your agreement, and rows you did not read would inflate the score.",
++            file=sys.stderr,
++        )
++        return
++
++    if args.calibrate:
++        from ..kb.cards.calibrate import calibrate
++
++        version = calibrate(llm, rounds_dir=args.calibrate)
++        for row in json.loads((args.calibrate / "judge" / "index.json").read_text()):
++            wrong = f"   still wrong on: {', '.join(row['disagreed'])}" if row["disagreed"] else ""
++            print(
++                f"  judge v{row['version']}: agreed with you on "
++                f"{row['agreement']}/{row['reviewed']}  ({row['agreement_rate']}){wrong}",
++                file=sys.stderr,
++            )
++        print(f"wrote judge v{version + 1} — run again to score it", file=sys.stderr)
++        return
++
+     if args.tune_round:
+         from ..kb.cards.tune import run_round
+ 
+diff --git a/src/workspace_app/kb/cards/calibrate.py b/src/workspace_app/kb/cards/calibrate.py
+new file mode 100644
+index 00000000..304c0790
+--- /dev/null
++++ b/src/workspace_app/kb/cards/calibrate.py
+@@ -0,0 +1,202 @@
++"""Calibrating the judge against the only ground truth there is: the owner.
++
++``defines_rate`` is the one number in the card scorecard built on a model's
++opinion, so it is the one that can be confidently wrong — and a tuning loop
++steering on a wrong metric is worse than no loop, because it makes progress
++away from what anybody wanted.
++
++What settles it is a person marking a handful of cards. That is the ONLY part a
++person has to do: rewriting the criterion from the disagreements is
++prompt-writing, which is what models are for. So this runs on the owner's
++machine with the owner's model — mark, revise, re-score, repeat — rather than
++sending examples away and waiting for someone to hand back a patch.
++
++The marks are frozen at labelling time. A review row records both the verdict
++the judge gave AND the owner's answer, so every later judge is scored against
++what the owner actually thought rather than against its own predecessor.
++"""
++
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from typing import Any
++
++from ..llm import ILlm
++from ..tuning import load_prompt as _load_prompt
++from ..tuning import next_version, usable
++from .tune import DEFINES, defines_score
++
++REVISE_JUDGE = """You are sharpening the criterion a judge uses to decide
++whether a glossary card tells a reader what its term IS.
++Your whole output is the REVISED CRITERION — no commentary, no code fences.
++
++A person has gone through the cards below and answered that question themselves.
++The judge disagreed with them. The person is right by definition: the criterion
++exists to reproduce their standard, not to be defensible on its own terms.
++
++## The criterion the judge is using now
++
++```
++{current}
++```
++
++## Where it disagreed with the person
++
++{disagreements}
++
++## What it got right
++
++{agreements}
++
++Change what the disagreements show is wrong; leave what is working alone. Do not
++narrow the criterion to these exact cards — a rule that only fires on the words
++above will disagree with the person again on the next batch. State the property
++that makes the difference.
++
++Keep the `{{cards}}` placeholder: it is where the cards are inserted, and a
++criterion without it judges nothing at all.
++
++Output the full revised criterion and nothing else."""
++
++
++def labels(review: list[dict[str, Any]]) -> dict[str, bool]:
++    """The owner's answer per card, frozen at labelling time.
++
++    An unmarked row is not missing data — it is agreement, recorded by omission.
++    Marking only the disagreements is what turns twenty cards into three minutes,
++    and the verdict that stood is kept beside it so a later judge is scored
++    against the PERSON rather than against its own predecessor.
++    """
++    return {
++        str(row["title"]): (bool(row["judge"]) if row.get("ok") is None else bool(row["ok"]))
++        for row in review
++    }
++
++
++def agreement(verdicts: dict[str, bool], truth: dict[str, bool]) -> dict[str, Any]:
++    """How often this judge said what the owner said."""
++    disagreed = sorted(t for t, want in truth.items() if verdicts.get(t, want) != want)
++    return {
++        "reviewed": len(truth),
++        "agreement": len(truth) - len(disagreed),
++        "agreement_rate": round((len(truth) - len(disagreed)) / len(truth), 3) if truth else 0.0,
++        "disagreed": disagreed,
++    }
++
++
++def judge_prompt(rounds_dir: Path, version: int) -> str:
++    """The criterion a judge version ran with — the built-in one when none is filed."""
++    return _load_prompt(rounds_dir / "judge", version, default=DEFINES)
++
++
++def best_judge_prompt(rounds_dir: Path) -> str:
++    """The calibrated criterion that agreed with the person most.
++
++    The BEST, not the newest: calibration is a single line with no beam, so a
++    revision that agreed less than its parent is still the most recent thing on
++    disk. Only SCORED versions are eligible — every round leaves a revision
++    nothing has graded, and using that would score the corpus with a criterion no
++    person ever agreed to.
++
++    The built-in criterion when nothing has been calibrated, so a corpus whose
++    owner has not done that yet still gets a number — just an unvalidated one.
++    """
++    best: tuple[float, str] | None = None
++    for folder in sorted(
++        (p for p in (rounds_dir / "judge").glob("v*") if p.name[1:].isdigit()),
++        key=lambda p: int(p.name[1:]),
++    ):
++        card, prompt = folder / "scorecard.json", folder / "prompt.txt"
++        if not (card.is_file() and prompt.is_file()):
++            continue
++        rate = float(json.loads(card.read_text()).get("agreement_rate", 0.0))
++        if best is None or rate >= best[0]:
++            best = (rate, prompt.read_text())
++    return best[1] if best else DEFINES
++
++
++def calibrate(llm: ILlm, *, rounds_dir: Path) -> int:
++    """One calibration round: score the newest criterion, revise it, file the next.
++
++    Returns the version just scored. Trigger it repeatedly and the criteria
++    accumulate under ``judge/v0, v1, …`` exactly like the extraction prompts, so
++    a criterion that got worse can be walked back to.
++    """
++    review = json.loads((rounds_dir / "review.json").read_text())
++    truth = labels(review)
++    if not truth:
++        # An empty review agrees with everything. Reporting that as a calibrated
++        # judge is how a loop ends up steering on a number nobody checked.
++        raise SystemExit(
++            f"{rounds_dir / 'review.json'} has no reviewed cards — mark some before calibrating"
++        )
++
++    home = rounds_dir / "judge"
++    version = next_version(home)
++    current = judge_prompt(rounds_dir, version)
++    here = home / f"v{version}"
++    here.mkdir(parents=True, exist_ok=True)
++    (here / "prompt.txt").write_text(current)
++
++    cards = [{"title": r["title"], "body": r.get("body", "")} for r in review]
++    scored = defines_score(llm, cards, prompt=current)
++    rejected = set(scored.get("does_not_define", []))
++    verdicts = {str(r["title"]): str(r["title"]) not in rejected for r in review}
++    result = agreement(verdicts, truth)
++    (here / "scorecard.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
++    _write_index(home)
++
++    body = {str(r["title"]): r.get("body", "") for r in review}
++    revised = llm.collect(
++        REVISE_JUDGE.format(
++            current=current,
++            disagreements=_show(result["disagreed"], body, truth, verdicts)
++            or "(none — it agreed everywhere)",
++            agreements=_show(
++                [t for t in truth if t not in result["disagreed"]], body, truth, verdicts
++            )
++            or "(none)",
++        )
++    )
++    nxt = home / f"v{version + 1}"
++    nxt.mkdir(parents=True, exist_ok=True)
++    (nxt / "prompt.txt").write_text(usable(revised, fallback=current, required=("{cards}",)))
++    (nxt / "parent.txt").write_text(str(version))
++    return version
++
++
++def _show(
++    titles: list[str], body: dict[str, str], truth: dict[str, bool], verdicts: dict[str, bool]
++) -> str:
++    """The cards themselves, with both answers. A criterion cannot be repaired
++    from a score — only from the card it misjudged, beside what it should have
++    said."""
++    lines = []
++    for title in titles:
++        said = "DOES" if verdicts.get(title) else "does NOT"
++        want = "DOES" if truth[title] else "does NOT"
++        lines.append(
++            f"- {title}: {body.get(title, '')}\n"
++            f"    the judge said it {said} define the term; the person said it {want}"
++        )
++    return "\n".join(lines)
++
++
++def _write_index(home: Path) -> None:
++    """One row per scored criterion, so the whole calibration reads at a glance —
++    including a version that agreed LESS than the one before it, which is the
++    shape that has to be walkable back.
++
++    Every version on disk, not just those up to the one just scored: deleting a
++    scorecard by hand means "run this one again", and re-running v0 must not
++    erase v1 and v2 from the record.
++    """
++    rows = []
++    for folder in sorted(
++        (p for p in home.glob("v*") if p.name[1:].isdigit()), key=lambda p: int(p.name[1:])
++    ):
++        card = folder / "scorecard.json"
++        if card.is_file():
++            rows.append({"version": int(folder.name[1:]), **json.loads(card.read_text())})
++    (home / "index.json").write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n")
+diff --git a/src/workspace_app/kb/cards/prompts/card_extraction.md b/src/workspace_app/kb/cards/prompts/card_extraction.md
+index f3af027b..88625597 100644
+--- a/src/workspace_app/kb/cards/prompts/card_extraction.md
++++ b/src/workspace_app/kb/cards/prompts/card_extraction.md
+@@ -22,6 +22,26 @@ about, record:
+   - `quote`: the passage from the document that states it, copied EXACTLY —
+     character for character, in the document's own script and spelling.
+ 
++Record only claims about WHAT THE TERM IS — claims that would still mean the
++same thing in a document you have not read. A reader looking the term up later
++has this card and nothing else.
++
++「H2O2 是一種氧化劑」 is such a claim. Two kinds are not, and both are true
++sentences you could quote exactly:
++
++- **The occasion instead of the thing.** 「H2O2 是這次的材料」 — 這次 points at this
++  document's own occasion, so outside it the sentence points at nothing. Same for
++  本批 / 目前 / 我們這邊 / 上述.
++- **A finding instead of a meaning.** "14k ratio increased from 7% in wave 1 to
++  20% in wave 2" says what HAPPENED to the thing. A reader who looked the term up
++  wanted to know what it IS; measurements, trends and results are not that,
++  however important they are.
++
++If the only thing a document says about a term is which run used it or what it
++measured, that term gets no statement from this document. Leaving it out is the
++right answer — another document may define it, and the card is written from all
++of them together.
++
+ Record only what the document says. If you would have to draw on knowledge from
+ outside this document to write a claim, that claim belongs to someone else's
+ knowledge base, not this one — leave it out. A term the document merely uses,
+diff --git a/src/workspace_app/kb/cards/tune.py b/src/workspace_app/kb/cards/tune.py
+index fa99d4de..d2360999 100644
+--- a/src/workspace_app/kb/cards/tune.py
++++ b/src/workspace_app/kb/cards/tune.py
+@@ -38,12 +38,19 @@ _SHOWN = 50
+ #: — inventing, measured. `cards_from_one_document` is the proliferation the
+ #: owner reported: several thin cards about one term instead of one that
+ #: accumulated. `statements_per_card` is the same shape from the other side.
++#: How many cards the judge is asked about in one round. A sample: the point is
++#: a trend across rounds, and a trend does not need every card every time.
++_JUDGED = 40
++
+ _HEADLINE: tuple[str, ...] = (
+     "cards",
+     "statements_per_card",
+     "cards_from_one_document",
+     "grounded_rate",
+ )
++#: Only the holdout carries these: one is scored against probes drawn from the
++#: holdout, the other is a card-level verdict that would move with the draw.
++_HOLDOUT_ONLY: tuple[str, ...] = ("lookup_hit_rate", "defines_rate")
+ 
+ 
+ def load_prompt(rounds_dir: Path, version: int) -> str:
+@@ -54,12 +61,21 @@ def load_prompt(rounds_dir: Path, version: int) -> str:
+ def fitness(card: dict[str, Any]) -> float:
+     """One number for comparing versions: what it FINDS, discounted by inventing.
+ 
+-    MULTIPLIED, not subtracted — the same trap as on the graph side. A prompt
+-    that extracts nothing offers nothing, so its grounded rate is a perfect 1.0
+-    by vacuity; subtracting an invention penalty would hand it the win. As a
+-    factor, a version that answers no probe scores zero however clean it looks.
++    Three factors, MULTIPLIED — the same trap as on the graph side. A prompt that
++    extracts nothing offers nothing, so its grounded rate is a perfect 1.0 by
++    vacuity; subtracting a penalty would hand it the win. As factors, a version
++    that answers no probe scores zero however clean it looks.
++
++    ``defines_rate`` defaults to 1.0 when absent, because absent means the judge
++    could not be read — not that the cards were bad. It is the one input
++    here that is not prompt-controlled, so reading its silence as failure would
++    punish a version for something it did not do.
+     """
+-    return float(card.get("lookup_hit_rate", 0.0)) * float(card.get("grounded_rate", 0.0))
++    return (
++        float(card.get("lookup_hit_rate", 0.0))
++        * float(card.get("grounded_rate", 0.0))
++        * float(card.get("defines_rate", 1.0))
++    )
+ 
+ 
+ def pick_parent(rounds: list[Round]) -> Round:
+@@ -128,7 +144,14 @@ the failure being fixed:
+   failure: a knowledge base answering from general knowledge is not reporting
+   what the corpus says, and a reader cannot tell the two apart.
+ - Several cards about 蘋果, each describing a different facet, because each
+-  document wrote its own. One document said it is a fruit and another said it is
++  document wrote its own.
++- A card reading 「H2O2 是這次的材料」 — true, quotable, and worthless. It records
++  which run used the material rather than what the material IS, and 這次 cannot
++  be resolved by anyone reading the card.
++- A card titled 「14k ratio」 whose body reads "increased from 7% in wave 1 to 20%
++  in wave 2". Nothing is invented and nothing is ambiguous; it simply answers a
++  different question from the one a reader opening it had. What the ratio IS
++  never appears. One document said it is a fruit and another said it is
+   red, and both became cards.
+ 
+ What the second one should have produced is ONE card reading 蘋果是紅色的水果 —
+@@ -136,6 +159,70 @@ every statement carried, combined into a sentence rather than listed side by
+ side. Statements accumulate across documents; the card is written from
+ all of them at once."""
+ 
++DEFINES = """Below are glossary cards. You are shown the cards ONLY — not the
++documents they came from, which is exactly what a reader looking a term up will
++have.
++
++Someone typed the term into a search box because they did not know what it
++meant. For each card, answer one question: after reading it, do they know what
++the term IS?
++
++Answer no in two cases, and they are the ones that actually happen:
++
++- The card describes ONE OCCASION rather than the thing. 「H2O2 是這次的材料」 —
++  這次 points at the document it came from, so outside that document it points at
++  nothing. Same for 本批 / 目前 / 上述 / 如前所示.
++- The card reports a FINDING or a MEASUREMENT instead of a meaning. A card titled
++  「14k ratio」 whose body is "increased from 7% in wave 1 to 20% in wave 2" tells
++  a reader what happened to it and never what it is. The number may well matter —
++  it just does not answer the question this card was opened to answer.
++
++CARDS
++{cards}
++
++Answer as JSON and nothing else:
++{{"verdicts": [{{"title": "...", "defines": true}}, ...]}}"""
++
++
++def defines_score(
++    llm: ILlm, cards: list[dict[str, Any]], *, prompt: str | None = None
++) -> dict[str, Any]:
++    """Does each card tell a reader what its term IS?
++
++    Neither of the other numbers can see this. 「H2O2 是這次的材料」 really is in
++    the text, so it is perfectly grounded; "14k ratio increased from 7% to 20%"
++    resolves fine on its own, so it is perfectly standalone. Both leave a reader
++    who typed the term knowing no more than before.
++
++    What catches them is reading the card WITHOUT its source and asking the
++    reader's question — so the judge is handed the bodies alone, never the
++    documents.
++
++    An unusable reply reports NOTHING rather than zero: a parse failure and "none
++    of them stand alone" are the same number and opposite facts.
++    """
++    if not cards:
++        return {}  # an empty glossary must not buy a clean sheet here
++    listed = "\n".join(f"- {c.get('title', '')}: {c.get('body', '')}" for c in cards[:_JUDGED])
++    reply = llm.collect((prompt or DEFINES).replace("{cards}", listed))
++    start, end = reply.find("{"), reply.rfind("}")
++    if start == -1 or end < start:
++        return {}
++    try:
++        data = json.loads(reply[start : end + 1])
++    except (json.JSONDecodeError, ValueError):
++        return {}
++    verdicts = data.get("verdicts")
++    rows = [v for v in verdicts if isinstance(v, dict)] if isinstance(verdicts, list) else []
++    if not rows:
++        return {}
++    out = sorted(str(v.get("title", "")) for v in rows if not v.get("defines"))
++    return {
++        "defines_rate": round((len(rows) - len(out)) / len(rows), 3),
++        "does_not_define": out[:_JUDGED],
++    }
++
++
+ REVISE = """You are improving the prompt that pulls STATEMENTS about terms out of
+ a technical corpus, for a glossary. Your whole output is the REVISED PROMPT — no
+ commentary, no explanation, no code fences.
+@@ -159,6 +246,18 @@ what the last version offered survived that check — it is the direct measureme
+ of inventing, and the only one, because everything that survives is grounded by
+ construction.
+ 
++**Answering a question nobody asked.** Someone types a term in because they do
++not know what it means. Two shapes leave them no wiser, and both are quotable
++and perfectly grounded, so the quote gate cannot catch either:
++
++- the occasion instead of the thing — 「H2O2 是這次的材料」, where 這次 points at
++  the source document and so, outside it, at nothing;
++- a finding instead of a meaning — a 「14k ratio」 card whose body is "increased
++  from 7% in wave 1 to 20% in wave 2". The number may matter; it is not what the
++  term MEANS, and the card was opened to find that out.
++
++`defines_rate` below is the share of cards that answer the reader's question.
++
+ **Refusing.** Extracting nothing makes `grounded_rate` a perfect 1.0 by vacuity
+ and every other count look tidy. It is the WORST outcome. `lookup_hit_rate` is
+ the guard: the share of terms a reader would actually look up that ended up with
+@@ -284,13 +383,27 @@ def run_round(
+             synthesis_prompt=synthesis_prompt,
+             concurrency=concurrency,
+         )
+-        holdout = scorecard(here / "holdout") | probe_score(here / "holdout", probes)
++        # The card-level verdict rides the holdout, not the rotating batch: it
++        # judges CARDS, so on a document set that changes every round its share
++        # moves with the draw rather than with the prompt.
++        built = json.loads((here / "holdout" / "cards.json").read_text())
++        # The criterion the OWNER calibrated, not the one shipped with the code.
++        # Scoring with an uncalibrated judge is how a loop spends a weekend
++        # chasing a standard nobody agreed to.
++        from .calibrate import best_judge_prompt
++
++        criterion = best_judge_prompt(rounds_dir)
++        holdout = (
++            scorecard(here / "holdout")
++            | probe_score(here / "holdout", probes)
++            | defines_score(reviser or llm, built, prompt=criterion)
++        )
+     (here / "scorecard.json").write_text(
+         json.dumps({"tune": tune, "holdout": holdout}, ensure_ascii=False, indent=2) + "\n"
+     )
+ 
+     past = history(rounds_dir, upto=version)
+-    write_index(rounds_dir, past, headline=_HEADLINE, holdout_only=("lookup_hit_rate",))
++    write_index(rounds_dir, past, headline=_HEADLINE, holdout_only=_HOLDOUT_ONLY)
+ 
+     parent = pick_parent(past)
+     # Whoever owns the corpus knows its bad cards better than this file does.
+diff --git a/tests/kb/test_card_calibrate.py b/tests/kb/test_card_calibrate.py
+new file mode 100644
+index 00000000..d2ed9bed
+--- /dev/null
++++ b/tests/kb/test_card_calibrate.py
+@@ -0,0 +1,252 @@
++"""Calibrating the judge against the only ground truth there is: the owner.
++
++`defines_rate` is the one metric here built on a model's opinion, so it is the
++one that can be confidently wrong. What settles it is a person marking a handful
++of cards — and that is the ONLY part a person has to do. Rewriting the judge's
++criterion from the disagreements is prompt-writing, which is what models are
++for, so it happens on the owner's machine with their own model rather than by
++sending examples somewhere and waiting for a patch.
++
++The marks are frozen at labelling time. A review file records both the verdict
++the judge gave and the owner's answer, so a later judge can be scored against
++what the owner actually thought rather than against its own predecessor.
++"""
++
++from __future__ import annotations
++
++import json
++from collections.abc import Iterator
++
++from workspace_app.kb.cards.calibrate import agreement, calibrate, labels
++from workspace_app.kb.llm import ILlm
++
++
++def _review(*rows: tuple[str, bool, bool | None]) -> list[dict]:
++    return [{"title": t, "body": f"{t} 的說明", "judge": j, "ok": ok} for t, j, ok in rows]
++
++
++def test_a_mark_the_owner_did_not_make_means_the_verdict_stood():
++    """Marking only the disagreements is the whole point — 20 cards becomes three.
++    An unmarked row is not missing data; it is agreement, recorded by omission."""
++    assert labels(_review(("A", True, None), ("B", False, True))) == {"A": True, "B": True}
++
++
++def test_agreement_counts_where_the_judge_matches_the_owner():
++    truth = {"A": True, "B": False, "C": True}
++    got = agreement({"A": True, "B": True, "C": True}, truth)
++
++    assert got["agreement"] == 2
++    assert got["reviewed"] == 3
++    assert got["disagreed"] == ["B"]
++
++
++def test_a_calibration_round_files_the_judge_prompt_it_ran_and_the_one_it_got_back(tmp_path):
++    rounds = tmp_path / "rounds-cards"
++    rounds.mkdir()
++    (rounds / "review.json").write_text(
++        json.dumps(_review(("A", True, None), ("B", True, False)), ensure_ascii=False)
++    )
++
++    class _Model(ILlm):
++        def __init__(self) -> None:
++            self.asked: list[str] = []
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "REVISED CRITERION" in prompt:
++                self.asked.append(prompt)
++                yield "A SHARPER CRITERION\n{cards}", False
++            else:
++                yield (
++                    '{"verdicts": [{"title": "A", "defines": true},'
++                    ' {"title": "B", "defines": true}]}',
++                    False,
++                )
++
++    model = _Model()
++    version = calibrate(model, rounds_dir=rounds)
++
++    assert version == 0
++    card = json.loads((rounds / "judge" / "v0" / "scorecard.json").read_text())
++    assert card["agreement"] == 1 and card["reviewed"] == 2
++    assert card["disagreed"] == ["B"]
++    assert (rounds / "judge" / "v1" / "prompt.txt").read_text() == "A SHARPER CRITERION\n{cards}"
++
++
++def test_the_reviser_is_shown_the_cards_it_got_wrong_and_what_the_owner_said(tmp_path):
++    """A criterion cannot be repaired from a score. What repairs it is the card
++    it misjudged, beside the answer it should have given."""
++    rounds = tmp_path / "rounds-cards"
++    rounds.mkdir()
++    (rounds / "review.json").write_text(
++        json.dumps(_review(("14k ratio", True, False)), ensure_ascii=False)
++    )
++
++    class _Model(ILlm):
++        def __init__(self) -> None:
++            self.asked: list[str] = []
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "REVISED CRITERION" in prompt:
++                self.asked.append(prompt)
++                yield "SHARPER\n{cards}", False
++            else:
++                yield '{"verdicts": [{"title": "14k ratio", "defines": true}]}', False
++
++    model = _Model()
++    calibrate(model, rounds_dir=rounds)
++
++    (asked,) = model.asked
++    assert "14k ratio" in asked
++    assert "14k ratio 的說明" in asked, "the card body never reached the reviser"
++    assert "the judge said it DOES" in asked or "judge said" in asked
++
++
++def test_a_revision_that_lost_the_cards_placeholder_is_refused(tmp_path):
++    """Without `{cards}` the judge would be handed nothing to judge, and would
++    answer about nothing without raising."""
++    rounds = tmp_path / "rounds-cards"
++    rounds.mkdir()
++    (rounds / "review.json").write_text(json.dumps(_review(("A", True, False)), ensure_ascii=False))
++
++    class _Model(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "REVISED CRITERION" in prompt:
++                yield "Judge them well.", False
++            else:
++                yield '{"verdicts": [{"title": "A", "defines": true}]}', False
++
++    calibrate(_Model(), rounds_dir=rounds)
++
++    kept = (rounds / "judge" / "v1" / "prompt.txt").read_text()
++    assert "{cards}" in kept
++
++
++def test_the_next_round_scores_the_prompt_the_last_one_wrote(tmp_path):
++    """Two triggers, two versions, and the second one graded — otherwise a
++    revision is written and never tested."""
++    rounds = tmp_path / "rounds-cards"
++    rounds.mkdir()
++    (rounds / "review.json").write_text(json.dumps(_review(("A", True, None)), ensure_ascii=False))
++
++    class _Model(ILlm):
++        def __init__(self) -> None:
++            self.judged_with: list[str] = []
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "REVISED CRITERION" in prompt:
++                yield "SECOND TRY\n{cards}", False
++            else:
++                self.judged_with.append(prompt)
++                yield '{"verdicts": [{"title": "A", "defines": true}]}', False
++
++    model = _Model()
++    assert calibrate(model, rounds_dir=rounds) == 0
++    assert calibrate(model, rounds_dir=rounds) == 1
++    assert model.judged_with[-1].startswith("SECOND TRY")
++
++
++def test_the_index_puts_every_judge_version_side_by_side(tmp_path):
++    rounds = tmp_path / "rounds-cards"
++    rounds.mkdir()
++    (rounds / "review.json").write_text(json.dumps(_review(("A", True, None)), ensure_ascii=False))
++
++    class _Model(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "REVISED CRITERION" in prompt:
++                yield "NEXT\n{cards}", False
++            else:
++                yield '{"verdicts": [{"title": "A", "defines": true}]}', False
++
++    calibrate(_Model(), rounds_dir=rounds)
++    calibrate(_Model(), rounds_dir=rounds)
++
++    index = json.loads((rounds / "judge" / "index.json").read_text())
++    assert [row["version"] for row in index] == [0, 1]
++    assert all("agreement" in row for row in index)
++
++
++def test_nothing_marked_is_refused_rather_than_scored_as_perfect(tmp_path):
++    """An empty review agrees with everything. Reporting that as a calibrated
++    judge is how a loop ends up steering on a number nobody checked."""
++    import pytest
++
++    rounds = tmp_path / "rounds-cards"
++    rounds.mkdir()
++    (rounds / "review.json").write_text("[]")
++
++    class _Model(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            yield "{}", False  # pragma: no cover
++
++    with pytest.raises(SystemExit, match="review"):
++        calibrate(_Model(), rounds_dir=rounds)
++
++
++def test_a_version_whose_score_was_deleted_is_skipped_not_fatal(tmp_path):
++    """Throwing away a bad round is a reasonable thing to do by hand. Deleting a
++    scorecard is how you say "run this version again" — and doing so must not
++    take the record of the later versions with it."""
++    import json as _json
++
++    rounds = tmp_path / "rounds-cards"
++    rounds.mkdir()
++    (rounds / "review.json").write_text(_json.dumps(_review(("A", True, None)), ensure_ascii=False))
++
++    class _Model(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "REVISED CRITERION" in prompt:
++                yield "NEXT\n{cards}", False
++            else:
++                yield '{"verdicts": [{"title": "A", "defines": true}]}', False
++
++    calibrate(_Model(), rounds_dir=rounds)
++    calibrate(_Model(), rounds_dir=rounds)
++    (rounds / "judge" / "v0" / "scorecard.json").unlink()  # thrown away by hand
++    calibrate(_Model(), rounds_dir=rounds)
++
++    # Deleting a score means "run this one again" — and re-running v0 must not
++    # erase the versions that came after it from the record.
++    index = _json.loads((rounds / "judge" / "index.json").read_text())
++    assert [row["version"] for row in index] == [0, 1]
++
++
++def _filed(home, version, prompt, rate):
++    (home / f"v{version}").mkdir(parents=True)
++    (home / f"v{version}" / "prompt.txt").write_text(prompt)
++    (home / f"v{version}" / "scorecard.json").write_text(
++        json.dumps({"reviewed": 20, "agreement": int(rate * 20), "agreement_rate": rate})
++    )
++
++
++def test_the_criterion_that_agreed_most_is_the_one_that_gets_used(tmp_path):
++    """The BEST, not the newest. Calibration is a single line with no beam, so a
++    revision that agreed LESS than its parent is still the most recent thing on
++    disk — and using it would quietly undo the calibration."""
++    from workspace_app.kb.cards.calibrate import best_judge_prompt
++
++    home = tmp_path / "rounds-cards" / "judge"
++    _filed(home, 0, "FIRST {cards}", 0.6)
++    _filed(home, 1, "BEST {cards}", 0.9)
++    _filed(home, 2, "WORSE {cards}", 0.7)
++
++    assert best_judge_prompt(tmp_path / "rounds-cards") == "BEST {cards}"
++
++
++def test_with_nothing_calibrated_the_built_in_criterion_stands(tmp_path):
++    from workspace_app.kb.cards.calibrate import best_judge_prompt
++    from workspace_app.kb.cards.tune import DEFINES
++
++    assert best_judge_prompt(tmp_path / "never-calibrated") == DEFINES
++
++
++def test_an_unscored_revision_is_not_eligible(tmp_path):
++    """Every round leaves a revision nothing has graded yet. Picking it would
++    score the corpus with a criterion no person ever agreed to."""
++    from workspace_app.kb.cards.calibrate import best_judge_prompt
++
++    home = tmp_path / "rounds-cards" / "judge"
++    _filed(home, 0, "GRADED {cards}", 0.8)
++    (home / "v1").mkdir()
++    (home / "v1" / "prompt.txt").write_text("UNGRADED {cards}")
++
++    assert best_judge_prompt(tmp_path / "rounds-cards") == "GRADED {cards}"
+diff --git a/tests/kb/test_card_tune.py b/tests/kb/test_card_tune.py
+index 15d18b8b..459dcf94 100644
+--- a/tests/kb/test_card_tune.py
++++ b/tests/kb/test_card_tune.py
+@@ -209,3 +209,185 @@ def test_the_corpus_owner_can_replace_the_examples(tmp_path):
+     (asked,) = model.revision_prompts
+     assert "工單編號" in asked
+     assert "薔薇科" not in asked, "the built-in examples were sent as well as theirs"
++
++
++# --- a card must say something about the TERM, not about one occasion ---------
++#
++# 「H2O2 是這次的材料」 is a true, quotable, perfectly grounded sentence and a
++# useless card: "這次" points at the document it came from, so outside that
++# document it points at nothing. The quote gate cannot catch it — the sentence
++# really is in the text. What catches it is reading the card WITHOUT the
++# document and asking whether anything survives.
++
++
++def test_the_judge_sees_the_card_alone_and_not_the_document():
++    """Handing it the source would let it resolve 「這次」 from context — which is
++    exactly the thing a reader looking the term up will not have."""
++    from workspace_app.kb.cards.tune import defines_score
++
++    class _Judge(ILlm):
++        def __init__(self) -> None:
++            self.asked: list[str] = []
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            self.asked.append(prompt)
++            yield '{"verdicts": [{"title": "H2O2", "defines": false}]}', False
++
++    judge = _Judge()
++    cards = [{"title": "H2O2", "body": "是這次的材料"}]
++
++    got = defines_score(judge, cards)
++
++    assert got["defines_rate"] == 0.0
++    assert got["does_not_define"] == ["H2O2"]
++    (asked,) = judge.asked
++    assert "是這次的材料" in asked
++    assert "H2O2 是這次的材料。本次實驗" not in asked, "the source document was handed over too"
++
++
++def test_a_judge_that_answers_unusably_reports_nothing_rather_than_zero():
++    """A parse failure and "none of them stand alone" are the same number and
++    opposite facts."""
++    from workspace_app.kb.cards.tune import defines_score
++
++    class _Broken(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            yield "Hard to say, really.", False
++
++    assert defines_score(_Broken(), [{"title": "H2O2", "body": "x"}]) == {}
++
++
++def test_no_cards_means_no_judgement_rather_than_a_clean_sheet():
++    from workspace_app.kb.cards.tune import defines_score
++
++    class _NeverCalled(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            raise AssertionError("the judge was asked about an empty glossary")
++            yield "", False  # pragma: no cover
++
++    assert defines_score(_NeverCalled(), []) == {}
++
++
++def test_a_glossary_of_useless_but_grounded_cards_does_not_win():
++    """Every card quotable, every probe answered, and every card meaningless out
++    of context. Without standalone in the fitness the loop would call that a
++    perfect run."""
++    from workspace_app.kb.cards.tune import fitness
++
++    episodic = {"lookup_hit_rate": 1.0, "grounded_rate": 1.0, "defines_rate": 0.1}
++    useful = {"lookup_hit_rate": 0.7, "grounded_rate": 0.8, "defines_rate": 0.9}
++
++    assert fitness(useful) > fitness(episodic)
++
++
++def test_the_round_judges_the_cards_it_built(tmp_path):
++    """The wiring, not the function."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++
++    class _Judging(_Model):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "do they know what" in prompt:
++                yield '{"verdicts": [{"title": "回焊爐", "defines": true}]}', False
++            else:
++                yield from super().stream(prompt)
++
++    model = _Judging()
++    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    card = json.loads((rounds / "v0" / "scorecard.json").read_text())["holdout"]
++    assert card["defines_rate"] == 1.0
++    (asked,) = model.revision_prompts
++    assert "defines_rate" in asked
++
++
++def test_the_extraction_prompt_asks_for_claims_that_outlive_the_document():
++    """The prompt is where this is actually fixed; the number only tells the loop
++    whether the fix worked."""
++    from workspace_app.kb.cards.extract import built_in_prompt
++
++    text = built_in_prompt()
++    assert "這次" in text or "this run" in text or "occasion" in text
++
++
++def test_a_card_that_reports_a_finding_does_not_define_its_term():
++    """The second shape, and the one a standalone reading misses: "14k ratio
++    increased from 7% in wave 1 to 20% in wave 2" resolves perfectly well on its
++    own. Nothing is invented and nothing is ambiguous — it just answers a
++    different question from the one a reader opening the card had."""
++    from workspace_app.kb.cards.tune import DEFINES, defines_score
++
++    class _Judge(ILlm):
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            yield '{"verdicts": [{"title": "14k ratio", "defines": false}]}', False
++
++    got = defines_score(
++        _Judge(),
++        [{"title": "14k ratio", "body": "increased from 7% in wave 1 to 20% in wave 2"}],
++    )
++
++    assert got["defines_rate"] == 0.0
++    assert got["does_not_define"] == ["14k ratio"]
++    assert "FINDING" in DEFINES, "the judge was never told this shape counts"
++
++
++def test_the_extraction_prompt_turns_findings_away_too():
++    """The prompt is where it is actually fixed; the number only says whether the
++    fix worked."""
++    from workspace_app.kb.cards.extract import built_in_prompt
++
++    assert "14k ratio" in built_in_prompt()
++
++
++def test_every_shape_of_unusable_verdict_reports_nothing():
++    """Braces are not agreement. A reply that parses but carries no verdict is
++    the same non-answer as unparseable text, and neither may read as zero — that
++    would tell the reviser to loosen a criterion nothing ever assessed."""
++    from workspace_app.kb.cards.tune import defines_score
++
++    class _Says(ILlm):
++        def __init__(self, reply: str) -> None:
++            self.reply = reply
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            yield self.reply, False
++
++    cards = [{"title": "H2O2", "body": "x"}]
++    for reply in (
++        "no json at all",  # nothing to slice
++        '{"verdicts": [}',  # braces closed, contents unparseable
++        '{"verdicts": "not a list"}',  # parses, wrong shape
++        '{"verdicts": ["a string"]}',  # a list, but of nothing usable
++        "{}",  # an object with no verdicts key
++    ):
++        assert defines_score(_Says(reply), cards) == {}, reply
++
++
++def test_the_round_scores_cards_with_the_criterion_the_owner_calibrated(tmp_path):
++    """Calibrating a judge nothing consults is a way to spend an afternoon."""
++    tune, holdout = _samples(tmp_path)
++    rounds = tmp_path / "rounds"
++    judge = rounds / "judge" / "v0"
++    judge.mkdir(parents=True)
++    judge.joinpath("prompt.txt").write_text("THE OWNER'S OWN CRITERION\n{cards}")
++    judge.joinpath("scorecard.json").write_text(
++        json.dumps({"reviewed": 20, "agreement": 19, "agreement_rate": 0.95})
++    )
++
++    class _Watching(_Model):
++        def __init__(self) -> None:
++            super().__init__()
++            self.judged_with: list[str] = []
++
++        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++            if "OWN CRITERION" in prompt or "do they know what" in prompt:
++                self.judged_with.append(prompt)
++                yield '{"verdicts": [{"title": "回焊爐", "defines": true}]}', False
++            else:
++                yield from super().stream(prompt)
++
++    model = _Watching()
++    run_round(model, rounds_dir=rounds, tune_dir=tune, holdout_dir=holdout)
++
++    (asked,) = model.judged_with
++    assert asked.startswith("THE OWNER'S OWN CRITERION"), "the built-in criterion was used instead"
