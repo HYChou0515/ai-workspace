@@ -183,6 +183,11 @@ def main() -> None:
             file=sys.stderr,
         )
         print("  Leave null where the judge got it right.", file=sys.stderr)
+        print(
+            "  If you stop part way, DELETE the rows you never looked at — a row left "
+            "null counts as your agreement, and rows you did not read would inflate the score.",
+            file=sys.stderr,
+        )
         return
 
     if args.calibrate:
