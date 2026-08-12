@@ -91,7 +91,7 @@ from .sandbox_address import IAddressStore, SpecstarAddressStore
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .tools_routes import register_tools_routes
-from .turn_context import TurnContextBuilder
+from .turn_context import TurnContextBuilder, resolve_item_tools
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
@@ -1343,6 +1343,18 @@ def create_app(
     # engine-key / chat-validation rules every workspace route crosses. The route
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.
     locator = ItemLocator(spec, app_catalog, get_user_id=get_user_id, superusers=superusers)
+
+    # #674: teach the registry what an item mounts, for the wakes with no turn
+    # behind them (the human terminal, a workflow node, the file-op rebuild).
+    # Assigned here rather than passed in because the locator this needs is built
+    # long after the registry — the same shape as the other post-construction
+    # wirings below. A sandbox mounts once, at create, so a turn-less wake that
+    # mounted nothing would silently cost the item its tools until that sandbox
+    # is recycled.
+    async def _item_tool_shas(item_id: str) -> dict[str, str]:
+        return (await resolve_item_tools(sandbox, locator, item_id)).shas
+
+    registry.tools_for = _item_tool_shas
 
     mention_svc = MentionService(spec=spec, locator=locator)
 
