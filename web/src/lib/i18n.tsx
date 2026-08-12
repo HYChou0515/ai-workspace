@@ -837,7 +837,40 @@ export const messages = {
   "resources.live.close": { "zh-TW": "關閉", en: "Close" },
   "resources.live.count": { "zh-TW": "{n} 個", en: "{n}" },
   "resources.live.cores": { "zh-TW": "{n} 核", en: "{n} cores" },
+  // English needs the singular; Chinese has no plural form, so both keys carry
+  // the same string there rather than pretending the distinction exists.
+  "resources.live.cores_one": { "zh-TW": "{n} 核", en: "{n} core" },
+  // ── superuser: per-person allowances ──────────────────────────────────
+  "resources.admin.heading": { "zh-TW": "個人額度（管理員）", en: "Per-person allowances (admin)" },
+  "resources.admin.intro": {
+    "zh-TW": "把某個人的額度調得比站台預設高。只填要放寬的維度,留空的沿用站台預設。",
+    en: "Raise one person above the site default. Fill only the dimensions you want to change; blank ones keep the default.",
+  },
+  "resources.admin.user": { "zh-TW": "使用者 id", en: "User id" },
+  "resources.admin.lookup": { "zh-TW": "查詢", en: "Look up" },
+  "resources.admin.save": { "zh-TW": "儲存", en: "Save" },
+  "resources.admin.clear": { "zh-TW": "清除覆寫", en: "Clear override" },
+  "resources.admin.count": { "zh-TW": "同時執行環境上限", en: "Live environment limit" },
+  "resources.admin.cpu": { "zh-TW": "CPU 核心上限", en: "CPU core limit" },
+  "resources.admin.memory": { "zh-TW": "記憶體上限", en: "Memory limit" },
+  "resources.admin.disk": { "zh-TW": "儲存空間上限", en: "Storage limit" },
+  "resources.admin.effective": { "zh-TW": "目前有效額度", en: "Effective now" },
+  "resources.admin.unlimited": { "zh-TW": "無上限", en: "unlimited" },
+  "resources.admin.saved": { "zh-TW": "已套用,不需重啟。", en: "Applied — no restart needed." },
+  "resources.admin.defaults": { "zh-TW": "站台預設", en: "Site default" },
+  "resources.admin.who": { "zh-TW": "目前有特例的人", en: "People with an exception" },
+  "resources.admin.none": {
+    "zh-TW": "目前沒有人有特例——所有人都吃站台預設。",
+    en: "Nobody has an exception — everyone is on the site default.",
+  },
+  "resources.admin.notfound": {
+    "zh-TW": "查不到這個使用者(或你沒有權限)。",
+    en: "No such user, or you don't have permission.",
+  },
   "resources.memory": { "zh-TW": "記憶體", en: "Memory" },
+  "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
+  "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
+  "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
   "resources.disk.untracked": {
     "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",

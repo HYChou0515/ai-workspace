@@ -26,6 +26,7 @@ import time
 
 from msgspec import Struct
 from specstar import SpecStar
+from specstar.query import QB
 from specstar.types import (
     DuplicateResourceError,
     ResourceIDNotFoundError,
@@ -143,6 +144,44 @@ class UserLimits:
             return
         with contextlib.suppress(DuplicateResourceError):
             rm.create(rec, resource_id=user_id, status=RevisionStatus.draft)
+
+    async def list_overrides(self) -> list[tuple[str, PerUserResources]]:
+        """Everyone who has an exception, and what it grants — sorted by id.
+
+        Without this an operator can only ask "does THIS person have one", which
+        means you can only find an exception you already knew about. "Who is
+        above the default?" is the question an admin inheriting the system
+        actually has, and it had no answer.
+
+        Returns the RAW override, not the resolved limits: a dimension left at
+        0/"" here is one the person does not have an exception for, and
+        flattening that against the default would make every row look
+        overridden in every dimension.
+        """
+        return await asyncio.to_thread(self._list_sync)
+
+    def _list_sync(self) -> list[tuple[str, PerUserResources]]:
+        rm = self._spec.get_resource_manager(_UserQuota)
+        # `is_deleted == False` is NOT optional: `clear_for` soft-deletes (it
+        # calls `rm.delete`), and `list_resources` returns soft-deleted rows —
+        # so without this, an exception someone REVOKED stays on the list for
+        # ever, and the page would report privileges nobody holds. Same trap the
+        # activity ledger documents; it bites the same way here.
+        query = (QB.is_deleted() == False).build()  # noqa: E712
+        out: list[tuple[str, PerUserResources]] = []
+        for rev in rm.list_resources(query):
+            data = rev.data
+            assert isinstance(data, _UserQuota)
+            out.append(
+                (
+                    data.user_id,
+                    PerUserResources(
+                        count=data.count, cpu=data.cpu, memory=data.memory, disk=data.disk
+                    ),
+                )
+            )
+        out.sort(key=lambda row: row[0])
+        return out
 
     async def clear_for(self, user_id: str) -> None:
         """Drop an override so the person falls back to the deploy default."""

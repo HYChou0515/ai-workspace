@@ -149,6 +149,48 @@ def test_an_override_is_per_dimension():
         assert limits["disk_bytes"] == 1024**3
 
 
+def test_the_admin_can_see_who_is_above_the_default_without_knowing_their_id():
+    """The by-id read only answers "does THIS person have one", so an operator
+    could only find an exception they already knew about."""
+    with _app(PerUserResources(count=1, disk="1G"), me="root") as (client, _spec):
+        client.put("/admin/user-resources/alice", json={"count": 9})
+        client.put("/admin/user-resources/bob", json={"memory": "8G"})
+
+        body = client.get("/admin/user-resources").json()
+        assert [o["user_id"] for o in body["overrides"]] == ["alice", "bob"]
+        # RAW, not merged: bob has no count exception, so it reads 0 rather than
+        # the deploy's 1 — otherwise every row would look overridden everywhere.
+        by_id = {o["user_id"]: o for o in body["overrides"]}
+        assert (by_id["alice"]["count"], by_id["alice"]["memory"]) == (9, "")
+        assert (by_id["bob"]["count"], by_id["bob"]["memory"]) == (0, "8G")
+        # and the baseline they are exceptions TO, so a number means something
+        assert body["defaults"] == {
+            "count": 1,
+            "cpu": 0.0,
+            "memory_bytes": 0,
+            "disk_bytes": 1024**3,
+        }
+
+
+def test_a_revoked_exception_leaves_the_list():
+    """`clear_for` SOFT-deletes and `list_resources` returns soft-deleted rows,
+    so without an `is_deleted` filter the page would keep reporting privileges
+    nobody holds — the same trap the activity ledger documents."""
+    with _app(PerUserResources(count=1), me="root") as (client, _spec):
+        client.put("/admin/user-resources/alice", json={"count": 9})
+        assert len(client.get("/admin/user-resources").json()["overrides"]) == 1
+
+        client.delete("/admin/user-resources/alice")
+        assert client.get("/admin/user-resources").json()["overrides"] == []
+
+
+def test_only_an_admin_can_list_the_exceptions():
+    """404 rather than 403, like the by-id read: whether anyone has an exception
+    is not something an ordinary caller should be able to probe."""
+    with _app(PerUserResources(count=1), me="alice") as (client, _spec):
+        assert client.get("/admin/user-resources").status_code == 404
+
+
 def test_a_non_admin_cannot_read_or_set_anyones_limits():
     """404 rather than 403 — whether a person has an exception is not something
     to let a non-admin probe for."""

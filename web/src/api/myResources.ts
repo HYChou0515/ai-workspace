@@ -50,9 +50,35 @@ export type MyResources = {
   disk_tracked: boolean;
 };
 
+/** One person's override, as an admin sets it. Every dimension is optional in
+ * the same "0 / empty means not stated" sense the rest of this feature uses —
+ * an override says only what it changes, and the unset dimensions keep falling
+ * through to the deploy default. */
+export type UserQuotaOverride = {
+  count?: number;
+  cpu?: number;
+  memory?: string;
+  disk?: string;
+};
+
+/** The exceptions, plus the baseline they are exceptions TO. One payload: a
+ * person's "9" means nothing without the default beside it. */
+export type OverrideList = {
+  defaults: ResourceLimits;
+  overrides: ({ user_id: string } & Required<UserQuotaOverride>)[];
+};
+
 export type MyResourcesApi = {
   get(): Promise<MyResources>;
   closeEnvironment(itemId: string): Promise<void>;
+  /** Superuser only. Null on 404, like `adminGet`. */
+  adminList(): Promise<OverrideList | null>;
+  /** Superuser only. Resolves to null on 404 — which the backend also returns to
+   * a NON-superuser, deliberately, so that "who has an exception" is not
+   * something an ordinary caller can probe. */
+  adminGet(userId: string): Promise<MyResources | null>;
+  adminSet(userId: string, limits: UserQuotaOverride): Promise<void>;
+  adminClear(userId: string): Promise<void>;
 };
 
 export const myResourcesApi: MyResourcesApi = {
@@ -64,5 +90,31 @@ export const myResourcesApi: MyResourcesApi = {
     await apiFetch(`/me/resources/live/${encodeURIComponent(itemId)}`, {
       method: "DELETE",
     });
+  },
+  async adminList() {
+    try {
+      const r = await apiFetch("/admin/user-resources");
+      return (await r.json()) as OverrideList;
+    } catch {
+      return null;
+    }
+  },
+  async adminGet(userId: string) {
+    try {
+      const r = await apiFetch(`/admin/user-resources/${encodeURIComponent(userId)}`);
+      return (await r.json()) as MyResources;
+    } catch {
+      return null;
+    }
+  },
+  async adminSet(userId: string, limits: UserQuotaOverride) {
+    await apiFetch(`/admin/user-resources/${encodeURIComponent(userId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(limits),
+    });
+  },
+  async adminClear(userId: string) {
+    await apiFetch(`/admin/user-resources/${encodeURIComponent(userId)}`, { method: "DELETE" });
   },
 };

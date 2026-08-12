@@ -82,8 +82,9 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **設管理員（能讀所有 collection）** | `server.superusers: ["alice@example.com"]` |
 | **讓外部系統的網頁把工作交棒進來** | `server.cors_allowed_origins: ["https://legacy-rca.corp"]`；沒設的話瀏覽器會在請求送出前就擋掉（串接方式見[從外部系統交棒進來](external-handoff.md)） |
 | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
-| **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**） |
-| **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上） |
+| **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**）。見 §6.5 |
+| **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上）。見 §6.5 |
+| **給某個人開特例額度** | superuser 在 `/my-resources` 頁尾的「個人額度」區塊設定（或 `PUT /admin/user-resources/{user_id}`）；逐維度覆寫、不用重啟。見 §6.5 |
 | **換嵌入模型** | `kb.embedder.model` + 設 `KB_EMBED_DIM` 或 `KB_EMBED_MODEL`（**改維度＝要重建索引**） |
 | **調 KB 檢索深度（recall vs 延遲）** | `kb.retrieval.enhancements`（`expand` / `hyde` / `rerank`） |
 | **關掉 KB 的 multi-query/HyDE/rerank** | `kb.retrieval_llm: null` |
@@ -242,6 +243,93 @@ sandbox:
 細節見 `deploy/sandbox-host.example.yaml` 與 `docs/sandbox-host.md`。
 
 ---
+
+## 6.5 資源額度（per-App / per-user）★重點
+
+兩個問題,兩套機制:**一個 App 的 item 能吃多少**(App 宣告 × 部署端封頂),以及
+**一個人跨所有 App 總共能吃多少**(部署端的 `per_user`,可對個人開特例)。
+
+`disk` 與 `cpu`/`memory` 的性質不同,所以做法也不同:
+
+|  | `disk` | `cpu` / `memory` / `count` |
+|---|---|---|
+| 性質 | **存量**——持久,sandbox 死了還在 | **流量**——只在 sandbox 活著時存在 |
+| 機制 | 寫入時檢查,**只擋成長** | 開新 sandbox 時的**准入控制** |
+| 回收 | 刪檔就回來 | sandbox 被回收就**自己**回來(綁探活,不是計數器) |
+
+「只擋成長」是可用性要求不是效能取捨:**縮小、同大小覆寫、刪除永遠放行**,否則一個人一旦
+滿了就再也清不回來。
+
+### 三層解析
+
+```yaml
+resources:
+  per_app:
+    default: { cpu: 1.0, memory: 512M, disk: 80M }   # App 沒宣告時吃這個
+    max:     { cpu: 4.0, memory: 4G,   disk: 20G }   # App 不得超過,超過=開機失敗
+  per_user:
+    count: 3          # 同時活著的 sandbox 個數
+    cpu: 6.0          # 那些活著的 sandbox 加總核心
+    memory: 8G        # 加總記憶體
+    disk: 50G         # 名下**所有 item** 的 workspace 加總
+```
+
+順序是 **app.json 的 `resources` ◇ `per_app.default` ◇ 今天的舊旋鈕**
+(`sandbox.isolation.*` / `filestore.workspace_quota`),**逐維度**各自往下掉。
+App 那一半怎麼寫見 [新增一個 App](adding-an-app.md#resources這個-app-一個-item-吃多少)。
+
+**整段不寫 = 完全維持今天的行為**:`per_app` 落到舊旋鈕,`per_user` 全零 ⇒ 每個維度都無上限,
+等於沒有准入控制。**`0` / 空字串一律是「這個維度不設限」,不是「額度為零」。**
+
+### 特規使用者（個人覆寫）
+
+一個數字套用到所有人一定不夠——總會有人要跑大東西。所以讀取是 **個人覆寫 ◇ 全站預設**,
+而且**逐維度**:只設 `count` 就只有 count 變,cpu/memory/disk 照吃全站預設。
+
+覆寫在 **`/my-resources` 的「個人額度（管理員）」區塊**設定——只有 superuser 看得到它,一般人連入口都沒有。底下的端點是同一套,要腳本化時直接用:
+
+```bash
+GET    /admin/user-resources/{user_id}   # 查某人目前的有效額度
+PUT    /admin/user-resources/{user_id}   # 設覆寫,body 只帶要改的維度,例如 {"count": 10}
+DELETE /admin/user-resources/{user_id}   # 清掉覆寫,回全站預設
+```
+
+- 不是 superuser 會拿到 **404 而不是 403**——「某人有沒有被開特例」本身不該外洩。
+- **不用重啟**:下 PUT 的那個 pod 立即生效,其他 replica 最多 **5 秒**(memo TTL,沒有跨 pod
+  失效廣播;宣稱「立即」會是這個部署形狀給不出的東西)。
+- superuser 名單是 `server.superusers`(§4 的區塊地圖)。
+
+### 撞到上限會發生什麼
+
+**直接拒絕,不會自動幫使用者讓位**(不會 LRU 回收他自己的 sandbox)。三種 507,`detail.error`
+不同因為**補救方式不同**:
+
+| `error` | 什麼滿了 | 使用者要做什麼 |
+|---|---|---|
+| `workspace_quota_exceeded` | **這個 item** 的 disk | 刪這個 item 裡的檔案 |
+| `user_quota_exceeded` | 這個人**所有 item** 的 disk 加總 | 要刪的檔案可能在**別的 item** |
+| `sandbox_quota_exceeded` | 活著的 sandbox `count`/`cpu`/`memory`(`detail.dimension` 指明哪一個) | 關掉某個執行環境 |
+
+擋在**使用者訊息存進去之前**(`chat_send.send`)、terminal 的 `POST /exec`、以及 workflow 執行;
+**item 已經有活著的 sandbox 就直接放行**,那格他早就佔著了。排程觸發的 headless workflow 一樣
+會被擋,但會留下可見的失敗紀錄——定時任務靜靜沒跑比擋下來更危險。
+
+被擋的人自己解決的地方是 **`/my-resources`**:列出活著的執行環境(附**關閉**鈕)與各 item 的
+儲存用量,兩者都配一條用量對上限的量表。實測一輪:`per_user.count: 1` 時第二個 item 的 exec 回
+`507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes","used":2,"limit":1.0}` → 進畫面顯示
+`Live environments 1 / 1` → 按 Close → `0 / 1 · No live environments` → 同一個 exec 回 200。
+
+superuser 在同一頁的最下方多一個**個人額度**區塊,可以直接把某個人調高(見上一節)。
+
+### 兩個要知道的前提
+
+- **`cpu` / `memory` 的執行者是 sandbox 後端。** 正式環境是 `kind: http`,所以**沒有重新部署
+  sandbox-host 就完全沒有效果**。`disk` 由本體執行,不受影響。這也是整套裡唯一沒有在真 host
+  上驗證過的一段。
+- ⚠️ **債務人是 item 的 `owner`,而那個欄位目前誰都能改**(issue #687 仍 OPEN)。它**不是**
+  權限擁有者(權限走 specstar 的 `created_by`),所以把 `owner` 設給別人**不會失去任何控制權**
+  ——item 照樣是你的,只有帳單跑到對方頭上。**在 #687 落地前,以上額度全部可被繞過。** 這是
+  知情的取捨(額度先做、鎖定後補),不是疏漏。
 
 ## 7. `agents`：心智模型與雷區
 
