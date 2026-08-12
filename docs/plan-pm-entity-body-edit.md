@@ -51,7 +51,37 @@ Every one of these produces the reported symptom, and the code cannot tell them 
 **Phase 1 answers this before any code is written.** Guessing here would mean fixing a
 permission check that is correct, or "fixing" a disclosure gap that is really a lookup bug.
 
-### Phase 1 — establish which
+### Phase 1 — RESULT: the permission theory is dead
+
+Two findings, and together they close this line of enquiry.
+
+**`created_by` is present.** Probed against a running app: the envelope carries
+`revision_info.created_by = "alice"` (and `meta.created_by` too), which is exactly what
+`api/real.ts::getAppItem` reads. **Candidate B is out.** The same probe confirms a freshly
+created item is `visibility: private` — so the owner bypass is the ONLY thing letting its
+creator write, which is what made B and C plausible in the first place.
+
+**But `canWrite` must already be true.** `EntityRecordView.tsx:60` renders the Edit button
+as `{canWrite && (…)}` — with `canWrite` false there is no button to press. The reporter
+presses it. Therefore `canWrite === true`, `readOnly={!canWrite}` is not engaged, and
+**A, C and D are out as well**.
+
+That also disposes of the framing this plan started from: the AI/human asymmetry is not a
+permission difference. Both sides are allowed to write. The block is somewhere in the
+editing surface itself.
+
+**Remaining candidates**, all inside the form rather than around it:
+
+| # | Cause | Distinguishing symptom |
+|---|---|---|
+| E | The Monaco body editor fails to mount / initialise | the FIELDS above it still accept typing |
+| F | The surface being used is not `EntityFileEditor` at all | there is no separate body area, only frontmatter fields |
+| G | Typing works but the save is rejected / silently dropped | text goes in, does not survive |
+
+One question separates them, and it is the next thing to ask rather than guess:
+**in that same edit form, can the FIELDS (status, assignee, …) be changed?**
+
+### Superseded — the original four candidates
 
 The reporter runs one snippet on the affected item's page; it reads four values and
 changes nothing:
