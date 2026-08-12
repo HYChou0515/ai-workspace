@@ -55,6 +55,27 @@ class _Limits(BaseModel):
     disk_bytes: int = 0
 
 
+class _Override(BaseModel):
+    """One person's exception, RAW — a dimension left at 0/"" is one they do not
+    have an exception for. Deliberately not merged with the deploy default: the
+    list exists to answer "who is above the baseline, and in what", and merging
+    would make every row look overridden in every dimension."""
+
+    user_id: str
+    count: int = 0
+    cpu: float = 0.0
+    memory: str = ""
+    disk: str = ""
+
+
+class _Overrides(BaseModel):
+    """The exceptions, plus the baseline they are exceptions TO — one payload,
+    because a number is meaningless without the default beside it."""
+
+    defaults: _Limits
+    overrides: list[_Override] = []
+
+
 class _MyResources(BaseModel):
     """Everything the panel renders. Usage and limits together, so the FE never
     has to pair up two calls that could disagree."""
@@ -165,6 +186,31 @@ def register_quota_routes(
         await registry.close_session(item_id)
         if activity is not None:
             await activity.forget(item_id)
+
+    # Registered BEFORE the `/{user_id}` route: a bare GET on the collection
+    # would otherwise be matched as a person literally called "".
+    @app.get("/admin/user-resources")
+    async def admin_list() -> _Overrides:
+        """Everyone above the deploy default, and the default itself.
+
+        The by-id read only answers "does THIS person have an exception", so an
+        operator could only find one they already knew about — leaving "who is
+        above the baseline?" unanswerable, which is the question someone
+        inheriting the system actually has."""
+        _require_admin(get_user_id(), superusers)
+        d = user_limits.default
+        return _Overrides(
+            defaults=_Limits(
+                count=d.count,
+                cpu=d.cpu,
+                memory_bytes=parse_size(d.memory),
+                disk_bytes=parse_size(d.disk),
+            ),
+            overrides=[
+                _Override(user_id=uid, count=o.count, cpu=o.cpu, memory=o.memory, disk=o.disk)
+                for uid, o in await user_limits.list_overrides()
+            ],
+        )
 
     @app.get("/admin/user-resources/{user_id}")
     async def admin_get(user_id: str) -> _MyResources:

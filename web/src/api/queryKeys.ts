@@ -23,6 +23,9 @@ export const qk = {
   // Invalidate after closing an environment, and after any 507 — being refused
   // is precisely when the panel's numbers are what the user needs.
   myResources: ["myResources"] as const,
+  // Who is above the deploy default (superuser only). Separate from
+  // `myResources`: it answers a different question, for a different person.
+  userOverrides: ["userOverrides"] as const,
 
   investigations: ["investigations"] as const,
   investigation: (id: string) => ["investigation", id] as const,

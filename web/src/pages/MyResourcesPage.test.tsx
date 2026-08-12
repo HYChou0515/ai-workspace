@@ -8,7 +8,7 @@
  */
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -54,6 +54,18 @@ function client(over: Partial<MyResourcesApi> = {}): MyResourcesApi {
   return {
     get: vi.fn(async () => data()),
     closeEnvironment: vi.fn(async () => {}),
+    adminList: vi.fn(async () => ({
+      defaults: { count: 2, cpu: 0, memory_bytes: 0, disk_bytes: 1024 },
+      // only the dimensions actually granted — the route returns the RAW
+      // override, so an ungranted dimension is 0/"" and not the default
+      overrides: [...overrides.entries()].map(([user_id, o]) => ({
+        user_id,
+        count: o.count ?? 0,
+        cpu: o.cpu ?? 0,
+        memory: o.memory ?? "",
+        disk: o.disk ?? "",
+      })),
+    })),
     adminGet: vi.fn(async (userId: string) => {
       if (userId !== "bob") return null;
       const o = overrides.get(userId);
@@ -181,6 +193,40 @@ describe("per-person overrides (superuser)", () => {
     await userEvent.type(screen.getByLabelText("同時執行環境上限"), "9");
     await userEvent.click(screen.getByRole("button", { name: "儲存" }));
     expect(c.adminSet).toHaveBeenCalledWith("bob", { count: 9, cpu: 0, memory: "", disk: "" });
+  });
+
+  // Without a list, an operator can only confirm an exception they already
+  // suspect — "who has one?" had no answer at all.
+  it("names who is above the baseline, and what the baseline is", async () => {
+    asUser(true);
+    const c = client();
+    await c.adminSet("bob", { count: 9, cpu: 0, memory: "", disk: "" });
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    expect(await screen.findByText(/^站台預設:/)).toHaveTextContent("同時執行環境上限 2");
+    expect(screen.getByText("bob")).toBeInTheDocument();
+    // only the dimension actually granted — not every dimension merged against
+    // the default, which would make everyone look overridden everywhere
+    expect(screen.getByText(/同時執行環境上限 9$/)).toBeInTheDocument();
+  });
+
+  it("says plainly when nobody has an exception", async () => {
+    asUser(true);
+    render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
+    expect(await screen.findByText(/目前沒有人有特例/)).toBeInTheDocument();
+  });
+
+  it("revokes an exception straight from the list", async () => {
+    asUser(true);
+    const c = client();
+    await c.adminSet("bob", { count: 9, cpu: 0, memory: "", disk: "" });
+    render(<MyResourcesPage client={c} />, { wrapper: Wrap });
+
+    const row = (await screen.findByText("bob")).closest("li")!;
+    await userEvent.click(within(row).getByRole("button", { name: "清除覆寫" }));
+
+    expect(c.adminClear).toHaveBeenCalledWith("bob");
+    await waitFor(() => expect(screen.getByText(/目前沒有人有特例/)).toBeInTheDocument());
   });
 
   it("says so when the id matches nobody, rather than showing an empty form", async () => {

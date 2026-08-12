@@ -61,9 +61,18 @@ export type UserQuotaOverride = {
   disk?: string;
 };
 
+/** The exceptions, plus the baseline they are exceptions TO. One payload: a
+ * person's "9" means nothing without the default beside it. */
+export type OverrideList = {
+  defaults: ResourceLimits;
+  overrides: ({ user_id: string } & Required<UserQuotaOverride>)[];
+};
+
 export type MyResourcesApi = {
   get(): Promise<MyResources>;
   closeEnvironment(itemId: string): Promise<void>;
+  /** Superuser only. Null on 404, like `adminGet`. */
+  adminList(): Promise<OverrideList | null>;
   /** Superuser only. Resolves to null on 404 — which the backend also returns to
    * a NON-superuser, deliberately, so that "who has an exception" is not
    * something an ordinary caller can probe. */
@@ -81,6 +90,14 @@ export const myResourcesApi: MyResourcesApi = {
     await apiFetch(`/me/resources/live/${encodeURIComponent(itemId)}`, {
       method: "DELETE",
     });
+  },
+  async adminList() {
+    try {
+      const r = await apiFetch("/admin/user-resources");
+      return (await r.json()) as OverrideList;
+    } catch {
+      return null;
+    }
   },
   async adminGet(userId: string) {
     try {

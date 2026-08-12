@@ -17,7 +17,7 @@ import { Link } from "react-router-dom";
 
 import { useT } from "../lib/i18n";
 
-import { type MyResources, type MyResourcesApi, myResourcesApi } from "../api/myResources";
+import { type MyResources, type MyResourcesApi, type OverrideList as OverrideListDTO, myResourcesApi } from "../api/myResources";
 import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
 
@@ -167,8 +167,15 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
   const [form, setForm] = useState({ count: "", cpu: "", memory: "", disk: "" });
   const [looked, setLooked] = useState<MyResources | null | undefined>(undefined);
   const [saved, setSaved] = useState(false);
+  const list = useQuery({
+    queryKey: qk.userOverrides,
+    queryFn: () => client.adminList(),
+    enabled: isSuperuser,
+  });
 
   if (!isSuperuser) return null;
+
+  const refreshList = () => void list.refetch();
 
   const lookup = async () => {
     setSaved(false);
@@ -183,12 +190,20 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
     });
     setSaved(true);
     setLooked(await client.adminGet(userId));
+    refreshList();
   };
   const clear = async () => {
     await client.adminClear(userId);
     setForm({ count: "", cpu: "", memory: "", disk: "" });
     setSaved(true);
     setLooked(await client.adminGet(userId));
+    refreshList();
+  };
+
+  const clearOne = async (u: string) => {
+    await client.adminClear(u);
+    refreshList();
+    if (u === userId) setLooked(await client.adminGet(u));
   };
 
   const amount = (n: number, fmt: (v: number) => string) => (n ? fmt(n) : t("resources.admin.unlimited"));
@@ -197,6 +212,8 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
     <section className="admin" aria-labelledby="admin-heading">
       <h2 id="admin-heading">{t("resources.admin.heading")}</h2>
       <p className="hint">{t("resources.admin.intro")}</p>
+
+      {list.data ? <OverrideList data={list.data} onClear={(u) => void clearOne(u)} /> : null}
 
       <div className="admin-row">
         <span className="admin-field">
@@ -284,5 +301,69 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         {saved ? <span className="detail">{t("resources.admin.saved")}</span> : null}
       </div>
     </section>
+  );
+}
+
+/**
+ * Who is above the baseline, and the baseline itself.
+ *
+ * The by-id lookup below can only confirm an exception you already suspect, so
+ * without this an operator inheriting the system cannot answer "who has one?".
+ * Rows show the RAW override — only the dimensions actually granted — because
+ * merging them against the default would make every row look overridden in
+ * every dimension, which is the opposite of what this list is for.
+ */
+function OverrideList({
+  data,
+  onClear,
+}: {
+  data: OverrideListDTO;
+  onClear: (userId: string) => void;
+}) {
+  const t = useT();
+  const d = data.defaults;
+  const dims = (o: OverrideListDTO["overrides"][number]) =>
+    [
+      o.count ? `${t("resources.admin.count")} ${o.count}` : "",
+      o.cpu ? `${t("resources.admin.cpu")} ${o.cpu}` : "",
+      o.memory ? `${t("resources.admin.memory")} ${o.memory}` : "",
+      o.disk ? `${t("resources.admin.disk")} ${o.disk}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  const def = (n: number, fmt: (v: number) => string) =>
+    n ? fmt(n) : t("resources.admin.unlimited");
+
+  return (
+    <>
+      <p className="hint">
+        {t("resources.admin.defaults")}: {t("resources.admin.count")} {def(d.count, String)} ·{" "}
+        {t("resources.admin.cpu")} {def(d.cpu, String)} · {t("resources.admin.memory")}{" "}
+        {def(d.memory_bytes, formatBytes)} · {t("resources.admin.disk")}{" "}
+        {def(d.disk_bytes, formatBytes)}
+      </p>
+      <h3 className="admin-sub">{t("resources.admin.who")}</h3>
+      {data.overrides.length === 0 ? (
+        <p className="empty">{t("resources.admin.none")}</p>
+      ) : (
+        <ul>
+          {data.overrides.map((o) => (
+            <li key={o.user_id}>
+              <span className="who">{o.user_id}</span>
+              <span className="detail">{dims(o)}</span>
+              <button
+                type="button"
+                className="btn"
+                data-variant="secondary"
+                data-size="sm"
+                onClick={() => onClear(o.user_id)}
+              >
+                {t("resources.admin.clear")}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }

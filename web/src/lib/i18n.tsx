@@ -857,6 +857,12 @@ export const messages = {
   "resources.admin.effective": { "zh-TW": "目前有效額度", en: "Effective now" },
   "resources.admin.unlimited": { "zh-TW": "無上限", en: "unlimited" },
   "resources.admin.saved": { "zh-TW": "已套用,不需重啟。", en: "Applied — no restart needed." },
+  "resources.admin.defaults": { "zh-TW": "站台預設", en: "Site default" },
+  "resources.admin.who": { "zh-TW": "目前有特例的人", en: "People with an exception" },
+  "resources.admin.none": {
+    "zh-TW": "目前沒有人有特例——所有人都吃站台預設。",
+    en: "Nobody has an exception — everyone is on the site default.",
+  },
   "resources.admin.notfound": {
     "zh-TW": "查不到這個使用者(或你沒有權限)。",
     en: "No such user, or you don't have permission.",
