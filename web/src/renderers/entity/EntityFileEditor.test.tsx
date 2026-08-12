@@ -60,6 +60,25 @@ describe("EntityFileEditor (§C2)", () => {
     expect(screen.queryByLabelText("issues")).not.toBeInTheDocument();
   });
 
+  it("does not wrap the body editor in a <label> (it is not a native control)", () => {
+    // The reported symptom: fields typed fine, the body did not. The body's
+    // Monaco was the only one in the codebase wrapped in a `<label>` — the YAML
+    // editor ten lines above it in this same file uses a `<div>` with the same
+    // class, and the six other MonacoEditor call sites use none.
+    //
+    // A `<label>` promises "click me and I hand focus to my control". Monaco is
+    // not a native control — it is divs plus a hidden textarea — so the wrapper
+    // intercepts the click and the caret never lands where the user aimed.
+    //
+    // This assertion is structural because the behaviour it guards cannot be
+    // reached from here: this suite MOCKS Monaco as a plain textarea, and a
+    // textarea inside a label behaves perfectly. That mock is why the defect
+    // survived every green run.
+    render(<EntityFileEditor type={issueType} record={record} onSave={vi.fn()} />);
+
+    expect(screen.getByLabelText("body").closest("label")).toBeNull();
+  });
+
   it("saves the frontmatter patch + body through onSave (§B1)", () => {
     const onSave = vi.fn();
     render(<EntityFileEditor type={issueType} record={record} onSave={onSave} />);

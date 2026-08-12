@@ -164,7 +164,14 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, r
         </div>
       )}
 
-      <label className="ev-editor__field">
+      {/* A DIV, not a label — matching the YAML editor above and every other
+          MonacoEditor call site. A `<label>` promises to hand focus to its
+          native control on click; Monaco is not one (divs plus a hidden
+          textarea), so wrapping it intercepted the click and the caret never
+          landed. That is why the body could not be typed into while the
+          frontmatter fields, which ARE native inputs, were fine. Monaco carries
+          its own `ariaLabel`, so nothing is lost by dropping the label. */}
+      <div className="ev-editor__field">
         <span className="ev-editor__label">Body</span>
         {/* Free-writing markdown body in the shared Monaco editor (§C2). */}
         <MonacoEditor
@@ -176,7 +183,7 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, r
           autoHeight
           minHeight={160}
         />
-      </label>
+      </div>
     </div>
   );
 }
