@@ -758,6 +758,16 @@
   line-height: var(--leading-body-sm);
   min-width: 0;
 }
+/* The record number, on every card. Muted so the title still leads, but present
+   even when the title is long — it is the handle people use out loud ("look at
+   33") and the only name an untitled record has. `--text-paper-d` is the shared
+   muted ink, defined in BOTH themes, so this cannot repeat #690 where a colour
+   picked for dark was unreadable in light. */
+.ev-card__num {
+  color: var(--text-paper-d);
+  font-weight: 500;
+  margin-inline-end: var(--space-4);
+}
 /* ⋯ card menu trigger — quiet until the card is hovered / the menu is open. */
 .ev-card__menu {
   flex: none;

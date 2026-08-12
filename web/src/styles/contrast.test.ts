@@ -51,3 +51,24 @@ describe("categorical chip contrast (#GH-projects B / #4)", () => {
     });
   }
 });
+
+/**
+ * The board card's record number (#PM). It renders on the CARD surface, not the
+ * page surface, and in `--text-paper-d` — a tier brighter than the d2 guarded
+ * above, so the test above does not cover it. Guarded in BOTH themes on purpose:
+ * #690 shipped text that was unreadable in light mode because the colour had only
+ * ever been eyeballed in dark, and the unit tests stayed green throughout.
+ */
+describe("board card number contrast", () => {
+  it("clears a 4:1 floor on the card surface in light mode", () => {
+    const ink = tokenIn(TOKENS_CSS, LIGHT, "--text-paper-d");
+    const card = tokenIn(TOKENS_CSS, LIGHT, "--white");
+    expect(contrast(ink, card)).toBeGreaterThanOrEqual(4);
+  });
+
+  it("clears a 4:1 floor on the card surface in dark mode", () => {
+    const ink = tokenIn(TOKENS_CSS, DARK, "--text-paper-d");
+    const card = tokenIn(TOKENS_CSS, DARK, "--white");
+    expect(contrast(ink, card)).toBeGreaterThanOrEqual(4);
+  });
+});

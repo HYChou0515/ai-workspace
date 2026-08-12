@@ -234,7 +234,17 @@ function Card({
       {...listeners}
     >
       <div className="ev-card__head">
-        <div className="ev-card__title">{fieldText(entity.fields[titleField]) || `#${entity.number}`}</div>
+        {/* The number is the record's spoken name ("look at 33"), so it rides
+            every card — it used to be a FALLBACK for a missing title, which
+            meant every card that had a title hid the one thing people say out
+            loud. Muted and ahead of the title; not a control, because the card
+            itself is the drag handle and the double-click target. */}
+        <div className="ev-card__title">
+          <span className="ev-card__num">#{entity.number}</span>
+          {fieldText(entity.fields[titleField]) && (
+            <span className="ev-card__label">{fieldText(entity.fields[titleField])}</span>
+          )}
+        </div>
         {(canOpen || canOpenFile) && (
           // Isolate the menu from the card's drag listeners — a pointerdown here
           // must not arm a drag — and from its open gesture, so double-clicking
