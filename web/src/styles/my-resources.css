@@ -33,12 +33,29 @@
   margin: 0 0 var(--space-8);
 }
 
-/* "1 / 1", "67 B / 160 MB" — the headline number, so it stays at body weight
-   rather than dropping to the metadata tier. */
+/* One row per dimension: name on the left, the number on the right, its own bar
+   underneath. Three dimensions used to share one line and one bar, which made
+   the bar mean whichever of them it happened to be tracking. */
+.page .gauge + .gauge {
+  margin-top: var(--space-12);
+}
+
 .page .summary {
-  margin: 0 0 var(--space-8);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-8);
+  margin: 0 0 var(--space-4);
   font-size: var(--text-body);
   color: var(--text-paper);
+}
+
+.page .gauge-label {
+  flex: 1;
+  min-width: 0;
+}
+
+.page .gauge-value {
+  font-variant-numeric: tabular-nums;
 }
 
 .page .empty {

@@ -868,6 +868,9 @@ export const messages = {
     en: "No such user, or you don't have permission.",
   },
   "resources.memory": { "zh-TW": "記憶體", en: "Memory" },
+  "resources.gauge.count": { "zh-TW": "環境數", en: "Environments" },
+  "resources.gauge.cpu": { "zh-TW": "CPU", en: "CPU" },
+  "resources.gauge.unlimited": { "zh-TW": "（無上限）", en: "(no limit)" },
   "resources.disk.heading": { "zh-TW": "儲存空間", en: "Storage" },
   "resources.disk.untracked": {
     "zh-TW": "這個部署沒有設定個人儲存空間上限,因此不統計用量。",

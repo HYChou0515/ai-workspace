@@ -49,6 +49,37 @@ function Meter({ used, limit }: { used: number; limit: number }) {
   );
 }
 
+/** One dimension: what it is, how much of it you hold, and how close that is to
+ * your ceiling.
+ *
+ * An UNLIMITED dimension still shows its usage — with no denominator and no bar,
+ * because there is nothing to be a fraction of. It used to be hidden entirely,
+ * so on a deploy that caps only the environment count you could not find out how
+ * much cpu or memory you were holding at all. */
+function Gauge({
+  label,
+  used,
+  limit,
+  format,
+}: {
+  label: string;
+  used: number;
+  limit: number;
+  format: (n: number) => string;
+}) {
+  const t = useT();
+  return (
+    <div className="gauge">
+      <p className="summary">
+        <span className="gauge-label">{label}</span>
+        <span className="gauge-value">{formatAgainstLimit(used, limit, format)}</span>
+        {limit ? null : <span className="detail">{t("resources.gauge.unlimited")}</span>}
+      </p>
+      <Meter used={used} limit={limit} />
+    </div>
+  );
+}
+
 export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResourcesApi }) {
   const t = useT();
   const qc = useQueryClient();
@@ -71,14 +102,29 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
 
       <section aria-labelledby="live-heading">
         <h2 id="live-heading">{t("resources.live.heading")}</h2>
-        <p className="summary">
-          {formatAgainstLimit(data.live.length, limits.count, (n) => t("resources.live.count", { n }))}
-          {limits.cpu ? ` · CPU ${formatAgainstLimit(data.cpu_in_use, limits.cpu, (n) => `${n}`)}` : ""}
-          {limits.memory_bytes
-            ? ` · ${t("resources.memory")} ${formatAgainstLimit(data.memory_in_use, limits.memory_bytes, formatBytes)}`
-            : ""}
-        </p>
-        <Meter used={data.live.length} limit={limits.count} />
+        {/* Three dimensions, three gauges. They used to share one line and ONE
+            bar — and that bar tracked only `count`, so at "1 / 2 · CPU 1 / 4" it
+            sat at 50% while cpu was at 25%: a reader takes the bar as "how full
+            am I" and it answered one dimension of three. Any of them can refuse
+            a turn on its own, so each shows its own. */}
+        <Gauge
+          label={t("resources.gauge.count")}
+          used={data.live.length}
+          limit={limits.count}
+          format={(n) => t("resources.live.count", { n })}
+        />
+        <Gauge
+          label={t("resources.gauge.cpu")}
+          used={data.cpu_in_use}
+          limit={limits.cpu}
+          format={(n) => `${n}`}
+        />
+        <Gauge
+          label={t("resources.memory")}
+          used={data.memory_in_use}
+          limit={limits.memory_bytes}
+          format={formatBytes}
+        />
         {data.live.length === 0 ? (
           <p className="empty">{t("resources.live.empty")}</p>
         ) : (
@@ -118,10 +164,12 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
           <p className="empty">{t("resources.disk.untracked")}</p>
         ) : (
           <>
-            <p className="summary">
-              {formatAgainstLimit(data.disk_in_use, limits.disk_bytes, formatBytes)}
-            </p>
-            <Meter used={data.disk_in_use} limit={limits.disk_bytes} />
+            <Gauge
+              label={t("resources.disk.heading")}
+              used={data.disk_in_use}
+              limit={limits.disk_bytes}
+              format={formatBytes}
+            />
           </>
         )}
         {!data.disk_tracked ? null : data.workspaces.length === 0 ? (

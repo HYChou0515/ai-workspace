@@ -134,6 +134,33 @@ describe("MyResourcesPage", () => {
     await waitFor(() => expect(screen.getByText(/目前沒有執行中的環境/)).toBeTruthy());
   });
 
+  // Any of the three can refuse a turn on its own, so each needs its own
+  // reading. They used to share one line and ONE bar — and that bar tracked
+  // `count`, so it could sit at 50% while cpu was at 25% and mean neither.
+  it("gives cpu and memory their own reading, not a share of the count's", async () => {
+    const d = data({ limits: { count: 2, cpu: 4, memory_bytes: 2048, disk_bytes: 1024 } });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    expect(await screen.findByText("CPU")).toBeInTheDocument();
+    expect(screen.getByText("2 / 4")).toBeInTheDocument();
+    expect(screen.getByText("512 B / 2.0 KB")).toBeInTheDocument();
+    // one bar per dimension: 3 live + 1 storage
+    expect(document.querySelectorAll(".meter")).toHaveLength(4);
+  });
+
+  // Hiding an unlimited dimension hid its USAGE too, so on a deploy that caps
+  // only the environment count you could not find out how much cpu you held.
+  it("still reports usage for a dimension with no limit", async () => {
+    const d = data({ limits: { count: 2, cpu: 0, memory_bytes: 0, disk_bytes: 1024 } });
+    render(<MyResourcesPage client={client({ get: vi.fn(async () => d) })} />, { wrapper: Wrap });
+
+    expect(await screen.findByText("CPU")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument(); // used, with no denominator
+    expect(screen.getAllByText("（無上限）").length).toBeGreaterThan(0);
+    // no bar where there is nothing to be a fraction of: count + storage only
+    expect(document.querySelectorAll(".meter")).toHaveLength(2);
+  });
+
   it("says how to free disk, because deleting happens in the item", async () => {
     render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
     expect(await screen.findByText(/刪除永遠不受額度限制/)).toBeTruthy();
