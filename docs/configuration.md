@@ -84,7 +84,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
 | **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**）。見 §6.5 |
 | **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上）。見 §6.5 |
-| **給某個人開特例額度** | `PUT /admin/user-resources/{user_id}`（superuser；逐維度覆寫，不用重啟）。見 §6.5 |
+| **給某個人開特例額度** | superuser 在 `/my-resources` 頁尾的「個人額度」區塊設定（或 `PUT /admin/user-resources/{user_id}`）；逐維度覆寫、不用重啟。見 §6.5 |
 | **換嵌入模型** | `kb.embedder.model` + 設 `KB_EMBED_DIM` 或 `KB_EMBED_MODEL`（**改維度＝要重建索引**） |
 | **調 KB 檢索深度（recall vs 延遲）** | `kb.retrieval.enhancements`（`expand` / `hyde` / `rerank`） |
 | **關掉 KB 的 multi-query/HyDE/rerank** | `kb.retrieval_llm: null` |
@@ -286,7 +286,7 @@ App 那一半怎麼寫見 [新增一個 App](adding-an-app.md#resources這個-ap
 一個數字套用到所有人一定不夠——總會有人要跑大東西。所以讀取是 **個人覆寫 ◇ 全站預設**,
 而且**逐維度**:只設 `count` 就只有 count 變,cpu/memory/disk 照吃全站預設。
 
-覆寫**目前只有 API,沒有畫面**,而且需要 superuser:
+覆寫在 **`/my-resources` 的「個人額度（管理員）」區塊**設定——只有 superuser 看得到它,一般人連入口都沒有。底下的端點是同一套,要腳本化時直接用:
 
 ```bash
 GET    /admin/user-resources/{user_id}   # 查某人目前的有效額度
@@ -315,11 +315,11 @@ DELETE /admin/user-resources/{user_id}   # 清掉覆寫,回全站預設
 會被擋,但會留下可見的失敗紀錄——定時任務靜靜沒跑比擋下來更危險。
 
 被擋的人自己解決的地方是 **`/my-resources`**:列出活著的執行環境(附**關閉**鈕)與各 item 的
-儲存用量。實測一輪:`per_user.count: 1` 時第二個 item 的 exec 回
+儲存用量,兩者都配一條用量對上限的量表。實測一輪:`per_user.count: 1` 時第二個 item 的 exec 回
 `507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes","used":2,"limit":1.0}` → 進畫面顯示
 `Live environments 1 / 1` → 按 Close → `0 / 1 · No live environments` → 同一個 exec 回 200。
 
-> ⚠️ **這頁目前幾乎沒有樣式**(純項目符號清單,文字彼此擠在一起)。功能是通的,外觀不是。
+superuser 在同一頁的最下方多一個**個人額度**區塊,可以直接把某個人調高(見上一節)。
 
 ### 兩個要知道的前提
 

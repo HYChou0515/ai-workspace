@@ -12,12 +12,14 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { useT } from "../lib/i18n";
 
-import { type MyResourcesApi, myResourcesApi } from "../api/myResources";
+import { type MyResources, type MyResourcesApi, myResourcesApi } from "../api/myResources";
 import { qk } from "../api/queryKeys";
+import { useIsSuperuser } from "../hooks/useIsSuperuser";
 
 /** Bytes → a short human string. Sizes here span KB to tens of GB. */
 export function formatBytes(n: number): string {
@@ -85,11 +87,18 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
               <li key={env.item_id}>
                 <Link to={`/a/${env.slug}/${env.item_id}`}>{env.title || env.item_id}</Link>
                 <span className="detail">
-                  {env.cpu_cores ? t("resources.live.cores", { n: env.cpu_cores }) : ""}
+                  {env.cpu_cores
+                    ? t(env.cpu_cores === 1 ? "resources.live.cores_one" : "resources.live.cores", {
+                        n: env.cpu_cores,
+                      })
+                    : ""}
                   {env.memory_bytes ? ` · ${formatBytes(env.memory_bytes)}` : ""}
                 </span>
                 <button
                   type="button"
+                  className="btn"
+                  data-variant="secondary"
+                  data-size="sm"
                   onClick={() => close.mutate(env.item_id)}
                   disabled={close.isPending}
                 >
@@ -132,6 +141,148 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
         )}
         {data.disk_tracked ? <p className="hint">{t("resources.disk.hint")}</p> : null}
       </section>
+
+      <AdminOverrides client={client} />
     </div>
+  );
+}
+
+/**
+ * Raise one person above the site default (#688 P7). Superuser only — and the
+ * backend answers 404, not 403, to everyone else, so this section simply does
+ * not render rather than offering a control that would be refused.
+ *
+ * The form starts EMPTY on purpose and does not pre-fill from the person's
+ * current numbers. `PUT` is replace-semantics — it rewrites all four dimensions
+ * — and the read endpoint returns EFFECTIVE limits (override merged over the
+ * deploy default), so pre-filling would submit inherited values back as explicit
+ * overrides and quietly pin them: a later change to the site default would then
+ * skip everyone who had ever been edited here. Blank means "keep the default",
+ * which is the same thing the backend's own 0/"" sentinel means.
+ */
+function AdminOverrides({ client }: { client: MyResourcesApi }) {
+  const t = useT();
+  const isSuperuser = useIsSuperuser();
+  const [userId, setUserId] = useState("");
+  const [form, setForm] = useState({ count: "", cpu: "", memory: "", disk: "" });
+  const [looked, setLooked] = useState<MyResources | null | undefined>(undefined);
+  const [saved, setSaved] = useState(false);
+
+  if (!isSuperuser) return null;
+
+  const lookup = async () => {
+    setSaved(false);
+    setLooked(userId ? await client.adminGet(userId) : undefined);
+  };
+  const save = async () => {
+    await client.adminSet(userId, {
+      count: form.count ? Number(form.count) : 0,
+      cpu: form.cpu ? Number(form.cpu) : 0,
+      memory: form.memory,
+      disk: form.disk,
+    });
+    setSaved(true);
+    setLooked(await client.adminGet(userId));
+  };
+  const clear = async () => {
+    await client.adminClear(userId);
+    setForm({ count: "", cpu: "", memory: "", disk: "" });
+    setSaved(true);
+    setLooked(await client.adminGet(userId));
+  };
+
+  const amount = (n: number, fmt: (v: number) => string) => (n ? fmt(n) : t("resources.admin.unlimited"));
+
+  return (
+    <section className="admin" aria-labelledby="admin-heading">
+      <h2 id="admin-heading">{t("resources.admin.heading")}</h2>
+      <p className="hint">{t("resources.admin.intro")}</p>
+
+      <div className="admin-row">
+        <span className="admin-field">
+          <label htmlFor="q-user">{t("resources.admin.user")}</label>
+          <input id="q-user" value={userId} onChange={(e) => setUserId(e.target.value)} />
+        </span>
+        <button type="button" className="btn" data-variant="secondary" data-size="sm" onClick={() => void lookup()}>
+          {t("resources.admin.lookup")}
+        </button>
+      </div>
+
+      {looked === null ? <p className="hint">{t("resources.admin.notfound")}</p> : null}
+      {looked ? (
+        <p className="hint">
+          {t("resources.admin.effective")}: {t("resources.admin.count")} {amount(looked.limits.count, String)} ·{" "}
+          {t("resources.admin.cpu")} {amount(looked.limits.cpu, String)} · {t("resources.admin.memory")}{" "}
+          {amount(looked.limits.memory_bytes, formatBytes)} · {t("resources.admin.disk")}{" "}
+          {amount(looked.limits.disk_bytes, formatBytes)}
+        </p>
+      ) : null}
+
+      <div className="admin-row">
+        <span className="admin-field">
+          <label htmlFor="q-count">{t("resources.admin.count")}</label>
+          <input
+            id="q-count"
+            type="number"
+            min="0"
+            value={form.count}
+            onChange={(e) => setForm({ ...form, count: e.target.value })}
+          />
+        </span>
+        <span className="admin-field">
+          <label htmlFor="q-cpu">{t("resources.admin.cpu")}</label>
+          <input
+            id="q-cpu"
+            type="number"
+            min="0"
+            step="0.5"
+            value={form.cpu}
+            onChange={(e) => setForm({ ...form, cpu: e.target.value })}
+          />
+        </span>
+        <span className="admin-field">
+          <label htmlFor="q-mem">{t("resources.admin.memory")}</label>
+          <input
+            id="q-mem"
+            placeholder="8G"
+            value={form.memory}
+            onChange={(e) => setForm({ ...form, memory: e.target.value })}
+          />
+        </span>
+        <span className="admin-field">
+          <label htmlFor="q-disk">{t("resources.admin.disk")}</label>
+          <input
+            id="q-disk"
+            placeholder="50G"
+            value={form.disk}
+            onChange={(e) => setForm({ ...form, disk: e.target.value })}
+          />
+        </span>
+      </div>
+
+      <div className="admin-row">
+        <button
+          type="button"
+          className="btn"
+          data-variant="primary"
+          data-size="sm"
+          disabled={!userId}
+          onClick={() => void save()}
+        >
+          {t("resources.admin.save")}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          disabled={!userId}
+          onClick={() => void clear()}
+        >
+          {t("resources.admin.clear")}
+        </button>
+        {saved ? <span className="detail">{t("resources.admin.saved")}</span> : null}
+      </div>
+    </section>
   );
 }

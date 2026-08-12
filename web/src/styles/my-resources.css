@@ -1,0 +1,165 @@
+/* `/my-resources` — the page every quota refusal points at (#692).
+ *
+ * It shipped with a full vocabulary of semantic classes and no stylesheet, so
+ * the meter was two zero-height divs (a person could not see how close to the
+ * limit they were) and each row read as one run of text:
+ * "quota demo A1 cores · 512 MB Close".
+ *
+ * Its own file rather than base.css: base is the app-wide reset + shared
+ * primitives, and these classes belong to one page. Same call as sheet.css /
+ * topic-hub.css. Imported from main.tsx alongside those.
+ *
+ * Tokens only — `no-undefined-tokens.test.ts` fails the build on a `var()` that
+ * names nothing, and a literal hex here would not follow the theme.
+ */
+
+.page {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-32) var(--space-24) var(--space-64);
+}
+
+.page > h1 {
+  font-size: var(--text-display-md);
+  margin: 0 0 var(--space-32);
+}
+
+.page > section + section {
+  margin-top: var(--space-32);
+}
+
+.page > section > h2 {
+  font-size: var(--text-body-lg);
+  margin: 0 0 var(--space-8);
+}
+
+/* "1 / 1", "67 B / 160 MB" — the headline number, so it stays at body weight
+   rather than dropping to the metadata tier. */
+.page .summary {
+  margin: 0 0 var(--space-8);
+  font-size: var(--text-body);
+  color: var(--text-paper);
+}
+
+.page .empty {
+  margin: 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
+/* The bar. `--paper-3` is the same track colour the app's other inset surfaces
+   use; the fill is the accent so it reads as "yours", not as an alert — being
+   near a limit is normal, not an error. */
+.meter {
+  height: 6px;
+  background: var(--paper-3);
+  border-radius: var(--radius-chip);
+  overflow: hidden;
+  margin-bottom: var(--space-12);
+}
+
+.meter-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+
+/* One row per environment / workspace: name grows, specs sit next to it, the
+   action is pushed to the end. The gap is what stopped "quota demo A" and
+   "1 core" reading as one word. */
+.page ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.page ul > li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  padding: var(--space-12) 0;
+  border-top: 1px solid var(--paper-3);
+}
+
+.page ul > li > a {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page .detail {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+
+.page .hint {
+  margin: var(--space-16) 0 0;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
+/* ── superuser: per-person overrides ─────────────────────────────────────
+   Only rendered for a superuser, so it is styled as a distinct block rather
+   than another list — the reader should be able to tell at a glance that this
+   half is about SOMEONE ELSE'S allowance, not their own usage. */
+.page .admin {
+  margin-top: var(--space-48);
+  padding: var(--space-16);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--paper-2);
+}
+
+.page .admin > h2 {
+  margin-top: 0;
+}
+
+.page .admin-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8) var(--space-16);
+  flex-wrap: wrap;
+}
+
+/* A label and its input wrap as ONE unit. Without this the row broke between
+   them — "Memory limit" ended a line and its box started the next, next to a
+   different field's label. */
+.page .admin-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+}
+
+.page .admin-row input {
+  font: inherit;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--paper);
+  color: var(--text-paper);
+}
+
+.page .admin-row input[type="number"] {
+  width: 90px;
+}
+
+.page .admin-row label {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+
+/* Which dimensions are this person's own and which fall through to the deploy
+   default — an override page that cannot show the difference makes it
+   impossible to tell who actually has an exception. */
+.page .admin .overridden {
+  color: var(--text-paper);
+  font-weight: 500;
+}
+
+.page .admin .inherited {
+  color: var(--text-paper-d2);
+}
