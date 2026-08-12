@@ -204,4 +204,36 @@ describe("BoardView (#451)", () => {
       expect(screen.getByTestId("card-1")).toHaveAttribute("aria-disabled", "false");
     });
   });
+
+  describe("record number on the card", () => {
+    it("shows the number alongside the title, not only when the title is missing", () => {
+      board({ entities: [issue(33, { title: "Fix the login loop", status: "open" })] });
+
+      const card = within(screen.getByTestId("card-33"));
+      // The number is what people say out loud ("look at 33"), so a titled card
+      // has to carry it too — it used to be a fallback for an empty title and
+      // therefore invisible on every card that had one.
+      expect(card.getByText("#33")).toBeInTheDocument();
+      expect(card.getByText("Fix the login loop")).toBeInTheDocument();
+    });
+
+    it("does not print the number twice when the record has no title", () => {
+      board({ entities: [issue(7, { status: "open" })] });
+
+      expect(within(screen.getByTestId("card-7")).getAllByText("#7")).toHaveLength(1);
+    });
+
+    it("keeps the number out of the way of the card's gestures", () => {
+      const onOpenRecord = vi.fn();
+      board({ entities: [issue(33, { title: "A", status: "open" })], onOpenRecord });
+
+      // The card is a drag handle and a double-click target, so the number must
+      // not become a control that eats either gesture. It stays readable to a
+      // screen reader on purpose — it is the record's identity, and on an
+      // untitled card it is the ONLY thing naming it.
+      const num = within(screen.getByTestId("card-33")).getByText("#33");
+      expect(num.closest("button")).toBeNull();
+      expect(num.tagName).toBe("SPAN");
+    });
+  });
 });
