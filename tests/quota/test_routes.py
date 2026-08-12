@@ -164,7 +164,12 @@ def test_the_admin_can_see_who_is_above_the_default_without_knowing_their_id():
         assert (by_id["alice"]["count"], by_id["alice"]["memory"]) == (9, "")
         assert (by_id["bob"]["count"], by_id["bob"]["memory"]) == (0, "8G")
         # and the baseline they are exceptions TO, so a number means something
-        assert body["defaults"] == {"count": 1, "cpu": 0.0, "memory_bytes": 0, "disk_bytes": 1024**3}
+        assert body["defaults"] == {
+            "count": 1,
+            "cpu": 0.0,
+            "memory_bytes": 0,
+            "disk_bytes": 1024**3,
+        }
 
 
 def test_a_revoked_exception_leaves_the_list():
