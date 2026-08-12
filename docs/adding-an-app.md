@@ -56,6 +56,7 @@ apps/<slug>/
 | `function.workspace` | file IDE(tree + editor + file tools)。`false` → 只有 chat 的 shell |
 | `function.sandbox` | exec + package tools。不需要 terminal;控制 exec 相關功能的開啟 |
 | `function.terminal` | 人用的 shell 分頁。**需要 `sandbox: true`** |
+| `resources` | 這個 App 的**一個** item 可以用多少 `{cpu, memory, disk}`。三個欄位各自可省略,見下 |
 | `agent.prompt_file` | base system prompt 的路徑(相對於 App 目錄) |
 | `agent.tools` | App 的 tool **上限**;profile 可以收窄成其子集 |
 | `agent.picker` | `[{preset, name}]`——model picker;`preset` ∈ `config.yaml` 的 `agents.presets` |
@@ -72,6 +73,38 @@ apps/<slug>/
 `agent.tools` 裡有 `exec` 卻 `sandbox: false`,或 `terminal: true` 卻
 `sandbox: false`,都會讓開機大聲失敗。`_template` App 出貨時帶
 `sandbox: false` + 只有 file 的 tools,用來示範一個 workspace-only(無 sandbox)的 App。
+
+### `resources`：這個 App 一個 item 吃多少
+
+一個資料分析 App 需要的記憶體本來就比聊天 App 多,而這件事屬於 App 自己,不屬於部署端一張
+按 slug 排的表——那種表新增 App 時沒人會記得改。所以 **App 宣告胃口,部署端定天花板**,就像
+k8s 的 Pod `requests` 對上 namespace 的 `LimitRange`。
+
+```jsonc
+// src/workspace_app/apps/<slug>/app.json
+"resources": {
+  "cpu": 2,           // 核心數
+  "memory": "2G",
+  "disk": "10G"       // 這是**一個 item 的 workspace** 上限,不是全 App 加總
+}
+```
+
+**三個欄位各自獨立、各自可省略。** 只在意記憶體就只寫 `memory`,cpu / disk 會各自往下掉到
+部署端的 `resources.per_app.default`,再掉到今天的舊旋鈕
+(`sandbox.isolation.*` / `filestore.workspace_quota`)。**什麼都不寫的 App 行為跟今天完全一樣**
+——目前四個內建 App 都沒有宣告。
+
+三件出手前要知道的事:
+
+- **超過天花板是開機失敗,不是默默截斷。** 超過 `resources.per_app.max` 會讓服務起不來,錯誤
+  訊息裡有 App 名字。「設定寫 4 核、實際只拿到 2 核」這種靜默失效的旋鈕,這個 codebase 不出貨。
+- **`cpu` / `memory` 由 sandbox 後端執行。** 正式環境是 `kind: http`,所以**改完要重新部署
+  sandbox-host**,否則 app.json 設了也沒有效果。`disk` 由本體執行,不受此限。
+- **`disk: "0"` 是「明確無上限」,會停止往下掉;`cpu: 0` 是「沒宣告」,會繼續往下掉。** 這個
+  不對稱是刻意的——零核心不是任何人的本意,零 disk 上限卻是。
+
+部署端那一半(`per_app.default` / `per_app.max`、以及**每個人**的總量與特規使用者)寫在
+[設定指南 §6.5](configuration.md)。
 
 ## `model.py` 合約
 
