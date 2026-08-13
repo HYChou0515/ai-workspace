@@ -1,0 +1,4176 @@
+diff --git a/specstar-skills/README.md b/specstar-skills/README.md
+new file mode 100644
+index 00000000..62f47ca3
+--- /dev/null
++++ b/specstar-skills/README.md
+@@ -0,0 +1,53 @@
++# SpecStar AI Skills
++
++Pre-built AI skills that teach coding assistants (Claude, GitHub Copilot, etc.) how to work with SpecStar. Install a skill and your AI can write SpecStar code correctly — models, schemas, routes, frontend customization, and more.
++
++## Available Skills
++
++| Skill | For | Description |
++|-------|-----|-------------|
++| **specstar-backend** | Python / FastAPI developers | Model definition, configuration, Schema API, route templates, QB, permissions, events |
++| **specstar-frontend** | React / TypeScript developers | Generator CLI, app structure, resource customization, components, hooks |
++
++## Installation
++
++### Claude Code / Claude Desktop
++
++Copy the skill folder into your project:
++
++```bash
++# Backend skill
++cp -r specstar-backend/ <your-project>/.claude/skills/
++
++# Frontend skill
++cp -r specstar-frontend/ <your-project>/.claude/skills/
++```
++
++### GitHub Copilot (VS Code)
++
++Copy the skill folder into `.github/skills/`:
++
++```bash
++# Backend skill
++cp -r specstar-backend/ <your-project>/.github/skills/
++
++# Frontend skill
++cp -r specstar-frontend/ <your-project>/.github/skills/
++```
++
++### Manual (any AI tool)
++
++You can also paste the content of `SKILL.md` directly into your AI tool's system prompt or context window.
++
++## Which skill do I need?
++
++- **Building an API with SpecStar?** → Install `specstar-backend`
++- **Building a React admin UI?** → Install `specstar-frontend`
++- **Building both?** → Install both skills
++
++## Compatibility
++
++- **Claude Code** ✅ (`.claude/skills/`)
++- **GitHub Copilot** ✅ (`.github/skills/`)
++- **Cursor** ✅ (paste into project rules)
++- **Any AI with custom instructions** ✅ (paste SKILL.md content)
+diff --git a/specstar-skills/specstar-backend/SKILL.md b/specstar-skills/specstar-backend/SKILL.md
+new file mode 100644
+index 00000000..84bca417
+--- /dev/null
++++ b/specstar-skills/specstar-backend/SKILL.md
+@@ -0,0 +1,446 @@
++---
++name: specstar-backend
++description: Build FastAPI REST APIs with SpecStar — spec-driven CRUD generation with built-in versioning, permissions, search, GraphQL, binary storage, schema migration, and message queue. Use this skill whenever the user works with SpecStar in Python, including defining data models (msgspec.Struct or Pydantic), configuring storage backends (Memory/Disk/S3/PostgreSQL), writing Query Builder (QB) expressions, using ResourceManager methods (create/get/update/delete/search/migrate/switch), setting up Schema migrations, adding route templates, creating custom create/update actions, handling events, processing async jobs with Job[T]/JobContext/DelayRetry, managing relationships with Ref/OnDelete, or building any FastAPI application powered by SpecStar. Also trigger when users ask about generating REST endpoints, building CRUD APIs, auto-generating API routes from models, data versioning or revision history, audit trails, soft delete and restore, file/binary/blob uploads, schema evolution or data migration, background job processing or async tasks, foreign key relationships between resources, or searching/filtering/querying API data — even if they don't explicitly mention SpecStar by name. Trigger on mentions of specstar, spec.configure, spec.add_model, spec.apply, spec.create_action, spec.update_action, Schema, ResourceManager, QB, DependencyProvider, DiskStorageFactory, S3StorageFactory, PostgresStorageFactory, or any SpecStar-specific API. Also trigger on legacy autocrud names (crud.configure, crud.add_model, crud.apply, AutoCRUD) since pre-0.10 code still uses them via the shim.
++---
++
++# SpecStar Backend Skill
++
++SpecStar is a **spec-driven backend platform for FastAPI** that generates complete REST APIs with **versioning, permissions, search, binary storage, schema migration, and async job processing** from Python data models. See `references/` for detailed API reference.
++
++> Setting up a new project or registering models? Read `references/setup-gotchas.md` first — it covers the most common import path and naming mistakes.
++
++## Key Decisions
++
++Before diving into the API, here are the choices you'll face and the reasoning behind each:
++
++**Struct vs Pydantic?** Use `msgspec.Struct` (recommended) for performance and native SpecStar compatibility. Use Pydantic `BaseModel` when you need Pydantic validators or are migrating existing Pydantic code — SpecStar converts it internally via `pydantic_to_struct()`.
++
++**Which storage factory?** Pick based on your deployment stage:
++- `MemoryStorageFactory` — tests and demos (data lost on restart)
++- `DiskStorageFactory` — local dev and small production (SQLite + filesystem)
++- `S3StorageFactory` — cloud deployment (SQLite-in-S3 + S3 objects) — requires `s3` extra
++- `PostgresStorageFactory` — large-scale production (full PostgreSQL) — requires `postgresql` extra
++
++Different storage and feature backends require installing extra dependencies. See the **Extra Dependencies by Feature** table below for the full mapping.
++
++**Which message queue factory?** Pick based on your infrastructure:
++- `SimpleMessageQueueFactory` — in-process queue, no infrastructure needed (default)
++- `RabbitMQMessageQueueFactory` — distributed, production-ready — requires `mq` extra
++- `CeleryMessageQueueFactory` — distributed via Celery workers — requires `celery` extra
++
++**`update()` vs `modify()`?** `update()` creates a new immutable revision — use it when you want to preserve history (the default for most workflows). `modify()` edits the current revision in-place — use it only for draft content that isn't finalized yet (e.g., a form being composed step by step).
++
++**`draft` vs `stable` status?** `stable` revisions are immutable (you must `update()` to create a new one). `draft` revisions can be `modify()`-ed in place. Set `default_status="draft"` if your workflow involves iterative editing before publishing.
++
++**When to use Schema versioning?** Skip it for early development. Add `Schema(Model, "v1")` when your data structure stabilizes. Add migration steps (`Schema(V2, "v2").step("v1", fn)`) only when you change the model shape and have existing data that needs to migrate.
++
++**`UNSET` vs `None`?** `None` means "this field is explicitly null." `UNSET` means "this field was not provided at all." This distinction matters in PATCH operations — an `UNSET` field is left unchanged, while `None` actively clears the value.
++
++## Quick Start
++
++```python
++from msgspec import Struct
++from fastapi import FastAPI
++from specstar import crud
++
++class User(Struct):
++    name: str
++    email: str
++
++app = FastAPI()
++crud.add_model(User)
++crud.apply(app)
++# Generates: POST/GET /user, GET/PUT/PATCH/DELETE /user/{id}, plus restore & switch-revision
++```
++
++### Full Example (storage + MQ + custom actions)
++
++```python
++from fastapi import FastAPI
++from msgspec import Struct
++from specstar import crud, Schema
++from specstar.resource_manager.storage_factory import DiskStorageFactory
++from specstar.message_queue.simple import SimpleMessageQueueFactory
++from specstar.crud.route_templates.basic import DependencyProvider
++from specstar.crud.route_templates.graphql import GraphQLRouteTemplate
++from specstar.crud.route_templates.blob import BlobRouteTemplate
++import datetime as dt
++
++app = FastAPI()
++
++crud.configure(
++    storage_factory=DiskStorageFactory("./data"),
++    message_queue_factory=SimpleMessageQueueFactory(),
++    dependency_provider=DependencyProvider(
++        get_user=lambda: "admin",
++        get_now=lambda: dt.datetime.now(),
++    ),
++    model_naming="kebab",
++)
++crud.add_route_template(GraphQLRouteTemplate())
++crud.add_route_template(BlobRouteTemplate())
++
++crud.add_model(User, indexed_fields=[("name", str), ("email", str)])
++crud.apply(app)
++```
++
++## Public API (all from `specstar`)
++
++```python
++from specstar import (
++    SpecStar, crud, Schema, LoadStats, struct_to_pydantic,
++    DisplayName, Unique, Ref, RefRevision, OnDelete, OnDuplicate, RefType,
++    IConstraintChecker, IValidator, ValidationError,
++    UniqueConstraintError, DuplicateResourceError, RevisionNotMigratedError,
++    SearchedResource, ResourceOps,
++    BackgroundTaskAccepted, BlobUploadSession, JobRedirectInfo,
++    MissingOperationContextError,
++)
++```
++
++## Model Definition
++
++### msgspec.Struct (recommended)
++
++```python
++from msgspec import Struct
++from typing import Annotated
++from enum import Enum
++from specstar import DisplayName, Unique, Ref, OnDelete
++from specstar.types import Binary
++
++class Role(Enum):
++    ADMIN = "admin"
++    USER = "user"
++
++class User(Struct):
++    name: Annotated[str, DisplayName()]                              # human label in admin UI
++    email: Annotated[str, Unique()]                                  # unique constraint
++    role: Role = Role.USER
++    age: int = 0
++    bio: str | None = None
++    team_id: Annotated[str | None, Ref("team", on_delete=OnDelete.set_null)] = None  # FK
++    skill_ids: list[Annotated[str, Ref("skill")]] = []              # array of refs
++    avatar: Binary | None = None                                     # blob file
++    config: dict | None = None                                       # arbitrary JSON
++```
++
++### Pydantic BaseModel
++
++```python
++from pydantic import BaseModel, field_validator
++
++class User(BaseModel):
++    name: Annotated[str, DisplayName()]
++    email: Annotated[str, Unique()]
++    age: int = 0
++
++    @field_validator("age")
++    @classmethod
++    def check_age(cls, v):
++        if v < 0: raise ValueError("Age must be non-negative")
++        return v
++```
++
++### Tagged Unions (discriminated)
++
++```python
++class ActiveSkill(Struct, tag_field="type", tag="active"):
++    mp_cost: int = 0
++    cooldown: int = 0
++
++class PassiveSkill(Struct, tag_field="type", tag="passive"):
++    buff_pct: int = 0
++
++class Skill(Struct):
++    name: str
++    detail: ActiveSkill | PassiveSkill  # discriminated union
++```
++
++### Field Annotations
++
++| Annotation | Purpose | Example |
++|-----------|---------|---------|
++| `DisplayName()` | Human-readable label | `Annotated[str, DisplayName()]` |
++| `Unique()` | Uniqueness constraint | `Annotated[str, Unique()]` |
++| `Ref("resource")` | Foreign key | `Annotated[str, Ref("team")]` |
++| `Ref("r", on_delete=OnDelete.cascade)` | Delete child when parent deleted | `Annotated[str, Ref("team", on_delete=OnDelete.cascade)]` |
++| `Ref("r", on_delete=OnDelete.set_null)` | Nullify on parent delete | `Annotated[str \| None, Ref("team", on_delete=OnDelete.set_null)]` |
++| `Ref("r", ref_type=RefType.revision_id)` | Ref to specific revision | `Annotated[str, Ref("user", ref_type=RefType.revision_id)]` |
++| `Binary` | Blob file (stored in blob store) | `avatar: Binary \| None = None` |
++
++## Configuration (`crud.configure`)
++
++```python
++crud.configure(
++    storage_factory=...,             # MemoryStorageFactory / DiskStorageFactory / S3StorageFactory / PostgresStorageFactory
++    message_queue_factory=...,       # SimpleMessageQueueFactory / RabbitMQMessageQueueFactory / CeleryMessageQueueFactory
++    dependency_provider=...,         # DependencyProvider(get_user=..., get_now=...)
++    permission_checker=...,          # IPermissionChecker implementation
++    model_naming="kebab",            # kebab | snake | camel | pascal | same | callable
++    encoding="json",                 # json | msgpack
++    default_status="stable",         # draft | stable — initial revision status
++    default_user="anonymous",        # str or Callable[[], str]
++    event_handlers=[...],            # list[IEventHandler]
++    route_templates=[...],           # list or dict
++    strict_operation_context=False,  # require user/now on every write
++)
++```
++
++See `references/storage-and-mq.md` for storage factory constructors, per-model overrides, message queue options, and DependencyProvider setup.
++
++## Model Registration (`crud.add_model`)
++
++```python
++crud.add_model(
++    User,                                 # type or Schema(type, "v1")
++    name="user",                          # custom resource name (default: auto from class)
++    indexed_fields=[("email", str), ("name", str)],  # tuple format for search optimization
++    storage=custom_factory,               # per-model storage override
++    permission_checker=custom_checker,    # per-model permission
++    event_handlers=[my_handler],          # per-model events
++    encoding="msgpack",                   # per-model encoding
++    default_status="draft",              # per-model default status
++    validator=validate_fn,                # function or IValidator
++    job_handler=process_job,              # Job[T] handler (activates MQ)
++    constraint_checkers=[...],            # custom constraint logic
++)
++crud.apply(app)  # generates all routes
++crud.apply(app, router=APIRouter(prefix="/v1"))  # mount under prefix
++```
++
++Validators can be a function `(data) → None` that raises on invalid input, or an `IValidator` class with a `.validate()` method. See `references/resource-manager.md` for examples.
++
++## ResourceManager API
++
++Get a ResourceManager for programmatic CRUD outside of HTTP routes:
++
++```python
++rm = crud.get_resource_manager(User)     # by type
++rm = crud.get_resource_manager("user")   # by name
++
++# Context manager sets audit user/time for all operations inside
++with rm.using(user="admin", now=dt.datetime.now()):
++    info = rm.create(User(name="Alice", email="a@b.com"))     # → RevisionInfo
++    resource = rm.get(info.resource_id)                        # → Resource[User]
++    rm.update(info.resource_id, User(name="Alice V2", email="a@b.com"))  # new revision
++    rm.modify(info.resource_id, User(name="Draft", email="a@b.com"))     # in-place edit
++    rm.switch(info.resource_id, info.revision_id)              # switch active revision
++    rm.delete(info.resource_id)                                # soft delete
++    rm.restore(info.resource_id)                               # undo delete
++    metas = rm.search_resources(QB["name"].contains("Ali").sort("-created_at").limit(10))
++```
++
++Key methods: `create`, `get`, `update`, `modify`, `patch`, `create_or_update`, `delete`, `restore`, `permanently_delete`, `switch`, `migrate`, `exists`, `get_meta`, `search_resources`, `list_resources`, `count_resources`, `get_blob`, `start_consume`, `dump`. See `references/resource-manager.md` for the full method table with signatures.
++
++## Schema & Migration (see references/query-and-schema.md for details)
++
++```python
++from specstar import Schema
++
++crud.add_model(User)                       # no versioning
++crud.add_model(Schema(User, "v1"))         # explicit version
++Schema(UserV2, "v2").step("v1", fn)        # with migration step
++Schema(UserV2, "v2").step("v1", fn, source_type=UserV1)  # typed migration (recommended)
++Schema(UserV3, "v3").step("v1", fn1).step("v2", fn2)     # chained: v1→v2→v3
++Schema(UserV3, "v3").step("v1", fn1).step("v2", fn2).plus("v1", fn_shortcut)  # BFS shortest
++Schema(User, "v1", validator=validate_user)                # with validator
++
++# Typed migration function (recommended)
++def migrate_v1_to_v2(old: UserV1) -> UserV2:
++    return UserV2(name=old.name, email=old.email, role="user")
++
++# Runtime migration
++rm.migrate(resource_id)                          # current revision
++rm.migrate(resource_id, revision_id="abc:1")     # specific old revision
++```
++
++## Query Builder (QB) (see references/query-and-schema.md for full operator table)
++
++```python
++from specstar.query import QB
++
++# Field comparisons — bracket notation + operator overloading
++q = QB["name"].eq("Alice")         # or QB["name"] == "Alice"
++q = QB["age"].gte(18)              # gte/gt/lte/lt/eq/ne
++q = QB["email"].contains("@g")     # also: startswith, endswith
++q = QB["role"].in_(["admin", "user"])  # also: is_null, is_not_null, between
++
++# Logical operators
++q = (QB["age"].gte(18) & QB["role"].eq("admin"))   # AND
++q = (QB["age"].lt(18) | QB["role"].eq("guest"))     # OR
++q = ~QB["name"].eq("Bob")                            # NOT
++
++# Metadata fields — QB.created_time(), QB.updated_by(), QB.is_deleted(), QB.resource_id(), etc.
++q = QB.created_time().gte(dt.datetime(2024, 1, 1))
++
++# Sorting & pagination
++q = QB["level"].gte(1).sort("-level", "+name").limit(10).offset(20)
++q = QB["level"].gte(1).page(2, 10)   # page 2, 10 per page
++
++# HTTP: GET /user?qb=QB["age"] > 18
++```
++
++## Route Templates (see references/routes-and-actions.md for all templates)
++
++Default: Create, List, Read, Update, Patch, Delete, Restore, SwitchRevision.
++
++```python
++from specstar.crud.route_templates.blob import BlobRouteTemplate
++from specstar.crud.route_templates.graphql import GraphQLRouteTemplate
++from specstar.crud.route_templates.migrate import MigrateRouteTemplate
++from specstar.crud.route_templates.delete import PermanentlyDeleteRouteTemplate, BatchDeleteRouteTemplate, BatchRestoreRouteTemplate
++from specstar.crud.route_templates.backup import ExportRouteTemplate, ImportRouteTemplate
++
++crud.add_route_template(BlobRouteTemplate())              # blob upload/download
++crud.add_route_template(GraphQLRouteTemplate())           # POST /graphql
++crud.add_route_template(MigrateRouteTemplate())           # schema migration endpoint
++crud.add_route_template(PermanentlyDeleteRouteTemplate()) # hard delete
++crud.add_route_template(BatchDeleteRouteTemplate())       # bulk soft delete
++```
++
++### Custom Create Actions (see references/routes-and-actions.md for async_mode details)
++
++```python
++@crud.create_action("character", label="Generate Random")
++async def gen_random():
++    return Character(name=f"Hero-{random.randint(1,100)}", level=1)
++
++@crud.create_action("character", path="/{name}/new", async_mode="job", job_name="create-char-job")
++async def create_by_name(name: Annotated[str, Ref("equipment")]):
++    return Character(name=name, level=1)
++# async_mode: None (sync) | "background" (fire-and-forget) | "job" (tracked via MQ)
++```
++
++### Custom Update Actions
++
++```python
++@crud.update_action("character", label="Level Up")
++async def level_up(existing: Character) -> Character:
++    return Character(name=existing.name, level=existing.level + 1)
++
++@crud.update_action("character", label="Rename", meta_param="meta")
++async def rename(existing: Character, info: RevisionInfo, meta: ResourceMeta):
++    existing.name = f"Renamed-{meta.total_revision_count}"
++    return existing
++```
++
++## Job System (Message Queue) (see references/storage-and-mq.md for details)
++
++```python
++from specstar.types import Job, Resource
++from specstar.message_queue.context import JobContext
++from specstar.message_queue.basic import DelayRetry
++
++class TaskPayload(Struct):
++    query: str
++class TaskArtifact(Struct):
++    result: str
++class GameEvent(Job[TaskPayload]):
++    pass  # Job model — automatically queued on create()
++
++def process_event(
++    event_resource: Resource[GameEvent],
++    job_context: JobContext[TaskPayload, TaskArtifact],
++):
++    payload = event_resource.data.payload
++    job_context.info(f"Processing: {payload.query}")
++
++    # Delay retry — re-enqueue after N seconds
++    if not_ready():
++        raise DelayRetry(delay_seconds=10)
++
++    job_context.set_artifact(TaskArtifact(result="done"))
++
++# Register with handler
++crud.add_model(GameEvent, indexed_fields=[("status", str)], job_handler=process_event)
++crud.apply(app)
++rm = crud.get_resource_manager(GameEvent)
++rm.start_consume(block=False)  # background thread
++```
++
++## Event Handlers
++
++```python
++from specstar.types import IEventHandler
++
++class AuditLogger(IEventHandler):
++    async def handle_event(self, context) -> None:
++        print(f"[{context.action}] resource={context.resource_name}")
++
++crud.configure(event_handlers=[AuditLogger()])
++```
++
++Event phases: `Before*`, `After*`, `OnSuccess*`, `OnFailure*` for Create, Get, Update, Modify, Patch, Delete, Restore, PermanentlyDelete, Switch, Migrate, SearchResources — 64 total contexts.
++
++## Backup & Restore
++
++```python
++import io
++from specstar import OnDuplicate, LoadStats
++
++# Export all data to .acbak binary stream
++buf = io.BytesIO()
++crud.dump(buf)
++
++# Import data
++buf.seek(0)
++stats: dict[str, LoadStats] = crud.load(buf, on_duplicate=OnDuplicate.overwrite)
++# OnDuplicate: overwrite | skip | raise_error
++```
++
++## Relationships (Ref & OnDelete)
++
++```python
++from specstar import Ref, OnDelete, RefType
++
++class Guild(Struct):
++    name: str
++
++class Character(Struct):
++    name: str
++    guild_id: Annotated[str, Ref("guild", on_delete=OnDelete.cascade)]          # delete char when guild deleted
++    mentor_id: Annotated[str | None, Ref("character", on_delete=OnDelete.set_null)] = None
++    skill_ids: list[Annotated[str, Ref("skill")]] = []                          # dangling (default)
++    pet_rev: Annotated[str, Ref("pet", ref_type=RefType.revision_id)] = ""      # ref to specific revision
++
++crud.add_model(Guild)
++crud.add_model(Character)  # SpecStar auto-installs referential integrity handlers
++```
++
++## Extra Dependencies by Feature
++
++Different storage factories, message queue backends, and optional features require installing the corresponding extra dependency:
++
++| Feature / Factory | Extra | Install Command |
++|---|---|---|
++| `MemoryStorageFactory` | *(none)* | `pip install specstar` |
++| `DiskStorageFactory` | *(none)* | `pip install specstar` |
++| `S3StorageFactory` | `s3` | `pip install "specstar[s3]"` |
++| `PostgresStorageFactory` | `postgresql` | `pip install "specstar[postgresql]"` |
++| `RabbitMQMessageQueueFactory` | `mq` | `pip install "specstar[mq]"` |
++| `CeleryMessageQueueFactory` | `celery` | `pip install "specstar[celery]"` |
++| `GraphQLRouteTemplate` | `graphql` | `pip install "specstar[graphql]"` |
++| `BlobRouteTemplate` (MIME detection) | `magic` | `pip install "specstar[magic]"` |
++| Redis MetaStore | `redis` | `pip install "specstar[redis]"` |
++| CLI tools | `cli` | `pip install "specstar[cli]"` |
++
++Combine multiple extras: `pip install "specstar[s3,postgresql,mq]"`
++
++## Install
++
++```bash
++pip install specstar              # core only
++pip install "specstar[all]"       # all extras
++# Individual extras: s3, postgresql, redis, mq, celery, graphql, cli, magic
++```
++
++## Key Conventions
++
++- **Versioning**: Every `update()` creates a new immutable revision (like Git commits), giving you full edit history and the ability to roll back. `modify()` edits a draft in-place — only use it for iterative authoring before publishing
++- **UNSET pattern**: `msgspec.UNSET` / `UnsetType` distinguishes "not provided" from `None` — essential for PATCH semantics where omitted fields should remain unchanged while `None` actively clears a value
++- **Soft delete**: `delete()` marks `is_deleted=True` (recoverable, data preserved); `restore()` reverses it; `permanently_delete()` removes all data and revisions irreversibly — use the soft approach by default so users can recover from mistakes
++- **Data coercion**: Accepts `dict`, `Struct`, or `BaseModel` as input — internally always converts to `Struct` for consistent serialization. Never return Pydantic instances from ResourceManager
++- **Model naming**: `model_naming="kebab"` → `UserProfile` becomes `/user-profile` in URLs. Choose the naming convention that matches your frontend's expectations
++- **Indexed fields**: Use tuple format `[("field", type)]` — indexed fields become searchable via QB and appear as filter options in the admin UI. Index the fields users will query most often
++- **Return types**: `create/update/modify/patch` → `RevisionInfo` (contains `resource_id` + `revision_id`); `delete/restore/switch/migrate` → `ResourceMeta` (full metadata); `get` → `Resource[T]` (metadata + typed data)
+diff --git a/specstar-skills/specstar-backend/references/query-and-schema.md b/specstar-skills/specstar-backend/references/query-and-schema.md
+new file mode 100644
+index 00000000..7974bff1
+--- /dev/null
++++ b/specstar-skills/specstar-backend/references/query-and-schema.md
+@@ -0,0 +1,278 @@
++# Query Builder & Schema — Detailed Reference
++
++## Query Builder (QB)
++
++The `QB` class provides a Django-like API for building resource queries. Queries are parsed safely via AST — no `eval()`.
++
++```python
++from specstar.query import QB
++```
++
++### Field Access
++
++```python
++QB["field_name"]          # bracket notation (recommended)
++QB["user.email"]          # nested fields via dot path
++QB["class"]               # reserved words safe
++```
++
++### Comparison Operators
++
++All return query condition objects that can be combined with `&`, `|`, `~`.
++
++| Method | Operator | Example |
++|--------|----------|---------|
++| `.eq(value)` | `==` | `QB["name"].eq("Alice")` or `QB["name"] == "Alice"` |
++| `.ne(value)` | `!=` | `QB["name"].ne("Bob")` or `QB["name"] != "Bob"` |
++| `.gt(value)` | `>` | `QB["age"].gt(18)` or `QB["age"] > 18` |
++| `.gte(value)` | `>=` | `QB["age"].gte(18)` or `QB["age"] >= 18` |
++| `.lt(value)` | `<` | `QB["age"].lt(18)` or `QB["age"] < 18` |
++| `.lte(value)` | `<=` | `QB["age"].lte(18)` or `QB["age"] <= 18` |
++| `.contains(s)` | string contains | `QB["email"].contains("@gmail")` |
++| `.startswith(s)` | string prefix | `QB["name"].startswith("A")` |
++| `.endswith(s)` | string suffix | `QB["name"].endswith("son")` |
++| `.in_(list)` | in collection | `QB["role"].in_(["admin", "user"])` |
++| `.is_null()` | is None | `QB["bio"].is_null()` |
++| `.is_not_null()` | is not None | `QB["bio"].is_not_null()` |
++| `.between(lo, hi)` | range inclusive | `QB["level"].between(20, 80)` |
++
++### Logical Operators
++
++```python
++# AND
++q = (QB["age"].gte(18) & QB["role"].eq("admin"))
++q = QB.all(QB["age"].gte(18), QB["role"].eq("admin"), QB["active"].eq(True))
++
++# OR
++q = (QB["role"].eq("admin") | QB["role"].eq("mod"))
++q = QB.any(QB["role"].eq("admin"), QB["role"].eq("mod"))
++
++# NOT
++q = ~QB["name"].eq("Bob")
++
++# Match all (no filter)
++q = QB.all()
++```
++
++### Chaining Methods
++
++```python
++q = QB["level"].gte(50)
++    .filter(QB["name"].contains("A"))   # add AND condition
++    .exclude(QB["role"].eq("banned"))    # add NOT condition
++    .sort("-level")                       # sorting
++    .limit(10)                            # max results
++    .offset(20)                           # skip N results
++```
++
++### Sorting
++
++```python
++# String-based (prefix - = descending, + = ascending)
++q = QB["level"].gte(1).sort("-level")              # level descending
++q = QB["level"].gte(1).sort("-level", "+name")     # multi-sort
++q = QB["level"].gte(1).sort("-created_at")         # by meta fields
++
++# Method-based
++q = QB["level"].gte(1).sort(QB["gold"].desc())
++q = QB["level"].gte(1).sort(QB["name"].asc())
++```
++
++### Pagination
++
++```python
++q = QB["level"].gte(1).limit(10)            # max 10 results
++q = QB["level"].gte(1).limit(10).offset(20) # skip first 20
++q = QB["level"].gte(1).page(2, 10)          # page 2, 10 per page
++q = QB["level"].gte(1).first()              # shorthand for limit(1)
++```
++
++### Metadata Field Queries
++
++Built-in accessors for `ResourceMeta` fields:
++
++| Accessor | Type | Example |
++|----------|------|---------|
++| `QB.resource_id()` | str | `QB.resource_id().eq("abc-123")` |
++| `QB.current_revision_id()` | str | `QB.current_revision_id().contains("abc")` |
++| `QB.created_time()` | datetime | `QB.created_time().gte(dt.datetime(2024, 1, 1))` || `QB.updated_time()` | datetime | `QB.updated_time().lte(dt.datetime.now())` |
++| `QB.created_by()` | str | `QB.created_by().eq("admin")` |
++| `QB.updated_by()` | str | `QB.updated_by().ne("guest")` |
++| `QB.is_deleted()` | bool | `QB.is_deleted().eq(False)` |
++| `QB.schema_version()` | str | `QB.schema_version().eq("v2")` |
++| `QB.total_revision_count()` | int | `QB.total_revision_count().gte(5)` |
++
++### HTTP API Usage
++
++Queries can be passed as query parameters in HTTP requests:
++
++```
++GET /user?qb=QB["age"] > 18
++GET /user?qb=(QB["age"] > 18) & (QB["status"] == "active")
++GET /user?qb=QB.created_by().eq("admin")
++GET /user?qb=QB.created_time() >= datetime(2024,1,1)
++```
++
++> When `qb` parameter is provided, it cannot be combined with `data_conditions`, `conditions`, or `sorts` parameters.
++
++### Complete Examples
++
++```python
++rm = crud.get_resource_manager(Character)
++
++# 1. High-level characters
++metas = rm.search_resources(QB["level"].gte(50).limit(10))
++
++# 2. Complex multi-condition
++metas = rm.search_resources(
++    (QB["level"].between(20, 80) & QB["guild_name"].is_not_null()).limit(5)
++)
++
++# 3. OR query
++metas = rm.search_resources(
++    (QB["level"].gte(80) | QB["gold"].gte(500000)).limit(5)
++)
++
++# 4. Sorted top 3
++metas = rm.search_resources(
++    QB["level"].gte(1).sort("-level").limit(3)
++)
++
++# 5. String contains
++metas = rm.search_resources(
++    QB["name"].contains("Hero").limit(5)
++)
++
++# 6. IN query
++metas = rm.search_resources(
++    QB["guild_name"].in_(["Alliance", "Horde"]).limit(10)
++)
++
++# 7. Recent metadata-based query
++metas = rm.search_resources(
++    QB.created_time()
++    .gte(dt.datetime.now() - dt.timedelta(hours=1))
++    .sort(QB.created_time().desc())
++    .limit(3)
++)
++
++# 8. Exclude specific groups
++metas = rm.search_resources(
++    QB["level"].gte(1)
++    .exclude(QB["guild_name"].eq("Beginner Town"))
++    .sort("-level")
++    .limit(5)
++)
++```
++
++---
++
++## Schema & Migration — Detailed Reference
++
++### Schema Class
++
++```python
++from specstar import Schema
++
++schema = Schema(
++    model: type[T],        # target Struct class
++    version: str,          # schema version identifier (e.g., "v1", "v2")
++    validator: Callable | IValidator | None = None,  # validation function or class
++)
++```
++
++### Migration Steps
++
++```python
++# IO-based migration (default): receives raw bytes stream
++def migrate_v1_to_v2(raw: IO[bytes]) -> dict:
++    import msgspec
++    old = msgspec.json.decode(raw.read())
++    return {"full_name": old["first_name"] + " " + old["last_name"]}
++
++Schema(UserV2, "v2").step("v1", migrate_v1_to_v2)
++
++# Typed migration (recommended): auto-decodes source to Struct
++def migrate_v1_to_v2(old: UserV1) -> UserV2:
++    return UserV2(full_name=f"{old.first_name} {old.last_name}")
++
++Schema(UserV2, "v2").step("v1", migrate_v1_to_v2, source_type=UserV1)
++```
++
++### Chained Migrations
++
++```python
++# v1 → v2 → v3 (sequential)
++Schema(UserV3, "v3").step("v1", fn_v1_to_v2).step("v2", fn_v2_to_v3)
++
++# Multiple paths (BFS finds shortest at runtime)
++schema = (
++    Schema(UserV3, "v3")
++    .step("v1", fn_v1_to_v2)      # v1 → v2
++    .step("v2", fn_v2_to_v3)      # v2 → v3
++    .plus("v1", fn_v1_to_v3)      # v1 → v3 directly (shortcut)
++)
++# BFS will pick v1→v3 (1 step) over v1→v2→v3 (2 steps)
++```
++
++### Validators
++
++Validators run on every `create()` and `update()`:
++
++```python
++# Function-based
++def validate_user(user: User) -> None:
++    if user.age < 0:
++        raise ValueError("Age must be non-negative")
++    if not user.email:
++        raise ValueError("Email required")
++
++Schema(User, "v1", validator=validate_user)
++
++# Class-based (IValidator protocol)
++class SkillValidator:
++    def validate(self, data: Skill) -> None:
++        if data.required_level < 0:
++            raise ValueError("Level must be non-negative")
++
++Schema(Skill, "v1", validator=SkillValidator())
++```
++
++### Runtime Migration
++
++```python
++rm = crud.get_resource_manager(User)
++
++# Migrate current revision to latest schema
++rm.migrate(resource_id)
++
++# Migrate a specific old revision
++rm.migrate(resource_id, revision_id="abc-123:1")
++
++# Switching to unmigrated revision raises error
++from specstar import RevisionNotMigratedError
++try:
++    rm.switch(resource_id, old_revision_id)
++except RevisionNotMigratedError:
++    rm.migrate(resource_id, revision_id=old_revision_id)
++    rm.switch(resource_id, old_revision_id)
++```
++
++### Schema Version Lifecycle
++
++1. **Create**: Revision stored with current `schema_version`
++2. **Update**: New revision uses current `schema_version`
++3. **Read old revision**: SpecStar attempts to decode with current schema
++4. **Migration**: Converts old revision data to current schema format
++5. **Switch**: Requires target revision to be at current schema_version
++
++### Encoding Options
++
++```python
++# Set encoding globally
++crud.configure(encoding="json")      # human-readable, larger
++crud.configure(encoding="msgpack")   # binary, compact, faster
++
++# Per-model encoding
++crud.add_model(User, encoding="msgpack")
++```
+diff --git a/specstar-skills/specstar-backend/references/resource-manager.md b/specstar-skills/specstar-backend/references/resource-manager.md
+new file mode 100644
+index 00000000..a837cbd8
+--- /dev/null
++++ b/specstar-skills/specstar-backend/references/resource-manager.md
+@@ -0,0 +1,248 @@
++# ResourceManager — Complete API Reference
++
++The `ResourceManager` is the core interface for all programmatic CRUD operations. Every model registered with `crud.add_model()` gets its own ResourceManager instance.
++
++## Obtaining a ResourceManager
++
++```python
++rm = crud.get_resource_manager(User)     # by type
++rm = crud.get_resource_manager("user")   # by resource name
++```
++
++## Operation Context
++
++Write operations require a user and timestamp for audit trails. Three approaches:
++
++```python
++import datetime as dt
++
++# 1. Context manager (recommended for batch operations)
++with rm.using(user="admin", now=dt.datetime.now()):
++    rm.create(data1)
++    rm.create(data2)
++    rm.update(id, data3)
++
++# 2. Per-call parameters
++rm.create(data, user="admin", now=dt.datetime.now())
++
++# 3. Global defaults (set in crud.configure)
++crud.configure(default_user="system", default_now=lambda: dt.datetime.now())
++```
++
++> **Note**: `meta_provide()` is deprecated — use `using()` instead.
++
++## Complete Method Reference
++
++### Create Operations
++
++```python
++# Create a new resource → returns RevisionInfo
++info = rm.create(
++    data: T,                        # Struct, Pydantic BaseModel, or dict
++    *,
++    status: RevisionStatus = UNSET, # override default_status (draft | stable)
++    user: str = UNSET,
++    now: dt.datetime = UNSET,
++    resource_id: str = UNSET,       # custom resource_id (auto-generated if omitted)
++)
++print(info.resource_id)             # "550e8400-..."
++print(info.revision_id)            # "550e8400-...:1"
++
++# Upsert: create if new, update if exists
++info = rm.create_or_update(resource_id, data)
++```
++
++### Read Operations
++
++```python
++# Get current revision
++resource = rm.get(resource_id)
++print(resource.data)               # User(name="Alice", ...)
++print(resource.info)               # RevisionInfo(revision_id=..., status=...)
++print(resource.info.revision_id)   # "abc-123:3"
++
++# Get specific revision
++resource = rm.get(resource_id, revision_id="abc-123:1")
++
++# Get specific revision directly
++resource = rm.get_resource_revision(resource_id, revision_id)
++
++# Get only metadata (no data fetch)
++meta = rm.get_meta(resource_id)
++print(meta.current_revision_id, meta.is_deleted, meta.total_revision_count)
++
++# Get revision-level metadata
++info = rm.get_revision_info(resource_id)
++info = rm.get_revision_info(resource_id, revision_id="abc-123:1")
++
++# List all revision IDs for a resource
++revisions = rm.list_revisions(resource_id)  # ["abc-123:1", "abc-123:2", ...]
++
++# Check existence
++if rm.exists(resource_id):
++    ...
++if rm.revision_exists(resource_id, revision_id):
++    ...
++
++# Partial field fetch (only retrieve specific fields)
++partial = rm.get_partial(resource_id, revision_id, ["name", "email"])
++```
++
++### Update Operations
++
++```python
++# Update — creates a NEW revision (immutable history)
++info = rm.update(
++    resource_id: str,
++    data: T,
++    *,
++    status: RevisionStatus = UNSET,
++    user: str = UNSET,
++    now: dt.datetime = UNSET,
++)
++# After: revision_id = "abc-123:4" (new), parent = "abc-123:3"
++
++# Modify — edits CURRENT revision in-place (for draft workflows)
++info = rm.modify(
++    resource_id: str,
++    data: T | JsonPatch | UnsetType = UNSET,
++    status: RevisionStatus = UNSET,
++    *,
++    user: str = UNSET,
++    now: dt.datetime = UNSET,
++)
++# After: same revision_id, updated_time changed
++
++# Patch — RFC 6902 JSON Patch operations
++info = rm.patch(resource_id, [
++    {"op": "replace", "path": "/name", "value": "New Name"},
++    {"op": "add", "path": "/tags/-", "value": "new-tag"},
++])
++```
++
++### Delete & Restore Operations
++
++```python
++# Soft delete — sets is_deleted=True, no revision change
++meta = rm.delete(resource_id)
++
++# Restore — reverses soft delete
++meta = rm.restore(resource_id)
++
++# Hard delete — removes resource + ALL revisions permanently
++meta = rm.permanently_delete(resource_id)
++```
++
++### Revision Management
++
++```python
++# Switch active revision (like git checkout)
++# r1 → r2 → r3(HEAD) → switch to r1 → r1(HEAD)
++meta = rm.switch(resource_id, revision_id="abc-123:1")
++
++# Migrate revision to latest schema
++meta = rm.migrate(resource_id)                          # current revision
++meta = rm.migrate(resource_id, revision_id="abc-123:1") # specific old revision
++
++# Switch to unmigrated revision requires migration first
++from specstar import RevisionNotMigratedError
++try:
++    rm.switch(resource_id, old_revision_id)
++except RevisionNotMigratedError:
++    rm.migrate(resource_id, revision_id=old_revision_id)
++    rm.switch(resource_id, old_revision_id)
++```
++
++### Search & Query
++
++```python
++from specstar.query import QB
++
++# Search → list of ResourceMeta (metadata only, fast)
++metas = rm.search_resources(
++    QB["level"].gte(50).sort("-level").limit(10)
++)
++for meta in metas:
++    print(meta.resource_id, meta.indexed_data)
++
++# List → list of SearchedResource (includes data + meta + info)
++results = rm.list_resources(
++    QB["level"].gte(50).sort("-level").limit(10),
++    returns=["data", "meta", "revision_info"],  # what to include
++    partial=["name", "level"],                   # partial fields only
++)
++for sr in results:
++    print(sr.data.name, sr.meta.created_time, sr.info.revision_id)
++
++# Count matching resources
++count = rm.count_resources(QB["level"].gte(50))
++```
++
++### Blob Operations
++
++```python
++from specstar.types import Binary
++
++# Blobs are auto-stored when creating/updating resources with Binary fields
++rm.create(Image(file=Binary(data=b"...", content_type="image/png")))
++
++# Retrieve blob by file_id
++blob = rm.get_blob(file_id)    # Binary(data=..., content_type=..., size=...)
++
++# Get presigned URL (S3 backends)
++url = rm.get_blob_url(file_id)
++
++# Stream download
++stream = rm.get_blob_stream(file_id)
++
++# Direct blob response (for HTTP endpoints)
++response = rm.get_blob_response(file_id)
++```
++
++### Export
++
++```python
++# Export resources as generator of records
++for record in rm.dump(query=None):  # None = all resources
++    # record is MetaRecord, RevisionRecord, or BlobRecord
++    ...
++```
++
++### Message Queue
++
++```python
++# Start consuming jobs (for Job[T] models)
++rm.start_consume(
++    block=False,                   # False = background thread
++    custom_creation="all",         # also consume async create actions
++    custom_update="all",           # also consume async update actions
++)
++# custom_creation/custom_update can also be list of specific job names
++```
++
++## Return Types
++
++| Method | Returns | Key Fields |
++|--------|---------|------------|
++| `create`, `update`, `modify`, `patch` | `RevisionInfo` | `.resource_id`, `.revision_id`, `.parent_revision_id`, `.status`, `.schema_version`, `.created_time`, `.data_hash` |
++| `delete`, `restore`, `switch`, `migrate`, `permanently_delete` | `ResourceMeta` | `.resource_id`, `.current_revision_id`, `.is_deleted`, `.total_revision_count`, `.created_time`, `.updated_time`, `.indexed_data` |
++| `get`, `get_resource_revision` | `Resource[T]` | `.data` (T), `.info` (RevisionInfo) |
++| `search_resources` | `list[ResourceMeta]` | metadata list |
++| `list_resources` | `list[SearchedResource[T]]` | `.data`, `.info`, `.meta` (all optional based on `returns`) |
++| `count_resources` | `int` | count |
++| `get_meta` | `ResourceMeta` | metadata |
++| `get_revision_info` | `RevisionInfo` | revision metadata |
++| `list_revisions` | `list[str]` | revision ID strings |
++| `exists` | `bool` | existence check |
++
++## Properties
++
++```python
++rm.resource_type          # type — the Struct class
++rm.resource_name          # str — registered name (e.g., "user")
++rm.schema_version         # str — current schema version
++rm.pydantic_type          # type | None — original Pydantic class if used
++rm.indexed_fields         # list — indexed field definitions
++rm.user                   # str — current context user
++rm.now                    # dt.datetime — current context timestamp
++```
+diff --git a/specstar-skills/specstar-backend/references/routes-and-actions.md b/specstar-skills/specstar-backend/references/routes-and-actions.md
+new file mode 100644
+index 00000000..17abb664
+--- /dev/null
++++ b/specstar-skills/specstar-backend/references/routes-and-actions.md
+@@ -0,0 +1,276 @@
++# Route Templates & Custom Actions — Detailed Reference
++
++## Route Generation Flow
++
++```python
++crud.add_model(User)       # register model
++crud.apply(app)            # generate all routes
++crud.apply(app, router=APIRouter(prefix="/v1"))  # mount under prefix
++```
++
++`apply()` validates Ref targets, installs referential integrity handlers, sorts and applies route templates, registers custom actions, adds ref-specific routes, and adds global backup/restore routes.
++
++## Default Route Templates
++
++These are automatically enabled for every registered model:
++
++| Template | Method | Path | Purpose |
++|----------|--------|------|---------|
++| `CreateRouteTemplate` | `POST` | `/{resource}` | Create resource |
++| `ListRouteTemplate` | `GET` | `/{resource}/data`, `/meta`, `/full`, etc. | Search/list with pagination + QB |
++| `ReadRouteTemplate` | `GET` | `/{resource}/{id}?returns=data,meta,revision_info` | Get single resource |
++| `UpdateRouteTemplate` | `PUT` | `/{resource}/{id}?mode=update\|modify` | Full replace (new revision or in-place) |
++| `PatchRouteTemplate` | `PATCH` | `/{resource}/{id}` | JSON Merge Patch (RFC 7386) |
++| `DeleteRouteTemplate` | `DELETE` | `/{resource}/{id}` | Soft delete |
++| `RestoreRouteTemplate` | `POST` | `/{resource}/{id}/restore` | Restore soft-deleted |
++| `SwitchRouteTemplate` | `POST` | `/{resource}/{id}/switch-revision` | Change active revision |
++
++## Additional Route Templates
++
++Add these explicitly for extra endpoints:
++
++```python
++from specstar.crud.route_templates.blob import BlobRouteTemplate
++from specstar.crud.route_templates.graphql import GraphQLRouteTemplate
++from specstar.crud.route_templates.migrate import MigrateRouteTemplate
++from specstar.crud.route_templates.delete import (
++    PermanentlyDeleteRouteTemplate,
++    BatchDeleteRouteTemplate,
++    BatchRestoreRouteTemplate,
++)
++from specstar.crud.route_templates.backup import ExportRouteTemplate, ImportRouteTemplate
++from specstar.crud.route_templates.rerun import RerunRouteTemplate
++```
++
++| Template | Method | Path | Purpose |
++|----------|--------|------|---------|
++| `BlobRouteTemplate` | `POST/GET` | `/{resource}/{id}/blobs/{file_id}` | Upload/download binary files |
++| `GraphQLRouteTemplate` | `POST` | `/graphql` | GraphQL endpoint for all models |
++| `MigrateRouteTemplate` | `POST` | `/{resource}/{id}/migrate` | Schema migration endpoint |
++| `PermanentlyDeleteRouteTemplate` | `DELETE` | `/{resource}/{id}/permanent` | Hard delete (irreversible) |
++| `BatchDeleteRouteTemplate` | `DELETE` | `/{resource}?field=value` | Bulk soft delete |
++| `BatchRestoreRouteTemplate` | `POST` | `/{resource}/restore?field=value` | Bulk restore |
++| `ExportRouteTemplate` | `GET` | `/{resource}/backup` | Export model data |
++| `ImportRouteTemplate` | `POST` | `/{resource}/backup/import` | Import model data |
++| `RerunRouteTemplate` | `POST` | `/{resource}/{id}/rerun` | Re-enqueue failed job |
++
++### Adding Templates
++
++```python
++# Method 1: add_route_template (before apply)
++crud.add_route_template(BlobRouteTemplate())
++crud.add_route_template(GraphQLRouteTemplate())
++
++# Method 2: configure with list
++crud.configure(route_templates=[
++    BlobRouteTemplate(),
++    PermanentlyDeleteRouteTemplate(),
++])
++
++# Method 3: configure with dict (customize default templates)
++from specstar.crud.route_templates import ListRouteTemplate
++crud.configure(route_templates={
++    ListRouteTemplate: {"dependency_provider": my_provider},
++})
++```
++
++## Custom Create Actions
++
++Decorator to register additional create endpoints for a resource:
++
++```python
++@crud.create_action(
++    resource_name: str,          # which resource (by name)
++    *,
++    path: str | None = None,     # custom URL path (default: auto-derived from function name)
++    label: str | None = None,    # human-readable label (shown in admin UI)
++    async_mode: Literal["job", "background"] | None = None,  # execution mode
++    job_name: str | None = None, # custom job resource name (for async_mode="job")
++)
++```
++
++### Sync Create (default)
++
++```python
++@crud.create_action("character", label="Generate Random")
++async def gen_random():
++    return Character(name=f"Hero-{random.randint(1,100)}", level=1)
++# → POST /character/gen-random
++```
++
++### Background Create (fire-and-forget)
++
++```python
++@crud.create_action("character", label="Slow Generate", async_mode="background")
++async def slow_gen():
++    time.sleep(5)  # long operation
++    return Character(name="Background Hero", level=1)
++# Returns immediately, creation happens in background thread
++```
++
++### Job Create (tracked via MQ)
++
++```python
++@crud.create_action("character", label="Job Create", async_mode="job", job_name="create-char-job")
++async def job_create(name: Annotated[str, Ref("equipment")]):
++    time.sleep(100)
++    return Character(name=name, level=1)
++# Creates a tracked job resource; consumer processes it asynchronously
++# Start consumer: rm.start_consume(block=False, custom_creation=["create-char-job"])
++```
++
++### Custom Path with Parameters
++
++```python
++@crud.create_action("character", path="/{name}/new", async_mode="job")
++async def create_by_name(name: str):
++    return Character(name=name, level=1)
++# → POST /character/{name}/new
++```
++
++### Complex Parameters
++
++```python
++from fastapi import Body, UploadFile
++from specstar import struct_to_pydantic, Ref
++
++@crud.create_action("character", label="Complex Create", async_mode="job")
++async def complex_create(
++    x: int | str,
++    name: Annotated[str, Body(embed=True), Ref("equipment")],
++    z: UploadFile,
++    skill: struct_to_pydantic(Skill),  # converts Struct to Pydantic for FastAPI validation
++):
++    return Character(name=f"{name} ({x})", level=1)
++```
++
++## Custom Update Actions
++
++Decorator to register additional update endpoints for an existing resource:
++
++```python
++@crud.update_action(
++    resource_name: str,
++    *,
++    path: str | None = None,
++    label: str | None = None,
++    mode: Literal["update", "modify"] = "update",  # update=new revision, modify=in-place
++    existing_param: str = "existing",    # parameter name for current resource data
++    info_param: str = "info",            # parameter name for RevisionInfo injection
++    meta_param: str = "meta",            # parameter name for ResourceMeta injection
++    async_mode: Literal["job", "background"] | None = None,
++    job_name: str | None = None,
++)
++```
++
++### Basic Update Action
++
++```python
++@crud.update_action("character", label="Level Up")
++async def level_up(existing: Character) -> Character:
++    return Character(
++        name=existing.name,
++        level=existing.level + 1,
++    )
++# → POST /character/{resource_id}/level-up
++# Creates new revision with updated data
++```
++
++### With RevisionInfo and ResourceMeta
++
++```python
++@crud.update_action("character", label="Rename", meta_param="xx")
++async def rename(existing: Character, info: RevisionInfo, xx: ResourceMeta):
++    existing.name = f"Renamed-{xx.total_revision_count}-{info.updated_time}"
++    return existing
++# Injects current data + revision info + resource metadata
++```
++
++### Modify Mode (in-place draft edit)
++
++```python
++@crud.update_action("character", label="Quick Fix", mode="modify")
++async def quick_fix(existing: Character) -> Character:
++    existing.name = existing.name.strip()
++    return existing
++# Edits current revision in-place (no new revision)
++```
++
++### Background Update
++
++```python
++@crud.update_action("character", label="Slow Update", async_mode="background")
++async def slow_update(existing: Character) -> Character:
++    time.sleep(5)
++    existing.name = f"Updated-{time.time()}"
++    return existing
++# Returns immediately, update happens in background
++```
++
++### Return None = No Update
++
++```python
++@crud.update_action("character", label="Conditional Update")
++async def conditional(existing: Character) -> Character | None:
++    if existing.level >= 100:
++        return None  # no update performed
++    return Character(name=existing.name, level=existing.level + 1)
++```
++
++## Starting Async Consumers
++
++```python
++crud.apply(app)
++
++# Start MQ consumer for Job models
++rm = crud.get_resource_manager(GameEvent)
++rm.start_consume(block=False)
++
++# Start consumer for custom async actions
++rm = crud.get_resource_manager(Character)
++rm.start_consume(
++    block=False,
++    custom_creation="all",     # consume all async create-action jobs
++    custom_update="all",       # consume all async update-action jobs
++)
++# Or specific ones:
++rm.start_consume(custom_creation=["create-char-job"])
++```
++
++## Global Backup & Restore Routes
++
++`apply()` automatically adds global routes:
++
++- `GET /backup` — export all resources as `.acbak` archive
++- `POST /backup/import` — import from `.acbak` archive
++
++```python
++# Programmatic backup/restore
++import io
++from specstar import OnDuplicate
++
++buf = io.BytesIO()
++crud.dump(buf)
++
++buf.seek(0)
++stats = crud.load(buf, on_duplicate=OnDuplicate.overwrite)
++# stats: {"user": LoadStats(loaded=10, skipped=0, total=10), ...}
++```
++
++## OpenAPI Customization
++
++`apply()` automatically customizes OpenAPI schema with:
++
++- `x-ref-*` / `x-ref-revision-*` extensions on schema properties
++- `x-specstar-custom-create-actions` for custom create endpoints
++- `x-specstar-custom-update-actions` for custom update endpoints
++- SpecStar-related schemas in `components.schemas`
++
++## Ref Routes
++
++For models with `Ref()` annotations, `apply()` also generates:
++
++- **Referrer routes**: Find resources that reference a given resource
++- **Relationship routes**: Navigate relationships between resources
++
++These are derived automatically from the `Ref()` annotations in your models.
+diff --git a/specstar-skills/specstar-backend/references/setup-gotchas.md b/specstar-skills/specstar-backend/references/setup-gotchas.md
+new file mode 100644
+index 00000000..88e3e507
+--- /dev/null
++++ b/specstar-skills/specstar-backend/references/setup-gotchas.md
+@@ -0,0 +1,66 @@
++# Before You Write Code — Common Gotchas
++
++These are the most frequent mistakes when setting up SpecStar. Internalizing them saves significant debugging time.
++
++## 1. `indexed_fields`, NOT `indexes` or `index_fields`
++The parameter for `crud.add_model()` is **`indexed_fields`** — not `indexes`, not `index_fields`, not `index`. This is the most common parameter name mistake.
++```python
++# ✓ CORRECT
++crud.add_model(User, indexed_fields=[("email", str)])
++# ❌ WRONG — these parameter names don't exist
++crud.add_model(User, indexes=[...])
++crud.add_model(User, index_fields=[...])
++```
++
++## 2. Ref names must match the **resource name**, not the Python class name
++With default kebab naming (`model_naming="kebab"`), class `BlogPost` becomes resource name `blog-post`. Ref annotations must use the **resource name** (kebab-case), not the Python class name or snake_case:
++```python
++class BlogPost(Struct):
++    title: str
++
++class Comment(Struct):
++    # ✓ CORRECT — matches the resource name (kebab-case, because BlogPost → blog-post)
++    post: Annotated[str, Ref("blog-post")]
++    # ❌ WRONG — "blog_post" is snake_case, but the resource name is "blog-post"
++    # post: Annotated[str, Ref("blog_post")]
++    # ❌ WRONG — "BlogPost" is the Python class name, not the resource name
++    # post: Annotated[str, Ref("BlogPost")]
++```
++
++The naming conversion table (default `model_naming="kebab"`):
++
++| Python Class | Resource Name | Ref Value |
++|-------------|--------------|-----------|
++| `User` | `user` | `Ref("user")` |
++| `BlogPost` | `blog-post` | `Ref("blog-post")` |
++| `GameEvent` | `game-event` | `Ref("game-event")` |
++
++## 3. `specstar.annotations` does NOT exist
++All annotations (`Unique`, `Ref`, `DisplayName`, `OnDelete`, etc.) are imported directly from `specstar`:
++```python
++# ✓ CORRECT
++from specstar import Unique, Ref, DisplayName, OnDelete
++# ❌ WRONG — this module doesn't exist
++# from specstar.annotations import Unique
++```
++
++## 4. Storage factories are NOT in `specstar` top-level
++Storage factories must be imported from `specstar.resource_manager.storage_factory`:
++```python
++# ✓ CORRECT
++from specstar.resource_manager.storage_factory import DiskStorageFactory
++from specstar.resource_manager.storage_factory import MemoryStorageFactory
++from specstar.resource_manager.storage_factory import S3StorageFactory
++from specstar.resource_manager.storage_factory import PostgresStorageFactory
++# ❌ WRONG — not exported at top level
++# from specstar import DiskStorageFactory
++```
++
++## 5. Model registration order matters for Ref validation
++If `Comment` has `Ref("blog-post")`, register `BlogPost` first (or at least before `crud.apply()`). SpecStar validates refs at `apply()` time, but warnings appear during `add_model()` if the target isn't registered yet. Best practice: register models in dependency order (parents before children).
++
++## 6. `uvicorn` is not a dependency of specstar
++You need to install it separately:
++```bash
++uv add uvicorn   # or: pip install uvicorn
++```
+diff --git a/specstar-skills/specstar-backend/references/storage-and-mq.md b/specstar-skills/specstar-backend/references/storage-and-mq.md
+new file mode 100644
+index 00000000..4916d4ff
+--- /dev/null
++++ b/specstar-skills/specstar-backend/references/storage-and-mq.md
+@@ -0,0 +1,309 @@
++# Storage Backends & Message Queue — Detailed Reference
++
++## Storage Architecture
++
++SpecStar splits persistence into three layers:
++
++| Layer | Interface | Purpose |
++|-------|-----------|---------|
++| **MetaStore** | `IMetaStore` | Resource metadata, search indexing |
++| **ResourceStore** | `IResourceStore` | Revision data (serialized payloads) |
++| **BlobStore** | `IBlobStore` | Binary files (content-hash addressed) |
++
++A `StorageFactory` creates all three for each registered model.
++
++## Storage Factory Options
++
++### MemoryStorageFactory
++
++In-memory storage. Data lost on process exit. Best for testing and demos.
++
++No extra dependency required.
++
++```python
++from specstar.resource_manager.storage_factory import MemoryStorageFactory
++
++crud.configure(storage_factory=MemoryStorageFactory())
++```
++
++| Component | Backend |
++|-----------|---------|
++| Meta | in-memory dict |
++| Revision | in-memory dict |
++| Blob | in-memory |
++
++### DiskStorageFactory
++
++Local filesystem. SQLite for metadata, files for revisions. Zero infrastructure.
++
++No extra dependency required.
++
++```python
++from specstar.resource_manager.storage_factory import DiskStorageFactory
++
++crud.configure(storage_factory=DiskStorageFactory(rootdir="./data"))
++```
++
++| Component | Backend |
++|-----------|---------|
++| Meta | SQLite file |
++| Revision | filesystem files |
++| Blob | filesystem |
++
++**Best for**: local development, single-node deployments, small-medium systems.
++
++### S3StorageFactory
++
++Cloud object storage. SQLite DB synced to S3 for metadata, S3 for data.
++
++**Requires:** `pip install "specstar[s3]"`
++
++```python
++from specstar.resource_manager.storage_factory import S3StorageFactory
++
++crud.configure(storage_factory=S3StorageFactory(
++    bucket="my-bucket",
++    access_key_id="...",                 # default: "minioadmin" (MinIO)
++    secret_access_key="...",             # default: "minioadmin" (MinIO)
++    region_name="us-east-1",
++    endpoint_url="http://localhost:9000", # MinIO; omit for AWS S3
++    prefix="app-data/",                  # S3 key prefix
++    encoding="json",                     # json or msgpack
++    auto_sync=True,                      # auto-sync SQLite to S3
++    sync_interval=0,                     # 0 = immediate, N = seconds
++    enable_locking=True,                 # ETag-based optimistic locking
++    auto_reload_on_conflict=False,       # reload from S3 on conflict
++    check_etag_on_read=True,             # verify consistency on read
++    upload_method="proxy",               # "proxy" or "single_put" (presigned URL)
++    presigned_url_expiry=3600,           # URL expiry seconds
++))
++```
++
++| Component | Backend |
++|-----------|---------|
++| Meta | SQLite stored in S3 |
++| Revision | S3 objects |
++| Blob | S3 |
++
++**Best for**: cloud deployments, medium-scale, multi-node services.
++
++### PostgresStorageFactory
++
++All data in PostgreSQL. No external object storage needed.
++
++**Requires:** `pip install "specstar[postgresql]"`
++
++```python
++from specstar.resource_manager.storage_factory import PostgresStorageFactory
++
++crud.configure(storage_factory=PostgresStorageFactory(
++    connection_string="postgresql://user:pass@host:5432/db",
++    encoding="msgpack",          # msgpack recommended for PG (default)
++    table_prefix="myapp_",      # prefix for table names
++))
++```
++
++| Component | Backend |
++|-----------|---------|
++| Meta | PostgreSQL tables |
++| Revision | PostgreSQL tables |
++| Blob | PostgreSQL |
++
++**Best for**: large-scale production, heavy query workloads, single-database architecture.
++
++## Choosing a Backend
++
++| Use Case | Recommended |
++|----------|-------------|
++| Unit tests | `MemoryStorageFactory` |
++| Local development | `DiskStorageFactory` |
++| Simple production | `DiskStorageFactory` |
++| Cloud storage | `S3StorageFactory` |
++| Large-scale production | `PostgresStorageFactory` |
++
++## Per-Model Storage Override
++
++Different resources can use different storage backends:
++
++```python
++crud.configure(storage_factory=DiskStorageFactory("./data"))  # default
++
++crud.add_model(User)                                           # uses Disk
++crud.add_model(Image, storage=S3StorageFactory(bucket="imgs")) # uses S3
++crud.add_model(Config, storage=MemoryStorageFactory())         # uses Memory
++```
++
++## Storage Upgrade Path
++
++```python
++# Phase 1: Development/Testing
++crud.configure(storage_factory=MemoryStorageFactory())
++
++# Phase 2: Local persistence
++crud.configure(storage_factory=DiskStorageFactory("./data"))
++
++# Phase 3: Cloud deployment
++crud.configure(storage_factory=S3StorageFactory(bucket="prod", endpoint_url=None))
++
++# Phase 4: Large-scale production
++crud.configure(storage_factory=PostgresStorageFactory(
++    connection_string="postgresql://...",
++))
++```
++
++---
++
++## Message Queue System
++
++SpecStar integrates async job processing directly into the resource model. Jobs are resources with status tracking, retry logic, and audit history.
++
++### Message Queue Factories
++
++```python
++# In-process (default) — no infrastructure needed, no extra dependency required
++from specstar.message_queue.simple import SimpleMessageQueueFactory
++crud.configure(message_queue_factory=SimpleMessageQueueFactory())
++
++# RabbitMQ — distributed, production-ready
++# Requires: pip install "specstar[mq]"
++from specstar.message_queue.rabbitmq import RabbitMQMessageQueueFactory
++crud.configure(message_queue_factory=RabbitMQMessageQueueFactory())
++
++# Celery — distributed via Celery workers
++# Requires: pip install "specstar[celery]"
++from specstar.message_queue.celery_queue import CeleryMessageQueueFactory
++crud.configure(message_queue_factory=CeleryMessageQueueFactory(broker="redis://..."))
++```
++
++### Job Model Definition
++
++Jobs are resources that automatically get queued when created:
++
++```python
++from msgspec import Struct
++from specstar.types import Job
++
++class TaskPayload(Struct):
++    query: str
++    priority: int = 1
++
++class TaskArtifact(Struct):
++    result: str
++    processing_time: float
++
++# Job[T] is a special Struct with: payload (T), status, retries, max_retries, errmsg
++class ProcessTask(Job[TaskPayload]):
++    pass
++```
++
++### Job Handler
++
++```python
++from specstar.types import Resource, JobContext, DelayRetry
++
++def handle_task(
++    task_resource: Resource[ProcessTask],
++    job_context: JobContext[TaskPayload, TaskArtifact],
++):
++    payload = task_resource.data.payload
++    retries = task_resource.data.retries
++
++    # Logging
++    job_context.info(f"Processing: {payload.query}")
++    job_context.warning("Low priority task")
++
++    # Delay retry — re-enqueue after N seconds
++    if external_service_unavailable():
++        raise DelayRetry(delay_seconds=30)
++
++    # Set result artifact
++    job_context.set_artifact(TaskArtifact(
++        result="done",
++        processing_time=1.5,
++    ))
++```
++
++### Registration & Consumption
++
++```python
++# Register with handler
++crud.add_model(
++    ProcessTask,
++    indexed_fields=[("status", str)],
++    job_handler=handle_task,
++)
++
++crud.apply(app)
++
++# Start consuming (after apply)
++rm = crud.get_resource_manager(ProcessTask)
++rm.start_consume(block=False)  # background thread
++
++# For custom create/update actions with async_mode="job"
++rm.start_consume(
++    block=False,
++    custom_creation="all",    # consume all async create actions
++    custom_update="all",      # consume all async update actions
++)
++# Or specific job names:
++rm.start_consume(custom_creation=["create-char-job"])
++```
++
++### Creating Jobs via API
++
++Jobs are created like any resource — `POST /process-task` with payload data. The MQ consumer picks them up automatically.
++
++```python
++# Programmatic job creation
++with rm.using("admin", dt.datetime.now()):
++    rm.create(ProcessTask(payload=TaskPayload(query="find users")))
++```
++
++### Job Status Tracking
++
++Jobs track status automatically: `pending` → `running` → `completed` / `failed`. Query via:
++
++```python
++# Find running jobs
++running = rm.search_resources(QB["status"].eq("running"))
++
++# Find failed jobs
++failed = rm.search_resources(QB["status"].eq("failed"))
++```
++
++---
++
++## DependencyProvider
++
++Controls how HTTP routes determine the current user and timestamp:
++
++```python
++from specstar.crud.route_templates.basic import DependencyProvider
++
++# Default (anonymous user, current time)
++dp = DependencyProvider()
++
++# Custom authentication
++dp = DependencyProvider(
++    get_user=get_current_user,    # FastAPI Depends-compatible function
++    get_now=lambda: dt.datetime.now(),
++)
++
++crud.configure(dependency_provider=dp)
++```
++
++If `default_user` is set in `crud.configure()`, it replaces the DependencyProvider's default when no custom `get_user` was provided.
++
++## Extras Installation
++
++```bash
++pip install specstar                   # core only
++pip install "specstar[s3]"             # S3 storage
++pip install "specstar[postgresql]"     # PostgreSQL storage
++pip install "specstar[redis]"          # Redis meta store
++pip install "specstar[mq]"            # RabbitMQ
++pip install "specstar[celery]"        # Celery workers
++pip install "specstar[graphql]"       # GraphQL support
++pip install "specstar[cli]"           # CLI tools
++pip install "specstar[all]"           # everything
++```
+diff --git a/specstar-skills/specstar-frontend/SKILL.md b/specstar-skills/specstar-frontend/SKILL.md
+new file mode 100644
+index 00000000..3b0dd460
+--- /dev/null
++++ b/specstar-skills/specstar-frontend/SKILL.md
+@@ -0,0 +1,516 @@
++---
++name: specstar-frontend
++description: Build React admin interfaces with SpecStar Web — a code generator that creates production-ready CRUD UIs from SpecStar FastAPI backends. Use this skill whenever the user is working with specstar-web-generator, customizing generated React apps, configuring resource fields or variants, using SpecStar hooks (useResourceList, useResourceDetail, useCreateResource), modifying field renderers, working with the resource registry, or building any React frontend that connects to an SpecStar API. Also use when the user mentions specstar-web, resourceCustomization, getResource, FieldVariant, generator init/generate/integrate, or Mantine components in an SpecStar context.
++---
++
++# SpecStar Frontend
++
++SpecStar Web is a **code generator** that parses OpenAPI specs from SpecStar backends and generates a complete, standalone React admin interface. The generated app uses React 19, Mantine 8, TanStack Router, and includes full CRUD pages, API clients, and type definitions.
++
++## Quick Start
++
++```bash
++# 1. Start your SpecStar backend
++uvicorn main:app --reload
++
++# 2. Generate the frontend app
++cd web
++make gen-app          # Scaffolds app + installs deps + generates code
++
++# 3. Run the dev server
++make dev-app          # Starts Vite on default port
++```
++
++After backend schema changes:
++
++```bash
++make regen-app        # Re-generates types, API clients, and routes
++```
++
++## Generator CLI
++
++The CLI tool (`specstar-web`) has three commands:
++
++### `init <project-name>` — Scaffold a new app
++
++```bash
++npx specstar-web init my-admin --mantine 8 --include-tests
++```
++
++| Option | Default | Description |
++|--------|---------|-------------|
++| `--dir <directory>` | `.` | Target directory |
++| `--mantine <7\|8>` | `7` | Mantine major version |
++| `--include-tests` | `false` | Include test files |
++
++### `generate` — Generate code from backend
++
++```bash
++npx specstar-web generate --url http://localhost:8000
++```
++
++| Option | Default | Description |
++|--------|---------|-------------|
++| `--url <api-url>` | `http://localhost:8000` | Backend URL for OpenAPI spec |
++| `--output <dir>` | `src` | Output directory |
++| `--openapi-path <path>` | `/openapi.json` | OpenAPI endpoint path |
++| `--base-path <path>` | auto-detected | API base path prefix |
++| `--proxy-path <path>` | `/api` | Vite dev server proxy path |
++
++### `integrate` — Add SpecStar to existing React project
++
++```bash
++npx specstar-web integrate --url http://localhost:8000 --mantine 8 --force
++```
++
++Same options as `init` + `generate` combined, plus `--force` to overwrite without prompting.
++
++## App Architecture
++
++```
++app/public/                     ← Static assets (specstar-mark.svg, your own logo)
++app/src/
++├── specstar/
++│   ├── generated/              ← AUTO-GENERATED (overwritten on each generate)
++│   │   ├── types.ts            ← OpenAPI → TypeScript interfaces
++│   │   ├── resources.ts        ← Resource registry + Zod schemas
++│   │   ├── branding.ts         ← APP_TITLE + APP_LOGO (see Branding below)
++│   │   └── api/                ← Axios clients (one per resource)
++│   ├── lib/                    ← Reusable components (safe to customize)
++│   │   ├── client.ts           ← Axios instance + URL builders
++│   │   ├── resources.ts        ← Resource registry logic + types
++│   │   ├── resourceCustomization.ts  ← YOUR customization entry point
++│   │   ├── components/         ← UI components (Table, Detail, Form, etc.)
++│   │   ├── hooks/              ← React hooks for CRUD operations
++│   │   ├── types/              ← Internal type definitions
++│   │   └── utils/              ← Form utils, display helpers, etc.
++│   └── types/
++│       └── api.ts              ← API type definitions
++├── routes/
++│   ├── __root.tsx              ← Root layout
++│   ├── index.tsx               ← Home page
++│   ├── specstar-admin.tsx      ← Admin layout
++│   └── specstar-admin/
++│       ├── index.tsx           ← Dashboard
++│       ├── backup.tsx          ← Backup/restore page
++│       └── {resource}/         ← Per-resource CRUD pages
++│           ├── index.tsx       ← List + search
++│           ├── create.tsx      ← Create form
++│           └── $resourceId.tsx ← Detail + edit + revisions
++```
++
++**Key rule**: Never edit files in `specstar/generated/` — they are overwritten on each `generate`. Customize through `resourceCustomization.ts` and by editing components in `specstar/lib/`.
++
++## Branding
++
++The generated app is the developer's console, not SpecStar's, so its name and logo are configurable. `generate` resolves both and writes them to `specstar/generated/branding.ts`:
++
++```typescript
++import { APP_TITLE, APP_LOGO } from '@/specstar/generated/branding';
++```
++
++Resolution order — first one set wins:
++
++| Source | Notes |
++|--------|-------|
++| `.specstarrc.json` → `title` / `logo` | Explicit per-project override |
++| OpenAPI `info.title` | Whatever the backend already calls itself |
++| `SpecStar Admin` / `/specstar-mark.svg` | Fallback |
++
++```json
++{
++  "mantineVersion": "8",
++  "title": "Northwind Console",
++  "logo": "/northwind.svg"
++}
++```
++
++`logo` is a path served from `public/`, so `/northwind.svg` means `app/public/northwind.svg`.
++
++Two behaviours worth knowing when editing this layer:
++
++- Blank strings count as unset, and the stock `FastAPI` spec title is ignored — a backend that never named itself must not name the app.
++- `generate` also stamps the resolved values into `index.html`, because the browser reads the tab title and favicon before React boots. It only rewrites tags that are already present, so a project that deliberately removed its favicon link keeps that decision.
++
++When rendering the logo, keep it at **32px or larger** — the mark's rays are `stroke-width: 2` on a 240 viewBox and vanish below that.
++
++## Resource Registry
++
++All resources are accessed through a type-safe registry, not direct imports:
++
++```typescript
++import { getResource, getResourceNames } from '@/specstar/lib/resources';
++
++// Get a single resource config
++const resource = getResource('character');
++resource.name;           // 'character'
++resource.label;          // 'Character'
++resource.fields;         // ResourceField[]
++resource.apiClient;      // { create, list, get, update, delete, ... }
++resource.zodSchema;      // Zod validation schema
++
++// Get all resource names
++const names = getResourceNames();  // ['character', 'skill', 'guild', ...]
++```
++
++## Resource Customization
++
++`resourceCustomization.ts` is the main entry point for customizing the generated app. The generator **never overwrites** this file.
++
++```typescript
++// src/specstar/lib/resourceCustomization.ts
++import type { ResourceCustomizations } from '../generated/resources';
++
++export const customizations: ResourceCustomizations = {
++  'character': {
++    // Override labels
++    label: 'Hero',
++    pluralLabel: 'Heroes',
++
++    // Field-level customizations
++    fields: {
++      'bio': { variant: { type: 'textarea', rows: 5 } },
++      'stats': { variant: { type: 'json', height: 300 } },
++      'description': { variant: { type: 'markdown', height: 400 } },
++      'code': { variant: { type: 'monaco', language: 'python', height: 500 } },
++      'level': { variant: { type: 'slider', sliderMin: 1, sliderMax: 100 } },
++      'tags': { variant: { type: 'tags', maxTags: 10 } },
++      'role': { variant: { type: 'select' } },
++      'is_active': { variant: { type: 'switch' } },
++      'guild_id': {
++        label: 'Guild',
++        ref: { resource: 'guild', type: 'resource_id' },
++      },
++    },
++
++    // Reveal hidden fields (e.g., job management fields)
++    showHiddenFields: ['debug_info'],
++
++    // Max nesting depth before fields collapse to JSON editor
++    maxFormDepth: 3,
++
++    // Table configuration
++    table: {
++      initPageSize: 50,
++      defaultSort: [{ id: 'name', desc: false }],
++      disableAdvancedSearch: false,
++      density: 'xs',
++      mrtOptions: {
++        enableRowSelection: true,
++      },
++    },
++
++    // Create form configuration
++    create: {
++      title: 'Create New Hero',
++    },
++
++    // Detail page configuration
++    detail: {
++      showRevisionHistory: true,
++      showDeleteButton: true,
++    },
++  },
++};
++```
++
++### All FieldVariant Types
++
++| Type | Options | Use Case |
++|------|---------|----------|
++| `text` | — | Default string input |
++| `textarea` | `rows?: number` | Multi-line text |
++| `monaco` | `language?: string`, `height?: number` | Code editor (JSON, Python, etc.) |
++| `markdown` | `height?: number` | Markdown editor with preview |
++| `number` | `min?`, `max?`, `step?` | Number input |
++| `slider` | `sliderMin?`, `sliderMax?`, `step?` | Slider input |
++| `select` | `options?: {value, label}[]` | Dropdown (auto-populated from enum) |
++| `checkbox` | — | Boolean checkbox |
++| `switch` | — | Boolean toggle (default for booleans) |
++| `date` | — | Date picker |
++| `file` | `accept?`, `multiple?` | File upload |
++| `json` | `height?: number` | JSON editor (Monaco) |
++| `tags` | `maxTags?`, `splitChars?` | Tag input |
++| `array` | `itemType?`, `minItems?`, `maxItems?` | Array editor |
++| `union` | `variant?: 'radio.group' \| 'radio.card'` | Union type selector |
++
++### FieldRef — Cross-Resource References
++
++```typescript
++fields: {
++  'owner_id': {
++    ref: { resource: 'user', type: 'resource_id' },
++    // Renders as a searchable dropdown (RefSelect component)
++  },
++  'approved_revision': {
++    ref: { resource: 'user', type: 'revision_id' },
++    // References a specific revision, not latest
++  },
++}
++```
++
++## Component Architecture
++
++### Three-Layer Field Rendering
++
++Components follow a three-layer rendering pattern based on context:
++
++| Layer | Directory | When Used |
++|-------|-----------|-----------|
++| **Cell** | `components/field/CellFieldRenderer/` | Table cells (compact display) |
++| **Detail** | `components/field/DetailFieldRenderer/` | Detail page (full display with binary, unions) |
++| **Form** | `components/field/FormFieldRenderer/` | Create/edit forms (interactive inputs) |
++
++`resolveFieldKind.ts` dispatches to the correct renderer based on field type, variant, and annotations. The resolution order: hidden → itemFields → union → binary → file → json → markdown → arrayString → tags → select → checkbox → switch → date → number → textarea → ref → text.
++
++### All Components
++
++| Category | Components |
++|----------|------------|
++| **Page** | `ResourceTable`, `ResourceCreate`, `ResourceDetail`, `Dashboard`, `BackupRestore`, `JobTable`, `MigrationStatus`, `PendingJobsAccordion` |
++| **Form** | `ResourceForm` (dual mode: structured form / JSON editor, deferred blob upload) |
++| **Detail** | `MetadataSection`, `RevisionHistorySection`, `RevisionTreeTimeline` |
++| **Table/Search** | `MultiResourceTable`, `AdvancedSearchPanel`, `SearchForm`, `MetaSearchForm`, `buildColumns` |
++| **Job** | `JobStatusSection`, `JobFieldsSection`, `JobArtifactSection`, `JobLogsPanel`, `PendingUpdateJobsAccordion` |
++| **Common** | `RefLink`/`RefLinkList`, `RefRevisionLink`/`RefRevisionLinkList`, `ResourceIdCell`, `RevisionIdCell`, `TimeDisplay` |
++| **Cell Renderers** | 21 FieldKind renderers — compact single-line table display |
++| **Detail Renderers** | `BinaryFieldDisplay`, `ArrayFieldDisplay`, `UnionFieldDisplay`, `StructuralUnionFieldDisplay`, `CollapsibleJson` |
++| **Form Renderers** | `RefSelect`/`RefMultiSelect`, `ArrayFieldRenderer`, `UnionFieldRenderer`, `BinaryFieldEditor`, `JsonEditor`, `MarkdownEditor` |
++
++> **Full reference** with props, behavior, and patterns: see `references/components.md`
++
++## Hooks Reference
++
++All hooks are exported from `@/specstar/lib/hooks`.
++
++### Query Hooks
++
++| Hook | Purpose | Returns |
++|------|---------|--------|
++| `useResourceList(config, params?, options?)` | Paginated list with search/sort | `{ data, total, loading, refresh }` |
++| `useResourceDetail(config, id, options?)` | Detail + integrated mutations | `{ resource, update, deleteResource, restore, switchRevision, rerun, logs, ... }` |
++| `useMultiResourceList(entries, params?, options?)` | Aggregate multiple resources | `{ items, totals, totalCount }` |
++
++### Mutation Hooks
++
++All mutation hooks return `{ action, actionAsync, isPending, error, reset }`. Options: `{ onSuccess?, onError?, showErrorNotification?, invalidateOnSuccess? }`.
++
++| Hook | API Call | Invalidates |
++|------|----------|------------|
++| `useCreateResource(config, options?)` | `apiClient.create(data)` | `lists` |
++| `useUpdateResource(config, id, options?)` | `apiClient.update(id, data)` | `details` + `lists` |
++| `useDeleteResource(config, id, options?)` | `apiClient.delete(id)` / `permanentlyDelete(id)` | `details` + `lists` |
++| `useRestoreResource(config, id, options?)` | `apiClient.restore(id)` | `details` + `lists` |
++| `useSwitchRevision(config, id, options?)` | `apiClient.switchRevision(id, revId)` | `details` + `lists` + `revisions` |
++| `useRerunResource(config, id, options?)` | `apiClient.rerun(id)` | `details` + `lists` |
++| `useBlobUpload(options?)` | Chunked upload with progress | N/A (stateful: status, progress, cancel) |
++
++### Utility Hooks
++
++| Hook | Purpose |
++|------|--------|
++| `useAdvancedSearch(options)` | Manages condition/QB search state, syncs URL + MRT table |
++| `useFieldDepth(options)` | Computes visible/collapsed fields by nesting depth |
++
++### Non-Hook Exports
++
++| Export | Purpose |
++|--------|--------|
++| `resourceKeys` | TanStack Query key factory: `.all()`, `.lists()`, `.list()`, `.details()`, `.detail()`, `.revisions()`, `.logs()` |
++| `fetchResourceList`, `fetchResourceDetail`, `fetchResourceRevisions`, `fetchResourceLogs` | Primitive async fetchers for use outside React |
++
++> **Full reference** with signatures, parameter types, return types, and query key patterns: see `references/hooks.md`
++
++## Axios Client Configuration
++
++The shared Axios instance is in `lib/client.ts`:
++
++```typescript
++import { client, getBaseUrl, getBlobUrl } from '@/specstar/lib/client';
++
++// Make custom API calls
++const response = await client.get('/custom-endpoint');
++
++// Build blob URLs for images/downloads
++const imageUrl = getBlobUrl(fileId);  // → /api/v1/specstar/blobs/{fileId}
++```
++
++Environment variable `VITE_API_URL` controls the base URL (defaults to `/api`).
++
++## URL Path & Proxy Configuration
++
++In development, API requests flow: **Axios** (`VITE_API_URL` + `basePath` + resource) → **Vite proxy** (strips `VITE_API_URL` prefix) → **Backend** (receives `basePath` + resource).
++
++Key variables in `.env`:
++- `VITE_API_URL` — Axios base URL + Vite proxy match prefix (default `/api`)
++- `API_PROXY_TARGET` — Backend URL (e.g., `http://localhost:8000`)
++
++The generator auto-detects `basePath` from OpenAPI spec (e.g., `/v1/specstar`) and injects it into generated API clients via `setApiBasePath()`.
++
++### When You Change Backend root_path or Router Prefix
++
++**Correct procedure**: (1) Start backend with new config → (2) `make regen-app` → (3) Restart Vite dev server. The generator re-detects paths automatically.
++
++**Important**: `root_path` only affects OpenAPI spec metadata, not actual routes. `APIRouter(prefix=...)` is what physically changes route paths.
++
++**Custom proxy mapping**: If your proxy prefix maps to a different backend prefix (not just removal), edit `vite.config.ts` rewrite manually — the generator does not modify `vite.config.ts` after initial `init`.
++
++> **Full reference** with request chain diagrams, troubleshooting checklist, and common mistakes: see `references/url-path-proxy.md`
++
++## Error Handling
++
++Three utility functions in `lib/utils/errorNotification.ts`:
++
++| Function | Purpose |
++|----------|--------|
++| `extractErrorMessage(error)` | Parses Axios errors → human-readable string. Handles FastAPI `HTTPException` (string detail) and `ValidationError` (array detail with field paths) |
++| `extractUniqueConflict(error)` | Detects 409 unique constraint → `{ field, message, conflictingResourceId? }` or `null` |
++| `showErrorNotification(error, title?)` | Shows Mantine notification (red, 8s, multi-line) |
++
++Mutation hooks auto-call `showErrorNotification` by default (configurable via `showErrorNotification: false`). Two calling patterns: `create()` (fire-and-forget, notification only) vs `createAsync()` (awaitable, throws for try/catch).
++
++Axios interceptor in `lib/client.ts` logs all errors: `console.error('[API Error]', status, data)`.
++
++> **Full reference** with patterns, component-level handling, and testing guide: see `references/error-handling.md`
++
++## Advanced Component Development
++
++The three-layer field renderer system (Cell/Detail/Form) uses registry-based dispatch via `resolveFieldKind()`. Each layer has a `Record<FieldKind, Component>` map ensuring TypeScript exhaustiveness.
++
++To **add a new FieldKind**: (1) extend the `FieldKind` type, (2) add resolution logic, (3) implement renderer for all three layers, (4) register in all three registry maps.
++
++To **customize rendering**: use `resourceCustomization.ts` for config-level changes (variant overrides), or edit the renderer component directly for visual changes.
++
++Key patterns: **Deferred blob upload** (file stored in form state, uploaded on submit), **Lazy table upgrade** (server-side → client-side when needed), **Field depth control** (collapse nested fields beyond a depth threshold).
++
++> **Full reference** with step-by-step guide and code examples: see `references/advanced-components.md`
++
++## Template Sync Mechanism
++
++During development, `app/` is the source of truth. `make sync-templates` runs rsync to copy `app/ → generator/templates/base/`, excluding generated files (`src/specstar/generated`, `src/routes/specstar-admin`, `routeTree.gen.ts`) and build artifacts (`node_modules`, `dist`, `.vite`, `coverage`).
++
++**Key rules**:
++- Never edit `generator/templates/base/` directly — always edit in `app/` and sync
++- Never edit `src/specstar/generated/` — overwritten by `generate`
++- `resourceCustomization.ts` is safe — generator skips it if it already exists
++
++**Flows**: `make sync-templates` (dev → templates), `init` (templates → new app), `generate` (backend OpenAPI → generated/).
++
++> **Full reference** with rsync breakdown, exclude list, and workflow details: see `references/template-sync.md`
++
++## Common Recipes
++
++### Custom Table Cell Rendering
++
++Override how a field appears in the table by modifying `CellFieldRenderer`:
++
++```typescript
++// In your route's index.tsx
++import { ResourceTable } from '@/specstar/lib/components';
++
++// Use table config to customize columns via mrtOptions
++const resource = getResource('character');
++// Customize via resourceCustomization.ts → table.mrtOptions
++```
++
++### Binary File Upload & Preview
++
++Binary fields (`Binary` in Python model) automatically render as:
++- **Form**: File upload input (`BinaryFieldEditor`)
++- **Detail**: Download link + inline preview for images (`BinaryFieldDisplay`)
++- **Table**: File icon indicator
++
++No extra configuration needed — just define `avatar: Binary | None = None` in your backend model.
++
++### Theme & Style Customization
++
++Edit `app/src/App.tsx` to customize the Mantine theme:
++
++```typescript
++import { MantineProvider, createTheme } from '@mantine/core';
++
++const theme = createTheme({
++  primaryColor: 'blue',
++  fontFamily: 'Inter, sans-serif',
++});
++
++// Applied in the App component's MantineProvider
++```
++
++### Adding Custom Pages
++
++Add new routes using TanStack Router file-based routing:
++
++```typescript
++// src/routes/specstar-admin/analytics.tsx
++import { createFileRoute } from '@tanstack/react-router';
++
++export const Route = createFileRoute('/specstar-admin/analytics')({
++  component: AnalyticsPage,
++});
++
++function AnalyticsPage() {
++  return <div>Custom analytics page</div>;
++}
++```
++
++## Development Workflow
++
++### Daily Development
++
++```bash
++make dev-app          # Start Vite dev server
++```
++
++### Backend Schema Changed
++
++```bash
++make regen-app        # Re-generate types, API clients, routes
++git diff              # Review changes
++```
++
++### Build for Production
++
++```bash
++make build            # Production build (generator + app)
++```
++
++### Run Tests
++
++```bash
++cd app && pnpm test   # Vitest test suite
++```
++
++### Code Style
++
++```bash
++make style            # lint:fix + prettier
++```
++
++### Key Make Commands
++
++| Command | Purpose |
++|---------|---------|
++| `make gen-app` | Full scaffold: build generator + create app + install + generate |
++| `make reset-app` | Delete app + regenerate from scratch |
++| `make regen-app` | Re-generate code only (backend must be running) |
++| `make clean-app` | Delete entire app directory |
++| `make dev-app` | Start Vite dev server |
++| `make rebuild` | Rebuild generator + regenerate code |
++| `make style` | Auto-fix lint + format |
++| `make test` | Run generator + app tests |
++
++## Key Dependencies
++
++| Package | Purpose |
++|---------|---------|
++| React 19 | UI framework |
++| Mantine 8 | Component library |
++| TanStack Router | File-based routing |
++| mantine-react-table 2.0 | Server-side data tables |
++| Zod 4 | Schema validation |
++| Axios | HTTP client |
++| @monaco-editor/react | Code editor for JSON/markdown |
++| react-markdown | Markdown rendering |
++| dayjs | Date formatting |
++| Vitest | Testing |
+diff --git a/specstar-skills/specstar-frontend/references/advanced-components.md b/specstar-skills/specstar-frontend/references/advanced-components.md
+new file mode 100644
+index 00000000..b2a41e70
+--- /dev/null
++++ b/specstar-skills/specstar-frontend/references/advanced-components.md
+@@ -0,0 +1,296 @@
++# Advanced Component Development
++
++Guide for extending and customizing the SpecStar frontend component system.
++
++## Table of Contents
++
++- [Three-Layer Rendering Architecture](#three-layer-rendering-architecture)
++- [resolveFieldKind Dispatch](#resolvefieldkind-dispatch)
++- [Adding a New FieldKind](#adding-a-new-fieldkind)
++- [Customizing Existing Renderers](#customizing-existing-renderers)
++- [Deferred Blob Upload Pattern](#deferred-blob-upload-pattern)
++- [Lazy Table Mode Upgrade](#lazy-table-mode-upgrade)
++- [Field Depth Control](#field-depth-control)
++
++---
++
++## Three-Layer Rendering Architecture
++
++Every field in SpecStar is rendered through one of three context-specific layers:
++
++```
++ResourceField
++  ↓ resolveFieldKind(field) → FieldKind
++  ↓
++  ├── Table cell    → CellFieldRenderer   → CELL_RENDERERS[kind]
++  ├── Detail page   → DetailFieldRenderer  → DETAIL_RENDERERS[kind]
++  └── Form input    → FormFieldRenderer    → FIELD_RENDERERS[kind]
++```
++
++Each layer maintains its own **renderer registry** — a `Record<FieldKind, ReactComponent>` map that dispatches to the appropriate component. TypeScript exhaustiveness checking ensures every `FieldKind` has an entry in every registry.
++
++### Layer Responsibilities
++
++| Layer | Registry | Input | Output |
++|-------|----------|-------|--------|
++| **Cell** | `CELL_RENDERERS` | `{ value, field }` | Compact single-line display |
++| **Detail** | `DETAIL_RENDERERS` | `{ value, field }` | Full-width read-only display |
++| **Form** | `FIELD_RENDERERS` | `{ field, form, path }` | Interactive input with Mantine form binding |
++
++### Registry Pattern
++
++```typescript
++// CellFieldRenderer/index.tsx
++const CELL_RENDERERS: Record<FieldKind, React.FC<CellRenderProps>> = {
++  hidden: () => null,
++  text: TextCell,
++  number: NumberCell,
++  // ... every FieldKind has an entry
++};
++
++export function CellFieldRenderer({ field, value }: Props) {
++  const kind = resolveFieldKind(field);
++  const Renderer = CELL_RENDERERS[kind];
++  return <Renderer value={value} field={field} />;
++}
++```
++
++---
++
++## resolveFieldKind Dispatch
++
++**File**: `components/field/resolveFieldKind.ts`
++
++Pure function that maps `ResourceField` → `FieldKind`. The resolution priority is strict and order-dependent:
++
++```
++1. hidden        ← field.constValue !== undefined (discriminator)
++2. itemFields    ← field.itemFields.length > 0 (array of typed objects)
++3. union         ← field.type === 'union' && field.unionMeta
++4. binary        ← field.type === 'binary'
++5. file          ← variant.type === 'file'
++6. json          ← variant.type === 'json'
++7. markdown      ← variant.type === 'markdown'
++8. arrayString   ← field.type === 'array' && no itemFields
++9. tags          ← variant.type === 'tags'
++10. select       ← variant.type === 'select' || field has enum options
++11. checkbox     ← variant.type === 'checkbox'
++12. switch       ← variant.type === 'switch' || field.type === 'boolean'
++13. date         ← variant.type === 'date'
++14. numberSlider ← variant.type === 'slider'
++15. number       ← variant.type === 'number' || field.type is numeric
++16. textarea     ← variant.type === 'textarea'
++17. refResourceId      ← field.ref.type === 'resource_id' (single)
++18. refResourceIdMulti ← field.ref.type === 'resource_id' (array)
++19. refRevisionId      ← field.ref.type === 'revision_id' (single)
++20. refRevisionIdMulti ← field.ref.type === 'revision_id' (array)
++21. text         ← fallback default
++```
++
++When no explicit `variant` is set on a field, `getDefaultVariant(field)` provides sensible defaults (e.g., boolean → switch, number → number, binary → file).
++
++---
++
++## Adding a New FieldKind
++
++To add a completely new field rendering type:
++
++### Step 1: Add to FieldKind Enum
++
++```typescript
++// resolveFieldKind.ts
++export type FieldKind =
++  | 'hidden'
++  | 'itemFields'
++  // ... existing kinds
++  | 'myNewKind'    // ← add here
++  | 'text';
++```
++
++### Step 2: Add Resolution Logic
++
++```typescript
++// resolveFieldKind.ts — in resolveFieldKind()
++// Add BEFORE the text fallback, in the correct priority position
++if (effectiveVariant.type === 'myNewType') {
++  return 'myNewKind';
++}
++```
++
++### Step 3: Implement Renderers for All Three Layers
++
++```typescript
++// CellFieldRenderer/ — compact display
++function MyNewKindCell({ value, field }: CellRenderProps) {
++  return <span>{/* compact rendering */}</span>;
++}
++
++// DetailFieldRenderer/ — full display
++function MyNewKindDetail({ value, field }: DetailRenderProps) {
++  return <div>{/* full read-only rendering */}</div>;
++}
++
++// FormFieldRenderer/ — editable input
++function MyNewKindInput({ field, form, path }: FormRenderProps) {
++  return <TextInput {...form.getInputProps(path)} />;
++}
++```
++
++### Step 4: Register in All Three Registries
++
++```typescript
++// CellFieldRenderer/index.tsx
++const CELL_RENDERERS: Record<FieldKind, ...> = {
++  // ...
++  myNewKind: MyNewKindCell,
++};
++
++// DetailFieldRenderer/index.tsx
++const DETAIL_RENDERERS: Record<FieldKind, ...> = {
++  // ...
++  myNewKind: MyNewKindDetail,
++};
++
++// FormFieldRenderer/index.tsx
++const FIELD_RENDERERS: Record<FieldKind, ...> = {
++  // ...
++  myNewKind: MyNewKindInput,
++};
++```
++
++TypeScript will enforce that all registries are updated — if you miss one, you'll get a compile error.
++
++### Step 5: (Optional) Add FieldVariant Type
++
++If the new kind needs configuration options:
++
++```typescript
++// In the FieldVariant type definition
++type FieldVariant =
++  | { type: 'text' }
++  | { type: 'myNewType'; customOption?: string; height?: number }
++  // ...
++```
++
++---
++
++## Customizing Existing Renderers
++
++### Override a Single Kind's Rendering
++
++To change how a specific `FieldKind` renders without creating a new kind, modify the corresponding renderer component directly:
++
++```typescript
++// Example: Customize how 'tags' renders in table cells
++// CellFieldRenderer/TagsCell.tsx
++function TagsCell({ value, field }: CellRenderProps) {
++  const tags = Array.isArray(value) ? value : [];
++  return (
++    <Group gap={4}>
++      {tags.slice(0, 3).map((tag) => (
++        <Badge key={tag} size="xs" variant="light">
++          {tag}
++        </Badge>
++      ))}
++      {tags.length > 3 && <Text size="xs">+{tags.length - 3}</Text>}
++    </Group>
++  );
++}
++```
++
++### Use resourceCustomization for Config-Level Changes
++
++For changes that don't require component modification, use `resourceCustomization.ts`:
++
++```typescript
++export const customizations: ResourceCustomizations = {
++  'character': {
++    fields: {
++      'bio': { variant: { type: 'markdown', height: 500 } },  // Override default
++    },
++  },
++};
++```
++
++---
++
++## Deferred Blob Upload Pattern
++
++Binary fields use a deferred upload strategy for better UX:
++
++```
++1. User selects file in form
++   ↓
++2. File stored in form state (not uploaded yet)
++   ↓
++3. User clicks submit
++   ↓
++4. ResourceForm.handleSubmit():
++   a. Upload all pending binary files via useBlobUpload
++   b. Replace File objects with blob IDs in form data
++   c. Send final form data to create/update API
++```
++
++**Implementation in ResourceForm**:
++
++```typescript
++const handleSubmit = async (values: Record<string, unknown>) => {
++  // 1. Find all binary fields with File values
++  const binaryFields = findBinaryFieldsWithFiles(values, config.fields);
++
++  // 2. Upload each file, get blob IDs
++  for (const { path, file } of binaryFields) {
++    const result = await upload(file);
++    if (!result) return; // Upload failed or cancelled
++    setNestedValue(values, path, result.file_id);
++  }
++
++  // 3. Submit with blob IDs instead of File objects
++  await onSubmit(values);
++};
++```
++
++This pattern ensures:
++- No orphaned blob uploads (file only uploaded when form is actually submitted)
++- Progress tracking during submit
++- Cancellation support
++
++---
++
++## Lazy Table Mode Upgrade
++
++`ResourceTable` defaults to server-side pagination but can auto-upgrade to client mode:
++
++```
++Server Mode (default)
++  ↓ All data fits on one page? or MRT needs client-side operation?
++  ↓
++Client Mode (auto-upgrade)
++  - Fetches all rows at once
++  - MRT handles sort/filter/paginate locally
++```
++
++This allows features like client-side column filtering to "just work" without manual configuration. The upgrade is transparent to the user.
++
++---
++
++## Field Depth Control
++
++Complex nested models can produce deeply nested forms that are hard to navigate. The `useFieldDepth` hook addresses this:
++
++```
++Depth 1: Only top-level fields visible
++         (nested objects collapsed into JSON editors)
++
++Depth 2: Top-level + one level of nesting
++         (deeply nested still collapsed)
++
++Depth N: All nesting levels visible
++         (full structured form)
++```
++
++**Detail mode** (`stripItemFields: true`): Array-of-objects fields remain visible as a section header, but their `itemFields` are stripped when depth is insufficient — the array items render as JSON.
++
++**Form mode** (`stripItemFields: false`, default): Array-of-objects fields collapse entirely into a JSON editor when depth is insufficient.
++
++The depth slider appears in both `ResourceDetail` and `ResourceCreate`/`ResourceForm` when `maxAvailableDepth > 1`.
+diff --git a/specstar-skills/specstar-frontend/references/components.md b/specstar-skills/specstar-frontend/references/components.md
+new file mode 100644
+index 00000000..6e07f110
+--- /dev/null
++++ b/specstar-skills/specstar-frontend/references/components.md
+@@ -0,0 +1,351 @@
++# Component Reference
++
++Complete inventory of all components in `app/src/specstar/lib/components/`. Components are imported directly from their module paths — there is no barrel `index.ts` export.
++
++## Table of Contents
++
++- [Top-Level Page Components](#top-level-page-components)
++- [Form Components](#form-components)
++- [Detail Components](#detail-components)
++- [Table & Search Components](#table--search-components)
++- [Job Components](#job-components)
++- [Common Components](#common-components)
++- [Field Renderers — Three-Layer System](#field-renderers--three-layer-system)
++
++---
++
++## Top-Level Page Components
++
++### `ResourceTable`
++
++**Path**: `components/ResourceTable.tsx`
++
++Server-side paginated resource list with lazy client-mode upgrade. Integrates mantine-react-table for sorting, filtering, and column customization.
++
++**Key Props**:
++- `config: ResourceConfig` — Resource configuration from registry
++- `customization?: ResourceCustomization` — Table/field overrides from `resourceCustomization.ts`
++- `basePath?: string` — URL prefix for navigation links
++
++**Features**:
++- Server-side pagination with `useResourceList`
++- Column auto-generation from `config.fields` via `buildColumns()`
++- Advanced search panel integration (`useAdvancedSearch`)
++- Bidirectional sync between MRT column filters and advanced search conditions
++- Lazy upgrade: starts server mode, auto-switches to client mode when needed
++- Batch delete support
++- Pending jobs accordion (for async-create resources)
++
++### `ResourceCreate`
++
++**Path**: `components/ResourceCreate.tsx`
++
++Create page with auto-generated form. Supports custom create actions (tabs) for resources with multiple creation endpoints.
++
++**Key Props**:
++- `config: ResourceConfig` — Resource configuration
++- `customization?: ResourceCustomization` — Create form overrides
++
++**Features**:
++- Standard form submission via `useCreateResource`
++- Custom action tabs when `customization.create.customActions` is defined
++- Union type support (wraps form values in `{ data: values }`)
++- Unique constraint error handling (sets field-level form errors)
++- Navigation to detail page on success
++
++### `ResourceDetail`
++
++**Path**: `components/ResourceDetail.tsx`
++
++Detail/edit page with metadata display, edit form, revision history, job info, and delete/restore controls.
++
++**Key Props**:
++- `config: ResourceConfig` — Resource configuration
++- `resourceId: string` — ID of the resource to display
++- `customization?: ResourceCustomization` — Detail page overrides
++
++**Features**:
++- Edit mode toggle with `ResourceForm`
++- Metadata section (ID, revision, timestamps, authors)
++- Revision history with tree timeline or list view
++- Soft delete, permanent delete, restore actions
++- Revision switch
++- Job logs display (for job resources)
++- Custom update actions (tabs in edit mode)
++- Pending update jobs accordion
++- Field depth control (collapse deep nested fields to JSON)
++
++### `Dashboard`
++
++**Path**: `components/Dashboard.tsx`
++
++Resource overview page showing resource counts and quick navigation links.
++
++### `BackupRestore`
++
++**Path**: `components/BackupRestore.tsx` (actually at `lib/components/BackupRestore.tsx`)
++
++Global and per-model backup/restore UI. Exports data as JSON, imports with duplicate handling (overwrite/skip/raise).
++
++### `JobTable`
++
++**Path**: `components/JobTable.tsx`
++
++Specialized resource table for job resources. Extends `ResourceTable` with job-specific columns (status badge, payload preview, retry count).
++
++### `MigrationStatus`
++
++**Path**: `components/MigrationStatus.tsx`
++
++Migration dry-run and execution UI with streaming progress display.
++
++### `PendingJobsAccordion`
++
++**Path**: `components/PendingJobsAccordion.tsx`
++
++Displays pending async-create jobs above the resource list. Aggregates jobs from relevant job resources and shows them in a collapsible accordion.
++
++---
++
++## Form Components
++
++### `ResourceForm`
++
++**Path**: `components/ResourceForm.tsx`
++
++Generic reusable form for create and edit operations. Supports dual mode: structured form or raw JSON editor.
++
++**Key Props**:
++- `config: ResourceConfig` — Resource configuration
++- `fields: ResourceField[]` — Fields to render
++- `initialValues?: Record<string, unknown>` — Pre-populated values (edit mode)
++- `onSubmit: (values) => void` — Form submission handler
++- `mode: 'create' | 'edit'` — Current mode
++- `formRef?: React.Ref` — Ref for external form control (e.g., `setFieldError`)
++
++**Features**:
++- Auto-generates form fields from `ResourceField[]` via `FormFieldRenderer`
++- Form/JSON toggle (switch between structured form and Monaco JSON editor)
++- Binary field deferred upload coordination (files stored in form state, uploaded on submit)
++- Zod schema validation
++- Field depth control integration
++
++### `useResourceForm` (Hook)
++
++**Path**: `components/ResourceForm.tsx` (co-located)
++
++Internal hook that manages form state, validation, and blob upload coordination.
++
++---
++
++## Detail Components
++
++### `MetadataSection`
++
++**Path**: `components/MetadataSection.tsx`
++
++Read-only metadata display: resource ID, revision ID, created/updated timestamps, created/updated by, status (draft/stable), deleted flag.
++
++### `RevisionHistorySection`
++
++**Path**: `components/RevisionHistorySection.tsx`
++
++Revision history display with two view modes:
++- **Timeline**: `RevisionTreeTimeline` — interactive revision DAG
++- **List**: Flat list sorted by creation time
++
++Supports revision switching and sorting controls.
++
++### `RevisionTreeTimeline`
++
++**Path**: `components/RevisionTreeTimeline.tsx`
++
++Interactive parent-child revision visualization. Renders a tree/DAG of revisions with:
++- Virtualized scrolling for large revision histories
++- Active revision highlighting
++- Click-to-switch revision
++- Expand/collapse branches
++
++---
++
++## Table & Search Components
++
++### `MultiResourceTable`
++
++**Path**: `components/MultiResourceTable.tsx`
++
++Aggregates rows from multiple resources into a single table. Uses `useMultiResourceList` to fetch in parallel. Each row is tagged with `_source` resource name.
++
++### `AdvancedSearchPanel`
++
++**Path**: `components/AdvancedSearchPanel.tsx`
++
++Collapsible panel with two search modes:
++- **Condition mode**: Structured field-based search (`SearchForm` + `MetaSearchForm`)
++- **QB mode**: Free-text Query Builder expression input
++
++Integrates with `useAdvancedSearch` hook for state management and URL sync.
++
++### `SearchForm`
++
++**Path**: `components/SearchForm.tsx`
++
++Data field search form with:
++- Field selector dropdown (from searchable fields)
++- Operator selector (equals, contains, gt, lt, etc.)
++- Value input (type-aware: text, number, date, select for enums)
++- Add/remove condition buttons
++
++### `MetaSearchForm`
++
++**Path**: `components/MetaSearchForm.tsx`
++
++Meta field filtering: date ranges (created_time, updated_time), author filters (created_by, updated_by), status filters, search_after.
++
++### `buildColumns` (Utility)
++
++**Path**: `components/buildColumns.ts`
++
++Auto-generates mantine-react-table column definitions from `ResourceField[]`. Maps each field through `CellFieldRenderer` for display. Handles column ordering, visibility defaults, and ref field column linking.
++
++---
++
++## Job Components
++
++### `JobStatusSection`
++
++**Path**: `components/JobStatusSection.tsx`
++
++Job status display: status badge (pending/running/completed/failed/cancelled), retry count, heartbeat, periodic schedule info.
++
++### `JobFieldsSection`
++
++**Path**: `components/JobFieldsSection.tsx`
++
++Renders non-status, non-payload job fields in a structured layout.
++
++### `JobArtifactSection`
++
++**Path**: `components/JobArtifactSection.tsx`
++
++Type-aware artifact display for completed jobs. Renders artifacts based on MIME type (JSON, text, binary).
++
++### `JobLogsPanel`
++
++**Path**: `components/JobLogsPanel.tsx`
++
++Plain-text log viewer with auto-refresh for running jobs. Uses `fetchResourceLogs` to poll for updates.
++
++### `PendingUpdateJobsAccordion`
++
++**Path**: `components/PendingUpdateJobsAccordion.tsx`
++
++Displays pending update jobs on the detail page. Similar to `PendingJobsAccordion` but scoped to a single resource.
++
++---
++
++## Common Components
++
++**Path**: `components/common/`
++
++### `RefLink` / `RefLinkList`
++
++Clickable link to a referenced resource. Navigates to the resource detail page. `RefLinkList` renders multiple refs.
++
++### `RefRevisionLink` / `RefRevisionLinkList`
++
++Clickable link to a specific revision of a referenced resource. Includes copy-to-clipboard for revision ID.
++
++### `ResourceIdCell`
++
++Compact resource ID display with short format (first 8 chars) + copy-to-clipboard on click.
++
++### `RevisionIdCell`
++
++Smart revision number extraction from revision ID string. Displays as `#N` format.
++
++### `TimeDisplay`
++
++Relative/full/short time display with i18n support (zh-tw locale via dayjs). Shows "2 hours ago" format with full timestamp on hover.
++
++---
++
++## Field Renderers — Three-Layer System
++
++All field renderers share the same `FieldKind` enum resolved by `resolveFieldKind.ts`. The resolution priority:
++
++```
++hidden → itemFields → union → binary → file → json → markdown →
++arrayString → tags → select → checkbox → switch → date →
++numberSlider → number → textarea → refResourceId →
++refResourceIdMulti → refRevisionId → refRevisionIdMulti → text
++```
++
++### Layer 1: CellFieldRenderer
++
++**Path**: `components/field/CellFieldRenderer/`
++
++Compact single-line rendering for table cells. Registry-based dispatch: `CELL_RENDERERS` map keyed by `FieldKind`.
++
++| FieldKind | Cell Rendering |
++|-----------|---------------|
++| `hidden` | Not rendered |
++| `itemFields` | Object count badge |
++| `union` | Discriminator value or type tag |
++| `binary` | File icon indicator / image thumbnail |
++| `file` | File icon |
++| `json` | `{...}` preview (truncated) |
++| `markdown` | Plain text excerpt |
++| `arrayString` | Comma-joined truncated list |
++| `tags` | Mantine `Badge` components |
++| `select` | Label text |
++| `checkbox` / `switch` | Check/cross icon |
++| `date` | Formatted date string |
++| `number` / `numberSlider` | Numeric value |
++| `textarea` | Truncated text |
++| `refResourceId` | `RefLink` component |
++| `refResourceIdMulti` | `RefLinkList` component |
++| `refRevisionId` | `RefRevisionLink` component |
++| `refRevisionIdMulti` | `RefRevisionLinkList` component |
++| `text` | Truncated string |
++
++### Layer 2: DetailFieldRenderer
++
++**Path**: `components/field/DetailFieldRenderer/`
++
++Full-width read-only rendering for detail pages.
++
++| Sub-Component | Purpose |
++|---------------|---------|
++| `BinaryFieldDisplay` | Image inline preview (if image MIME type) + download link + file metadata |
++| `ArrayFieldDisplay` | Numbered cards with nested table for array-of-objects |
++| `UnionFieldDisplay` | Discriminator badge + rendered variant fields |
++| `StructuralUnionFieldDisplay` | Runtime variant inference (no discriminator) — tries each variant |
++| `CollapsibleJson` | Expandable JSON viewer with syntax highlighting |
++
++### Layer 3: FormFieldRenderer
++
++**Path**: `components/field/FormFieldRenderer/`
++
++Interactive input rendering for create/edit forms. Registry-based dispatch: `FIELD_RENDERERS` map.
++
++| Sub-Component | Purpose |
++|---------------|---------|
++| `RefSelect` | Searchable dropdown for single `resource_id` ref |
++| `RefMultiSelect` | Multi-select for array of `resource_id` refs |
++| `RefRevisionSelect` | Searchable dropdown for single `revision_id` ref |
++| `RefRevisionMultiSelect` | Multi-select for array of `revision_id` refs |
++| `ArrayFieldRenderer` | Repeatable list with add/remove/reorder for typed arrays |
++| `UnionFieldRenderer` | Discriminated/structural/simple union input |
++| `BinaryFieldEditor` | Deferred file upload (file stored in form state, uploaded on submit) or URL input |
++| `JsonEditor` | Monaco editor with JSON syntax highlighting + validation |
++| `MarkdownEditor` | Monaco editor + live markdown preview side-by-side |
++
++### `resolveFieldKind`
++
++**Path**: `components/field/resolveFieldKind.ts`
++
++Pure function dispatching `ResourceField` → `FieldKind`. Single source of truth for all three layers. Uses `getDefaultVariant()` to apply default variant when no explicit variant is set.
++
++**FieldKind enum** (21 values):
++`hidden`, `itemFields`, `union`, `binary`, `file`, `json`, `markdown`, `arrayString`, `tags`, `select`, `checkbox`, `switch`, `date`, `numberSlider`, `number`, `textarea`, `refResourceId`, `refResourceIdMulti`, `refRevisionId`, `refRevisionIdMulti`, `text`
+diff --git a/specstar-skills/specstar-frontend/references/error-handling.md b/specstar-skills/specstar-frontend/references/error-handling.md
+new file mode 100644
+index 00000000..72501d0d
+--- /dev/null
++++ b/specstar-skills/specstar-frontend/references/error-handling.md
+@@ -0,0 +1,253 @@
++# Error Handling & Debugging
++
++Error handling patterns used across the SpecStar frontend app. All utilities are in `app/src/specstar/lib/utils/errorNotification.ts`.
++
++## Table of Contents
++
++- [Error Utility Functions](#error-utility-functions)
++- [Mutation Hook Error Pattern](#mutation-hook-error-pattern)
++- [Component-Level Error Handling](#component-level-error-handling)
++- [Axios Response Interceptor](#axios-response-interceptor)
++- [Testing Error Handling](#testing-error-handling)
++
++---
++
++## Error Utility Functions
++
++### `extractErrorMessage(error: unknown): string`
++
++Parses Axios error responses into human-readable messages. Handles two FastAPI formats:
++
++**Format 1 — HTTPException** (string detail):
++```json
++{ "detail": "Resource not found" }
++```
++→ Returns: `"Resource not found"`
++
++**Format 2 — ValidationError** (array detail):
++```json
++{
++  "detail": [
++    { "loc": ["body", "name"], "msg": "field required", "type": "missing" },
++    { "loc": ["body", "age"], "msg": "must be positive", "type": "value_error" }
++  ]
++}
++```
++→ Returns (multi-line):
++```
++name: field required
++age: must be positive
++```
++
++**Fallback chain**: `detail string` → `detail array` → `status code message` → `error.message` → `"An unexpected error occurred"`
++
++The `"body"` prefix is automatically filtered from field paths. Nested paths use ` → ` separator (e.g., `address → city: field required`).
++
++### `extractUniqueConflict(error: unknown): UniqueConflictInfo | null`
++
++Detects 409 Unique Constraint errors from SpecStar backend.
++
++**Expected 409 body**:
++```json
++{
++  "detail": {
++    "message": "Username already taken",
++    "field": "username",
++    "conflicting_resource_id": "user-123"
++  }
++}
++```
++
++**Returns** `UniqueConflictInfo`:
++```typescript
++{
++  field: string;                     // "username"
++  message: string;                   // "Username already taken"
++  conflictingResourceId?: string;    // "user-123" (optional)
++}
++```
++
++Returns `null` if: not a 409, detail is a string, or no `field` property.
++
++### `showErrorNotification(error: unknown, title?: string)`
++
++Display an error notification using Mantine's notification system.
++
++```typescript
++notifications.show({
++  title: title || 'Operation Failed',
++  message: extractErrorMessage(error),
++  color: 'red',
++  autoClose: 8000,          // 8 seconds
++  withCloseButton: true,
++  style: { whiteSpace: 'pre-line' },  // Preserve multi-line formatting
++});
++```
++
++---
++
++## Mutation Hook Error Pattern
++
++All mutation hooks (`useCreateResource`, `useUpdateResource`, `useDeleteResource`, `useRestoreResource`, `useSwitchRevision`, `useRerunResource`) use a dual-track error pattern:
++
++### Options Interface
++
++```typescript
++interface ResourceMutationOptions<TData, TVariables> {
++  onSuccess?: (data: TData, variables: TVariables) => void | Promise<void>;
++  onError?: (error: Error, variables: TVariables) => void | Promise<void>;
++  onSettled?: (data, error, variables) => void | Promise<void>;
++  showErrorNotification?: boolean;    // default: true — auto-shows toast
++  invalidateOnSuccess?: boolean;       // default: true — auto-invalidates cache
++}
++```
++
++### Dual Calling Patterns
++
++```typescript
++const { create, createAsync, isPending, error } = useCreateResource(config, {
++  showErrorNotification: true,  // default
++  onError: (err) => { /* custom error handling */ },
++});
++
++// Pattern 1: Fire-and-forget — errors shown as notification only
++create({ name: 'Hero' });
++
++// Pattern 2: Awaitable — throws on error for try/catch handling
++try {
++  const result = await createAsync({ name: 'Hero' });
++  navigate(`/admin/character/${result.resource_id}`);
++} catch (err) {
++  // Error notification already shown (if enabled)
++  // Additional custom handling here
++}
++```
++
++### Error Flow
++
++```
++API call fails
++  ↓
++useMutation.onError fires
++  ├── showErrorNotification enabled? → showErrorNotification(error, 'Create Failed')
++  └── options.onError provided? → call options.onError(error, variables)
++  ↓
++If called via createAsync() → re-throws error to caller's try/catch
++If called via create() → error stored in mutation.error state
++```
++
++---
++
++## Component-Level Error Handling
++
++### ResourceCreate — Unique Constraint Handling
++
++```typescript
++const { createAsync } = useCreateResource(config, {
++  onError: (error) => {
++    const conflict = extractUniqueConflict(error);
++    if (conflict && formRef.current) {
++      // Set field-level error instead of generic toast
++      formRef.current.setFieldError(
++        conflict.field,
++        `此值已被使用 (unique constraint)`
++      );
++    }
++  },
++});
++
++const handleSubmit = async (values) => {
++  try {
++    const result = await createAsync(values);
++    navigate({ to: `${basePath}/${result.resource_id}` });
++  } catch {
++    // Error already handled in onError callback
++  }
++};
++```
++
++### ResourceDetail — Custom Action Error Handling
++
++For custom update actions (non-standard mutations), error handling is explicit:
++
++```typescript
++const handleUpdateAction = async (action, values) => {
++  setSubmitting(true);
++  try {
++    await action.apiMethod(resourceId, values);
++    setActiveAction(null);
++    setEditOpen(false);
++
++    if (action.asyncMode === 'background') {
++      notifications.show({
++        title: action.label,
++        message: '已提交背景任務',
++        color: 'blue',
++      });
++    }
++    refresh();
++  } catch (error) {
++    showErrorNotification(error, `${action.label} Failed`);
++  } finally {
++    setSubmitting(false);
++  }
++};
++```
++
++---
++
++## Axios Response Interceptor
++
++**File**: `lib/client.ts`
++
++Global interceptor logs all API errors to console:
++
++```typescript
++client.interceptors.response.use(
++  (response) => response,
++  (error) => {
++    console.error('[API Error]', error.response?.status, error.response?.data);
++    return Promise.reject(error);
++  },
++);
++```
++
++This ensures every API error is logged at `[API Error]` prefix regardless of whether the calling code handles the error. Useful for debugging in browser DevTools.
++
++**Note**: There are no error boundary components in the app. Errors bubble from hooks to the nearest try/catch or become `mutation.error` state. The notification system serves as the primary user-facing error feedback.
++
++---
++
++## Testing Error Handling
++
++To test error notification behavior, mock `@mantine/notifications`:
++
++```typescript
++const mockShow = vi.hoisted(() => vi.fn());
++vi.mock('@mantine/notifications', () => ({
++  notifications: { show: mockShow },
++}));
++
++it('shows error notification for validation error', () => {
++  const error = {
++    response: {
++      status: 422,
++      data: {
++        detail: [
++          { loc: ['body', 'name'], msg: 'field required', type: 'missing' },
++        ],
++      },
++    },
++  };
++
++  showErrorNotification(error, 'Create Failed');
++
++  expect(mockShow).toHaveBeenCalledWith(
++    expect.objectContaining({
++      title: 'Create Failed',
++      message: 'name: field required',
++      color: 'red',
++    }),
++  );
++});
++```
+diff --git a/specstar-skills/specstar-frontend/references/hooks.md b/specstar-skills/specstar-frontend/references/hooks.md
+new file mode 100644
+index 00000000..96ed2d31
+--- /dev/null
++++ b/specstar-skills/specstar-frontend/references/hooks.md
+@@ -0,0 +1,512 @@
++# Hooks Reference
++
++Complete inventory of all hooks exported from `app/src/specstar/lib/hooks/`. All hooks are re-exported from `hooks/index.ts`.
++
++## Table of Contents
++
++- [Query Hooks](#query-hooks)
++- [Mutation Hooks](#mutation-hooks)
++- [Utility Hooks](#utility-hooks)
++- [Query Key Factory](#query-key-factory)
++- [Primitive Fetchers](#primitive-fetchers)
++- [Shared Types](#shared-types)
++
++---
++
++## Query Hooks
++
++### `useResourceList`
++
++**File**: `hooks/useResourceList.ts`
++
++Paginated resource list with server-side search, sorting, and filtering.
++
++```typescript
++function useResourceList<T>(
++  config: ResourceConfig<T>,
++  params?: UseResourceListParams,
++  options?: UseResourceListOptions<T>,
++): UseResourceListResult<T>;
++```
++
++**Parameters**:
++
++| Name | Type | Description |
++|------|------|-------------|
++| `config` | `ResourceConfig<T>` | Resource configuration from registry |
++| `params.limit` | `number` | Page size |
++| `params.offset` | `number` | Pagination offset |
++| `params.sorts` | `string` | Sort expression (e.g. `'name:asc'`) |
++| `params.search` | `string` | Free-text search query |
++| `params.*` | `Record<string, unknown>` | Additional custom query parameters |
++| `options.staleTime` | `number` | TanStack Query stale time |
++| `options.gcTime` | `number` | Garbage collection time |
++| `options.refetchInterval` | `number` | Auto-refetch interval (ms) |
++
++**Returns**: `UseResourceListResult<T>`
++
++| Property | Type | Description |
++|----------|------|-------------|
++| `data` | `FullResource<T>[]` | Array of resources |
++| `total` | `number` | Total count from server |
++| `loading` | `boolean` | Whether fetching |
++| `error` | `Error \| null` | Last fetch error |
++| `refresh` | `() => void` | Manually invalidate list cache |
++| `query` | `UseQueryResult` | Raw TanStack Query result (advanced) |
++
++**Query Key**: `resourceKeys.list(resourceName, params)`
++
++---
++
++### `useResourceDetail`
++
++**File**: `hooks/useResourceDetail.ts`
++
++Single resource detail with integrated mutation methods (update, delete, restore, switch revision, rerun, logs).
++
++```typescript
++function useResourceDetail<T>(
++  config: ResourceConfig<T>,
++  resourceId: string,
++  revisionIdOrOptions?: string | null | UseResourceDetailOptions<T>,
++  maybeOptions?: UseResourceDetailOptions<T>,
++): UseResourceDetailResult<T>;
++```
++
++**Parameters**:
++
++| Name | Type | Description |
++|------|------|-------------|
++| `config` | `ResourceConfig<T>` | Resource configuration |
++| `resourceId` | `string` | Resource ID |
++| `revisionIdOrOptions` | `string \| null \| Options` | Revision ID (backward compat) or options object |
++| `maybeOptions` | `Options` | Options when 3rd arg is revision ID |
++
++**Options** (`UseResourceDetailOptions<T>`):
++
++| Property | Type | Description |
++|----------|------|-------------|
++| `revisionId` | `string \| null` | Fetch specific revision |
++| `queryOptions` | `UseQueryOptions` | TanStack Query overrides |
++
++**Returns**: `UseResourceDetailResult<T>`
++
++| Property | Type | Description |
++|----------|------|-------------|
++| `resource` | `FullResource<T> \| null` | The fetched resource |
++| `loading` | `boolean` | Whether fetching detail |
++| `error` | `Error \| null` | Fetch error |
++| `refresh` | `() => void` | Invalidate detail + revision caches |
++| `update` | `(data: T) => Promise<void>` | Update mutation (re-throws) |
++| `deleteResource` | `() => Promise<void>` | Soft delete mutation |
++| `permanentlyDelete` | `() => Promise<void>` | Permanent delete mutation |
++| `restore` | `() => Promise<void>` | Restore soft-deleted resource |
++| `switchRevision` | `(revisionId: string) => Promise<void>` | Switch active revision |
++| `rerun` | `() => Promise<void>` | Rerun job resource |
++| `logs` | `string \| null \| undefined` | Job logs (`null`=not loaded, `undefined`=204) |
++| `logsLoading` | `boolean` | Whether logs are fetching |
++| `fetchLogs` | `() => void` | Trigger logs fetch on demand |
++| `isUpdatePending` | `boolean` | Update mutation in flight |
++| `isDeletePending` | `boolean` | Delete mutation in flight |
++| `isRestorePending` | `boolean` | Restore mutation in flight |
++| `isSwitchRevisionPending` | `boolean` | Switch revision in flight |
++| `isRerunPending` | `boolean` | Rerun mutation in flight |
++| `query` | `UseQueryResult` | Raw detail query |
++
++**Query Keys**:
++- Detail: `resourceKeys.detail(name, id)` or `resourceKeys.detail(name, id, revisionId)`
++- Logs: `resourceKeys.logs(name, id)`
++
++---
++
++### `useMultiResourceList`
++
++**File**: `hooks/useMultiResourceList.ts`
++
++Aggregated paginated list from multiple resources, fetched in parallel.
++
++```typescript
++function useMultiResourceList(
++  entries: MultiResourceEntry[],
++  sharedParams?: UseResourceListParams,
++  options?: UseMultiResourceListOptions,
++): UseMultiResourceListResult;
++```
++
++**Parameters**:
++
++| Name | Type | Description |
++|------|------|-------------|
++| `entries` | `MultiResourceEntry[]` | Array of `{ config, params? }` |
++| `sharedParams` | `UseResourceListParams` | Applied to all resources |
++| `options` | `UseMultiResourceListOptions` | TanStack Query overrides |
++
++**Returns**: `UseMultiResourceListResult`
++
++| Property | Type | Description |
++|----------|------|-------------|
++| `items` | `MultiResourceRow[]` | Flat list with `_source: string` tag |
++| `totals` | `Record<string, number>` | Per-resource count |
++| `totalCount` | `number` | Sum of all counts |
++| `loading` | `boolean` | Any resource loading |
++| `error` | `Error \| null` | First error encountered |
++| `refresh` | `() => void` | Invalidate all resource lists |
++| `queries` | `UseQueryResult[]` | Raw per-entry query results |
++
++**Behavior**: Rows sorted by `updated_time` descending (newest first). Each row tagged with `_source` resource name.
++
++---
++
++## Mutation Hooks
++
++All mutation hooks follow a consistent pattern:
++- Accept `config: ResourceConfig` + resource-specific params
++- Accept `options?: { onSuccess?, onError?, onSettled?, showErrorNotification?, invalidateOnSuccess? }`
++- Return `{ actionName, actionNameAsync, isPending, error, reset }`
++- Fire-and-forget via `actionName()`, awaitable (throws) via `actionNameAsync()`
++- Auto-show error notification (default: `true`)
++- Auto-invalidate caches on success (default: `true`)
++
++### `useCreateResource`
++
++**File**: `hooks/useCreateResource.ts`
++
++```typescript
++function useCreateResource<T>(
++  config: ResourceConfig<T>,
++  options?: UseCreateResourceOptions<T>,
++): UseCreateResourceResult<T>;
++```
++
++| Return Property | Type | Description |
++|----------------|------|-------------|
++| `create` | `(data: T) => void` | Fire-and-forget create |
++| `createAsync` | `(data: T) => Promise<RevisionInfo>` | Awaitable (throws) |
++| `isPending` | `boolean` | Mutation in flight |
++| `error` | `Error \| null` | Last error |
++| `reset` | `() => void` | Clear error/state |
++
++**Invalidates**: `resourceKeys.lists(name)` on success.
++
++### `useUpdateResource`
++
++**File**: `hooks/useUpdateResource.ts`
++
++```typescript
++function useUpdateResource<T>(
++  config: ResourceConfig<T>,
++  resourceId: string,
++  options?: UseUpdateResourceOptions<T>,
++): UseUpdateResourceResult<T>;
++```
++
++| Return Property | Type | Description |
++|----------------|------|-------------|
++| `update` | `(data: T) => void` | Fire-and-forget update |
++| `updateAsync` | `(data: T) => Promise<RevisionInfo>` | Awaitable (throws) |
++| `isPending` | `boolean` | Mutation in flight |
++| `error` | `Error \| null` | Last error |
++| `reset` | `() => void` | Clear state |
++
++**Invalidates**: `resourceKeys.details(name)` + `resourceKeys.lists(name)` on success.
++
++### `useDeleteResource`
++
++**File**: `hooks/useDeleteResource.ts`
++
++```typescript
++function useDeleteResource<T>(
++  config: ResourceConfig<T>,
++  resourceId: string,
++  options?: UseDeleteResourceOptions,
++): UseDeleteResourceResult;
++```
++
++| Return Property | Type | Description |
++|----------------|------|-------------|
++| `deleteResource` | `() => void` | Soft delete (fire-and-forget) |
++| `deleteResourceAsync` | `() => Promise<ResourceMeta>` | Awaitable soft delete |
++| `permanentlyDelete` | `() => void` | Permanent delete (fire-and-forget) |
++| `permanentlyDeleteAsync` | `() => Promise<void>` | Awaitable permanent delete |
++| `isDeletePending` | `boolean` | Soft delete in flight |
++| `isPermanentDeletePending` | `boolean` | Permanent delete in flight |
++| `isPending` | `boolean` | Either operation in flight |
++| `error` | `Error \| null` | Last error from either |
++| `reset` | `() => void` | Clear both states |
++
++**Invalidates**:
++- Soft delete: `details` + `lists`
++- Permanent delete: **Removes** detail query (no 404) + invalidates `lists`
++
++### `useRestoreResource`
++
++**File**: `hooks/useRestoreResource.ts`
++
++```typescript
++function useRestoreResource<T>(
++  config: ResourceConfig<T>,
++  resourceId: string,
++  options?: UseRestoreResourceOptions,
++): UseRestoreResourceResult;
++```
++
++| Return Property | Type | Description |
++|----------------|------|-------------|
++| `restore` | `() => void` | Fire-and-forget restore |
++| `restoreAsync` | `() => Promise<ResourceMeta>` | Awaitable (throws) |
++| `isPending` | `boolean` | In flight |
++| `error` | `Error \| null` | Last error |
++| `reset` | `() => void` | Clear state |
++
++**Invalidates**: `resourceKeys.details(name)` + `resourceKeys.lists(name)`.
++
++### `useSwitchRevision`
++
++**File**: `hooks/useSwitchRevision.ts`
++
++```typescript
++function useSwitchRevision<T>(
++  config: ResourceConfig<T>,
++  resourceId: string,
++  options?: UseSwitchRevisionOptions,
++): UseSwitchRevisionResult;
++```
++
++| Return Property | Type | Description |
++|----------------|------|-------------|
++| `switchRevision` | `(revisionId: string) => void` | Fire-and-forget |
++| `switchRevisionAsync` | `(revisionId: string) => Promise<ResourceMeta>` | Awaitable |
++| `isPending` | `boolean` | In flight |
++| `error` | `Error \| null` | Last error |
++| `reset` | `() => void` | Clear state |
++
++**Invalidates**: `resourceKeys.details(name)` + `resourceKeys.lists(name)` + `resourceKeys.revisions(name, id)`.
++
++### `useRerunResource`
++
++**File**: `hooks/useRerunResource.ts`
++
++```typescript
++function useRerunResource<T>(
++  config: ResourceConfig<T>,
++  resourceId: string,
++  options?: UseRerunResourceOptions,
++): UseRerunResourceResult;
++```
++
++| Return Property | Type | Description |
++|----------------|------|-------------|
++| `rerun` | `() => void` | Fire-and-forget rerun |
++| `rerunAsync` | `() => Promise<RevisionInfo>` | Awaitable |
++| `isPending` | `boolean` | In flight |
++| `error` | `Error \| null` | Last error |
++| `reset` | `() => void` | Clear state |
++
++**Invalidates**: `resourceKeys.details(name)` + `resourceKeys.lists(name)`.
++
++Throws immediately if `config.apiClient.rerun` is not available (non-job resources).
++
++### `useBlobUpload`
++
++**File**: `hooks/useBlobUpload.ts`
++
++Chunked file upload with progress tracking and cancellation support.
++
++```typescript
++function useBlobUpload(options?: {
++  chunkSize?: number;        // Default: 1 MB
++  chunkThreshold?: number;   // Default: 10 MB
++  concurrency?: number;      // Default: 4
++}): UseBlobUploadReturn;
++```
++
++| Return Property | Type | Description |
++|----------------|------|-------------|
++| `upload` | `(file: File) => Promise<BlobUploadResult \| null>` | Start upload (null on error/cancel) |
++| `cancel` | `() => void` | Cancel current upload |
++| `status` | `BlobUploadStatus` | `'idle' \| 'uploading' \| 'finalizing' \| 'done' \| 'error' \| 'cancelled'` |
++| `progress` | `BlobUploadProgress` | `{ loaded, total, percent, elapsed, eta }` |
++| `error` | `string \| null` | Error message |
++| `reset` | `() => void` | Reset to idle |
++
++**Behavior**:
++- **Small files** (≤ threshold): Single `POST /blobs/upload`
++- **Large files** (> threshold): Chunked — session create → parallel chunk uploads → finalize
++- Tracks elapsed time, ETA, and percent complete
++- Cancellable via `cancel()`
++
++**Standalone function**: `uploadFileToBlob(file, options)` — non-hook version for use outside React components.
++
++---
++
++## Utility Hooks
++
++### `useAdvancedSearch`
++
++**File**: `hooks/useAdvancedSearch.ts`
++
++Manages advanced search UI state with bidirectional MRT table sync and URL persistence.
++
++```typescript
++function useAdvancedSearch(options: UseAdvancedSearchOptions): UseAdvancedSearchReturn;
++```
++
++**Options**:
++
++| Property | Type | Description |
++|----------|------|-------------|
++| `config` | `ResourceConfig` | Resource configuration |
++| `searchableFields?` | `SearchableField[]` | Custom searchable fields (auto-generated if omitted) |
++| `disableQB?` | `boolean` | Disable Query Builder mode |
++| `onSearchChange` | `(search: ActiveSearchState) => void` | Callback when search submitted |
++| `mrtColumnFilters?` | `MRT_ColumnFiltersState` | Mantine React Table column filters |
++| `mrtSorting?` | `MRT_SortingState` | Mantine React Table sorting |
++| `onMrtSortingChange?` | `(sorting: MRT_SortingState) => void` | Sync sorting to MRT |
++
++**Returns** (key properties):
++
++| Property | Type | Description |
++|----------|------|-------------|
++| `searchMode` | `'condition' \| 'qb'` | Current search mode |
++| `advancedOpen` | `boolean` | Whether panel is open |
++| `setAdvancedOpen` | `Dispatch<boolean>` | Toggle panel |
++| `activeSearch` | `ActiveSearchState` | Current submitted search (synced to URL) |
++| `editingState` | `EditingState` | Current editing state (not yet submitted) |
++| `handleConditionSearch` | `() => void` | Submit condition mode search |
++| `handleConditionClear` | `() => void` | Clear condition mode |
++| `handleQBSubmit` | `() => void` | Submit QB mode search |
++| `handleQBClear` | `() => void` | Clear QB mode |
++| `normalizedSearchableFields` | `NormalizedSearchableField[]` | Searchable fields with labels |
++| `sortFieldOptions` | `{ value; label }[]` | Available sort-by fields |
++| `activeBackendCount` | `number` | Active search conditions count |
++| `filterDepth` / `setFilterDepth` | `number` / `(n) => void` | Nested field depth control |
++| `maxFilterDepth` | `number` | Max available depth |
++
++**Exported Helpers**:
++- `mrtFiltersToConditions()` — Convert MRT column filters to search conditions
++- `mrtSortingToSortBy()` — Convert MRT sorting to sort string
++- `sortByToMrtSorting()` — Convert sort string to MRT sorting
++- `normalizeSearchableFields()` — Normalize searchable field definitions
++- `buildSortFieldOptions()` — Build sort field dropdown options
++
++### `useFieldDepth`
++
++**File**: `hooks/useFieldDepth.ts`
++
++Computes visible/collapsed fields based on nesting depth.
++
++```typescript
++function useFieldDepth(options: UseFieldDepthOptions): UseFieldDepthReturn;
++```
++
++**Options**:
++
++| Property | Type | Description |
++|----------|------|-------------|
++| `fields` | `ResourceField[]` | All available fields |
++| `maxFormDepth?` | `number` | Override initial depth (default: maxAvailableDepth) |
++| `stripItemFields?` | `boolean` | Detail mode: keep array fields visible but strip itemFields. Form mode (default): collapse to JSON |
++
++**Returns**:
++
++| Property | Type | Description |
++|----------|------|-------------|
++| `maxAvailableDepth` | `number` | Max nesting depth in field tree |
++| `depth` | `number` | Current depth level |
++| `setDepth` | `(n: number) => void` | Update depth |
++| `visibleFields` | `ResourceField[]` | Fields visible at current depth |
++| `collapsedGroups` | `{ path, label }[]` | Fields collapsed into JSON editors |
++
++---
++
++## Query Key Factory
++
++**File**: `hooks/queryKeys.ts`
++
++Standardized TanStack Query keys for consistent cache management.
++
++```typescript
++const resourceKeys = {
++  all:       (name: string) => ['resource', name],
++  lists:     (name: string) => ['resource', name, 'list'],
++  list:      (name: string, params?: Record<string, unknown>) =>
++               ['resource', name, 'list', params],
++  details:   (name: string) => ['resource', name, 'detail'],
++  detail:    (name: string, id: string, revisionId?: string | null) =>
++               ['resource', name, 'detail', id, ...(revisionId ? [revisionId] : [])],
++  revisions: (name: string, id: string) => ['resource', name, 'revisions', id],
++  logs:      (name: string, id: string) => ['resource', name, 'logs', id],
++};
++```
++
++**Usage for cache invalidation**:
++
++```typescript
++import { useQueryClient } from '@tanstack/react-query';
++import { resourceKeys } from '@/specstar/lib/hooks';
++
++const queryClient = useQueryClient();
++
++// Invalidate all lists for a resource
++queryClient.invalidateQueries({ queryKey: resourceKeys.lists('character') });
++
++// Remove a specific detail (e.g., after permanent delete)
++queryClient.removeQueries({ queryKey: resourceKeys.detail('character', id) });
++
++// Invalidate everything for a resource
++queryClient.invalidateQueries({ queryKey: resourceKeys.all('character') });
++```
++
++---
++
++## Primitive Fetchers
++
++**File**: `hooks/primitives.ts`
++
++Non-hook async functions for use outside React components (loaders, scripts, etc.).
++
++```typescript
++// Fetch paginated list + total count (parallel)
++async function fetchResourceList<T>(
++  config: ResourceConfig<T>,
++  params?: UseResourceListParams,
++): Promise<{ data: FullResource<T>[]; total: number }>;
++
++// Fetch single resource detail
++async function fetchResourceDetail<T>(
++  config: ResourceConfig<T>,
++  id: string,
++  revisionId?: string | null,
++): Promise<FullResource<T>>;
++
++// Fetch revision history
++async function fetchResourceRevisions<T>(
++  config: ResourceConfig<T>,
++  id: string,
++  params?: RevisionListParams,
++): Promise<RevisionListResponse>;
++
++// Fetch job logs (returns undefined if not supported or 204)
++async function fetchResourceLogs<T>(
++  config: ResourceConfig<T>,
++  id: string,
++): Promise<string | undefined>;
++```
++
++---
++
++## Shared Types
++
++**File**: `hooks/types.ts`
++
++```typescript
++/** Base mutation options shared by all mutation hooks */
++interface ResourceMutationOptions<TData, TVariables> {
++  onSuccess?: (data: TData, variables: TVariables) => void | Promise<void>;
++  onError?: (error: Error, variables: TVariables) => void | Promise<void>;
++  onSettled?: (data: TData | undefined, error: Error | null, variables: TVariables)
++    => void | Promise<void>;
++  showErrorNotification?: boolean;    // default: true
++  invalidateOnSuccess?: boolean;       // default: true
++}
++```
+diff --git a/specstar-skills/specstar-frontend/references/template-sync.md b/specstar-skills/specstar-frontend/references/template-sync.md
+new file mode 100644
+index 00000000..54544cbf
+--- /dev/null
++++ b/specstar-skills/specstar-frontend/references/template-sync.md
+@@ -0,0 +1,229 @@
++# Template Sync Mechanism
++
++How the generator templates and the app stay in sync during development.
++
++## Table of Contents
++
++- [Overview](#overview)
++- [Sync Direction: App → Templates](#sync-direction-app--templates)
++- [Template vs Generated File Separation](#template-vs-generated-file-separation)
++- [make sync-templates Breakdown](#make-sync-templates-breakdown)
++- [CLI Init Flow: Templates → New App](#cli-init-flow-templates--new-app)
++- [Regeneration Flow: Backend → Generated Code](#regeneration-flow-backend--generated-code)
++- [Development Workflow](#development-workflow)
++
++---
++
++## Overview
++
++The SpecStar Web project has a two-component architecture:
++
++```
++generator/templates/base/     ← Source templates (shipped in npm package)
++         ↕ sync
++app/                          ← Development app (working copy)
++```
++
++During development, you edit files in `app/`. When ready to publish the generator, you sync `app/ → generator/templates/base/` to update the templates. When a user runs `npx specstar-web init`, the `templates/base/` files are copied into their new project.
++
++---
++
++## Sync Direction: App → Templates
++
++The sync is **one-way**: `app/` is the source of truth, `generator/templates/base/` is the destination. Never edit template files directly — always edit in `app/` and sync.
++
++```
++app/src/specstar/lib/         →  generator/templates/base/src/specstar/lib/
++app/src/App.tsx               →  generator/templates/base/src/App.tsx
++app/vite.config.ts            →  generator/templates/base/vite.config.ts
++app/package.json              →  generator/templates/base/package.json
++...                           →  ...
++```
++
++---
++
++## Template vs Generated File Separation
++
++```
++app/src/specstar/
++├── generated/                  ← EXCLUDED from sync (regenerated by CLI)
++│   ├── types.ts                OpenAPI → TypeScript interfaces
++│   ├── resources.ts            Resource registry with Zod schemas
++│   ├── branding.ts             APP_TITLE + APP_LOGO
++│   └── api/                    Axios clients (one per resource)
++│
++├── lib/                        ← INCLUDED in sync (template code)
++│   ├── client.ts               Axios instance config
++│   ├── resources.ts            Resource registration logic
++│   ├── resourceCustomization.ts  User customization entry point
++│   ├── components/             All reusable UI components
++│   ├── hooks/                  React hooks
++│   ├── types/                  Internal TypeScript types
++│   └── utils/                  Error notification, form utils, etc.
++│
++└── types/
++    └── api.ts                  ← INCLUDED in sync
++
++app/public/                     ← INCLUDED in sync (specstar-mark.svg, etc.)
++
++app/src/routes/
++├── __root.tsx                  ← INCLUDED in sync
++├── index.tsx                   ← INCLUDED in sync *and* regenerated (see below)
++├── specstar-admin.tsx          ← INCLUDED in sync
++└── specstar-admin/             ← EXCLUDED from sync (generated route pages)
++    ├── index.tsx               Generated dashboard
++    ├── backup.tsx              Generated backup page
++    └── {resource}/             Generated per-resource pages
++
++app/src/routeTree.gen.ts        ← EXCLUDED (TanStack Router auto-generated)
++```
++
++**Rule**: If the generator's `generate` command creates or overwrites a file, it's **excluded** from sync. Everything else (the "framework" layer) is **included**.
++
++**The one exception is `src/routes/index.tsx`.** It is synced from `app/` *and* rewritten by `generate` (from `genRootIndex()` in `generator/src/codegen/routes-gen.ts`), because it is both the placeholder a fresh `init` needs and a page the generator regenerates. Editing the landing page therefore means editing **two** places and keeping them identical — the `app/` copy and the `genRootIndex()` template string. Change only one and the page silently reverts on the next `generate`.
++
++---
++
++## make sync-templates Breakdown
++
++```bash
++make sync-templates
++```
++
++Executes two steps:
++
++### Step 1: Format App Code
++
++```bash
++cd app && make style    # prettier + eslint --fix
++```
++
++Ensures consistent formatting before syncing, so templates always have canonical formatting.
++
++### Step 2: rsync
++
++```bash
++rsync -av --delete \
++  --exclude='node_modules' \
++  --exclude='.vite' \
++  --exclude='.tanstack' \
++  --exclude='dist' \
++  --exclude='.env' \
++  --exclude='.mantine-version' \
++  --exclude='coverage' \
++  --exclude='pnpm-lock.yaml' \
++  --exclude='src/specstar/generated' \
++  --exclude='src/routes/specstar-admin' \
++  --exclude='src/routeTree.gen.ts' \
++  app/ generator/templates/base/
++```
++
++**Flag meanings**:
++- `-a` (archive): Preserves permissions, timestamps, symlinks, recursive
++- `-v` (verbose): Shows transferred files
++- `--delete`: Removes files from `templates/base/` that no longer exist in `app/`
++
++**Excluded directories/files**:
++
++| Exclude | Reason |
++|---------|--------|
++| `node_modules` | Install artifact |
++| `.vite` | Vite cache |
++| `.tanstack` | TanStack Router cache |
++| `dist` | Build output |
++| `.env` | Local environment config |
++| `.mantine-version` | Runtime version marker |
++| `coverage` | Test coverage reports |
++| `pnpm-lock.yaml` | Lock file (regenerated per project) |
++| `src/specstar/generated` | Generator output |
++| `src/routes/specstar-admin` | Generator output (route pages) |
++| `src/routeTree.gen.ts` | TanStack Router auto-generated tree |
++
++---
++
++## CLI Init Flow: Templates → New App
++
++When a user runs `npx specstar-web init my-app`:
++
++```
++1. Copy entire generator/templates/base/ → my-app/
++2. Apply Mantine version selection (7 or 8)
++3. Optionally include test files (--include-tests)
++4. Run pnpm install in the new project
++```
++
++After `init`, the user runs `npx specstar-web generate` to populate the `generated/` directory from their backend's OpenAPI spec.
++
++---
++
++## Regeneration Flow: Backend → Generated Code
++
++When running `make regen-app` or `npx specstar-web generate`:
++
++```
++1. Delete existing generated files:
++   - rm -rf app/src/specstar/generated
++   - rm -rf app/src/routes/specstar-admin
++
++2. Fetch OpenAPI spec:
++   - GET {backend-url}/openapi.json
++
++3. Parse and generate:
++   - types.ts       ← From OpenAPI schemas
++   - resources.ts   ← Resource registry with field metadata + Zod schemas
++   - api/*.ts        ← One Axios client per resource
++
++4. Generate route pages:
++   - specstar-admin/index.tsx      ← Dashboard
++   - specstar-admin/backup.tsx     ← Backup/restore page
++   - specstar-admin/{resource}/    ← Per-resource CRUD pages
++```
++
++**Important**: `resourceCustomization.ts` is in `lib/` (not `generated/`) and is **never overwritten** by the generator. This is the safe place for user customizations.
++
++---
++
++## Development Workflow
++
++### Daily Development (Editing Components)
++
++```
++1. Edit files in app/src/specstar/lib/
++2. Test with make dev-app
++3. When satisfied, run make sync-templates
++4. Commit both app/ and generator/templates/base/ changes
++```
++
++### Backend Schema Changed
++
++```
++1. make regen-app        (re-generates types, api, routes)
++2. git diff              (review changes in generated/)
++3. Test with make dev-app
++```
++
++### Publishing Generator
++
++Publishing is tag-driven; CI uploads to npm over OIDC. From `web/`:
++
++```
++1. make sync-templates   (only if app/ changed — commit the result)
++2. bump version in generator/package.json, commit
++3. make release          (tags web-vX.Y.Z + pushes; CI publishes)
++```
++
++CI refuses to publish when the tag disagrees with `generator/package.json`,
++or when `templates/base` has drifted from `app/` (`make check-templates`) —
++the old local flow synced implicitly at pack time, whereas CI publishes only
++what the tag points at.
++
++`make bootstrap-publish` exists solely for the package's *first* npm release
++(npm cannot publish an initial version over OIDC); don't use it afterwards.
++
++### Important Gotchas
++
++- **Never edit `generator/templates/base/` directly** — changes will be overwritten by next sync
++- **Never edit files in `app/src/specstar/generated/`** — overwritten by `generate`
++- **`resourceCustomization.ts` is safe** — generator skips it if it already exists
++- **`pnpm-lock.yaml` is excluded** from sync — each project generates its own
++- **`.env` is excluded** — each deployment has its own environment
+diff --git a/specstar-skills/specstar-frontend/references/url-path-proxy.md b/specstar-skills/specstar-frontend/references/url-path-proxy.md
+new file mode 100644
+index 00000000..e446e0a3
+--- /dev/null
++++ b/specstar-skills/specstar-frontend/references/url-path-proxy.md
+@@ -0,0 +1,259 @@
++# URL Path & Proxy Configuration
++
++How API URLs are resolved from frontend request to backend endpoint, and how to correctly handle changes to `root_path` or router prefix.
++
++## Table of Contents
++
++- [Complete Request Chain](#complete-request-chain)
++- [Key Concepts](#key-concepts)
++- [How the Generator Detects Paths](#how-the-generator-detects-paths)
++- [Changing Backend root_path or Router Prefix](#changing-backend-root_path-or-router-prefix)
++- [Custom Proxy Path Mapping](#custom-proxy-path-mapping)
++- [Production Deployment](#production-deployment)
++- [Troubleshooting](#troubleshooting)
++
++---
++
++## Complete Request Chain
++
++In development, every API request flows through three layers:
++
++```
++Frontend (Axios)          Vite Dev Proxy              Backend (FastAPI)
++─────────────────         ──────────────              ─────────────────
++GET {VITE_API_URL}        Match proxyPath prefix      Receive final path
++    {basePath}            Rewrite: remove prefix      at actual route
++    /{resource}           Forward to target
++```
++
++### Concrete Example
++
++Backend routes at `/v1/specstar/character`. Config:
++- `VITE_API_URL=/api` (proxy prefix)
++- `API_PROXY_TARGET=http://localhost:8000` (backend URL)
++- `basePath=/v1/specstar` (auto-detected from OpenAPI)
++
++```
++1. Axios sends:    GET /api/v1/specstar/character
++                        ^^^^ VITE_API_URL (baseURL)
++                            ^^^^^^^^^^^^^^ basePath
++                                          ^^^^^^^^^^ resource
++
++2. Vite matches:   /api prefix ✓
++
++3. Vite rewrites:  Remove /api → /v1/specstar/character
++
++4. Vite forwards:  GET http://localhost:8000/v1/specstar/character
++
++5. Backend serves: Route /v1/specstar/character ✓
++```
++
++---
++
++## Key Concepts
++
++| Concept | Where Set | What It Does | Example |
++|---------|-----------|-------------|---------|
++| **`VITE_API_URL`** | `.env` | Axios `baseURL` + Vite proxy match prefix | `/api`, `/blog-api` |
++| **`API_PROXY_TARGET`** | `.env` | Vite proxy forwarding target (dev only) | `http://localhost:8000` |
++| **`basePath`** | Auto-detected or `--base-path` | Path prefix in generated API clients | `/v1/specstar` |
++| **`apiBasePath`** | `setApiBasePath()` in generated `resources.ts` | Runtime base path for blob URLs | `/v1/specstar` |
++| **`proxyPath`** | `--proxy-path` CLI option | Written to `VITE_API_URL` in `.env` | `/api` (default) |
++| **`root_path`** | FastAPI constructor | Affects OpenAPI `servers` field only, not actual routes | `/v1/specstar` |
++| **`APIRouter.prefix`** | Python code | Directly changes registered route paths | `/api/v1` |
++
++### Important Distinction: root_path vs APIRouter.prefix
++
++- **`root_path`** only affects the OpenAPI spec `servers` field and ASGI scope. It does **NOT** change the actual URL paths that FastAPI registers. The routes remain at their original paths.
++- **`APIRouter(prefix=...)`** directly changes the registered route paths. If you change prefix from `/v1/specstar` to `/specstar`, all routes physically move.
++
++---
++
++## How the Generator Detects Paths
++
++When you run `npx specstar-web generate`, the generator:
++
++1. **Fetches** `{url}/openapi.json`
++2. **Auto-detects `basePath`** via `detectBasePath()`:
++   - Scans all POST endpoints with request body schemas
++   - Strips the last path segment (resource name) from each
++   - Returns the common prefix if all match
++   ```
++   POST /v1/specstar/character → prefix /v1/specstar
++   POST /v1/specstar/guild     → prefix /v1/specstar
++   Common = /v1/specstar ✓
++   ```
++3. **Generates code** with detected basePath:
++   - `generated/resources.ts`: calls `setApiBasePath('/v1/specstar')`
++   - `generated/api/characterApi.ts`: `const BASE = '/v1/specstar/character'`
++4. **Writes `.env`**:
++   - `VITE_API_URL={proxyPath}` (default `/api`)
++   - `API_PROXY_TARGET={url}`
++
++---
++
++## Changing Backend root_path or Router Prefix
++
++### The Correct Procedure
++
++When you change the backend's `root_path` or router prefix:
++
++**Step 1:** Ensure the backend is running with the new configuration.
++
++**Step 2:** Re-run the generator:
++```bash
++make regen-app
++# or
++npx specstar-web generate --url http://localhost:8000
++```
++
++This automatically:
++- Re-detects the new `basePath` from the updated OpenAPI spec
++- Regenerates all API client BASE paths
++- Updates `setApiBasePath()` call
++- Updates `.env` proxy config
++
++**Step 3:** Restart the Vite dev server (proxy config is read at startup).
++
++### If You Also Need a Custom Proxy Prefix
++
++```bash
++npx specstar-web generate --url http://localhost:8000 --proxy-path /blog-api
++```
++
++This sets `VITE_API_URL=/blog-api` in `.env`, configuring both Axios and the Vite proxy to use `/blog-api` as the prefix.
++
++---
++
++## Custom Proxy Path Mapping
++
++The default Vite proxy rewrite **removes the proxy prefix entirely**:
++
++```typescript
++// vite.config.ts (default behavior)
++proxy: {
++  [proxyPath]: {                    // e.g., '/api'
++    target: proxyTarget,            // e.g., 'http://localhost:8000'
++    changeOrigin: true,
++    rewrite: (p) => p.replace(new RegExp(`^${proxyPath}`), ''),
++    // /api/v1/specstar/character → /v1/specstar/character
++  },
++}
++```
++
++This works correctly when:
++- **Proxy path**: `/api` (or any custom prefix)
++- **Backend routes**: `/v1/specstar/character`
++- **Request**: `/api/v1/specstar/character` → removes `/api` → `/v1/specstar/character` ✓
++
++### When You Need Custom Rewrite
++
++If your proxy prefix needs to **map to a different backend prefix** (not just be removed), edit `vite.config.ts` manually:
++
++```typescript
++// Example: /blog-api/* should reach /specstar/* on backend
++rewrite: (p) => p.replace(/^\/blog-api/, '/specstar'),
++// /blog-api/author → /specstar/author ✓
++```
++
++**Warning**: The generator does NOT modify `vite.config.ts` after initial `init`. If you need non-standard rewrite rules, you must edit it manually.
++
++### When Custom Rewrite Is Needed
++
++| Scenario | Rewrite | Manual Edit? |
++|----------|---------|-------------|
++| Standard: `/api` → remove prefix | `p.replace(/^\/api/, '')` | No (default) |
++| Custom prefix: `/blog-api` → remove prefix | `p.replace(/^\/blog-api/, '')` | No (handled by `--proxy-path`) |
++| Prefix mapping: `/blog-api` → `/specstar` | `p.replace(/^\/blog-api/, '/specstar')` | **Yes** |
++| Multiple backends | Multiple proxy entries | **Yes** |
++
++---
++
++## Production Deployment
++
++In production, there's no Vite proxy. Configure `VITE_API_URL` at build time:
++
++### Direct API URL
++
++```bash
++VITE_API_URL=https://api.example.com npm run build
++```
++
++Axios sends requests directly to `https://api.example.com/v1/specstar/character`.
++
++### Behind Reverse Proxy (Nginx, etc.)
++
++```bash
++VITE_API_URL=/api npm run build
++```
++
++Configure your reverse proxy to forward `/api/*` to the backend, similar to the Vite dev proxy.
++
++Example nginx config:
++```nginx
++location /api/ {
++    proxy_pass http://backend:8000/;    # Trailing / strips /api prefix
++}
++```
++
++---
++
++## Troubleshooting
++
++### "Frontend can't reach any API endpoints"
++
++**Diagnosis checklist:**
++
++1. **Check `.env`** — Is `VITE_API_URL` correct? Is `API_PROXY_TARGET` pointing to the right backend?
++   ```bash
++   cat app/.env
++   ```
++
++2. **Check generated API paths** — Do they match backend routes?
++   ```bash
++   grep "const BASE" app/src/specstar/generated/api/*.ts
++   ```
++
++3. **Check `setApiBasePath`** — Is it using the correct base path?
++   ```bash
++   grep "setApiBasePath" app/src/specstar/generated/resources.ts
++   ```
++
++4. **Check browser DevTools Network tab** — What URL is Axios actually requesting? What does the backend respond?
++
++5. **Check Vite proxy rewrite** — Manually trace the rewrite:
++   ```
++   Request:  {VITE_API_URL}{basePath}/{resource}
++   Rewrite:  Remove {VITE_API_URL} prefix
++   Forward:  {API_PROXY_TARGET}{basePath}/{resource}
++   Backend:  Must serve at {basePath}/{resource}
++   ```
++
++### Common Mistakes
++
++| Mistake | Symptom | Fix |
++|---------|---------|-----|
++| Changed backend prefix but didn't `regen-app` | 404 on all endpoints | Run `make regen-app` |
++| Changed `.env` but didn't restart Vite | Proxy still using old config | Restart Vite dev server |
++| Proxy rewrite removes prefix that backend needs | 404 (path too short) | Edit `vite.config.ts` rewrite rule |
++| `VITE_API_URL` set to full URL in dev | Vite proxy doesn't intercept | Use relative path (e.g., `/api`) in dev |
++| `basePath` in generated code doesn't match backend | 404 on specific resources | Re-run generator with `--base-path` override |
++| Using `root_path` thinking it changes routes | Routes unchanged, confusion | `root_path` only affects OpenAPI spec; use `APIRouter(prefix=...)` for actual route changes |
++
++### Quick Fix Commands
++
++```bash
++# Nuclear option: regenerate everything
++make regen-app && cd app && pnpm dev
++
++# Just update .env proxy config
++npx specstar-web generate --url http://localhost:8000 --proxy-path /my-prefix
++
++# Check what the generator would detect
++curl http://localhost:8000/openapi.json | python3 -c "
++import json, sys
++spec = json.load(sys.stdin)
++for p in spec.get('paths', {}):
++    print(p)
++"
++```
