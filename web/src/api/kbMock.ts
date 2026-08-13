@@ -688,6 +688,7 @@ export const mockKbApi: KbApi = {
         mode: hit ? "update" : "new",
         target_card_id: hit?.id ?? null,
         provenance: [{ doc_id: docId, path, snippet: `…relevant passage from ${path}…` }],
+        statements: [],
         decision: "pending",
       };
     });

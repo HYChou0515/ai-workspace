@@ -25,6 +25,7 @@ const card = (can_act: boolean) => ({
     mode: "new" as const,
     target_card_id: null,
     provenance: [],
+    statements: [],
     decision: "pending" as const,
   },
 });

@@ -40,6 +40,7 @@ const card = (title: string, keys: string[] = [title]): KbReviewCard => ({
     mode: "new",
     target_card_id: null,
     provenance: [],
+    statements: [],
     decision: "pending",
   },
 });

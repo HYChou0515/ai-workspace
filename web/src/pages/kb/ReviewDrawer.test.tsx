@@ -29,12 +29,42 @@ const card = (over: Partial<KbReviewCard> = {}): KbReviewCard => ({
     mode: "new",
     target_card_id: null,
     provenance: [{ doc_id: "d", path: "spec.md", snippet: "…RZ3…" }],
+    statements: [],
     decision: "pending",
   },
   ...over,
 });
 
 describe("ReviewDrawer", () => {
+  it("shows what the corpus said, each claim with the sentence that says it", () => {
+    // The reviewer is approving a body the pipeline WROTE from these claims. With
+    // the evidence hidden they would be approving prose with nothing to check it
+    // against — which is the failure the whole evidence model exists to remove.
+    render(
+      <ReviewDrawer
+        item={{
+          kind: "card",
+          data: card({
+            card: {
+              ...card().card,
+              statements: [
+                { text: "是第三個回焊區", quote: "RZ3 是第三個回焊區。", source_doc_id: "d" },
+                { text: "設定 245°C", quote: "RZ3 設定 245°C。", source_doc_id: "d2" },
+              ],
+            },
+          }),
+        }}
+        resolved={false}
+        actions={actions()}
+        onClose={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("是第三個回焊區")).toBeTruthy();
+    expect(screen.getByText("RZ3 是第三個回焊區。")).toBeTruthy();
+    expect(screen.getByText("設定 245°C")).toBeTruthy();
+  });
+
   it("saves an edited card body via update.mutate", () => {
     const a = actions();
     render(

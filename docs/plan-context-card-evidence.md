@@ -127,9 +127,20 @@ grounded 是空洞的滿分 1.0,相減會讓它奪冠。
 |---|---|---|
 | **P1** | `ContextCard.statements` + `accumulate()` + `synthesise()` 對外 | ✅ |
 | **P1b** | 統一 `Statement` 型別 —— `kb.cards.extract` 改用 `resources.kb.CardStatement`,並把解析器 `parse_cards()` 公開給正式 drafter 共用 | ✅ |
-| **P2+P3** | drafter 改吐陳述 + finalize 改成「累積 + 合成」 | ⬜ |
-| **P4** | 待審 inbox 顯示陳述 + 引句 | ⬜ |
-| **P5** | 一次性刪除舊卡的操作腳本 | ⬜ |
+| **P2+P3** | drafter 改吐陳述 + finalize 改成「累積 + 合成」 | ✅ |
+| **P4** | 待審 inbox 顯示陳述 + 引句 | ✅ |
+| **P5** | 一次性刪除舊卡的操作腳本 | ✅ `scripts/delete_pre_evidence_cards.py`(預設 dry run,要 `--yes` 才刪) |
+
+### 實作時補上的、規格沒寫到的
+
+- **正式管線也要接合成器**:`coordinators.build_coordinators` 把 `card_drafter_llm` 當
+  `synthesiser` 傳給 `CardGenCoordinator`。沒接的話證據會落地但 body 永遠是空的。
+- **`card_proposal_to_proposed` 也要帶 `statements`**:規格寫了「兩邊」,我第一次只做了寫入
+  方向,測試抓到 —— 讀回來的提案沒有證據。
+- **`ProposedCardIO` 要宣告 `statements`**:pydantic 預設**靜默丟掉**未宣告欄位,所以證據
+  到不了前端,而審核者會核准一段沒有東西可對照的散文。
+- **`AgentCardDrafter` 的引句閘門需要 `doc_text`**:它是 agent,可能引用它在 wiki 上讀到的
+  真實句子 —— 那些句子這份文件從來沒說過。
 
 ---
 

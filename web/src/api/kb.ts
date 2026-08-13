@@ -515,6 +515,14 @@ export type KbCardProvenance = { doc_id: string; path: string; snippet: string }
  * is `new` or `update` (then `target_card_id` is the card to overwrite);
  * `confident=false` marks an uncertain draft (⚠️, defaulted out of commit);
  * `decision` is the reviewer's verdict, persisted on the job (resumable). */
+export type KbCardStatement = {
+  /** The claim, in the extractor's words. */
+  text: string;
+  /** The sentence from the document that makes it, verbatim. */
+  quote: string;
+  source_doc_id: string;
+};
+
 export type KbProposedCard = {
   /** #481: stable per-run card id — the review table addresses one card by it. */
   id: string;
@@ -525,6 +533,13 @@ export type KbProposedCard = {
   mode: "new" | "update";
   target_card_id: string | null;
   provenance: KbCardProvenance[];
+  /**
+   * What the corpus actually said about the term, each with the sentence that
+   * says it. The body is written FROM these, so a reviewer approving a card is
+   * approving the claims and the sentence they add up to — not a paragraph with
+   * nothing behind it.
+   */
+  statements: KbCardStatement[];
   // #481: `committed` = written to a card (terminal); a run leaves the queue once
   // every proposal is terminal (committed / rejected).
   decision: "pending" | "accepted" | "rejected" | "committed";
