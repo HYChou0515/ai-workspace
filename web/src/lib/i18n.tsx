@@ -817,6 +817,14 @@ export const messages = {
   // checked by the person reading it — "your workspace is full" reads the same
   // whether it is true or whether the wrong rule answered, which is how a wrong
   // one survived long enough to be reported as a bug.
+  // The environment limit covers three different things, so its numbers say
+  // which one they are. Without that, "已用 4,上限 2" under a sentence about
+  // live environments reads as "I have four environments open" when it means
+  // four cores.
+  "resources.usedOfLimitNamed": {
+    "zh-TW": "({what} 已用 {used},上限 {limit})",
+    en: "({what}: {used} used of {limit})",
+  },
   "resources.usedOfLimit": {
     "zh-TW": "(已用 {used},上限 {limit})",
     en: "({used} used of {limit})",
@@ -825,10 +833,6 @@ export const messages = {
   // led, so the person is not sent to fix one limit, only to be told about the
   // next one on the retry. They name the page for the same reason the primary
   // messages do — `ResourceLinkText` turns that name into the link.
-  "resources.also.environment": {
-    "zh-TW": "另外,你同時開啟的執行環境也已達上限——到「我的資源」關掉一個。",
-    en: "You are also at your limit for live environments — close one in My resources.",
-  },
   "resources.also.user": {
     "zh-TW": "另外,你所有項目的空間總量也滿了——到「我的資源」看是哪些項目佔用。",
     en: "You are also out of space across all your items — see where it went in My resources.",

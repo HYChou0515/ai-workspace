@@ -1,4 +1,4 @@
-import { formatBytes } from "./formatBytes";
+import { formatBytes } from "./bytes";
 import type { MsgKey, Vars } from "./i18n";
 
 /**
@@ -45,21 +45,44 @@ export type QuotaDetail = {
  * "1 B" would be worse than saying nothing. A body with no numbers returns
  * null — nothing is invented to fill the sentence.
  */
-export function quotaAmounts(detail: QuotaDetail | undefined): { used: string; limit: string } | null {
+export const QUOTA_DIMENSION_KEY = {
+  sandboxes: "resources.gauge.count",
+  cpu: "resources.gauge.cpu",
+  memory: "resources.memory",
+} as const;
+
+export function quotaAmounts(
+  detail: QuotaDetail | undefined,
+): { used: string; limit: string; dimension?: keyof typeof QUOTA_DIMENSION_KEY } | null {
   if (!detail) return null;
-  const cap = detail.error === "sandbox_quota_exceeded" ? detail.limit : detail.quota;
+  const isEnv = detail.error === "sandbox_quota_exceeded";
+  const cap = isEnv ? detail.limit : detail.quota;
   if (typeof detail.used !== "number" || typeof cap !== "number") return null;
-  const asBytes =
-    detail.error !== "sandbox_quota_exceeded" || detail.dimension === "memory";
+  const asBytes = !isEnv || detail.dimension === "memory";
   const render = asBytes ? formatBytes : (n: number) => `${n}`;
-  return { used: render(detail.used), limit: render(cap) };
+  // The environment limit is THREE limits behind one sentence, and the sentence
+  // names none of them. Appending a bare "2 of 1" to "you are at your limit for
+  // live environments" told a person holding ONE environment that they had 4 —
+  // those were cores. A number that contradicts the sentence it is attached to
+  // is worse than no number, which is the whole reason numbers were added.
+  const dimension =
+    isEnv && detail.dimension && detail.dimension in QUOTA_DIMENSION_KEY
+      ? (detail.dimension as keyof typeof QUOTA_DIMENSION_KEY)
+      : undefined;
+  return { used: render(detail.used), limit: render(cap), ...(dimension ? { dimension } : {}) };
 }
 
-/** The clause each limit contributes when it is not the one that led. */
+/**
+ * The clause each limit contributes when it is not the one that led.
+ *
+ * There is no `environment` entry: the backend appends the admission refusal
+ * FIRST, so whenever the environment limit binds it is the one that leads and
+ * can never appear in `also`. A key for it would be a message nothing can
+ * produce, sitting in the catalogue looking maintained.
+ */
 export const QUOTA_ALSO_KEY = {
   workspace: "resources.also.workspace",
   user: "resources.also.user",
-  environment: "resources.also.environment",
 } as const;
 
 export function quotaKind(status: number | undefined, code: string | undefined): QuotaKind {
@@ -116,6 +139,16 @@ export function quotaMessage(
   const [lead, ...rest] = quotaKinds(err?.status, code, err?.also ?? err?.detail?.also);
   if (!lead) return null;
   const amounts = quotaAmounts(err?.detail);
-  const head = t(leadKey[lead]) + (amounts ? ` ${t("resources.usedOfLimit", amounts)}` : "");
-  return [head, ...rest.map((k) => t(QUOTA_ALSO_KEY[k!]))].join(" ");
+  const numbers = !amounts
+    ? ""
+    : amounts.dimension
+      ? ` ${t("resources.usedOfLimitNamed", {
+          what: t(QUOTA_DIMENSION_KEY[amounts.dimension]),
+          used: amounts.used,
+          limit: amounts.limit,
+        })}`
+      : ` ${t("resources.usedOfLimit", { used: amounts.used, limit: amounts.limit })}`;
+  const head = t(leadKey[lead]) + numbers;
+  const also = rest.filter((k): k is keyof typeof QUOTA_ALSO_KEY => k !== null && k in QUOTA_ALSO_KEY);
+  return [head, ...also.map((k) => t(QUOTA_ALSO_KEY[k]))].join(" ");
 }

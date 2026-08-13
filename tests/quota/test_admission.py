@@ -63,6 +63,11 @@ def _gate(
         _limits_for,
         owner_of=lambda item: "alice" if item.startswith("a-") else None,
         has_live_sandbox=_has_live,
+        # These tests weigh the incoming sandbox EXPLICITLY (`check(item, limits)`)
+        # to isolate the arithmetic, so there is nothing for the gate to ask.
+        # Stated rather than defaulted: the production wiring is what proves the
+        # default path, and an omission here used to be indistinguishable from it.
+        cost_of=None,
         window_ms=1800_000,  # the reaper's idle threshold
         now_ms=clock,
     )

@@ -21,6 +21,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from ..files import WorkspaceFiles, rel_path
+from ..files.facade import WorkspaceFull
 from ..files.zip_download import (
     DownloadPrepared,
     prepare_zip,
@@ -54,6 +55,7 @@ from .schemas import (
     _WorkspaceUsage,
 )
 from .search import InvalidQuery, compile_query, path_selected, search_text
+from .turn_gate import quota_body
 from .turns import ChatTurnEngine
 
 _READONLY_DIR = ".readonly"
@@ -200,14 +202,14 @@ async def _stream_upload_to_store(
                         quota,
                         size,
                     )
+                    # Built by the same function every other 507 goes through.
+                    # This route streams, so it cannot let `WorkspaceFull` reach
+                    # the app-wide handler — it has to stop mid-upload — but the
+                    # BODY must not be a second hand-written copy: that is how
+                    # four entry points came to spell one refusal four ways.
                     raise HTTPException(
                         status_code=507,
-                        detail={
-                            "error": "workspace_quota_exceeded",
-                            "used": used,
-                            "quota": quota,
-                            "attempted": size,
-                        },
+                        detail=quota_body(WorkspaceFull(used=used, quota=quota, attempted=size)),
                     )
                 f.write(chunk)
         await files.write_from_path(workspace_id, path, tmp, request.headers.get("content-type"))

@@ -38,8 +38,6 @@ _CODES: dict[type[Exception], str] = {
     SandboxQuotaExceeded: "sandbox_quota_exceeded",
 }
 
-QUOTA_REFUSALS = tuple(_CODES)
-
 
 def quota_code(exc: Exception) -> str:
     """The FE-facing code for one refusal."""
@@ -76,7 +74,11 @@ class TurnRefused(Exception):
     handler, test and tool message is untouched."""
 
     def __init__(self, primary: Exception, also: list[Exception]) -> None:
-        super().__init__(f"{primary} (and {len(also)} more limit(s) at their cap)")
+        # NAMES the others rather than counting them. A scheduled run is the one
+        # surface with no frontend to read `also`, so its failure record is the
+        # whole message a person gets — "(and 1 more)" tells them there is
+        # something else and not what.
+        super().__init__("; also: ".join([str(primary), *(str(e) for e in also)]))
         self.primary = primary
         self.also = also
 
@@ -110,10 +112,10 @@ async def admit_turn(
             await admission.check(item_id)
         except SandboxQuotaExceeded as exc:
             refusals.append(exc)
-    try:
-        await files.ensure_room_for(item_id, 1)
-    except (WorkspaceFull, UserDiskFull) as exc:
-        refusals.append(exc)
+    # …then EVERY disk rule. `ensure_room_for` raises the first, which is right
+    # for a write that is stopping anyway; a refusal a person has to act on wants
+    # all of them, or they fix one and meet the next on the retry.
+    refusals.extend(await files.room_refusals(item_id, 1))
 
     if not refusals:
         return

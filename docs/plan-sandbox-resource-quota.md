@@ -242,6 +242,22 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 3. **每次寫檔多 4 次阻塞式 specstar 查詢 + 1 次耐久寫,即使一個額度都沒設。** **修法**:item→(slug, owner) 加 5 秒 memo(對齊量測本來就有的落後視窗);帳本只在「這個人真的被設了 disk 上限」時才寫。實測回到「一次寫檔 ≤1 次查詢、零筆帳本寫入」。
 4. **前端把三種 507 都渲染成「這個工作區滿了」。** 後端刻意分成三種錯誤碼、handler 註解也寫明理由,但 FE 只 branch 在 status。**第一次只修了一半**:接上的是**上傳**路徑,而 `sandbox_quota_exceeded` 只會從終端機 (`POST /exec`) 和送訊息產生 —— 上傳根本走不到 admission gate,所以那個分支在實務上是死路,真正會遇到它的入口一個都沒接。**完整修法**:共用 `quotaKind(status, code)` 判定是哪一種限制,各入口映射成自己的措辭 —— 檔案樹上傳、composer 拖放/貼上附檔(`attach` 現在回傳 `overQuotaKind`)、終端機;`HttpError` 在 `writeFile` 與 `execShell` 都帶上 `code`。順帶把 `MyResourcesPage` 的硬寫中文接上 i18n。
 
+## 3.2 已知取捨(知情、目前不做)
+
+寫下來的原因很簡單:沒記下來的已知取捨,下一個 reviewer 會再問一次。
+
+- **純聊天 turn 也會被擋。** sandbox 是 lazy 建立的,但閘門在 `chat_send.send` 無條件執行,所以 `count` 用滿時,在另一個 item 送一則「根本不會跑 code」的訊息也會 507。這是把閘門前移到「訊息持久化之前」的代價 —— 換成等 agent 真的要用 sandbox 才擋,就會白燒一輪 turn。
+- **override 無法表達「這個人無上限」。** `count` / `cpu` 的 `0` 是「未指定」,memory / disk 還能寫 `"max"`。而「某人不設限」正是例外最常見的形狀 —— 這條我認為最該先補。
+- **check 與實際 create 之間沒有保留(TOCTOU)。** 同一個 owner 的兩個 item 同時送 turn,兩邊都會過。derived-tally 本來就沒有 reservation;要修得引入租約,那會把「帳可自癒」這個性質換掉。
+- **per-user cpu/memory 只對「有宣告成本」的 App 生效**,而 repo 裡四個 App 目前都沒宣告。開機會警告(`warn_unenforceable_dimensions`),不是靜默。
+- **`test_review_regressions.py` 量的是子集合。** 它 monkeypatch `apps.resolve.find_work_item`,攔不到 `locator.py` 在 import 時就綁定的那份,所以數到的是 quota 這一份而非整個請求。斷言仍然有效(quota 從 4 次降到 1 次),但別把那個數字當成整個請求的總數。
+
+**不在本計畫範圍**:owner 轉移 UI(= #687)。
+
+**建議順序** P4 → P5 → P6 → P8 → P7 → P3 → P9。P4 補完「依 App 設定」的最後一維且不用重新部署;P5/P6/P8 是最短的「看得見」路徑;P3 要決定何時重新部署 sandbox-host,可以晚做,但**不做就等於正式環境沒上**。
+
+---
+
 ## 3.3 這份計劃自己的缺陷 —— 為什麼「全部打勾」之後還有一堆洞
 
 P1–P9 全部對照上面的條件打完勾、宣告完成之後,實際使用時仍然一次撞到:用量恆為 0、頁面沒有樣式、三個維度共用一條量表、找不到誰有特例、被拒絕時只被告知一個上限。這一節記錄**為什麼那些條件擋不住這些洞**,因為下一份計劃會用同樣的寫法。
@@ -264,22 +280,6 @@ P8 的條件是「親自按過一輪」。零 CSS 的頁面按得動。計劃裡
 2. **驗收設定挑會露餡的那個**,不是最順的那個。先問「哪一組設定會讓這個功能看起來正常但其實壞掉」,然後用那組驗。
 3. **每個畫面要有一條「看得見」的條件**,與「按得動」分開列。
 4. **維運視角單獨列一節**。使用者看得到自己的額度 ≠ 維運找得到誰有特例。
-
-## 3.2 已知取捨(知情、目前不做)
-
-寫下來的原因很簡單:沒記下來的已知取捨,下一個 reviewer 會再問一次。
-
-- **純聊天 turn 也會被擋。** sandbox 是 lazy 建立的,但閘門在 `chat_send.send` 無條件執行,所以 `count` 用滿時,在另一個 item 送一則「根本不會跑 code」的訊息也會 507。這是把閘門前移到「訊息持久化之前」的代價 —— 換成等 agent 真的要用 sandbox 才擋,就會白燒一輪 turn。
-- **override 無法表達「這個人無上限」。** `count` / `cpu` 的 `0` 是「未指定」,memory / disk 還能寫 `"max"`。而「某人不設限」正是例外最常見的形狀 —— 這條我認為最該先補。
-- **check 與實際 create 之間沒有保留(TOCTOU)。** 同一個 owner 的兩個 item 同時送 turn,兩邊都會過。derived-tally 本來就沒有 reservation;要修得引入租約,那會把「帳可自癒」這個性質換掉。
-- **per-user cpu/memory 只對「有宣告成本」的 App 生效**,而 repo 裡四個 App 目前都沒宣告。開機會警告(`warn_unenforceable_dimensions`),不是靜默。
-- **`test_review_regressions.py` 量的是子集合。** 它 monkeypatch `apps.resolve.find_work_item`,攔不到 `locator.py` 在 import 時就綁定的那份,所以數到的是 quota 這一份而非整個請求。斷言仍然有效(quota 從 4 次降到 1 次),但別把那個數字當成整個請求的總數。
-
-**不在本計畫範圍**:owner 轉移 UI(= #687)。
-
-**建議順序** P4 → P5 → P6 → P8 → P7 → P3 → P9。P4 補完「依 App 設定」的最後一維且不用重新部署;P5/P6/P8 是最短的「看得見」路徑;P3 要決定何時重新部署 sandbox-host,可以晚做,但**不做就等於正式環境沒上**。
-
----
 
 ## 4. 順手發現(未在本計畫處理)
 

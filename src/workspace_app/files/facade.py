@@ -27,6 +27,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
+from ..quota.disk_ledger import UserDiskFull
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound
 
 # How many times an etag-guarded edit re-bases against a concurrent writer
@@ -642,15 +643,37 @@ class WorkspaceFiles:
         directory subtree — checking once before starting is the difference
         between a clean refusal and a half-copied folder the user now has to
         clean up while over quota. Per-write gating alone can only fail in the
-        middle."""
+        middle.
+
+        Raises the FIRST refusal, which is what a write path wants: it is
+        stopping, and one reason is enough. A caller that would rather report
+        every reason (the turn gate) asks `room_refusals` instead."""
+        for refusal in await self.room_refusals(workspace_id, extra_bytes):
+            raise refusal
+
+    async def room_refusals(self, workspace_id: str, extra_bytes: int) -> list[Exception]:
+        """Every disk rule that `extra_bytes` more would break, in order.
+
+        TWO rules live here — this item's own quota and its owner's total across
+        items — and they are independent: being over one says nothing about the
+        other. Stopping at the first meant a person out of BOTH was told to
+        delete files, deleted them, tried again, and was told to delete files
+        somewhere else. That is the sequence the turn gate exists to prevent, and
+        it survived on the likeliest pair of all because both refusals came from
+        inside this one method."""
+        refusals: list[Exception] = []
         quota = self._quota_for(workspace_id)
         if extra_bytes <= 0 or (not quota and self._person_gate is None):
-            return
+            return refusals
         used = await self.workspace_usage(workspace_id)
         if quota and used + extra_bytes > quota:
-            raise WorkspaceFull(used=used, quota=quota, attempted=extra_bytes)
+            refusals.append(WorkspaceFull(used=used, quota=quota, attempted=extra_bytes))
         if self._person_gate is not None:
-            await self._person_gate(workspace_id, used + extra_bytes, extra_bytes)
+            try:
+                await self._person_gate(workspace_id, used + extra_bytes, extra_bytes)
+            except UserDiskFull as exc:
+                refusals.append(exc)
+        return refusals
 
     async def _usage_and_size(
         self, workspace_id: str, path: str, warm: tuple[Sandbox, SandboxHandle] | None

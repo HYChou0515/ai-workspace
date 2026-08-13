@@ -21,10 +21,16 @@ getting this wrong is not cosmetic:
   own default, so it resolves to a concrete number. There is no other party
   holding an opinion about it.
 
-The consequence worth knowing: a per-user `cpu`/`memory` cap can only bind for
-Apps whose cost is actually stated (in app.json or `per_app.default`). You
-cannot sum what nobody declared — and inventing a number for the sum is what
-produced the bug above. `count` binds regardless.
+The consequence worth knowing: a per-user `cpu`/`memory` cap sums what each live
+sandbox is ALLOWED to consume — and that allowance has two possible authors. An
+App can state it, and when nobody does, the BACKEND applies its own
+(`SANDBOX_HOST_*`, `sandbox.isolation.*`). Both are real ceilings that a real
+cgroup enforces, so both are honest terms in the sum.
+
+What is NOT honest is inventing a number when neither party set one: a backend
+that caps nothing (mock, the plain local process) makes the dimension genuinely
+unsummable, and then the cap cannot bind. That — not "did an App declare it" —
+is what `warn_unenforceable_dimensions` reports. `count` binds regardless.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from dataclasses import dataclass
 
 from ..apps.manifest import AppManifest, AppResources
 from ..config.schema import PerUserResources, ResourceAmounts, Settings
+from ..sandbox.protocol import EnforcedLimits
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +93,10 @@ class _SummedDimension:
 
     configured: Callable[[PerUserResources], float]
     stated: Callable[[ResourceLimits], float | int | None]
+    # What the BACKEND applies when the App states nothing. Lives here with the
+    # other two for the reason the docstring above gives: a third dimension
+    # added without its own accessor would silently be treated as another one's.
+    backend: Callable[[EnforcedLimits], float | int | None]
 
 
 @dataclass(frozen=True)
@@ -110,8 +121,10 @@ class ResourceLimits:
 # The dimensions a per-person cap SUMS. `count` is absent on purpose: counting
 # sandboxes needs nobody to have declared anything, so it can never be inert.
 _SUMMED_DIMENSIONS: dict[str, _SummedDimension] = {
-    "cpu": _SummedDimension(lambda u: u.cpu, lambda lim: lim.cpu_cores),
-    "memory": _SummedDimension(lambda u: parse_size(u.memory), lambda lim: lim.memory_bytes),
+    "cpu": _SummedDimension(lambda u: u.cpu, lambda lim: lim.cpu_cores, lambda e: e.cpu_cores),
+    "memory": _SummedDimension(
+        lambda u: parse_size(u.memory), lambda lim: lim.memory_bytes, lambda e: e.memory_bytes
+    ),
 }
 
 
@@ -199,14 +212,27 @@ def _enforce_ceiling(slug: str, limits: ResourceLimits, ceiling: ResourceAmounts
 
 
 def warn_unenforceable_dimensions(
-    settings: Settings, limits: dict[str, ResourceLimits]
+    settings: Settings,
+    limits: dict[str, ResourceLimits],
+    *,
+    enforced: EnforcedLimits | None,
 ) -> list[str]:
     """Name any per-person dimension the deploy set that cannot fully bind.
 
+    `enforced` is what the sandbox BACKEND applies to a sandbox whose spec states
+    nothing — `Sandbox.effective_limits(SandboxSpec())`. It is required, and it
+    is the half this check used to be missing: judging on App declarations alone
+    made this line announce that `per_user.cpu` "never fires" for exactly the
+    configuration in which the gate does refuse a turn. Two statements about one
+    config, one of them printed at boot to the operator.
+
+    `None` means the answer could not be obtained (no backend wired at this
+    point). Then nothing is reported: "we did not ask" is not evidence that a
+    limit is dead, and saying so would be the same false claim inverted.
+
     A per-user `cpu` / `memory` cap sums what each live sandbox is ALLOWED to
-    consume. An App that states no cost contributes a zero term, so the cap is
-    only as real as the Apps that declared something. Two shapes matter, and the
-    second is the nastier one:
+    consume. A term is missing only when NEITHER the App nor the backend states
+    one. Two shapes matter, and the second is the nastier one:
 
     * **nobody declared** — the cap never fires at all;
     * **some declared** — the cap fires against a partial sum, so the same limit
@@ -226,16 +252,23 @@ def warn_unenforceable_dimensions(
     """
     per_user = settings.resources.per_user
     messages: list[str] = []
+    if enforced is None:
+        return messages
     for name, dim in _SUMMED_DIMENSIONS.items():
         if not dim.configured(per_user):
+            continue
+        if dim.backend(enforced) is not None:
+            # The backend caps this dimension for a sandbox that declares
+            # nothing, so every sandbox contributes a real term whatever its App
+            # says. Nothing to warn about.
             continue
         silent = sorted(slug for slug, lim in limits.items() if dim.stated(lim) is None)
         if not silent:
             continue  # every App states this dimension — the sum is complete
-        where = f"app.json `resources`, or resources.per_app.default.{name}"
+        where = f"app.json `resources`, `resources.per_app.default.{name}`, or the sandbox backend"
         if len(silent) == len(limits):
             messages.append(
-                f"resources.per_user.{name} is set, but no App states a {name} "
+                f"resources.per_user.{name} is set, but nothing states a {name} "
                 f"cost ({where}), so the sum has no terms and this limit never "
                 f"fires. resources.per_user.count still applies."
             )
@@ -246,9 +279,46 @@ def warn_unenforceable_dimensions(
                 f"count as zero, so the limit binds against a partial sum — it "
                 f"will fire or not depending on which Apps a person is using."
             )
+    messages.extend(_impossible_dimensions(per_user, limits, enforced))
     for message in messages:
         logger.warning("quota: %s", message)
     return messages
+
+
+def _impossible_dimensions(
+    per_user: PerUserResources,
+    limits: dict[str, ResourceLimits],
+    enforced: EnforcedLimits,
+) -> list[str]:
+    """Name any per-person cap so small that ONE sandbox already exceeds it.
+
+    Then nobody can open even their first environment, and the refusal tells
+    them to close one — advice that cannot be followed, on a screen that will
+    show nothing to close. The limit is not "tight", it is closed, and that is
+    almost never what an operator meant to type.
+
+    Reported rather than fatal, for the same reason the rest of this function
+    is: the config is not malformed, and a deploy may genuinely want a dimension
+    parked at zero-usable while it is being tuned."""
+    out: list[str] = []
+    for name, dim in _SUMMED_DIMENSIONS.items():
+        cap = dim.configured(per_user)
+        if not cap:
+            continue
+        backend = dim.backend(enforced)
+        costs = {
+            slug: (stated if (stated := dim.stated(lim)) is not None else backend)
+            for slug, lim in limits.items()
+        }
+        over = sorted(slug for slug, cost in costs.items() if cost and cost > cap)
+        if over:
+            out.append(
+                f"resources.per_user.{name} is {cap}, which is smaller than ONE "
+                f"sandbox of: {', '.join(over)}. Nobody can open even their first "
+                f"environment for those Apps — the refusal will tell them to close "
+                f"one they do not have."
+            )
+    return out
 
 
 def resolve_discovered_apps(settings: Settings) -> dict[str, ResourceLimits]:

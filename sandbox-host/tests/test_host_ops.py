@@ -162,3 +162,20 @@ async def test_healthz_publishes_the_ceilings_this_host_will_apply():
     # Named, so an app talking to a host too old to say can tell "not advertised"
     # from "advertised as nothing" and report a stale image instead of charging 0.
     assert "resource-defaults" in body["capabilities"]
+
+
+async def test_healthz_survives_a_backend_that_cannot_answer():
+    """This endpoint is the deployment's LIVENESS probe. Making it depend on the
+    sandbox answering a resource question turns "cannot say" into a crashloop —
+    the app charging nothing is a visible under-count, a restarting pod is an
+    outage."""
+
+    class _Mute(MockSandbox):
+        async def effective_limits(self, spec):  # noqa: ANN001, ANN201
+            raise RuntimeError("this backend has no idea")
+
+    app = make_host_app(_Mute(), advertise_url="http://h")
+    async with _client(app) as c:
+        resp = await c.get("/healthz")
+    assert resp.status_code == 200
+    assert resp.json()["defaults"] == {"cpu_cores": None, "memory_bytes": None}

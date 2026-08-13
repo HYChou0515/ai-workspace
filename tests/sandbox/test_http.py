@@ -13,6 +13,7 @@ no privilege.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import socket
@@ -708,3 +709,82 @@ async def test_create_states_nothing_when_the_app_has_no_limits():
         sb = HttpSandbox(base_url=_ADVERTISE, client=client)
         await sb.create(SandboxSpec())
     assert app.state.created_limits == [(None, None, None)]
+
+
+# ── the host-defaults cache (review round 1) ──────────────────────────────
+
+
+def _flaky_host(fail_first: int, cpu: float = 1.5, mem: int = 768 * 1024**2):
+    """A host whose `/healthz` fails the first `fail_first` times. Records how
+    many times it was actually asked."""
+    state = {"calls": 0, "cpu": cpu, "mem": mem}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        state["calls"] += 1
+        if state["calls"] <= fail_first:
+            raise httpx.ConnectError("host down", request=request)
+        return httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "capabilities": ["resource-defaults"],
+                "defaults": {"cpu_cores": state["cpu"], "memory_bytes": state["mem"]},
+            },
+        )
+
+    return state, handler
+
+
+async def test_a_momentary_host_blip_does_not_charge_zero_for_ever():
+    """The failure must NOT be remembered.
+
+    Caching it pinned the whole process to "this sandbox costs nothing" — the
+    exact defect this backend reports `effective_limits` to fix, except silent
+    and only curable by restarting the pod. The blip is likeliest during the
+    sandbox-host rollout this change requires."""
+    state, handler = _flaky_host(fail_first=1)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        first = await sb.effective_limits(SandboxSpec())
+        second = await sb.effective_limits(SandboxSpec())
+
+    assert first == EnforcedLimits(cpu_cores=None, memory_bytes=None)  # nothing invented
+    assert second == EnforcedLimits(cpu_cores=1.5, memory_bytes=768 * 1024**2)
+    assert state["calls"] == 2  # it asked again rather than trusting the failure
+
+
+async def test_a_redeployed_host_is_picked_up_without_restarting_the_app():
+    """`sandbox-host` and the app are separate deployments, so "the next process"
+    is not a real cure: rolling the host does not restart the app pods. The
+    answer is remembered for a bounded time, not for ever."""
+    clock = {"t": 0.0}
+    state, handler = _flaky_host(fail_first=0)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(
+            base_url=_ADVERTISE,
+            client=client,
+            host_defaults_ttl=60.0,
+            monotonic=lambda: clock["t"],
+        )
+        assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5
+        clock["t"] = 30.0
+        state["cpu"] = 4.0  # host redeployed with a bigger ceiling
+        assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5  # still cached
+        assert state["calls"] == 1
+        clock["t"] = 61.0
+        assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 4.0
+        assert state["calls"] == 2
+
+
+async def test_concurrent_first_calls_ask_once_and_a_failure_cannot_win():
+    """Two cold callers raced the one-shot fetch, and whichever finished LAST
+    wrote the cache — so a failing probe could overwrite an answer the host had
+    already given correctly. A cold pod waking several items at once is exactly
+    that shape."""
+    state, handler = _flaky_host(fail_first=0)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        got = await asyncio.gather(*(sb.effective_limits(SandboxSpec()) for _ in range(5)))
+
+    assert all(g == EnforcedLimits(cpu_cores=1.5, memory_bytes=768 * 1024**2) for g in got)
+    assert state["calls"] == 1  # serialised, not five races

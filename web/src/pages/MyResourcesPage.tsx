@@ -15,7 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-import { formatBytes } from "../lib/formatBytes";
+import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 
 import { type MyResources, type MyResourcesApi, type OverrideList as OverrideListDTO, myResourcesApi } from "../api/myResources";
@@ -23,8 +23,10 @@ import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { UserPicker } from "../components/UserPicker";
 
-// Re-exported: this page was its only home until the refusal messages started
-// carrying the numbers behind them too.
+// Re-exported for this page's own tests. The implementation lives in
+// `lib/bytes` — where it always did. A second copy briefly existed here under a
+// new filename and rendered the SAME number differently ("80 MB" vs "80.0 MB"),
+// so a refusal message and the usage bar beside it disagreed.
 export { formatBytes };
 
 /** `used of limit`, or just `used` when the dimension is unlimited (limit 0). */
@@ -269,6 +271,7 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
         <span className="admin-field">
           <label id="q-user-label">{t("resources.admin.user")}</label>
           <UserPicker
+            labelledBy="q-user-label"
             selected={userId ? [userId] : []}
             onToggle={(id) => {
               // Single-select: picking someone else REPLACES the target rather

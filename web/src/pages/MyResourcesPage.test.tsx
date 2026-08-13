@@ -300,7 +300,10 @@ describe("formatting", () => {
     expect(formatBytes(0)).toBe("0 B");
     expect(formatBytes(900)).toBe("900 B");
     expect(formatBytes(1536)).toBe("1.5 KB");
-    expect(formatBytes(20 * 1024 ** 3)).toBe("20 GB");
+    // One decimal above 1 KB — `lib/bytes`'s shipped convention, shared with
+    // the usage bar. A second copy of this function briefly rendered the same
+    // number as "20 GB", so a refusal message and the bar beside it disagreed.
+    expect(formatBytes(20 * 1024 ** 3)).toBe("20.0 GB");
   });
 
   it("omits the denominator when a dimension is unlimited", () => {

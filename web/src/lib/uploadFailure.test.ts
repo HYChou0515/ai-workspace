@@ -86,13 +86,26 @@ describe("quotaAmounts — the numbers behind the refusal", () => {
 
   // The environment limit has three dimensions and they are not all bytes —
   // rendering cores as "1 B" would be worse than showing nothing.
-  it("reads each environment dimension in its own unit", () => {
+  // The environment limit is three limits behind one sentence, so its numbers
+  // have to say which one they are: "2 of 1" under "you are at your limit for
+  // live environments" reads as environments even when it means cores.
+  it("reads each environment dimension in its own unit, and names it", () => {
     expect(
       quotaAmounts({ error: "sandbox_quota_exceeded", dimension: "sandboxes", used: 2, limit: 1 }),
-    ).toEqual({ used: "2", limit: "1" });
+    ).toEqual({ used: "2", limit: "1", dimension: "sandboxes" });
+    expect(
+      quotaAmounts({ error: "sandbox_quota_exceeded", dimension: "cpu", used: 4, limit: 2 }),
+    ).toEqual({ used: "4", limit: "2", dimension: "cpu" });
     expect(
       quotaAmounts({ error: "sandbox_quota_exceeded", dimension: "memory", used: 512, limit: 1024 }),
-    ).toEqual({ used: "512 B", limit: "1.0 KB" });
+    ).toEqual({ used: "512 B", limit: "1.0 KB", dimension: "memory" });
+  });
+
+  it("leaves the two disk limits unnamed — their sentence is already specific", () => {
+    expect(quotaAmounts({ error: "workspace_quota_exceeded", used: 0, quota: 1024 })).toEqual({
+      used: "0 B",
+      limit: "1.0 KB",
+    });
   });
 
   it("is null when the body carried no numbers, so nothing is invented", () => {
@@ -116,9 +129,12 @@ describe("quotaMessage — one sentence, both surfaces", () => {
         status: 507,
         code: "sandbox_quota_exceeded",
         also: ["workspace_quota_exceeded"],
-        detail: { error: "sandbox_quota_exceeded", dimension: "sandboxes", used: 2, limit: 1 },
+        detail: { error: "sandbox_quota_exceeded", dimension: "cpu", used: 4, limit: 2 },
       }),
-    ).toBe("chat.send.envFull resources.usedOfLimit(2/1) resources.also.workspace");
+      // the dimension leads the numbers: 4 CORES, not 4 environments
+    ).toBe(
+      "chat.send.envFull resources.usedOfLimitNamed(resources.gauge.cpu/4/2) resources.also.workspace",
+    );
   });
 
   // Reading `detail` alone silently demoted every caller that only carries

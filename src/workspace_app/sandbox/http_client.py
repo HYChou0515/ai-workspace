@@ -17,6 +17,7 @@ import asyncio
 import base64
 import json
 import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,6 +103,8 @@ class HttpSandbox:
         read_timeout: float = 0.0,
         io_retry: IoRetryPolicy | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
+        host_defaults_ttl: float = 60.0,
+        monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         # read_timeout <= 0 ⇒ no read deadline; the host's own exec/idle timeout
@@ -115,43 +118,95 @@ class HttpSandbox:
         )
         self._io_retry = io_retry or IoRetryPolicy()
         self._sleep = sleep or asyncio.sleep
-        # What the host says it enforces when a spec states nothing. Fetched
-        # once and remembered: it is a property of the host's deployment, not of
-        # any one sandbox, and the tally asks on every heartbeat.
+        # What the host says it enforces when a spec states nothing — a property
+        # of the host's DEPLOYMENT, not of any one sandbox, so it is remembered
+        # rather than asked on every heartbeat.
+        #
+        # Remembered for a bounded time, and only when the host actually
+        # answered. Both halves were learned the hard way:
+        #
+        # - Caching a FAILURE pinned the process to "every sandbox is free",
+        #   which is precisely the defect `effective_limits` exists to fix —
+        #   except silent, and only curable by restarting the pod. One blip on
+        #   one `/healthz` was enough, and the staleness probe stays green
+        #   because the host is fine; it was this side that gave up.
+        # - Caching for ever made "a redeployed host is picked up" false: the
+        #   host and the app are SEPARATE deployments, so rolling the host does
+        #   not restart the app's pods. A TTL is what makes that sentence true.
+        self._host_defaults_ttl = host_defaults_ttl
+        self._monotonic = monotonic or time.monotonic
         self._host_defaults: EnforcedLimits | None = None
+        self._host_defaults_until = 0.0
+        # Serialises the fetch. Without it, cold callers racing the first ask
+        # each wrote the cache and the LAST writer won — so a failing probe
+        # could overwrite an answer the host had already given correctly.
+        self._host_defaults_lock = asyncio.Lock()
 
     async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
         """What the HOST will really cap this sandbox at.
 
         The app cannot read another service's environment, so it asks. A host
-        too old to advertise (or one that is momentarily unreachable) leaves the
+        too old to advertise, or one that is unreachable right now, leaves the
         request's own `None`s in place — the pre-existing behaviour, which
         charges nothing. That is a visible under-count rather than an invented
-        number, and `SandboxHostCapabilityCheck` is what tells the operator the
-        host image is behind."""
-        if self._host_defaults is None:
-            self._host_defaults = await self._fetch_host_defaults()
-        host = self._host_defaults
+        number; `SandboxHostCapabilityCheck` names an image too old to advertise,
+        and an unreachable host is retried on the next call rather than believed
+        for the rest of the process."""
+        host = await self._defaults()
         return EnforcedLimits(
             cpu_cores=host.cpu_cores if spec.cpu_cores is None else spec.cpu_cores,
             memory_bytes=host.memory_bytes if spec.memory_bytes is None else spec.memory_bytes,
         )
 
-    async def _fetch_host_defaults(self) -> EnforcedLimits:
-        """The host's advertised ceilings, or empty ones when it cannot say.
+    async def _defaults(self) -> EnforcedLimits:
+        """The host's ceilings, from cache while fresh, else asked for again."""
+        fresh = self._fresh_defaults()
+        if fresh is not None:
+            return fresh
+        async with self._host_defaults_lock:
+            # Re-read under the lock: a caller we queued behind may have just
+            # filled it, and asking again would waste the round trip we were
+            # waiting for.
+            fresh = self._fresh_defaults()
+            if fresh is not None:
+                return fresh
+            got = await self._fetch_host_defaults()
+            if got is None:
+                # Could not ask. Charge nothing for now — and do NOT remember
+                # that, so the next call tries again.
+                return EnforcedLimits(cpu_cores=None, memory_bytes=None)
+            self._host_defaults = got
+            self._host_defaults_until = self._monotonic() + self._host_defaults_ttl
+            return got
 
-        Deliberately swallows every failure: this is an accounting refinement,
-        and a host that is down must not turn every heartbeat into an error —
-        liveness is decided elsewhere. An empty answer is NOT cached as final;
-        `_host_defaults` keeps it, so a redeployed host is picked up by the next
-        process. (A restart is already required to change those numbers.)"""
+    def _fresh_defaults(self) -> EnforcedLimits | None:
+        if self._host_defaults is None or self._monotonic() >= self._host_defaults_until:
+            return None
+        return self._host_defaults
+
+    async def _fetch_host_defaults(self) -> EnforcedLimits | None:
+        """The host's advertised ceilings, or `None` when it could not be asked.
+
+        `None` and "the host advertises nothing" are deliberately different: the
+        second is an ANSWER (an image too old to carry the field) and is worth
+        remembering; the first is our own failure to reach it, and remembering
+        that is how one blip became a permanently mis-charged pod.
+
+        Every failure is swallowed rather than raised: this is an accounting
+        refinement on a path that also serves the heartbeat, and liveness is
+        decided elsewhere. The timeout is short for the same reason — it sits
+        in front of a turn, before the user's message is persisted."""
         try:
-            resp = await self._client.get(f"{self._base_url}/healthz", timeout=10.0)
+            resp = await self._client.get(f"{self._base_url}/healthz", timeout=3.0)
             resp.raise_for_status()
             got = resp.json().get("defaults") or {}
         except Exception:  # noqa: BLE001 — an unreachable host must not break the tally
-            logger.warning("sandbox-http: host did not advertise its resource defaults")
-            return EnforcedLimits(cpu_cores=None, memory_bytes=None)
+            logger.warning(
+                "sandbox-http: could not read the host's resource defaults; "
+                "charging nothing for now and retrying on the next call",
+                exc_info=True,
+            )
+            return None
         cpu, mem = got.get("cpu_cores"), got.get("memory_bytes")
         return EnforcedLimits(
             cpu_cores=None if cpu is None else float(cpu),

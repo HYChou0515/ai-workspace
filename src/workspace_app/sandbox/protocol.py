@@ -210,10 +210,10 @@ class Sandbox(Protocol):
 
         Async only because ONE backend has to ask: the http host applies its own
         `SANDBOX_HOST_*`, which lives in another service's environment, so the
-        only truthful source is the host itself. It answers from a cached
-        advertisement rather than per call, so this stays cheap enough for the
-        heartbeat to ask every time — and asking every time is what keeps it
-        correct when the host is redeployed with different numbers.
+        only truthful source is the host itself. It answers from a BRIEFLY cached
+        advertisement, so the heartbeat can call this every time without a round
+        trip each time — and the cache expires, because the host is a separate
+        deployment whose numbers can change without restarting this one.
 
         This exists because "what was requested" and "what will be enforced" are
         different questions over the same fields, and the quota needs the second.
