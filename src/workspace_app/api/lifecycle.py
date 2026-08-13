@@ -96,6 +96,7 @@ def build_lifespan(
     cluster_tau: float = _CLUSTER_SWEEP_TAU,
     cluster_merge_tau: float = _CLUSTER_MERGE_TAU,
     prewarm_tools: Callable[[], Awaitable[dict[str, str]]],
+    warn_resources: Callable[[], Awaitable[list[str]]] | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Build the FastAPI ``lifespan`` context manager, capturing the injected
     deps in the nested sweeper closures. The coordinators stay off-capture and
@@ -361,6 +362,20 @@ def build_lifespan(
         with boot_step("tools: warm third-party bundles"):
             unwarmed = await prewarm_tools()
         logger.info("lifespan: third-party tools warmed, %d unavailable", len(unwarmed))
+        # A per-person cpu/memory cap can only bind if SOMETHING states what a
+        # sandbox costs — the App, or the backend's own ceiling. Saying so needs
+        # to ASK the backend, which for the http one is a real request.
+        #
+        # It runs HERE rather than in `__main__` for that reason: `asyncio.run`
+        # at boot opens that request on a throwaway event loop, and the
+        # keep-alive connection it leaves in the client's pool belongs to a loop
+        # that is then closed. The first sandbox call on the serving loop dies
+        # with "Event loop is closed" — swallowed into "charge nothing" on the
+        # accounting path, and unmapped (no retry, a 500) on every other.
+        if warn_resources is not None:
+            with boot_step("resources: check the per-person caps can bind"):
+                for warning in await warn_resources():
+                    logger.warning("quota: %s", warning)
         # #312: in-process consumers run only when `run_consumers` is on. Default
         # True keeps the all-in-one behaviour; a pod-split deploy sets it False so
         # the API is a pure producer and dedicated worker pods drain each JobType.

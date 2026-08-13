@@ -307,7 +307,13 @@ class _RoomAlways:
     async def ensure_room_for(self, _workspace_id: str, _extra: int) -> None:
         return None
 
-    async def room_refusals(self, _workspace_id: str, _extra: int) -> list[Exception]:
+    async def room_refusals(
+        self, _workspace_id: str, _extra: int, *, record: bool = True
+    ) -> list[Exception]:
+        # Signature mirrors `WorkspaceFiles.room_refusals`, `record` included.
+        # This double has now fallen behind that contract twice in one branch —
+        # once when the method was added, once when `record` was — and each time
+        # it surfaced as two unrelated-looking failures somewhere else.
         return []
 
 

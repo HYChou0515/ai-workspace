@@ -182,7 +182,9 @@ def test_a_dimension_nobody_declared_is_reported_as_never_firing():
     undeclared sandbox gives the sum a term the App never wrote down."""
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
     (message,) = warn_unenforceable_dimensions(
-        settings, _limits(rca=(None, None, 0)), enforced=EnforcedLimits(None, None)
+        settings.resources.per_user,
+        _limits(rca=(None, None, 0)),
+        enforced=EnforcedLimits(None, None),
     )
     assert "per_user.cpu" in message
     assert "never fires" in message
@@ -197,7 +199,7 @@ def test_a_backend_that_caps_an_undeclared_sandbox_silences_the_warning():
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
     assert (
         warn_unenforceable_dimensions(
-            settings,
+            settings.resources.per_user,
             _limits(rca=(None, None, 0)),  # the App still declares nothing…
             enforced=EnforcedLimits(cpu_cores=1.0, memory_bytes=None),  # …the backend caps cpu
         )
@@ -212,7 +214,10 @@ def test_an_unknown_backend_ceiling_is_not_reported_as_unenforceable():
     be the same false claim in the other direction."""
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
     assert (
-        warn_unenforceable_dimensions(settings, _limits(rca=(None, None, 0)), enforced=None) == []
+        warn_unenforceable_dimensions(
+            settings.resources.per_user, _limits(rca=(None, None, 0)), enforced=None
+        )
+        == []
     )
 
 
@@ -222,7 +227,9 @@ def test_the_check_is_per_dimension_not_shared():
     could not bind, because every sandbox's cpu term was zero."""
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
     messages = warn_unenforceable_dimensions(
-        settings, _limits(rca=(None, 2048, 0)), enforced=EnforcedLimits(None, None)
+        settings.resources.per_user,
+        _limits(rca=(None, 2048, 0)),
+        enforced=EnforcedLimits(None, None),
     )
     assert messages, "an App declaring only memory must not silence the cpu warning"
     assert "cpu" in messages[0]
@@ -234,7 +241,7 @@ def test_partial_declaration_is_reported_too():
     works, which is why silence here would be worse than the total case."""
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
     (message,) = warn_unenforceable_dimensions(
-        settings,
+        settings.resources.per_user,
         _limits(rca=(2.0, None, 0), pm=(None, None, 0)),
         enforced=EnforcedLimits(None, None),
     )
@@ -246,7 +253,9 @@ def test_a_fully_declared_dimension_says_nothing():
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
     assert (
         warn_unenforceable_dimensions(
-            settings, _limits(rca=(2.0, None, 0)), enforced=EnforcedLimits(None, None)
+            settings.resources.per_user,
+            _limits(rca=(2.0, None, 0)),
+            enforced=EnforcedLimits(None, None),
         )
         == []
     )
@@ -321,7 +330,9 @@ def test_the_warning_names_a_config_key_that_really_exists():
 
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4, memory="8G")))
     messages = warn_unenforceable_dimensions(
-        settings, _limits(rca=(None, None, 0)), enforced=EnforcedLimits(None, None)
+        settings.resources.per_user,
+        _limits(rca=(None, None, 0)),
+        enforced=EnforcedLimits(None, None),
     )
     assert len(messages) == 2
 
@@ -351,7 +362,12 @@ def test_a_deploy_with_no_apps_says_nothing():
     Apps, and no workload exists for the cap to bind against either. Pinned so
     the silence reads as a decision rather than an oversight."""
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
-    assert warn_unenforceable_dimensions(settings, {}, enforced=EnforcedLimits(None, None)) == []
+    assert (
+        warn_unenforceable_dimensions(
+            settings.resources.per_user, {}, enforced=EnforcedLimits(None, None)
+        )
+        == []
+    )
 
 
 def test_a_cap_smaller_than_one_sandbox_is_called_out():
@@ -360,7 +376,9 @@ def test_a_cap_smaller_than_one_sandbox_is_called_out():
     limit is not tight, it is closed."""
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=2.0)))
     (message,) = warn_unenforceable_dimensions(
-        settings, _limits(rca=(4.0, None, 0)), enforced=EnforcedLimits(None, None)
+        settings.resources.per_user,
+        _limits(rca=(4.0, None, 0)),
+        enforced=EnforcedLimits(None, None),
     )
     assert "smaller than ONE sandbox" in message
     assert "rca" in message
@@ -371,7 +389,7 @@ def test_the_backend_default_counts_towards_that_too():
     caps it, and that ceiling is what a person is charged."""
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=0.5)))
     (message,) = warn_unenforceable_dimensions(
-        settings,
+        settings.resources.per_user,
         _limits(rca=(None, None, 0)),
         enforced=EnforcedLimits(cpu_cores=1.0, memory_bytes=None),
     )
@@ -382,7 +400,9 @@ def test_a_workable_cap_says_nothing():
     settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=8.0)))
     assert (
         warn_unenforceable_dimensions(
-            settings, _limits(rca=(4.0, None, 0)), enforced=EnforcedLimits(None, None)
+            settings.resources.per_user,
+            _limits(rca=(4.0, None, 0)),
+            enforced=EnforcedLimits(None, None),
         )
         == []
     )

@@ -115,7 +115,7 @@ async def admit_turn(
     # …then EVERY disk rule. `ensure_room_for` raises the first, which is right
     # for a write that is stopping anyway; a refusal a person has to act on wants
     # all of them, or they fix one and meet the next on the retry.
-    refusals.extend(await files.room_refusals(item_id, 1))
+    refusals.extend(await files.room_refusals(item_id, 1, record=False))
 
     if not refusals:
         return

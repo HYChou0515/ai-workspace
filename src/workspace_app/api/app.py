@@ -34,7 +34,7 @@ from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
 from ..quota.admission import AdmissionGate, SandboxQuotaExceeded
 from ..quota.disk_ledger import DiskLedger, UserDiskFull, register_disk_ledger
-from ..quota.limits import ResourceLimits, parse_size
+from ..quota.limits import ResourceLimits, parse_size, warn_unenforceable_dimensions
 from ..quota.user_limits import UserLimits, register_user_quota
 from ..resources import (
     AgentConfig,
@@ -582,8 +582,14 @@ def create_app(
     disk_ledger = DiskLedger(spec)
     user_limits = UserLimits(spec, per_user_resources or PerUserResources())
 
-    async def _person_disk_gate(item_id: str, new_size: int, growth: int) -> None:
+    async def _person_disk_gate(
+        item_id: str, new_size: int, growth: int, *, record: bool = True
+    ) -> None:
         """The per-person disk total, checked only on GROWTH.
+
+        `record=False` asks the question WITHOUT the side effect below. A caller
+        that is collecting reasons rather than performing a write must not leave
+        the owner charged for a size the workspace will never have.
 
         `new_size` is this workspace's LIVE size (measured on the write path, so
         exact); the ledger supplies the other items' last measured sizes. The
@@ -616,7 +622,13 @@ def create_app(
         # DIFFERENT item is judged against a total that includes this one.
         # Only reached when they are actually capped — an uncapped deploy pays
         # no durable write for an answer nobody asked for.
-        await disk_ledger.record(item_id, owner, new_size)
+        #
+        # `new_size` is what the workspace will be AFTER the write this gate just
+        # allowed, so recording it is only honest if that write is going to
+        # happen. It is not, for a caller that is gathering every reason a turn
+        # is refused — another rule may already have stopped it.
+        if record:
+            await disk_ledger.record(item_id, owner, new_size)
 
     async def _publish_measured(item_id: str) -> None:
         """Hand the freshly measured size of one workspace to the ledger.
@@ -763,6 +775,14 @@ def create_app(
         on_result=_persist_check_run,
     )
 
+    async def _warn_resources() -> list[str]:
+        """Any per-person dimension configured here that nothing can enforce."""
+        return warn_unenforceable_dimensions(
+            per_user_resources or PerUserResources(),
+            app_resources or {},
+            enforced=await sandbox.effective_limits(SandboxSpec()),
+        )
+
     lifespan = build_lifespan(
         registry=registry,
         spec=spec,
@@ -787,6 +807,10 @@ def create_app(
         cluster_merge_tau=kb_cluster_merge_tau,
         # #674: warm every app's declared third-party bundles at boot.
         prewarm_tools=lambda: prewarm_external_tools(sandbox, _declared_external_tools()),
+        # Asked of the BACKEND, on the serving loop — see `lifecycle` for why not
+        # at boot. `app_resources` is what this app is actually serving with, so
+        # the check and the enforcement read the same numbers.
+        warn_resources=lambda: _warn_resources(),
     )
 
     # root_path lives on the app (not just uvicorn.run) so OpenAPI servers and

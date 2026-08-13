@@ -742,15 +742,31 @@ async def test_a_momentary_host_blip_does_not_charge_zero_for_ever():
     exact defect this backend reports `effective_limits` to fix, except silent
     and only curable by restarting the pod. The blip is likeliest during the
     sandbox-host rollout this change requires."""
+    clock = {"t": 0.0}
     state, handler = _flaky_host(fail_first=1)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        sb = HttpSandbox(base_url=_ADVERTISE, client=client)
+        sb = HttpSandbox(
+            base_url=_ADVERTISE,
+            client=client,
+            host_defaults_retry_after=5.0,
+            monotonic=lambda: clock["t"],
+        )
         first = await sb.effective_limits(SandboxSpec())
-        second = await sb.effective_limits(SandboxSpec())
+        # Within the retry window the failure is still honoured — that window
+        # exists so a down host cannot turn this into a serial queue of timeouts
+        # in front of every turn. It bounds the damage; it does not deny it.
+        during = await sb.effective_limits(SandboxSpec())
+        asked_within_window = state["calls"]  # sampled HERE, not after the block
+        clock["t"] = 6.0
+        after = await sb.effective_limits(SandboxSpec())
 
     assert first == EnforcedLimits(cpu_cores=None, memory_bytes=None)  # nothing invented
-    assert second == EnforcedLimits(cpu_cores=1.5, memory_bytes=768 * 1024**2)
-    assert state["calls"] == 2  # it asked again rather than trusting the failure
+    assert during == EnforcedLimits(cpu_cores=None, memory_bytes=None)
+    assert asked_within_window == 1  # …and it did not re-ask inside the window
+    # Recovery is BOUNDED, which is the whole finding: caching the failure made
+    # it permanent, curable only by restarting the pod.
+    assert after == EnforcedLimits(cpu_cores=1.5, memory_bytes=768 * 1024**2)
+    assert state["calls"] == 2
 
 
 async def test_a_redeployed_host_is_picked_up_without_restarting_the_app():
@@ -788,3 +804,60 @@ async def test_concurrent_first_calls_ask_once_and_a_failure_cannot_win():
 
     assert all(g == EnforcedLimits(cpu_cores=1.5, memory_bytes=768 * 1024**2) for g in got)
     assert state["calls"] == 1  # serialised, not five races
+
+
+async def test_a_host_that_dies_after_answering_keeps_its_last_known_ceiling():
+    """Expiring the cache must not mean forgetting what the host already said.
+
+    The TTL exists so a REDEPLOYED host is picked up; treating expiry as "we
+    know nothing" made a host that answered once and then went down worse than
+    one that was never asked — every sandbox charged 0, which is the defect this
+    whole mechanism exists to prevent."""
+    clock = {"t": 0.0}
+    state = {"up": True, "calls": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        state["calls"] += 1
+        if not state["up"]:
+            raise httpx.ConnectError("host down", request=request)
+        return httpx.Response(
+            200,
+            json={"defaults": {"cpu_cores": 1.5, "memory_bytes": 1024}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(
+            base_url=_ADVERTISE,
+            client=client,
+            host_defaults_ttl=60.0,
+            monotonic=lambda: clock["t"],
+        )
+        assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5
+        clock["t"] = 61.0
+        state["up"] = False
+        assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5
+
+
+async def test_a_down_host_is_not_re_asked_by_every_caller_in_turn():
+    """The lock serialises the fetch, and a failure is deliberately not cached —
+    so without a retry window every queued caller paid a full timeout in turn.
+    Twenty concurrent turns behind a 3s timeout is a minute of serial queueing,
+    on the path that runs BEFORE a user's message is persisted."""
+    clock = {"t": 0.0}
+    state = {"calls": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        state["calls"] += 1
+        raise httpx.ConnectError("host down", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(
+            base_url=_ADVERTISE,
+            client=client,
+            host_defaults_retry_after=5.0,
+            monotonic=lambda: clock["t"],
+        )
+        got = await asyncio.gather(*(sb.effective_limits(SandboxSpec()) for _ in range(20)))
+
+    assert all(g == EnforcedLimits(None, None) for g in got)  # nothing invented
+    assert state["calls"] == 1, "twenty callers must not each pay their own timeout"

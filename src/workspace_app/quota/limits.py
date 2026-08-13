@@ -36,7 +36,7 @@ is what `warn_unenforceable_dimensions` reports. `count` binds regardless.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from ..apps.manifest import AppManifest, AppResources
@@ -212,8 +212,8 @@ def _enforce_ceiling(slug: str, limits: ResourceLimits, ceiling: ResourceAmounts
 
 
 def warn_unenforceable_dimensions(
-    settings: Settings,
-    limits: dict[str, ResourceLimits],
+    per_user: PerUserResources,
+    limits: Mapping[str, ResourceLimits],
     *,
     enforced: EnforcedLimits | None,
 ) -> list[str]:
@@ -250,7 +250,6 @@ def warn_unenforceable_dimensions(
     A deploy with NO Apps at all reports nothing: every dimension is vacuously
     complete, and there is no workload for a cap to bind against either.
     """
-    per_user = settings.resources.per_user
     messages: list[str] = []
     if enforced is None:
         return messages
@@ -287,7 +286,7 @@ def warn_unenforceable_dimensions(
 
 def _impossible_dimensions(
     per_user: PerUserResources,
-    limits: dict[str, ResourceLimits],
+    limits: Mapping[str, ResourceLimits],
     enforced: EnforcedLimits,
 ) -> list[str]:
     """Name any per-person cap so small that ONE sandbox already exceeds it.

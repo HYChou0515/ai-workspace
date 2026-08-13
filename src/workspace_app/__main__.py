@@ -15,7 +15,6 @@ config-refactor grill — the only env override mechanism).
 from __future__ import annotations
 
 import argparse
-import asyncio
 from datetime import timedelta
 from pathlib import Path
 
@@ -57,8 +56,7 @@ from workspace_app.factories import (
 from workspace_app.monitor import SpecstarMonitor
 from workspace_app.observability.boot import boot_step
 from workspace_app.observability.setup import install_llm_logging
-from workspace_app.quota.limits import resolve_discovered_apps, warn_unenforceable_dimensions
-from workspace_app.sandbox.protocol import SandboxSpec
+from workspace_app.quota.limits import resolve_discovered_apps
 from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
 from workspace_app.tooling.registry import discover_packages
 
@@ -207,18 +205,6 @@ def main() -> None:
     infer_cfg = get_infer_modules_run_config(settings)
     with boot_step("init sandbox"):
         sandbox = get_sandbox(settings, tools_dir=tools_dir)
-    # A per-person cpu/memory cap sums what each live sandbox is allowed to use.
-    # With NEITHER an App nor the backend stating a cost there is nothing to sum,
-    # and the number in the dump above would enforce nothing — say so out loud
-    # rather than let it read as configured.
-    #
-    # It runs HERE, after the sandbox exists, because the backend is half the
-    # answer: it applies its own ceiling to a sandbox that declares nothing.
-    # Asking only the Apps is what made this line announce "never fires" about a
-    # limit that does fire.
-    _enforced = asyncio.run(sandbox.effective_limits(SandboxSpec()))
-    for _warning in warn_unenforceable_dimensions(settings, app_resources, enforced=_enforced):
-        print(f"  ⚠ resources: {_warning}")
     with boot_step("build app (create_app)"):
         # #501: the API's SPECSTAR filestore (WorkspaceFile registration / blob GC /
         # #219 / shared blob pool with KB·wiki) is DISTINCT from the SANDBOX's durable

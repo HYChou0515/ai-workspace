@@ -104,6 +104,7 @@ class HttpSandbox:
         io_retry: IoRetryPolicy | None = None,
         sleep: Callable[[float], Awaitable[None]] | None = None,
         host_defaults_ttl: float = 60.0,
+        host_defaults_retry_after: float = 5.0,
         monotonic: Callable[[], float] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
@@ -137,6 +138,12 @@ class HttpSandbox:
         self._monotonic = monotonic or time.monotonic
         self._host_defaults: EnforcedLimits | None = None
         self._host_defaults_until = 0.0
+        # How long a FAILED ask is remembered — briefly, and only to stop the
+        # queue below from forming. Not remembering it at all was the other
+        # extreme: the lock made every waiting caller pay a full timeout in
+        # turn, so a down host turned the pre-turn gate into a serial queue.
+        self._host_defaults_retry_after = host_defaults_retry_after
+        self._host_defaults_retry_at = 0.0
         # Serialises the fetch. Without it, cold callers racing the first ask
         # each wrote the cache and the LAST writer won — so a failing probe
         # could overwrite an answer the host had already given correctly.
@@ -159,25 +166,41 @@ class HttpSandbox:
         )
 
     async def _defaults(self) -> EnforcedLimits:
-        """The host's ceilings, from cache while fresh, else asked for again."""
+        """The host's ceilings: cached while fresh, re-asked when stale, and —
+        when it cannot be reached — the last thing it said rather than nothing."""
         fresh = self._fresh_defaults()
         if fresh is not None:
             return fresh
+        if self._monotonic() < self._host_defaults_retry_at:
+            return self._last_known()
         async with self._host_defaults_lock:
-            # Re-read under the lock: a caller we queued behind may have just
-            # filled it, and asking again would waste the round trip we were
-            # waiting for.
+            # Re-read both under the lock: a caller we queued behind may have
+            # just filled the cache (asking again would waste the round trip we
+            # waited for) or just failed (asking again would rebuild the queue
+            # this lock created).
             fresh = self._fresh_defaults()
             if fresh is not None:
                 return fresh
+            if self._monotonic() < self._host_defaults_retry_at:
+                return self._last_known()
             got = await self._fetch_host_defaults()
             if got is None:
-                # Could not ask. Charge nothing for now — and do NOT remember
-                # that, so the next call tries again.
-                return EnforcedLimits(cpu_cores=None, memory_bytes=None)
+                self._host_defaults_retry_at = self._monotonic() + self._host_defaults_retry_after
+                return self._last_known()
             self._host_defaults = got
             self._host_defaults_until = self._monotonic() + self._host_defaults_ttl
+            self._host_defaults_retry_at = 0.0
             return got
+
+    def _last_known(self) -> EnforcedLimits:
+        """What the host last said, or nothing if it never said anything.
+
+        A stale ceiling beats no ceiling: the numbers change only when the host
+        is redeployed, while "no ceiling" charges every sandbox zero — the exact
+        defect this mechanism exists to prevent. Forgetting a good answer the
+        moment the host goes down would make an answered-then-unreachable host
+        worse than one never asked."""
+        return self._host_defaults or EnforcedLimits(cpu_cores=None, memory_bytes=None)
 
     def _fresh_defaults(self) -> EnforcedLimits | None:
         if self._host_defaults is None or self._monotonic() >= self._host_defaults_until:

@@ -30,6 +30,11 @@ from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..quota.disk_ledger import UserDiskFull
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound
 
+# The per-person disk gate. `record` is part of the CONTRACT, not an
+# optimisation: the gate writes the post-write size to the ledger when it
+# ALLOWS a write, so a caller that is only asking has to be able to say so.
+PersonDiskGate = Callable[..., Awaitable[None]]
+
 # How many times an etag-guarded edit re-bases against a concurrent writer
 # before giving up and reporting a conflict. A handful is plenty — contention
 # on one wiki page across workers is rare and each retry re-reads fresh.
@@ -157,7 +162,7 @@ class WorkspaceFiles:
         handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
         rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
         quota: int | Callable[[str], int] = 0,
-        person_gate: Callable[[str, int, int], Awaitable[None]] | None = None,
+        person_gate: PersonDiskGate | None = None,
         on_usage: Callable[[str, int], Awaitable[None]] | None = None,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
@@ -647,12 +652,26 @@ class WorkspaceFiles:
 
         Raises the FIRST refusal, which is what a write path wants: it is
         stopping, and one reason is enough. A caller that would rather report
-        every reason (the turn gate) asks `room_refusals` instead."""
-        for refusal in await self.room_refusals(workspace_id, extra_bytes):
+        every reason (the turn gate) asks `room_refusals` instead — and asks it
+        NOT to record, because it is not about to write."""
+        for refusal in await self.room_refusals(workspace_id, extra_bytes, record=True):
             raise refusal
 
-    async def room_refusals(self, workspace_id: str, extra_bytes: int) -> list[Exception]:
+    async def room_refusals(
+        self, workspace_id: str, extra_bytes: int, *, record: bool = True
+    ) -> list[Exception]:
         """Every disk rule that `extra_bytes` more would break, in order.
+
+        `record=False` gathers the reasons WITHOUT charging anyone. The
+        per-person gate is not a pure predicate — on the allowed path it writes
+        the post-write size to the ledger, which is honest only when the write
+        is actually about to happen. Collecting every reason means reaching that
+        gate even after another rule has already refused the operation, and
+        charging there left an owner over-counted for a copy that never ran:
+        they were then refused in a DIFFERENT item, against a number that
+        appears nowhere in the product — the file tree still showed the smaller
+        size. The gate's own comment says a refused write is "deliberately NOT
+        recorded"; this is the caller-side half of that rule.
 
         TWO rules live here — this item's own quota and its owner's total across
         items — and they are independent: being over one says nothing about the
@@ -670,7 +689,9 @@ class WorkspaceFiles:
             refusals.append(WorkspaceFull(used=used, quota=quota, attempted=extra_bytes))
         if self._person_gate is not None:
             try:
-                await self._person_gate(workspace_id, used + extra_bytes, extra_bytes)
+                await self._person_gate(
+                    workspace_id, used + extra_bytes, extra_bytes, record=record
+                )
             except UserDiskFull as exc:
                 refusals.append(exc)
         return refusals

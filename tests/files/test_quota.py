@@ -444,3 +444,39 @@ async def test_store_without_usage_accounting_falls_back():
     assert await files.file_size("ws", "/a") is None
     # remaining is then just the whole quota (nothing counted against it)
     assert await files.remaining_quota("ws", "/a") == 1000
+
+
+async def test_gathering_reasons_does_not_charge_the_person_gate():
+    """The per-person gate is NOT a pure predicate: when it allows a write it
+    records the post-write size. `ensure_room_for` never reached it once the
+    workspace rule had already refused, but `room_refusals` deliberately keeps
+    going — so it reached a recording gate for an operation that was already
+    refused, and the owner was charged for a copy that never happened.
+
+    The double records on the allowed path because the real gate does. One that
+    only decided would be immune to exactly this defect — which is how it
+    shipped."""
+    recorded: list[int] = []
+
+    async def gate(_ws: str, new_size: int, _growth: int, *, record: bool = True) -> None:
+        if record:
+            recorded.append(new_size)
+
+    files = WorkspaceFiles(MemoryFileStore(), quota=100, person_gate=gate)
+    await files.write("ws1", "/a", b"x" * 100)  # the workspace is now exactly full
+    # …and that write legitimately charged, through `_ensure_headroom`. Clear it:
+    # what is under test is the ASKING path, not the writing one.
+    recorded.clear()
+
+    # Asking for reasons: the workspace rule refuses, and the person gate must
+    # be consulted (so both can be named) WITHOUT charging anyone.
+    refusals = await files.room_refusals("ws1", 50, record=False)
+    assert [type(r).__name__ for r in refusals] == ["WorkspaceFull"]
+    assert recorded == [], "a refused operation charged the owner"
+
+    # …while a write path still records exactly as before.
+    roomy = WorkspaceFiles(MemoryFileStore(), quota=1000, person_gate=gate)
+    await roomy.write("ws1", "/a", b"x" * 100)
+    recorded.clear()
+    await roomy.ensure_room_for("ws1", 50)
+    assert recorded == [150], "a write path must still keep the ledger current"
