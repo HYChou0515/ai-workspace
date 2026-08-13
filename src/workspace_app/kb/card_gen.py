@@ -64,10 +64,14 @@ class DescriptionQuestionDraft(msgspec.Struct):
 
 
 class DocDigest(msgspec.Struct):
-    """One document's full digest (#377): the cards the reader could confidently
-    draft, plus the questions it raised instead of guessing — terms it couldn't
-    define and passages it couldn't follow. The single LLM pass yields all three
-    so the reader writes what it knows and asks what it doesn't in one go."""
+    """One document's digest: the terms it stated something about.
+
+    ``cards`` is the whole of it now. The drafter used to also raise questions
+    about terms it could not define (#377); it stays silent instead, because the
+    only other branch on offer was to guess. The question fields remain — they
+    are read by shapes a migration would have to move — and are always empty, so
+    ``_raise_questions`` is a no-op on them.
+    """
 
     cards: list[CardDraft] = msgspec.field(default_factory=list)
     # Always empty. The drafter used to ask about terms it could not define; it
@@ -80,11 +84,11 @@ class DocDigest(msgspec.Struct):
 
 class CardDrafter(Protocol):
     """The LLM-driven seam the generation job calls once per document: read the
-    document's extracted text and return its ``DocDigest`` — the confident cards
-    plus the term / description questions it raised instead of guessing (#377).
-    Production wraps an ``Llm`` + a classify prompt; tests inject a fake that
-    returns a canned digest (so the job's orchestration is testable without a
-    model)."""
+    document's extracted text and return its ``DocDigest`` — the terms the
+    document states something about, each claim carrying the sentence that makes
+    it. No questions (see ``DocDigest``). Production wraps an ``Llm`` + the
+    extraction prompt; tests inject a fake that returns a canned digest (so the
+    job's orchestration is testable without a model)."""
 
     def digest(self, *, doc_path: str, doc_text: str, collection_id: str = "") -> DocDigest: ...
 
@@ -112,6 +116,12 @@ class ProposedCard(msgspec.Struct):
     id: str = ""  # #481: stable per-run card id, so the review table addresses one card
     title: str = ""
     body: str = ""
+    # Always true for anything this pipeline produces. It used to carry the
+    # drafter's self-rating, and that tier was removed: "grounded in the text but
+    # inferring" was the entry point for the invented definitions this design
+    # exists to stop. Kept because PROPOSALS FILED BEFORE THIS CHANGE can still
+    # be sitting in the review queue with it false, and the ⚠️ that renders them
+    # must keep working.
     confident: bool = True
     mode: str = "new"  # new | update
     target_card_id: str | None = None
