@@ -1,23 +1,27 @@
 # Plan — context card:證據與成品分離
 
-## 這份計畫要解的問題
-
-擁有者的原話:
+## 三個現象,擁有者的原話
 
 > 我們很常會看到他會自己發明定義(文本沒有說的他會自己說明)。我們真正會想要的是文本當中
 > 明確定義的可以被記下來,並且和過去同樣名詞定義相融合。例如 a 說蘋果是水果、另一個文本 b
 > 說蘋果是紅色,就應該最後呈現「蘋果是紅色的水果」。但現在充斥著蘋果的定義,包含他是什麼科
 > 什麼屬(文本沒提過),以及每多張卡片在描述蘋果的不同面向。
 
-三個現象,兩個不在 prompt 裡。
+> H2O2 是這次的材料 —— 在缺乏上下文的情況,這是無用的。
 
-| 現象 | 位置 |
+> title: 14k ratio,body: the 14k ratio increased from wave 1 7% to wave 2 20%。
+> 這個訊息感覺是重要沒錯,但是我會預期 title 放 14k ratio 是在解釋什麼叫做 14k ratio。
+
+歸成三種失敗,而其中兩種**不在 prompt 裡**:
+
+| 現象 | 真正的位置 |
 |---|---|
-| 自己發明定義 | `kb/prompts/card_drafting.md` —— prompt 的判準 |
-| 一個詞多張卡 | `merge_drafts` 只在 **norm_key 撞名**時合併,「蘋果 / 蘋果顏色 / Apple」不撞就各自成卡 |
+| 自己發明定義 | 抽取判準 —— 可以訓練 |
+| 一個詞多張卡 | `merge_drafts` 只在 **norm_key 撞名**時合併 |
 | 定義不融合 | **後到的 body 被靜默丟棄**(見下) |
+| 答錯問題(講場合、講發現) | 抽取判準 —— 可以訓練,但引句閘門抓不到 |
 
-### 第三個不是「還沒做融合」,是資料遺失
+### 「不融合」不是還沒做,是資料遺失
 
 `kb/card_gen.py:390`:
 
@@ -26,30 +30,21 @@ if not p.confident and d.confident:   # 只有「不確定 → 確定」才換 b
     p.title, p.body, p.confident = d.title, d.body, True
 ```
 
-兩份文件都有把握地談蘋果時:
+兩份文件都有把握地談蘋果時,後到的 body 直接被丟掉。**key 會 union、provenance 會 union、
+body 從來不 union。** 跨 run 也一樣:`update` 走 `create_or_update` **整段覆寫**
+(`card_gen_coordinator.py:266`)。同一類 bug 在這裡被咬過一次 —— 註解寫著 #518 補救
+`reference_doc_ids`,「否則每一輪 card-gen 都會把卡上的證據刮掉」—— **body 有一模一樣的
+毛病,沒被補。**
 
-```
-doc A「蘋果是水果」(confident) → 建立提案,body = 蘋果是水果
-doc B「蘋果是紅色」(confident) → key 撞上 → p.confident 已是 True
-                                → 這一行不執行 → 蘋果是紅色 消失
-```
-
-**key 會 union、provenance 會 union、body 從來不 union。** 跨 run 也一樣:`update` 模式走
-`create_or_update` **整段覆寫**(`card_gen_coordinator.py:266`)。同一類 bug 在這裡被咬過一次
-—— 註解寫著 #518 補救 `reference_doc_ids`,「否則每一輪 card-gen 都會把卡上的證據刮掉」——
-**body 有一模一樣的毛病,沒被補。**
-
-實務上 `Collection.auto_digest` 預設 `False`(`index_coordinator.py:854` 直接 return),
-所以出卡全部來自手動觸發。重跑同一批文件正是這兩個缺陷疊加最兇的情境:不是覆寫掉上一輪,
-就是因為 key 差一點而長出兄弟卡。**重跑越多次,面向分得越散。**
+`Collection.auto_digest` 預設 `False`,所以出卡全部來自手動觸發。重跑同一批文件正是這兩個
+缺陷疊加最兇的情境:不是覆寫掉上一輪,就是因為 key 差一點而長出兄弟卡。
 
 ## 根本的建模錯誤
 
-現在是「**每份文件各自寫一段定義,然後挑一個贏家**」。但沒有任何一份文件握有完整圖像
-—— 寫「蘋果是水果」的那份不知道紅色。所以無論挑誰贏都一定丟資訊。這不是 merge 寫壞了,
-是這個模型**本來就不可能累積**。
+「**每份文件各自寫一段定義,然後挑一個贏家**」。沒有任何一份文件握有完整圖像,所以無論挑誰
+贏都一定丟資訊。這不是 merge 寫壞了,是這個模型**本來就不可能累積**。
 
-## 正解:body 是算出來的,不是寫下來再選的
+## 正解
 
 ```
 每份文件  →  關於某個詞的【陳述】,逐字帶引句      ← 只需要看這一份文件
@@ -57,98 +52,114 @@ doc B「蘋果是紅色」(confident) → key 撞上 → p.confident 已是 True
 一個詞的全部陳述  →  合成一段 body                 ← 這裡才需要全域視野
 ```
 
-跟 #697 對圖譜做的是同一件事:mention 是逐段的證據,entity 由 `build_vocabulary`
-從**全部**證據推導。卡片要的是同一個結構。
+跟 #697 對圖譜做的是同一件事:mention 是逐段的證據,entity 由全部證據推導。
 
-一次解掉三個現象:
-
-- **發明定義** —— 陳述必須引得出原句(圖譜側 `entity_extract.py:273` 已有這個閘門);合成只准用手上的陳述
-- **一詞多卡** —— 一個詞一張卡,因為卡是推導出來的,不是靠誰先到
-- **不融合** —— 合成**就是**融合。多一份文件 → 重算 → body 多一個子句,不覆寫、不遺失
-
-順帶解掉「提問很分散」:在這個模型裡,「有出現但零陳述」的詞**就是**一個問題,由累積證據
-推導而來,天然按詞聚合。不需要另外寫合併提問的邏輯 —— 那個邏輯不存在,是因為提問本來就
-不該逐份文件發。
+---
 
 ## 已定案
 
 | 決定 | 理由 |
 |---|---|
-| **不與知識圖譜共用證據層** | 圖譜的 `attributes` / `relationships` 確實抽的是同一種東西,合併能省一趟模型呼叫。**但兩條路現在都還不夠好,擁有者正在賭哪一條比較好** —— 共用抽取等於共用失敗模式,比出來的差異只剩渲染方式,賭局作廢。這是刻意的重複,**未來的讀者不要「順手」把它們收斂掉**。 |
-| 卡片仍走自己的抽取 | 同上。代價是同一批文件跑兩趟模型,已知並接受。 |
-| 提問不是刪掉,是**改為推導** | 擁有者要求「先不提問」,但現在的 prompt 只有「出卡 / 提問」兩條路(第 4 行:*When in doubt, ask; never guess*)。拿掉 ask,剩下的動詞只有 guess —— 直接放大要修的那個毛病。第三條路是**沉默**,而問題本身改由證據推導。 |
-| `confident: false` 那層拿掉 | prompt 現在定義為「grounded in the text but inferring」。inferring 就是發明的入口。要嘛文件明確說了,要嘛沒有。 |
+| **不與知識圖譜共用證據層** | 圖譜的 `attributes` 抽的是同一種東西,合併能省一趟呼叫。**但兩條路都還不夠好,擁有者正在賭哪一條比較好** —— 共用抽取等於共用失敗模式,比出來的差異只剩渲染方式。這是刻意的重複,**未來的讀者不要「順手」收斂掉**。 |
+| **共用樣本與探針,不共用版本** | 尺可以共用,證據不行。`--from` 指文件,`--tune-round` 指版本。 |
+| **不提問,改為沉默** | 原 prompt 只有「出卡 / 提問」兩條路(*When in doubt, ask; never guess*)。拿掉 ask,剩下的動詞只有 guess。第三條路是**什麼都不產出**。 |
+| **拿掉 `confident: false` 那層** | 原定義是「grounded in the text but inferring」。inferring 就是發明的入口。 |
+| **舊卡刪除,不寫相容** | 舊卡沒有 `statements`,無法重算。擁有者決定砍掉重生。 |
+| **judge 必須先對人校準** | `defines_rate` 是唯一建立在模型判斷上的指標。未校準的 judge 會讓迴圈爬錯的山。 |
+
+### 三種失敗,三個量法
+
+| 指標 | 量什麼 | 需要校準嗎 |
+|---|---|---|
+| `grounded_rate` | 模型提出的陳述裡,引句真的在原文的比例 | 不用 —— 純字串比對 |
+| `defines_rate` | 卡片有沒有回答「這個詞是什麼」 | **要** —— 唯一靠模型判斷的 |
+| `lookup_hit_rate` | 讀者會查的東西,有沒有對應的卡 | 靠人看一次凍結探針 |
+| `cards_from_one_document` | 只站在一份文件上的卡 —— 一詞多卡的殘留量 | 不用 |
+
+`fitness = lookup_hit_rate × grounded_rate × defines_rate`,**相乘不是相減**:抽零張卡的
+grounded 是空洞的滿分 1.0,相減會讓它奪冠。
+
+## 兩個迴圈,順序不能顛倒
+
+```
+迴圈 A  校準 judge         人的時間,一次性
+        20 張人工標註 → GLM 依分歧改寫判準 → 重新評分
+        沒有 holdout ⇒ 跑三五輪就停
+        用全新一批(--judge-from + --seed)驗證有沒有過擬合
+                ↓
+迴圈 B  訓練抽取 prompt     機器的時間,可無人看管
+        每輪:抽卡 → 用【校準後的】判準評分 → GLM 改抽取 prompt
+        有固定 holdout ⇒ 可以久跑
+```
+
+**A 的產出是 B 的評分依據。** `best_judge_prompt()` 挑一致率最高的**已評分**版本 —— 不是
+最新的,因為校準是單線沒有 beam,退步的版本一樣會是最新的。
+
+### 一個前提:judge 必須先對自己一致
+
+實測:預設溫度下 judge 對同一批卡跑兩次只有 **16/20** 一致。一個跟自己都談不攏的評審不可能
+穩定地跟人談得攏,而且**改 prompt 修不好那個** —— 那是取樣隨機性。
+
+必須先:`reasoning_effort: "none"`,以及 `temperature=0`。
+
+> ⚠️ **專案裡沒有 temperature 這個旋鈕** —— `litellm.completion` 沒傳它
+> (`kb/llm.py`)。目前靠手改或在模型服務端設定。要做成設定的話,得先決定範圍:
+> judge 要 0,檢索增強(multi-query / HyDE)大概不要。
 
 ---
 
-## Phases
+## 進度
 
-### P1 — 抽「陳述」而不是「定義」
+### 離線的部分 —— 完成
 
-每份文件產出的不再是寫好的 body,而是**關於某個詞的陳述**:`term` / `statement` / `quote`。
-`quote` 必須逐字出現在文件裡,否則整條丟棄 —— 確定性閘門,不用模型。
+| | |
+|---|---|
+| `kb/cards/extract.py` | 一份文件 → 帶逐字引句的陳述;引不出原文(含空引句)就丟,並**計數** |
+| `kb/cards/build.py` | 依 `lookup_glossary` 的正規化分組;body 由全部陳述推導;`--concurrency` |
+| `kb/cards/preview.py` + `card_preview` CLI | 離線跑真實文件,零 store |
+| `kb/cards/tune.py` | 迴圈 B:三層獎勵、beam、mini-batch、`DEFINES` 評審 |
+| `kb/cards/calibrate.py` | 迴圈 A:`--review` / `--calibrate`,判準逐版留存 |
+| `kb/tuning.py` | 兩條管線共用的版本記帳、beam、探針 |
 
-`card_drafter.py:132` 現在**只檢查 snippet 是不是字串**,從未比對文件內容;圖譜側同一個要求
-是強制的。卡片的正當性完全建立在那段引文上,這個閘門在這裡比在那裡更重要。
+### 接回正式管線 —— P1 完成,P2–P4 未做
 
-### P2 — 純計算的合成
-
-`statements(term) → body`,無 store、無 SpecStar,跟 `kb/graph/build.py` 同形狀。
-輸入是可列舉的 N 條陳述,輸出是一段話。重跑就重算,不覆寫任何東西。
-
-### P3 — 唯讀預覽 + 樣本抽取
-
-照 `graph_preview` 的形狀:一次讀取正式語料 → 純文字樣本 → 之後全部離線。
-沒有這個就沒有安全的迭代迴圈,而沒有迴圈就只能憑感覺改 prompt。
-
-### P4 — 三層 reward
-
-| 層 | 訊號 | 成本 |
+| | | 狀態 |
 |---|---|---|
-| 快 | 引句逐字命中率;詞條的 termhood 象限 | 零模型呼叫 |
-| 中 | **遺漏**(哪幾條陳述沒被 body 表達)+ **新增**(body 哪個子句沒有任何陳述支持) | 每輪抽樣 |
-| 慢 | 凍結探針的 `lookup_glossary` 命中率 | 跟 holdout 同節奏 |
+| **P1** | `ContextCard.statements` + `accumulate()` + `synthesise()` 對外 | ✅ |
+| **P2** | drafter 改吐陳述,換掉 `LlmCardDrafter.digest` | ⬜ |
+| **P3** | commit 改成「附加 + 重算」,換掉 `merge_drafts` 的丟棄與 `update` 的覆寫 | ⬜ |
+| **P4** | 待審 inbox 顯示陳述 + 引句,每句點得到出處 | ⬜ |
 
-中間那層是**封閉比較** —— 輸入可列舉,所以「有沒有多」近乎客觀,而「有沒有多」就是
-「自己發明定義」被直接量出來。這比圖譜那邊的獎勵好定義。
-
-### P5 — 調校迴圈
-
-版本化、holdout、beam、流失名單、meta-prompt 帶歷史 —— 這些與任務無關,整組復用
-`kb/graph/tune.py` 的結構。兩個 prompt 各自訓練:抽陳述的、合成的。
-
-### P6 — 提問改為推導
-
-「在文件中出現、但零陳述」的詞聚合成一個問題,按詞而不是按文件。
-
-### P7 — 接回正式路徑
-
-`merge_drafts` 的「後到者丟棄」與 `update` 的整段覆寫換掉。待審 inbox 審的對象從
-「三段各自合理的散文」變成「這些陳述 + 它們合成的結果」,每一句都點得到出處。
-
-### P8 — 賭局需要一把共同的尺
-
-擁有者的話:「圖譜和卡片現在都不夠好到能上線,我現在在賭誰比較好。」**現在沒有任何東西
-能回答那個問題。**
-
-兩者都被 exact-key lookup 消費(`lookup_entity` / `lookup_glossary`),所以**同一組凍結探針
-對兩邊都成立**。探針衍生自文件、不屬於任一條管線,共用它不構成耦合 —— 共用的是尺,不是證據。
-
-- **命中率** 兩邊各量一次,同一組探針
-- **成對盲測**:同一個問題,一邊給 entity dossier、一邊給 card body,問哪個更能回答。
-  成對比絕對評分可靠得多,而且不需要任何標註
-
-這一階段唯讀、不依賴前面任何一個 phase,可以先跑起來當基線。
+P3 是唯一動到現行審核流程的一步;舊卡刪除的決定讓它不用寫相容邏輯。
 
 ## 非目標
 
-- 不與圖譜合併證據層(理由見上,而且這是**刻意**的重複)
-- 不做黑名單:一個被排除的詞不再被抽出,就不再出現在任何後續證據裡,沒有任何一輪能發現
-  那個排除是錯的 —— 與 [`plan-graph-reward.md`](plan-graph-reward.md) 同一條理由
+- 不與圖譜合併證據層(**刻意**的重複)
+- 不做黑名單:被排除的名字不再被抽出,就不再出現在任何後續證據裡,沒有任何一輪能發現那個
+  排除是錯的 —— 與 [`plan-graph-reward.md`](plan-graph-reward.md) 同一條理由
 - 不做人工「必抓詞」名單:列得出那份名單,就代表已經知道答案了
+- 不動模型權重
 
-## 相關
+## 操作程序
 
-- [`plan-graph-reward.md`](plan-graph-reward.md) —— 圖譜側的同一套迴圈與獎勵設計;
-  P4/P5 的結構直接沿用,P8 是把兩邊放在同一把尺上比
-- [`plan-context-cards.md`](plan-context-cards.md) —— #106 卡片本身的設計
+見 [`plan-graph-reward.md`](plan-graph-reward.md) 的同型流程;卡片這條的指令:
+
+```bash
+# 0 一次性:抽樣本、產一批卡
+python -m workspace_app.graph_preview <cid> -o ./rounds --dump-samples 60 --holdout 30
+python -m workspace_app.card_preview --samples ./rounds/holdout -o ./card-check --concurrency 8
+
+# A 校準 judge(重複到一致率不動,不要 while 迴圈)
+python -m workspace_app.card_preview --review ./rounds-cards --cards ./card-check/cards.json
+#   看完 20 張,只標不同意的
+python -m workspace_app.card_preview --calibrate ./rounds-cards
+#   用全新一批驗證
+python -m workspace_app.card_preview --review ./check-1 --cards ./card-check/cards.json \
+    --judge-from ./rounds-cards --seed 1
+
+# B 訓練抽取 prompt(可掛著跑)
+while :; do python -m workspace_app.card_preview --tune-round ./rounds-cards \
+    --from ./rounds --batch 8 --holdout-every 3 --concurrency 8 || break; done
+```
+
+**驗證用的批次絕對不要拿去 calibrate** —— 一旦拿去改判準,它就不再是 holdout。
