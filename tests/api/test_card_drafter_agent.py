@@ -28,14 +28,21 @@ from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, RunError
 from workspace_app.api.runner import ScriptedAgentRunner
 from workspace_app.resources import AgentConfig
 
+#: The document the drafter is given. The quote gate checks every claim against
+#: it, so a canned reply has to quote something the document really says — which
+#: matters most for THIS drafter: an agent that browsed the wiki can quote
+#: perfectly real sentences the document never contained.
+_DOC = "M4 (Metal 4) is the fourth interconnect layer."
+
 _GOOD = json.dumps(
     {
         "cards": [
             {
+                "term": "Metal 4",
                 "keys": ["M4", "Metal 4"],
-                "title": "Metal 4",
-                "body": "The fourth metal layer.",
-                "snippet": "M4 (Metal 4) is the fourth interconnect layer.",
+                "statements": [
+                    {"text": "the fourth interconnect layer", "quote": _DOC},
+                ],
             }
         ]
     }
@@ -47,9 +54,10 @@ def test_agentic_drafter_parses_the_final_assistant_message_into_a_digest():
     # instead of a one-shot ILlm, parsed by the same tolerant parser.
     runner = ScriptedAgentRunner([MessageDelta(text=_GOOD), RunDone()])
     d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
-    (card,) = d.digest(doc_path="a.md", doc_text="...").cards
+    (card,) = d.digest(doc_path="a.md", doc_text=_DOC).cards
     assert card.keys == ["M4", "Metal 4"]
-    assert card.title == "Metal 4"
+    assert card.term == "Metal 4"
+    assert [s.text for s in card.statements] == ["the fourth interconnect layer"]
 
 
 def test_streamed_chunks_concatenate_and_reasoning_is_ignored():
@@ -66,7 +74,7 @@ def test_streamed_chunks_concatenate_and_reasoning_is_ignored():
         ]
     )
     d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
-    (card,) = d.digest(doc_path="a.md", doc_text="...").cards
+    (card,) = d.digest(doc_path="a.md", doc_text=_DOC).cards
     assert card.keys == ["M4", "Metal 4"]  # the content answer, not the reasoning scratch
 
 
@@ -80,7 +88,7 @@ def test_a_run_error_is_a_give_up_that_raises_not_a_silent_empty_digest():
     )
     d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
     with pytest.raises(RuntimeError, match="all providers exhausted"):
-        d.digest(doc_path="a.md", doc_text="...")
+        d.digest(doc_path="a.md", doc_text=_DOC)
 
 
 async def test_drafter_context_delegates_ask_knowledge_base_scoped_to_the_doc_collection():

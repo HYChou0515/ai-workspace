@@ -234,6 +234,11 @@ def build_coordinators(
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
         reconciler=reconciler,
+        # Writes each proposal's body from ALL the statements the term has
+        # gathered, at finalize time. Without it the evidence still lands and the
+        # cards are still merged — they just have no prose, which is recoverable;
+        # a body copied from one document is not.
+        synthesiser=card_drafter_llm,
     )
     # #82: indexing runs off the request path on a durable, cross-pod job queue.
     # It chains the index→wiki hook, so the wiki coordinator is handed in here.

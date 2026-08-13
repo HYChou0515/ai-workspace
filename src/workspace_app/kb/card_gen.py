@@ -32,22 +32,16 @@ import msgspec
 from specstar import OnDelete, Ref
 from specstar.types import Job
 
+from ..resources.kb import CardStatement
+from .cards.accumulate import accumulate
+from .cards.extract import TermCard
 from .context_cards import derive_norm_keys, norm
 
-
-class CardDraft(msgspec.Struct):
-    """One glossary card drafted from a single document by the ``CardDrafter``,
-    before dedup against other drafts / existing cards. ``keys`` are the surface
-    forms (term + aliases) the reader might search; ``confident`` is the
-    classifier's self-rated certainty (an uncertain draft surfaces with a ⚠️ in
-    review and is not committed by default, #205); ``snippet`` is the supporting
-    passage the draft was derived from — the provenance a reviewer audits."""
-
-    keys: list[str]
-    title: str = ""
-    body: str = ""
-    confident: bool = True
-    snippet: str = ""
+#: What one document yields about one term. The SAME type the offline pipeline
+#: produces (``kb.cards.extract.TermCard``) — a document states claims and quotes
+#: the sentences that make them; it does not author a definition, because it
+#: cannot see what the rest of the corpus says about the term.
+CardDraft = TermCard
 
 
 class TermQuestionDraft(msgspec.Struct):
@@ -76,6 +70,10 @@ class DocDigest(msgspec.Struct):
     so the reader writes what it knows and asks what it doesn't in one go."""
 
     cards: list[CardDraft] = msgspec.field(default_factory=list)
+    # Always empty. The drafter used to ask about terms it could not define; it
+    # now stays silent instead, because the only other branch was to guess (see
+    # docs/plan-context-card-evidence.md). The fields remain so the shapes that
+    # read them keep decoding, and `_raise_questions` is a no-op on empty lists.
     term_questions: list[TermQuestionDraft] = msgspec.field(default_factory=list)
     description_questions: list[DescriptionQuestionDraft] = msgspec.field(default_factory=list)
 
@@ -118,6 +116,10 @@ class ProposedCard(msgspec.Struct):
     mode: str = "new"  # new | update
     target_card_id: str | None = None
     provenance: list[Provenance] = msgspec.field(default_factory=list)
+    # The evidence `body` was written from. Carried through review so the
+    # reviewer approves the statements AND the sentence they add up to, and so
+    # the committed card can be recomputed when a later document says more.
+    statements: list[CardStatement] = msgspec.field(default_factory=list)
     # #481 review lifecycle: pending / accepted are ACTIVE (still in the queue);
     # committed (written to a card) / rejected are TERMINAL — a run leaves the
     # 待審核 queue only once every proposal is terminal.
@@ -151,6 +153,7 @@ class CardProposal(msgspec.Struct):  # → resource "card-proposal"
     mode: str = "new"  # new | update
     target_card_id: str | None = None
     provenance: list[Provenance] = msgspec.field(default_factory=list)
+    statements: list[CardStatement] = msgspec.field(default_factory=list)
     decision: str = "pending"  # pending | accepted | rejected | committed
 
 
@@ -174,6 +177,7 @@ def proposal_to_card_proposal(collection_id: str, run_id: str, p: ProposedCard) 
         mode=p.mode,
         target_card_id=p.target_card_id,
         provenance=list(p.provenance),
+        statements=list(p.statements),
         decision=p.decision,
     )
 
@@ -192,6 +196,7 @@ def card_proposal_to_proposed(pid: str, cp: CardProposal) -> ProposedCard:
         mode=cp.mode,
         target_card_id=cp.target_card_id,
         provenance=list(cp.provenance),
+        statements=list(cp.statements),
         decision=cp.decision,
     )
 
@@ -353,30 +358,35 @@ def ensure_proposal_ids(proposals: list[ProposedCard]) -> list[ProposedCard]:
 
 
 def merge_drafts(drafts: list[tuple[str, str, CardDraft]]) -> list[ProposedCard]:
-    """Dedup raw drafts into proposals by NORMALISED key overlap (#205: "deduped
-    by normalised key, aliases unioned"). Each draft is ``(doc_id, path, draft)``.
-    Two drafts that share any ``norm_key`` merge into one proposal: their keys are
-    unioned (dedup by ``norm``), their provenance accumulated. A draft with no
-    usable key (blank after ``norm``) is dropped. A confident draft's title/body
-    wins over an uncertain one's for the merged proposal; merge stays ``new`` here
-    — overlap with existing cards is decided later by
-    ``classify_against_existing``."""
+    """Group this run's drafts by normalised key and ACCUMULATE their statements.
+
+    Deterministic — no model call, no store. The body is left empty here; it is
+    written in ``_finalize``, once the existing card's statements are in hand,
+    because only there is the whole evidence for a term available.
+
+    What this replaces: the old merge kept the FIRST confident draft's body and
+    dropped every later one, so 「蘋果是水果」 and 「蘋果是紅色」 arriving from two
+    documents left one of them on the floor. Keys unioned, provenance unioned,
+    body never did. Accumulating the statements makes merging the normal case.
+    """
     out: list[ProposedCard] = []
-    norm_keys: list[set[str]] = []  # parallel to out: each proposal's norm_key set
+    norm_keys: list[set[str]] = []  # parallel to out
     for doc_id, path, d in drafts:
         nks = set(derive_norm_keys(d.keys))
         if not nks:
             continue  # nothing lookup-able — can't become a findable card
-        prov = Provenance(doc_id=doc_id, path=path, snippet=d.snippet)
+        arriving = [
+            CardStatement(text=st.text, quote=st.quote, source_doc_id=doc_id) for st in d.statements
+        ]
+        prov = Provenance(doc_id=doc_id, path=path, snippet=arriving[0].quote if arriving else "")
         hit = next((i for i, ks in enumerate(norm_keys) if ks & nks), None)
         if hit is None:
             out.append(
                 ProposedCard(
                     keys=list(d.keys),
-                    title=d.title,
-                    body=d.body,
-                    confident=d.confident,
+                    title=d.term,
                     provenance=[prov],
+                    statements=accumulate([], arriving),
                 )
             )
             norm_keys.append(set(nks))
@@ -387,8 +397,7 @@ def merge_drafts(drafts: list[tuple[str, str, CardDraft]]) -> list[ProposedCard]
                 p.keys.append(k)
         norm_keys[hit] |= nks
         p.provenance.append(prov)
-        if not p.confident and d.confident:  # a confident draft supersedes an uncertain body
-            p.title, p.body, p.confident = d.title, d.body, True
+        p.statements = accumulate(p.statements, arriving)
     return out
 
 

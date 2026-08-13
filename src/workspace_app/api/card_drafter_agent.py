@@ -151,7 +151,9 @@ class AgentCardDrafter:
                 # into a falsely-green empty digest (#494).
                 logger.error("AgentCardDrafter: run failed for doc %s: %s", doc_path, ev.message)
                 raise RuntimeError(ev.message)
-        return _parse_digest("".join(parts), max_cards=self._max_cards, doc_path=doc_path)
+        # The document, so the quote gate has something to check against — an
+        # agent that browsed the wiki can quote things this document never said.
+        return _parse_digest("".join(parts), doc_text, max_cards=self._max_cards, doc_path=doc_path)
 
 
 def drafter_context_builder(
