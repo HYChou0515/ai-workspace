@@ -1,0 +1,109 @@
+diff --git a/docs/plan-context-card-evidence.md b/docs/plan-context-card-evidence.md
+index f780db75..e673458f 100644
+--- a/docs/plan-context-card-evidence.md
++++ b/docs/plan-context-card-evidence.md
+@@ -126,11 +126,100 @@ grounded 是空洞的滿分 1.0,相減會讓它奪冠。
+ | | | 狀態 |
+ |---|---|---|
+ | **P1** | `ContextCard.statements` + `accumulate()` + `synthesise()` 對外 | ✅ |
+-| **P2** | drafter 改吐陳述,換掉 `LlmCardDrafter.digest` | ⬜ |
+-| **P3** | commit 改成「附加 + 重算」,換掉 `merge_drafts` 的丟棄與 `update` 的覆寫 | ⬜ |
+-| **P4** | 待審 inbox 顯示陳述 + 引句,每句點得到出處 | ⬜ |
++| **P2** | drafter 改吐陳述 | ⬜ |
++| **P3** | finalize 改成「累積 + 合成」 | ⬜ |
++| **P4** | 待審 inbox 顯示陳述 + 引句 | ⬜ |
++| **P5** | 一次性刪除舊卡的操作腳本 | ⬜ |
+ 
+-P3 是唯一動到現行審核流程的一步;舊卡刪除的決定讓它不用寫相容邏輯。
++---
++
++## P2–P4 的規格
++
++寫到「照著做就能做完」的程度,因為擁有者不會在旁邊盯。**四個原本沒定的決定先寫在這裡。**
++
++### 已決定的四件事
++
++| 決定 | 為什麼 |
++|---|---|
++| **合成在 `_finalize`(提案階段),不在 commit** | `commit_cards` 現在完全不呼叫模型。放一個進去,審核者按下「接受」還要等、還可能失敗;更關鍵的是**審核者必須看到他正在核准的那段 body**,核准完才重寫等於那個核准沒有意義。 |
++| **`term_questions` / `description_questions` 欄位留著,永遠吐空陣列** | 刪資源欄位要 migration;留空是免費且可逆,而且 `_raise_questions` 收到空 list 自然變 no-op,不用改它。 |
++| **`CardDraft` 換形狀,不新增型別** | `CardDraft` 只被 drafter → `merge_drafts` 這一段用,換掉它比並存兩種草稿型別乾淨 —— 兩套規則並存等於保證有一套會變假。 |
++| **舊卡由一次性腳本刪除(P5),不進管線** | 一次性的資料操作不該變成每次都跑的程式碼。 |
++
++### 目標資料流
++
++```
++每份文件   digest() → CardDraft{term, keys, statements[]}       ← P2
++                              ↓
++_finalize  依 norm_key 分組
++           statements = accumulate(既有卡的 statements, 這批的)   ← P3
++           title, body = synthesise(llm, term, statements)        ← P3(這裡呼叫模型)
++           → ProposedCard{keys, title, body, statements, mode, target_card_id}
++                              ↓
++commit     寫 ContextCard{keys, title, body, statements}          ← 不呼叫模型
++```
++
++`classify_against_existing` 維持原樣決定 `new` / `update`;`update` 時,**既有卡的
++`statements` 就是累積的起點** —— 這就是跨 run 融合成立的地方。
++
++### P2 — drafter 改吐陳述
++
++**改什麼**
++
++- `CardDraft`:`{keys, title, body, confident, snippet}` → `{term, keys, statements: list[CardStatement]}`
++- `LlmCardDrafter`:改用 `kb/cards/extract.py` 的 `extract()`,prompt 檔改讀
++  `kb/cards/prompts/card_extraction.md`(調校出來的那份)
++- `DocDigest.cards` 型別跟著換;`term_questions` / `description_questions` 一律回空
++
++**驗收**
++
++- 一份文件的每條陳述都帶逐字引句,引不出原文的被丟掉並計入 `proposed` vs `kept`
++- `digest()` 不再回傳任何 question
++- 現有 `LlmCardDrafter` 的測試改成斷言新形狀,**且必須有會紅的新測試**
++
++### P3 — finalize 改成累積 + 合成
++
++**改什麼**
++
++- `merge_drafts`:分組後不再「先到者的 body 勝出」,改成
++  `accumulate()` 全部陳述 → `synthesise()` 寫 body
++- 需要 `llm` 與既有卡:`merge_drafts` 的簽章要拿得到兩者,或把合成拉到
++  `_finalize` 裡分組之後
++- `ProposedCard` 加 `statements` 欄位,並在 `proposal_to_card_proposal` /
++  `card_proposal_to_proposed` 兩邊帶過去
++- commit 的 `_write_one`:寫 `ContextCard` 時帶上 `statements`;`update` 模式仍是
++  `create_or_update`,但 body 是**重算的**而不是覆寫的
++
++**驗收(每條都要有測試)**
++
++- 兩份文件對同一個詞各說一件事 → **一張**卡,body 兩件事都在
++- 同一批文件重跑第二次 → 卡的 `statements` 不變(冪等)
++- `update` 到一張既有卡 → 既有的 `statements` 有被當成累積起點,舊的沒有消失
++- `reference_doc_ids` 仍然跨 update 保留(#518 已經踩過一次)
++- commit 路徑**沒有**模型呼叫
++
++### P4 — 待審 inbox 顯示證據
++
++**改什麼**:提案卡片下方列出每條陳述與其引句、出處文件。審核者核准的是
++「這些陳述 + 它們合成的結果」,不是一段沒有出處的散文。
++
++**驗收**:一個提案的每條陳述都看得到引句,且點得到來源文件。
++
++### P5 — 刪除舊卡
++
++`statements` 為空的卡就是舊卡(body 是寫死的,算不回來)。一次性腳本,擁有者自己跑,
++印出將刪除的數量並要求確認。
++
++---
++
++## 做這些的時候不要順手做的事
++
++- **不要把 `kb/cards/` 跟 `kb/graph/` 的抽取合併** —— 刻意的重複,理由見上
++- **不要為舊卡寫相容路徑** —— 已決定刪除
++- **不要把合成搬到 commit** —— 見上表
++- **不要刪 `term_questions` 欄位** —— 留空即可
++- **不要動 `classify_against_existing`** —— `new` / `update` 的判斷沒有問題,壞的是它之後
++  怎麼處理 body
+ 
+ ## 非目標
+ 
