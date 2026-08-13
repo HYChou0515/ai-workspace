@@ -170,10 +170,16 @@ _finalize  依 norm_key 分組
 commit     寫 ContextCard{keys, title, body, statements}          ← 不呼叫模型
 ```
 
-`classify_against_existing` 維持原樣決定 `new` / `update`;`update` 時,**既有卡的
-`statements` 就是累積的起點** —— 這就是跨 run 融合成立的地方。
+`classify_against_existing` 決定 `new` / `update`;`update` 時,**既有卡的 `statements`
+就是累積的起點** —— 這就是跨 run 融合成立的地方。
 
-### ⚠️ P2 與 P3 不能分開,而且比原估大得多
+> **實作時推翻的:** 規格原本寫「維持原樣」。它的 `skip` 規則是「keys 是既有卡的子集 ⇒
+> 完全重複,丟掉」,舊模型下對(提案是一整段寫好的 body),**新模型下等於「一個詞只要有卡
+> 了就永遠學不到東西」** —— 新文件說了新東西,在任何人看到之前就被丟掉。問題不再是「這個
+> 詞有卡了嗎」,而是「這帶來了卡上沒有的東西嗎」。是變異測試逼出來的:直接測試全綠,而
+> 「skip 退回只問有沒有卡」這個變異沒有任何測試抓得到。
+
+### ⚠️ P2 與 P3 不能分開,而且比原估大得多(已完成,紀錄留作下次估算的依據)
 
 **實測過一次才知道的兩件事:**
 
@@ -190,7 +196,7 @@ commit     寫 ContextCard{keys, title, body, statements}          ← 不呼叫
 旗標」這些**要被改掉的行為**,所以不是機械替換,要逐條重想 —— 在那種地方趕工,最容易發生
 的就是把斷言改軟讓它變綠。
 
-做這一步的人請預留一整段完整的時間,不要在別的工作尾巴接著做。
+實際做完花的正是這個量級。下一次估同型的改動(換掉一個被幾百個測試點引用的資料形狀)請照這個算,不要照「改幾個檔案」算。
 
 ### P2 — drafter 改吐陳述
 
@@ -248,8 +254,9 @@ commit     寫 ContextCard{keys, title, body, statements}          ← 不呼叫
 - **不要為舊卡寫相容路徑** —— 已決定刪除
 - **不要把合成搬到 commit** —— 見上表
 - **不要刪 `term_questions` 欄位** —— 留空即可
-- **不要動 `classify_against_existing`** —— `new` / `update` 的判斷沒有問題,壞的是它之後
-  怎麼處理 body
+- ~~**不要動 `classify_against_existing`**~~ —— **這一條被實作推翻了**,見上面的資料流
+  說明。`new` / `update` 的判斷確實沒問題,但它的 `skip` 分支問錯了問題,而那正是累積永遠
+  發生不了的原因。
 
 ## 非目標
 

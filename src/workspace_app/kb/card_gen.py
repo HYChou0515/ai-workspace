@@ -375,6 +375,13 @@ def merge_drafts(drafts: list[tuple[str, str, CardDraft]]) -> list[ProposedCard]
         nks = set(derive_norm_keys(d.keys))
         if not nks:
             continue  # nothing lookup-able — can't become a findable card
+        if not d.statements:
+            # Nothing to write a body FROM. Letting it through would hand the
+            # synthesiser an empty list and get back a definition with nothing
+            # behind it — the failure this whole design removes, arriving through
+            # the one door left open. The extractor already refuses to emit such
+            # a card; this is the seam's own guarantee, not a hope about callers.
+            continue
         arriving = [
             CardStatement(text=st.text, quote=st.quote, source_doc_id=doc_id) for st in d.statements
         ]

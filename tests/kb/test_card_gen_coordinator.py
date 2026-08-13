@@ -20,6 +20,7 @@ from workspace_app.kb.card_gen import (
     DescriptionQuestionDraft,
     DocDigest,
     TermQuestionDraft,
+    merge_drafts,
 )
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
 from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
@@ -614,6 +615,19 @@ async def test_a_proposal_carries_the_evidence_its_body_was_written_from():
     (p,) = coord.proposals(jid).proposals
     assert [(st.text, st.quote) for st in p.statements] == [("是一種設備", "X 是一種設備")]
     assert st_doc(p) == [doc], "a statement must say which document it came from"
+
+
+def test_a_draft_with_nothing_to_say_never_becomes_a_proposal():
+    """A card is written FROM its statements, so a draft with none would send the
+    synthesiser an empty list and get back a definition with nothing behind it —
+    the exact failure the evidence model exists to remove, arriving through the
+    one door it left open.
+
+    The extractor already refuses to emit such a card, but `merge_drafts` is a
+    public seam and the agentic drafter is a second producer; a guarantee that
+    holds only because of what today's callers happen to send is not a guarantee.
+    """
+    assert merge_drafts([("d1", "a.md", CardDraft(term="SPI", keys=["SPI"], statements=[]))]) == []
 
 
 async def test_a_draft_with_no_usable_key_is_dropped():
