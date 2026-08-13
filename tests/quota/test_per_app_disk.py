@@ -137,3 +137,28 @@ async def test_remaining_quota_reads_the_items_own_limit():
     files = WorkspaceFiles(MemoryFileStore(), quota={"a": 1000, "b": 100}.__getitem__)
     assert await files.remaining_quota("a", "/f") == 1000
     assert await files.remaining_quota("b", "/f") == 100
+
+
+def test_every_507_body_comes_from_one_builder():
+    """Four entry points answer 507. The wording drifted across them once
+    already, so the body is built in ONE place — including the streamed upload,
+    which cannot use the app-wide handler (it must stop mid-transfer) and so is
+    the one most likely to grow a fifth spelling.
+
+    Asserted on the KEYS: a hand-written copy that happens to agree today is not
+    the same thing as one that cannot disagree tomorrow."""
+    import inspect
+
+    from workspace_app.api import file_routes
+    from workspace_app.api.turn_gate import quota_body
+    from workspace_app.files.facade import WorkspaceFull
+
+    src = inspect.getsource(file_routes)
+    assert "quota_body(" in src, "the streamed upload must not build its own body"
+    assert '"error": "workspace_quota_exceeded"' not in src, "a hand-written body came back"
+    assert set(quota_body(WorkspaceFull(used=1, quota=2, attempted=3))) == {
+        "error",
+        "used",
+        "quota",
+        "attempted",
+    }

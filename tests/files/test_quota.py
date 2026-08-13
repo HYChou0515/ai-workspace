@@ -14,6 +14,7 @@ import pytest
 from workspace_app.files.facade import WorkspaceFiles, WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.filestore.protocol import FileExists
+from workspace_app.quota.disk_ledger import UserDiskFull
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxBusy, SandboxHandle, SandboxSpec
 
@@ -480,3 +481,28 @@ async def test_gathering_reasons_does_not_charge_the_person_gate():
     recorded.clear()
     await roomy.ensure_room_for("ws1", 50)
     assert recorded == [150], "a write path must still keep the ledger current"
+
+
+async def test_both_disk_rules_are_named_not_just_the_first():
+    """The two disk rules are independent — being over one says nothing about
+    the other — and they live behind ONE facade call. Stopping at the first is
+    what made someone delete files, retry, and be told to delete files somewhere
+    else instead.
+
+    Pinned here because the only other `also` test pairs the ENVIRONMENT limit
+    with a disk one, and that pair is refused by two different gates. This pair
+    is refused inside one method, which is exactly why it short-circuited."""
+
+    async def gate(_ws: str, _new: int, growth: int, *, record: bool = True) -> None:
+        # Only the growth under test: the setup write below legitimately passes
+        # through this same gate, and a double that refused everything would
+        # never reach the case being pinned.
+        if growth == 50:
+            raise UserDiskFull(owner="alice", used=999, quota=1000, attempted=growth)
+
+    files = WorkspaceFiles(MemoryFileStore(), quota=100, person_gate=gate)
+    await files.write("ws1", "/a", b"x" * 100)  # this item is full…
+
+    # …and so is its owner's total. Both must be reported.
+    refusals = await files.room_refusals("ws1", 50, record=False)
+    assert [type(r).__name__ for r in refusals] == ["WorkspaceFull", "UserDiskFull"]

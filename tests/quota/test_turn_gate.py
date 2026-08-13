@@ -182,3 +182,28 @@ def test_cpu_alone_refuses_a_turn_when_no_app_declared_anything():
         detail = refused.json()["detail"]
         assert detail["error"] == "sandbox_quota_exceeded"
         assert detail["dimension"] == "cpu"
+
+
+def test_the_text_of_a_combined_refusal_names_every_limit():
+    """A scheduled run has no frontend to read `also`, so `str(exc)` IS the whole
+    message a person gets — `workflow/driver.py` records `f"{type}: {exc}"`.
+    Counting the others ("and 1 more limit(s)") tells them something else is
+    wrong and not what.
+
+    Nothing referenced `TurnRefused` anywhere in the suite, so the naming could
+    be reverted to counting with everything still green."""
+    from workspace_app.api.turn_gate import TurnRefused
+    from workspace_app.files.facade import WorkspaceFull
+    from workspace_app.quota.admission import SandboxQuotaExceeded
+
+    exc = TurnRefused(
+        SandboxQuotaExceeded(owner="alice", dimension="cpu", used=4.0, limit=2.0),
+        [WorkspaceFull(used=100, quota=100, attempted=1)],
+    )
+    text = str(exc)
+    assert "cpu" in text
+    assert "workspace" in text.lower() or "quota" in text.lower()
+    # the counting phrasing this replaced — note "1 more" alone would match
+    # `WorkspaceFull`'s own wording ("cannot write 1 more byte"), which is why
+    # the assertion names the phrase rather than the number
+    assert "more limit(s) at their cap" not in text

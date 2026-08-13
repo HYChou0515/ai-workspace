@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { formatBytes } from "./bytes";
 import { quotaAmounts, quotaKind, quotaKinds, quotaMessage } from "./quotaFailure";
 import { uploadFailureKey } from "./uploadFailure";
 
@@ -148,5 +149,23 @@ describe("quotaMessage — one sentence, both surfaces", () => {
 
   it("is null for a failure that is not a quota, so the real error survives", () => {
     expect(quotaMessage(t as never, KEYS as never, { status: 500 })).toBeNull();
+  });
+});
+
+describe("one byte formatter, not two", () => {
+  // A second copy briefly lived in `lib/formatBytes.ts` and rendered the same
+  // number differently ("80 MB" vs "80.0 MB"), so a refusal message and the
+  // usage bar on the same screen disagreed. Deleting the merge left every test
+  // green: the page's own assertions pin `lib/bytes`, and nothing pinned the
+  // refusal path to the same function.
+  it("formats a refusal's numbers exactly as the usage bar does", () => {
+    const amounts = quotaAmounts({
+      error: "workspace_quota_exceeded",
+      used: 20 * 1024 ** 3,
+      quota: 80 * 1024 ** 2,
+    });
+    expect(amounts).toEqual({ used: formatBytes(20 * 1024 ** 3), limit: formatBytes(80 * 1024 ** 2) });
+    // …and that shared function is the one with a decimal above 1 KB
+    expect(amounts?.used).toBe("20.0 GB");
   });
 });

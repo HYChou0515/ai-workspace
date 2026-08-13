@@ -721,6 +721,11 @@ def _flaky_host(fail_first: int, cpu: float = 1.5, mem: int = 768 * 1024**2):
 
     async def handler(request: httpx.Request) -> httpx.Response:
         state["calls"] += 1
+        # Yield, so concurrent callers really interleave. Without this the
+        # transport completes without ever suspending and the lock below is
+        # untestable: five racing callers serialise themselves by accident, and
+        # removing the lock changes nothing the suite can see.
+        await asyncio.sleep(0)
         if state["calls"] <= fail_first:
             raise httpx.ConnectError("host down", request=request)
         return httpx.Response(

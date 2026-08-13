@@ -215,7 +215,7 @@ def warn_unenforceable_dimensions(
     per_user: PerUserResources,
     limits: Mapping[str, ResourceLimits],
     *,
-    enforced: EnforcedLimits | None,
+    enforced: EnforcedLimits,
 ) -> list[str]:
     """Name any per-person dimension the deploy set that cannot fully bind.
 
@@ -226,9 +226,11 @@ def warn_unenforceable_dimensions(
     configuration in which the gate does refuse a turn. Two statements about one
     config, one of them printed at boot to the operator.
 
-    `None` means the answer could not be obtained (no backend wired at this
-    point). Then nothing is reported: "we did not ask" is not evidence that a
-    limit is dead, and saying so would be the same false claim inverted.
+    It cannot express "we could not ask". `HttpSandbox` reports an unreachable
+    host as "enforces nothing" — the same value as a host that genuinely caps
+    nothing — so a branch for the unknown case looked careful and was
+    unreachable from the only production caller. The wording below carries that
+    ambiguity instead, because the wording is the part an operator reads.
 
     A per-user `cpu` / `memory` cap sums what each live sandbox is ALLOWED to
     consume. A term is missing only when NEITHER the App nor the backend states
@@ -251,8 +253,6 @@ def warn_unenforceable_dimensions(
     complete, and there is no workload for a cap to bind against either.
     """
     messages: list[str] = []
-    if enforced is None:
-        return messages
     for name, dim in _SUMMED_DIMENSIONS.items():
         if not dim.configured(per_user):
             continue
@@ -267,9 +267,12 @@ def warn_unenforceable_dimensions(
         where = f"app.json `resources`, `resources.per_app.default.{name}`, or the sandbox backend"
         if len(silent) == len(limits):
             messages.append(
-                f"resources.per_user.{name} is set, but nothing states a {name} "
-                f"cost ({where}), so the sum has no terms and this limit never "
-                f"fires. resources.per_user.count still applies."
+                f"resources.per_user.{name} is set, but nothing this check can "
+                f"see states a {name} cost ({where}), so the sum has no terms "
+                f"and this limit does not fire. If the sandbox host was "
+                f"unreachable just now, this line cannot tell that apart from a "
+                f"host that caps nothing — re-check once it is up. "
+                f"resources.per_user.count applies either way."
             )
         else:
             messages.append(

@@ -200,6 +200,16 @@ describe("per-person overrides (superuser)", () => {
   // An exception is granted to a PERSON, and the directory is what knows who
   // exists. Typing a raw id meant a typo silently created an allowance for
   // nobody — it saves fine, shows up in the list, and never binds to a user.
+  // The field lost its name when the input became a picker: a `<label>` outside
+  // the component cannot reach the search box inside it, so `htmlFor` pointed at
+  // nothing and the only cue left was a placeholder. Removing the fix left every
+  // test green, because they all click a person's name.
+  it("names the person field, rather than leaving a label pointing at nothing", async () => {
+    asUser(true);
+    render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
+    expect(await screen.findByLabelText("對象")).toBeInTheDocument();
+  });
+
   it("grants the exception to whoever was picked from the directory", async () => {
     asUser(true);
     const c = client();

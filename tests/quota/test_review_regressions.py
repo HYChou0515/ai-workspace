@@ -187,7 +187,12 @@ def test_a_dimension_nobody_declared_is_reported_as_never_firing():
         enforced=EnforcedLimits(None, None),
     )
     assert "per_user.cpu" in message
-    assert "never fires" in message
+    assert "does not fire" in message
+    # …and it does NOT claim to know why. An unreachable host reports "enforces
+    # nothing" through the same value as a host that caps nothing, so a line
+    # that stated the first as fact would be the original false claim wearing a
+    # different hat.
+    assert "unreachable" in message
 
 
 def test_a_backend_that_caps_an_undeclared_sandbox_silences_the_warning():
@@ -204,19 +209,6 @@ def test_a_backend_that_caps_an_undeclared_sandbox_silences_the_warning():
             enforced=EnforcedLimits(cpu_cores=1.0, memory_bytes=None),  # …the backend caps cpu
         )
         # cpu is enforceable now; memory is not configured, so nothing else fires
-        == []
-    )
-
-
-def test_an_unknown_backend_ceiling_is_not_reported_as_unenforceable():
-    """`enforced=None` means we could not ask (no backend wired at boot). That is
-    not evidence the limit is dead, and a warning stating it "never fires" would
-    be the same false claim in the other direction."""
-    settings = Settings(resources=ResourceSettings(per_user=PerUserResources(cpu=4)))
-    assert (
-        warn_unenforceable_dimensions(
-            settings.resources.per_user, _limits(rca=(None, None, 0)), enforced=None
-        )
         == []
     )
 
