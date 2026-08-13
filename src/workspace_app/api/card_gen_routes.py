@@ -43,6 +43,14 @@ class ProvenanceIO(BaseModel):
     snippet: str = ""
 
 
+class StatementIO(BaseModel):
+    """One claim the corpus makes about the term, and the words that make it."""
+
+    text: str
+    quote: str
+    source_doc_id: str = ""
+
+
 class ProposedCardIO(BaseModel):
     keys: list[str]
     id: str = ""
@@ -52,6 +60,10 @@ class ProposedCardIO(BaseModel):
     mode: str = "new"
     target_card_id: str | None = None
     provenance: list[ProvenanceIO] = []
+    # The evidence the body was written from. Declared here or pydantic drops it
+    # silently — a reviewer would then approve a sentence with nothing to check
+    # it against, which is the whole thing this change exists to stop.
+    statements: list[StatementIO] = []
     decision: str = "pending"
 
 

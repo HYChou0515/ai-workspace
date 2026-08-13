@@ -168,6 +168,20 @@ function CardDetail({
         </p>
       )}
 
+      {c.statements?.length > 0 && (
+        <div className="rvw-drawer__prov">
+          <span className="rvw-drawer__label">{t("review.drawer.statements")}</span>
+          <ul>
+            {c.statements.map((s, i) => (
+              <li key={`${s.text}-${i}`}>
+                {s.text}
+                {s.quote && <blockquote>{s.quote}</blockquote>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {c.provenance.length > 0 && (
         <div className="rvw-drawer__prov">
           <span className="rvw-drawer__label">{t("review.drawer.provenance")}</span>

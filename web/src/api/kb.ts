@@ -73,6 +73,12 @@ export type KbCollection = {
    * wiki answers. Blank ⇒ the bundled prompt is used as-is. */
   wiki_maintainer_guidance: string;
   wiki_reader_guidance: string;
+  /** #697: what deserves to BE a thing in this corpus, in the owner's words.
+   * Folded into the extraction prompt, which otherwise asks for "anything a
+   * reader would consider a distinct thing" — not a criterion, since every noun
+   * passes it. Blank ⇒ the prompt exactly as it was. Optional on the wire (the
+   * real BE always sends it, defaulting to ""); absent ⇒ treat as "". */
+  graph_guidance?: string;
   /** #105: the per-collection quality rubric — what makes a doc a good/bad
    * knowledge source + which dimensions to assess. Blank ⇒ the collection is
    * not scored and its search ranking is unaffected. Optional on the wire (the
@@ -509,6 +515,14 @@ export type KbCardProvenance = { doc_id: string; path: string; snippet: string }
  * is `new` or `update` (then `target_card_id` is the card to overwrite);
  * `confident=false` marks an uncertain draft (⚠️, defaulted out of commit);
  * `decision` is the reviewer's verdict, persisted on the job (resumable). */
+export type KbCardStatement = {
+  /** The claim, in the extractor's words. */
+  text: string;
+  /** The sentence from the document that makes it, verbatim. */
+  quote: string;
+  source_doc_id: string;
+};
+
 export type KbProposedCard = {
   /** #481: stable per-run card id — the review table addresses one card by it. */
   id: string;
@@ -519,6 +533,13 @@ export type KbProposedCard = {
   mode: "new" | "update";
   target_card_id: string | null;
   provenance: KbCardProvenance[];
+  /**
+   * What the corpus actually said about the term, each with the sentence that
+   * says it. The body is written FROM these, so a reviewer approving a card is
+   * approving the claims and the sentence they add up to — not a paragraph with
+   * nothing behind it.
+   */
+  statements: KbCardStatement[];
   // #481: `committed` = written to a card (terminal); a run leaves the queue once
   // every proposal is terminal (committed / rejected).
   decision: "pending" | "accepted" | "rejected" | "committed";
@@ -669,6 +690,8 @@ export interface KbApi {
       auto_digest?: boolean;
       /** #534: opt in to knowledge-graph metric extraction. */
       use_graph?: boolean;
+      /** #697: the corpus's own criterion for what deserves to be a thing. */
+      graph_guidance?: string;
       wiki_maintainer_guidance?: string;
       wiki_reader_guidance?: string;
       /** #105: the per-collection quality rubric (what makes a doc a good/bad

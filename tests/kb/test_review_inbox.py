@@ -9,15 +9,19 @@ collection, so a private/since-tightened collection's items never leak.
 
 from __future__ import annotations
 
+import json
+
 import msgspec
 
 from workspace_app.kb.card_gen import CardDraft, TermQuestionDraft
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
 from workspace_app.kb.doc_id import encode_doc_id
+from workspace_app.kb.llm import ILlm
 from workspace_app.kb.review_inbox import build_review_inbox, cluster_key_map
 from workspace_app.perm import Actor
 from workspace_app.perm.model import Permission
 from workspace_app.resources import Collection, SourceDoc, make_spec
+from workspace_app.resources.kb import CardStatement
 
 
 def _collection(spec, name: str, *, owner: str = "u", permission: Permission | None = None) -> str:
@@ -74,7 +78,11 @@ def _reconciler(spec):
 def _coord(spec, by_path, *, term_qs=None, owner="u", reconciler=None) -> CardGenCoordinator:
     """One coordinator per spec (a second registration of the job model raises)."""
     return CardGenCoordinator(
-        spec, _FakeDrafter(by_path, term_qs), get_user_id=lambda: owner, reconciler=reconciler
+        spec,
+        _FakeDrafter(by_path, term_qs),
+        get_user_id=lambda: owner,
+        reconciler=reconciler,
+        synthesiser=_Writer(),
     )
 
 
@@ -101,7 +109,7 @@ async def test_inbox_aggregates_a_collections_pending_card_and_open_question():
     await _seed_run(
         spec,
         cid,
-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
     )
     inbox = build_review_inbox(spec, actor=Actor.human("u"))
@@ -123,7 +131,7 @@ async def test_inbox_hides_items_in_collections_the_user_cannot_read():
         spec,
         cid,
         owner="owner",
-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
         term_qs={"a.md": [TermQuestionDraft(term="R7", question="?")]},
     )
     inbox = build_review_inbox(spec, actor=Actor.human("outsider"))
@@ -145,7 +153,7 @@ async def test_inbox_shows_readonly_items_when_the_user_lacks_write():
         spec,
         cid,
         owner="owner",
-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
     )
     inbox = build_review_inbox(spec, actor=Actor.human("reader"))
     assert len(inbox.cards) == 1
@@ -158,7 +166,7 @@ async def test_inbox_history_shows_resolved_and_default_hides_them():
     spec = make_spec(default_user="u")
     cid = _collection(spec, "Alpha")
     coord = await _seed_run(
-        spec, cid, cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]}
+        spec, cid, cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]}
     )
     (item,) = build_review_inbox(spec, actor=Actor.human("u")).cards
     coord.decide(item.run_id, item.card.id, "accepted")
@@ -178,8 +186,8 @@ async def test_inbox_can_scope_to_one_collection():
     coord = _coord(
         spec,
         {
-            "one.md": [CardDraft(keys=["A"], title="A", snippet="s")],
-            "two.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+            "one.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
+            "two.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
         },
     )
     d1 = _add_source(spec, c1, "one.md", "x")
@@ -204,9 +212,9 @@ async def test_inbox_limit_caps_the_page_and_reports_total():
         cid,
         cards={
             "a.md": [
-                CardDraft(keys=["RZ3"], title="RZ3", snippet="s"),
-                CardDraft(keys=["RZ4"], title="RZ4", snippet="s"),
-                CardDraft(keys=["RZ5"], title="RZ5", snippet="s"),
+                _draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s"),
+                _draft(term="RZ4", keys=["RZ4"], claim="RZ4", quote="s"),
+                _draft(term="RZ5", keys=["RZ5"], claim="RZ5", quote="s"),
             ]
         },
     )
@@ -225,9 +233,9 @@ async def test_offset_pages_through_the_stream_without_overlap_or_gaps():
         cid,
         cards={
             "a.md": [
-                CardDraft(keys=["RZ3"], title="RZ3", snippet="s"),
-                CardDraft(keys=["RZ4"], title="RZ4", snippet="s"),
-                CardDraft(keys=["RZ5"], title="RZ5", snippet="s"),
+                _draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s"),
+                _draft(term="RZ4", keys=["RZ4"], claim="RZ4", quote="s"),
+                _draft(term="RZ5", keys=["RZ5"], claim="RZ5", quote="s"),
             ]
         },
     )
@@ -251,7 +259,7 @@ async def test_kind_filter_returns_only_that_stream_and_total_reflects_it():
     await _seed_run(
         spec,
         cid,
-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
     )
     cards_only = build_review_inbox(spec, actor=Actor.human("u"), kind="cards")
@@ -277,8 +285,8 @@ async def test_q_filters_across_the_whole_stream_case_insensitively():
         cid,
         cards={
             "a.md": [
-                CardDraft(keys=["RZ3"], title="RZ3", body="reflow zone three"),
-                CardDraft(keys=["XY9"], title="XY9", body="gamma"),
+                _draft(term="RZ3", keys=["RZ3"], claim="reflow zone three", quote=""),
+                _draft(term="XY9", keys=["XY9"], claim="gamma", quote=""),
             ]
         },
         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
@@ -314,8 +322,8 @@ async def test_actionable_filter_and_total_actionable_count():
     coord = _coord(
         spec,
         {
-            "act.md": [CardDraft(keys=["A"], title="A", body="a")],
-            "ro.md": [CardDraft(keys=["B"], title="B", body="b")],
+            "act.md": [_draft(term="A", keys=["A"], claim="a", quote="")],
+            "ro.md": [_draft(term="B", keys=["B"], claim="b", quote="")],
         },
         owner="owner",
     )
@@ -416,7 +424,7 @@ async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():
     await _seed_run(
         spec,
         cid,
-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
     )
     flat = build_review_inbox(spec, actor=Actor.human("u"))
@@ -490,7 +498,7 @@ async def test_grouped_respects_the_kind_and_q_filters():
     await _seed_run(
         spec,
         cid,
-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
         reconciler=_reconciler(spec),
     )
@@ -513,7 +521,7 @@ async def test_grouped_q_fallback_honours_kind_and_actionable():
     await _seed_run(
         spec,
         cid,
-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
         reconciler=_reconciler(spec),
     )
@@ -549,7 +557,10 @@ async def test_grouped_actionable_drops_readonly_clusters():
     )
     coord = _coord(
         spec,
-        {"act.md": [CardDraft(keys=["A"], title="A")], "ro.md": [CardDraft(keys=["B"], title="B")]},
+        {
+            "act.md": [_draft(term="A", keys=["A"], claim="A", quote="")],
+            "ro.md": [_draft(term="B", keys=["B"], claim="B", quote="")],
+        },
         owner="owner",
         reconciler=_reconciler(spec),
     )
@@ -573,7 +584,11 @@ async def test_grouped_pages_concepts_natively_with_a_full_total():
     await _seed_run(
         spec,
         cid,
-        cards={"a.md": [CardDraft(keys=[f"K{i}"], title=f"C{i}") for i in range(5)]},
+        cards={
+            "a.md": [
+                _draft(term=f"C{i}", keys=[f"K{i}"], claim=f"C{i}", quote="") for i in range(5)
+            ]
+        },
         reconciler=_reconciler(spec),
     )
     actor = Actor.human("u")
@@ -595,7 +610,12 @@ async def test_grouped_drops_a_resolved_concept_from_the_active_view():
     coord = await _seed_run(
         spec,
         cid,
-        cards={"a.md": [CardDraft(keys=["A"], title="A"), CardDraft(keys=["B"], title="B")]},
+        cards={
+            "a.md": [
+                _draft(term="A", keys=["A"], claim="A", quote=""),
+                _draft(term="B", keys=["B"], claim="B", quote=""),
+            ]
+        },
         reconciler=_reconciler(spec),
     )
     actor = Actor.human("u")
@@ -704,3 +724,37 @@ async def test_suppressed_audit_pages_natively_with_total():
     assert [len(p.suppressed) for p in (p1, p2)] == [2, 1]
     seen = {s.label for p in (p1, p2) for s in p.suppressed}
     assert seen == {"S0", "S1", "S2"}  # no overlap / gap
+
+
+def _draft(*, term: str, keys: list[str], claim: str = "", quote: str = "") -> CardDraft:
+    """One document's take on one term, in the shape the drafter now returns.
+
+    The old drafts carried a written body; these carry a CLAIM and the sentence
+    that makes it, because no single document can define a term the whole corpus
+    talks about. `claim` defaults to the term, so a draft that only says "this
+    term appears here" still has something to accumulate.
+    """
+    return CardDraft(
+        term=term,
+        keys=list(keys),
+        statements=[CardStatement(text=claim or term, quote=quote or claim or term)],
+    )
+
+
+class _Writer(ILlm):
+    """A stand-in synthesiser: joins the claims it is handed.
+
+    The real one writes prose; what the tests need is only that the body is
+    DERIVED from the whole evidence rather than copied from one document, so a
+    join is enough to tell the two apart.
+    """
+
+    def stream(self, prompt: str):
+        # Only the statement lines: `synthesise` formats them as
+        # `- {text}  \u300c{quote}\u300d`, and the prompt's own bullets have no quote.
+        body = " / ".join(
+            line.split("  \u300c")[0].removeprefix("- ")
+            for line in prompt.splitlines()
+            if line.startswith("- ") and "\u300c" in line
+        )
+        yield json.dumps({"title": "", "body": body}, ensure_ascii=False), False

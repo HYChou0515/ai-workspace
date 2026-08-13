@@ -180,6 +180,20 @@ class Collection(Struct):  # → resource "collection"
     # so the graph dispatch can query the opted-in set instead of scanning. Absent
     # ≡ off (no migration).
     use_graph: bool = False
+    # #534: what deserves to BE a thing in this corpus, in the owner's words —
+    # folded into the extraction prompt (kb/graph/entity_extract). The prompt's
+    # own description ("anything a reader would consider a distinct thing") is
+    # not a criterion: every noun passes it, so a capable model faithfully fills
+    # the vocabulary with 「系統」/「問題」/「資料」 and every label a table
+    # carried, and a BETTER model makes that worse. The criterion cannot be
+    # written in the prompt because it is a fact about the corpus — machines,
+    # processes and part numbers matter in a fab and are noise in a finance deck
+    # — and every criterion this module invented from outside a corpus was wrong
+    # within a corpus or two. So it lives with the owner, next to the `use_graph`
+    # gate they already set. Blank ⇒ the prompt exactly as it was (no migration;
+    # old rows decode with the empty default). Non-indexed: never filtered or
+    # sorted on. Same shape as `wiki_*_guidance` (#90).
+    graph_guidance: str = ""
     # Issue #90: per-collection wiki guidance, APPENDED onto the bundled wiki
     # prompts (never a replacement — the machinery stays). `maintainer` shapes
     # how pages are written/organised (fold + unfold); `reader` shapes how the
@@ -603,6 +617,23 @@ class IndexUnitText(Struct):  # → resource "index-unit-text"
     text: str
 
 
+class CardStatement(Struct):
+    """One claim the corpus makes about a card's term, and the words that make it.
+
+    The card's EVIDENCE. ``body`` is derived from the whole list, so a new
+    document adds a statement and the body is rewritten from everything — rather
+    than the old shape, where each document authored a body and the last one to
+    arrive won. That shape could only ever lose the others.
+
+    ``quote`` is verbatim from the source and is checked against it at extraction
+    time; a claim that cannot be quoted never becomes a statement.
+    """
+
+    text: str
+    quote: str
+    source_doc_id: str = ""
+
+
 class ContextCard(Struct):  # → resource "context-card"
     """Issue #106: a lightweight glossary card — several ``keys`` (a term and
     its surface forms) → a short ``body`` explanation, looked up deterministically
@@ -626,6 +657,11 @@ class ContextCard(Struct):  # → resource "context-card"
     # ignore it and compute by scan).
     norm_keys: Annotated[list[str], TrigramIndex()] = field(default_factory=list)
     title: str = ""  # display name (FE list/detail); "" → keys[0]
+    # The evidence `body` is written from. Non-indexed (never filtered or sorted
+    # on), so adding it needs no migration — old rows decode with an empty list.
+    # An empty list means the card predates the evidence model: its body was
+    # authored rather than derived, and nothing can be recomputed from it.
+    statements: list[CardStatement] = field(default_factory=list)
     body: str = ""  # markdown explanation
     # #518: the SourceDocs that BACK this card — the curated evidence a human (or a
     # workflow, via ``upsert_context_card``) attached. OPTIONAL and never required:

@@ -26,22 +26,31 @@ from ._client import TestClient as ApiTestClient
 
 
 class _FakeLlm(ILlm):
+    """Answers the drafting call with the canned digest, and the SYNTHESIS call
+    with a body — the coordinator now writes each proposal's body from the whole
+    evidence, so one canned reply can no longer serve both."""
+
     def __init__(self, response: str) -> None:
         self._response = response
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        if "STATEMENTS" in prompt:
+            yield json.dumps({"title": "", "body": "The third reflow zone."}), False
+            return
         yield (self._response, False)
 
 
+#: The quote must be verbatim in the uploaded document below, or the gate drops
+#: the claim and the run proposes nothing.
 _ONE_CARD = json.dumps(
     {
         "cards": [
             {
-                "title": "Reflow Zone 3",
+                "term": "Reflow Zone 3",
                 "keys": ["RZ3", "Reflow Zone 3"],
-                "body": "The third reflow zone.",
-                "confident": True,
-                "snippet": "RZ3 is the third reflow zone.",
+                "statements": [
+                    {"text": "the third reflow zone", "quote": "RZ3 is the third reflow zone."}
+                ],
             }
         ]
     }

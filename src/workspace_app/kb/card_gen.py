@@ -32,22 +32,16 @@ import msgspec
 from specstar import OnDelete, Ref
 from specstar.types import Job
 
+from ..resources.kb import CardStatement
+from .cards.accumulate import accumulate
+from .cards.extract import TermCard
 from .context_cards import derive_norm_keys, norm
 
-
-class CardDraft(msgspec.Struct):
-    """One glossary card drafted from a single document by the ``CardDrafter``,
-    before dedup against other drafts / existing cards. ``keys`` are the surface
-    forms (term + aliases) the reader might search; ``confident`` is the
-    classifier's self-rated certainty (an uncertain draft surfaces with a ⚠️ in
-    review and is not committed by default, #205); ``snippet`` is the supporting
-    passage the draft was derived from — the provenance a reviewer audits."""
-
-    keys: list[str]
-    title: str = ""
-    body: str = ""
-    confident: bool = True
-    snippet: str = ""
+#: What one document yields about one term. The SAME type the offline pipeline
+#: produces (``kb.cards.extract.TermCard``) — a document states claims and quotes
+#: the sentences that make them; it does not author a definition, because it
+#: cannot see what the rest of the corpus says about the term.
+CardDraft = TermCard
 
 
 class TermQuestionDraft(msgspec.Struct):
@@ -70,23 +64,31 @@ class DescriptionQuestionDraft(msgspec.Struct):
 
 
 class DocDigest(msgspec.Struct):
-    """One document's full digest (#377): the cards the reader could confidently
-    draft, plus the questions it raised instead of guessing — terms it couldn't
-    define and passages it couldn't follow. The single LLM pass yields all three
-    so the reader writes what it knows and asks what it doesn't in one go."""
+    """One document's digest: the terms it stated something about.
+
+    ``cards`` is the whole of it now. The drafter used to also raise questions
+    about terms it could not define (#377); it stays silent instead, because the
+    only other branch on offer was to guess. The question fields remain — they
+    are read by shapes a migration would have to move — and are always empty, so
+    ``_raise_questions`` is a no-op on them.
+    """
 
     cards: list[CardDraft] = msgspec.field(default_factory=list)
+    # Always empty. The drafter used to ask about terms it could not define; it
+    # now stays silent instead, because the only other branch was to guess (see
+    # docs/plan-context-card-evidence.md). The fields remain so the shapes that
+    # read them keep decoding, and `_raise_questions` is a no-op on empty lists.
     term_questions: list[TermQuestionDraft] = msgspec.field(default_factory=list)
     description_questions: list[DescriptionQuestionDraft] = msgspec.field(default_factory=list)
 
 
 class CardDrafter(Protocol):
     """The LLM-driven seam the generation job calls once per document: read the
-    document's extracted text and return its ``DocDigest`` — the confident cards
-    plus the term / description questions it raised instead of guessing (#377).
-    Production wraps an ``Llm`` + a classify prompt; tests inject a fake that
-    returns a canned digest (so the job's orchestration is testable without a
-    model)."""
+    document's extracted text and return its ``DocDigest`` — the terms the
+    document states something about, each claim carrying the sentence that makes
+    it. No questions (see ``DocDigest``). Production wraps an ``Llm`` + the
+    extraction prompt; tests inject a fake that returns a canned digest (so the
+    job's orchestration is testable without a model)."""
 
     def digest(self, *, doc_path: str, doc_text: str, collection_id: str = "") -> DocDigest: ...
 
@@ -114,10 +116,20 @@ class ProposedCard(msgspec.Struct):
     id: str = ""  # #481: stable per-run card id, so the review table addresses one card
     title: str = ""
     body: str = ""
+    # Always true for anything this pipeline produces. It used to carry the
+    # drafter's self-rating, and that tier was removed: "grounded in the text but
+    # inferring" was the entry point for the invented definitions this design
+    # exists to stop. Kept because PROPOSALS FILED BEFORE THIS CHANGE can still
+    # be sitting in the review queue with it false, and the ⚠️ that renders them
+    # must keep working.
     confident: bool = True
     mode: str = "new"  # new | update
     target_card_id: str | None = None
     provenance: list[Provenance] = msgspec.field(default_factory=list)
+    # The evidence `body` was written from. Carried through review so the
+    # reviewer approves the statements AND the sentence they add up to, and so
+    # the committed card can be recomputed when a later document says more.
+    statements: list[CardStatement] = msgspec.field(default_factory=list)
     # #481 review lifecycle: pending / accepted are ACTIVE (still in the queue);
     # committed (written to a card) / rejected are TERMINAL — a run leaves the
     # 待審核 queue only once every proposal is terminal.
@@ -151,6 +163,7 @@ class CardProposal(msgspec.Struct):  # → resource "card-proposal"
     mode: str = "new"  # new | update
     target_card_id: str | None = None
     provenance: list[Provenance] = msgspec.field(default_factory=list)
+    statements: list[CardStatement] = msgspec.field(default_factory=list)
     decision: str = "pending"  # pending | accepted | rejected | committed
 
 
@@ -174,6 +187,7 @@ def proposal_to_card_proposal(collection_id: str, run_id: str, p: ProposedCard) 
         mode=p.mode,
         target_card_id=p.target_card_id,
         provenance=list(p.provenance),
+        statements=list(p.statements),
         decision=p.decision,
     )
 
@@ -192,6 +206,7 @@ def card_proposal_to_proposed(pid: str, cp: CardProposal) -> ProposedCard:
         mode=cp.mode,
         target_card_id=cp.target_card_id,
         provenance=list(cp.provenance),
+        statements=list(cp.statements),
         decision=cp.decision,
     )
 
@@ -353,30 +368,42 @@ def ensure_proposal_ids(proposals: list[ProposedCard]) -> list[ProposedCard]:
 
 
 def merge_drafts(drafts: list[tuple[str, str, CardDraft]]) -> list[ProposedCard]:
-    """Dedup raw drafts into proposals by NORMALISED key overlap (#205: "deduped
-    by normalised key, aliases unioned"). Each draft is ``(doc_id, path, draft)``.
-    Two drafts that share any ``norm_key`` merge into one proposal: their keys are
-    unioned (dedup by ``norm``), their provenance accumulated. A draft with no
-    usable key (blank after ``norm``) is dropped. A confident draft's title/body
-    wins over an uncertain one's for the merged proposal; merge stays ``new`` here
-    — overlap with existing cards is decided later by
-    ``classify_against_existing``."""
+    """Group this run's drafts by normalised key and ACCUMULATE their statements.
+
+    Deterministic — no model call, no store. The body is left empty here; it is
+    written in ``_finalize``, once the existing card's statements are in hand,
+    because only there is the whole evidence for a term available.
+
+    What this replaces: the old merge kept the FIRST confident draft's body and
+    dropped every later one, so 「蘋果是水果」 and 「蘋果是紅色」 arriving from two
+    documents left one of them on the floor. Keys unioned, provenance unioned,
+    body never did. Accumulating the statements makes merging the normal case.
+    """
     out: list[ProposedCard] = []
-    norm_keys: list[set[str]] = []  # parallel to out: each proposal's norm_key set
+    norm_keys: list[set[str]] = []  # parallel to out
     for doc_id, path, d in drafts:
         nks = set(derive_norm_keys(d.keys))
         if not nks:
             continue  # nothing lookup-able — can't become a findable card
-        prov = Provenance(doc_id=doc_id, path=path, snippet=d.snippet)
+        if not d.statements:
+            # Nothing to write a body FROM. Letting it through would hand the
+            # synthesiser an empty list and get back a definition with nothing
+            # behind it — the failure this whole design removes, arriving through
+            # the one door left open. The extractor already refuses to emit such
+            # a card; this is the seam's own guarantee, not a hope about callers.
+            continue
+        arriving = [
+            CardStatement(text=st.text, quote=st.quote, source_doc_id=doc_id) for st in d.statements
+        ]
+        prov = Provenance(doc_id=doc_id, path=path, snippet=arriving[0].quote if arriving else "")
         hit = next((i for i, ks in enumerate(norm_keys) if ks & nks), None)
         if hit is None:
             out.append(
                 ProposedCard(
                     keys=list(d.keys),
-                    title=d.title,
-                    body=d.body,
-                    confident=d.confident,
+                    title=d.term,
                     provenance=[prov],
+                    statements=accumulate([], arriving),
                 )
             )
             norm_keys.append(set(nks))
@@ -387,8 +414,7 @@ def merge_drafts(drafts: list[tuple[str, str, CardDraft]]) -> list[ProposedCard]
                 p.keys.append(k)
         norm_keys[hit] |= nks
         p.provenance.append(prov)
-        if not p.confident and d.confident:  # a confident draft supersedes an uncertain body
-            p.title, p.body, p.confident = d.title, d.body, True
+        p.statements = accumulate(p.statements, arriving)
     return out
 
 
@@ -398,21 +424,32 @@ def classify_against_existing(
     """Decide a proposal's fate against the collection's existing cards (#175
     Q5). ``existing`` is ``(card_id, ContextCard)`` pairs. Returns:
 
-      - ``"skip"`` — the proposal's normalised keys are a subset of an existing
-        card's (the term is already fully carded): a complete duplicate, dropped.
-      - ``None`` after setting ``mode="update"`` + ``target_card_id`` — it shares
-        ≥1 key with an existing card but adds something (partial overlap).
+      - ``"skip"`` — the existing card already has these keys AND every claim
+        the proposal brings: nothing to add.
+      - ``None`` after setting ``mode="update"`` + ``target_card_id`` — it
+        overlaps an existing card and brings something it does not have, whether
+        that is a new key or a new claim.
       - ``None`` leaving ``mode="new"`` — no overlap with any existing card.
 
-    The first existing card it overlaps wins (cards rarely share keys)."""
+    The first existing card it overlaps wins (cards rarely share keys).
+
+    "Already carded" used to be enough to skip, and under the old model it was:
+    a proposal was a whole authored body, so a term that already had a card had
+    nothing to gain from another one. Under the evidence model that rule made
+    accumulation impossible — a document saying something NEW about a term that
+    already had a card was dropped before anyone saw it, which is precisely the
+    case the card is supposed to grow from. The question is no longer "is this
+    term carded" but "does this bring anything the card does not have".
+    """
     pnk = set(derive_norm_keys(proposal.keys))
     for card_id, card in existing:
         cnk = set(getattr(card, "norm_keys", []))
-        inter = pnk & cnk
-        if not inter:
+        if not (pnk & cnk):
             continue
-        if pnk <= cnk:
-            return "skip"  # fully covered by this card — a complete duplicate
+        held = {st.text for st in getattr(card, "statements", [])}
+        brings = {st.text for st in proposal.statements} - held
+        if pnk <= cnk and not brings:
+            return "skip"  # same keys, nothing new to say
         proposal.mode = "update"
         proposal.target_card_id = card_id
         return None
