@@ -617,6 +617,23 @@ class IndexUnitText(Struct):  # → resource "index-unit-text"
     text: str
 
 
+class CardStatement(Struct):
+    """One claim the corpus makes about a card's term, and the words that make it.
+
+    The card's EVIDENCE. ``body`` is derived from the whole list, so a new
+    document adds a statement and the body is rewritten from everything — rather
+    than the old shape, where each document authored a body and the last one to
+    arrive won. That shape could only ever lose the others.
+
+    ``quote`` is verbatim from the source and is checked against it at extraction
+    time; a claim that cannot be quoted never becomes a statement.
+    """
+
+    text: str
+    quote: str
+    source_doc_id: str = ""
+
+
 class ContextCard(Struct):  # → resource "context-card"
     """Issue #106: a lightweight glossary card — several ``keys`` (a term and
     its surface forms) → a short ``body`` explanation, looked up deterministically
@@ -640,6 +657,11 @@ class ContextCard(Struct):  # → resource "context-card"
     # ignore it and compute by scan).
     norm_keys: Annotated[list[str], TrigramIndex()] = field(default_factory=list)
     title: str = ""  # display name (FE list/detail); "" → keys[0]
+    # The evidence `body` is written from. Non-indexed (never filtered or sorted
+    # on), so adding it needs no migration — old rows decode with an empty list.
+    # An empty list means the card predates the evidence model: its body was
+    # authored rather than derived, and nothing can be recomputed from it.
+    statements: list[CardStatement] = field(default_factory=list)
     body: str = ""  # markdown explanation
     # #518: the SourceDocs that BACK this card — the curated evidence a human (or a
     # workflow, via ``upsert_context_card``) attached. OPTIONAL and never required:

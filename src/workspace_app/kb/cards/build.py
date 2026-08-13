@@ -16,8 +16,10 @@ not by overwriting an answer.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import msgspec
 
@@ -155,6 +157,27 @@ def _group(found: list[tuple[str, TermCard]]) -> list[list[tuple[str, TermCard]]
     return groups
 
 
+def synthesise(
+    llm: ILlm,
+    term: str,
+    statements: Sequence[Statement | Any],
+    *,
+    prompt: str | None = None,
+) -> tuple[str, str]:
+    """The title and body a term's whole evidence adds up to.
+
+    Takes the statements rather than the cards they came from, so the SAME writer
+    serves the offline preview and the live pipeline — where a card accumulates
+    statements over many runs and its body is rewritten from all of them.
+    """
+    reply = llm.collect(
+        (prompt or _SYNTHESIS)
+        .replace("{term}", term)
+        .replace("{statements}", "\n".join(f"- {s.text}  「{s.quote}」" for s in statements))
+    )
+    return _read(reply)
+
+
 def _synthesise(llm: ILlm, group: list[tuple[str, TermCard]], *, prompt: str | None) -> Card:
     statements: list[Statement] = []
     seen: set[str] = set()
@@ -171,12 +194,7 @@ def _synthesise(llm: ILlm, group: list[tuple[str, TermCard]], *, prompt: str | N
                 seen_keys.add(n)
                 keys.append(key)
     term = group[0][1].term
-    reply = llm.collect(
-        (prompt or _SYNTHESIS)
-        .replace("{term}", term)
-        .replace("{statements}", "\n".join(f"- {s.text}  「{s.quote}」" for s in statements))
-    )
-    title, body = _read(reply)
+    title, body = synthesise(llm, term, statements, prompt=prompt)
     return Card(
         keys=keys,
         title=title or term,
