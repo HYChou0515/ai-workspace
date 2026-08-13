@@ -8,6 +8,8 @@ tested separately against a fake ``ILlm``.
 
 from __future__ import annotations
 
+import json
+
 import msgspec
 from specstar import QB
 from specstar.types import Binary, TaskStatus
@@ -21,13 +23,14 @@ from workspace_app.kb.card_gen import (
 )
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
 from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
-from workspace_app.kb.context_cards import derive_norm_keys, lookup
+from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.doc_questions import open_questions_for_collections
+from workspace_app.kb.llm import ILlm
 from workspace_app.kb.reconcile import Reconciler, collection_wiki_text
 from workspace_app.kb.wiki.store import _rid
 from workspace_app.resources import Collection, ContextCard, SourceDoc, WikiPage, make_spec
-from workspace_app.resources.kb import EMBED_DIM, ClusterMember
+from workspace_app.resources.kb import EMBED_DIM, CardStatement, ClusterMember
 
 
 def _add_source(spec, collection_id: str, path: str, text: str) -> str:
@@ -74,7 +77,13 @@ def _add_wiki(spec, collection_id: str, path: str, text: str) -> str:
     return _rid(collection_id, path)
 
 
-def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
+def _add_card(
+    spec,
+    collection_id: str,
+    keys: list[str],
+    body: str = "",
+    statements: list[CardStatement] | None = None,
+) -> str:
     rm = spec.get_resource_manager(ContextCard)
     rev = rm.create(
         ContextCard(
@@ -82,6 +91,7 @@ def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
             keys=keys,
             norm_keys=derive_norm_keys(keys),
             body=body,
+            statements=list(statements or []),
         )
     )
     return rev.resource_id
@@ -142,16 +152,16 @@ async def test_generates_a_new_card_proposal_from_a_document():
     drafter = _FakeDrafter(
         {
             "spec.md": [
-                CardDraft(
+                _draft(
+                    term="Reflow Zone 3",
                     keys=["RZ3", "Reflow Zone 3"],
-                    title="Reflow Zone 3",
-                    body="The third reflow zone.",
-                    snippet="The reflow zone uses RZ3 heating.",
+                    claim="The third reflow zone.",
+                    quote="The reflow zone uses RZ3 heating.",
                 )
             ]
         }
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     job_id = coord.enqueue(cid, [doc])
     await coord.aclose()
 
@@ -179,8 +189,8 @@ async def test_a_still_indexing_doc_is_skipped_not_digested_to_nothing():
     cid = _collection(spec)
     ready = _add_source(spec, cid, "ready.md", "RZ3 is the third reflow zone")
     pending = _add_indexing_binary(spec, cid, "pending.png")
-    drafter = _FakeDrafter({"ready.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"ready.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [ready, pending])
     await coord.aclose()
 
@@ -200,8 +210,8 @@ async def test_the_funnel_attributes_the_coverage_gap_to_still_indexing_docs():
     cid = _collection(spec)
     ready = _add_source(spec, cid, "ready.md", "RZ3 is the third reflow zone")
     pending = _add_indexing_binary(spec, cid, "pending.png")
-    drafter = _FakeDrafter({"ready.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"ready.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [ready, pending])
     await coord.aclose()
 
@@ -223,8 +233,8 @@ async def test_a_finalized_run_is_listed_for_review_then_leaves_the_queue_on_com
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
 
@@ -256,11 +266,11 @@ async def test_finalize_writes_first_class_card_proposal_rows():
     d2 = _add_source(spec, cid, "b.md", "RZ7 is the seventh reflow zone")
     drafter = _FakeDrafter(
         {
-            "a.md": [CardDraft(keys=["RZ3"], title="RZ3", body="third", snippet="s3")],
-            "b.md": [CardDraft(keys=["RZ7"], title="RZ7", body="seventh", snippet="s7")],
+            "a.md": [_draft(term="RZ3", keys=["RZ3"], claim="third", quote="s3")],
+            "b.md": [_draft(term="RZ7", keys=["RZ7"], claim="seventh", quote="s7")],
         }
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [d1, d2])
     await coord.aclose()
 
@@ -295,8 +305,8 @@ async def test_dismiss_removes_a_run_from_review_without_writing_cards():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "RZ3 body")
-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
 
@@ -314,8 +324,8 @@ async def test_review_resolution_is_idempotent():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
 
@@ -339,11 +349,11 @@ async def test_pending_runs_are_scoped_to_their_collection():
     d2 = _add_source(spec, c2, "b.md", "RZ4 body")
     drafter = _FakeDrafter(
         {
-            "a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")],
-            "b.md": [CardDraft(keys=["RZ4"], title="RZ4", snippet="s")],
+            "a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")],
+            "b.md": [_draft(term="RZ4", keys=["RZ4"], claim="RZ4", quote="s")],
         }
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     j1 = coord.enqueue(c1, [d1])
     coord.enqueue(c2, [d2])
     await coord.aclose()
@@ -360,9 +370,9 @@ async def test_a_selected_wiki_page_is_read_and_drafted_like_a_document():
     cid = _collection(spec)
     tagged_id = WIKI_ID_PREFIX + _add_wiki(spec, cid, "/index.md", "RZ3 is the third reflow zone.")
     drafter = _FakeDrafter(
-        {"/index.md": [CardDraft(keys=["RZ3"], title="RZ3", body="Third zone.", snippet="RZ3…")]}
+        {"/index.md": [_draft(term="RZ3", keys=["RZ3"], claim="Third zone.", quote="RZ3…")]}
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [tagged_id])
     await coord.aclose()
 
@@ -388,7 +398,7 @@ async def test_a_wiki_page_source_still_yields_reviewable_proposals():
     )
     tagged_id = WIKI_ID_PREFIX + _add_wiki(spec, cid, "/index.md", "RZ3 is the third reflow zone.")
     drafter = _FakeDrafter(
-        {"/index.md": [CardDraft(keys=["RZ3"], title="RZ3", body="Third zone.", snippet="RZ3…")]}
+        {"/index.md": [_draft(term="RZ3", keys=["RZ3"], claim="Third zone.", quote="RZ3…")]}
     )
     coord = CardGenCoordinator(
         spec,
@@ -409,18 +419,52 @@ async def test_a_wiki_page_source_still_yields_reviewable_proposals():
     assert [p.keys for p in coord.proposals(jid).proposals] == [["RZ3"]]
 
 
-async def test_a_draft_already_fully_covered_by_an_existing_card_is_skipped():
-    """#175 Q5: a term whose normalised keys are all already on an existing card
-    is a complete duplicate — dropped, never surfaced for review."""
+async def test_a_draft_that_adds_nothing_to_an_existing_card_is_skipped():
+    """#175 Q5, restated for the evidence model: a duplicate is a draft whose
+    keys AND claims the card already has. "The term is already carded" is no
+    longer enough — under that rule a document saying something NEW about a
+    carded term was dropped before anyone saw it, which is exactly the case the
+    card is meant to grow from."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
-    _add_card(spec, cid, ["RZ3", "Reflow Zone 3"], body="already defined")
+    _add_card(
+        spec,
+        cid,
+        ["RZ3", "Reflow Zone 3"],
+        body="already defined",
+        statements=[CardStatement(text="y", quote="s", source_doc_id="older")],
+    )
     doc = _add_source(spec, cid, "spec.md", "...")
-    drafter = _FakeDrafter({"spec.md": [CardDraft(keys=["RZ3"], title="x", body="y", snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"spec.md": [_draft(term="x", keys=["RZ3"], claim="y", quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
     assert coord.proposals(jid).proposals == []
+
+
+async def test_a_carded_term_the_document_says_something_new_about_is_not_skipped():
+    """The other half, and the one the old rule got wrong: same keys, new claim.
+    Dropping this is how a card stops learning the moment it exists."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _add_card(
+        spec,
+        cid,
+        ["RZ3"],
+        body="the third zone",
+        statements=[CardStatement(text="是第三區", quote="RZ3 是第三區", source_doc_id="older")],
+    )
+    doc = _add_source(spec, cid, "spec.md", "...")
+    drafter = _FakeDrafter(
+        {"spec.md": [_draft(term="RZ3", keys=["RZ3"], claim="設定 245°C", quote="RZ3 設定 245°C")]}
+    )
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    (p,) = coord.proposals(jid).proposals
+    assert p.mode == "update"
+    assert [st.text for st in p.statements] == ["是第三區", "設定 245°C"]
 
 
 async def test_a_draft_overlapping_an_existing_card_becomes_an_update():
@@ -431,9 +475,9 @@ async def test_a_draft_overlapping_an_existing_card_becomes_an_update():
     target = _add_card(spec, cid, ["M4"], body="old")
     doc = _add_source(spec, cid, "spec.md", "...")
     drafter = _FakeDrafter(
-        {"spec.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]}
+        {"spec.md": [_draft(term="Metal 4", keys=["M4", "Metal 4"], claim="new", quote="s")]}
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
     (p,) = coord.proposals(jid).proposals
@@ -451,13 +495,11 @@ async def test_drafts_sharing_a_key_across_documents_merge_into_one_proposal():
     d2 = _add_source(spec, cid, "b.md", "...")
     drafter = _FakeDrafter(
         {
-            "a.md": [CardDraft(keys=["RZ3"], title="t1", body="b1", snippet="from a")],
-            "b.md": [
-                CardDraft(keys=["RZ3", "Reflow Zone 3"], title="t2", body="b2", snippet="from b")
-            ],
+            "a.md": [_draft(term="t1", keys=["RZ3"], claim="b1", quote="from a")],
+            "b.md": [_draft(term="t2", keys=["RZ3", "Reflow Zone 3"], claim="b2", quote="from b")],
         }
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [d1, d2])
     await coord.aclose()
     (p,) = coord.proposals(jid).proposals
@@ -474,7 +516,7 @@ async def test_digest_term_question_is_raised_as_an_open_doc_question():
     drafter = _FakeDrafter(
         {}, term_qs={"spec.md": [TermQuestionDraft(term="R7", question="What is the R7 recipe?")]}
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     coord.enqueue(cid, [doc])
     await coord.aclose()
     ((_qid, q),) = open_questions_for_collections(spec, [cid])
@@ -492,7 +534,7 @@ async def test_a_term_already_carded_is_not_raised_as_a_question():
     _add_card(spec, cid, ["R7"], body="the R7 reflow recipe")
     doc = _add_source(spec, cid, "spec.md", "Uses the R7 recipe.")
     drafter = _FakeDrafter({}, term_qs={"spec.md": [TermQuestionDraft(term="R7", question="?")]})
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     coord.enqueue(cid, [doc])
     await coord.aclose()
     assert open_questions_for_collections(spec, [cid]) == []
@@ -512,7 +554,7 @@ async def test_digest_description_question_is_raised_with_its_quote():
             ]
         },
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     coord.enqueue(cid, [doc])
     await coord.aclose()
     ((_qid, q),) = open_questions_for_collections(spec, [cid])
@@ -527,8 +569,10 @@ async def test_a_document_deleted_before_the_run_is_skipped_cleanly():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "gone.md", "...")
-    drafter = _FakeDrafter({"gone.md": [CardDraft(keys=["X"], snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter(
+        {"gone.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]}
+    )
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     spec.get_resource_manager(SourceDoc).permanently_delete(doc)
     await coord.aclose()
@@ -553,20 +597,23 @@ async def test_the_split_job_is_partitioned_by_collection():
     assert job.payload.doc_ids == [doc]
 
 
-async def test_an_uncertain_draft_keeps_its_confidence_flag():
-    """#205/#175 信心標記: an uncertain draft surfaces with confident=False so the
-    review UI can ⚠️ it and default it out of the commit."""
+async def test_a_proposal_carries_the_evidence_its_body_was_written_from():
+    """What replaced the confidence flag. A draft used to say how sure it felt;
+    now it says what the document stated and quotes the sentence, so a reviewer
+    checks the claim against the source instead of trusting a self-rating."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
     drafter = _FakeDrafter(
-        {"a.md": [CardDraft(keys=["X"], title="X", body="?", confident=False, snippet="s")]}
+        {"a.md": [_draft(term="X", keys=["X"], claim="是一種設備", quote="X 是一種設備")]}
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
+
     (p,) = coord.proposals(jid).proposals
-    assert p.confident is False
+    assert [(st.text, st.quote) for st in p.statements] == [("是一種設備", "X 是一種設備")]
+    assert st_doc(p) == [doc], "a statement must say which document it came from"
 
 
 async def test_a_draft_with_no_usable_key_is_dropped():
@@ -575,8 +622,8 @@ async def test_a_draft_with_no_usable_key_is_dropped():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["   "], title="blank", snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"a.md": [_draft(term="blank", keys=["   "], claim="blank", quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
     assert coord.proposals(jid).proposals == []
@@ -588,7 +635,9 @@ async def test_status_is_pending_until_the_run_is_consumed():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
-    coord = CardGenCoordinator(spec, _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]}))
+    coord = CardGenCoordinator(
+        spec, _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
+    )
     jid = coord.enqueue(cid, [doc])
     assert coord.status(jid) == TaskStatus.PENDING
     assert coord.proposals(jid).proposals == []
@@ -607,7 +656,15 @@ async def test_a_multi_doc_run_fans_out_into_parallelisable_process_jobs():
     cid = _collection(spec)
     docs = [_add_source(spec, cid, f"{i}.md", "x") for i in range(3)]
     coord = CardGenCoordinator(
-        spec, _FakeDrafter({f"{i}.md": [CardDraft(keys=[f"K{i}"], snippet="s")] for i in range(3)})
+        spec,
+        _FakeDrafter(
+            {
+                f"{i}.md": [
+                    _draft(term=[f"K{i}"][0], keys=[f"K{i}"], claim=[f"K{i}"][0], quote="s")
+                ]
+                for i in range(3)
+            }
+        ),
     )
     coord.enqueue(cid, docs)
     await coord.aclose()  # drain split → 3 process → finalize
@@ -633,7 +690,9 @@ async def test_a_single_doc_run_short_circuits_without_fanning_out():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
-    coord = CardGenCoordinator(spec, _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]}))
+    coord = CardGenCoordinator(
+        spec, _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
+    )
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
 
@@ -651,8 +710,8 @@ async def test_the_drafter_is_told_the_documents_collection():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     coord.enqueue(cid, [doc])
     await coord.aclose()
     assert drafter.seen_cids == [cid]
@@ -666,7 +725,15 @@ async def test_set_drafter_swaps_in_a_new_drafter_after_construction():
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
     coord = CardGenCoordinator(spec, NullCardDrafter())  # starts with the no-op drafter
-    coord.set_drafter(_FakeDrafter({"a.md": [CardDraft(keys=["SWAPPED"], snippet="s")]}))
+    coord.set_drafter(
+        _FakeDrafter(
+            {
+                "a.md": [
+                    _draft(term=["SWAPPED"][0], keys=["SWAPPED"], claim=["SWAPPED"][0], quote="s")
+                ]
+            }
+        )
+    )
 
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
@@ -701,7 +768,9 @@ async def test_finalize_logs_the_funnel_counts(caplog):
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
-    coord = CardGenCoordinator(spec, _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]}))
+    coord = CardGenCoordinator(
+        spec, _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
+    )
     with caplog.at_level("INFO"):
         coord.enqueue(cid, [doc])
         await coord.aclose()
@@ -723,12 +792,12 @@ async def test_finalize_persists_the_funnel_counts_on_the_run():
     drafter = _FakeDrafter(
         {
             "a.md": [
-                CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s"),
-                CardDraft(keys=["SP7"], title="Solder Paste 7", snippet="s"),
+                _draft(term="Reflow Zone 3", keys=["RZ3"], claim="Reflow Zone 3", quote="s"),
+                _draft(term="Solder Paste 7", keys=["SP7"], claim="Solder Paste 7", quote="s"),
             ]
         }
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
 
@@ -754,8 +823,10 @@ async def test_latest_funnel_reports_the_most_recent_finalized_run():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter(
+        {"a.md": [_draft(term="Reflow Zone 3", keys=["RZ3"], claim="Reflow Zone 3", quote="s")]}
+    )
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     assert coord.latest_funnel(cid) is None  # no finalized run yet
 
     coord.enqueue(cid, [doc])
@@ -775,9 +846,9 @@ async def test_a_doc_whose_digest_fails_does_not_sink_the_run():
     d1 = _add_source(spec, cid, "a.md", "x")
     d2 = _add_source(spec, cid, "b.md", "y")
     drafter = _FakeDrafter(
-        {"a.md": [CardDraft(keys=["RZ3"], title="t", snippet="s")]}, fail_paths={"b.md"}
+        {"a.md": [_draft(term="t", keys=["RZ3"], claim="t", quote="s")]}, fail_paths={"b.md"}
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [d1, d2])
     await coord.aclose()
 
@@ -821,8 +892,13 @@ async def test_a_run_deleted_mid_fanout_is_skipped_by_its_process_jobs():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     docs = [_add_source(spec, cid, f"{i}.md", "x") for i in range(2)]
-    drafter = _FakeDrafter({f"{i}.md": [CardDraft(keys=[f"K{i}"], snippet="s")] for i in range(2)})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter(
+        {
+            f"{i}.md": [_draft(term=[f"K{i}"][0], keys=[f"K{i}"], claim=[f"K{i}"][0], quote="s")]
+            for i in range(2)
+        }
+    )
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     rid = coord.enqueue(cid, docs)
     spec.get_resource_manager(CardGenRun).permanently_delete(rid)  # e.g. collection cascade
     await coord.aclose()  # split fans out; the process jobs find no run and skip
@@ -838,8 +914,8 @@ async def test_a_single_doc_run_whose_run_vanished_finalizes_cleanly():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]})
-    coord = CardGenCoordinator(spec, drafter)
+    drafter = _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     rid = coord.enqueue(cid, [doc])
     spec.get_resource_manager(CardGenRun).permanently_delete(rid)  # e.g. collection cascade
     await coord.aclose()
@@ -860,7 +936,7 @@ def _list_cards(spec, cid: str) -> list[ContextCard]:
 
 
 async def _run(spec, cid, by_path, docs):
-    coord = CardGenCoordinator(spec, _FakeDrafter(by_path))
+    coord = CardGenCoordinator(spec, _FakeDrafter(by_path), synthesiser=_Writer())
     jid = coord.enqueue(cid, docs)
     await coord.aclose()
     return coord, jid
@@ -873,7 +949,7 @@ async def test_save_review_persists_decisions_and_edits():
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
     coord, jid = await _run(
-        spec, cid, {"a.md": [CardDraft(keys=["RZ3"], title="t", body="orig", snippet="s")]}, [doc]
+        spec, cid, {"a.md": [_draft(term="t", keys=["RZ3"], claim="orig", quote="s")]}, [doc]
     )
     (p,) = coord.proposals(jid).proposals
     p.decision = "accepted"
@@ -892,7 +968,7 @@ async def test_commit_creates_a_card_for_an_accepted_new_proposal():
     coord, jid = await _run(
         spec,
         cid,
-        {"a.md": [CardDraft(keys=["RZ3"], title="Reflow Zone 3", body="3rd zone", snippet="s")]},
+        {"a.md": [_draft(term="Reflow Zone 3", keys=["RZ3"], claim="3rd zone", quote="s")]},
         [doc],
     )
     (p,) = coord.proposals(jid).proposals
@@ -916,7 +992,7 @@ async def test_commit_overwrites_the_target_card_for_an_accepted_update():
     coord, jid = await _run(
         spec,
         cid,
-        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
+        {"a.md": [_draft(term="Metal 4", keys=["M4", "Metal 4"], claim="new", quote="s")]},
         [doc],
     )
     (p,) = coord.proposals(jid).proposals
@@ -947,7 +1023,7 @@ async def test_commit_keeps_the_target_cards_reference_doc_ids():
     coord, jid = await _run(
         spec,
         cid,
-        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
+        {"a.md": [_draft(term="Metal 4", keys=["M4", "Metal 4"], claim="new", quote="s")]},
         [doc],
     )
     (p,) = coord.proposals(jid).proposals
@@ -961,37 +1037,6 @@ async def test_commit_keeps_the_target_cards_reference_doc_ids():
     assert got.reference_doc_ids == ["doc-a"]  # …without stripping the curated links
 
 
-async def test_commit_creates_when_the_target_card_was_deleted_since_generation():
-    """`_existing_card` promises `None` for a card deleted since generation so the
-    commit falls back to a create. It caught only `ResourceIDNotFoundError`, and
-    specstar raises `ResourceIsDeletedError` for a SOFT delete — a sibling, not a
-    subclass — so a reviewer who deleted the target while the proposal sat in the
-    inbox got an exception instead of the promised fallback, and the whole commit
-    died with it. Same shape as #701's tombstone fence, one file over."""
-    spec = make_spec(default_user="u")
-    cid = _collection(spec)
-    target = _add_card(spec, cid, ["M4"], body="old")
-    doc = _add_source(spec, cid, "a.md", "x")
-    coord, jid = await _run(
-        spec,
-        cid,
-        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
-        [doc],
-    )
-    (p,) = coord.proposals(jid).proposals
-    assert p.mode == "update" and p.target_card_id == target
-    p.decision = "accepted"
-    coord.save_review(jid, [p])
-    spec.get_resource_manager(ContextCard).delete(target)  # reviewer deletes it meanwhile
-
-    res = coord.commit(jid)
-
-    assert res.created == 1 and res.updated == 0  # fell back to a create, as promised
-    # Asserted through `lookup`, not a raw listing: the tombstone is still a row, and
-    # what matters is what the term now resolves to.
-    assert [c.body for c in lookup(spec, cid, ["M4"])["M4"]] == ["new"]
-
-
 async def test_commit_skips_proposals_the_reviewer_did_not_accept():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
@@ -1001,8 +1046,8 @@ async def test_commit_skips_proposals_the_reviewer_did_not_accept():
         spec,
         cid,
         {
-            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
-            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+            "a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
+            "b.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
         },
         [d1, d2],
     )
@@ -1024,7 +1069,7 @@ async def test_commit_falls_back_to_create_when_the_update_target_was_deleted():
     coord, jid = await _run(
         spec,
         cid,
-        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
+        {"a.md": [_draft(term="Metal 4", keys=["M4", "Metal 4"], claim="new", quote="s")]},
         [doc],
     )
     (p,) = coord.proposals(jid).proposals
@@ -1047,7 +1092,7 @@ async def test_commit_skips_an_accepted_proposal_with_no_usable_key():
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
     coord, jid = await _run(
-        spec, cid, {"a.md": [CardDraft(keys=["A"], title="A", snippet="s")]}, [doc]
+        spec, cid, {"a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")]}, [doc]
     )
     coord.save_review(jid, [ProposedCard(keys=["  "], title="x", body="y", decision="accepted")])
 
@@ -1056,9 +1101,11 @@ async def test_commit_skips_an_accepted_proposal_with_no_usable_key():
     assert _list_cards(spec, cid) == []
 
 
-async def test_a_confident_draft_supersedes_an_uncertain_one_when_merged():
-    """When two drafts of the same term merge, a confident draft's title/body
-    wins over an earlier uncertain one's."""
+async def test_two_documents_about_one_term_both_survive_the_merge():
+    """The failure this whole design replaces. The old merge kept the FIRST
+    confident draft's body and dropped every later one, so 「是水果」 and
+    「是紅色」 arriving from two documents left one of them on the floor —
+    silently, and with the keys and provenance unioned so it looked fine."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     d1 = _add_source(spec, cid, "a.md", "x")
@@ -1067,25 +1114,16 @@ async def test_a_confident_draft_supersedes_an_uncertain_one_when_merged():
         spec,
         cid,
         {
-            "a.md": [
-                CardDraft(keys=["RZ3"], title="guess", body="unsure", confident=False, snippet="sa")
-            ],
-            "b.md": [
-                CardDraft(
-                    keys=["RZ3"],
-                    title="Reflow Zone 3",
-                    body="definite",
-                    confident=True,
-                    snippet="sb",
-                )
-            ],
+            "a.md": [_draft(term="蘋果", keys=["蘋果"], claim="是水果", quote="蘋果是水果")],
+            "b.md": [_draft(term="蘋果", keys=["蘋果"], claim="是紅色", quote="蘋果是紅色")],
         },
         [d1, d2],
     )
+
     (p,) = coord.proposals(jid).proposals
-    assert p.confident is True
-    assert p.body == "definite"
-    assert p.title == "Reflow Zone 3"
+    assert [st.text for st in p.statements] == ["是水果", "是紅色"]
+    assert p.body == "是水果 / 是紅色", "the body must be written from BOTH, not one of them"
+    assert sorted(st_doc(p)) == sorted([d1, d2])
 
 
 async def test_a_new_term_with_an_unrelated_existing_card_stays_new():
@@ -1096,7 +1134,7 @@ async def test_a_new_term_with_an_unrelated_existing_card_stays_new():
     _add_card(spec, cid, ["ZZZ"], body="unrelated")
     doc = _add_source(spec, cid, "a.md", "x")
     coord, jid = await _run(
-        spec, cid, {"a.md": [CardDraft(keys=["RZ3"], title="t", snippet="s")]}, [doc]
+        spec, cid, {"a.md": [_draft(term="t", keys=["RZ3"], claim="t", quote="s")]}, [doc]
     )
     (p,) = coord.proposals(jid).proposals
     assert p.mode == "new"
@@ -1117,8 +1155,8 @@ async def test_proposals_carry_stable_ids():
         spec,
         cid,
         {
-            "a.md": [CardDraft(keys=["A"], snippet="s")],
-            "b.md": [CardDraft(keys=["B"], snippet="s")],
+            "a.md": [_draft(term=["A"][0], keys=["A"], claim=["A"][0], quote="s")],
+            "b.md": [_draft(term=["B"][0], keys=["B"], claim=["B"][0], quote="s")],
         },
         [d1, d2],
     )
@@ -1137,8 +1175,8 @@ async def test_decide_persists_a_single_cards_decision():
         spec,
         cid,
         {
-            "a.md": [CardDraft(keys=["A"], snippet="s")],
-            "b.md": [CardDraft(keys=["B"], snippet="s")],
+            "a.md": [_draft(term=["A"][0], keys=["A"], claim=["A"][0], quote="s")],
+            "b.md": [_draft(term=["B"][0], keys=["B"], claim=["B"][0], quote="s")],
         },
         [d1, d2],
     )
@@ -1160,8 +1198,8 @@ async def test_commit_cards_writes_only_the_referenced_cards():
         spec,
         cid,
         {
-            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
-            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+            "a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
+            "b.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
         },
         [d1, d2],
     )
@@ -1178,7 +1216,7 @@ async def test_commit_cards_resolves_the_run_when_its_last_card_is_committed():
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
     coord, jid = await _run(
-        spec, cid, {"a.md": [CardDraft(keys=["A"], title="A", snippet="s")]}, [doc]
+        spec, cid, {"a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")]}, [doc]
     )
     (a,) = coord.proposals(jid).proposals
     coord.commit_cards([(jid, a.id)])
@@ -1195,11 +1233,11 @@ async def test_commit_cards_spans_multiple_runs_in_one_call():
     d2 = _add_source(spec, cid, "b.md", "y")
     drafter = _FakeDrafter(
         {
-            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
-            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+            "a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
+            "b.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
         }
     )
-    coord = CardGenCoordinator(spec, drafter)
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     j1 = coord.enqueue(cid, [d1])
     j2 = coord.enqueue(cid, [d2])
     await coord.aclose()
@@ -1216,7 +1254,7 @@ async def test_update_proposal_persists_a_drawer_edit():
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
     coord, jid = await _run(
-        spec, cid, {"a.md": [CardDraft(keys=["A"], body="old", snippet="s")]}, [doc]
+        spec, cid, {"a.md": [_draft(term=["A"][0], keys=["A"], claim="old", quote="s")]}, [doc]
     )
     (a,) = coord.proposals(jid).proposals
     coord.update_proposal(jid, a.id, msgspec.structs.replace(a, body="edited", decision="accepted"))
@@ -1245,8 +1283,8 @@ async def test_commit_cards_skips_a_rejected_reference():
         spec,
         cid,
         {
-            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
-            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+            "a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
+            "b.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
         },
         [d1, d2],
     )
@@ -1267,7 +1305,7 @@ async def test_start_consuming_is_idempotent_and_takes_an_explicit_queue_factory
     doc = _add_source(spec, cid, "a.md", "x")
     coord = CardGenCoordinator(
         spec,
-        _FakeDrafter({"a.md": [CardDraft(keys=["X"], title="X", snippet="s")]}),
+        _FakeDrafter({"a.md": [_draft(term="X", keys=["X"], claim="X", quote="s")]}),
         message_queue_factory=SimpleMessageQueueFactory(),
     )
     assert coord.consuming is False
@@ -1340,7 +1378,9 @@ async def test_finalize_reconcile_suppresses_a_semantic_duplicate():
         )
     )
     doc = _add_source(spec, cid, "d.md", "beta is explained here")
-    drafter = _FakeDrafter({"d.md": [CardDraft(keys=["beta"], title="SharedTag", snippet="s")]})
+    drafter = _FakeDrafter(
+        {"d.md": [_draft(term="SharedTag", keys=["beta"], claim="SharedTag", quote="s")]}
+    )
     coord = CardGenCoordinator(
         spec,
         drafter,
@@ -1411,7 +1451,9 @@ async def test_finalize_reconcile_keeps_and_clusters_a_new_proposal():
         )
     )
     doc = _add_source(spec, cid, "d.md", "gamma is a new thing")
-    drafter = _FakeDrafter({"d.md": [CardDraft(keys=["gamma"], title="OtherTag", snippet="s")]})
+    drafter = _FakeDrafter(
+        {"d.md": [_draft(term="OtherTag", keys=["gamma"], claim="OtherTag", quote="s")]}
+    )
     coord = CardGenCoordinator(
         spec,
         drafter,
@@ -1450,3 +1492,97 @@ async def test_finalize_reconcile_clusters_a_term_question():
     assert len(tq) == 1
     assert tq[0].state == "active"
     assert tq[0].cluster_key == "widget"  # norm(Widget) — opened its own cluster
+
+
+def _draft(*, term: str, keys: list[str], claim: str = "", quote: str = "") -> CardDraft:
+    """One document's take on one term, in the shape the drafter now returns.
+
+    The old drafts carried a written body; these carry a CLAIM and the sentence
+    that makes it, because no single document can define a term the whole corpus
+    talks about. `claim` defaults to the term, so a draft that only says "this
+    term appears here" still has something to accumulate.
+    """
+    return CardDraft(
+        term=term,
+        keys=list(keys),
+        statements=[CardStatement(text=claim or term, quote=quote or claim or term)],
+    )
+
+
+class _Writer(ILlm):
+    """A stand-in synthesiser: joins the claims it is handed.
+
+    The real one writes prose; what the tests need is only that the body is
+    DERIVED from the whole evidence rather than copied from one document, so a
+    join is enough to tell the two apart.
+    """
+
+    def stream(self, prompt: str):
+        # Only the statement lines: `synthesise` formats them as
+        # `- {text}  \u300c{quote}\u300d`, and the prompt's own bullets have no quote.
+        body = " / ".join(
+            line.split("  \u300c")[0].removeprefix("- ")
+            for line in prompt.splitlines()
+            if line.startswith("- ") and "\u300c" in line
+        )
+        yield json.dumps({"title": "", "body": body}, ensure_ascii=False), False
+
+
+def st_doc(proposal) -> list[str]:
+    """Which documents a proposal's statements name as their source."""
+    return [st.source_doc_id for st in proposal.statements]
+
+
+async def test_an_update_accumulates_onto_what_the_card_already_knew():
+    """Cross-run accumulation, and the reason the evidence lives on the CARD.
+
+    A run months ago recorded 「是水果」. Today's document says 「是紅色」. The card
+    must end up holding both — the old pipeline overwrote the body wholesale, so
+    everything the card had learnt before was replaced by whatever the newest
+    document happened to mention.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    target = _add_card(
+        spec,
+        cid,
+        ["蘋果"],
+        body="是水果",
+        statements=[CardStatement(text="是水果", quote="蘋果是水果", source_doc_id="older")],
+    )
+    doc = _add_source(spec, cid, "b.md", "y")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {"b.md": [_draft(term="蘋果", keys=["蘋果"], claim="是紅色", quote="蘋果是紅色")]},
+        [doc],
+    )
+
+    (p,) = coord.proposals(jid).proposals
+    assert p.mode == "update" and p.target_card_id == target
+    assert [st.text for st in p.statements] == ["是水果", "是紅色"]
+    assert p.body == "是水果 / 是紅色", "the body must be rewritten from BOTH, not replaced"
+
+
+async def test_committing_puts_the_evidence_on_the_card():
+    """Without this the card is prose again the moment it is written, and the
+    NEXT run has nothing to accumulate onto — the whole design collapses back to
+    overwriting at the last step."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {"a.md": [_draft(term="蘋果", keys=["蘋果"], claim="是水果", quote="蘋果是水果")]},
+        [doc],
+    )
+    (p,) = coord.proposals(jid).proposals
+    p.decision = "accepted"
+    coord.save_review(jid, [p])
+
+    coord.commit(jid)
+
+    (card,) = _list_cards(spec, cid)
+    assert [(st.text, st.quote) for st in card.statements] == [("是水果", "蘋果是水果")]
+    assert [st.source_doc_id for st in card.statements] == [doc]

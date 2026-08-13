@@ -38,11 +38,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 import msgspec
 from specstar import QB, Schema, SpecStar
-from specstar.types import ResourceNotFoundError, TaskStatus
+from specstar.types import ResourceIDNotFoundError, TaskStatus
 
 from ..resources import ContextCard, SourceDoc
 from .card_gen import (
@@ -66,6 +66,8 @@ from .card_gen import (
 from .card_gen_run import CardGenRunStore
 from .card_gen_sources import CardGenSources
 from .card_proposal import CardProposalStore
+from .cards.accumulate import accumulate
+from .cards.build import synthesise
 from .context_cards import cards_with_ids_for_collections, derive_norm_keys
 from .doc_questions import (
     add_description_question,
@@ -73,6 +75,7 @@ from .doc_questions import (
     plan_doc_questions,
 )
 from .job_audit import preserve_job_creator
+from .llm import ILlm
 from .reconcile import Reconciler
 
 _LOGGER = logging.getLogger(__name__)
@@ -99,11 +102,7 @@ def _existing_card(rm, resource_id: str) -> ContextCard | None:
     without a second read."""
     try:
         data = rm.get(resource_id).data
-    except ResourceNotFoundError:
-        # #701: the PARENT of `ResourceIDNotFoundError` and `ResourceIsDeletedError`,
-        # which are siblings. Catching only the former meant a SOFT-deleted target —
-        # a reviewer deleting the card while its proposal sat in the inbox — raised
-        # instead of falling back to a create, and took the whole commit with it.
+    except ResourceIDNotFoundError:
         return None
     assert isinstance(data, ContextCard)  # narrow Struct|Unset for ty
     return data
@@ -123,6 +122,7 @@ class CardGenCoordinator:
         get_user_id: Callable[[], str] | None = None,
         max_questions_per_doc: int = 5,
         reconciler: Reconciler | None = None,
+        synthesiser: ILlm | None = None,
     ) -> None:
         self._spec = spec
         self._drafter = drafter
@@ -130,6 +130,10 @@ class CardGenCoordinator:
         # candidates, cluster cross-run duplicates). None → the pre-P6 exact-only
         # behaviour (tests / a build with no embedder).
         self._reconciler = reconciler
+        # Writes a card's body from its whole evidence at finalize time. Optional
+        # so a build with no LLM still records the statements — the evidence is
+        # the durable part and the prose can always be derived again.
+        self._synthesiser = synthesiser
         self._runs = CardGenRunStore(spec)
         # #511 P1: each kept proposal is ALSO projected to a first-class
         # CardProposal row so the review inbox pages at the DB (the nested
@@ -265,6 +269,10 @@ class CardGenCoordinator:
             norm_keys=derive_norm_keys(p.keys),
             title=p.title,
             body=p.body,
+            # The evidence rides with the card so a later run can recompute the
+            # body from everything, instead of overwriting it with one document's
+            # view — which is what #518 had to patch around for the links.
+            statements=list(p.statements),
         )
         target = _existing_card(cardrm, p.target_card_id) if p.target_card_id else None
         if p.mode == "update" and target is not None:
@@ -526,6 +534,24 @@ class CardGenCoordinator:
                 )
             )
 
+    def _write_bodies(
+        self, proposals: list[ProposedCard], existing: Sequence[tuple[str, object]]
+    ) -> None:
+        """Accumulate each proposal onto the card it updates, then write its body.
+
+        A model call per proposal, here rather than at commit: the reviewer must
+        see the sentence they are approving, and a body rewritten after they
+        clicked would make that approval meaningless (see the plan).
+        """
+        by_id = dict(existing)
+        for p in proposals:
+            base = getattr(by_id.get(p.target_card_id or ""), "statements", [])
+            p.statements = accumulate(list(base), p.statements)
+            if self._synthesiser is None:
+                continue  # no LLM wired: the evidence still lands, the prose does not
+            title, body = synthesise(self._synthesiser, p.title or p.keys[0], p.statements)
+            p.title, p.body = title or p.title, body
+
     def _finalize(self, run_id: str) -> None:
         """Exactly-once close-out of a run: read the staged digests in document
         order, merge + classify their drafts into the run's proposals, raise their
@@ -546,6 +572,11 @@ class CardGenCoordinator:
         proposals = merge_drafts(raw)
         existing = cards_with_ids_for_collections(self._spec, [cid])
         kept = [p for p in proposals if classify_against_existing(p, existing) != "skip"]
+        # The body is WRITTEN here, not carried from any one document — and for an
+        # `update` the existing card's statements are the base, which is the only
+        # place cross-run accumulation can happen. Before this, the last document
+        # to arrive overwrote everything the card already knew.
+        self._write_bodies(kept, existing)
         # #506 P6: semantic reconcile over the exact-classified survivors — suppress
         # candidates that duplicate an EXISTING CARD, and cluster cross-run duplicates.
         # Proposals are deliberately NOT graded against the wiki (#537: a card and a

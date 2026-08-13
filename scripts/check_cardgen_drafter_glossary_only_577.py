@@ -120,7 +120,7 @@ def _report(digest: DocDigest) -> bool:
     questions = digest.term_questions + digest.description_questions
     print(f"\n== drafter output: {len(cards)} card(s), {len(questions)} question(s) ==")
     for c in cards:
-        print(f"  card: keys={c.keys} title={c.title!r}")
+        print(f"  card: keys={c.keys} term={c.term!r} statements={len(c.statements)}")
     for q in digest.term_questions:
         print(f"  term-question: {q.term!r} — {q.question}")
 

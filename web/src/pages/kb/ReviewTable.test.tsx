@@ -37,6 +37,7 @@ const card = (over: Partial<KbReviewCard> = {}): KbReviewCard => ({
     mode: "new",
     target_card_id: null,
     provenance: [],
+    statements: [],
     decision: "pending",
   },
   ...over,

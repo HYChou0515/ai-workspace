@@ -999,6 +999,7 @@ export const messages = {
   "review.drawer.body": { "zh-TW": "內容", en: "Body" },
   "review.drawer.overwrites": { "zh-TW": "將覆蓋現有卡片", en: "Overwrites the current card" },
   "review.drawer.provenance": { "zh-TW": "依據", en: "Evidence" },
+  "review.drawer.statements": { "zh-TW": "文本說了什麼", en: "What the corpus says" },
   "review.drawer.close": { "zh-TW": "關閉", en: "Close" },
   "review.drawer.save": { "zh-TW": "儲存編輯", en: "Save edits" },
   "review.applied.tally": {
