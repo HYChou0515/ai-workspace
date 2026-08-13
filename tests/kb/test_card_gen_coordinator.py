@@ -77,7 +77,13 @@ def _add_wiki(spec, collection_id: str, path: str, text: str) -> str:
     return _rid(collection_id, path)
 
 
-def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
+def _add_card(
+    spec,
+    collection_id: str,
+    keys: list[str],
+    body: str = "",
+    statements: list[CardStatement] | None = None,
+) -> str:
     rm = spec.get_resource_manager(ContextCard)
     rev = rm.create(
         ContextCard(
@@ -85,6 +91,7 @@ def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
             keys=keys,
             norm_keys=derive_norm_keys(keys),
             body=body,
+            statements=list(statements or []),
         )
     )
     return rev.resource_id
@@ -412,18 +419,52 @@ async def test_a_wiki_page_source_still_yields_reviewable_proposals():
     assert [p.keys for p in coord.proposals(jid).proposals] == [["RZ3"]]
 
 
-async def test_a_draft_already_fully_covered_by_an_existing_card_is_skipped():
-    """#175 Q5: a term whose normalised keys are all already on an existing card
-    is a complete duplicate — dropped, never surfaced for review."""
+async def test_a_draft_that_adds_nothing_to_an_existing_card_is_skipped():
+    """#175 Q5, restated for the evidence model: a duplicate is a draft whose
+    keys AND claims the card already has. "The term is already carded" is no
+    longer enough — under that rule a document saying something NEW about a
+    carded term was dropped before anyone saw it, which is exactly the case the
+    card is meant to grow from."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
-    _add_card(spec, cid, ["RZ3", "Reflow Zone 3"], body="already defined")
+    _add_card(
+        spec,
+        cid,
+        ["RZ3", "Reflow Zone 3"],
+        body="already defined",
+        statements=[CardStatement(text="y", quote="s", source_doc_id="older")],
+    )
     doc = _add_source(spec, cid, "spec.md", "...")
     drafter = _FakeDrafter({"spec.md": [_draft(term="x", keys=["RZ3"], claim="y", quote="s")]})
     coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
     assert coord.proposals(jid).proposals == []
+
+
+async def test_a_carded_term_the_document_says_something_new_about_is_not_skipped():
+    """The other half, and the one the old rule got wrong: same keys, new claim.
+    Dropping this is how a card stops learning the moment it exists."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _add_card(
+        spec,
+        cid,
+        ["RZ3"],
+        body="the third zone",
+        statements=[CardStatement(text="是第三區", quote="RZ3 是第三區", source_doc_id="older")],
+    )
+    doc = _add_source(spec, cid, "spec.md", "...")
+    drafter = _FakeDrafter(
+        {"spec.md": [_draft(term="RZ3", keys=["RZ3"], claim="設定 245°C", quote="RZ3 設定 245°C")]}
+    )
+    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    (p,) = coord.proposals(jid).proposals
+    assert p.mode == "update"
+    assert [st.text for st in p.statements] == ["是第三區", "設定 245°C"]
 
 
 async def test_a_draft_overlapping_an_existing_card_becomes_an_update():
@@ -1490,3 +1531,58 @@ class _Writer(ILlm):
 def st_doc(proposal) -> list[str]:
     """Which documents a proposal's statements name as their source."""
     return [st.source_doc_id for st in proposal.statements]
+
+
+async def test_an_update_accumulates_onto_what_the_card_already_knew():
+    """Cross-run accumulation, and the reason the evidence lives on the CARD.
+
+    A run months ago recorded 「是水果」. Today's document says 「是紅色」. The card
+    must end up holding both — the old pipeline overwrote the body wholesale, so
+    everything the card had learnt before was replaced by whatever the newest
+    document happened to mention.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    target = _add_card(
+        spec,
+        cid,
+        ["蘋果"],
+        body="是水果",
+        statements=[CardStatement(text="是水果", quote="蘋果是水果", source_doc_id="older")],
+    )
+    doc = _add_source(spec, cid, "b.md", "y")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {"b.md": [_draft(term="蘋果", keys=["蘋果"], claim="是紅色", quote="蘋果是紅色")]},
+        [doc],
+    )
+
+    (p,) = coord.proposals(jid).proposals
+    assert p.mode == "update" and p.target_card_id == target
+    assert [st.text for st in p.statements] == ["是水果", "是紅色"]
+    assert p.body == "是水果 / 是紅色", "the body must be rewritten from BOTH, not replaced"
+
+
+async def test_committing_puts_the_evidence_on_the_card():
+    """Without this the card is prose again the moment it is written, and the
+    NEXT run has nothing to accumulate onto — the whole design collapses back to
+    overwriting at the last step."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {"a.md": [_draft(term="蘋果", keys=["蘋果"], claim="是水果", quote="蘋果是水果")]},
+        [doc],
+    )
+    (p,) = coord.proposals(jid).proposals
+    p.decision = "accepted"
+    coord.save_review(jid, [p])
+
+    coord.commit(jid)
+
+    (card,) = _list_cards(spec, cid)
+    assert [(st.text, st.quote) for st in card.statements] == [("是水果", "蘋果是水果")]
+    assert [st.source_doc_id for st in card.statements] == [doc]

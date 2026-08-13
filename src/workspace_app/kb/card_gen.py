@@ -407,21 +407,32 @@ def classify_against_existing(
     """Decide a proposal's fate against the collection's existing cards (#175
     Q5). ``existing`` is ``(card_id, ContextCard)`` pairs. Returns:
 
-      - ``"skip"`` — the proposal's normalised keys are a subset of an existing
-        card's (the term is already fully carded): a complete duplicate, dropped.
-      - ``None`` after setting ``mode="update"`` + ``target_card_id`` — it shares
-        ≥1 key with an existing card but adds something (partial overlap).
+      - ``"skip"`` — the existing card already has these keys AND every claim
+        the proposal brings: nothing to add.
+      - ``None`` after setting ``mode="update"`` + ``target_card_id`` — it
+        overlaps an existing card and brings something it does not have, whether
+        that is a new key or a new claim.
       - ``None`` leaving ``mode="new"`` — no overlap with any existing card.
 
-    The first existing card it overlaps wins (cards rarely share keys)."""
+    The first existing card it overlaps wins (cards rarely share keys).
+
+    "Already carded" used to be enough to skip, and under the old model it was:
+    a proposal was a whole authored body, so a term that already had a card had
+    nothing to gain from another one. Under the evidence model that rule made
+    accumulation impossible — a document saying something NEW about a term that
+    already had a card was dropped before anyone saw it, which is precisely the
+    case the card is supposed to grow from. The question is no longer "is this
+    term carded" but "does this bring anything the card does not have".
+    """
     pnk = set(derive_norm_keys(proposal.keys))
     for card_id, card in existing:
         cnk = set(getattr(card, "norm_keys", []))
-        inter = pnk & cnk
-        if not inter:
+        if not (pnk & cnk):
             continue
-        if pnk <= cnk:
-            return "skip"  # fully covered by this card — a complete duplicate
+        held = {st.text for st in getattr(card, "statements", [])}
+        brings = {st.text for st in proposal.statements} - held
+        if pnk <= cnk and not brings:
+            return "skip"  # same keys, nothing new to say
         proposal.mode = "update"
         proposal.target_card_id = card_id
         return None
