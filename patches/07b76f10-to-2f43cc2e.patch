@@ -1,0 +1,2585 @@
+diff --git a/docs/plan-context-card-evidence.md b/docs/plan-context-card-evidence.md
+index e673458f..09ca6193 100644
+--- a/docs/plan-context-card-evidence.md
++++ b/docs/plan-context-card-evidence.md
+@@ -126,10 +126,21 @@ grounded 是空洞的滿分 1.0,相減會讓它奪冠。
+ | | | 狀態 |
+ |---|---|---|
+ | **P1** | `ContextCard.statements` + `accumulate()` + `synthesise()` 對外 | ✅ |
+-| **P2** | drafter 改吐陳述 | ⬜ |
+-| **P3** | finalize 改成「累積 + 合成」 | ⬜ |
+-| **P4** | 待審 inbox 顯示陳述 + 引句 | ⬜ |
+-| **P5** | 一次性刪除舊卡的操作腳本 | ⬜ |
++| **P1b** | 統一 `Statement` 型別 —— `kb.cards.extract` 改用 `resources.kb.CardStatement`,並把解析器 `parse_cards()` 公開給正式 drafter 共用 | ✅ |
++| **P2+P3** | drafter 改吐陳述 + finalize 改成「累積 + 合成」 | ✅ |
++| **P4** | 待審 inbox 顯示陳述 + 引句 | ✅ |
++| **P5** | 一次性刪除舊卡的操作腳本 | ✅ `scripts/delete_pre_evidence_cards.py`(預設 dry run,要 `--yes` 才刪) |
++
++### 實作時補上的、規格沒寫到的
++
++- **正式管線也要接合成器**:`coordinators.build_coordinators` 把 `card_drafter_llm` 當
++  `synthesiser` 傳給 `CardGenCoordinator`。沒接的話證據會落地但 body 永遠是空的。
++- **`card_proposal_to_proposed` 也要帶 `statements`**:規格寫了「兩邊」,我第一次只做了寫入
++  方向,測試抓到 —— 讀回來的提案沒有證據。
++- **`ProposedCardIO` 要宣告 `statements`**:pydantic 預設**靜默丟掉**未宣告欄位,所以證據
++  到不了前端,而審核者會核准一段沒有東西可對照的散文。
++- **`AgentCardDrafter` 的引句閘門需要 `doc_text`**:它是 agent,可能引用它在 wiki 上讀到的
++  真實句子 —— 那些句子這份文件從來沒說過。
+ 
+ ---
+ 
+@@ -162,6 +173,25 @@ commit     寫 ContextCard{keys, title, body, statements}          ← 不呼叫
+ `classify_against_existing` 維持原樣決定 `new` / `update`;`update` 時,**既有卡的
+ `statements` 就是累積的起點** —— 這就是跨 run 融合成立的地方。
+ 
++### ⚠️ P2 與 P3 不能分開,而且比原估大得多
++
++**實測過一次才知道的兩件事:**
++
++1. **P2 一動 `CardDraft` 的形狀,`merge_drafts` 立刻編不過** —— 它讀 `d.title` / `d.body` /
++   `d.confident`,而新形狀沒有。中間不存在可以停下來的綠色狀態,所以兩個 phase 要一起做。
++2. **有第二個 drafter**:`api/card_drafter_agent.py` 的 `AgentCardDrafter`(#506 P5)。
++   好消息是它共用 `card_drafter._parse_digest`,所以解析器改一處兩邊都跟著走 —— 但它
++   **有自己的 prompt**(`kb/prompts/card_drafting_agentic.md`),輸出契約要一起改,而且
++   它是 agent,可能引用它在 wiki 上讀到的句子,所以引句閘門必須拿得到 `doc_text`。
++
++**成本的真實量級:生產程式碼改完型別是通的,但有 ~250 個測試呼叫點在用舊形狀** ——
++`tests/kb/test_card_gen_coordinator.py`(178)、`tests/kb/test_review_inbox.py`(70)、
++`tests/kb/test_card_drafter.py`(7)。其中相當一部分斷言的正是「merge 挑贏家」「`confident`
++旗標」這些**要被改掉的行為**,所以不是機械替換,要逐條重想 —— 在那種地方趕工,最容易發生
++的就是把斷言改軟讓它變綠。
++
++做這一步的人請預留一整段完整的時間,不要在別的工作尾巴接著做。
++
+ ### P2 — drafter 改吐陳述
+ 
+ **改什麼**
+diff --git a/scripts/check_cardgen_drafter_glossary_only_577.py b/scripts/check_cardgen_drafter_glossary_only_577.py
+index c180c3e9..489ad661 100644
+--- a/scripts/check_cardgen_drafter_glossary_only_577.py
++++ b/scripts/check_cardgen_drafter_glossary_only_577.py
+@@ -120,7 +120,7 @@ def _report(digest: DocDigest) -> bool:
+     questions = digest.term_questions + digest.description_questions
+     print(f"\n== drafter output: {len(cards)} card(s), {len(questions)} question(s) ==")
+     for c in cards:
+-        print(f"  card: keys={c.keys} title={c.title!r}")
++        print(f"  card: keys={c.keys} term={c.term!r} statements={len(c.statements)}")
+     for q in digest.term_questions:
+         print(f"  term-question: {q.term!r} — {q.question}")
+ 
+diff --git a/scripts/delete_pre_evidence_cards.py b/scripts/delete_pre_evidence_cards.py
+new file mode 100644
+index 00000000..a0fe80dd
+--- /dev/null
++++ b/scripts/delete_pre_evidence_cards.py
+@@ -0,0 +1,65 @@
++"""Delete the context cards written before a card carried its evidence.
++
++    uv run python scripts/delete_pre_evidence_cards.py --config ./config.yaml [--yes]
++
++A card with no ``statements`` has a body somebody's model wrote from one document
++and nothing to recompute it from — so a later document cannot add to it, only
++overwrite it. That is the shape this whole change removes
++(``docs/plan-context-card-evidence.md``), and the corpus owner decided the old
++cards go rather than the pipeline carrying a compatibility path for them.
++
++One-off and interactive on purpose: a destructive data operation should not
++become code that runs on every deploy. It prints what it will delete and refuses
++to do it without ``--yes``.
++"""
++
++from __future__ import annotations
++
++import argparse
++import sys
++from pathlib import Path
++
++from workspace_app.config.loader import load
++from workspace_app.factories import get_spec
++from workspace_app.resources import ContextCard
++
++
++def main() -> None:
++    p = argparse.ArgumentParser(prog="delete_pre_evidence_cards")
++    p.add_argument("--config", type=Path, default=None, help="path to config.yaml")
++    p.add_argument(
++        "--collection", default=None, help="limit to one collection (default: every one)"
++    )
++    p.add_argument("--yes", action="store_true", help="actually delete; without it, dry run")
++    args = p.parse_args()
++
++    spec = get_spec(load(config_path=args.config))
++    rm = spec.get_resource_manager(ContextCard)
++    doomed, kept = [], 0
++    for row in rm.list_resources():
++        card = row.data
++        if not isinstance(card, ContextCard):
++            continue
++        if args.collection and card.collection_id != args.collection:
++            continue
++        if card.statements:
++            kept += 1
++            continue
++        doomed.append((row.info.resource_id, card))  # ty: ignore[unresolved-attribute]
++
++    print(f"{len(doomed)} card(s) with no evidence; {kept} carry theirs and stay", file=sys.stderr)
++    for _, card in doomed[:20]:
++        print(f"  {card.title or (card.keys[:1] or ['?'])[0]}: {card.body[:60]}", file=sys.stderr)
++    if len(doomed) > 20:
++        print(f"  … and {len(doomed) - 20} more", file=sys.stderr)
++
++    if not args.yes:
++        print("\ndry run — pass --yes to delete", file=sys.stderr)
++        return
++    for card_id, _ in doomed:
++        rm.delete(card_id)
++    print(f"deleted {len(doomed)}", file=sys.stderr)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/src/workspace_app/api/card_drafter_agent.py b/src/workspace_app/api/card_drafter_agent.py
+index b71a3e95..7a2820fd 100644
+--- a/src/workspace_app/api/card_drafter_agent.py
++++ b/src/workspace_app/api/card_drafter_agent.py
+@@ -151,7 +151,9 @@ class AgentCardDrafter:
+                 # into a falsely-green empty digest (#494).
+                 logger.error("AgentCardDrafter: run failed for doc %s: %s", doc_path, ev.message)
+                 raise RuntimeError(ev.message)
+-        return _parse_digest("".join(parts), max_cards=self._max_cards, doc_path=doc_path)
++        # The document, so the quote gate has something to check against — an
++        # agent that browsed the wiki can quote things this document never said.
++        return _parse_digest("".join(parts), doc_text, max_cards=self._max_cards, doc_path=doc_path)
+ 
+ 
+ def drafter_context_builder(
+diff --git a/src/workspace_app/api/card_gen_routes.py b/src/workspace_app/api/card_gen_routes.py
+index d72fc4d8..74313565 100644
+--- a/src/workspace_app/api/card_gen_routes.py
++++ b/src/workspace_app/api/card_gen_routes.py
+@@ -43,6 +43,14 @@ class ProvenanceIO(BaseModel):
+     snippet: str = ""
+ 
+ 
++class StatementIO(BaseModel):
++    """One claim the corpus makes about the term, and the words that make it."""
++
++    text: str
++    quote: str
++    source_doc_id: str = ""
++
++
+ class ProposedCardIO(BaseModel):
+     keys: list[str]
+     id: str = ""
+@@ -52,6 +60,10 @@ class ProposedCardIO(BaseModel):
+     mode: str = "new"
+     target_card_id: str | None = None
+     provenance: list[ProvenanceIO] = []
++    # The evidence the body was written from. Declared here or pydantic drops it
++    # silently — a reviewer would then approve a sentence with nothing to check
++    # it against, which is the whole thing this change exists to stop.
++    statements: list[StatementIO] = []
+     decision: str = "pending"
+ 
+ 
+diff --git a/src/workspace_app/coordinators.py b/src/workspace_app/coordinators.py
+index 6b6ee4cb..ae028319 100644
+--- a/src/workspace_app/coordinators.py
++++ b/src/workspace_app/coordinators.py
+@@ -234,6 +234,11 @@ def build_coordinators(
+         message_queue_factory=message_queue_factory,
+         get_user_id=get_user_id,
+         reconciler=reconciler,
++        # Writes each proposal's body from ALL the statements the term has
++        # gathered, at finalize time. Without it the evidence still lands and the
++        # cards are still merged — they just have no prose, which is recoverable;
++        # a body copied from one document is not.
++        synthesiser=card_drafter_llm,
+     )
+     # #82: indexing runs off the request path on a durable, cross-pod job queue.
+     # It chains the index→wiki hook, so the wiki coordinator is handed in here.
+diff --git a/src/workspace_app/kb/card_drafter.py b/src/workspace_app/kb/card_drafter.py
+index 752a1280..f0df4a49 100644
+--- a/src/workspace_app/kb/card_drafter.py
++++ b/src/workspace_app/kb/card_drafter.py
+@@ -1,47 +1,58 @@
+ """LlmCardDrafter (#175) — the production ``CardDrafter``: an ``ILlm`` reads one
+-document and drafts glossary cards from it as JSON, parsed defensively.
++document and records what it STATES about the terms it uses.
+ 
+-This is the LLM half of "自動 context card". It mirrors ``InsightExtractor``'s
+-shape (document text → prompt → ``llm.collect`` → tolerant JSON parse), but emits
+-``CardDraft``s (title / keys / body / confident / snippet) instead of insight
+-nodes. The classify intent is #205's ``→collections`` classify, run per document:
+-draft a card for each unknown term, list every alias as its own key, flag
+-confidence, and quote the supporting passage as provenance.
++Not definitions. A document cannot see what the rest of the corpus says about a
++term, so a definition it authors is one facet — and the pipeline that then
++picked between facets could only lose the others. What it supplies is a claim
++plus the sentence that makes it; those accumulate on the card and the definition
++is written from all of them (docs/plan-context-card-evidence.md).
++
++The parse and the QUOTE GATE are ``kb.cards.extract``'s, shared with the offline
++tuning loop. One parser, one criterion: a second copy is how the criterion a
++person tuned and the criterion that ships drift apart.
+ 
+ Parsing is deliberately tolerant — small models wrap JSON in ```json fences, add
+-preambles, or emit the wrong shape — so a bad response yields ``[]`` (never
+-raises) and malformed cards are dropped, matching the repo's structured-LLM
+-contract.
++preambles, or emit the wrong shape — so a bad response yields an empty digest
++(never raises) and malformed cards are dropped.
+ """
+ 
+ from __future__ import annotations
+ 
+-import json
+ import logging
+-import re
+ from pathlib import Path
+-from typing import Any
+ 
+-from .card_gen import CardDraft, DescriptionQuestionDraft, DocDigest, TermQuestionDraft
++from .card_gen import DocDigest
++from .cards.extract import parse_cards
+ from .llm import ILlm
+ 
+ logger = logging.getLogger(__name__)
+ 
+-_DEFAULT_PROMPT = (Path(__file__).parent / "prompts" / "card_drafting.md").read_text(
++#: The criterion the corpus owner tuned offline. The SAME file the tuning loop
++#: reads, so what was measured is what ships.
++_DEFAULT_PROMPT = (Path(__file__).parent / "cards" / "prompts" / "card_extraction.md").read_text(
+     encoding="utf-8"
+ )
+ 
+ 
+ def drafting_prompt(doc_text: str, *, doc_path: str = "", template: str | None = None) -> str:
+     """The exact prompt one document is drafted with. ``str.replace`` (not
+-    ``.format``) so the JSON example in the template's braces is left alone."""
+-    return (template or _DEFAULT_PROMPT).replace("{path}", doc_path).replace("{document}", doc_text)
++    ``.format``) so the JSON example in the template's braces is left alone.
++
++    ``{text}`` is the placeholder the tuned prompt uses; ``{document}`` and
++    ``{path}`` are honoured too so a hand-written template keeps working.
++    """
++    return (
++        (template or _DEFAULT_PROMPT)
++        .replace("{path}", doc_path)
++        .replace("{document}", doc_text)
++        .replace("{text}", doc_text)
++    )
+ 
+ 
+ class LlmCardDrafter:
+-    """Digest a document via one ``ILlm`` pass into confident cards + the
+-    questions it raised instead of guessing (#377). Caps the number of cards per
+-    document so a pathological response can't flood review."""
++    """Digest a document via one ``ILlm`` pass into the terms it states something
++    about. Caps the number per document so a pathological response can't flood
++    review."""
+ 
+     def __init__(
+         self, llm: ILlm, *, prompt_template: str | None = None, max_cards: int = 30
+@@ -62,7 +73,7 @@ class LlmCardDrafter:
+             drafting_prompt(doc_text, doc_path=doc_path, template=self._template),
+             recover_reasoning=True,
+         )
+-        return _parse_digest(raw, max_cards=self._max_cards, doc_path=doc_path)
++        return _parse_digest(raw, doc_text, max_cards=self._max_cards, doc_path=doc_path)
+ 
+ 
+ class NullCardDrafter:
+@@ -75,187 +86,34 @@ class NullCardDrafter:
+         return DocDigest()
+ 
+ 
+-def _parse_digest(raw: str, *, max_cards: int, doc_path: str = "") -> DocDigest:
+-    """Parse the LLM's ``{"cards": [...], "term_questions": [...],
+-    "description_questions": [...]}`` response into a ``DocDigest`` (#377).
+-    Tolerant of reasoning ``<think>…</think>`` spans, code fences, and preamble
+-    braces (see ``_find_digest_object``); each section is parsed independently and
+-    malformed items are dropped. Any unrecoverable parse error yields an EMPTY
+-    digest — never raises.
++def _parse_digest(raw: str, doc_text: str, *, max_cards: int, doc_path: str = "") -> DocDigest:
++    """Parse the model's reply into a ``DocDigest``.
++
++    The cards — and the quote gate that drops any claim whose quote is not
++    verbatim in ``doc_text`` — come from ``kb.cards.extract``, the same code the
++    offline tuning loop scores. No questions are ever produced: the drafter used
++    to ask about terms it could not define, and removing that branch without
++    adding silence would have left only guessing (see the plan).
+ 
+     #494 observability: a digest that ends up empty is the exact silent failure
+-    that produced a green card-gen run with 0 cards + 0 questions. Distinguish and
+-    LOG the two ways it happens — no parseable object at all vs. a parsed-but-empty
+-    one — each tied to ``doc_path`` with a prefix of the raw reply, so the next
+-    occurrence is diagnosable instead of invisible."""
+-    obj = _find_digest_object(raw)
+-    if obj is None:
++    that produced a green card-gen run with 0 cards. Distinguish and LOG the two
++    ways it happens — nothing parseable at all vs. parsed-but-empty — each tied to
++    ``doc_path`` with a prefix of the raw reply.
++    """
++    got = parse_cards(raw, doc_text)
++    if got.proposed == 0 and not got.cards:
+         logger.warning(
+-            "CardDrafter: no parseable digest JSON in the response "
++            "CardDrafter: no usable cards in the response "
+             "(doc_path=%s raw_len=%d prefix=%r) — nothing to draft from",
+             doc_path,
+             len(raw),
+             raw[:200],
+         )
+-        return DocDigest()
+-    digest = DocDigest(
+-        cards=_parse_cards(obj.get("cards", []), max_n=max_cards),
+-        term_questions=_parse_term_questions(obj.get("term_questions", [])),
+-        description_questions=_parse_description_questions(obj.get("description_questions", [])),
+-    )
+-    if not (digest.cards or digest.term_questions or digest.description_questions):
++    elif got.proposed and not got.cards:
+         logger.warning(
+-            "CardDrafter: parsed the response but the digest is EMPTY (0 cards, 0 "
+-            "questions) (doc_path=%s raw_len=%d keys=%s) — the document yielded "
+-            "nothing, or the response shape was unexpected",
++            "CardDrafter: every claim was DROPPED by the quote gate "
++            "(doc_path=%s offered=%d) — the model is not quoting the document",
+             doc_path,
+-            len(raw),
+-            sorted(obj.keys())[:10],
++            got.proposed,
+         )
+-    return digest
+-
+-
+-def _parse_cards(items: Any, *, max_n: int) -> list[CardDraft]:
+-    """Each card needs a non-empty string ``keys`` list and string
+-    title/body/snippet, else it's dropped. ``confident`` defaults to true when
+-    absent. Returns at most ``max_n``."""
+-    if not isinstance(items, list):
+-        return []
+-    out: list[CardDraft] = []
+-    for item in items:
+-        if not isinstance(item, dict):
+-            continue
+-        keys = item.get("keys")
+-        if not (isinstance(keys, list) and keys and all(isinstance(k, str) for k in keys)):
+-            continue
+-        title, body, snippet = item.get("title", ""), item.get("body", ""), item.get("snippet", "")
+-        if not (isinstance(title, str) and isinstance(body, str) and isinstance(snippet, str)):
+-            continue
+-        usable = [k for k in keys if k.strip()]
+-        if not usable:
+-            continue
+-        out.append(
+-            CardDraft(
+-                keys=usable,
+-                title=title,
+-                body=body,
+-                confident=bool(item.get("confident", True)),
+-                snippet=snippet,
+-            )
+-        )
+-        if len(out) >= max_n:
+-            break
+-    return out
+-
+-
+-def _parse_term_questions(items: Any) -> list[TermQuestionDraft]:
+-    """Each term question needs a non-blank string ``term``; ``question`` defaults
+-    to empty. Malformed items are dropped."""
+-    if not isinstance(items, list):
+-        return []
+-    out: list[TermQuestionDraft] = []
+-    for item in items:
+-        if not isinstance(item, dict):
+-            continue
+-        term, question = item.get("term", ""), item.get("question", "")
+-        if not (isinstance(term, str) and isinstance(question, str) and term.strip()):
+-            continue
+-        out.append(TermQuestionDraft(term=term, question=question))
+-    return out
+-
+-
+-def _parse_description_questions(items: Any) -> list[DescriptionQuestionDraft]:
+-    """Each description question needs a non-blank string ``quote``; ``question``
+-    defaults to empty. Malformed items are dropped."""
+-    if not isinstance(items, list):
+-        return []
+-    out: list[DescriptionQuestionDraft] = []
+-    for item in items:
+-        if not isinstance(item, dict):
+-            continue
+-        quote, question = item.get("quote", ""), item.get("question", "")
+-        if not (isinstance(quote, str) and isinstance(question, str) and quote.strip()):
+-            continue
+-        out.append(DescriptionQuestionDraft(quote=quote, question=question))
+-    return out
+-
+-
+-_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+-_DIGEST_KEYS = ("cards", "term_questions", "description_questions")
+-
+-
+-def _find_digest_object(raw: str) -> dict[str, Any] | None:
+-    """The digest object in a raw LLM reply, tolerant of the ways a reasoning
+-    model (#494) mangles it. Returns the parsed ``dict``, or ``None`` when nothing
+-    parseable is present.
+-
+-    - **Strips well-formed** ``<think>…</think>`` spans first, so a SCRATCH object
+-      the model drafted inside its thinking never shadows the real answer after
+-      it. An UNTERMINATED ``<think>`` (the reply that landed in the reasoning
+-      channel and was recovered by ``collect``) is left intact so its JSON is
+-      still found.
+-    - **Scans every top-level balanced** ``{…}`` (string-aware, so a ``}`` inside
+-      a JSON string value doesn't close the object early — the old first-``{``
+-      extractor mis-handled both this and a preamble brace).
+-    - **Prefers a digest-shaped object** (one carrying ``cards`` /
+-      ``term_questions`` / ``description_questions``) over a stray ``{…}`` in
+-      prose; falls back to the first parseable object so a genuinely off-shape
+-      reply still parses to an (empty) digest the caller logs, rather than
+-      raising."""
+-    stripped = _THINK_RE.sub("", raw)
+-    texts = [stripped] if stripped == raw else [stripped, raw]
+-    fallback: dict[str, Any] | None = None
+-    for text in texts:
+-        for candidate in _balanced_objects(text):
+-            obj = _try_object(candidate)
+-            if obj is None:
+-                continue
+-            if any(k in obj for k in _DIGEST_KEYS):
+-                return obj
+-            if fallback is None:
+-                fallback = obj
+-    return fallback
+-
+-
+-def _balanced_objects(text: str) -> list[str]:
+-    """Every top-level, brace-balanced ``{…}`` substring of ``text``, left to
+-    right. String-aware: braces inside a double-quoted JSON string (respecting
+-    ``\\`` escapes) don't move the depth, so a ``}`` in a value can't close the
+-    object early."""
+-    out: list[str] = []
+-    depth = 0
+-    start = -1
+-    in_str = False
+-    escaped = False
+-    for i, c in enumerate(text):
+-        if in_str:
+-            if escaped:
+-                escaped = False
+-            elif c == "\\":
+-                escaped = True
+-            elif c == '"':
+-                in_str = False
+-            continue
+-        if c == '"':
+-            in_str = True
+-        elif c == "{":
+-            if depth == 0:
+-                start = i
+-            depth += 1
+-        elif c == "}" and depth > 0:
+-            depth -= 1
+-            if depth == 0:
+-                out.append(text[start : i + 1])
+-    return out
+-
+-
+-def _try_object(candidate: str) -> dict[str, Any] | None:
+-    """``json.loads(candidate)`` if it parses, else ``None``. ``candidate`` is a
+-    brace-balanced ``{…}`` from :func:`_balanced_objects`, so a successful parse is
+-    always a JSON object (never an array/scalar) — narrowed for ty."""
+-    try:
+-        obj = json.loads(candidate)
+-    except (json.JSONDecodeError, ValueError):
+-        return None
+-    assert isinstance(obj, dict)  # a balanced {…} always parses to a JSON object
+-    return obj
++    return DocDigest(cards=list(got.cards[:max_cards]))
+diff --git a/src/workspace_app/kb/card_gen.py b/src/workspace_app/kb/card_gen.py
+index 24035c97..1ccaee42 100644
+--- a/src/workspace_app/kb/card_gen.py
++++ b/src/workspace_app/kb/card_gen.py
+@@ -32,22 +32,16 @@ import msgspec
+ from specstar import OnDelete, Ref
+ from specstar.types import Job
+ 
++from ..resources.kb import CardStatement
++from .cards.accumulate import accumulate
++from .cards.extract import TermCard
+ from .context_cards import derive_norm_keys, norm
+ 
+-
+-class CardDraft(msgspec.Struct):
+-    """One glossary card drafted from a single document by the ``CardDrafter``,
+-    before dedup against other drafts / existing cards. ``keys`` are the surface
+-    forms (term + aliases) the reader might search; ``confident`` is the
+-    classifier's self-rated certainty (an uncertain draft surfaces with a ⚠️ in
+-    review and is not committed by default, #205); ``snippet`` is the supporting
+-    passage the draft was derived from — the provenance a reviewer audits."""
+-
+-    keys: list[str]
+-    title: str = ""
+-    body: str = ""
+-    confident: bool = True
+-    snippet: str = ""
++#: What one document yields about one term. The SAME type the offline pipeline
++#: produces (``kb.cards.extract.TermCard``) — a document states claims and quotes
++#: the sentences that make them; it does not author a definition, because it
++#: cannot see what the rest of the corpus says about the term.
++CardDraft = TermCard
+ 
+ 
+ class TermQuestionDraft(msgspec.Struct):
+@@ -76,6 +70,10 @@ class DocDigest(msgspec.Struct):
+     so the reader writes what it knows and asks what it doesn't in one go."""
+ 
+     cards: list[CardDraft] = msgspec.field(default_factory=list)
++    # Always empty. The drafter used to ask about terms it could not define; it
++    # now stays silent instead, because the only other branch was to guess (see
++    # docs/plan-context-card-evidence.md). The fields remain so the shapes that
++    # read them keep decoding, and `_raise_questions` is a no-op on empty lists.
+     term_questions: list[TermQuestionDraft] = msgspec.field(default_factory=list)
+     description_questions: list[DescriptionQuestionDraft] = msgspec.field(default_factory=list)
+ 
+@@ -118,6 +116,10 @@ class ProposedCard(msgspec.Struct):
+     mode: str = "new"  # new | update
+     target_card_id: str | None = None
+     provenance: list[Provenance] = msgspec.field(default_factory=list)
++    # The evidence `body` was written from. Carried through review so the
++    # reviewer approves the statements AND the sentence they add up to, and so
++    # the committed card can be recomputed when a later document says more.
++    statements: list[CardStatement] = msgspec.field(default_factory=list)
+     # #481 review lifecycle: pending / accepted are ACTIVE (still in the queue);
+     # committed (written to a card) / rejected are TERMINAL — a run leaves the
+     # 待審核 queue only once every proposal is terminal.
+@@ -151,6 +153,7 @@ class CardProposal(msgspec.Struct):  # → resource "card-proposal"
+     mode: str = "new"  # new | update
+     target_card_id: str | None = None
+     provenance: list[Provenance] = msgspec.field(default_factory=list)
++    statements: list[CardStatement] = msgspec.field(default_factory=list)
+     decision: str = "pending"  # pending | accepted | rejected | committed
+ 
+ 
+@@ -174,6 +177,7 @@ def proposal_to_card_proposal(collection_id: str, run_id: str, p: ProposedCard)
+         mode=p.mode,
+         target_card_id=p.target_card_id,
+         provenance=list(p.provenance),
++        statements=list(p.statements),
+         decision=p.decision,
+     )
+ 
+@@ -192,6 +196,7 @@ def card_proposal_to_proposed(pid: str, cp: CardProposal) -> ProposedCard:
+         mode=cp.mode,
+         target_card_id=cp.target_card_id,
+         provenance=list(cp.provenance),
++        statements=list(cp.statements),
+         decision=cp.decision,
+     )
+ 
+@@ -353,30 +358,35 @@ def ensure_proposal_ids(proposals: list[ProposedCard]) -> list[ProposedCard]:
+ 
+ 
+ def merge_drafts(drafts: list[tuple[str, str, CardDraft]]) -> list[ProposedCard]:
+-    """Dedup raw drafts into proposals by NORMALISED key overlap (#205: "deduped
+-    by normalised key, aliases unioned"). Each draft is ``(doc_id, path, draft)``.
+-    Two drafts that share any ``norm_key`` merge into one proposal: their keys are
+-    unioned (dedup by ``norm``), their provenance accumulated. A draft with no
+-    usable key (blank after ``norm``) is dropped. A confident draft's title/body
+-    wins over an uncertain one's for the merged proposal; merge stays ``new`` here
+-    — overlap with existing cards is decided later by
+-    ``classify_against_existing``."""
++    """Group this run's drafts by normalised key and ACCUMULATE their statements.
++
++    Deterministic — no model call, no store. The body is left empty here; it is
++    written in ``_finalize``, once the existing card's statements are in hand,
++    because only there is the whole evidence for a term available.
++
++    What this replaces: the old merge kept the FIRST confident draft's body and
++    dropped every later one, so 「蘋果是水果」 and 「蘋果是紅色」 arriving from two
++    documents left one of them on the floor. Keys unioned, provenance unioned,
++    body never did. Accumulating the statements makes merging the normal case.
++    """
+     out: list[ProposedCard] = []
+-    norm_keys: list[set[str]] = []  # parallel to out: each proposal's norm_key set
++    norm_keys: list[set[str]] = []  # parallel to out
+     for doc_id, path, d in drafts:
+         nks = set(derive_norm_keys(d.keys))
+         if not nks:
+             continue  # nothing lookup-able — can't become a findable card
+-        prov = Provenance(doc_id=doc_id, path=path, snippet=d.snippet)
++        arriving = [
++            CardStatement(text=st.text, quote=st.quote, source_doc_id=doc_id) for st in d.statements
++        ]
++        prov = Provenance(doc_id=doc_id, path=path, snippet=arriving[0].quote if arriving else "")
+         hit = next((i for i, ks in enumerate(norm_keys) if ks & nks), None)
+         if hit is None:
+             out.append(
+                 ProposedCard(
+                     keys=list(d.keys),
+-                    title=d.title,
+-                    body=d.body,
+-                    confident=d.confident,
++                    title=d.term,
+                     provenance=[prov],
++                    statements=accumulate([], arriving),
+                 )
+             )
+             norm_keys.append(set(nks))
+@@ -387,8 +397,7 @@ def merge_drafts(drafts: list[tuple[str, str, CardDraft]]) -> list[ProposedCard]
+                 p.keys.append(k)
+         norm_keys[hit] |= nks
+         p.provenance.append(prov)
+-        if not p.confident and d.confident:  # a confident draft supersedes an uncertain body
+-            p.title, p.body, p.confident = d.title, d.body, True
++        p.statements = accumulate(p.statements, arriving)
+     return out
+ 
+ 
+@@ -398,21 +407,32 @@ def classify_against_existing(
+     """Decide a proposal's fate against the collection's existing cards (#175
+     Q5). ``existing`` is ``(card_id, ContextCard)`` pairs. Returns:
+ 
+-      - ``"skip"`` — the proposal's normalised keys are a subset of an existing
+-        card's (the term is already fully carded): a complete duplicate, dropped.
+-      - ``None`` after setting ``mode="update"`` + ``target_card_id`` — it shares
+-        ≥1 key with an existing card but adds something (partial overlap).
++      - ``"skip"`` — the existing card already has these keys AND every claim
++        the proposal brings: nothing to add.
++      - ``None`` after setting ``mode="update"`` + ``target_card_id`` — it
++        overlaps an existing card and brings something it does not have, whether
++        that is a new key or a new claim.
+       - ``None`` leaving ``mode="new"`` — no overlap with any existing card.
+ 
+-    The first existing card it overlaps wins (cards rarely share keys)."""
++    The first existing card it overlaps wins (cards rarely share keys).
++
++    "Already carded" used to be enough to skip, and under the old model it was:
++    a proposal was a whole authored body, so a term that already had a card had
++    nothing to gain from another one. Under the evidence model that rule made
++    accumulation impossible — a document saying something NEW about a term that
++    already had a card was dropped before anyone saw it, which is precisely the
++    case the card is supposed to grow from. The question is no longer "is this
++    term carded" but "does this bring anything the card does not have".
++    """
+     pnk = set(derive_norm_keys(proposal.keys))
+     for card_id, card in existing:
+         cnk = set(getattr(card, "norm_keys", []))
+-        inter = pnk & cnk
+-        if not inter:
++        if not (pnk & cnk):
+             continue
+-        if pnk <= cnk:
+-            return "skip"  # fully covered by this card — a complete duplicate
++        held = {st.text for st in getattr(card, "statements", [])}
++        brings = {st.text for st in proposal.statements} - held
++        if pnk <= cnk and not brings:
++            return "skip"  # same keys, nothing new to say
+         proposal.mode = "update"
+         proposal.target_card_id = card_id
+         return None
+diff --git a/src/workspace_app/kb/card_gen_coordinator.py b/src/workspace_app/kb/card_gen_coordinator.py
+index 7f986278..474b53c7 100644
+--- a/src/workspace_app/kb/card_gen_coordinator.py
++++ b/src/workspace_app/kb/card_gen_coordinator.py
+@@ -38,7 +38,7 @@ from __future__ import annotations
+ 
+ import asyncio
+ import logging
+-from collections.abc import Callable
++from collections.abc import Callable, Sequence
+ 
+ import msgspec
+ from specstar import QB, Schema, SpecStar
+@@ -66,6 +66,8 @@ from .card_gen import (
+ from .card_gen_run import CardGenRunStore
+ from .card_gen_sources import CardGenSources
+ from .card_proposal import CardProposalStore
++from .cards.accumulate import accumulate
++from .cards.build import synthesise
+ from .context_cards import cards_with_ids_for_collections, derive_norm_keys
+ from .doc_questions import (
+     add_description_question,
+@@ -73,6 +75,7 @@ from .doc_questions import (
+     plan_doc_questions,
+ )
+ from .job_audit import preserve_job_creator
++from .llm import ILlm
+ from .reconcile import Reconciler
+ 
+ _LOGGER = logging.getLogger(__name__)
+@@ -119,6 +122,7 @@ class CardGenCoordinator:
+         get_user_id: Callable[[], str] | None = None,
+         max_questions_per_doc: int = 5,
+         reconciler: Reconciler | None = None,
++        synthesiser: ILlm | None = None,
+     ) -> None:
+         self._spec = spec
+         self._drafter = drafter
+@@ -126,6 +130,10 @@ class CardGenCoordinator:
+         # candidates, cluster cross-run duplicates). None → the pre-P6 exact-only
+         # behaviour (tests / a build with no embedder).
+         self._reconciler = reconciler
++        # Writes a card's body from its whole evidence at finalize time. Optional
++        # so a build with no LLM still records the statements — the evidence is
++        # the durable part and the prose can always be derived again.
++        self._synthesiser = synthesiser
+         self._runs = CardGenRunStore(spec)
+         # #511 P1: each kept proposal is ALSO projected to a first-class
+         # CardProposal row so the review inbox pages at the DB (the nested
+@@ -261,6 +269,10 @@ class CardGenCoordinator:
+             norm_keys=derive_norm_keys(p.keys),
+             title=p.title,
+             body=p.body,
++            # The evidence rides with the card so a later run can recompute the
++            # body from everything, instead of overwriting it with one document's
++            # view — which is what #518 had to patch around for the links.
++            statements=list(p.statements),
+         )
+         target = _existing_card(cardrm, p.target_card_id) if p.target_card_id else None
+         if p.mode == "update" and target is not None:
+@@ -522,6 +534,24 @@ class CardGenCoordinator:
+                 )
+             )
+ 
++    def _write_bodies(
++        self, proposals: list[ProposedCard], existing: Sequence[tuple[str, object]]
++    ) -> None:
++        """Accumulate each proposal onto the card it updates, then write its body.
++
++        A model call per proposal, here rather than at commit: the reviewer must
++        see the sentence they are approving, and a body rewritten after they
++        clicked would make that approval meaningless (see the plan).
++        """
++        by_id = dict(existing)
++        for p in proposals:
++            base = getattr(by_id.get(p.target_card_id or ""), "statements", [])
++            p.statements = accumulate(list(base), p.statements)
++            if self._synthesiser is None:
++                continue  # no LLM wired: the evidence still lands, the prose does not
++            title, body = synthesise(self._synthesiser, p.title or p.keys[0], p.statements)
++            p.title, p.body = title or p.title, body
++
+     def _finalize(self, run_id: str) -> None:
+         """Exactly-once close-out of a run: read the staged digests in document
+         order, merge + classify their drafts into the run's proposals, raise their
+@@ -542,6 +572,11 @@ class CardGenCoordinator:
+         proposals = merge_drafts(raw)
+         existing = cards_with_ids_for_collections(self._spec, [cid])
+         kept = [p for p in proposals if classify_against_existing(p, existing) != "skip"]
++        # The body is WRITTEN here, not carried from any one document — and for an
++        # `update` the existing card's statements are the base, which is the only
++        # place cross-run accumulation can happen. Before this, the last document
++        # to arrive overwrote everything the card already knew.
++        self._write_bodies(kept, existing)
+         # #506 P6: semantic reconcile over the exact-classified survivors — suppress
+         # candidates that duplicate an EXISTING CARD, and cluster cross-run duplicates.
+         # Proposals are deliberately NOT graded against the wiki (#537: a card and a
+diff --git a/src/workspace_app/kb/cards/extract.py b/src/workspace_app/kb/cards/extract.py
+index a1d10f38..e69d8f06 100644
+--- a/src/workspace_app/kb/cards/extract.py
++++ b/src/workspace_app/kb/cards/extract.py
+@@ -15,16 +15,15 @@ from typing import Any
+ 
+ import msgspec
+ 
++from ...resources.kb import CardStatement
+ from ..llm import ILlm
+ 
+-_PROMPT = (Path(__file__).parent / "prompts" / "card_extraction.md").read_text(encoding="utf-8")
+-
++#: The statement type is the RESOURCE's, not a private copy. A card carries its
++#: statements all the way to the store, and two shapes for one thing is how the
++#: two ends drift apart — see ``docs/plan-context-card-evidence.md``.
++Statement = CardStatement
+ 
+-class Statement(msgspec.Struct, frozen=True):
+-    """One claim a document makes about a term, and the words that make it."""
+-
+-    text: str
+-    quote: str
++_PROMPT = (Path(__file__).parent / "prompts" / "card_extraction.md").read_text(encoding="utf-8")
+ 
+ 
+ class TermCard(msgspec.Struct, frozen=True):
+@@ -60,6 +59,16 @@ def extract(llm: ILlm, text: str, *, prompt: str | None = None) -> Extraction:
+     """What this document states, and how much of what was offered survived."""
+     template = prompt or _PROMPT
+     reply = llm.collect(template.replace("{text}", text))
++    return parse_cards(reply, text)
++
++
++def parse_cards(reply: str, text: str) -> Extraction:
++    """A model reply → the terms it stated something about, quote-gated.
++
++    Public because the live drafters parse their own replies (one of them an
++    agent's final message) and must apply the SAME gate. Two parsers for one
++    contract is how the offline criterion and the shipped one drift apart.
++    """
+     return _parse(reply, text)
+ 
+ 
+diff --git a/tests/api/test_card_drafter_agent.py b/tests/api/test_card_drafter_agent.py
+index 87f3420f..ce2e8c0b 100644
+--- a/tests/api/test_card_drafter_agent.py
++++ b/tests/api/test_card_drafter_agent.py
+@@ -28,14 +28,21 @@ from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, RunError
+ from workspace_app.api.runner import ScriptedAgentRunner
+ from workspace_app.resources import AgentConfig
+ 
++#: The document the drafter is given. The quote gate checks every claim against
++#: it, so a canned reply has to quote something the document really says — which
++#: matters most for THIS drafter: an agent that browsed the wiki can quote
++#: perfectly real sentences the document never contained.
++_DOC = "M4 (Metal 4) is the fourth interconnect layer."
++
+ _GOOD = json.dumps(
+     {
+         "cards": [
+             {
++                "term": "Metal 4",
+                 "keys": ["M4", "Metal 4"],
+-                "title": "Metal 4",
+-                "body": "The fourth metal layer.",
+-                "snippet": "M4 (Metal 4) is the fourth interconnect layer.",
++                "statements": [
++                    {"text": "the fourth interconnect layer", "quote": _DOC},
++                ],
+             }
+         ]
+     }
+@@ -47,9 +54,10 @@ def test_agentic_drafter_parses_the_final_assistant_message_into_a_digest():
+     # instead of a one-shot ILlm, parsed by the same tolerant parser.
+     runner = ScriptedAgentRunner([MessageDelta(text=_GOOD), RunDone()])
+     d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
+-    (card,) = d.digest(doc_path="a.md", doc_text="...").cards
++    (card,) = d.digest(doc_path="a.md", doc_text=_DOC).cards
+     assert card.keys == ["M4", "Metal 4"]
+-    assert card.title == "Metal 4"
++    assert card.term == "Metal 4"
++    assert [s.text for s in card.statements] == ["the fourth interconnect layer"]
+ 
+ 
+ def test_streamed_chunks_concatenate_and_reasoning_is_ignored():
+@@ -66,7 +74,7 @@ def test_streamed_chunks_concatenate_and_reasoning_is_ignored():
+         ]
+     )
+     d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
+-    (card,) = d.digest(doc_path="a.md", doc_text="...").cards
++    (card,) = d.digest(doc_path="a.md", doc_text=_DOC).cards
+     assert card.keys == ["M4", "Metal 4"]  # the content answer, not the reasoning scratch
+ 
+ 
+@@ -80,7 +88,7 @@ def test_a_run_error_is_a_give_up_that_raises_not_a_silent_empty_digest():
+     )
+     d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
+     with pytest.raises(RuntimeError, match="all providers exhausted"):
+-        d.digest(doc_path="a.md", doc_text="...")
++        d.digest(doc_path="a.md", doc_text=_DOC)
+ 
+ 
+ async def test_drafter_context_delegates_ask_knowledge_base_scoped_to_the_doc_collection():
+diff --git a/tests/api/test_card_gen_routes.py b/tests/api/test_card_gen_routes.py
+index 297dc294..3c0659dd 100644
+--- a/tests/api/test_card_gen_routes.py
++++ b/tests/api/test_card_gen_routes.py
+@@ -26,22 +26,31 @@ from ._client import TestClient as ApiTestClient
+ 
+ 
+ class _FakeLlm(ILlm):
++    """Answers the drafting call with the canned digest, and the SYNTHESIS call
++    with a body — the coordinator now writes each proposal's body from the whole
++    evidence, so one canned reply can no longer serve both."""
++
+     def __init__(self, response: str) -> None:
+         self._response = response
+ 
+     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
++        if "STATEMENTS" in prompt:
++            yield json.dumps({"title": "", "body": "The third reflow zone."}), False
++            return
+         yield (self._response, False)
+ 
+ 
++#: The quote must be verbatim in the uploaded document below, or the gate drops
++#: the claim and the run proposes nothing.
+ _ONE_CARD = json.dumps(
+     {
+         "cards": [
+             {
+-                "title": "Reflow Zone 3",
++                "term": "Reflow Zone 3",
+                 "keys": ["RZ3", "Reflow Zone 3"],
+-                "body": "The third reflow zone.",
+-                "confident": True,
+-                "snippet": "RZ3 is the third reflow zone.",
++                "statements": [
++                    {"text": "the third reflow zone", "quote": "RZ3 is the third reflow zone."}
++                ],
+             }
+         ]
+     }
+diff --git a/tests/kb/test_card_drafter.py b/tests/kb/test_card_drafter.py
+index 205381ad..0ca97802 100644
+--- a/tests/kb/test_card_drafter.py
++++ b/tests/kb/test_card_drafter.py
+@@ -1,286 +1,174 @@
+-"""LlmCardDrafter (#175) — the LLM half of "自動 context card". A fake ``ILlm``
+-yields a canned response so the prompt-building + tolerant JSON parse are pinned
+-without a model."""
++"""LlmCardDrafter — one document → what it STATES about the terms it uses.
++
++The drafter used to write a definition per document and rate its own confidence,
++and to ask a question when it could not. All three are gone, and each for the
++same reason: no single document can define a term the whole corpus talks about,
++so a body written here is one facet that the merge could only ever choose
++between. What a document can supply is a claim plus the sentence that makes it.
++
++The parse and the QUOTE GATE live in ``kb.cards.extract`` and are shared with the
++offline tuning loop — one criterion, one implementation, so what a person tuned
++is what ships. These tests cover the drafter's own contract: the prompt it sends,
++the shape it returns, and what it does with a reply it cannot use.
++"""
+ 
+ from __future__ import annotations
+ 
+-import json
++import logging
+ from collections.abc import Iterator
+ 
+ from workspace_app.kb.card_drafter import LlmCardDrafter, NullCardDrafter, drafting_prompt
+ from workspace_app.kb.llm import ILlm
+ 
+ 
+-def test_null_drafter_proposes_nothing():
+-    # The no-LLM-configured drafter: the feature stays mounted but every doc
+-    # digests to an empty result (no cards, no questions).
+-    d = NullCardDrafter().digest(doc_path="a.md", doc_text="anything")
+-    assert (d.cards, d.term_questions, d.description_questions) == ([], [], [])
+-
+-
+ class _FakeLlm(ILlm):
+-    """collect() returns a canned response; records every prompt it was sent."""
+-
+-    def __init__(self, response: str) -> None:
+-        self._response = response
++    def __init__(self, reply: str) -> None:
++        self._reply = reply
+         self.prompts: list[str] = []
+ 
+     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+         self.prompts.append(prompt)
+-        yield (self._response, False)
+-
+-
+-_GOOD = json.dumps(
+-    {
+-        "cards": [
+-            {
+-                "title": "Metal 4",
+-                "keys": ["M4", "Metal 4"],
+-                "body": "The fourth metal layer.",
+-                "confident": True,
+-                "snippet": "M4 (Metal 4) is the fourth interconnect layer.",
+-            }
+-        ]
+-    }
+-)
+-
+-
+-def test_digest_parses_cards_and_both_question_kinds():
+-    # #377: the SAME LLM pass that drafts cards also raises the terms it can't
+-    # define (→ card) and the passages it can't follow (→ wiki), in one response.
+-    raw = json.dumps(
+-        {
+-            "cards": [
+-                {
+-                    "keys": ["M4"],
+-                    "title": "Metal 4",
+-                    "body": "The fourth metal layer.",
+-                    "snippet": "s",
+-                }
+-            ],
+-            "term_questions": [{"term": "R7", "question": "What is the R7 recipe?"}],
+-            "description_questions": [
+-                {"quote": "uses M4 then CMP", "question": "Why skip the clean before CMP?"}
+-            ],
+-        }
++        yield self._reply, False
++
++
++DOC = "回焊爐是一種加熱設備。錫膏在此熔融。"
++
++
++def _reply(*cards: str) -> str:
++    return '{"cards": [' + ", ".join(cards) + "]}"
++
++
++def _card(term: str, claim: str, quote: str) -> str:
++    return (
++        f'{{"term": "{term}", "keys": ["{term}"], '
++        f'"statements": [{{"text": "{claim}", "quote": "{quote}"}}]}}'
+     )
+-    d = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...")
+-    assert [c.keys for c in d.cards] == [["M4"]]
+-    assert [(q.term, q.question) for q in d.term_questions] == [("R7", "What is the R7 recipe?")]
+-    assert [(q.quote, q.question) for q in d.description_questions] == [
+-        ("uses M4 then CMP", "Why skip the clean before CMP?")
+-    ]
+ 
+ 
+-def test_parses_a_well_formed_response_into_card_drafts():
+-    drafter = LlmCardDrafter(_FakeLlm(_GOOD))
+-    (card,) = drafter.digest(doc_path="a.md", doc_text="...").cards
+-    assert card.title == "Metal 4"
+-    assert card.keys == ["M4", "Metal 4"]
+-    assert card.body == "The fourth metal layer."
+-    assert card.confident is True
+-    assert card.snippet == "M4 (Metal 4) is the fourth interconnect layer."
++def test_null_drafter_proposes_nothing():
++    """The drafter used when no LLM is configured: the feature stays mounted and a
++    run completes with zero proposals instead of 503-ing."""
++    got = NullCardDrafter().digest(doc_path="a.md", doc_text=DOC)
++    assert got.cards == []
++
++
++def test_a_document_yields_the_terms_it_states_something_about():
++    llm = _FakeLlm(_reply(_card("回焊爐", "是一種加熱設備", "回焊爐是一種加熱設備")))
+ 
++    (card,) = LlmCardDrafter(llm).digest(doc_path="a.md", doc_text=DOC).cards
+ 
+-def test_tolerates_a_fenced_or_prefixed_response():
+-    fenced = "Sure! Here are the cards:\n```json\n" + _GOOD + "\n```"
+-    (card,) = LlmCardDrafter(_FakeLlm(fenced)).digest(doc_path="a.md", doc_text="...").cards
+-    assert card.keys == ["M4", "Metal 4"]
++    assert card.term == "回焊爐"
++    assert [(s.text, s.quote) for s in card.statements] == [
++        ("是一種加熱設備", "回焊爐是一種加熱設備")
++    ]
+ 
+ 
+-def test_an_unparseable_response_yields_no_cards_and_warns(caplog):
+-    with caplog.at_level("WARNING"):
+-        d = LlmCardDrafter(_FakeLlm("I could not find any terms.")).digest(
+-            doc_path="a.md", doc_text="..."
++def test_a_claim_whose_quote_is_not_in_the_document_is_dropped():
++    """The gate, and the whole defence against a card the corpus never supported.
++    It costs no model call: a claim the model could not quote is a claim the
++    document did not make."""
++    llm = _FakeLlm(
++        _reply(
++            _card("回焊爐", "是一種加熱設備", "回焊爐是一種加熱設備"),
++            _card("回焊爐", "屬於薔薇科", "回焊爐屬於薔薇科"),
+         )
+-    assert d.cards == []
+-    # #494: the failure must be visible with the doc + a prefix of the raw reply,
+-    # not a silent empty run.
+-    rec = next(r for r in caplog.records if "no parseable" in r.message.lower())
+-    assert "a.md" in rec.message
+-
+-
+-def test_ignores_a_think_block_and_parses_the_real_object_after_it():
+-    # #494: a reasoning model may draft SCRATCH json inside <think>…</think>, then
+-    # emit the real answer. The naive first-"{" extractor grabbed the scratch; we
+-    # must strip the think span and parse the real object.
+-    raw = '<think>let me draft {"cards": [{"keys": ["SCRATCH"], "title": "wrong"}]}</think>' + _GOOD
+-    (card,) = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
+-    assert card.keys == ["M4", "Metal 4"]  # the REAL card, not the scratch
+-
+-
+-def test_recovers_json_from_unterminated_reasoning():
+-    # #494 recovery path: collect() hands back the reasoning text (the answer that
+-    # landed in the reasoning channel), which has an UNTERMINATED <think> — the
+-    # JSON must still be found, not stripped away.
+-    raw = "<think>the answer is " + _GOOD
+-    (card,) = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
+-    assert card.keys == ["M4", "Metal 4"]
+-
+-
+-def test_skips_a_preamble_brace_that_is_not_a_digest():
+-    # A non-digest object before the real one (a stray {...} in prose) must not be
+-    # mistaken for the answer — pick the object that actually has digest keys.
+-    raw = 'Here is my reasoning: {"note": "thinking"} and the result:\n' + _GOOD
+-    (card,) = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
+-    assert card.keys == ["M4", "Metal 4"]
+-
+-
+-def test_a_brace_inside_a_string_does_not_break_extraction():
+-    # The balanced scan is string-aware: a "}" inside a JSON string value must not
+-    # be counted as the object's close, and an escaped quote (\") must not end the
+-    # string early. json.dumps encodes both here.
+-    raw = json.dumps(
+-        {"cards": [{"keys": ["X"], "title": "t", "body": 'he said "}" today', "snippet": "s"}]}
+-    )
+-    (card,) = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
+-    assert card.body == 'he said "}" today'
+-
+-
+-def test_a_parseable_but_non_digest_object_falls_back_to_an_empty_digest(caplog):
+-    # No object carries digest keys, but one parses — we fall back to it rather
+-    # than raising; it maps to an empty digest (and warns), never a crash.
+-    raw = json.dumps({"result": "I found nothing worth carding"})
+-    with caplog.at_level("WARNING"):
+-        d = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="x.md", doc_text="...")
+-    assert (d.cards, d.term_questions, d.description_questions) == ([], [], [])
+-    assert any("empty" in r.message.lower() for r in caplog.records)
+-
+-
+-def test_extraction_skips_a_malformed_object_and_keeps_the_first_fallback():
+-    # A balanced but INVALID {…} is skipped (not a crash); of two parseable
+-    # non-digest objects the FIRST is kept as the fallback. Exercises the
+-    # malformed-skip and the "fallback already set" branches.
+-    raw = '{ this is not json } {"a": 1} {"b": 2}'
+-    d = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="m.md", doc_text="...")
+-    assert (d.cards, d.term_questions, d.description_questions) == ([], [], [])
+-
+-
+-def test_a_parsed_but_empty_digest_warns(caplog):
+-    # #494: the model answered with a well-formed but EMPTY digest (or a shape we
+-    # can't map) — a green run that produced nothing must say so, tied to the doc.
+-    raw = json.dumps({"cards": [], "term_questions": [], "description_questions": []})
+-    with caplog.at_level("WARNING"):
+-        d = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="empty.md", doc_text="...")
+-    assert (d.cards, d.term_questions, d.description_questions) == ([], [], [])
+-    assert any("empty" in r.message.lower() and "empty.md" in r.message for r in caplog.records)
+-
+-
+-def test_cards_missing_keys_or_with_wrong_types_are_dropped():
+-    raw = json.dumps(
+-        {
+-            "cards": [
+-                {"title": "no keys", "body": "x"},  # missing keys
+-                {"keys": "M4", "body": "x"},  # keys not a list
+-                {"keys": ["  "], "title": "blank key"},  # no usable key after strip
+-                {"keys": ["OK"], "title": "good", "body": "y", "snippet": "s"},
+-            ]
+-        }
+     )
+-    cards = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
+-    assert [c.keys for c in cards] == [["OK"]]
+ 
++    (card,) = LlmCardDrafter(llm).digest(doc_path="a.md", doc_text=DOC).cards
+ 
+-def test_confidence_defaults_to_true_when_absent():
+-    raw = json.dumps({"cards": [{"keys": ["X"], "title": "X", "body": "b", "snippet": "s"}]})
+-    (card,) = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
+-    assert card.confident is True
++    assert [s.text for s in card.statements] == ["是一種加熱設備"]
+ 
+ 
+-def test_an_uncertain_card_is_kept_with_its_flag():
+-    raw = json.dumps(
+-        {"cards": [{"keys": ["X"], "title": "X", "body": "?", "snippet": "s", "confident": False}]}
+-    )
+-    (card,) = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
+-    assert card.confident is False
++def test_the_drafter_never_asks_questions():
++    """It used to raise a question for a term it could not define. Removing that
++    without adding silence would have left only guessing, so the third branch is
++    to produce nothing — and the fields stay, always empty, because removing
++    resource-facing shapes needs a migration."""
++    llm = _FakeLlm(_reply(_card("回焊爐", "是一種加熱設備", "回焊爐是一種加熱設備")))
+ 
++    got = LlmCardDrafter(llm).digest(doc_path="a.md", doc_text=DOC)
+ 
+-def test_the_number_of_cards_is_capped():
+-    raw = json.dumps({"cards": [{"keys": [f"K{i}"], "title": f"t{i}"} for i in range(10)]})
+-    cards = LlmCardDrafter(_FakeLlm(raw), max_cards=3).digest(doc_path="a.md", doc_text="...").cards
+-    assert len(cards) == 3
++    assert got.term_questions == []
++    assert got.description_questions == []
+ 
+ 
+-def test_the_prompt_carries_the_document_text_and_path():
+-    llm = _FakeLlm(_GOOD)
+-    LlmCardDrafter(llm).digest(doc_path="reflow-spec.md", doc_text="Zone 3 setpoint 245C.")
+-    (prompt,) = llm.prompts
+-    assert "Zone 3 setpoint 245C." in prompt
+-    assert "reflow-spec.md" in prompt
++def test_a_term_the_document_only_mentions_yields_nothing():
++    """No statement, no card. A headword whose card answers nothing is worse than
++    no headword: a reader looks it up and learns that it exists."""
++    llm = _FakeLlm('{"cards": [{"term": "SPI", "keys": ["SPI"], "statements": []}]}')
+ 
++    assert LlmCardDrafter(llm).digest(doc_path="a.md", doc_text=DOC).cards == []
+ 
+-def test_drafting_prompt_leaves_the_json_example_intact():
+-    """str.replace (not .format) — the template's literal JSON braces survive."""
+-    prompt = drafting_prompt("doc body", doc_path="p.md")
+-    assert '{"cards":' in prompt
+-    assert "doc body" in prompt
+-    assert "p.md" in prompt
+-
+-
+-def test_a_cards_value_that_is_not_a_list_yields_nothing():
+-    assert (
+-        LlmCardDrafter(_FakeLlm(json.dumps({"cards": "nope"})))
+-        .digest(doc_path="a.md", doc_text="...")
+-        .cards
+-        == []
++
++def test_the_prompt_is_the_one_the_tuning_loop_scored():
++    """`--tune-round` improves a prompt file; if the drafter read a different one,
++    every round of that tuning would be measuring something that never ships."""
++    from workspace_app.kb.cards.extract import built_in_prompt
++
++    llm = _FakeLlm('{"cards": []}')
++    LlmCardDrafter(llm).digest(doc_path="a.md", doc_text=DOC)
++
++    assert llm.prompts[0] == built_in_prompt().replace("{text}", DOC)
++
++
++def test_the_prompt_carries_the_document_however_the_template_marks_the_slot():
++    """`{text}` is what the tuned prompt uses; `{document}` and `{path}` are the
++    older markers and are honoured so a hand-written template keeps working."""
++    assert drafting_prompt("body", doc_path="p.md", template="A {document} at {path}") == (
++        "A body at p.md"
+     )
++    assert drafting_prompt("body", template="B {text}") == "B body"
+ 
+ 
+-def test_non_dict_items_are_skipped():
+-    raw = json.dumps({"cards": ["just a string", {"keys": ["OK"], "title": "t"}]})
+-    cards = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
+-    assert [c.keys for c in cards] == [["OK"]]
++def test_drafting_prompt_leaves_the_json_example_intact():
++    """The prompt describes a JSON reply, so it is full of braces. Substituting
++    with `str.format` would read those as fields and raise — on a file a person is
++    told to dump and edit."""
++    template = 'Answer {"cards": [{"term": "..."}]} for {text}'
++    assert drafting_prompt("D", template=template) == 'Answer {"cards": [{"term": "..."}]} for D'
+ 
+ 
+-def test_items_with_a_wrong_typed_field_are_dropped():
+-    raw = json.dumps({"cards": [{"keys": ["X"], "title": 5}]})  # title not a string
+-    assert LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards == []
++def test_a_reply_with_no_usable_json_yields_nothing_and_warns(caplog):
++    """One document out of hundreds answers with prose. Raising would end the run;
++    warning leaves it diagnosable instead of a silently green run with no cards."""
++    llm = _FakeLlm("I could not find any terms in this document.")
+ 
++    with caplog.at_level(logging.WARNING, logger="workspace_app.kb.card_drafter"):
++        got = LlmCardDrafter(llm).digest(doc_path="a.md", doc_text=DOC)
+ 
+-def test_an_unterminated_json_object_yields_nothing():
+-    assert (
+-        LlmCardDrafter(_FakeLlm('{"cards": [')).digest(doc_path="a.md", doc_text="...").cards == []
+-    )
++    assert got.cards == []
++    logged = "\n".join(r.getMessage() for r in caplog.records)
++    assert "a.md" in logged and "no usable cards" in logged
+ 
+ 
+-def test_malformed_term_questions_are_dropped():
+-    # not-a-list → none; then per-item drops: non-dict, blank term, wrong-typed term.
+-    assert (
+-        LlmCardDrafter(_FakeLlm(json.dumps({"term_questions": "nope"})))
+-        .digest(doc_path="a.md", doc_text="...")
+-        .term_questions
+-        == []
+-    )
+-    raw = json.dumps(
+-        {
+-            "term_questions": [
+-                "just a string",  # not a dict
+-                {"term": "   ", "question": "blank term"},  # blank after strip
+-                {"term": 5, "question": "wrong type"},  # term not a string
+-                {"term": "R7", "question": "kept"},  # the one good item
+-            ]
+-        }
+-    )
+-    qs = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").term_questions
+-    assert [(q.term, q.question) for q in qs] == [("R7", "kept")]
++def test_a_reply_whose_every_claim_fails_the_gate_says_so(caplog):
++    """A different failure from "the model said nothing": the model DID answer and
++    every quote was invented. Logged apart, because the fix is a different one."""
++    llm = _FakeLlm(_reply(_card("回焊爐", "屬於薔薇科", "回焊爐屬於薔薇科")))
+ 
++    with caplog.at_level(logging.WARNING, logger="workspace_app.kb.card_drafter"):
++        got = LlmCardDrafter(llm).digest(doc_path="a.md", doc_text=DOC)
+ 
+-def test_malformed_description_questions_are_dropped():
+-    assert (
+-        LlmCardDrafter(_FakeLlm(json.dumps({"description_questions": "nope"})))
+-        .digest(doc_path="a.md", doc_text="...")
+-        .description_questions
+-        == []
+-    )
+-    raw = json.dumps(
+-        {
+-            "description_questions": [
+-                "just a string",  # not a dict
+-                {"quote": "  ", "question": "blank quote"},  # blank after strip
+-                {"quote": 9, "question": "wrong type"},  # quote not a string
+-                {"quote": "uses M4 then CMP", "question": "kept"},  # the one good item
+-            ]
+-        }
+-    )
+-    qs = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").description_questions
+-    assert [(q.quote, q.question) for q in qs] == [("uses M4 then CMP", "kept")]
++    assert got.cards == []
++    logged = "\n".join(r.getMessage() for r in caplog.records)
++    assert "quote gate" in logged and "offered=1" in logged
++
++
++def test_a_fenced_or_prefixed_reply_is_tolerated():
++    """Small models wrap JSON in fences and add preambles."""
++    body = _reply(_card("回焊爐", "是一種加熱設備", "回焊爐是一種加熱設備"))
++    llm = _FakeLlm(f"Sure! Here you go:\n```json\n{body}\n```\nHope that helps.")
++
++    (card,) = LlmCardDrafter(llm).digest(doc_path="a.md", doc_text=DOC).cards
++
++    assert card.term == "回焊爐"
++
++
++def test_the_number_of_cards_is_capped():
++    """A pathological reply must not flood review."""
++    many = _reply(*[_card(f"T{i}", "是一種加熱設備", "回焊爐是一種加熱設備") for i in range(9)])
++    llm = _FakeLlm(many)
++
++    got = LlmCardDrafter(llm, max_cards=3).digest(doc_path="a.md", doc_text=DOC)
++
++    assert len(got.cards) == 3
+diff --git a/tests/kb/test_card_gen_coordinator.py b/tests/kb/test_card_gen_coordinator.py
+index 62431a12..b8619b95 100644
+--- a/tests/kb/test_card_gen_coordinator.py
++++ b/tests/kb/test_card_gen_coordinator.py
+@@ -8,6 +8,8 @@ tested separately against a fake ``ILlm``.
+ 
+ from __future__ import annotations
+ 
++import json
++
+ import msgspec
+ from specstar import QB
+ from specstar.types import Binary, TaskStatus
+@@ -24,10 +26,11 @@ from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
+ from workspace_app.kb.context_cards import derive_norm_keys
+ from workspace_app.kb.doc_id import encode_doc_id
+ from workspace_app.kb.doc_questions import open_questions_for_collections
++from workspace_app.kb.llm import ILlm
+ from workspace_app.kb.reconcile import Reconciler, collection_wiki_text
+ from workspace_app.kb.wiki.store import _rid
+ from workspace_app.resources import Collection, ContextCard, SourceDoc, WikiPage, make_spec
+-from workspace_app.resources.kb import EMBED_DIM, ClusterMember
++from workspace_app.resources.kb import EMBED_DIM, CardStatement, ClusterMember
+ 
+ 
+ def _add_source(spec, collection_id: str, path: str, text: str) -> str:
+@@ -74,7 +77,13 @@ def _add_wiki(spec, collection_id: str, path: str, text: str) -> str:
+     return _rid(collection_id, path)
+ 
+ 
+-def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
++def _add_card(
++    spec,
++    collection_id: str,
++    keys: list[str],
++    body: str = "",
++    statements: list[CardStatement] | None = None,
++) -> str:
+     rm = spec.get_resource_manager(ContextCard)
+     rev = rm.create(
+         ContextCard(
+@@ -82,6 +91,7 @@ def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
+             keys=keys,
+             norm_keys=derive_norm_keys(keys),
+             body=body,
++            statements=list(statements or []),
+         )
+     )
+     return rev.resource_id
+@@ -142,16 +152,16 @@ async def test_generates_a_new_card_proposal_from_a_document():
+     drafter = _FakeDrafter(
+         {
+             "spec.md": [
+-                CardDraft(
++                _draft(
++                    term="Reflow Zone 3",
+                     keys=["RZ3", "Reflow Zone 3"],
+-                    title="Reflow Zone 3",
+-                    body="The third reflow zone.",
+-                    snippet="The reflow zone uses RZ3 heating.",
++                    claim="The third reflow zone.",
++                    quote="The reflow zone uses RZ3 heating.",
+                 )
+             ]
+         }
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     job_id = coord.enqueue(cid, [doc])
+     await coord.aclose()
+ 
+@@ -179,8 +189,8 @@ async def test_a_still_indexing_doc_is_skipped_not_digested_to_nothing():
+     cid = _collection(spec)
+     ready = _add_source(spec, cid, "ready.md", "RZ3 is the third reflow zone")
+     pending = _add_indexing_binary(spec, cid, "pending.png")
+-    drafter = _FakeDrafter({"ready.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"ready.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [ready, pending])
+     await coord.aclose()
+ 
+@@ -200,8 +210,8 @@ async def test_the_funnel_attributes_the_coverage_gap_to_still_indexing_docs():
+     cid = _collection(spec)
+     ready = _add_source(spec, cid, "ready.md", "RZ3 is the third reflow zone")
+     pending = _add_indexing_binary(spec, cid, "pending.png")
+-    drafter = _FakeDrafter({"ready.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"ready.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [ready, pending])
+     await coord.aclose()
+ 
+@@ -223,8 +233,8 @@ async def test_a_finalized_run_is_listed_for_review_then_leaves_the_queue_on_com
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
+-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+ 
+@@ -256,11 +266,11 @@ async def test_finalize_writes_first_class_card_proposal_rows():
+     d2 = _add_source(spec, cid, "b.md", "RZ7 is the seventh reflow zone")
+     drafter = _FakeDrafter(
+         {
+-            "a.md": [CardDraft(keys=["RZ3"], title="RZ3", body="third", snippet="s3")],
+-            "b.md": [CardDraft(keys=["RZ7"], title="RZ7", body="seventh", snippet="s7")],
++            "a.md": [_draft(term="RZ3", keys=["RZ3"], claim="third", quote="s3")],
++            "b.md": [_draft(term="RZ7", keys=["RZ7"], claim="seventh", quote="s7")],
+         }
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [d1, d2])
+     await coord.aclose()
+ 
+@@ -295,8 +305,8 @@ async def test_dismiss_removes_a_run_from_review_without_writing_cards():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "RZ3 body")
+-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+ 
+@@ -314,8 +324,8 @@ async def test_review_resolution_is_idempotent():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
+-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+ 
+@@ -339,11 +349,11 @@ async def test_pending_runs_are_scoped_to_their_collection():
+     d2 = _add_source(spec, c2, "b.md", "RZ4 body")
+     drafter = _FakeDrafter(
+         {
+-            "a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")],
+-            "b.md": [CardDraft(keys=["RZ4"], title="RZ4", snippet="s")],
++            "a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")],
++            "b.md": [_draft(term="RZ4", keys=["RZ4"], claim="RZ4", quote="s")],
+         }
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     j1 = coord.enqueue(c1, [d1])
+     coord.enqueue(c2, [d2])
+     await coord.aclose()
+@@ -360,9 +370,9 @@ async def test_a_selected_wiki_page_is_read_and_drafted_like_a_document():
+     cid = _collection(spec)
+     tagged_id = WIKI_ID_PREFIX + _add_wiki(spec, cid, "/index.md", "RZ3 is the third reflow zone.")
+     drafter = _FakeDrafter(
+-        {"/index.md": [CardDraft(keys=["RZ3"], title="RZ3", body="Third zone.", snippet="RZ3…")]}
++        {"/index.md": [_draft(term="RZ3", keys=["RZ3"], claim="Third zone.", quote="RZ3…")]}
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [tagged_id])
+     await coord.aclose()
+ 
+@@ -388,7 +398,7 @@ async def test_a_wiki_page_source_still_yields_reviewable_proposals():
+     )
+     tagged_id = WIKI_ID_PREFIX + _add_wiki(spec, cid, "/index.md", "RZ3 is the third reflow zone.")
+     drafter = _FakeDrafter(
+-        {"/index.md": [CardDraft(keys=["RZ3"], title="RZ3", body="Third zone.", snippet="RZ3…")]}
++        {"/index.md": [_draft(term="RZ3", keys=["RZ3"], claim="Third zone.", quote="RZ3…")]}
+     )
+     coord = CardGenCoordinator(
+         spec,
+@@ -409,20 +419,54 @@ async def test_a_wiki_page_source_still_yields_reviewable_proposals():
+     assert [p.keys for p in coord.proposals(jid).proposals] == [["RZ3"]]
+ 
+ 
+-async def test_a_draft_already_fully_covered_by_an_existing_card_is_skipped():
+-    """#175 Q5: a term whose normalised keys are all already on an existing card
+-    is a complete duplicate — dropped, never surfaced for review."""
++async def test_a_draft_that_adds_nothing_to_an_existing_card_is_skipped():
++    """#175 Q5, restated for the evidence model: a duplicate is a draft whose
++    keys AND claims the card already has. "The term is already carded" is no
++    longer enough — under that rule a document saying something NEW about a
++    carded term was dropped before anyone saw it, which is exactly the case the
++    card is meant to grow from."""
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+-    _add_card(spec, cid, ["RZ3", "Reflow Zone 3"], body="already defined")
++    _add_card(
++        spec,
++        cid,
++        ["RZ3", "Reflow Zone 3"],
++        body="already defined",
++        statements=[CardStatement(text="y", quote="s", source_doc_id="older")],
++    )
+     doc = _add_source(spec, cid, "spec.md", "...")
+-    drafter = _FakeDrafter({"spec.md": [CardDraft(keys=["RZ3"], title="x", body="y", snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"spec.md": [_draft(term="x", keys=["RZ3"], claim="y", quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+     assert coord.proposals(jid).proposals == []
+ 
+ 
++async def test_a_carded_term_the_document_says_something_new_about_is_not_skipped():
++    """The other half, and the one the old rule got wrong: same keys, new claim.
++    Dropping this is how a card stops learning the moment it exists."""
++    spec = make_spec(default_user="u")
++    cid = _collection(spec)
++    _add_card(
++        spec,
++        cid,
++        ["RZ3"],
++        body="the third zone",
++        statements=[CardStatement(text="是第三區", quote="RZ3 是第三區", source_doc_id="older")],
++    )
++    doc = _add_source(spec, cid, "spec.md", "...")
++    drafter = _FakeDrafter(
++        {"spec.md": [_draft(term="RZ3", keys=["RZ3"], claim="設定 245°C", quote="RZ3 設定 245°C")]}
++    )
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
++    jid = coord.enqueue(cid, [doc])
++    await coord.aclose()
++
++    (p,) = coord.proposals(jid).proposals
++    assert p.mode == "update"
++    assert [st.text for st in p.statements] == ["是第三區", "設定 245°C"]
++
++
+ async def test_a_draft_overlapping_an_existing_card_becomes_an_update():
+     """#175 Q5: a draft that shares a key with an existing card but adds an alias
+     is proposed as an UPDATE targeting that card, not a duplicate new card."""
+@@ -431,9 +475,9 @@ async def test_a_draft_overlapping_an_existing_card_becomes_an_update():
+     target = _add_card(spec, cid, ["M4"], body="old")
+     doc = _add_source(spec, cid, "spec.md", "...")
+     drafter = _FakeDrafter(
+-        {"spec.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]}
++        {"spec.md": [_draft(term="Metal 4", keys=["M4", "Metal 4"], claim="new", quote="s")]}
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+     (p,) = coord.proposals(jid).proposals
+@@ -451,13 +495,11 @@ async def test_drafts_sharing_a_key_across_documents_merge_into_one_proposal():
+     d2 = _add_source(spec, cid, "b.md", "...")
+     drafter = _FakeDrafter(
+         {
+-            "a.md": [CardDraft(keys=["RZ3"], title="t1", body="b1", snippet="from a")],
+-            "b.md": [
+-                CardDraft(keys=["RZ3", "Reflow Zone 3"], title="t2", body="b2", snippet="from b")
+-            ],
++            "a.md": [_draft(term="t1", keys=["RZ3"], claim="b1", quote="from a")],
++            "b.md": [_draft(term="t2", keys=["RZ3", "Reflow Zone 3"], claim="b2", quote="from b")],
+         }
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [d1, d2])
+     await coord.aclose()
+     (p,) = coord.proposals(jid).proposals
+@@ -474,7 +516,7 @@ async def test_digest_term_question_is_raised_as_an_open_doc_question():
+     drafter = _FakeDrafter(
+         {}, term_qs={"spec.md": [TermQuestionDraft(term="R7", question="What is the R7 recipe?")]}
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     coord.enqueue(cid, [doc])
+     await coord.aclose()
+     ((_qid, q),) = open_questions_for_collections(spec, [cid])
+@@ -492,7 +534,7 @@ async def test_a_term_already_carded_is_not_raised_as_a_question():
+     _add_card(spec, cid, ["R7"], body="the R7 reflow recipe")
+     doc = _add_source(spec, cid, "spec.md", "Uses the R7 recipe.")
+     drafter = _FakeDrafter({}, term_qs={"spec.md": [TermQuestionDraft(term="R7", question="?")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     coord.enqueue(cid, [doc])
+     await coord.aclose()
+     assert open_questions_for_collections(spec, [cid]) == []
+@@ -512,7 +554,7 @@ async def test_digest_description_question_is_raised_with_its_quote():
+             ]
+         },
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     coord.enqueue(cid, [doc])
+     await coord.aclose()
+     ((_qid, q),) = open_questions_for_collections(spec, [cid])
+@@ -527,8 +569,10 @@ async def test_a_document_deleted_before_the_run_is_skipped_cleanly():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "gone.md", "...")
+-    drafter = _FakeDrafter({"gone.md": [CardDraft(keys=["X"], snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter(
++        {"gone.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]}
++    )
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     spec.get_resource_manager(SourceDoc).permanently_delete(doc)
+     await coord.aclose()
+@@ -553,20 +597,23 @@ async def test_the_split_job_is_partitioned_by_collection():
+     assert job.payload.doc_ids == [doc]
+ 
+ 
+-async def test_an_uncertain_draft_keeps_its_confidence_flag():
+-    """#205/#175 信心標記: an uncertain draft surfaces with confident=False so the
+-    review UI can ⚠️ it and default it out of the commit."""
++async def test_a_proposal_carries_the_evidence_its_body_was_written_from():
++    """What replaced the confidence flag. A draft used to say how sure it felt;
++    now it says what the document stated and quotes the sentence, so a reviewer
++    checks the claim against the source instead of trusting a self-rating."""
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+     drafter = _FakeDrafter(
+-        {"a.md": [CardDraft(keys=["X"], title="X", body="?", confident=False, snippet="s")]}
++        {"a.md": [_draft(term="X", keys=["X"], claim="是一種設備", quote="X 是一種設備")]}
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
++
+     (p,) = coord.proposals(jid).proposals
+-    assert p.confident is False
++    assert [(st.text, st.quote) for st in p.statements] == [("是一種設備", "X 是一種設備")]
++    assert st_doc(p) == [doc], "a statement must say which document it came from"
+ 
+ 
+ async def test_a_draft_with_no_usable_key_is_dropped():
+@@ -575,8 +622,8 @@ async def test_a_draft_with_no_usable_key_is_dropped():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["   "], title="blank", snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"a.md": [_draft(term="blank", keys=["   "], claim="blank", quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+     assert coord.proposals(jid).proposals == []
+@@ -588,7 +635,9 @@ async def test_status_is_pending_until_the_run_is_consumed():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+-    coord = CardGenCoordinator(spec, _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]}))
++    coord = CardGenCoordinator(
++        spec, _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
++    )
+     jid = coord.enqueue(cid, [doc])
+     assert coord.status(jid) == TaskStatus.PENDING
+     assert coord.proposals(jid).proposals == []
+@@ -607,7 +656,15 @@ async def test_a_multi_doc_run_fans_out_into_parallelisable_process_jobs():
+     cid = _collection(spec)
+     docs = [_add_source(spec, cid, f"{i}.md", "x") for i in range(3)]
+     coord = CardGenCoordinator(
+-        spec, _FakeDrafter({f"{i}.md": [CardDraft(keys=[f"K{i}"], snippet="s")] for i in range(3)})
++        spec,
++        _FakeDrafter(
++            {
++                f"{i}.md": [
++                    _draft(term=[f"K{i}"][0], keys=[f"K{i}"], claim=[f"K{i}"][0], quote="s")
++                ]
++                for i in range(3)
++            }
++        ),
+     )
+     coord.enqueue(cid, docs)
+     await coord.aclose()  # drain split → 3 process → finalize
+@@ -633,7 +690,9 @@ async def test_a_single_doc_run_short_circuits_without_fanning_out():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+-    coord = CardGenCoordinator(spec, _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]}))
++    coord = CardGenCoordinator(
++        spec, _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
++    )
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+ 
+@@ -651,8 +710,8 @@ async def test_the_drafter_is_told_the_documents_collection():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     coord.enqueue(cid, [doc])
+     await coord.aclose()
+     assert drafter.seen_cids == [cid]
+@@ -666,7 +725,15 @@ async def test_set_drafter_swaps_in_a_new_drafter_after_construction():
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+     coord = CardGenCoordinator(spec, NullCardDrafter())  # starts with the no-op drafter
+-    coord.set_drafter(_FakeDrafter({"a.md": [CardDraft(keys=["SWAPPED"], snippet="s")]}))
++    coord.set_drafter(
++        _FakeDrafter(
++            {
++                "a.md": [
++                    _draft(term=["SWAPPED"][0], keys=["SWAPPED"], claim=["SWAPPED"][0], quote="s")
++                ]
++            }
++        )
++    )
+ 
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+@@ -701,7 +768,9 @@ async def test_finalize_logs_the_funnel_counts(caplog):
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+-    coord = CardGenCoordinator(spec, _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]}))
++    coord = CardGenCoordinator(
++        spec, _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
++    )
+     with caplog.at_level("INFO"):
+         coord.enqueue(cid, [doc])
+         await coord.aclose()
+@@ -723,12 +792,12 @@ async def test_finalize_persists_the_funnel_counts_on_the_run():
+     drafter = _FakeDrafter(
+         {
+             "a.md": [
+-                CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s"),
+-                CardDraft(keys=["SP7"], title="Solder Paste 7", snippet="s"),
++                _draft(term="Reflow Zone 3", keys=["RZ3"], claim="Reflow Zone 3", quote="s"),
++                _draft(term="Solder Paste 7", keys=["SP7"], claim="Solder Paste 7", quote="s"),
+             ]
+         }
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [doc])
+     await coord.aclose()
+ 
+@@ -754,8 +823,10 @@ async def test_latest_funnel_reports_the_most_recent_finalized_run():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter(
++        {"a.md": [_draft(term="Reflow Zone 3", keys=["RZ3"], claim="Reflow Zone 3", quote="s")]}
++    )
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     assert coord.latest_funnel(cid) is None  # no finalized run yet
+ 
+     coord.enqueue(cid, [doc])
+@@ -775,9 +846,9 @@ async def test_a_doc_whose_digest_fails_does_not_sink_the_run():
+     d1 = _add_source(spec, cid, "a.md", "x")
+     d2 = _add_source(spec, cid, "b.md", "y")
+     drafter = _FakeDrafter(
+-        {"a.md": [CardDraft(keys=["RZ3"], title="t", snippet="s")]}, fail_paths={"b.md"}
++        {"a.md": [_draft(term="t", keys=["RZ3"], claim="t", quote="s")]}, fail_paths={"b.md"}
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     jid = coord.enqueue(cid, [d1, d2])
+     await coord.aclose()
+ 
+@@ -821,8 +892,13 @@ async def test_a_run_deleted_mid_fanout_is_skipped_by_its_process_jobs():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     docs = [_add_source(spec, cid, f"{i}.md", "x") for i in range(2)]
+-    drafter = _FakeDrafter({f"{i}.md": [CardDraft(keys=[f"K{i}"], snippet="s")] for i in range(2)})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter(
++        {
++            f"{i}.md": [_draft(term=[f"K{i}"][0], keys=[f"K{i}"], claim=[f"K{i}"][0], quote="s")]
++            for i in range(2)
++        }
++    )
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     rid = coord.enqueue(cid, docs)
+     spec.get_resource_manager(CardGenRun).permanently_delete(rid)  # e.g. collection cascade
+     await coord.aclose()  # split fans out; the process jobs find no run and skip
+@@ -838,8 +914,8 @@ async def test_a_single_doc_run_whose_run_vanished_finalizes_cleanly():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+-    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]})
+-    coord = CardGenCoordinator(spec, drafter)
++    drafter = _FakeDrafter({"a.md": [_draft(term=["X"][0], keys=["X"], claim=["X"][0], quote="s")]})
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     rid = coord.enqueue(cid, [doc])
+     spec.get_resource_manager(CardGenRun).permanently_delete(rid)  # e.g. collection cascade
+     await coord.aclose()
+@@ -860,7 +936,7 @@ def _list_cards(spec, cid: str) -> list[ContextCard]:
+ 
+ 
+ async def _run(spec, cid, by_path, docs):
+-    coord = CardGenCoordinator(spec, _FakeDrafter(by_path))
++    coord = CardGenCoordinator(spec, _FakeDrafter(by_path), synthesiser=_Writer())
+     jid = coord.enqueue(cid, docs)
+     await coord.aclose()
+     return coord, jid
+@@ -873,7 +949,7 @@ async def test_save_review_persists_decisions_and_edits():
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+     coord, jid = await _run(
+-        spec, cid, {"a.md": [CardDraft(keys=["RZ3"], title="t", body="orig", snippet="s")]}, [doc]
++        spec, cid, {"a.md": [_draft(term="t", keys=["RZ3"], claim="orig", quote="s")]}, [doc]
+     )
+     (p,) = coord.proposals(jid).proposals
+     p.decision = "accepted"
+@@ -892,7 +968,7 @@ async def test_commit_creates_a_card_for_an_accepted_new_proposal():
+     coord, jid = await _run(
+         spec,
+         cid,
+-        {"a.md": [CardDraft(keys=["RZ3"], title="Reflow Zone 3", body="3rd zone", snippet="s")]},
++        {"a.md": [_draft(term="Reflow Zone 3", keys=["RZ3"], claim="3rd zone", quote="s")]},
+         [doc],
+     )
+     (p,) = coord.proposals(jid).proposals
+@@ -916,7 +992,7 @@ async def test_commit_overwrites_the_target_card_for_an_accepted_update():
+     coord, jid = await _run(
+         spec,
+         cid,
+-        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
++        {"a.md": [_draft(term="Metal 4", keys=["M4", "Metal 4"], claim="new", quote="s")]},
+         [doc],
+     )
+     (p,) = coord.proposals(jid).proposals
+@@ -947,7 +1023,7 @@ async def test_commit_keeps_the_target_cards_reference_doc_ids():
+     coord, jid = await _run(
+         spec,
+         cid,
+-        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
++        {"a.md": [_draft(term="Metal 4", keys=["M4", "Metal 4"], claim="new", quote="s")]},
+         [doc],
+     )
+     (p,) = coord.proposals(jid).proposals
+@@ -970,8 +1046,8 @@ async def test_commit_skips_proposals_the_reviewer_did_not_accept():
+         spec,
+         cid,
+         {
+-            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+-            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
++            "a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
++            "b.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
+         },
+         [d1, d2],
+     )
+@@ -993,7 +1069,7 @@ async def test_commit_falls_back_to_create_when_the_update_target_was_deleted():
+     coord, jid = await _run(
+         spec,
+         cid,
+-        {"a.md": [CardDraft(keys=["M4", "Metal 4"], title="Metal 4", body="new", snippet="s")]},
++        {"a.md": [_draft(term="Metal 4", keys=["M4", "Metal 4"], claim="new", quote="s")]},
+         [doc],
+     )
+     (p,) = coord.proposals(jid).proposals
+@@ -1016,7 +1092,7 @@ async def test_commit_skips_an_accepted_proposal_with_no_usable_key():
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+     coord, jid = await _run(
+-        spec, cid, {"a.md": [CardDraft(keys=["A"], title="A", snippet="s")]}, [doc]
++        spec, cid, {"a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")]}, [doc]
+     )
+     coord.save_review(jid, [ProposedCard(keys=["  "], title="x", body="y", decision="accepted")])
+ 
+@@ -1025,9 +1101,11 @@ async def test_commit_skips_an_accepted_proposal_with_no_usable_key():
+     assert _list_cards(spec, cid) == []
+ 
+ 
+-async def test_a_confident_draft_supersedes_an_uncertain_one_when_merged():
+-    """When two drafts of the same term merge, a confident draft's title/body
+-    wins over an earlier uncertain one's."""
++async def test_two_documents_about_one_term_both_survive_the_merge():
++    """The failure this whole design replaces. The old merge kept the FIRST
++    confident draft's body and dropped every later one, so 「是水果」 and
++    「是紅色」 arriving from two documents left one of them on the floor —
++    silently, and with the keys and provenance unioned so it looked fine."""
+     spec = make_spec(default_user="u")
+     cid = _collection(spec)
+     d1 = _add_source(spec, cid, "a.md", "x")
+@@ -1036,25 +1114,16 @@ async def test_a_confident_draft_supersedes_an_uncertain_one_when_merged():
+         spec,
+         cid,
+         {
+-            "a.md": [
+-                CardDraft(keys=["RZ3"], title="guess", body="unsure", confident=False, snippet="sa")
+-            ],
+-            "b.md": [
+-                CardDraft(
+-                    keys=["RZ3"],
+-                    title="Reflow Zone 3",
+-                    body="definite",
+-                    confident=True,
+-                    snippet="sb",
+-                )
+-            ],
++            "a.md": [_draft(term="蘋果", keys=["蘋果"], claim="是水果", quote="蘋果是水果")],
++            "b.md": [_draft(term="蘋果", keys=["蘋果"], claim="是紅色", quote="蘋果是紅色")],
+         },
+         [d1, d2],
+     )
++
+     (p,) = coord.proposals(jid).proposals
+-    assert p.confident is True
+-    assert p.body == "definite"
+-    assert p.title == "Reflow Zone 3"
++    assert [st.text for st in p.statements] == ["是水果", "是紅色"]
++    assert p.body == "是水果 / 是紅色", "the body must be written from BOTH, not one of them"
++    assert sorted(st_doc(p)) == sorted([d1, d2])
+ 
+ 
+ async def test_a_new_term_with_an_unrelated_existing_card_stays_new():
+@@ -1065,7 +1134,7 @@ async def test_a_new_term_with_an_unrelated_existing_card_stays_new():
+     _add_card(spec, cid, ["ZZZ"], body="unrelated")
+     doc = _add_source(spec, cid, "a.md", "x")
+     coord, jid = await _run(
+-        spec, cid, {"a.md": [CardDraft(keys=["RZ3"], title="t", snippet="s")]}, [doc]
++        spec, cid, {"a.md": [_draft(term="t", keys=["RZ3"], claim="t", quote="s")]}, [doc]
+     )
+     (p,) = coord.proposals(jid).proposals
+     assert p.mode == "new"
+@@ -1086,8 +1155,8 @@ async def test_proposals_carry_stable_ids():
+         spec,
+         cid,
+         {
+-            "a.md": [CardDraft(keys=["A"], snippet="s")],
+-            "b.md": [CardDraft(keys=["B"], snippet="s")],
++            "a.md": [_draft(term=["A"][0], keys=["A"], claim=["A"][0], quote="s")],
++            "b.md": [_draft(term=["B"][0], keys=["B"], claim=["B"][0], quote="s")],
+         },
+         [d1, d2],
+     )
+@@ -1106,8 +1175,8 @@ async def test_decide_persists_a_single_cards_decision():
+         spec,
+         cid,
+         {
+-            "a.md": [CardDraft(keys=["A"], snippet="s")],
+-            "b.md": [CardDraft(keys=["B"], snippet="s")],
++            "a.md": [_draft(term=["A"][0], keys=["A"], claim=["A"][0], quote="s")],
++            "b.md": [_draft(term=["B"][0], keys=["B"], claim=["B"][0], quote="s")],
+         },
+         [d1, d2],
+     )
+@@ -1129,8 +1198,8 @@ async def test_commit_cards_writes_only_the_referenced_cards():
+         spec,
+         cid,
+         {
+-            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+-            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
++            "a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
++            "b.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
+         },
+         [d1, d2],
+     )
+@@ -1147,7 +1216,7 @@ async def test_commit_cards_resolves_the_run_when_its_last_card_is_committed():
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+     coord, jid = await _run(
+-        spec, cid, {"a.md": [CardDraft(keys=["A"], title="A", snippet="s")]}, [doc]
++        spec, cid, {"a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")]}, [doc]
+     )
+     (a,) = coord.proposals(jid).proposals
+     coord.commit_cards([(jid, a.id)])
+@@ -1164,11 +1233,11 @@ async def test_commit_cards_spans_multiple_runs_in_one_call():
+     d2 = _add_source(spec, cid, "b.md", "y")
+     drafter = _FakeDrafter(
+         {
+-            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+-            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
++            "a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
++            "b.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
+         }
+     )
+-    coord = CardGenCoordinator(spec, drafter)
++    coord = CardGenCoordinator(spec, drafter, synthesiser=_Writer())
+     j1 = coord.enqueue(cid, [d1])
+     j2 = coord.enqueue(cid, [d2])
+     await coord.aclose()
+@@ -1185,7 +1254,7 @@ async def test_update_proposal_persists_a_drawer_edit():
+     cid = _collection(spec)
+     doc = _add_source(spec, cid, "a.md", "x")
+     coord, jid = await _run(
+-        spec, cid, {"a.md": [CardDraft(keys=["A"], body="old", snippet="s")]}, [doc]
++        spec, cid, {"a.md": [_draft(term=["A"][0], keys=["A"], claim="old", quote="s")]}, [doc]
+     )
+     (a,) = coord.proposals(jid).proposals
+     coord.update_proposal(jid, a.id, msgspec.structs.replace(a, body="edited", decision="accepted"))
+@@ -1214,8 +1283,8 @@ async def test_commit_cards_skips_a_rejected_reference():
+         spec,
+         cid,
+         {
+-            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+-            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
++            "a.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
++            "b.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
+         },
+         [d1, d2],
+     )
+@@ -1236,7 +1305,7 @@ async def test_start_consuming_is_idempotent_and_takes_an_explicit_queue_factory
+     doc = _add_source(spec, cid, "a.md", "x")
+     coord = CardGenCoordinator(
+         spec,
+-        _FakeDrafter({"a.md": [CardDraft(keys=["X"], title="X", snippet="s")]}),
++        _FakeDrafter({"a.md": [_draft(term="X", keys=["X"], claim="X", quote="s")]}),
+         message_queue_factory=SimpleMessageQueueFactory(),
+     )
+     assert coord.consuming is False
+@@ -1309,7 +1378,9 @@ async def test_finalize_reconcile_suppresses_a_semantic_duplicate():
+         )
+     )
+     doc = _add_source(spec, cid, "d.md", "beta is explained here")
+-    drafter = _FakeDrafter({"d.md": [CardDraft(keys=["beta"], title="SharedTag", snippet="s")]})
++    drafter = _FakeDrafter(
++        {"d.md": [_draft(term="SharedTag", keys=["beta"], claim="SharedTag", quote="s")]}
++    )
+     coord = CardGenCoordinator(
+         spec,
+         drafter,
+@@ -1380,7 +1451,9 @@ async def test_finalize_reconcile_keeps_and_clusters_a_new_proposal():
+         )
+     )
+     doc = _add_source(spec, cid, "d.md", "gamma is a new thing")
+-    drafter = _FakeDrafter({"d.md": [CardDraft(keys=["gamma"], title="OtherTag", snippet="s")]})
++    drafter = _FakeDrafter(
++        {"d.md": [_draft(term="OtherTag", keys=["gamma"], claim="OtherTag", quote="s")]}
++    )
+     coord = CardGenCoordinator(
+         spec,
+         drafter,
+@@ -1419,3 +1492,97 @@ async def test_finalize_reconcile_clusters_a_term_question():
+     assert len(tq) == 1
+     assert tq[0].state == "active"
+     assert tq[0].cluster_key == "widget"  # norm(Widget) — opened its own cluster
++
++
++def _draft(*, term: str, keys: list[str], claim: str = "", quote: str = "") -> CardDraft:
++    """One document's take on one term, in the shape the drafter now returns.
++
++    The old drafts carried a written body; these carry a CLAIM and the sentence
++    that makes it, because no single document can define a term the whole corpus
++    talks about. `claim` defaults to the term, so a draft that only says "this
++    term appears here" still has something to accumulate.
++    """
++    return CardDraft(
++        term=term,
++        keys=list(keys),
++        statements=[CardStatement(text=claim or term, quote=quote or claim or term)],
++    )
++
++
++class _Writer(ILlm):
++    """A stand-in synthesiser: joins the claims it is handed.
++
++    The real one writes prose; what the tests need is only that the body is
++    DERIVED from the whole evidence rather than copied from one document, so a
++    join is enough to tell the two apart.
++    """
++
++    def stream(self, prompt: str):
++        # Only the statement lines: `synthesise` formats them as
++        # `- {text}  \u300c{quote}\u300d`, and the prompt's own bullets have no quote.
++        body = " / ".join(
++            line.split("  \u300c")[0].removeprefix("- ")
++            for line in prompt.splitlines()
++            if line.startswith("- ") and "\u300c" in line
++        )
++        yield json.dumps({"title": "", "body": body}, ensure_ascii=False), False
++
++
++def st_doc(proposal) -> list[str]:
++    """Which documents a proposal's statements name as their source."""
++    return [st.source_doc_id for st in proposal.statements]
++
++
++async def test_an_update_accumulates_onto_what_the_card_already_knew():
++    """Cross-run accumulation, and the reason the evidence lives on the CARD.
++
++    A run months ago recorded 「是水果」. Today's document says 「是紅色」. The card
++    must end up holding both — the old pipeline overwrote the body wholesale, so
++    everything the card had learnt before was replaced by whatever the newest
++    document happened to mention.
++    """
++    spec = make_spec(default_user="u")
++    cid = _collection(spec)
++    target = _add_card(
++        spec,
++        cid,
++        ["蘋果"],
++        body="是水果",
++        statements=[CardStatement(text="是水果", quote="蘋果是水果", source_doc_id="older")],
++    )
++    doc = _add_source(spec, cid, "b.md", "y")
++    coord, jid = await _run(
++        spec,
++        cid,
++        {"b.md": [_draft(term="蘋果", keys=["蘋果"], claim="是紅色", quote="蘋果是紅色")]},
++        [doc],
++    )
++
++    (p,) = coord.proposals(jid).proposals
++    assert p.mode == "update" and p.target_card_id == target
++    assert [st.text for st in p.statements] == ["是水果", "是紅色"]
++    assert p.body == "是水果 / 是紅色", "the body must be rewritten from BOTH, not replaced"
++
++
++async def test_committing_puts_the_evidence_on_the_card():
++    """Without this the card is prose again the moment it is written, and the
++    NEXT run has nothing to accumulate onto — the whole design collapses back to
++    overwriting at the last step."""
++    spec = make_spec(default_user="u")
++    cid = _collection(spec)
++    doc = _add_source(spec, cid, "a.md", "x")
++    coord, jid = await _run(
++        spec,
++        cid,
++        {"a.md": [_draft(term="蘋果", keys=["蘋果"], claim="是水果", quote="蘋果是水果")]},
++        [doc],
++    )
++    (p,) = coord.proposals(jid).proposals
++    p.decision = "accepted"
++    coord.save_review(jid, [p])
++
++    coord.commit(jid)
++
++    (card,) = _list_cards(spec, cid)
++    assert [(st.text, st.quote) for st in card.statements] == [("是水果", "蘋果是水果")]
++    assert [st.source_doc_id for st in card.statements] == [doc]
+diff --git a/tests/kb/test_review_inbox.py b/tests/kb/test_review_inbox.py
+index ac28e1ab..0462bdd9 100644
+--- a/tests/kb/test_review_inbox.py
++++ b/tests/kb/test_review_inbox.py
+@@ -9,15 +9,19 @@ collection, so a private/since-tightened collection's items never leak.
+ 
+ from __future__ import annotations
+ 
++import json
++
+ import msgspec
+ 
+ from workspace_app.kb.card_gen import CardDraft, TermQuestionDraft
+ from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
+ from workspace_app.kb.doc_id import encode_doc_id
++from workspace_app.kb.llm import ILlm
+ from workspace_app.kb.review_inbox import build_review_inbox, cluster_key_map
+ from workspace_app.perm import Actor
+ from workspace_app.perm.model import Permission
+ from workspace_app.resources import Collection, SourceDoc, make_spec
++from workspace_app.resources.kb import CardStatement
+ 
+ 
+ def _collection(spec, name: str, *, owner: str = "u", permission: Permission | None = None) -> str:
+@@ -74,7 +78,11 @@ def _reconciler(spec):
+ def _coord(spec, by_path, *, term_qs=None, owner="u", reconciler=None) -> CardGenCoordinator:
+     """One coordinator per spec (a second registration of the job model raises)."""
+     return CardGenCoordinator(
+-        spec, _FakeDrafter(by_path, term_qs), get_user_id=lambda: owner, reconciler=reconciler
++        spec,
++        _FakeDrafter(by_path, term_qs),
++        get_user_id=lambda: owner,
++        reconciler=reconciler,
++        synthesiser=_Writer(),
+     )
+ 
+ 
+@@ -101,7 +109,7 @@ async def test_inbox_aggregates_a_collections_pending_card_and_open_question():
+     await _seed_run(
+         spec,
+         cid,
+-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
++        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
+         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+     )
+     inbox = build_review_inbox(spec, actor=Actor.human("u"))
+@@ -123,7 +131,7 @@ async def test_inbox_hides_items_in_collections_the_user_cannot_read():
+         spec,
+         cid,
+         owner="owner",
+-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
++        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
+         term_qs={"a.md": [TermQuestionDraft(term="R7", question="?")]},
+     )
+     inbox = build_review_inbox(spec, actor=Actor.human("outsider"))
+@@ -145,7 +153,7 @@ async def test_inbox_shows_readonly_items_when_the_user_lacks_write():
+         spec,
+         cid,
+         owner="owner",
+-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
++        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
+     )
+     inbox = build_review_inbox(spec, actor=Actor.human("reader"))
+     assert len(inbox.cards) == 1
+@@ -158,7 +166,7 @@ async def test_inbox_history_shows_resolved_and_default_hides_them():
+     spec = make_spec(default_user="u")
+     cid = _collection(spec, "Alpha")
+     coord = await _seed_run(
+-        spec, cid, cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]}
++        spec, cid, cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]}
+     )
+     (item,) = build_review_inbox(spec, actor=Actor.human("u")).cards
+     coord.decide(item.run_id, item.card.id, "accepted")
+@@ -178,8 +186,8 @@ async def test_inbox_can_scope_to_one_collection():
+     coord = _coord(
+         spec,
+         {
+-            "one.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+-            "two.md": [CardDraft(keys=["B"], title="B", snippet="s")],
++            "one.md": [_draft(term="A", keys=["A"], claim="A", quote="s")],
++            "two.md": [_draft(term="B", keys=["B"], claim="B", quote="s")],
+         },
+     )
+     d1 = _add_source(spec, c1, "one.md", "x")
+@@ -204,9 +212,9 @@ async def test_inbox_limit_caps_the_page_and_reports_total():
+         cid,
+         cards={
+             "a.md": [
+-                CardDraft(keys=["RZ3"], title="RZ3", snippet="s"),
+-                CardDraft(keys=["RZ4"], title="RZ4", snippet="s"),
+-                CardDraft(keys=["RZ5"], title="RZ5", snippet="s"),
++                _draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s"),
++                _draft(term="RZ4", keys=["RZ4"], claim="RZ4", quote="s"),
++                _draft(term="RZ5", keys=["RZ5"], claim="RZ5", quote="s"),
+             ]
+         },
+     )
+@@ -225,9 +233,9 @@ async def test_offset_pages_through_the_stream_without_overlap_or_gaps():
+         cid,
+         cards={
+             "a.md": [
+-                CardDraft(keys=["RZ3"], title="RZ3", snippet="s"),
+-                CardDraft(keys=["RZ4"], title="RZ4", snippet="s"),
+-                CardDraft(keys=["RZ5"], title="RZ5", snippet="s"),
++                _draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s"),
++                _draft(term="RZ4", keys=["RZ4"], claim="RZ4", quote="s"),
++                _draft(term="RZ5", keys=["RZ5"], claim="RZ5", quote="s"),
+             ]
+         },
+     )
+@@ -251,7 +259,7 @@ async def test_kind_filter_returns_only_that_stream_and_total_reflects_it():
+     await _seed_run(
+         spec,
+         cid,
+-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
++        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
+         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+     )
+     cards_only = build_review_inbox(spec, actor=Actor.human("u"), kind="cards")
+@@ -277,8 +285,8 @@ async def test_q_filters_across_the_whole_stream_case_insensitively():
+         cid,
+         cards={
+             "a.md": [
+-                CardDraft(keys=["RZ3"], title="RZ3", body="reflow zone three"),
+-                CardDraft(keys=["XY9"], title="XY9", body="gamma"),
++                _draft(term="RZ3", keys=["RZ3"], claim="reflow zone three", quote=""),
++                _draft(term="XY9", keys=["XY9"], claim="gamma", quote=""),
+             ]
+         },
+         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+@@ -314,8 +322,8 @@ async def test_actionable_filter_and_total_actionable_count():
+     coord = _coord(
+         spec,
+         {
+-            "act.md": [CardDraft(keys=["A"], title="A", body="a")],
+-            "ro.md": [CardDraft(keys=["B"], title="B", body="b")],
++            "act.md": [_draft(term="A", keys=["A"], claim="a", quote="")],
++            "ro.md": [_draft(term="B", keys=["B"], claim="b", quote="")],
+         },
+         owner="owner",
+     )
+@@ -416,7 +424,7 @@ async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():
+     await _seed_run(
+         spec,
+         cid,
+-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
++        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
+         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+     )
+     flat = build_review_inbox(spec, actor=Actor.human("u"))
+@@ -490,7 +498,7 @@ async def test_grouped_respects_the_kind_and_q_filters():
+     await _seed_run(
+         spec,
+         cid,
+-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
++        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
+         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+         reconciler=_reconciler(spec),
+     )
+@@ -513,7 +521,7 @@ async def test_grouped_q_fallback_honours_kind_and_actionable():
+     await _seed_run(
+         spec,
+         cid,
+-        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
++        cards={"a.md": [_draft(term="RZ3", keys=["RZ3"], claim="RZ3", quote="s")]},
+         term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+         reconciler=_reconciler(spec),
+     )
+@@ -549,7 +557,10 @@ async def test_grouped_actionable_drops_readonly_clusters():
+     )
+     coord = _coord(
+         spec,
+-        {"act.md": [CardDraft(keys=["A"], title="A")], "ro.md": [CardDraft(keys=["B"], title="B")]},
++        {
++            "act.md": [_draft(term="A", keys=["A"], claim="A", quote="")],
++            "ro.md": [_draft(term="B", keys=["B"], claim="B", quote="")],
++        },
+         owner="owner",
+         reconciler=_reconciler(spec),
+     )
+@@ -573,7 +584,11 @@ async def test_grouped_pages_concepts_natively_with_a_full_total():
+     await _seed_run(
+         spec,
+         cid,
+-        cards={"a.md": [CardDraft(keys=[f"K{i}"], title=f"C{i}") for i in range(5)]},
++        cards={
++            "a.md": [
++                _draft(term=f"C{i}", keys=[f"K{i}"], claim=f"C{i}", quote="") for i in range(5)
++            ]
++        },
+         reconciler=_reconciler(spec),
+     )
+     actor = Actor.human("u")
+@@ -595,7 +610,12 @@ async def test_grouped_drops_a_resolved_concept_from_the_active_view():
+     coord = await _seed_run(
+         spec,
+         cid,
+-        cards={"a.md": [CardDraft(keys=["A"], title="A"), CardDraft(keys=["B"], title="B")]},
++        cards={
++            "a.md": [
++                _draft(term="A", keys=["A"], claim="A", quote=""),
++                _draft(term="B", keys=["B"], claim="B", quote=""),
++            ]
++        },
+         reconciler=_reconciler(spec),
+     )
+     actor = Actor.human("u")
+@@ -704,3 +724,37 @@ async def test_suppressed_audit_pages_natively_with_total():
+     assert [len(p.suppressed) for p in (p1, p2)] == [2, 1]
+     seen = {s.label for p in (p1, p2) for s in p.suppressed}
+     assert seen == {"S0", "S1", "S2"}  # no overlap / gap
++
++
++def _draft(*, term: str, keys: list[str], claim: str = "", quote: str = "") -> CardDraft:
++    """One document's take on one term, in the shape the drafter now returns.
++
++    The old drafts carried a written body; these carry a CLAIM and the sentence
++    that makes it, because no single document can define a term the whole corpus
++    talks about. `claim` defaults to the term, so a draft that only says "this
++    term appears here" still has something to accumulate.
++    """
++    return CardDraft(
++        term=term,
++        keys=list(keys),
++        statements=[CardStatement(text=claim or term, quote=quote or claim or term)],
++    )
++
++
++class _Writer(ILlm):
++    """A stand-in synthesiser: joins the claims it is handed.
++
++    The real one writes prose; what the tests need is only that the body is
++    DERIVED from the whole evidence rather than copied from one document, so a
++    join is enough to tell the two apart.
++    """
++
++    def stream(self, prompt: str):
++        # Only the statement lines: `synthesise` formats them as
++        # `- {text}  \u300c{quote}\u300d`, and the prompt's own bullets have no quote.
++        body = " / ".join(
++            line.split("  \u300c")[0].removeprefix("- ")
++            for line in prompt.splitlines()
++            if line.startswith("- ") and "\u300c" in line
++        )
++        yield json.dumps({"title": "", "body": body}, ensure_ascii=False), False
+diff --git a/web/src/api/kb.ts b/web/src/api/kb.ts
+index 23d8a178..99bcb33e 100644
+--- a/web/src/api/kb.ts
++++ b/web/src/api/kb.ts
+@@ -515,6 +515,14 @@ export type KbCardProvenance = { doc_id: string; path: string; snippet: string }
+  * is `new` or `update` (then `target_card_id` is the card to overwrite);
+  * `confident=false` marks an uncertain draft (⚠️, defaulted out of commit);
+  * `decision` is the reviewer's verdict, persisted on the job (resumable). */
++export type KbCardStatement = {
++  /** The claim, in the extractor's words. */
++  text: string;
++  /** The sentence from the document that makes it, verbatim. */
++  quote: string;
++  source_doc_id: string;
++};
++
+ export type KbProposedCard = {
+   /** #481: stable per-run card id — the review table addresses one card by it. */
+   id: string;
+@@ -525,6 +533,13 @@ export type KbProposedCard = {
+   mode: "new" | "update";
+   target_card_id: string | null;
+   provenance: KbCardProvenance[];
++  /**
++   * What the corpus actually said about the term, each with the sentence that
++   * says it. The body is written FROM these, so a reviewer approving a card is
++   * approving the claims and the sentence they add up to — not a paragraph with
++   * nothing behind it.
++   */
++  statements: KbCardStatement[];
+   // #481: `committed` = written to a card (terminal); a run leaves the queue once
+   // every proposal is terminal (committed / rejected).
+   decision: "pending" | "accepted" | "rejected" | "committed";
+diff --git a/web/src/api/kbMock.ts b/web/src/api/kbMock.ts
+index 5a00302d..c957df13 100644
+--- a/web/src/api/kbMock.ts
++++ b/web/src/api/kbMock.ts
+@@ -688,6 +688,7 @@ export const mockKbApi: KbApi = {
+         mode: hit ? "update" : "new",
+         target_card_id: hit?.id ?? null,
+         provenance: [{ doc_id: docId, path, snippet: `…relevant passage from ${path}…` }],
++        statements: [],
+         decision: "pending",
+       };
+     });
+diff --git a/web/src/hooks/useReviewInbox.test.tsx b/web/src/hooks/useReviewInbox.test.tsx
+index 5c1ccfdd..1f575b9f 100644
+--- a/web/src/hooks/useReviewInbox.test.tsx
++++ b/web/src/hooks/useReviewInbox.test.tsx
+@@ -25,6 +25,7 @@ const card = (can_act: boolean) => ({
+     mode: "new" as const,
+     target_card_id: null,
+     provenance: [],
++    statements: [],
+     decision: "pending" as const,
+   },
+ });
+diff --git a/web/src/lib/i18n.tsx b/web/src/lib/i18n.tsx
+index 469c5fbc..db6c4712 100644
+--- a/web/src/lib/i18n.tsx
++++ b/web/src/lib/i18n.tsx
+@@ -984,6 +984,7 @@ export const messages = {
+   "review.drawer.body": { "zh-TW": "內容", en: "Body" },
+   "review.drawer.overwrites": { "zh-TW": "將覆蓋現有卡片", en: "Overwrites the current card" },
+   "review.drawer.provenance": { "zh-TW": "依據", en: "Evidence" },
++  "review.drawer.statements": { "zh-TW": "文本說了什麼", en: "What the corpus says" },
+   "review.drawer.close": { "zh-TW": "關閉", en: "Close" },
+   "review.drawer.save": { "zh-TW": "儲存編輯", en: "Save edits" },
+   "review.applied.tally": {
+diff --git a/web/src/pages/kb/ClusterReviewList.test.tsx b/web/src/pages/kb/ClusterReviewList.test.tsx
+index 050398ca..851aeddf 100644
+--- a/web/src/pages/kb/ClusterReviewList.test.tsx
++++ b/web/src/pages/kb/ClusterReviewList.test.tsx
+@@ -40,6 +40,7 @@ const card = (title: string, keys: string[] = [title]): KbReviewCard => ({
+     mode: "new",
+     target_card_id: null,
+     provenance: [],
++    statements: [],
+     decision: "pending",
+   },
+ });
+diff --git a/web/src/pages/kb/ReviewDrawer.test.tsx b/web/src/pages/kb/ReviewDrawer.test.tsx
+index fc4c54cd..02f26088 100644
+--- a/web/src/pages/kb/ReviewDrawer.test.tsx
++++ b/web/src/pages/kb/ReviewDrawer.test.tsx
+@@ -29,12 +29,42 @@ const card = (over: Partial<KbReviewCard> = {}): KbReviewCard => ({
+     mode: "new",
+     target_card_id: null,
+     provenance: [{ doc_id: "d", path: "spec.md", snippet: "…RZ3…" }],
++    statements: [],
+     decision: "pending",
+   },
+   ...over,
+ });
+ 
+ describe("ReviewDrawer", () => {
++  it("shows what the corpus said, each claim with the sentence that says it", () => {
++    // The reviewer is approving a body the pipeline WROTE from these claims. With
++    // the evidence hidden they would be approving prose with nothing to check it
++    // against — which is the failure the whole evidence model exists to remove.
++    render(
++      <ReviewDrawer
++        item={{
++          kind: "card",
++          data: card({
++            card: {
++              ...card().card,
++              statements: [
++                { text: "是第三個回焊區", quote: "RZ3 是第三個回焊區。", source_doc_id: "d" },
++                { text: "設定 245°C", quote: "RZ3 設定 245°C。", source_doc_id: "d2" },
++              ],
++            },
++          }),
++        }}
++        resolved={false}
++        actions={actions()}
++        onClose={() => {}}
++      />,
++    );
++
++    expect(screen.getByText("是第三個回焊區")).toBeTruthy();
++    expect(screen.getByText("RZ3 是第三個回焊區。")).toBeTruthy();
++    expect(screen.getByText("設定 245°C")).toBeTruthy();
++  });
++
+   it("saves an edited card body via update.mutate", () => {
+     const a = actions();
+     render(
+diff --git a/web/src/pages/kb/ReviewDrawer.tsx b/web/src/pages/kb/ReviewDrawer.tsx
+index 85c57358..cf8b36f7 100644
+--- a/web/src/pages/kb/ReviewDrawer.tsx
++++ b/web/src/pages/kb/ReviewDrawer.tsx
+@@ -168,6 +168,20 @@ function CardDetail({
+         </p>
+       )}
+ 
++      {c.statements?.length > 0 && (
++        <div className="rvw-drawer__prov">
++          <span className="rvw-drawer__label">{t("review.drawer.statements")}</span>
++          <ul>
++            {c.statements.map((s, i) => (
++              <li key={`${s.text}-${i}`}>
++                {s.text}
++                {s.quote && <blockquote>{s.quote}</blockquote>}
++              </li>
++            ))}
++          </ul>
++        </div>
++      )}
++
+       {c.provenance.length > 0 && (
+         <div className="rvw-drawer__prov">
+           <span className="rvw-drawer__label">{t("review.drawer.provenance")}</span>
+diff --git a/web/src/pages/kb/ReviewTable.test.tsx b/web/src/pages/kb/ReviewTable.test.tsx
+index 777d66a8..b929130c 100644
+--- a/web/src/pages/kb/ReviewTable.test.tsx
++++ b/web/src/pages/kb/ReviewTable.test.tsx
+@@ -37,6 +37,7 @@ const card = (over: Partial<KbReviewCard> = {}): KbReviewCard => ({
+     mode: "new",
+     target_card_id: null,
+     provenance: [],
++    statements: [],
+     decision: "pending",
+   },
+   ...over,
