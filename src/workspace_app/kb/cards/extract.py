@@ -15,16 +15,15 @@ from typing import Any
 
 import msgspec
 
+from ...resources.kb import CardStatement
 from ..llm import ILlm
 
+#: The statement type is the RESOURCE's, not a private copy. A card carries its
+#: statements all the way to the store, and two shapes for one thing is how the
+#: two ends drift apart — see ``docs/plan-context-card-evidence.md``.
+Statement = CardStatement
+
 _PROMPT = (Path(__file__).parent / "prompts" / "card_extraction.md").read_text(encoding="utf-8")
-
-
-class Statement(msgspec.Struct, frozen=True):
-    """One claim a document makes about a term, and the words that make it."""
-
-    text: str
-    quote: str
 
 
 class TermCard(msgspec.Struct, frozen=True):
@@ -60,6 +59,16 @@ def extract(llm: ILlm, text: str, *, prompt: str | None = None) -> Extraction:
     """What this document states, and how much of what was offered survived."""
     template = prompt or _PROMPT
     reply = llm.collect(template.replace("{text}", text))
+    return parse_cards(reply, text)
+
+
+def parse_cards(reply: str, text: str) -> Extraction:
+    """A model reply → the terms it stated something about, quote-gated.
+
+    Public because the live drafters parse their own replies (one of them an
+    agent's final message) and must apply the SAME gate. Two parsers for one
+    contract is how the offline criterion and the shipped one drift apart.
+    """
     return _parse(reply, text)
 
 

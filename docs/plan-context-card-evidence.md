@@ -126,8 +126,8 @@ grounded 是空洞的滿分 1.0,相減會讓它奪冠。
 | | | 狀態 |
 |---|---|---|
 | **P1** | `ContextCard.statements` + `accumulate()` + `synthesise()` 對外 | ✅ |
-| **P2** | drafter 改吐陳述 | ⬜ |
-| **P3** | finalize 改成「累積 + 合成」 | ⬜ |
+| **P1b** | 統一 `Statement` 型別 —— `kb.cards.extract` 改用 `resources.kb.CardStatement`,並把解析器 `parse_cards()` 公開給正式 drafter 共用 | ✅ |
+| **P2+P3** | drafter 改吐陳述 + finalize 改成「累積 + 合成」 | ⬜ |
 | **P4** | 待審 inbox 顯示陳述 + 引句 | ⬜ |
 | **P5** | 一次性刪除舊卡的操作腳本 | ⬜ |
 
@@ -161,6 +161,25 @@ commit     寫 ContextCard{keys, title, body, statements}          ← 不呼叫
 
 `classify_against_existing` 維持原樣決定 `new` / `update`;`update` 時,**既有卡的
 `statements` 就是累積的起點** —— 這就是跨 run 融合成立的地方。
+
+### ⚠️ P2 與 P3 不能分開,而且比原估大得多
+
+**實測過一次才知道的兩件事:**
+
+1. **P2 一動 `CardDraft` 的形狀,`merge_drafts` 立刻編不過** —— 它讀 `d.title` / `d.body` /
+   `d.confident`,而新形狀沒有。中間不存在可以停下來的綠色狀態,所以兩個 phase 要一起做。
+2. **有第二個 drafter**:`api/card_drafter_agent.py` 的 `AgentCardDrafter`(#506 P5)。
+   好消息是它共用 `card_drafter._parse_digest`,所以解析器改一處兩邊都跟著走 —— 但它
+   **有自己的 prompt**(`kb/prompts/card_drafting_agentic.md`),輸出契約要一起改,而且
+   它是 agent,可能引用它在 wiki 上讀到的句子,所以引句閘門必須拿得到 `doc_text`。
+
+**成本的真實量級:生產程式碼改完型別是通的,但有 ~250 個測試呼叫點在用舊形狀** ——
+`tests/kb/test_card_gen_coordinator.py`(178)、`tests/kb/test_review_inbox.py`(70)、
+`tests/kb/test_card_drafter.py`(7)。其中相當一部分斷言的正是「merge 挑贏家」「`confident`
+旗標」這些**要被改掉的行為**,所以不是機械替換,要逐條重想 —— 在那種地方趕工,最容易發生
+的就是把斷言改軟讓它變綠。
+
+做這一步的人請預留一整段完整的時間,不要在別的工作尾巴接著做。
 
 ### P2 — drafter 改吐陳述
 
