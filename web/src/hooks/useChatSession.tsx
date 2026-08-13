@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentEvent } from "../events";
 import { eventSeq, isTerminal } from "../events";
 import { type AgentLog, logFromMessages, reduceAgent } from "../pages/investigation/agentLog";
-import { QUOTA_ALSO_KEY, type QuotaKind, quotaKinds } from "../lib/quotaFailure";
+import type { MsgKey } from "../lib/i18n";
+import { type QuotaDetail, type QuotaKind, quotaMessage } from "../lib/quotaFailure";
 import { type ChatThread, useChatLog } from "./useChatLog";
 import { useCurrentUser } from "./useCurrentUser";
 import { useT } from "../lib/i18n";
@@ -17,7 +18,7 @@ const CHAT_QUOTA_KEY = {
   workspace: "chat.send.workspaceFull",
   user: "chat.send.userFull",
   environment: "chat.send.envFull",
-} as const satisfies Record<NonNullable<QuotaKind>, string>;
+} as const satisfies Record<NonNullable<QuotaKind>, MsgKey>;
 
 export { STORE_POLL_MS };
 export type { ChatThread };
@@ -406,16 +407,13 @@ export function useChatSession(
         // A quota refusal is the one send failure the user can act on, so it
         // names which limit and where to go. Everything else keeps reporting
         // what actually happened rather than guessing.
-        const e = err as { code?: string; also?: string[] } | null;
-        // Every limit that bound, not just the one that fired first: telling
-        // someone to free disk when they are ALSO at their environment limit
-        // sends them to do one thing and then refuses them again.
-        const [lead, ...rest] = quotaKinds(status, e?.code, e?.also);
-        const msg = lead
-          ? [t(CHAT_QUOTA_KEY[lead]), ...rest.map((k) => t(QUOTA_ALSO_KEY[k!]))].join(" ")
-          : err instanceof Error
-            ? err.message
-            : String(err);
+        // Every limit that bound (not just the one that fired first) plus the
+        // numbers behind it — see `quotaMessage`.
+        const quota = quotaMessage(t, CHAT_QUOTA_KEY, {
+          ...(err as { code?: string; also?: string[]; detail?: QuotaDetail } | null),
+          status,
+        });
+        const msg = quota ?? (err instanceof Error ? err.message : String(err));
         setLog((prev) => ({ ...prev, streaming: false, error: msg }));
       }
     },

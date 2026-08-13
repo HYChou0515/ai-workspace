@@ -78,10 +78,17 @@ class AdmissionGate:
         *,
         owner_of: Callable[[str], str | None],
         has_live_sandbox: Callable[[str], Awaitable[bool]],
+        cost_of: Callable[[str], Awaitable[ResourceLimits]] | None = None,
         window_ms: int,
         now_ms: Callable[[], int],
     ) -> None:
         self._activity = activity
+        # What a NEW sandbox for an item would really cost — asked here rather
+        # than passed in by each caller. The one production call site passed
+        # nothing, so the incoming sandbox was weighed as free and `cpu` could
+        # only refuse someone who was ALREADY over. A default the callers cannot
+        # forget is the difference between a rule and a suggestion.
+        self._cost_of = cost_of
         # Resolved per check, not captured at construction: raising someone's
         # allowance has to take effect on their next turn, not at the next
         # restart. It is one point read on a path already about to query the
@@ -118,6 +125,8 @@ class AdmissionGate:
             return
         if await self._has_live(item_id):
             return  # already holding its slot — never refuse what is already open
+        if incoming is None and self._cost_of is not None:
+            incoming = await self._cost_of(item_id)
         since = self._now_ms() - self._window_ms
         live = [
             s for s in await self._activity.live_for(owner, since_ms=since) if s.item_id != item_id

@@ -725,6 +725,10 @@ def create_app(
         user_limits.for_user,
         owner_of=_owner_of,
         has_live_sandbox=registry.has_live_sandbox,
+        # The SAME number the ledger charges a live sandbox (`registry._bump`),
+        # so "does one more fit?" and "what is already held?" cannot answer in
+        # different units.
+        cost_of=registry.would_cost,
         # The window over which a heartbeat still counts as a live sandbox. It is
         # the reaper's idle threshold on purpose: shorter under-counts a
         # live-but-idle sandbox that is still holding memory, longer keeps

@@ -18,7 +18,14 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound, SandboxSpec
+from ..quota.limits import ResourceLimits
+from ..sandbox.protocol import (
+    Sandbox,
+    SandboxBusy,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 from .sandbox_activity import IActivityStore
 from .sandbox_address import IAddressStore
 
@@ -243,6 +250,20 @@ class InvestigationRegistry:
             await self._bump(session.investigation_id)
             session.last_active = _utcnow()
         return session.handle
+
+    async def would_cost(self, item: str) -> ResourceLimits:
+        """What a NEW sandbox for `item` would really consume.
+
+        The admission gate's "does one more of THIS size fit?" and the ledger's
+        "what is already held?" are the same measurement asked at two moments,
+        so they read the same source — the backend's own ceilings, not the
+        App's declaration."""
+        enforced = await self.sandbox.effective_limits(self.spec_for(item))
+        return ResourceLimits(
+            cpu_cores=enforced.cpu_cores,
+            memory_bytes=enforced.memory_bytes,
+            disk_bytes=0,  # admission weighs the flow dimensions only
+        )
 
     async def _bump(self, item: str) -> None:
         """Refresh the item's global heartbeat, carrying what its live sandbox

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { quotaKind, quotaKinds } from "./quotaFailure";
+import { quotaAmounts, quotaKind, quotaKinds, quotaMessage } from "./quotaFailure";
 import { uploadFailureKey } from "./uploadFailure";
 
 describe("uploadFailureKey", () => {
@@ -64,5 +64,73 @@ describe("quotaKinds — more than one limit at its cap", () => {
 
   it("stays empty for anything that is not a quota", () => {
     expect(quotaKinds(404, undefined, undefined)).toEqual([]);
+  });
+});
+
+
+describe("quotaAmounts — the numbers behind the refusal", () => {
+  // "Your workspace is full" is unfalsifiable to the person reading it: a wrong
+  // one looks exactly like a right one until someone reads the code. It was
+  // reported as a bug for that reason — the disk was empty and the message said
+  // otherwise, and there was no way to tell from the screen which limit fired.
+  it("reads bytes as sizes for the two disk limits", () => {
+    expect(quotaAmounts({ error: "workspace_quota_exceeded", used: 0, quota: 1024 })).toEqual({
+      used: "0 B",
+      limit: "1.0 KB",
+    });
+    expect(quotaAmounts({ error: "user_quota_exceeded", used: 2048, quota: 4096 })).toEqual({
+      used: "2.0 KB",
+      limit: "4.0 KB",
+    });
+  });
+
+  // The environment limit has three dimensions and they are not all bytes —
+  // rendering cores as "1 B" would be worse than showing nothing.
+  it("reads each environment dimension in its own unit", () => {
+    expect(
+      quotaAmounts({ error: "sandbox_quota_exceeded", dimension: "sandboxes", used: 2, limit: 1 }),
+    ).toEqual({ used: "2", limit: "1" });
+    expect(
+      quotaAmounts({ error: "sandbox_quota_exceeded", dimension: "memory", used: 512, limit: 1024 }),
+    ).toEqual({ used: "512 B", limit: "1.0 KB" });
+  });
+
+  it("is null when the body carried no numbers, so nothing is invented", () => {
+    expect(quotaAmounts({ error: "workspace_quota_exceeded" })).toBeNull();
+    expect(quotaAmounts(undefined)).toBeNull();
+  });
+});
+
+describe("quotaMessage — one sentence, both surfaces", () => {
+  const KEYS = {
+    workspace: "chat.send.workspaceFull",
+    user: "chat.send.userFull",
+    environment: "chat.send.envFull",
+  } as const;
+  const t = (key: string, vars?: Record<string, unknown>) =>
+    vars ? `${key}(${Object.values(vars).join("/")})` : key;
+
+  it("names the limit, its numbers, and every other limit that bound", () => {
+    expect(
+      quotaMessage(t as never, KEYS as never, {
+        status: 507,
+        code: "sandbox_quota_exceeded",
+        also: ["workspace_quota_exceeded"],
+        detail: { error: "sandbox_quota_exceeded", dimension: "sandboxes", used: 2, limit: 1 },
+      }),
+    ).toBe("chat.send.envFull resources.usedOfLimit(2/1) resources.also.workspace");
+  });
+
+  // Reading `detail` alone silently demoted every caller that only carries
+  // `code` — which is all of them except the send path — to the code-less
+  // default, i.e. the WRONG limit. The terminal's tests caught it.
+  it("still names the right limit when the caller only has the code", () => {
+    expect(
+      quotaMessage(t as never, KEYS as never, { status: 507, code: "user_quota_exceeded" }),
+    ).toBe("chat.send.userFull");
+  });
+
+  it("is null for a failure that is not a quota, so the real error survives", () => {
+    expect(quotaMessage(t as never, KEYS as never, { status: 500 })).toBeNull();
   });
 });

@@ -15,6 +15,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
+import { formatBytes } from "../lib/formatBytes";
 import { useT } from "../lib/i18n";
 
 import { type MyResources, type MyResourcesApi, type OverrideList as OverrideListDTO, myResourcesApi } from "../api/myResources";
@@ -22,14 +23,9 @@ import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { UserPicker } from "../components/UserPicker";
 
-/** Bytes → a short human string. Sizes here span KB to tens of GB. */
-export function formatBytes(n: number): string {
-  if (n <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1);
-  const value = n / 1024 ** i;
-  return `${value >= 10 || i === 0 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
-}
+// Re-exported: this page was its only home until the refusal messages started
+// carrying the numbers behind them too.
+export { formatBytes };
 
 /** `used of limit`, or just `used` when the dimension is unlimited (limit 0). */
 export function formatAgainstLimit(

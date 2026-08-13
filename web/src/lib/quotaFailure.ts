@@ -1,3 +1,6 @@
+import { formatBytes } from "./formatBytes";
+import type { MsgKey, Vars } from "./i18n";
+
 /**
  * Which resource limit answered a 507, if any.
  *
@@ -18,6 +21,39 @@
  * environments.
  */
 export type QuotaKind = "workspace" | "user" | "environment" | null;
+
+/** The `detail` object a 507 carries. Shapes differ per limit — see `quotaAmounts`. */
+export type QuotaDetail = {
+  error?: string;
+  dimension?: string;
+  used?: number;
+  limit?: number;
+  quota?: number;
+  also?: string[];
+};
+
+/**
+ * How much of the limit is held, and what the limit is — as display strings.
+ *
+ * The messages named a limit but never a number, which made them impossible to
+ * check: "this item's workspace is full" reads identically whether it is true
+ * or whether the wrong rule answered. That ambiguity was reported as a bug, and
+ * from the screen alone it could not be told apart from a real full workspace.
+ *
+ * Each dimension is read in its OWN unit. The environment limit is three
+ * different things (a count of sandboxes, cores, bytes) and rendering cores as
+ * "1 B" would be worse than saying nothing. A body with no numbers returns
+ * null — nothing is invented to fill the sentence.
+ */
+export function quotaAmounts(detail: QuotaDetail | undefined): { used: string; limit: string } | null {
+  if (!detail) return null;
+  const cap = detail.error === "sandbox_quota_exceeded" ? detail.limit : detail.quota;
+  if (typeof detail.used !== "number" || typeof cap !== "number") return null;
+  const asBytes =
+    detail.error !== "sandbox_quota_exceeded" || detail.dimension === "memory";
+  const render = asBytes ? formatBytes : (n: number) => `${n}`;
+  return { used: render(detail.used), limit: render(cap) };
+}
 
 /** The clause each limit contributes when it is not the one that led. */
 export const QUOTA_ALSO_KEY = {
@@ -55,4 +91,31 @@ export function quotaKinds(
   const primary = quotaKind(status, code);
   if (!primary) return [];
   return [primary, ...(also ?? []).map((c) => quotaKind(status, c)).filter((k) => k !== null)];
+}
+
+
+/**
+ * The whole refusal sentence: the surface's own wording for the limit that led,
+ * the numbers behind it, and one clause per other limit that also bound.
+ *
+ * Shared rather than written per surface. The refusal wording has drifted
+ * between entry points before — four copies of the same 507 body, only one of
+ * which anyone maintained — and the chat and the terminal say the same thing
+ * about the same limits.
+ */
+export function quotaMessage(
+  t: (key: MsgKey, vars?: Vars) => string,
+  leadKey: Record<NonNullable<QuotaKind>, MsgKey>,
+  err: { status?: number; code?: string; also?: string[]; detail?: QuotaDetail } | null,
+): string | null {
+  // `code` is the field every caller has always carried; `detail` is the whole
+  // body and only some paths pass it. Reading `detail` ALONE silently demoted
+  // every caller that did not to the code-less default — the right sentence has
+  // to survive a caller that only knows the code.
+  const code = err?.code ?? err?.detail?.error;
+  const [lead, ...rest] = quotaKinds(err?.status, code, err?.also ?? err?.detail?.also);
+  if (!lead) return null;
+  const amounts = quotaAmounts(err?.detail);
+  const head = t(leadKey[lead]) + (amounts ? ` ${t("resources.usedOfLimit", amounts)}` : "");
+  return [head, ...rest.map((k) => t(QUOTA_ALSO_KEY[k!]))].join(" ");
 }

@@ -566,6 +566,7 @@ export const realApi: ApiClient = {
         `messages failed: ${resp.status}`,
         info.code,
         info.also,
+        info.detail,
       );
     }
   },
@@ -603,12 +604,14 @@ export const realApi: ApiClient = {
       // The terminal is one of only TWO places a `sandbox_quota_exceeded` can
       // come from (the other is sending a message) — carry the code or the
       // pane can only report a bare 507.
-      const code = await errorCode(resp);
-      const detail = await resp.text().catch(() => "");
+      const info = await errorInfo(resp);
+      const text = await resp.text().catch(() => "");
       throw new HttpError(
         resp.status,
-        `exec failed: ${resp.status} ${detail.slice(0, 200)}`,
-        code,
+        `exec failed: ${resp.status} ${text.slice(0, 200)}`,
+        info.code,
+        info.also,
+        info.detail,
       );
     }
     return (await resp.json()) as ExecResult;

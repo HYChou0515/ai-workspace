@@ -813,6 +813,14 @@ export const messages = {
     "zh-TW": "沒有送出:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再送一次。",
     en: "Not sent — you're out of space across all your items. Open My resources to see where it went, then send again.",
   },
+  // Appended to whichever refusal led. A limit named without a number cannot be
+  // checked by the person reading it — "your workspace is full" reads the same
+  // whether it is true or whether the wrong rule answered, which is how a wrong
+  // one survived long enough to be reported as a bug.
+  "resources.usedOfLimit": {
+    "zh-TW": "(已用 {used},上限 {limit})",
+    en: "({used} used of {limit})",
+  },
   // When MORE than one limit is at its cap. Appended after whichever message
   // led, so the person is not sent to fix one limit, only to be told about the
   // next one on the retry. They name the page for the same reason the primary

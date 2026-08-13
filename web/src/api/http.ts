@@ -56,6 +56,8 @@ export class HttpError extends Error {
     public code?: string,
     /** Other limits the SAME refusal named — see `errorInfo`. */
     public also?: string[],
+    /** The structured error body, when there was one — carries the numbers. */
+    public detail?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "HttpError";
@@ -76,7 +78,7 @@ export async function errorCode(resp: Response): Promise<string | undefined> {
  */
 export async function errorInfo(
   resp: Response,
-): Promise<{ code?: string; also?: string[] }> {
+): Promise<{ code?: string; also?: string[]; detail?: Record<string, unknown> }> {
   try {
     const body = await resp.clone().json();
     const detail = body?.detail;
@@ -84,7 +86,10 @@ export async function errorInfo(
     const also = Array.isArray(detail?.also)
       ? detail.also.filter((c: unknown): c is string => typeof c === "string")
       : undefined;
-    return { code, also };
+    // The whole object, not just the code: a quota refusal carries the numbers
+    // behind it, and a message that names a limit without one cannot be checked
+    // by the person reading it.
+    return { code, also, detail: detail && typeof detail === "object" ? detail : undefined };
   } catch {
     return {}; // not JSON, or no body — the status is all we have
   }

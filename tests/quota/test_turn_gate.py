@@ -40,7 +40,7 @@ def _app(
     spec = make_spec()
     app = create_app(
         spec=spec,
-        sandbox=MockSandbox(),
+        sandbox=MockSandbox(cpu_cores=2.0, memory_bytes=256 * 1024**2),
         filestore=SpecstarFileStore(spec),
         runner=ScriptedAgentRunner([]),
         app_resources=app_resources or {"rca": ONE_CORE},
@@ -154,3 +154,31 @@ def test_a_refusal_names_every_limit_that_is_at_its_cap():
         # message links to, while freeing disk means going into the item.
         assert detail["error"] == "sandbox_quota_exceeded"
         assert detail["also"] == ["workspace_quota_exceeded"]
+
+
+def test_cpu_alone_refuses_a_turn_when_no_app_declared_anything():
+    """The condition P5 never had: `count` has room, and `cpu` is what refuses —
+    for an App that declares no `resources` at all, which is every App in this
+    repo.
+
+    `test_admission.py` already covered cpu binding, but it feeds the ledger by
+    hand (`store.bump(cpu_milli=...)`), so it proves the GATE and not the
+    pipeline that fills it. The pipeline charged `spec.cpu_cores or 0`, and an
+    undeclared App's spec says `None` — so every term of the sum was 0 and this
+    limit could never fire, while the gate's own tests stayed green."""
+    undeclared = ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=0)
+    # count is generous; cpu is not. One live sandbox at the backend's own
+    # 2-core ceiling already fills it.
+    with _app(PerUserResources(count=10, cpu=2.0), app_resources={"rca": undeclared}) as (
+        client,
+        spec,
+    ):
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        _wake(client, first)
+
+        refused = client.post(f"/a/rca/items/{second}/messages", json={"content": "go"})
+        assert refused.status_code == 507, refused.text
+        detail = refused.json()["detail"]
+        assert detail["error"] == "sandbox_quota_exceeded"
+        assert detail["dimension"] == "cpu"
