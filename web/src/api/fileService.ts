@@ -17,6 +17,7 @@ import { writeVerified } from "./writeVerified";
 import { API_PREFIX, apiFetch } from "./http";
 import type { DownloadPrepared } from "./kb";
 import { qk } from "./queryKeys";
+import { isExternalRef, resolveRefPath } from "./refPath";
 import type { FileContent, FileInfo } from "./types";
 
 /** What file operations a service supports — the tree hides actions it can't do
@@ -53,9 +54,11 @@ export type FileService = {
    * a no-op where there's nothing to mirror (KB). */
   refreshFiles(): Promise<void>;
   /** Resolve a markdown ref (`![](src)` image / `[](href)` link) to a browser
-   * URL. `fromPath` is the doc the ref appears in, so a service can resolve
-   * doc-relative refs (KB sibling docs); the investigation service ignores it
-   * and treats refs as workspace-root-relative. */
+   * URL. `fromPath` is the document the ref appears in: a relative ref means
+   * the file NEXT TO that document, an absolute one is tree-root. Every service
+   * resolves by that one rule, so a document renders the same whichever tree it
+   * was opened from. Omit `fromPath` only where there is no containing document
+   * to resolve against (chat markdown) — then a ref is tree-root-relative. */
   fileUrl(src: string | undefined, fromPath?: string): string;
   /** #247: the URL a native `<a download>` points at to save ONE file verbatim
    * (KB → its content blob; investigation → the file route). The caller sets the
@@ -109,7 +112,15 @@ export function investigationFileService(slug: string, investigationId: string):
     copyFile: (from, to) => api.copyFile(slug, investigationId, from, to),
     mkdir: (path) => api.mkdir(slug, investigationId, path),
     refreshFiles: () => api.refreshFiles(slug, investigationId),
-    fileUrl: (src) => resolveServiceUrl(filesBase, src),
+    // A relative ref means the file next to the DOCUMENT it was written in, so
+    // `![](./a.png)` in `/reports/r.md` is `/reports/a.png` — the same rule the
+    // KB tree resolves by, and the one whoever wrote the markdown meant.
+    // `fromPath` absent (chat markdown has no containing document) is the only
+    // case that can still mean workspace-root-relative.
+    fileUrl: (src, fromPath) =>
+      !src || isExternalRef(src)
+        ? resolveServiceUrl(filesBase, src)
+        : resolveServiceUrl(filesBase, resolveRefPath(fromPath ?? "/", src)),
     fileDownloadUrl: (path) => resolveServiceUrl(filesBase, path),
     prepareDirDownload: async (prefix) => {
       const resp = await apiFetch(
@@ -129,7 +140,7 @@ export function investigationFileService(slug: string, investigationId: string):
  * service's `fileUrl` (the investigation file route, the KB blob route, …). */
 export function resolveServiceUrl(base: string, src: string | undefined): string {
   if (!src) return "";
-  if (/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(src)) return src;
+  if (isExternalRef(src)) return src;
   const cleaned = src.replace(/^\.\//, "").replace(/^\/+/, "");
   const path = cleaned.split("/").map(encodeURIComponent).join("/");
   return `${API_PREFIX}/${base}/${path}`;
