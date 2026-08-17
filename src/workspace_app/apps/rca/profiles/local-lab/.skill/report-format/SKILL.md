@@ -94,7 +94,9 @@ description: 寫 ./report.v{N}.md 的版型細則 — 要數字 + 圖,findings �
 ![CMP02.CHB-3 vs others, step 380](./binary-scatter-step380.png)
 ```
 
-FE 的 report renderer 會把 `./xxx.png` 自動解析成 workspace 內的檔案 URL,所以圖會直接 inline 顯示。
+路徑是**相對於報告這個檔案自己的位置**算的,跟 GitHub / VSCode 預覽同一套規則:`./xxx.png`
+就是報告旁邊那張圖,`../step3-analysis/xxx.png` 是往上一層再進去。圖檔放哪個資料夾都可以,
+只要路徑是從報告的位置算出來的。
 
 **禁用以下做法**(這些 FE 不會渲染,使用者只看到一堆亂碼/空白):
 
@@ -140,7 +142,7 @@ FE 的 report renderer 會把 `./xxx.png` 自動解析成 workspace 內的檔案
 | 整篇報告只有最高分的 1 個 finding | 失去物理排序的價值;讀者看不到排除過程 | 列 2–4 個候選,被排除的也寫一兩句說為什麼 |
 | 引用 KB 時改寫 title / 編 URL | citation 必須跟 `ask_knowledge_base` 結果嚴格 1:1 | 直接 paste 回的 metadata;沒有就寫「KB 無對應」 |
 | 把所有結論塞同一個 root-cause 段(不分 finding) | 失去 a→b→c→d 結構,讀者要自己拆 | 每個 finding 獨立一個 section,內部嚴格 4 段 |
-| 用 base64 / `<img src="data:...">` 內嵌圖 | FE renderer 不開 raw HTML,使用者看到一堆亂碼或空白 | 改用 `![alt](./filename.png)`,圖檔放 workspace 根目錄 |
+| 用 base64 / `<img src="data:...">` 內嵌圖 | FE renderer 不開 raw HTML,使用者看到一堆亂碼或空白 | 改用 `![alt](./filename.png)`,路徑從報告自己的位置算 |
 | 圖檔生出來但沒嵌進報告 markdown,只在對話裡口頭描述 | 報告本身缺資料,export PDF 出來是空的 | 在 c.2 段用 `![](./filename.png)` 把每一張圖正式嵌入 |
 
 ## 範例骨架(不是模板,別逐字 copy)
