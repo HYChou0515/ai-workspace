@@ -375,7 +375,11 @@ def build_lifespan(
         if warn_resources is not None:
             with boot_step("resources: check the per-person caps can bind"):
                 for warning in await warn_resources():
-                    logger.warning("quota: %s", warning)
+                    # PRINTED, not logged: the check logs it already, and a
+                    # second identical log line is just noise. This one restores
+                    # what moving off `__main__` cost — the boot dump on stdout,
+                    # which is what an operator redirecting `> boot.log` reads.
+                    print(f"  ⚠ resources: {warning}")
         # #312: in-process consumers run only when `run_consumers` is on. Default
         # True keeps the all-in-one behaviour; a pod-split deploy sets it False so
         # the API is a pure producer and dedicated worker pods drain each JobType.

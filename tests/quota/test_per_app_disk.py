@@ -12,6 +12,7 @@ import pytest
 from specstar import SpecStar
 
 from workspace_app.api import create_app
+from workspace_app.api.file_routes import over_upload_quota
 from workspace_app.api.turn_gate import quota_body
 from workspace_app.apps.pm.model import PmProject
 from workspace_app.apps.rca.model import RcaInvestigation
@@ -156,6 +157,31 @@ def test_every_507_body_comes_from_one_builder():
         assert big.status_code == 507, big.text
         body = big.json()["detail"]
 
-    # The exact keys `quota_body` produces for this refusal — no more, no fewer.
-    assert set(body) == set(quota_body(WorkspaceFull(used=0, quota=1, attempted=1)))
-    assert body["error"] == "workspace_quota_exceeded"
+    # EQUAL to what the one builder produces for this refusal — values, not just
+    # keys. A key-set comparison let a hand-written copy that happens to agree
+    # today pass, which is the same hole as the source-grep version it replaced:
+    # both measured a proxy for "one builder" rather than the body itself.
+    assert body == quota_body(WorkspaceFull(used=0, quota=100, attempted=5000))
+
+
+@pytest.mark.parametrize(
+    ("read", "remaining", "cut"),
+    [
+        (1, None, False),  # no ceiling on this workspace — never cut off
+        (10**9, None, False),
+        (99, 100, False),  # under
+        (100, 100, False),  # exactly at the limit still fits…
+        (101, 100, True),  # …one byte past does not
+        (5000, 0, True),  # a workspace with no room left
+        (0, 0, False),  # nothing read yet
+    ],
+)
+def test_the_streamed_upload_cuts_off_at_the_right_byte(read, remaining, cut):
+    """The cut-off decision, unit-tested, because the route cannot show it.
+
+    An in-process ASGI client buffers the whole body before the route runs, so
+    "refused mid-transfer" and "read it all, then refused" are byte-identical
+    responses — the end-to-end test stayed green with the entire cut-off deleted.
+    The boundary matters in both directions: cutting off at exactly the limit
+    would refuse an upload the pre-flight gate had already approved."""
+    assert over_upload_quota(read, remaining) is cut

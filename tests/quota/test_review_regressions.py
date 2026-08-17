@@ -186,20 +186,25 @@ def test_a_dimension_nobody_declared_is_reported_as_never_firing():
         _limits(rca=(None, None, 0)),
         enforced=EnforcedLimits(None, None),
     )
-    assert "per_user.cpu" in message
-    assert "does not fire" in message
-    # The claim it replaced must be GONE, not merely joined by a better one —
-    # both sentences coexisting is how a retired rule keeps being printed.
-    assert "never fires" not in message
+    # The WHOLE sentence, not a blacklist of phrasings. Substring assertions
+    # were evaded three ways in review: `never fire` (singular) slipped past
+    # `"never fires" not in message`, and a message could carry every required
+    # phrase while stating the unreachable host as the CAUSE — the exact
+    # counter-example the code comment names. Any rewording now fails here, and
+    # rewriting this literal is the moment to re-read what it promises.
+    assert message == (
+        "resources.per_user.cpu is set, but nothing this check can see states a "
+        "cpu cost (app.json `resources`, `resources.per_app.default.cpu`, or the "
+        "sandbox backend), so the sum has no terms and this limit does not fire. "
+        "If the sandbox host was unreachable just now, this line cannot tell that "
+        "apart from a host that caps nothing — re-check once it is up. "
+        "resources.per_user.count applies either way."
+    )
     # …and it does NOT claim to know why. An unreachable host reports "enforces
     # nothing" through the same value as a host that caps nothing, so a line
     # that stated the first as fact would be the original false claim wearing a
     # different hat.
     assert "unreachable" in message
-    # …stated as something this check CANNOT distinguish, not as the reason.
-    # "does not fire because the host is unreachable" contains every required
-    # word and is the same false certainty wearing a different hat.
-    assert "cannot tell" in message
 
 
 def test_a_backend_that_caps_an_undeclared_sandbox_silences_the_warning():
