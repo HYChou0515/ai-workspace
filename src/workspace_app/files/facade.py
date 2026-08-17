@@ -677,9 +677,15 @@ class WorkspaceFiles:
         items — and they are independent: being over one says nothing about the
         other. Stopping at the first meant a person out of BOTH was told to
         delete files, deleted them, tried again, and was told to delete files
-        somewhere else. That is the sequence the turn gate exists to prevent, and
-        it survived on the likeliest pair of all because both refusals came from
-        inside this one method."""
+        somewhere else — the sequence the turn gate exists to prevent, surviving
+        here because both refusals come from inside this one method.
+
+        How OFTEN both bind at once is not something this docstring should claim.
+        The documented example config puts them 640× apart (`per_app.default.disk`
+        80M against `per_user.disk` 50G), so someone would have to fill hundreds
+        of items before the personal total binds alongside one item's own. The
+        justification is that they are independent rules, not that they fail
+        together."""
         refusals: list[Exception] = []
         quota = self._quota_for(workspace_id)
         if extra_bytes <= 0 or (not quota and self._person_gate is None):
