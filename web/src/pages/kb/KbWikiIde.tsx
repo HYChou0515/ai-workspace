@@ -16,7 +16,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { FileServiceProvider } from "../../api/fileService";
 import { kbApi, type KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
-import { normPath } from "../../api/kbFileService";
+import { normPath } from "../../api/refPath";
 import { wikiFileService } from "../../api/wikiFileService";
 import { MonacoEditor } from "../../components/MonacoEditor";
 import { DialogProvider } from "../../components/Dialog";

@@ -17,7 +17,8 @@ import { useNavigate, useParams } from "react-router-dom";
 
 import { FileServiceProvider } from "../../api/fileService";
 import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
-import { kbFileService, normPath } from "../../api/kbFileService";
+import { kbFileService } from "../../api/kbFileService";
+import { normPath } from "../../api/refPath";
 import { qk } from "../../api/queryKeys";
 import { DialogProvider, useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";

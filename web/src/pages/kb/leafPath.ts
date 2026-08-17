@@ -8,7 +8,7 @@
  * naturally: `/kb/collections/c1/documents/a%20dir/x.md`.
  */
 
-import { normPath } from "../../api/kbFileService";
+import { normPath } from "../../api/refPath";
 
 /** Canonical leaf path → splat tail: drop the leading slash, percent-encode
  * each segment, rejoin with "/". */
