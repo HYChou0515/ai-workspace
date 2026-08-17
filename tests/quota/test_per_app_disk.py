@@ -12,6 +12,7 @@ import pytest
 from specstar import SpecStar
 
 from workspace_app.api import create_app
+from workspace_app.api.turn_gate import quota_body
 from workspace_app.apps.pm.model import PmProject
 from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.files import WorkspaceFiles, WorkspaceFull
@@ -140,25 +141,21 @@ async def test_remaining_quota_reads_the_items_own_limit():
 
 
 def test_every_507_body_comes_from_one_builder():
-    """Four entry points answer 507. The wording drifted across them once
-    already, so the body is built in ONE place — including the streamed upload,
-    which cannot use the app-wide handler (it must stop mid-transfer) and so is
-    the one most likely to grow a fifth spelling.
+    """Four entry points answer 507, and the wording drifted across them once
+    already. The streamed upload is the one most likely to grow a fifth
+    spelling: it cannot use the app-wide handler (it must stop mid-transfer).
 
-    Asserted on the KEYS: a hand-written copy that happens to agree today is not
-    the same thing as one that cannot disagree tomorrow."""
-    import inspect
+    Asserted on the RESPONSE, not on the source text. The first version of this
+    test grepped `file_routes.py` for `quota_body(` and for one blacklisted
+    literal — which a hand-written body using a DIFFERENT code satisfied, and
+    which a passing mention in a comment failed. It measured the file, not the
+    contract."""
+    client, rca, _pm = _two_app_client()
+    with client:
+        big = client.put(f"/a/rca/items/{rca}/files/x.bin", content=b"z" * 5000)
+        assert big.status_code == 507, big.text
+        body = big.json()["detail"]
 
-    from workspace_app.api import file_routes
-    from workspace_app.api.turn_gate import quota_body
-    from workspace_app.files.facade import WorkspaceFull
-
-    src = inspect.getsource(file_routes)
-    assert "quota_body(" in src, "the streamed upload must not build its own body"
-    assert '"error": "workspace_quota_exceeded"' not in src, "a hand-written body came back"
-    assert set(quota_body(WorkspaceFull(used=1, quota=2, attempted=3))) == {
-        "error",
-        "used",
-        "quota",
-        "attempted",
-    }
+    # The exact keys `quota_body` produces for this refusal — no more, no fewer.
+    assert set(body) == set(quota_body(WorkspaceFull(used=0, quota=1, attempted=1)))
+    assert body["error"] == "workspace_quota_exceeded"

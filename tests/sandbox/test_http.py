@@ -747,7 +747,7 @@ async def test_a_momentary_host_blip_does_not_charge_zero_for_ever():
     exact defect this backend reports `effective_limits` to fix, except silent
     and only curable by restarting the pod. The blip is likeliest during the
     sandbox-host rollout this change requires."""
-    clock = {"t": 0.0}
+    clock = {"t": 1000.0}
     state, handler = _flaky_host(fail_first=1)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         sb = HttpSandbox(
@@ -762,7 +762,7 @@ async def test_a_momentary_host_blip_does_not_charge_zero_for_ever():
         # in front of every turn. It bounds the damage; it does not deny it.
         during = await sb.effective_limits(SandboxSpec())
         asked_within_window = state["calls"]  # sampled HERE, not after the block
-        clock["t"] = 6.0
+        clock["t"] = 1006.0
         after = await sb.effective_limits(SandboxSpec())
 
     assert first == EnforcedLimits(cpu_cores=None, memory_bytes=None)  # nothing invented
@@ -778,7 +778,7 @@ async def test_a_redeployed_host_is_picked_up_without_restarting_the_app():
     """`sandbox-host` and the app are separate deployments, so "the next process"
     is not a real cure: rolling the host does not restart the app pods. The
     answer is remembered for a bounded time, not for ever."""
-    clock = {"t": 0.0}
+    clock = {"t": 1000.0}
     state, handler = _flaky_host(fail_first=0)
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         sb = HttpSandbox(
@@ -788,11 +788,11 @@ async def test_a_redeployed_host_is_picked_up_without_restarting_the_app():
             monotonic=lambda: clock["t"],
         )
         assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5
-        clock["t"] = 30.0
+        clock["t"] = 1030.0
         state["cpu"] = 4.0  # host redeployed with a bigger ceiling
         assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5  # still cached
         assert state["calls"] == 1
-        clock["t"] = 61.0
+        clock["t"] = 1061.0
         assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 4.0
         assert state["calls"] == 2
 
@@ -818,7 +818,7 @@ async def test_a_host_that_dies_after_answering_keeps_its_last_known_ceiling():
     know nothing" made a host that answered once and then went down worse than
     one that was never asked — every sandbox charged 0, which is the defect this
     whole mechanism exists to prevent."""
-    clock = {"t": 0.0}
+    clock = {"t": 1000.0}
     state = {"up": True, "calls": 0}
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -838,8 +838,12 @@ async def test_a_host_that_dies_after_answering_keeps_its_last_known_ceiling():
             monotonic=lambda: clock["t"],
         )
         assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5
-        clock["t"] = 61.0
+        clock["t"] = 1061.0
         state["up"] = False
+        assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5
+        # …and it keeps holding. Asking once cannot tell "remembered" apart from
+        # "handed out once and then forgotten".
+        clock["t"] = 2000.0
         assert (await sb.effective_limits(SandboxSpec())).cpu_cores == 1.5
 
 
@@ -848,11 +852,15 @@ async def test_a_down_host_is_not_re_asked_by_every_caller_in_turn():
     so without a retry window every queued caller paid a full timeout in turn.
     Twenty concurrent turns behind a 3s timeout is a minute of serial queueing,
     on the path that runs BEFORE a user's message is persisted."""
-    clock = {"t": 0.0}
+    clock = {"t": 1000.0}
     state = {"calls": 0}
 
     async def handler(request: httpx.Request) -> httpx.Response:
         state["calls"] += 1
+        # Yield, or the twenty callers below run to completion one after another
+        # and never actually contend — which leaves the in-lock recheck (the
+        # thing this test exists for) unexecuted.
+        await asyncio.sleep(0)
         raise httpx.ConnectError("host down", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:

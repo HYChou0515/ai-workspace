@@ -188,11 +188,18 @@ def test_a_dimension_nobody_declared_is_reported_as_never_firing():
     )
     assert "per_user.cpu" in message
     assert "does not fire" in message
+    # The claim it replaced must be GONE, not merely joined by a better one —
+    # both sentences coexisting is how a retired rule keeps being printed.
+    assert "never fires" not in message
     # …and it does NOT claim to know why. An unreachable host reports "enforces
     # nothing" through the same value as a host that caps nothing, so a line
     # that stated the first as fact would be the original false claim wearing a
     # different hat.
     assert "unreachable" in message
+    # …stated as something this check CANNOT distinguish, not as the reason.
+    # "does not fire because the host is unreachable" contains every required
+    # word and is the same false certainty wearing a different hat.
+    assert "cannot tell" in message
 
 
 def test_a_backend_that_caps_an_undeclared_sandbox_silences_the_warning():
@@ -397,4 +404,48 @@ def test_a_workable_cap_says_nothing():
             enforced=EnforcedLimits(None, None),
         )
         == []
+    )
+
+
+def test_the_app_actually_runs_the_resource_check_at_startup():
+    """The check moved from an unconditional `print` in `__main__` into an
+    OPTIONAL lifespan hook. Deleting either half of that wiring — the argument
+    `create_app` passes, or the `if` in the lifespan — left every targeted suite
+    green, because the eleven tests above all call the pure function directly.
+
+    A boot warning nobody is wired to emit is the dead-knob shape: it reads as
+    configured and says nothing."""
+    import logging
+
+    from workspace_app.api import ScriptedAgentRunner, create_app
+    from workspace_app.config.schema import PerUserResources
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.quota.limits import ResourceLimits
+    from workspace_app.resources import make_spec
+    from workspace_app.sandbox.mock import MockSandbox
+
+    from ..api._client import TestClient as ApiTestClient
+
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),  # caps nothing, so the cap below cannot bind
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        app_resources={"rca": ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=0)},
+        per_user_resources=PerUserResources(cpu=4.0),
+    )
+    logger = logging.getLogger("workspace_app.quota.limits")
+    seen: list[str] = []
+    handler = logging.Handler()
+    handler.emit = lambda record: seen.append(record.getMessage())  # ty: ignore[invalid-assignment]
+    logger.addHandler(handler)
+    try:
+        with ApiTestClient(app):  # runs the lifespan
+            pass
+    finally:
+        logger.removeHandler(handler)
+
+    assert any("per_user.cpu" in m for m in seen), (
+        "startup did not run the check that warns about an unenforceable cap"
     )

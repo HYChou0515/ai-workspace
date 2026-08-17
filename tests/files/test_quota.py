@@ -506,3 +506,29 @@ async def test_both_disk_rules_are_named_not_just_the_first():
     # …and so is its owner's total. Both must be reported.
     refusals = await files.room_refusals("ws1", 50, record=False)
     assert [type(r).__name__ for r in refusals] == ["WorkspaceFull", "UserDiskFull"]
+
+
+async def test_a_write_path_charges_nothing_once_another_rule_has_refused():
+    """`ensure_room_for` is the path a folder copy takes — the exact operation
+    the fix for this was written about — and it legitimately passes
+    `record=True`, because a write really is about to happen.
+
+    Right up until the workspace rule refuses it. The first fix set the flag at
+    the two CALLERS and left the gate call unconditional, so the turn gate
+    stopped charging and the folder copy, which is what the commit message
+    described, carried on charging. The test that shipped with it asserted the
+    caller-side flag and a roomy workspace — neither reaches this case."""
+    recorded: list[int] = []
+
+    async def gate(_ws: str, new_size: int, _growth: int, *, record: bool = True) -> None:
+        if record:
+            recorded.append(new_size)
+
+    files = WorkspaceFiles(MemoryFileStore(), quota=100, person_gate=gate)
+    await files.write("ws1", "/a", b"x" * 100)  # the item is now full
+    recorded.clear()
+
+    with pytest.raises(WorkspaceFull):
+        await files.ensure_room_for("ws1", 50)  # a copy that cannot happen
+
+    assert recorded == [], "a refused write charged its owner"

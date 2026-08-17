@@ -12,6 +12,7 @@ The plan's acceptance conditions:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Iterator
 
@@ -152,3 +153,31 @@ async def test_the_total_is_scoped_to_one_person(owner: str):
     ledger = DiskLedger(spec)
     await ledger.record("i-1", owner, 100)
     assert await ledger.total_for("alice") == 0
+
+
+def test_a_turn_does_not_invent_a_ledger_row_for_the_item_it_runs_in():
+    """Through `create_app`, not through the facade.
+
+    The turn gate asks the disk rules "would one more byte fit" — a QUESTION,
+    not a write. The per-person gate answers by recording the post-write size,
+    so asking through it charged the item a byte it never stored: a cold item
+    acquired a ledger row for an operation that does not write files at all.
+
+    The facade-level test proves the facade OBEYS `record=False`. It cannot
+    prove the turn gate PASSES it, nor that the real gate READS it — and both of
+    those were mutated to their broken form with every targeted suite green.
+    """
+    with _app("1G") as (client, spec):
+        item = _mk(spec, RcaInvestigation, "alice")
+        assert client.put(f"/a/rca/items/{item}/files/a.bin", content=b"x" * 300).status_code == 204
+        before = asyncio.run(DiskLedger(spec).total_for("alice"))
+        assert before == 300
+
+        cold = _mk(spec, PmProject, "alice")  # stores nothing, ever
+        assert (
+            client.post(f"/a/pm/items/{cold}/messages", json={"content": "go"}).status_code == 202
+        )
+
+        assert asyncio.run(DiskLedger(spec).total_for("alice")) == before, (
+            "the turn gate charged an item for bytes no one wrote"
+        )

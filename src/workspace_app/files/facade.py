@@ -25,15 +25,37 @@ import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Protocol
 
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..quota.disk_ledger import UserDiskFull
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound
 
-# The per-person disk gate. `record` is part of the CONTRACT, not an
-# optimisation: the gate writes the post-write size to the ledger when it
-# ALLOWS a write, so a caller that is only asking has to be able to say so.
-PersonDiskGate = Callable[..., Awaitable[None]]
+
+class PersonDiskGate(Protocol):
+    """The per-person disk gate.
+
+    `record` is part of the CONTRACT, not an optimisation: the gate writes the
+    post-write size to the ledger when it ALLOWS a write, so a caller that is
+    only asking has to be able to say so.
+
+    A Protocol with `__call__` rather than a `Callable[...]` alias, because the
+    alias could not express a keyword-only argument — and `Callable[..., X]`
+    accepts ANY parameter list, so widening to it silently switched off the
+    arity check that was there before. `ty` then passed a gate taking a single
+    `bytes`. On a branch where a test double had already fallen behind this
+    contract twice, deleting the one mechanical check was the wrong trade."""
+
+    def __call__(
+        self, workspace_id: str, new_size: int, growth: int, /, *, record: bool = True
+    ) -> Awaitable[None]: ...
+
+    # Not `async def`: a plain `async def` function is `(...) -> Coroutine`, and
+    # declaring the protocol member async would demand a class with an async
+    # `__call__` instead. Positional-only (`/`) so a caller may name the first
+    # three whatever reads best at their call site — the KEYWORD one is the part
+    # that has to match, because that is the part carrying the contract.
+
 
 # How many times an etag-guarded edit re-bases against a concurrent writer
 # before giving up and reporting a conflict. A handful is plenty — contention
@@ -662,10 +684,14 @@ class WorkspaceFiles:
     ) -> list[Exception]:
         """Every disk rule that `extra_bytes` more would break, in order.
 
-        `record=False` gathers the reasons WITHOUT charging anyone. The
-        per-person gate is not a pure predicate — on the allowed path it writes
-        the post-write size to the ledger, which is honest only when the write
-        is actually about to happen. Collecting every reason means reaching that
+        Nobody is charged for an operation that is not happening. Two things
+        decide that: the CALLER saying it is only asking (`record=False`), and
+        this method having already collected a refusal — a write path is honest
+        about intending to write, right up until another rule stops it.
+
+        The per-person gate is not a pure predicate: on the allowed path it
+        writes the post-write size to the ledger, which is only true if that
+        write occurs. Collecting every reason means reaching that
         gate even after another rule has already refused the operation, and
         charging there left an owner over-counted for a copy that never ran:
         they were then refused in a DIFFERENT item, against a number that
@@ -696,7 +722,18 @@ class WorkspaceFiles:
         if self._person_gate is not None:
             try:
                 await self._person_gate(
-                    workspace_id, used + extra_bytes, extra_bytes, record=record
+                    workspace_id,
+                    used + extra_bytes,
+                    extra_bytes,
+                    # …and not once ANOTHER rule has already refused. `record`
+                    # alone was not enough: it is the CALLER saying "I am only
+                    # asking", and a write path legitimately passes True — but a
+                    # write path whose workspace rule has just refused is no
+                    # longer going to write either. The first version of this
+                    # fix set the flag at the two callers and left this line
+                    # unconditional, so the folder copy its own commit message
+                    # described — refused, yet charged — was untouched.
+                    record=record and not refusals,
                 )
             except UserDiskFull as exc:
                 refusals.append(exc)

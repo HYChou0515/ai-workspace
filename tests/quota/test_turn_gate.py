@@ -195,15 +195,19 @@ def test_the_text_of_a_combined_refusal_names_every_limit():
     from workspace_app.api.turn_gate import TurnRefused
     from workspace_app.files.facade import WorkspaceFull
     from workspace_app.quota.admission import SandboxQuotaExceeded
+    from workspace_app.quota.disk_ledger import UserDiskFull
 
-    exc = TurnRefused(
-        SandboxQuotaExceeded(owner="alice", dimension="cpu", used=4.0, limit=2.0),
-        [WorkspaceFull(used=100, quota=100, attempted=1)],
-    )
-    text = str(exc)
-    assert "cpu" in text
-    assert "workspace" in text.lower() or "quota" in text.lower()
-    # the counting phrasing this replaced — note "1 more" alone would match
-    # `WorkspaceFull`'s own wording ("cannot write 1 more byte"), which is why
-    # the assertion names the phrase rather than the number
-    assert "more limit(s) at their cap" not in text
+    primary = SandboxQuotaExceeded(owner="alice", dimension="cpu", used=4.0, limit=2.0)
+    # TWO others, because an assertion fed one cannot detect truncation: keeping
+    # only the first `also` is invisible when there is only a first.
+    others: list[Exception] = [
+        WorkspaceFull(used=100, quota=100, attempted=1),
+        UserDiskFull(owner="alice", used=999, quota=1000, attempted=1),
+    ]
+    text = str(TurnRefused(primary, others))
+
+    # The property, not one phrasing of it: every refusal's OWN message survives
+    # into the combined text. Asserting a keyword instead let a counting version
+    # back in as long as it happened to contain the word "quota".
+    for refusal in [primary, *others]:
+        assert str(refusal) in text, f"lost: {refusal}"

@@ -207,7 +207,9 @@ describe("per-person overrides (superuser)", () => {
   it("names the person field, rather than leaving a label pointing at nothing", async () => {
     asUser(true);
     render(<MyResourcesPage client={client()} />, { wrapper: Wrap });
-    expect(await screen.findByLabelText("對象")).toBeInTheDocument();
+    // by ROLE: `findByLabelText` also matches a name parked on a wrapper, so it
+    // passed with the picker itself still nameless.
+    expect(await screen.findByRole("searchbox", { name: "對象" })).toBeInTheDocument();
   });
 
   it("grants the exception to whoever was picked from the directory", async () => {
