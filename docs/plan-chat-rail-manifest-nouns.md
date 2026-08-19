@@ -108,3 +108,31 @@ name the scale in one place (tokens) and have these three refer to it.
    relationship, not the literal numbers (the same shape as the existing contrast guards).
 
 Order: 1 and 2 are independent; 3 is independent of both. Each is separately shippable.
+
+## What the web demo turned up (2026-08-19)
+
+Recording the three fixes against a real backend — PM temporarily set to
+`primary_surface: "chat"`, since no App in the repo ships that setting — found two
+things the unit tests had passed over. Both are now fixed and guarded.
+
+**Phase 3 was fixed for one menu out of three.** `.chat-switcher__menu`,
+`.new-item-picker__menu` and `.wf-launch-menu__menu` are siblings in the same chat bar
+and all three carried the hand-written `z-index: 20`. Only the first was converted,
+because the guard was written against that one selector. The dropdown named in the
+original report is the `New…` picker, so the reported defect survived its own fix.
+
+Measured in Chromium at 760px wide with the rail reopened (`position: absolute`,
+`z-index: 42`, spanning x 0–240): the `New…` menu spans x 148–428, and
+`document.elementFromPoint` inside the overlap returns `chat-rail__item-title` at
+`z-index: 20` versus `new-item-picker__free` at `--z-popover`. Above 767px the rail is
+in flow and nothing overlaps, which is why this never showed on a desktop-width screen.
+
+**Phase 2 converted only the copy that is visible.** The `<nav>` landmark's
+`aria-label`, the row menu's `Chat options for …` and the `Untitled chat` title
+fallback still said "chat". Nothing renders them as text, so no assertion that reads the
+screen could have caught them — a screen-reader user would have been told "chats"
+throughout while the visible UI said "Project".
+
+Both guards were widened from "this instance" to "this class": every menu in
+`topic-hub.css` must resolve to `--z-popover` and the file may hold no hand-written
+z-index at all; the rail's accessible names are asserted by role and name.
