@@ -80,11 +80,15 @@ def _create_collection(spec: SpecStar, settings: dict[str, Any], fallback_name: 
     return rev.resource_id
 
 
-def _restore_cards(
+def restore_cards(
     spec: SpecStar, collection_id: str, cards: list[dict[str, Any]], mode: str
 ) -> None:
     """Restore the manifest's cards, obeying ``mode`` exactly as a colliding document
     does (#701).
+
+    Public because the ASYNCHRONOUS importer (#715) restores cards from a worker
+    rather than from the request, and both paths must apply the one rule — the
+    whole point of #701 was that a second copy of a card rule drifts.
 
     This used to create unconditionally, so a card was the one thing a round-trip
     could not survive: re-importing an archive to correct a typo left the collection
@@ -199,5 +203,5 @@ def import_collection(
 
     for doc_id in document_ids:
         index_coordinator.enqueue(doc_id, collection_id)
-    _restore_cards(spec, collection_id, manifest.get("context_cards", []), mode)
+    restore_cards(spec, collection_id, manifest.get("context_cards", []), mode)
     return ImportResult(collection_id=collection_id, document_ids=document_ids)

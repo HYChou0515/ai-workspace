@@ -603,6 +603,14 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
     # to merge + raise questions from). Transient; deleted at finalize.
     spec.add_model(CardGenUnit, indexed_fields=["run_id"])
+    # #715: one row per archive import — the staged archive, the fan-out join
+    # state, and the per-batch outcome a caller polls. `collection_id` indexed so
+    # "is this collection still filling?" is a query rather than a scan; `finished`
+    # indexed so that query narrows to the runs still outstanding. Imported lazily
+    # for the same cycle reason as the card-gen structs above.
+    from ..kb.import_jobs import ImportRun
+
+    spec.add_model(ImportRun, indexed_fields=["collection_id", "finished"])
     # #511: proposals as first-class rows (extracted from CardGenRun.proposals) so
     # the 待審核 views page via native offset/limit. collection_id + decision indexed
     # → the flat "active proposals in this collection" query; run_id indexed → list
