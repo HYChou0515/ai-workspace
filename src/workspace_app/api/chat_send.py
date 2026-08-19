@@ -266,9 +266,9 @@ class ChatSendService:
         the caller is stored anywhere for it to pick up.
 
         A failing impl FAILS THE SEND, before the user's message is persisted —
-        the same placement as the workspace-full and admission gates above, and
-        for the same reason: a turn that runs anyway would run as nobody in
-        particular and return an answer that looks right. An impl that would
+        the same placement as the quota gate above, and for the same reason: a
+        turn that runs anyway would run as nobody in particular and return an
+        answer that looks right. An impl that would
         rather degrade catches its own errors and returns ``{}``.
 
         The impl's own message is deliberately NOT relayed to the client: only

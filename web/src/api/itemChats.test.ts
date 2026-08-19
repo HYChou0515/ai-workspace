@@ -124,6 +124,39 @@ describe("itemChatApi error contract", () => {
     ).rejects.toMatchObject({ status: 504, message: "send failed: 504", code: undefined });
   });
 
+  /**
+   * Parity with the item-level client, asserted rather than remembered.
+   *
+   * A turn can be refused by several limits at once, and #712 made the refusal
+   * carry all of them plus the numbers. `real.ts` hand-builds its error with
+   * `info.also, info.detail`; routing this client through a shared constructor
+   * that took only the code left the named-chat composer — the surface people
+   * actually type into — saying "this workspace is full" while the report
+   * button said "…1.0 KB of 2.0 KB, and your total is full too". A helper
+   * introduced so the next call site cannot forget must not itself carry less.
+   */
+  it("carries every limit the refusal named, not just the first", async () => {
+    respondWith(
+      507,
+      JSON.stringify({
+        detail: {
+          error: "workspace_quota_exceeded",
+          also: ["user_quota_exceeded"],
+          used: 1024,
+          quota: 2048,
+        },
+      }),
+    );
+    await expect(
+      itemChatApi.sendMessage({ slug: "rca", itemId: "INC-1", chatId: "c1", content: "hi" }),
+    ).rejects.toMatchObject({
+      status: 507,
+      code: "workspace_quota_exceeded",
+      also: ["user_quota_exceeded"],
+      detail: { used: 1024, quota: 2048 },
+    });
+  });
+
   it("throws a status-carrying HttpError from a JSON read", async () => {
     respondWith(403);
     await expect(itemChatApi.getChat("rca", "INC-1", "c1")).rejects.toBeInstanceOf(HttpError);

@@ -21,6 +21,7 @@ from fastapi import FastAPI, Request
 from specstar import SpecStar
 
 import workspace_app.api.app as app_mod
+import workspace_app.api.chat_send as chat_send
 from workspace_app.agent import AgentToolContext
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.api.events import RunDone
@@ -30,6 +31,7 @@ from workspace_app.api.turn_context import TurnContextBuilder
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.config.schema import Settings
 from workspace_app.factories import get_request_env
+from workspace_app.files import WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, make_spec
 from workspace_app.sandbox.mock import MockSandbox
@@ -297,6 +299,37 @@ def _default_chat(spec: SpecStar, item_id: str) -> tuple[str, Conversation]:
     rm = spec.get_resource_manager(Conversation)
     conv = Conversation(item_id=item_id, messages=[])
     return rm.create(conv).resource_id, conv
+
+
+def test_a_send_the_quota_gate_refuses_never_reaches_the_impl():
+    """Ordering, asserted rather than commented.
+
+    The seam is resolved AFTER `admit_turn`, and the comment explains it as
+    cost — no point paying for a credential exchange the turn will not use. It
+    decides something louder than cost, though: when a send is both over quota
+    and unable to establish identity, whichever gate runs first picks the
+    message. "Your workspace is full, delete something" is actionable; "we
+    could not confirm your sign-in" sends the person to re-authenticate over a
+    problem that has nothing to do with them.
+    """
+    calls: list[str] = []
+
+    class Recording(IRequestEnv):
+        async def env_for(self, request: Request, *, user_id: str, item_id: str) -> dict[str, str]:
+            calls.append(item_id)
+            return {}
+
+    client, runner, item_id, _spec = _send_app(Recording())
+
+    async def _refuse(*_a, **_k) -> None:
+        raise WorkspaceFull(used=2048, quota=2048, attempted=1)
+
+    with mock.patch.object(chat_send, "admit_turn", _refuse), client:
+        resp = client.post(f"/a/playground/items/{item_id}/messages", json={"content": "hi"})
+
+    assert resp.status_code == 507
+    assert calls == []  # the gate answered before anything was asked of the seam
+    assert runner.envs == []
 
 
 def test_a_deploy_with_no_seam_behaves_exactly_as_before():

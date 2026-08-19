@@ -75,6 +75,13 @@ export class HttpError extends Error {
  * kind of rule that is obeyed on the day it is written and forgotten on the
  * next call site, so it lives here instead.
  *
+ * Everything the refusal named, not just the code: `also` and `detail` are what
+ * turn "this workspace is full" into "…(1.0 KB of 2.0 KB), and your total across
+ * every item is full too". Taking only the code made this helper WEAKER than the
+ * hand-rolled throws it replaced — the surface people actually type into got the
+ * short sentence while the report button got the useful one, which is the same
+ * split it was written to close.
+ *
  * Safe on any response — with ONE precondition: the body must not have been
  * read yet. `clone()` throws on a consumed body and the code comes back
  * `undefined`, silently. So a caller that already did `await resp.text()` must
@@ -82,7 +89,8 @@ export class HttpError extends Error {
  * helper cannot tell the difference and will not warn.
  */
 export async function httpErrorFrom(resp: Response, message: string): Promise<HttpError> {
-  return new HttpError(resp.status, message, await errorCode(resp));
+  const info = await errorInfo(resp);
+  return new HttpError(resp.status, message, info.code, info.also, info.detail);
 }
 
 /** How long a failed response's body may take to arrive before we give up on
