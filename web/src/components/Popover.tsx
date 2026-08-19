@@ -60,7 +60,7 @@ export function Popover({
             borderRadius: "var(--radius-card)",
             boxShadow: "0 6px 20px rgba(20,22,28,0.08)",
             minWidth: width ?? 200,
-            zIndex: 50,
+            zIndex: "var(--z-popover)",
             padding: 4,
           }}
         >

@@ -123,7 +123,16 @@
   /* Layering — one scale so overlays stop colliding (#445). Content modals sit
    * at --z-modal; an imperative confirm (Dialog) rides just above so it stacks
    * over an open modal; the brand splash and the global progress bar own the
-   * top two bands. base.css / brand.css reference these too. */
+   * top two bands. base.css / brand.css reference these too.
+   *
+   * Extended below modal (#pm): --z-rail is the chat rail, which becomes an
+   * overlay on a narrow viewport, and --z-popover is every menu / dropdown.
+   * A popover must outrank the furniture it is opened from or it renders
+   * underneath it — which is exactly what the chat switcher did, sitting at a
+   * hand-written 20 against a rail at 42. Keep menus at --z-popover rather than
+   * picking a number. */
+  --z-rail:      40;
+  --z-popover:   50;
   --z-modal:    100;
   --z-dialog:   150;
   --z-splash:   200;

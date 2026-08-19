@@ -87,13 +87,13 @@
 .chat-rail__backdrop {
   position: fixed;
   inset: 0;
-  z-index: 40;
+  z-index: var(--z-rail);
 }
 .chat-rail__menu {
   position: absolute;
   top: 44px;
   left: var(--space-8);
-  z-index: 41;
+  z-index: calc(var(--z-rail) + 1);
   min-width: 200px;
   padding: var(--space-4);
   border: 1px solid var(--paper-3);
@@ -270,7 +270,7 @@
   position: absolute;
   top: 100%;
   right: var(--space-8);
-  z-index: 41;
+  z-index: calc(var(--z-rail) + 1);
   min-width: 140px;
   padding: var(--space-4);
   border: 1px solid var(--paper-3);
@@ -363,7 +363,7 @@
 @media (max-width: 767px) {
   .chat-rail {
     position: absolute;
-    z-index: 42;
+    z-index: calc(var(--z-rail) + 2);
     top: 0;
     bottom: 0;
     left: 0;
