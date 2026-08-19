@@ -845,6 +845,13 @@ export const messages = {
     "zh-TW": "沒有送出:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
     en: "Not sent — this item's workspace is full. Delete files you no longer need first.",
   },
+  // #714: the deploy's request→env source refused or broke. The turn was not
+  // started BECAUSE the tools would have run without knowing who is asking, so
+  // the copy has to say "nothing happened", not "something went wrong".
+  "chat.send.identityUnavailable": {
+    "zh-TW": "沒有送出:這次沒辦法確認你的登入身分。請重新整理頁面或重新登入後再送一次。",
+    en: "Not sent — we couldn't confirm your sign-in for this request. Refresh the page or sign in again, then send it once more.",
+  },
   "terminal.envFull": {
     "zh-TW": "沒有執行:你同時開啟的執行環境已達上限。到「我的資源」關掉不用的環境再試一次。",
     en: "Not run — you're at your limit for live environments. Close one in My resources, then try again.",

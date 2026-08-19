@@ -114,10 +114,19 @@ class AgentToolContext:
     files: WorkspaceFiles | None = None
     sync: SandboxSync | None = None
     sandbox_spec: SandboxSpec = field(default_factory=SandboxSpec)
-    # The item's user-set environment variables (`WorkItemBase.env_vars`), handed
-    # to the tools this turn runs. `ensure_sandbox` renders them into the
-    # sandbox's infra area; the launchers export them. Empty ⇒ an empty file,
-    # which still has to be written so a deleted variable actually disappears.
+    # The environment variables this turn's tools are given, already resolved.
+    # Two sources are merged here by `TurnContextBuilder`: the item's own
+    # `WorkItemBase.env_vars` (#673 — one shared copy, every participant can read
+    # it) and, for a turn started by a chat send, whatever the deploy's
+    # `IRequestEnv` composed from THAT request (#714 — per-person, never stored).
+    # The item's value wins a name collision.
+    #
+    # Nothing is written anywhere: the names are set on the `exec` that
+    # dispatches a tool and nowhere else (`tooling.registry._exec_tool`), so the
+    # agent's own `exec` has nothing to inherit and no file to open. An earlier
+    # design (#664) did render a file into the sandbox's infra area; it is gone,
+    # and this comment described it for two issues after it was removed.
+    #
     # NOT part of `sandbox_spec`: that is create-time infra env, set once and
     # then overwritten by the launcher's own exports — the wrong layer and the
     # wrong ordering for values the user owns.

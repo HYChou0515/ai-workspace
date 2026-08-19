@@ -24,6 +24,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import magic
+from fastapi import HTTPException
 
 from ..agent.context import KbSearchBudget, WikiSearchBudget
 from ..config.schema import OffHoursSettings
@@ -54,6 +55,7 @@ from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from fastapi import Request
     from specstar import SpecStar
 
     from ..files import WorkspaceFiles
@@ -65,6 +67,7 @@ if TYPE_CHECKING:
     from ..users import UserDirectory
     from .activity import ActivityLog
     from .locator import ItemLocator
+    from .request_env import IRequestEnv
     from .schemas import _MessageBody
     from .subagent_bridge import SubagentBridge
     from .turn_context import TurnContextBuilder
@@ -137,6 +140,7 @@ class ChatSendService:
         offhours: OffHoursSettings | None = None,
         flush_item: Callable[[str], Awaitable[None]],
         admission: AdmissionGate | None = None,
+        request_env: IRequestEnv | None = None,
         send_await_timeout: float = 25.0,
     ) -> None:
         self._spec = spec
@@ -169,6 +173,9 @@ class ChatSendService:
         # The cpu/memory sibling of the workspace-full gate below. None ⇒ no
         # per-person limits configured, so nothing to check.
         self._admission = admission
+        # #714: the deploy's request→env impl, or None when it plugged none in
+        # (then a turn's tools see the item's env_vars alone, as before).
+        self._request_env = request_env
         # #493 symptom 1 (504): how long the POST awaits its own turn before
         # DETACHING it to the background. Snappy turns finish within this and the
         # POST returns after the reply is persisted (the historical behaviour every
@@ -195,6 +202,7 @@ class ChatSendService:
         author: str | None = None,
         lane: CallLane = "background",
         driven_by: str | None = None,
+        request: Request | None = None,
     ) -> None:
         """Append the user message, build the turn ctx and enqueue it — see
         :meth:`_send` — but do it in a task this request only WATCHES.
@@ -217,6 +225,18 @@ class ChatSendService:
         gate sits here rather than on each write, and why it reports every limit
         that bound rather than the first one to fire."""
         await admit_turn(self._files, self._admission, investigation_id)
+        # Who this turn is for, settled ONCE here rather than again downstream:
+        # the request env is composed for this person, and the message is stamped
+        # with them, so the two must not be able to disagree.
+        author = author or self._get_user_id()
+        # #714: and the same placement for the caller's own request-derived
+        # variables — resolved HERE, while the request is still open, because by
+        # the time a tool is dispatched this POST has long returned. After the
+        # gate above, so a refused turn never pays for a credential exchange it
+        # is not going to use.
+        request_env = await self._resolve_request_env(
+            request, user_id=author, item_id=investigation_id
+        )
         task = asyncio.create_task(
             self._send(
                 investigation_id,
@@ -227,11 +247,47 @@ class ChatSendService:
                 author=author,
                 lane=lane,
                 driven_by=driven_by,
+                request_env=request_env,
             )
         )
         self._inflight.add(task)
         task.add_done_callback(self._inflight.discard)
         await asyncio.shield(task)
+
+    async def _resolve_request_env(
+        self, request: Request | None, *, user_id: str, item_id: str
+    ) -> dict[str, str]:
+        """What the request behind this send contributes to the turn's tool env.
+
+        Empty whenever there is no seam or no request. The second case is not an
+        edge: the goal driver (#615) re-enters this same method to continue a
+        chat with nobody watching, and it holds no request — which is the whole
+        of what a turn without a person behind it inherits, since nothing about
+        the caller is stored anywhere for it to pick up.
+
+        A failing impl FAILS THE SEND, before the user's message is persisted —
+        the same placement as the quota gate above, and for the same reason: a
+        turn that runs anyway would run as nobody in particular and return an
+        answer that looks right. An impl that would
+        rather degrade catches its own errors and returns ``{}``.
+
+        The impl's own message is deliberately NOT relayed to the client: only
+        the impl knows whether it built that string out of the very cookie it was
+        reading. The server log keeps the traceback.
+        """
+        if self._request_env is None or request is None:
+            return {}
+        try:
+            return await self._request_env.env_for(request, user_id=user_id, item_id=item_id)
+        except Exception:
+            logger.exception("chat_send: request env source failed for item %s", item_id)
+            raise HTTPException(
+                # Not 502/503/504: the chat client reads those as "an idle
+                # gateway cut the POST while the turn runs" and keeps waiting for
+                # a reply that this refusal guarantees will never come.
+                status_code=500,
+                detail={"error": "request_env_failed"},
+            ) from None
 
     # ── #613 P3: goal auto-continue ─────────────────────────────────────
 
@@ -526,17 +582,21 @@ class ChatSendService:
         conv: Conversation,
         engine_key: str,
         body: _MessageBody,
-        author: str | None = None,
+        author: str,
         lane: CallLane = "background",
         driven_by: str | None = None,
+        request_env: dict[str, str] | None = None,
     ) -> None:
         """Append the user message to conversation ``rid``, build the RCA turn ctx
         from ITS history, and enqueue the turn on ``engine_key`` (item_id for the
         default chat, the chat_id otherwise — manual §3). Shared by the item-level
-        and chat-scoped message endpoints."""
+        and chat-scoped message endpoints.
+
+        ``author`` arrives already settled (``send`` does it): the same person
+        must stamp the message and be the one the request env was composed for,
+        and two defaults for one question is how they come to differ."""
         # #43: stamp the sender so a shared workspace's chat shows who said what,
         # and broadcast the message to live viewers (below, before the turn runs).
-        author = author or self._get_user_id()
         created = now_ms()
         conv.messages.append(
             Message(
@@ -679,6 +739,10 @@ class ChatSendService:
             # #380: skills applied THIS turn — so read_skill exempts them from the
             # disable gate (their bodies are already preloaded into the prompt).
             apply_skills=body.apply_skills or [],
+            # #714: what the POST's own cookies/headers contributed, resolved
+            # back when the request was still open. The item's env_vars are
+            # merged on top of these.
+            request_env=request_env,
             # #613: this thread's Conversation id — the update_todos tool's row key.
             conversation_id=rid,
         )

@@ -276,7 +276,12 @@ async def _exec_tool(
 
 
 def _tool_env(user_env: dict[str, str]) -> dict[str, str]:
-    """The item's variables, plus the list of which names they are.
+    """This turn's variables, plus the list of which names they are.
+
+    "This turn's", not "the item's": since #714 the set can also carry values
+    composed from the request behind the send, and the launcher has to restore
+    those by name too — which it does for free, because the list is derived from
+    whatever arrives here rather than from any one source.
 
     The launcher sets `HOME` / `PYTHONPATH` / `PIP_USER` for itself, and those
     run after we hand the process its environment — so a reserved name the user

@@ -142,7 +142,12 @@ def test_a_stuck_agent_parks_instead_of_spending_the_whole_night():
         goal = read_goal(spec, rid)
         assert goal is not None
         assert goal.offhours_rounds_used < 5  # nowhere near the 30-round budget
-        assert any("卡住" in m.content for m in _messages(spec, rid) if m.role == "goal")
+        # Waited for, not asserted: the state is persisted BEFORE the marker is
+        # written (`upsert_goal`, then `_hand_over`), and between them sits a
+        # thread hop for the summary. Reading the thread the instant the state
+        # flips therefore races that hop — invisibly on an idle machine, and
+        # about two runs in five under a saturated xdist suite.
+        _wait(lambda: any("卡住" in m.content for m in _messages(spec, rid) if m.role == "goal"))
 
 
 def test_an_agent_that_keeps_changing_what_it_does_is_left_alone():

@@ -317,6 +317,7 @@ class TurnContextBuilder:
         run_subagent: RunSubagent,
         history_messages: list[Message],
         external: ExternalTools,
+        request_env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """The fields identical across every RCA turn shape (interactive + workflow)."""
         # #624: capture whether history had to be cut, so the send path can say so
@@ -365,7 +366,17 @@ class TurnContextBuilder:
             # that is create-time infra env, and the launcher's own exports run
             # after it, so a user value placed there would be silently
             # overwritten for exactly the names that collide.
-            user_env=self._locator.env_vars_of(item_id),
+            #
+            # #714: whatever the request behind this turn contributed goes in
+            # FIRST, so the item's own panel wins a name collision. The two are
+            # different kinds of thing — the request's values belong to the one
+            # person who pressed send and are never stored, the item's are a
+            # shared copy every participant can read — and the decision was that
+            # the stored one overrides, unannounced, so a value can be pinned
+            # for testing. `request_env` is empty for every turn with no request
+            # behind it (a workflow step, the goal driver, a scheduled job),
+            # which is the whole of what those turns inherit: nothing.
+            user_env={**(request_env or {}), **self._locator.env_vars_of(item_id)},
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set
             # (so idle-kill/close_all can find it) and the restore-after-create
@@ -439,13 +450,19 @@ class TurnContextBuilder:
         call_lane: CallLane = "background",
         apply_skills: list[str] | None = None,
         conversation_id: str | None = None,
+        request_env: dict[str, str] | None = None,
     ) -> AgentToolContext:
         """The full RCA/workspace-chat turn context (`_send_into`).
 
         ``call_lane`` comes from the CALLER, not from this builder: the same send
         path serves a person hitting send and the goal driver continuing a chat by
         itself, and only the caller knows which it is. It defaults to the tighter
-        lane so a new caller that forgets cannot spend a person's quota."""
+        lane so a new caller that forgets cannot spend a person's quota.
+
+        ``request_env`` (#714) likewise comes from the caller, and for the same
+        reason: only the send path holds the request these values were read from.
+        It defaults to none, so the goal driver re-entering this path with nobody
+        watching gets a turn carrying the item's env and nothing else."""
         session = await self._registry.session(item_id)
         logger.debug("turn-context: build chat turn for %s", item_id)
         external = await self._external_tools(item_id, session)
@@ -457,6 +474,7 @@ class TurnContextBuilder:
                 run_subagent=run_subagent,
                 history_messages=history_messages,
                 external=external,
+                request_env=request_env,
             ),
             # #pm: live record-type schema so the agent creates valid issues /
             # milestones up front (field names, status vocab, timeline date-range).

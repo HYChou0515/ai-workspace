@@ -81,6 +81,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 | **把 job runner 拆出 API** | `server.run_consumers: false`，另跑 worker pod（[§8 訊息佇列](#8-訊息佇列-message-queue)） |
 | **設管理員（能讀所有 collection）** | `server.superusers: ["alice@example.com"]` |
 | **讓外部系統的網頁把工作交棒進來** | `server.cors_allowed_origins: ["https://legacy-rca.corp"]`；沒設的話瀏覽器會在請求送出前就擋掉（串接方式見[從外部系統交棒進來](external-handoff.md)） |
+| **讓工具以「按下送出的那個人」的身分打外部系統** | `server.request_env: "你的套件.YourRequestEnv"`——自己寫一個 `IRequestEnv`,從該次請求的 cookie/header 組出環境變數給那一輪的工具(值不落地、只活一輪;item 自己設的環境變數會蓋過同名的)。見[擴充平台](extending-the-platform.md) |
 | **限制上傳大小 / 每工作區配額** | `filestore.max_file_size` / `filestore.workspace_quota` |
 | **依 App 種類給不同的 cpu / 記憶體 / 硬碟** | App 自己宣告 `apps/<slug>/app.json` 的 `resources`；部署端用 `resources.per_app.default` 給預設、`resources.per_app.max` 設天花板（超過**開機失敗**）。見 §6.5 |
 | **限制一個人總共能用多少** | `resources.per_user`（`count` / `cpu` / `memory` 為同時活著的 sandbox，`disk` 為名下所有 item 的工作區總和；記在 item 的 `owner` 上）。見 §6.5 |
@@ -102,7 +103,7 @@ uv run python -m workspace_app            # API + SPA 一起跑在 127.0.0.1:800
 
 | 區塊 | 是什麼 | 一般會不會動 |
 |---|---|---|
-| `server` | 監聽位址、`default_user`、`superusers`、`run_consumers`、cancel 輪詢、`cors_allowed_origins` | 上線常改 superusers / run_consumers |
+| `server` | 監聽位址、`default_user`、`superusers`、`run_consumers`、cancel 輪詢、`cors_allowed_origins`、`request_env` | 上線常改 superusers / run_consumers |
 | `sandbox` | **agent 執行環境**（見 [§6](#6-sandbox-執行環境重點)） | 多 pod 一定改 |
 | `tools` | RCA 工具包怎麼佈署（`prebuilt` / `uv-run`） | 開發時改 |
 | `filestore` | 檔案儲存（`memory` / `specstar`）＋ 配額 / GC | 上線一定改 |

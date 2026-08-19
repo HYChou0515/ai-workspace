@@ -70,6 +70,15 @@ class ServerSettings:
     # wildcarded because the caller is identified by the shared session cookie,
     # which requires `allow_credentials`, and browsers refuse that with `*`.
     cors_allowed_origins: list[str] = field(default_factory=list)
+    # #714: dotted path to this deploy's `IRequestEnv` — the seam that turns the
+    # REQUEST behind a chat send (its cookies / headers) into environment
+    # variables for that turn's tools. Empty (default) ⇒ no seam at all, and a
+    # turn's env comes from the item alone, exactly as before.
+    #
+    # The platform deliberately knows no cookie name: which cookie, which header
+    # and what the values mean all belong to the deploy's gateway, so the whole
+    # decision lives in the impl rather than in a mapping table here.
+    request_env: str = ""
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────

@@ -64,6 +64,48 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * Build an `HttpError` from a failed response — code included, always.
+ *
+ * The code is what lets the UI say something a person can act on, and it only
+ * ever arrives if the throw site remembers to ask for it. It did not: the
+ * item-level send passed it and the chat-scoped send did not, so the identity
+ * refusal #714 added rendered as "send failed: 500" on the surface every
+ * composer actually uses. Attaching it at each `throw new HttpError(...)` is the
+ * kind of rule that is obeyed on the day it is written and forgotten on the
+ * next call site, so it lives here instead.
+ *
+ * Everything the refusal named, not just the code: `also` and `detail` are what
+ * turn "this workspace is full" into "…(1.0 KB of 2.0 KB), and your total across
+ * every item is full too". Taking only the code made this helper WEAKER than the
+ * hand-rolled throws it replaced — the surface people actually type into got the
+ * short sentence while the report button got the useful one, which is the same
+ * split it was written to close.
+ *
+ * Safe on any response — with ONE precondition: the body must not have been
+ * read yet. `clone()` throws on a consumed body and the code comes back
+ * `undefined`, silently. So a caller that already did `await resp.text()` must
+ * either build the error before reading, or keep passing the code itself; this
+ * helper cannot tell the difference and will not warn.
+ */
+export async function httpErrorFrom(resp: Response, message: string): Promise<HttpError> {
+  const info = await errorInfo(resp);
+  return new HttpError(resp.status, message, info.code, info.also, info.detail);
+}
+
+/** How long a failed response's body may take to arrive before we give up on
+ *  reading a reason out of it.
+ *
+ *  Deliberately generous rather than tight. The two failure directions are not
+ *  symmetric: too long merely delays a rejection that is still bounded, while
+ *  too short discards a code that WAS coming — and a missing code is not a
+ *  missing detail, it is the wrong message (see `quotaFailure`: three limits
+ *  answer 507, and without the code the UI sends people to free space in the
+ *  wrong place). An error body is a few hundred bytes from a server that has
+ *  already answered, so a second is orders of magnitude past normal and still
+ *  turns "never settles" into "settles". */
+const CODE_READ_BUDGET_MS = 1000;
+
 /** Read the structured error code out of a JSON error body, if there is one. */
 export async function errorCode(resp: Response): Promise<string | undefined> {
   return (await errorInfo(resp)).code;
@@ -75,12 +117,49 @@ export async function errorCode(resp: Response): Promise<string | undefined> {
  * A turn is gated on more than one rule and can be refused by several at once.
  * Reporting only the first produced a sequence that reads as a bug: free disk,
  * resend, get told about a different limit.
+ *
+ * BOUNDED, and the timer belongs HERE rather than on `errorCode` — this is the
+ * only place the body is read, and the callers that matter most (the item-level
+ * send, `execShell`) reach it directly. A bound placed on the wrapper would look
+ * right and do nothing for them.
+ *
+ * Every caller uses this to decide how to REJECT, so waiting here is waiting to
+ * fail — and a body that is delivered but never closed (an ingress cutting a
+ * stream mid-flight) would otherwise turn a rejection into a promise that never
+ * settles. Downstream that is not a slow error, it is a missing one: the chat's
+ * reconnect loop never re-enters, the composer never unlocks, the write-failure
+ * notice never fires.
+ *
+ * The deadline RESOLVES the read rather than racing it away — the clone is left
+ * to finish or die on its own, its failure already swallowed.
  */
 export async function errorInfo(
   resp: Response,
-): Promise<{ code?: string; also?: string[]; detail?: Record<string, unknown> }> {
+): Promise<{ code?: string; also?: string[]; detail?: Record<string, unknown>; text?: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const body = await resp.clone().json();
+    // Text, not `json()`: a caller that wants the raw body for its message must
+    // get it from HERE. Reading it again off the original response is a second
+    // unbounded await, and a deadline on the first read buys nothing when the
+    // next line waits forever on the same stalled stream — which is exactly how
+    // `execShell` kept locking the terminal after this was first bounded.
+    const read = resp
+      .clone()
+      .text()
+      .catch(() => undefined); // no body, or a stream that errored
+    const raw = await Promise.race([
+      read,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), CODE_READ_BUDGET_MS);
+      }),
+    ]);
+    if (raw === undefined) return {};
+    let body: { detail?: { error?: unknown; also?: unknown } } | undefined;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return { text: raw }; // not JSON — the status and the words are all we have
+    }
     const detail = body?.detail;
     const code = typeof detail?.error === "string" ? detail.error : undefined;
     const also = Array.isArray(detail?.also)
@@ -89,8 +168,15 @@ export async function errorInfo(
     // The whole object, not just the code: a quota refusal carries the numbers
     // behind it, and a message that names a limit without one cannot be checked
     // by the person reading it.
-    return { code, also, detail: detail && typeof detail === "object" ? detail : undefined };
+    return {
+      code,
+      also,
+      detail: detail && typeof detail === "object" ? (detail as Record<string, unknown>) : undefined,
+      text: raw,
+    };
   } catch {
-    return {}; // not JSON, or no body — the status is all we have
+    return {}; // `clone()` refuses an already-consumed body, synchronously
+  } finally {
+    clearTimeout(timer);
   }
 }

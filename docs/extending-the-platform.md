@@ -268,6 +268,57 @@ def run(args: Args) -> str:
   讀 `/proc/<pid>/environ`。這裡**不是 secret store**。比起把值放在 sandbox 裡的檔案(agent
   隨時 `cat` 得到),窗口窄很多,但不是零——要真的隔開,得讓 tool 與 agent 用不同 uid。
 
+### 隨「按下送出的那個人」而變的變數(#714)
+
+上面那組是**一個 item 一份、大家共用**的。有一種值它天生裝不下:**每個人不一樣的身分**——
+使用者自己的 SSO session cookie、閘道加在請求上的 header。把它填進 `env_vars` 等於把小明的
+登入憑證分享給這個 item 的每一個參與者(那個欄位 `read_meta` 就讀得到,而且不遮罩)。
+
+所以有第二條來源:部署自己寫一個 `IRequestEnv`(`workspace_app/api/request_env.py`),用
+`server.request_env` 指過去。平台**不認得任何 cookie 名字**——哪個 cookie、哪個 header、值是
+什麼意思,全都是你們閘道的事實,所以整個判斷(包含白名單)都在你的 impl 裡:
+
+```python
+# mycorp/plugins.py  — 部署自己的套件,不在本 repo
+from fastapi import Request
+from workspace_app.api.request_env import IRequestEnv
+
+class SsoCookieEnv(IRequestEnv):
+    async def env_for(self, request: Request, *, user_id: str, item_id: str) -> dict[str, str]:
+        session = request.cookies.get("SSO_SESSION")
+        return {"MYCORP_SESSION": session} if session else {}
+```
+
+```yaml
+server:
+  request_env: "mycorp.plugins.SsoCookieEnv"   # 沒設 → 這個機制完全不存在
+```
+
+tool 端的讀法跟上面**一模一樣**(`os.environ`),它分不出值從哪來——這是刻意的。
+
+規則:
+
+- **不落地。** 值只活在觸發它的那一輪 turn,不寫進 item、不寫進任何儲存。
+- **item 的設定蓋過它。** 同名時 `env_vars` 那格贏,而且沒有提示(要拿服務帳號的值壓過去做
+  測試時就靠這個)。
+- **只有聊天送出有。** workflow 整條沒有:它會續跑、會被排程和上傳事件重跑,「第一步有、
+  第二步沒有」是 UI 上看不出來的差別。goal driver(#615)自己續的那些回合同樣沒有——沒有
+  請求就沒有身分,而且沒有任何存下來的東西可以繼承。
+- **`async def`,而且失敗就整輪不跑。** 需要拿 cookie 去外部換 token 是這個接縫存在的理由,
+  那段延遲會直接坐在「按下送出」到「turn 開始」之間。impl 丟例外 → 這則訊息**送不出去**
+  (使用者的訊息也不會被寫下來),因為這裡走的是身分:安靜地當作沒有,會讓 turn 以匿名身分
+  跑完並交出一個看起來正確的答案。想降級的話,自己 `except` 回 `{}`——只有 impl 知道少了
+  那個值還有沒有意義。
+- ⚠️ **延遲要你自己設上限,平台不會幫你設。** 平台不知道你的閘道等多久算合理,設一個數字只會
+  誤殺「只是慢」的請求。但這段等待很危險:此時使用者的訊息**還沒被寫下來**,一旦拖過 ingress
+  的讀取逾時,閘道回 **504**,而前端把 504 當成「閒置代理切斷了 POST、turn 還在跑」→ 繼續等
+  一個**從來沒開始**的 turn,輸入框就鎖死了。**在你自己那個呼叫上設 timeout**,逾時就丟例外
+  (或回 `{}`)——一個看得見的拒絕,好過一個看不見的等待。
+- **例外訊息不會回給前端,但會進伺服器 log。** 前端只拿得到一個固定的代碼
+  (`request_env_failed`),因為只有你自己知道那串字是不是拿剛讀到的 cookie 拼出來的。
+  ⚠️ **反過來說,`raise RuntimeError(f"...{cookie}...")` 會把憑證寫進 log。**
+  例外訊息裡只放「哪一步失敗」,不要放值。
+
 ### 為什麼沒有 user 自建 tool
 
 新增 tool 要跑**任意 Python** 並可能持有 credential——把它開放給執行期使用者不安全,所以這是

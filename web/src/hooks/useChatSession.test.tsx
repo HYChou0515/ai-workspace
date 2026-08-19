@@ -187,6 +187,23 @@ describe("useChatSession", () => {
     expect(result.current.log.error).toBeNull();
   });
 
+  // #714: the backend refuses the send outright when it cannot establish who is
+  // asking. "messages failed: 500" is visible but tells nobody what happened.
+  it("send explains an identity failure instead of echoing the status", async () => {
+    const failed = Object.assign(new Error("messages failed: 500"), {
+      status: 500,
+      code: "request_env_failed",
+    });
+    const { result } = render(fakeTransport({ post: vi.fn().mockRejectedValue(failed) }));
+    await waitFor(() => expect(result.current.log.entries.length).toBeGreaterThan(0)); // hydrated
+    await act(async () => {
+      await result.current.send("q");
+    });
+    expect(result.current.log.streaming).toBe(false);
+    expect(result.current.log.error).toContain("沒有送出");
+    expect(result.current.log.error).not.toContain("500");
+  });
+
   it("cancel tells the transport and unlocks the composer immediately", async () => {
     const t = fakeTransport();
     const { result } = render(t);

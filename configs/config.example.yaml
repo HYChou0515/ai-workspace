@@ -89,6 +89,23 @@
 #                              # the caller is identified by the shared session
 #                              # cookie, so credentials must be allowed, and
 #                              # browsers refuse to pair that with a `*` wildcard.
+#   request_env: ""            # #714: dotted path to YOUR `IRequestEnv`
+#                              # (`workspace_app.api.request_env`), e.g.
+#                              # "mycorp.plugins.SsoCookieEnv". It turns the
+#                              # request behind a chat send — its cookies and
+#                              # headers — into environment variables for that
+#                              # turn's tools, which is how a tool can call an
+#                              # outside system AS THE PERSON WHO PRESSED SEND.
+#                              # The item's own `env_vars` cannot do that: they
+#                              # are one copy, readable by every participant, so
+#                              # a session cookie put there is shared with all of
+#                              # them. Values from here are never stored, live
+#                              # for exactly that one turn, and are merged UNDER
+#                              # the item's (a name set in both resolves to the
+#                              # item's). Turns with no request behind them — a
+#                              # workflow step, the goal driver, a scheduled job
+#                              # — get none. A raising impl fails the send.
+#                              # Empty (default) = no such seam at all.
 
 # ─── sandbox (agent execution environment) ──── [MUST] · [SCALE] ────
 # sandbox:

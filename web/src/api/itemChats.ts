@@ -12,7 +12,7 @@
 
 import type { BodyEnhancements } from "../lib/kbEnhancementMode";
 import type { AgentEvent } from "../events";
-import { apiFetch, HttpError } from "./http";
+import { apiFetch, httpErrorFrom } from "./http";
 import { parseSseStream } from "./sse";
 import type { Message } from "./types";
 
@@ -49,7 +49,7 @@ type ConversationEnvelope = {
 };
 
 async function jsonOrThrow<T>(r: Response, what: string): Promise<T> {
-  if (!r.ok) throw new HttpError(r.status, `${what} failed: ${r.status}`);
+  if (!r.ok) throw await httpErrorFrom(r, `${what} failed: ${r.status}`);
   return r.json() as Promise<T>;
 }
 
@@ -89,7 +89,7 @@ export const itemChatApi = {
   /** Delete a chat (#132) — the backend also cancels a running workflow first. */
   async deleteChat(slug: string, itemId: string, chatId: string): Promise<void> {
     const r = await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}`, { method: "DELETE" });
-    if (!r.ok) throw new HttpError(r.status, `delete chat failed: ${r.status}`);
+    if (!r.ok) throw await httpErrorFrom(r, `delete chat failed: ${r.status}`);
   },
 
   /** Hydrate a chat's persisted thread via the specstar single-resource route. */
@@ -153,7 +153,7 @@ export const itemChatApi = {
       }),
       signal: args.signal,
     });
-    if (!r.ok) throw new HttpError(r.status, `send failed: ${r.status}`);
+    if (!r.ok) throw await httpErrorFrom(r, `send failed: ${r.status}`);
   },
 
   async *subscribe(
@@ -166,7 +166,7 @@ export const itemChatApi = {
     // `since` (a reconnect) resumes the same-pod replay buffer from that seq.
     const q = since !== undefined ? `?since=${since}` : "";
     const r = await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}/stream${q}`, { signal });
-    if (!r.ok || !r.body) throw new HttpError(r.status, `stream failed: ${r.status}`);
+    if (!r.ok || !r.body) throw await httpErrorFrom(r, `stream failed: ${r.status}`);
     yield* parseSseStream(r.body) as AsyncGenerator<AgentEvent>;
   },
 
@@ -184,7 +184,7 @@ export const itemChatApi = {
       `${base(slug, itemId)}/chats/${enc(chatId)}/messages?turns=${turns}`,
       { method: "DELETE" },
     );
-    if (!r.ok) throw new HttpError(r.status, `undo failed: ${r.status}`);
+    if (!r.ok) throw await httpErrorFrom(r, `undo failed: ${r.status}`);
   },
 
   /** @mention people to "come look" — notifies them, does NOT run the agent.
@@ -195,7 +195,7 @@ export const itemChatApi = {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ user_ids: userIds, note }),
     });
-    if (!r.ok) throw new HttpError(r.status, `mention failed: ${r.status}`);
+    if (!r.ok) throw await httpErrorFrom(r, `mention failed: ${r.status}`);
   },
 };
 

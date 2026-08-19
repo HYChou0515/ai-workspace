@@ -30,6 +30,7 @@ from workspace_app.resources import make_spec
 
 from .agent.config_catalog import AgentConfigCatalog
 from .api.litellm_runner import LitellmAgentRunner
+from .api.request_env import IRequestEnv
 from .api.runner import AgentRunner
 from .apps.catalog import AppCatalog, validate_all_apps
 from .config.catalog_build import build_catalog
@@ -1180,6 +1181,25 @@ def get_check_registry(settings: Settings):  # -> health.CheckRegistry
     for dotted in settings.health.checks:
         registry.register(_construct_dotted(dotted, ISanityCheck, config_key="health.checks"))
     return registry
+
+
+def get_request_env(dotted: str) -> IRequestEnv | None:
+    """The deploy's request→env seam (#714), or None when it configured none.
+
+    None is not a degraded mode — it is the absence of the feature: a turn's
+    tools then see the item's ``env_vars`` and nothing else, exactly as before
+    this seam existed. That is why there is no bundled default impl to fall back
+    to; without knowing the deploy's gateway there is nothing for the platform to
+    compose.
+
+    Takes the value rather than the whole ``Settings`` — one field is all it
+    needs, and the composition root reading ``settings.server.request_env`` in
+    plain sight is what ``tests/config/test_server_settings_are_wired`` looks
+    for.
+    """
+    if not dotted:
+        return None
+    return _construct_dotted(dotted, IRequestEnv, config_key="server.request_env")
 
 
 def _tool_check_kwargs(settings: Settings, purpose: str) -> dict:
