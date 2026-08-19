@@ -384,6 +384,52 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
   它不模擬 specstar／sandbox jail／SSE／額度／工具授權——那些只會讓正式環境更寬鬆,
   所以這裡綠燈是「可以去做活體檢查」,不是「取代活體檢查」。
 
+#### 寫你自己的情境
+
+一個情境就是一個 `*.json`,放在你指給 `--scenarios` 的資料夾裡,它引用的資料檔放在同一層。
+
+```json
+{
+  "name": "silent-dtype",
+  "note": "給人看的:這個情境為什麼存在。只出現在報告裡,不影響判定",
+  "data": ["silent_dtype.csv"],
+  "prompt": "Compute mean - 3 sigma of thickness in silent_dtype.csv.",
+  "expect": {
+    "must_call": ["exec"],
+    "must_mention": [
+      "thickness",
+      ["not a number", "not numeric", "object", "as text"]
+    ]
+  }
+}
+```
+
+| 欄位 | 意義 |
+|---|---|
+| `name` | 報告與輸出資料夾用的識別字(必填) |
+| `prompt` | 送給模型的那句話(必填) |
+| `data` | 開跑前複製進 workspace 的檔案,相對於情境資料夾 |
+| `note` | 給讀報告的人看的說明 |
+| `expect.must_call` | 這些工具**每個都**要被呼叫過 |
+| `expect.must_not_call` | 這些工具**一個都不准**被呼叫 |
+| `expect.must_mention` | 最終答覆裡**每一項都**要出現 |
+| `expect.must_not_mention` | 最終答覆裡**一項都不准**出現 |
+
+`expect` 的四個欄位都可省略,省略就是「不在意」——一個情境只宣告它真的想主張的事。
+
+`must_mention` / `must_not_mention` 的每一項可以是**一個字串**,或**一個候選清單**——清單
+中任一個命中就算數。這是為了讓期望不要對用字過度敏感:你要主張的是「它有沒有指出這欄
+不是數字」,不是「它有沒有剛好用 object 這個詞」。比對**不分大小寫**。
+
+判定完全是決定性的,沒有 LLM judge:這些問題都有客觀答案,而加一個 judge 只會多出一個
+需要先被校準的東西。想主張的事若無法寫成這四條,通常代表那個主張還沒被想清楚。
+
+一個實務建議:**每個情境都放 `"must_call": ["exec"]`**。在模型腦中算出來的數字既不可重現
+也無法查核,所以「絕不心算」是這類 skill 裡唯一有完全客觀測法的一條。
+
+另外準備一個**乾淨的對照情境**——沒有任何缺陷、正確行為是「直接回答、什麼都別問」。
+會叫狼來了的 guidance 實務上會被使用者關掉,而只有這種情境抓得到它。
+
 ### user 自建（#298）
 
 在任何 workspace app 裡跟助理說「幫我做一個 skill」,agent 會載入內建的 `author-skill`

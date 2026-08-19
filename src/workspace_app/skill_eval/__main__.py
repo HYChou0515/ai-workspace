@@ -53,18 +53,37 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="NAME",
         help="write the shipped skill to --out-dir and exit, as a starting point to edit",
     )
-    p.add_argument("--scenarios", type=Path, default=None, help="folder of *.json + their data")
-    p.add_argument("-o", "--out-dir", type=Path, default=Path("./skill-eval"))
+    p.add_argument(
+        "--scenarios",
+        type=Path,
+        default=None,
+        help="folder of *.json scenarios and the data files they name. See "
+        "docs/extending-the-platform.md for the field reference",
+    )
+    p.add_argument(
+        "-o",
+        "--out-dir",
+        type=Path,
+        default=Path("./skill-eval"),
+        help="per-scenario workspaces + transcripts + report.json/report.txt land here. "
+        "Use a fresh dir per run so two versions can be compared side by side",
+    )
     p.add_argument("--model", default="ollama_chat/qwen3:14b", help="any litellm model id")
     p.add_argument("--num-ctx", type=int, default=0, metavar="N", help="ollama context window")
-    p.add_argument("--timeout", type=int, default=900, metavar="S")
+    p.add_argument("--timeout", type=int, default=900, metavar="S", help="per model call, seconds")
     p.add_argument(
         "--control",
         action="store_true",
         help="also run every scenario with NO skill. A scenario the control passes too "
         "is not measuring the guidance — without this the report cannot say so",
     )
-    p.add_argument("--max-steps", type=int, default=20)
+    p.add_argument(
+        "--max-steps",
+        type=int,
+        default=20,
+        help="give up on a scenario after this many model turns; the report says "
+        "step-limit rather than pretending the run answered",
+    )
     p.add_argument("--app", default="rca", help="whose system prompt the turn starts with")
     return p.parse_args(argv)
 
