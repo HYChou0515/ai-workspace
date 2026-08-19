@@ -24,6 +24,7 @@ import msgspec
 from .kb.card_drafter import LlmCardDrafter, NullCardDrafter
 from .kb.card_gen_coordinator import CardGenCoordinator
 from .kb.chunker import FixedTokenChunker
+from .kb.import_jobs import ImportCoordinator
 from .kb.index_coordinator import IndexCoordinator
 from .kb.ingest import Ingestor
 from .kb.quality import QualityScorer
@@ -64,6 +65,9 @@ class CoordinatorBundle:
     eval: EvalCoordinator | None
     # #534: the metric-extraction fan-out. None when no KB LLM is wired.
     graph: GraphCoordinator | None
+    # #715: archive imports. Always built — it needs no LLM, only the ingestor and
+    # the index queue it hands each restored document to.
+    kb_import: ImportCoordinator
 
 
 def build_ingestor(
@@ -246,6 +250,15 @@ def build_coordinators(
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
     )
+    # #715: archive imports write their documents on a worker instead of inside the
+    # request, so a large archive cannot be cut off by a gateway timeout. Built after
+    # `index` because every restored document is handed to that queue.
+    kb_import = ImportCoordinator(
+        spec,
+        ingestor=ingestor,
+        index_coordinator=index,
+        message_queue_factory=message_queue_factory,
+    )
     # Model-sanity battery: a background consumer runs matrix cells (heavy live
     # LLM) off the request path. Only built when an LLM factory is wired.
     sanity = None
@@ -283,11 +296,12 @@ def build_coordinators(
             message_queue_factory=message_queue_factory,
         )
         logger.info("coordinators: metric-extraction (graph) coordinator wired")
-    logger.info("coordinators: built wiki/index/card_gen coordinators")
+    logger.info("coordinators: built wiki/index/card_gen/kb_import coordinators")
     return CoordinatorBundle(
         wiki=wiki,
         index=index,
         card_gen=card_gen,
+        kb_import=kb_import,
         quality=quality,
         sanity=sanity,
         eval=eval_coordinator,

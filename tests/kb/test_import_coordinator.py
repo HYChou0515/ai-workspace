@@ -54,9 +54,7 @@ def _coordinator(spec: SpecStar) -> ImportCoordinator:
     ing = Ingestor(
         spec, chunker=FixedTokenChunker(max_tokens=64), embedder=HashEmbedder(dim=EMBED_DIM)
     )
-    return ImportCoordinator(
-        spec, ingestor=ing, index_coordinator=IndexCoordinator(spec, ing)
-    )
+    return ImportCoordinator(spec, ingestor=ing, index_coordinator=IndexCoordinator(spec, ing))
 
 
 def _index_jobs(spec: SpecStar) -> int:

@@ -197,11 +197,17 @@ class ImportCoordinator:
         Returns before a single document is written — that is the whole point. The
         collection must already exist (the route creates it, so the caller has its
         id straight away)."""
+        # Count the members HERE, not in `split`. Reading a zip's central directory
+        # is milliseconds even for a large archive, and the caller should be able to
+        # see "1000 documents queued" the moment it is accepted rather than zero
+        # until a worker picks the run up — a progress number that starts as a lie
+        # is worse than no number.
         with self._run_rm.using(user=user):
             run_id = self._run_rm.create(
                 ImportRun(
                     collection_id=collection_id,
                     mode=mode,
+                    members=len(_members_of(zip_data)),
                     archive=Binary(data=zip_data, content_type="application/zip"),
                 )
             ).resource_id
@@ -264,7 +270,7 @@ class ImportCoordinator:
             (i, members[s : s + MEMBERS_PER_BATCH])
             for i, s in enumerate(range(0, len(members), MEMBERS_PER_BATCH))
         ]
-        self._patch(run_id, total=len(batches), members=len(members))
+        self._patch(run_id, total=len(batches))
         if not batches:
             # Nothing to write — cards still have to be restored, so go straight
             # to finalize rather than leaving the run pending forever.

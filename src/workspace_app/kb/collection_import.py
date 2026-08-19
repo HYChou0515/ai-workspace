@@ -65,7 +65,14 @@ def read_manifest(zip_data: bytes) -> dict[str, Any] | None:
     return parsed
 
 
-def _create_collection(spec: SpecStar, settings: dict[str, Any], fallback_name: str) -> str:
+def create_collection_row(spec: SpecStar, settings: dict[str, Any], fallback_name: str) -> str:
+    """Create the collection an archive's manifest describes, and nothing else.
+
+    Public because #715's asynchronous route creates the row in the REQUEST — one
+    cheap write — so the caller gets a collection id at once and the collection is
+    visible while a worker fills it. Copying these few lines into the route would
+    put "what an archive's settings restore to" in two places.
+    """
     coll = Collection(
         name=settings.get("name") or fallback_name,
         description=settings.get("description", ""),
@@ -176,7 +183,7 @@ def import_collection(
     ``None``). Blocking (zip parse + blob writes) — call off the event loop."""
     manifest = read_manifest(zip_data) or {}
     if collection_id is None:
-        collection_id = _create_collection(spec, manifest.get("collection", {}), fallback_name)
+        collection_id = create_collection_row(spec, manifest.get("collection", {}), fallback_name)
 
     document_ids: list[str] = []
     with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:

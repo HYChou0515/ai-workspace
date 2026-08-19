@@ -1129,6 +1129,7 @@ def create_app(
         wiki_coordinator,
         graph_coordinator=coordinators.graph,
         index_coordinator=index_coordinator,
+        import_coordinator=coordinators.kb_import,
         retriever=kb_retriever,
         get_user_id=get_user_id,
         superusers=superusers,
