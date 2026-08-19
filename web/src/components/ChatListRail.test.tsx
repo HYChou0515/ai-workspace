@@ -12,8 +12,12 @@ const items = [
   { resource_id: "rca-investigation/2", title: "Sensor noise", owner: "me" },
   { resource_id: "rca-investigation/9", title: "From a teammate", owner: "someone-else" },
 ];
+const manifest = {
+  item: { noun: "Project", noun_plural: "Projects", create_label: "Start a Project" },
+};
 vi.mock("../hooks/useResources", () => ({
   useAppItems: () => ({ items, isPending: false }),
+  useAppManifest: () => manifest,
   useApps: () => [
     { slug: "rca", title: "RCA" },
     { slug: "pm", title: "Product" },
@@ -76,6 +80,20 @@ function renderRail(currentId = "rca-investigation/1") {
 }
 
 describe("ChatListRail", () => {
+  it("calls an item what the App calls it, not a chat (#pm)", () => {
+    // The rail lists ITEMS. Where an item holds many conversations — a PM
+    // project does — calling it a "chat" names the wrong level, and the
+    // manifest already declares the right word.
+    renderRail();
+
+    expect(screen.getByRole("button", { name: /Start a Project/i })).toBeInTheDocument();
+    // Deliberately unequal to the "New <noun>" fallback, so this asserts the
+    // manifest is READ rather than that the fallback happens to match.
+    expect(screen.getByRole("tab", { name: /My Projects/i })).toBeInTheDocument();
+    expect(screen.queryByText(/New chat/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/My chats/i)).not.toBeInTheDocument();
+  });
+
   it("lists the app's chats, links each to its item (slash id encoded), marks the current one", () => {
     renderRail();
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
@@ -87,7 +105,7 @@ describe("ChatListRail", () => {
 
   it("creates a chat with defaults when New chat is pressed (no create form)", () => {
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /New chat/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Start a Project/i }));
     expect(newChat).toHaveBeenCalled();
   });
 
@@ -103,7 +121,7 @@ describe("ChatListRail", () => {
     renderRail();
     fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
-    const input = screen.getByRole("textbox", { name: /Rename chat/i });
+    const input = screen.getByRole("textbox", { name: /Rename Project/i });
     fireEvent.change(input, { target: { value: "Oven drift RCA" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(chatActions.rename).toHaveBeenCalledWith("rca-investigation/1", "Oven drift RCA");
@@ -159,7 +177,7 @@ describe("ChatListRail", () => {
 
   it("still lets you cross to the other tab from a shared chat", () => {
     renderRail("rca-investigation/9");
-    fireEvent.click(screen.getByRole("tab", { name: /My chats/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /My Projects/i }));
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
     expect(screen.queryByText("From a teammate")).not.toBeInTheDocument();
   });
@@ -174,9 +192,9 @@ describe("ChatListRail", () => {
   it("collapses to a thin bar and re-expands", () => {
     renderRail();
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /collapse chats/i }));
+    fireEvent.click(screen.getByRole("button", { name: /collapse projects/i }));
     expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /show chats/i }));
+    fireEvent.click(screen.getByRole("button", { name: /show projects/i }));
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
   });
 
@@ -210,7 +228,7 @@ describe("ChatListRail on a narrow viewport (#fe-responsive)", () => {
     setViewport(BREAKPOINTS.shell + BREAKPOINTS.chatRail - 1);
     renderRail();
     expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /show chats/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show projects/i })).toBeInTheDocument();
   });
 
   it("stays tucked on a phone", () => {
@@ -228,7 +246,7 @@ describe("ChatListRail on a narrow viewport (#fe-responsive)", () => {
   it("can still be opened when tucked — tucked is a default, not a lockout", () => {
     setViewport(390);
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /show chats/i }));
+    fireEvent.click(screen.getByRole("button", { name: /show projects/i }));
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
   });
 });

@@ -18,7 +18,8 @@ import { useChatActions } from "../hooks/useChatActions";
 import { useCreateChat } from "../hooks/useCreateChat";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useMinWidth } from "../hooks/useMediaQuery";
-import { useAppItems, useApps } from "../hooks/useResources";
+import { useAppItems, useAppManifest, useApps } from "../hooks/useResources";
+import { itemNouns } from "../lib/itemNoun";
 import { BREAKPOINTS } from "../lib/breakpoints";
 import { ShareChatDialog } from "./ShareChatDialog";
 import { UserChip } from "./UserChip";
@@ -50,6 +51,9 @@ export function ChatListRail({
   currentId: string;
 }) {
   const { items, isPending } = useAppItems(slug, resourceRoute);
+  // The rail lists ITEMS, so it uses the App's word for one. Hardcoding
+  // "chat" named the wrong level wherever an item holds many conversations.
+  const nouns = itemNouns(useAppManifest(slug));
   const apps = useApps();
   const me = useCurrentUser();
   const createChat = useCreateChat(slug);
@@ -93,11 +97,11 @@ export function ChatListRail({
 
   if (collapsed) {
     return (
-      <nav className="chat-rail chat-rail--collapsed" aria-label="chats">
+      <nav className="chat-rail chat-rail--collapsed" aria-label={nouns.plural.toLowerCase()}>
         <button
           type="button"
           className="chat-rail__expand"
-          aria-label="Show chats"
+          aria-label={`Show ${nouns.plural}`}
           onClick={() => setCollapsed(false)}
         >
           »
@@ -124,12 +128,12 @@ export function ChatListRail({
           onClick={() => createChat.mutate()}
           disabled={createChat.isPending}
         >
-          + New chat
+          + {nouns.createLabel}
         </button>
         <button
           type="button"
           className="chat-rail__collapse"
-          aria-label="Collapse chats"
+          aria-label={`Collapse ${nouns.plural}`}
           onClick={() => setCollapsed(true)}
         >
           «
@@ -177,7 +181,7 @@ export function ChatListRail({
           data-active={tab === "mine" ? "true" : undefined}
           onClick={() => setTab("mine")}
         >
-          My chats
+          My {nouns.plural}
         </button>
         <button
           type="button"
@@ -196,7 +200,7 @@ export function ChatListRail({
           <div className="chat-rail__empty">Loading…</div>
         ) : shown.length === 0 ? (
           <div className="chat-rail__empty">
-            {tab === "mine" ? "No chats yet" : "Nothing shared with you yet"}
+            {tab === "mine" ? `No ${nouns.plural} yet` : "Nothing shared with you yet"}
           </div>
         ) : (
           shown.map((it: AppItem) => (
@@ -205,6 +209,7 @@ export function ChatListRail({
               slug={slug}
               item={it}
               active={it.resource_id === currentId}
+              noun={nouns.noun}
               onRename={actions.rename}
               onDelete={actions.remove}
             />
@@ -221,12 +226,15 @@ function ChatRailItem({
   slug,
   item,
   active,
+  noun,
   onRename,
   onDelete,
 }: {
   slug: string;
   item: AppItem;
   active: boolean;
+  /** What this App calls one item ("Project"), for the row's own labels. */
+  noun: string;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -249,7 +257,7 @@ function ChatRailItem({
         // eslint-disable-next-line jsx-a11y/no-autofocus
         autoFocus
         className="chat-rail__rename"
-        aria-label="Rename chat"
+        aria-label={`Rename ${noun}`}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
