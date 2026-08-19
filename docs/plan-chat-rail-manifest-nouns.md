@@ -8,6 +8,24 @@ here are `ide` (rca) and `views` (pm). The chat-first surface is enabled by a de
 own `app.json`. So every fix must be manifest-driven, and the tests must construct a chat
 manifest rather than lean on a bundled app.
 
+## The level confusion underneath Report 1
+
+`ChatListRail`'s own docstring says it lists "the user's own chats (**= items**)". That
+equals sign is the defect. There are two levels, and they are not the same thing:
+
+```
+ChatListRail  -> useAppItems(slug)          -> ITEMS   (a PM "Project")
+ChatSwitcher  -> useItemChats(slug, itemId) -> CHATS   (many, inside ONE item)
+```
+
+The equation holds only for an App where an item carries exactly one conversation. **PM is
+not one** — a project holds many chats — so the rail is currently labelling a project as
+though it were a chat, while the chats themselves live a level down in the switcher.
+
+So this is not only hardcoded copy. Renaming the strings fixes the wording; it does not
+answer whether a rail that lists projects should also surface the chats inside them. That
+is a design question for the reporter, flagged rather than assumed.
+
 ## Report 1 — the rail hardcodes "chat" for every App
 
 `ChatListRail` calls the item a "chat" in six user-visible places, while the manifest
