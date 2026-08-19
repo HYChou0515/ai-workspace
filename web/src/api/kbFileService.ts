@@ -19,6 +19,7 @@ import { decodeBytes } from "./encoding";
 import type { FileCaps, FileService } from "./fileService";
 import { API_PREFIX, apiFetch } from "./http";
 import type { KbApi, KbDocument } from "./kb";
+import { isExternalRef, normPath, resolveRefPath } from "./refPath";
 import type { FileContent, FileInfo } from "./types";
 
 const KB_CAPS: FileCaps = {
@@ -35,29 +36,6 @@ const KB_CAPS: FileCaps = {
 function basename(path: string): string {
   const clean = path.replace(/\/+$/, "");
   return clean.slice(clean.lastIndexOf("/") + 1) || clean;
-}
-
-/** Normalise a path to a single leading-slash, `.`/`..`-resolved form, so doc
- * paths and resolved refs compare regardless of how they were stored. This is
- * the tree's canonical form: real uploads store relative paths (no leading
- * slash), the tree (and the investigation IDE it shares) speaks leading-slash —
- * normalising here is the single FE boundary that reconciles the two (#87). */
-export function normPath(path: string): string {
-  const stack: string[] = [];
-  for (const seg of path.split("/")) {
-    if (seg === "" || seg === ".") continue;
-    if (seg === "..") stack.pop();
-    else stack.push(seg);
-  }
-  return "/" + stack.join("/");
-}
-
-/** Resolve a markdown ref against the doc it appears in: an absolute path is
- * collection-root; anything else is relative to the doc's directory. */
-function resolveRefPath(fromPath: string, src: string): string {
-  if (src.startsWith("/")) return normPath(src);
-  const dir = fromPath.replace(/[^/]*$/, ""); // keep trailing slash
-  return normPath(dir + src);
 }
 
 type DocEnvelope = {
@@ -243,7 +221,7 @@ export function kbFileService(
     // Unknown sibling → left as-is (a broken-image marker beats a wrong URL).
     fileUrl: (src, fromPath) => {
       if (!src) return "";
-      if (/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(src)) return src;
+      if (isExternalRef(src)) return src;
       const target = resolveRefPath(fromPath ?? "/", src);
       const sibling = byPath.get(target);
       if (!sibling || !sibling.file_id) return src;

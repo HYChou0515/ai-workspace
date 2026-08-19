@@ -78,3 +78,21 @@ describe("MarkdownRenderer — Marp routing", () => {
     expect(container.querySelector('[data-testid="marp-host"]')).toBeNull();
   });
 });
+
+// The service knows how to resolve a ref against a document, but only if the
+// renderer tells it WHICH document. Asserting the resolved URL at the service
+// alone left that wiring untested — and dropping it is exactly what made an
+// image render only when its markdown happened to sit at the workspace root.
+describe("MarkdownRenderer — an image next to the document", () => {
+  it("resolves a sibling image against the document's own folder", async () => {
+    const { container } = await renderMd("# Notes\n\n![chart](./plot.png)\n", "/reports/r.md");
+    const img = container.querySelector("img");
+    expect(img).toHaveAttribute("src", "/api/a/pm/items/item1/files/reports/plot.png");
+  });
+
+  it("resolves a sibling link against the document's own folder", async () => {
+    const { container } = await renderMd("[the data](./rows.csv)\n", "/reports/r.md");
+    const link = container.querySelector("a");
+    expect(link).toHaveAttribute("href", "/api/a/pm/items/item1/files/reports/rows.csv");
+  });
+});

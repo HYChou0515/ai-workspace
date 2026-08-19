@@ -66,6 +66,57 @@ describe("investigationFileService", () => {
     expect(svc.fileUrl("./plot.png")).toBe("/sub/api/a/rca/items/inv1/files/plot.png");
   });
 
+  // A relative ref means the file NEXT TO the document it was written in —
+  // what `![](./a.png)` means in GitHub, in a VSCode preview, and to whoever
+  // wrote it. Resolving every ref against the workspace root instead made an
+  // image render only when its document happened to sit at the root, and made
+  // the file-tree half of the shell disagree with the KB half over one document.
+  describe("fileUrl — a relative ref resolves against the document, not the root", () => {
+    const FILES = "/sub/api/a/rca/items/inv1/files";
+    const svc = () => investigationFileService("rca", "inv1");
+
+    it("resolves an explicit sibling ref to the doc's own folder", () => {
+      expect(svc().fileUrl("./plot.png", "/reports/r.md")).toBe(`${FILES}/reports/plot.png`);
+    });
+
+    it("resolves a bare sibling ref the same way", () => {
+      expect(svc().fileUrl("plot.png", "/reports/r.md")).toBe(`${FILES}/reports/plot.png`);
+    });
+
+    // `..` must be resolved HERE. Left in the URL, the browser collapses it
+    // against the API route and walks out of the file endpoint altogether
+    // (`…/items/inv1/shared/plot.png` — a route that does not exist).
+    it("resolves `..` itself instead of leaving it for the browser", () => {
+      const url = svc().fileUrl("../shared/plot.png", "/reports/r.md");
+      expect(url).toBe(`${FILES}/shared/plot.png`);
+      expect(new URL(url, "http://h").pathname).toBe(url);
+    });
+
+    it("keeps an absolute ref workspace-root-relative", () => {
+      expect(svc().fileUrl("/plot.png", "/reports/r.md")).toBe(`${FILES}/plot.png`);
+    });
+
+    it("resolves a ref in a root document against the root", () => {
+      expect(svc().fileUrl("./plot.png", "/report.v2.md")).toBe(`${FILES}/plot.png`);
+    });
+
+    // Chat markdown has no containing document (`AgentEntryView`), so a ref
+    // there can only mean workspace-root-relative — that meaning must survive.
+    it("stays root-relative when the caller has no document to resolve against", () => {
+      expect(svc().fileUrl("out/sine.png")).toBe(`${FILES}/out/sine.png`);
+    });
+
+    it("passes external refs through even with a document to resolve against", () => {
+      const s = svc();
+      expect(s.fileUrl("https://cdn/x.png", "/reports/r.md")).toBe("https://cdn/x.png");
+      expect(s.fileUrl("data:image/png;base64,AAAA", "/reports/r.md")).toBe(
+        "data:image/png;base64,AAAA",
+      );
+      expect(s.fileUrl("#section-2", "/reports/r.md")).toBe("#section-2");
+      expect(s.fileUrl(undefined, "/reports/r.md")).toBe("");
+    });
+  });
+
   it("builds a single-file download URL on the file route (#247)", () => {
     const svc = investigationFileService("rca", "inv1");
     expect(svc.fileDownloadUrl("/data/a.csv")).toBe("/sub/api/a/rca/items/inv1/files/data/a.csv");

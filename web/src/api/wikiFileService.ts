@@ -12,7 +12,7 @@
  */
 
 import type { FileCaps, FileService } from "./fileService";
-import { normPath } from "./kbFileService";
+import { normPath } from "./refPath";
 import type { KbApi } from "./kb";
 import type { FileContent, FileInfo } from "./types";
 
