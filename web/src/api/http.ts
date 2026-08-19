@@ -127,19 +127,31 @@ export async function errorCode(resp: Response): Promise<string | undefined> {
  */
 export async function errorInfo(
   resp: Response,
-): Promise<{ code?: string; also?: string[]; detail?: Record<string, unknown> }> {
+): Promise<{ code?: string; also?: string[]; detail?: Record<string, unknown>; text?: string }> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const parsed = resp
+    // Text, not `json()`: a caller that wants the raw body for its message must
+    // get it from HERE. Reading it again off the original response is a second
+    // unbounded await, and a deadline on the first read buys nothing when the
+    // next line waits forever on the same stalled stream — which is exactly how
+    // `execShell` kept locking the terminal after this was first bounded.
+    const read = resp
       .clone()
-      .json()
-      .catch(() => undefined); // not JSON, or no body — the status is all we have
-    const body = await Promise.race([
-      parsed,
+      .text()
+      .catch(() => undefined); // no body, or a stream that errored
+    const raw = await Promise.race([
+      read,
       new Promise<undefined>((resolve) => {
         timer = setTimeout(() => resolve(undefined), CODE_READ_BUDGET_MS);
       }),
     ]);
+    if (raw === undefined) return {};
+    let body: { detail?: { error?: unknown; also?: unknown } } | undefined;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      return { text: raw }; // not JSON — the status and the words are all we have
+    }
     const detail = body?.detail;
     const code = typeof detail?.error === "string" ? detail.error : undefined;
     const also = Array.isArray(detail?.also)
@@ -148,7 +160,12 @@ export async function errorInfo(
     // The whole object, not just the code: a quota refusal carries the numbers
     // behind it, and a message that names a limit without one cannot be checked
     // by the person reading it.
-    return { code, also, detail: detail && typeof detail === "object" ? detail : undefined };
+    return {
+      code,
+      also,
+      detail: detail && typeof detail === "object" ? (detail as Record<string, unknown>) : undefined,
+      text: raw,
+    };
   } catch {
     return {}; // `clone()` refuses an already-consumed body, synchronously
   } finally {

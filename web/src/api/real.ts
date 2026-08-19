@@ -605,7 +605,11 @@ export const realApi: ApiClient = {
       // come from (the other is sending a message) — carry the code or the
       // pane can only report a bare 507.
       const info = await errorInfo(resp);
-      const text = await resp.text().catch(() => "");
+      // The body `errorInfo` already read, not a second read of the original:
+      // that one had no deadline, so a stalled error body left the terminal
+      // locked with its entry stuck on "running" (the `finally` that clears it
+      // is never reached).
+      const text = info.text ?? "";
       throw new HttpError(
         resp.status,
         `exec failed: ${resp.status} ${text.slice(0, 200)}`,
