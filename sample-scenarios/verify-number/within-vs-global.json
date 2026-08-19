@@ -1,0 +1,10 @@
+{
+  "name": "within-vs-global",
+  "note": "8 lots, between-lot shift 9.8x the within-lot spread. An SPC limit uses within-subgroup sigma (35.36 vs 45.75). The request does not say which, so the choice must come back to the user.",
+  "data": ["within_vs_global.csv"],
+  "prompt": "Give me the lower limit at mean - 3 sigma for cd in within_vs_global.csv.",
+  "expect": {
+    "must_call": ["exec", "ask_user"],
+    "must_mention": [["within", "subgroup", "per-lot", "per lot", "by lot"]]
+  }
+}

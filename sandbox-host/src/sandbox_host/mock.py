@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from .protocol import (
+    EnforcedLimits,
     ExecResult,
     FileEntry,
     OutputSink,
@@ -29,7 +30,12 @@ def _version(data: bytes) -> str:
 
 
 class MockSandbox:
-    def __init__(self) -> None:
+    def __init__(self, *, cpu_cores: float | None = None, memory_bytes: int | None = None) -> None:
+        # What this stand-in claims to enforce when a spec states nothing.
+        # None = "caps nothing", the truth for a mock; a test standing in for a
+        # real backend (all of which DO cap) passes the ceilings it models.
+        self._cpu_cores = cpu_cores
+        self._memory_bytes = memory_bytes
         # One entry per `exec`, in call order — what the caller asked to add.
         self.exec_envs: list[dict[str, str]] = []
         self._fs: dict[str, dict[str, bytes]] = {}
@@ -51,6 +57,12 @@ class MockSandbox:
         if handle.id not in self._fs:
             raise SandboxNotFound(handle.id)
         return self._fs[handle.id]
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        return EnforcedLimits(
+            cpu_cores=self._cpu_cores if spec.cpu_cores is None else spec.cpu_cores,
+            memory_bytes=self._memory_bytes if spec.memory_bytes is None else spec.memory_bytes,
+        )
 
     async def create(self, spec: SandboxSpec) -> SandboxHandle:
         handle = SandboxHandle(id=str(uuid.uuid4()))

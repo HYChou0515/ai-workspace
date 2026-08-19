@@ -30,6 +30,13 @@ REQUIRED_CAPABILITIES = frozenset(
         # anything else writing a profile to $HOME) fails in the sandbox with
         # "User installation could not be completed".
         "per-exec-home",
+        # `/healthz` publishes the ceilings the host applies when a spec states
+        # nothing. Without it the app cannot know what a live sandbox costs its
+        # owner, so it charges zero: `/my-resources` reads "CPU 0" beside a live
+        # environment and a per-person cpu/memory cap can never bind. The app
+        # still works — it under-counts — which is exactly the kind of silent
+        # staleness this probe exists to name.
+        "resource-defaults",
     }
 )
 

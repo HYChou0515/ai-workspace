@@ -25,9 +25,37 @@ import time
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import Protocol
 
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
+from ..quota.disk_ledger import UserDiskFull
 from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound
+
+
+class PersonDiskGate(Protocol):
+    """The per-person disk gate.
+
+    `record` is part of the CONTRACT, not an optimisation: the gate writes the
+    post-write size to the ledger when it ALLOWS a write, so a caller that is
+    only asking has to be able to say so.
+
+    A Protocol with `__call__` rather than a `Callable[...]` alias, because the
+    alias could not express a keyword-only argument — and `Callable[..., X]`
+    accepts ANY parameter list, so widening to it silently switched off the
+    arity check that was there before. `ty` then passed a gate taking a single
+    `bytes`. On a branch where a test double had already fallen behind this
+    contract twice, deleting the one mechanical check was the wrong trade."""
+
+    def __call__(
+        self, workspace_id: str, new_size: int, growth: int, /, *, record: bool = True
+    ) -> Awaitable[None]: ...
+
+    # Not `async def`: a plain `async def` function is `(...) -> Coroutine`, and
+    # declaring the protocol member async would demand a class with an async
+    # `__call__` instead. Positional-only (`/`) so a caller may name the first
+    # three whatever reads best at their call site — the KEYWORD one is the part
+    # that has to match, because that is the part carrying the contract.
+
 
 # How many times an etag-guarded edit re-bases against a concurrent writer
 # before giving up and reporting a conflict. A handful is plenty — contention
@@ -156,7 +184,7 @@ class WorkspaceFiles:
         handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
         rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
         quota: int | Callable[[str], int] = 0,
-        person_gate: Callable[[str, int, int], Awaitable[None]] | None = None,
+        person_gate: PersonDiskGate | None = None,
         on_usage: Callable[[str, int], Awaitable[None]] | None = None,
         usage_window: float = _USAGE_WINDOW_S,
         now: Callable[[], float] = time.monotonic,
@@ -642,15 +670,74 @@ class WorkspaceFiles:
         directory subtree — checking once before starting is the difference
         between a clean refusal and a half-copied folder the user now has to
         clean up while over quota. Per-write gating alone can only fail in the
-        middle."""
+        middle.
+
+        Raises the FIRST refusal, which is what a write path wants: it is
+        stopping, and one reason is enough. A caller that would rather report
+        every reason (the turn gate) asks `room_refusals` instead — and asks it
+        NOT to record, because it is not about to write."""
+        for refusal in await self.room_refusals(workspace_id, extra_bytes, record=True):
+            raise refusal
+
+    async def room_refusals(
+        self, workspace_id: str, extra_bytes: int, *, record: bool = True
+    ) -> list[Exception]:
+        """Every disk rule that `extra_bytes` more would break, in order.
+
+        Nobody is charged for an operation that is not happening. Two things
+        decide that: the CALLER saying it is only asking (`record=False`), and
+        this method having already collected a refusal — a write path is honest
+        about intending to write, right up until another rule stops it.
+
+        The per-person gate is not a pure predicate: on the allowed path it
+        writes the post-write size to the ledger, which is only true if that
+        write occurs. Collecting every reason means reaching that
+        gate even after another rule has already refused the operation, and
+        charging there left an owner over-counted for a copy that never ran:
+        they were then refused in a DIFFERENT item, against a number that
+        appears nowhere in the product — the file tree still showed the smaller
+        size. The gate's own comment says a refused write is "deliberately NOT
+        recorded"; this is the caller-side half of that rule.
+
+        TWO rules live here — this item's own quota and its owner's total across
+        items — and they are independent: being over one says nothing about the
+        other. Stopping at the first meant a person out of BOTH was told to
+        delete files, deleted them, tried again, and was told to delete files
+        somewhere else — the sequence the turn gate exists to prevent, surviving
+        here because both refusals come from inside this one method.
+
+        How OFTEN both bind at once is not something this docstring should claim.
+        The documented example config puts them 640× apart (`per_app.default.disk`
+        80M against `per_user.disk` 50G), so someone would have to fill hundreds
+        of items before the personal total binds alongside one item's own. The
+        justification is that they are independent rules, not that they fail
+        together."""
+        refusals: list[Exception] = []
         quota = self._quota_for(workspace_id)
         if extra_bytes <= 0 or (not quota and self._person_gate is None):
-            return
+            return refusals
         used = await self.workspace_usage(workspace_id)
         if quota and used + extra_bytes > quota:
-            raise WorkspaceFull(used=used, quota=quota, attempted=extra_bytes)
+            refusals.append(WorkspaceFull(used=used, quota=quota, attempted=extra_bytes))
         if self._person_gate is not None:
-            await self._person_gate(workspace_id, used + extra_bytes, extra_bytes)
+            try:
+                await self._person_gate(
+                    workspace_id,
+                    used + extra_bytes,
+                    extra_bytes,
+                    # …and not once ANOTHER rule has already refused. `record`
+                    # alone was not enough: it is the CALLER saying "I am only
+                    # asking", and a write path legitimately passes True — but a
+                    # write path whose workspace rule has just refused is no
+                    # longer going to write either. The first version of this
+                    # fix set the flag at the two callers and left this line
+                    # unconditional, so the folder copy its own commit message
+                    # described — refused, yet charged — was untouched.
+                    record=record and not refusals,
+                )
+            except UserDiskFull as exc:
+                refusals.append(exc)
+        return refusals
 
     async def _usage_and_size(
         self, workspace_id: str, path: str, warm: tuple[Sandbox, SandboxHandle] | None

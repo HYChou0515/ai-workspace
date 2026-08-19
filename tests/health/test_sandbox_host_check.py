@@ -32,7 +32,7 @@ def test_passes_when_the_host_advertises_everything_we_need():
             json={
                 "status": "ok",
                 "version": "0.1.0",
-                "capabilities": ["host-managed-archive", "per-exec-home"],
+                "capabilities": ["host-managed-archive", "per-exec-home", "resource-defaults"],
             },
         )
 

@@ -15,20 +15,19 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
+import { formatBytes } from "../lib/bytes";
 import { useT } from "../lib/i18n";
 
 import { type MyResources, type MyResourcesApi, type OverrideList as OverrideListDTO, myResourcesApi } from "../api/myResources";
 import { qk } from "../api/queryKeys";
 import { useIsSuperuser } from "../hooks/useIsSuperuser";
+import { UserPicker } from "../components/UserPicker";
 
-/** Bytes → a short human string. Sizes here span KB to tens of GB. */
-export function formatBytes(n: number): string {
-  if (n <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1);
-  const value = n / 1024 ** i;
-  return `${value >= 10 || i === 0 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
-}
+// Re-exported for this page's own tests. The implementation lives in
+// `lib/bytes` — where it always did. A second copy briefly existed here under a
+// new filename and rendered the SAME number differently ("80 MB" vs "80.0 MB"),
+// so a refusal message and the usage bar beside it disagreed.
+export { formatBytes };
 
 /** `used of limit`, or just `used` when the dimension is unlimited (limit 0). */
 export function formatAgainstLimit(
@@ -263,10 +262,26 @@ function AdminOverrides({ client }: { client: MyResourcesApi }) {
 
       {list.data ? <OverrideList data={list.data} onClear={(u) => void clearOne(u)} /> : null}
 
+      {/* Picked from the directory, not typed. An exception is granted to a
+          PERSON, and a mistyped id saves perfectly well — it lands in the list
+          and binds to nobody, so the operator sees an allowance that looks
+          granted and never applies. The picker is the same one share/@mention
+          use, so "who exists" has one answer across the app. */}
       <div className="admin-row">
         <span className="admin-field">
-          <label htmlFor="q-user">{t("resources.admin.user")}</label>
-          <input id="q-user" value={userId} onChange={(e) => setUserId(e.target.value)} />
+          <label id="q-user-label">{t("resources.admin.user")}</label>
+          <UserPicker
+            labelledBy="q-user-label"
+            selected={userId ? [userId] : []}
+            onToggle={(id) => {
+              // Single-select: picking someone else REPLACES the target rather
+              // than adding to it, and picking the same person again clears it.
+              setUserId((prev) => (prev === id ? "" : id));
+              setLooked(undefined);
+              setSaved(false);
+            }}
+            placeholder={t("resources.admin.userSearch")}
+          />
         </span>
         <button type="button" className="btn" data-variant="secondary" data-size="sm" onClick={() => void lookup()}>
           {t("resources.admin.lookup")}

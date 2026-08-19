@@ -32,7 +32,12 @@ from workspace_app.sandbox.isolated_process import (
     _setpriv_cgroup_argv,
     isolation_supported,
 )
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
+from workspace_app.sandbox.protocol import (
+    EnforcedLimits,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 
 
 @pytest.fixture
@@ -397,3 +402,19 @@ def test_run_chown_calls_oschown_with_uid_and_unchanged_gid(monkeypatch, tmp_pat
 def test_constructs_default_chown_runner(tmp_path):
     sb = IsolatedProcessSandbox(root_dir=tmp_path / "s", cgroup_root=tmp_path / "c")
     assert sb._chown_runner is _run_chown
+
+
+# ---- what this backend will actually enforce ----
+
+
+async def test_it_reports_the_ceiling_it_really_applies_when_the_spec_states_nothing(isolated):
+    """A spec stating nothing is NOT free.
+
+    `None` means "the backend applies whatever it was configured with" — and
+    this one does, at provision time, in `cpu.max` / `memory.max`. The
+    per-person tally used to read the SPEC, so an App that declared nothing was
+    charged zero for a sandbox that genuinely held a core: `/my-resources`
+    showed "CPU 0" beside a live environment."""
+    assert await isolated.effective_limits(SandboxSpec()) == EnforcedLimits(
+        cpu_cores=0.5, memory_bytes=64 * 1024**2
+    )

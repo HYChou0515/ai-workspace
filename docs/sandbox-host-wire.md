@@ -50,8 +50,17 @@ sandbox。
 | `POST /tools/resolve` | `{tools: {名稱: manifest 網址}}` | `200 {tools: {名稱: {sha, version, stale, commands}}, refused: {名稱: 原因}}` | 第三方工具:抓→驗→裝,並回傳要掛的 sha 與要給模型的 schema(#674) |
 
 維運用(不屬於 sandbox 表面)：`GET /healthz`(回
-`{status, version, capabilities: [str]}`——能力名與行為同 commit,不會像手維護的相容性表那樣
-漂移)、`GET /readyz`、`POST /drain`。
+`{status, version, capabilities: [str], defaults: {cpu_cores, memory_bytes}}`——能力名與行為同
+commit,不會像手維護的相容性表那樣漂移)、`GET /readyz`、`POST /drain`。
+
+**`defaults` —— 額度的分子從哪裡來**:`create` 收到 `cpu_cores: null` 時 host 會套自己的
+`SANDBOX_HOST_*`,而那是 app **讀不到**的另一個服務的環境變數。app 要向 item 的 owner 計費
+「這個沙盒佔了多少」,只讀請求的話,沒宣告資源的 App 就等於免費佔著一顆核心(`/my-resources`
+會在活著的環境旁邊顯示 CPU 0,per-user 的 cpu/memory 上限也永遠加總成 0 而不會生效)。所以
+host 公告它實際會套的天花板,由 **enforcer 自己回答**(問 sandbox,不是重讀一次 settings),
+兩邊因此不可能漂移。能力名是 `resource-defaults`;沒有它的舊 host,app 維持今天的行為(照請求
+計費 ⇒ 少算),並由 `SandboxHostCapabilityCheck` 指出映像過舊——**是看得見的少算,不是猜一個
+數字**。
 
 **`item_id` + `persist`(#492)**:host 設了 `SANDBOX_HOST_NFS_ROOT` 時,帶 `item_id` 的
 `create` 會**先**把 `{nfs_root}/{item_id}` rsync 還原進新沙盒、`reown` 成沙盒 uid、最後才

@@ -31,16 +31,22 @@ ONE_CORE = ResourceLimits(cpu_cores=1.0, memory_bytes=512 * 1024**2, disk_bytes=
 
 @contextlib.contextmanager
 def _app(
-    limits: PerUserResources, *, me: str = "alice"
+    limits: PerUserResources,
+    *,
+    me: str = "alice",
+    app_resources: dict[str, ResourceLimits] | None = None,
 ) -> Iterator[tuple[ApiTestClient, SpecStar]]:
     spec = make_spec()
     app = create_app(
         spec=spec,
-        sandbox=MockSandbox(),
+        # A backend that enforces ceilings of its own — which is what every
+        # production backend does. A mock enforcing nothing cannot show what an
+        # App that declares nothing actually costs its owner.
+        sandbox=MockSandbox(cpu_cores=2.0, memory_bytes=256 * 1024**2),
         filestore=SpecstarFileStore(spec),
         runner=ScriptedAgentRunner([]),
         workspace_quota=0,
-        app_resources={"rca": ONE_CORE},
+        app_resources=app_resources or {"rca": ONE_CORE},
         per_user_resources=limits,
         get_user_id=lambda: me,
         superusers=frozenset({"root"}),
@@ -198,3 +204,23 @@ def test_a_non_admin_cannot_read_or_set_anyones_limits():
         assert client.get("/admin/user-resources/bob").status_code == 404
         assert client.put("/admin/user-resources/bob", json={"count": 9}).status_code == 404
         assert client.delete("/admin/user-resources/bob").status_code == 404
+
+
+def test_a_live_environment_is_charged_what_the_backend_really_caps_it_at():
+    """An App that declares nothing is not free.
+
+    Its `SandboxSpec` carries `None`, which means "backend, use your own
+    ceiling" — and the backend does: production caps every sandbox at
+    `SANDBOX_HOST_CPU_CORES` / `MEMORY_MAX`, a local deploy at
+    `sandbox.isolation.*`. The tally read the SPEC, so it charged 0: the panel
+    showed "CPU 0" beside a live environment, and a per-person cpu/memory cap
+    summed those zeros and could never bind."""
+    undeclared = ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=0)
+    with _app(PerUserResources(count=3), app_resources={"rca": undeclared}) as (client, spec):
+        item = _mk(spec, "alice")
+        client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo", "hi"]})
+
+        got = client.get("/me/resources").json()
+        assert got["live"][0]["cpu_cores"] == 2.0
+        assert got["cpu_in_use"] == 2.0
+        assert got["memory_in_use"] == 256 * 1024**2

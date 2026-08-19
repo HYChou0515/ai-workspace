@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .local_process import _HOME, LocalProcessSandbox
-from .protocol import SandboxHandle, SandboxSpec
+from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
 _CPU_PERIOD = 100_000
@@ -101,6 +101,19 @@ class _CgroupManager:
         self._memory_max = _parse_size(memory_max)
         self._cpu_max = _cpu_max(cpu_cores)
         self._pids_max = str(pids_max)
+        # Kept as NUMBERS beside the cgroup spellings above: `effective` answers
+        # "what does this sandbox cost", and `"100000 100000"` is a cpu.max line,
+        # not a core count. Same two values, so the fallback below and the one in
+        # `create` cannot disagree about which one won.
+        self._cpu_cores = cpu_cores
+        self._memory_bytes = 0 if self._memory_max == "max" else int(self._memory_max)
+
+    def effective(self, cpu_cores: float | None, memory_bytes: int | None) -> EnforcedLimits:
+        """The ceilings `create` would really write for these arguments."""
+        return EnforcedLimits(
+            cpu_cores=self._cpu_cores if cpu_cores is None else cpu_cores,
+            memory_bytes=self._memory_bytes if memory_bytes is None else memory_bytes,
+        )
 
     def create(
         self,
@@ -229,6 +242,11 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         self._acl_runner: AclRunner = acl_runner or _run_setfacl
         self._chown_runner: ChownRunner = chown_runner or _run_chown
         self._alloc_lock = asyncio.Lock()
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        """What this sandbox will really be capped at — the cgroup manager's own
+        answer, so the number published is the number written to `cpu.max`."""
+        return self._cgroups.effective(spec.cpu_cores, spec.memory_bytes)
 
     async def create(self, spec: SandboxSpec) -> SandboxHandle:
         async with self._alloc_lock:  # serialize uid allocation across handles

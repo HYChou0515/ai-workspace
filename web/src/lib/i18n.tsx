@@ -813,6 +813,34 @@ export const messages = {
     "zh-TW": "沒有送出:你所有項目的空間總量已滿。到「我的資源」看是哪些項目佔用,刪掉不需要的再送一次。",
     en: "Not sent — you're out of space across all your items. Open My resources to see where it went, then send again.",
   },
+  // Appended to whichever refusal led. A limit named without a number cannot be
+  // checked by the person reading it — "your workspace is full" reads the same
+  // whether it is true or whether the wrong rule answered, which is how a wrong
+  // one survived long enough to be reported as a bug.
+  // The environment limit covers three different things, so its numbers say
+  // which one they are. Without that, "已用 4,上限 2" under a sentence about
+  // live environments reads as "I have four environments open" when it means
+  // four cores.
+  "resources.usedOfLimitNamed": {
+    "zh-TW": "({what} 已用 {used},上限 {limit})",
+    en: "({what}: {used} used of {limit})",
+  },
+  "resources.usedOfLimit": {
+    "zh-TW": "(已用 {used},上限 {limit})",
+    en: "({used} used of {limit})",
+  },
+  // When MORE than one limit is at its cap. Appended after whichever message
+  // led, so the person is not sent to fix one limit, only to be told about the
+  // next one on the retry. They name the page for the same reason the primary
+  // messages do — `ResourceLinkText` turns that name into the link.
+  "resources.also.user": {
+    "zh-TW": "另外,你所有項目的空間總量也滿了——到「我的資源」看是哪些項目佔用。",
+    en: "You are also out of space across all your items — see where it went in My resources.",
+  },
+  "resources.also.workspace": {
+    "zh-TW": "另外,這個項目的工作區空間也滿了,請先刪除不需要的檔案。",
+    en: "This item's workspace is also full — delete files you no longer need.",
+  },
   "chat.send.workspaceFull": {
     "zh-TW": "沒有送出:這個項目的工作區空間已滿。請先刪除不需要的檔案。",
     en: "Not sent — this item's workspace is full. Delete files you no longer need first.",
@@ -846,7 +874,10 @@ export const messages = {
     "zh-TW": "把某個人的額度調得比站台預設高。只填要放寬的維度,留空的沿用站台預設。",
     en: "Raise one person above the site default. Fill only the dimensions you want to change; blank ones keep the default.",
   },
-  "resources.admin.user": { "zh-TW": "使用者 id", en: "User id" },
+  // The person an exception is for. Now a directory pick, so the label names
+  // the person rather than the identifier they happen to be stored under.
+  "resources.admin.user": { "zh-TW": "對象", en: "Person" },
+  "resources.admin.userSearch": { "zh-TW": "搜尋姓名、id、單位…", en: "Search name, id, section…" },
   "resources.admin.lookup": { "zh-TW": "查詢", en: "Look up" },
   "resources.admin.save": { "zh-TW": "儲存", en: "Save" },
   "resources.admin.clear": { "zh-TW": "清除覆寫", en: "Clear override" },

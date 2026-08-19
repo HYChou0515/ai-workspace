@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from .protocol import (
+    EnforcedLimits,
     ExecResult,
     FileEntry,
     OutputSink,
@@ -27,7 +28,14 @@ def _version(data: bytes) -> str:
 
 
 class MockSandbox:
-    def __init__(self) -> None:
+    def __init__(self, *, cpu_cores: float | None = None, memory_bytes: int | None = None) -> None:
+        # What this stand-in claims to enforce when a spec states nothing.
+        # Default None = "enforces nothing", which is the truth for a mock and
+        # keeps every existing caller charging zero. A test that needs to model
+        # a REAL backend — all of which do cap what they hand out — passes the
+        # ceilings it wants to stand in for.
+        self._cpu_cores = cpu_cores
+        self._memory_bytes = memory_bytes
         self._fs: dict[str, dict[str, bytes]] = {}
         # Directories, tracked explicitly rather than implied by the file paths:
         # an empty one implies nothing, and it is exactly the case that broke.
@@ -51,6 +59,12 @@ class MockSandbox:
         if handle.id not in self._fs:
             raise SandboxNotFound(handle.id)
         return self._fs[handle.id]
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        return EnforcedLimits(
+            cpu_cores=self._cpu_cores if spec.cpu_cores is None else spec.cpu_cores,
+            memory_bytes=self._memory_bytes if spec.memory_bytes is None else spec.memory_bytes,
+        )
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         # #345: a given sandbox_id is STABLE + IDEMPOTENT — reattach to the

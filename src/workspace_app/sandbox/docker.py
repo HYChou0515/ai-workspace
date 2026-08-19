@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from .protocol import (
+    EnforcedLimits,
     ExecResult,
     FileEntry,
     OutputSink,
@@ -72,6 +73,11 @@ class DockerSandbox:
         if c is None:
             raise SandboxNotFound(handle.id)
         return c
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        """Deprecated backend, no resource control wired: it applies nothing of
+        its own, so the answer is what was requested."""
+        return EnforcedLimits(cpu_cores=spec.cpu_cores, memory_bytes=spec.memory_bytes)
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         # DEPRECATED backend (#252); `sandbox_id` (the #345 shared-vol stable-id

@@ -78,10 +78,22 @@ class AdmissionGate:
         *,
         owner_of: Callable[[str], str | None],
         has_live_sandbox: Callable[[str], Awaitable[bool]],
+        cost_of: Callable[[str], Awaitable[ResourceLimits]] | None,
         window_ms: int,
         now_ms: Callable[[], int],
     ) -> None:
         self._activity = activity
+        # What a NEW sandbox for an item would really cost — asked here rather
+        # than passed in by each caller. The one production call site passed
+        # nothing, so the incoming sandbox was weighed as free and `cpu` could
+        # only refuse someone who was ALREADY over.
+        #
+        # REQUIRED, with no default, even though `None` is a legal value. An
+        # optional one still reads as "a rule you cannot forget" while letting
+        # the next `AdmissionGate(...)` silently reinstate exactly that defect;
+        # passing `None` on purpose is a decision, forgetting is an accident,
+        # and only one of them should compile.
+        self._cost_of = cost_of
         # Resolved per check, not captured at construction: raising someone's
         # allowance has to take effect on their next turn, not at the next
         # restart. It is one point read on a path already about to query the
@@ -100,10 +112,14 @@ class AdmissionGate:
         """Raise `SandboxQuotaExceeded` if opening a sandbox for `item_id` would
         put its owner over.
 
-        `incoming` is what the NEW sandbox would be allowed to consume (its
-        App's ceilings). It matters because the question is not "are you already
-        over?" but "does one more of THIS size fit?" — with 3.5 of 4 cores live,
-        whether another sandbox is admissible depends entirely on how big it is.
+        `incoming` is what the NEW sandbox would be allowed to consume — what
+        the BACKEND will really cap it at, which is its App's ceilings when the
+        App states them and the backend's own when it does not. It matters
+        because the question is not "are you already over?" but "does one more
+        of THIS size fit?" — with 3.5 of 4 cores live, whether another sandbox is
+        admissible depends entirely on how big it is. Defaulted from `cost_of`
+        rather than passed by each caller: the one production call site passed
+        nothing, so the incoming sandbox was weighed as free.
 
         A no-op when no per-person limit is configured, when there is no shared
         activity store to tally against (single-process), or when the item
@@ -118,6 +134,8 @@ class AdmissionGate:
             return
         if await self._has_live(item_id):
             return  # already holding its slot — never refuse what is already open
+        if incoming is None and self._cost_of is not None:
+            incoming = await self._cost_of(item_id)
         since = self._now_ms() - self._window_ms
         live = [
             s for s in await self._activity.live_for(owner, since_ms=since) if s.item_id != item_id
@@ -131,10 +149,12 @@ class AdmissionGate:
         incoming: ResourceLimits | None,
         lim: PerUserResources,
     ) -> None:
-        # An undeclared dimension contributes nothing to the sum, because there
-        # is no honest number to add: the backend's own default is not the App's
-        # statement. That is why a per-user cpu/memory cap only binds for Apps
-        # whose cost is actually stated (`quota.limits` module docstring).
+        # A dimension contributes nothing only when NOBODY states it — neither
+        # the App nor the backend. `incoming` is what the backend will really
+        # apply (`Sandbox.effective_limits`), so a sandbox whose App declares
+        # nothing still carries the ceiling its cgroup will get. Reading the
+        # App's declaration alone is what let cpu/memory sum to zero and never
+        # bind (`quota.limits` module docstring).
         add_cpu = (incoming.cpu_cores or 0.0) if incoming else 0.0
         add_mem = (incoming.memory_bytes or 0) if incoming else 0
         checks: tuple[tuple[str, float, float], ...] = (

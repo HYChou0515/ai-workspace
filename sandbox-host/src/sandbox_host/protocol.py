@@ -36,6 +36,20 @@ class SandboxHandle:
 
 
 @dataclass(frozen=True)
+class EnforcedLimits:
+    """What this host will ACTUALLY apply for a spec — each `None` in the
+    request replaced by the ceiling it was configured with (`SANDBOX_HOST_*`).
+
+    Published on `/healthz` because the app charges a sandbox's owner for what
+    it holds, and only this side knows what that is: a spec stating nothing is
+    still capped. `None` here means this backend caps nothing at all, so there
+    is genuinely nothing to charge."""
+
+    cpu_cores: float | None
+    memory_bytes: int | None
+
+
+@dataclass(frozen=True)
 class SandboxSpec:
     """Everything `create()` needs to provision a sandbox. `image` /
     `exposed_ports` are accepted for wire compatibility but ignored by the

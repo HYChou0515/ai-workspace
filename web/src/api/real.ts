@@ -14,7 +14,7 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { API_PREFIX, apiFetch, HttpError, errorCode } from "./http";
+import { API_PREFIX, apiFetch, HttpError, errorCode, errorInfo } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -560,10 +560,13 @@ export const realApi: ApiClient = {
       // Sending a message is the OTHER place a `sandbox_quota_exceeded` comes
       // from, and it is the primary interface — a bare "messages failed: 507"
       // is a status with no remedy attached.
+      const info = await errorInfo(resp);
       throw new HttpError(
         resp.status,
         `messages failed: ${resp.status}`,
-        await errorCode(resp),
+        info.code,
+        info.also,
+        info.detail,
       );
     }
   },
@@ -601,12 +604,14 @@ export const realApi: ApiClient = {
       // The terminal is one of only TWO places a `sandbox_quota_exceeded` can
       // come from (the other is sending a message) — carry the code or the
       // pane can only report a bare 507.
-      const code = await errorCode(resp);
-      const detail = await resp.text().catch(() => "");
+      const info = await errorInfo(resp);
+      const text = await resp.text().catch(() => "");
       throw new HttpError(
         resp.status,
-        `exec failed: ${resp.status} ${detail.slice(0, 200)}`,
-        code,
+        `exec failed: ${resp.status} ${text.slice(0, 200)}`,
+        info.code,
+        info.also,
+        info.detail,
       );
     }
     return (await resp.json()) as ExecResult;
