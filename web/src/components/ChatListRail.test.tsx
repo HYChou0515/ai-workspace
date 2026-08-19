@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BREAKPOINTS } from "../lib/breakpoints";
+import { QueryWrap } from "../test/queryWrapper";
 import { ChatListRail } from "./ChatListRail";
 
 const items = [
@@ -73,13 +74,33 @@ afterEach(() => {
 
 function renderRail(currentId = "rca-investigation/1") {
   return render(
-    <MemoryRouter>
-      <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId={currentId} />
-    </MemoryRouter>,
+    <QueryWrap>
+      <MemoryRouter>
+        <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId={currentId} />
+      </MemoryRouter>
+    </QueryWrap>,
   );
 }
 
 describe("ChatListRail", () => {
+  it("offers the same platform destinations the global switcher does", () => {
+    // The rail kept its own hardcoded list and had silently fallen behind: no
+    // My resources at all, and no way to express the conditional entries. Both
+    // menus now render one shared, viewer-aware list, so a destination cannot
+    // exist in one and not the other.
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /platform menu/i }));
+
+    // Assert the DESTINATIONS, not the words: two of the labels are i18n keys,
+    // and it is the reachable set that had drifted.
+    const hrefs = within(screen.getByRole("menu"))
+      .getAllByRole("menuitem")
+      .map((el) => el.getAttribute("href"));
+    expect(hrefs).toEqual(
+      expect.arrayContaining(["/kb", "/review", "/diagnostics", "/my-resources", "/help"]),
+    );
+  });
+
   it("calls an item what the App calls it, not a chat (#pm)", () => {
     // The rail lists ITEMS. Where an item holds many conversations — a PM
     // project does — calling it a "chat" names the wrong level, and the

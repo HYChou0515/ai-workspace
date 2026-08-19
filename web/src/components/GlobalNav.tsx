@@ -6,18 +6,15 @@
  * and the current breadcrumb trail published by the active page.
  */
 
-import { useQuery } from "@tanstack/react-query";
 import { Fragment, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
-import { groupsApi } from "../api/groups";
 import type { HealthApi } from "../api/health";
-import { qk } from "../api/queryKeys";
 import { useT } from "../lib/i18n";
 import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
-import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useReviewBadgeCount } from "../hooks/useReviewInbox";
+import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
 import { useApps } from "../hooks/useResources";
 import { AppIcon } from "./AppIcon";
 import { GlobalSettings } from "./GlobalSettings";
@@ -86,15 +83,9 @@ function Switcher() {
   const apps = useApps();
   const { pathname } = useLocation();
   const t = useT();
-  // #608: the Groups link is shown to superusers (who create groups) and to
-  // anyone who owns / maintains / belongs to one. The query is cached app-wide
-  // and degrades to hidden if it can't load.
-  const isSuperuser = useIsSuperuser();
-  const { data: myGroups = [] } = useQuery({
-    queryKey: qk.groups,
-    queryFn: () => groupsApi.listGroups(),
-  });
-  const showGroups = isSuperuser || myGroups.length > 0;
+  // Which destinations this viewer may open — including the #608 Groups gating
+  // — is resolved by the shared hook, so the rail's menu cannot disagree.
+  const destinations = usePlatformDestinations();
   return (
     <Popover
       align="start"
@@ -133,29 +124,20 @@ function Switcher() {
             </MenuLink>
           ))}
           <div style={{ height: 1, background: "var(--paper-3)", margin: "6px 0" }} />
-          <FixedLink to="/kb" icon="layers" label="Knowledge base" pathname={pathname} />
-          <FixedLink to="/review" icon="check" label={t("review.title")} pathname={pathname} />
-          <FixedLink to="/diagnostics" icon="sparkle" label="Diagnostics" pathname={pathname} />
-          {showGroups && (
-            <FixedLink to="/groups" icon="users" label="Groups" pathname={pathname} />
-          )}
-          {/* Visible to everyone, not gated behind superuser: it is where a
-              person goes after being refused, so hiding it would leave them
-              with a 507 and nowhere to act on it. */}
-          <FixedLink
-            to="/my-resources"
-            icon="layers"
-            label={t("resources.title")}
-            pathname={pathname}
-          />
-          {isSuperuser && (
-            <FixedLink
-              to="/work-calendar"
-              icon="clock"
-              label="Work calendar"
-              pathname={pathname}
-            />
-          )}
+          {/* One list, shared with the chat rail's menu (they had drifted). Help
+              is dropped here only because this bar already carries a persistent
+              "?" button (#230); listing it twice would be a duplicate. */}
+          {destinations
+            .filter((d) => d.to !== "/help")
+            .map((d) => (
+              <FixedLink
+                key={d.to}
+                to={d.to}
+                icon={d.icon}
+                label={d.label}
+                pathname={pathname}
+              />
+            ))}
         </div>
       )}
     </Popover>

@@ -19,19 +19,11 @@ import { useCreateChat } from "../hooks/useCreateChat";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useMinWidth } from "../hooks/useMediaQuery";
 import { useAppItems, useAppManifest, useApps } from "../hooks/useResources";
+import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
 import { itemNouns } from "../lib/itemNoun";
 import { BREAKPOINTS } from "../lib/breakpoints";
 import { ShareChatDialog } from "./ShareChatDialog";
 import { UserChip } from "./UserChip";
-
-// Platform destinations that live behind the menu (App-agnostic — the App
-// switcher is data-driven from useApps, these are the fixed platform surfaces).
-const PLATFORM_LINKS: { to: string; label: string }[] = [
-  { to: "/kb", label: "Knowledge base" },
-  { to: "/review", label: "Review" },
-  { to: "/diagnostics", label: "Diagnostics" },
-  { to: "/help", label: "Help" },
-];
 
 type Tab = "mine" | "shared";
 
@@ -54,6 +46,9 @@ export function ChatListRail({
   // The rail lists ITEMS, so it uses the App's word for one. Hardcoding
   // "chat" named the wrong level wherever an item holds many conversations.
   const nouns = itemNouns(useAppManifest(slug));
+  // Shared with GlobalNav's switcher — the rail used to keep its own copy and
+  // silently lacked My resources, Groups and Work calendar.
+  const destinations = usePlatformDestinations();
   const apps = useApps();
   const me = useCurrentUser();
   const createChat = useCreateChat(slug);
@@ -157,7 +152,7 @@ export function ChatListRail({
               </Link>
             ))}
             <div className="chat-rail__menu-sep" />
-            {PLATFORM_LINKS.map((l) => (
+            {destinations.map((l) => (
               <Link
                 key={l.to}
                 role="menuitem"
