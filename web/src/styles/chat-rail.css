@@ -89,6 +89,17 @@
   inset: 0;
   z-index: var(--z-rail);
 }
+/* The drawer's dismiss surface. Mounted by the component only below `narrow`,
+   where the rail overlays the chat, so it needs no media query — but it must
+   land BETWEEN the chat and the rail: above the chat so one click dismisses
+   instead of also firing the covered control, below the rail so the rail itself
+   stays clickable. */
+.chat-rail__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-rail) + 1);
+  background: rgb(0 0 0 / 24%);
+}
 .chat-rail__menu {
   position: absolute;
   top: 44px;

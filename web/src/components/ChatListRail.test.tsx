@@ -284,3 +284,60 @@ describe("ChatListRail on a narrow viewport (#fe-responsive)", () => {
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
   });
 });
+
+/**
+ * The overlay rail is a DRAWER, and a drawer you cannot dismiss by looking away
+ * is a trap: below 768px it sits ON TOP of the chat's own toolbar, so the chat
+ * switcher and everything else on the bar's left edge stop responding — the
+ * clicks land on the rail. Measured in Chromium at 760px wide: reopening the
+ * rail moves the switcher's trigger to x=8 under a rail spanning 0–240, and a
+ * click there resolves to `chat-rail__tab` while the switcher's menu never
+ * opens. Collapsing the rail by hand was the only way back to it.
+ *
+ * Only where the rail actually overlays. Above the breakpoint it holds its own
+ * column and nothing is covered, so dismissing it on a stray click would be its
+ * own bug — a rail that will not stay open.
+ */
+describe("ChatListRail as a drawer (#pm)", () => {
+  const openDrawer = () => fireEvent.click(screen.getByRole("button", { name: /show projects/i }));
+  const isOpen = () => screen.queryByText("Oven drift") !== null;
+
+  it("closes when you click away from it", () => {
+    stubViewport(390);
+    renderRail();
+    openDrawer();
+    expect(isOpen()).toBe(true);
+
+    fireEvent.click(screen.getByTestId("chat-rail-scrim"));
+    expect(isOpen()).toBe(false);
+  });
+
+  it("closes on Escape", () => {
+    stubViewport(390);
+    renderRail();
+    openDrawer();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(isOpen()).toBe(false);
+  });
+
+  it("closes once you pick something — it would cover what you just opened", () => {
+    stubViewport(390);
+    renderRail();
+    openDrawer();
+
+    fireEvent.click(screen.getByRole("link", { name: /Sensor noise/ }));
+    expect(isOpen()).toBe(false);
+  });
+
+  it("does none of that when the rail has its own column", () => {
+    stubViewport(BREAKPOINTS.shell + BREAKPOINTS.chatRail);
+    renderRail();
+    expect(isOpen()).toBe(true);
+    expect(screen.queryByTestId("chat-rail-scrim")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(screen.getByRole("link", { name: /Sensor noise/ }));
+    expect(isOpen()).toBe(true);
+  });
+});
