@@ -4,25 +4,56 @@
 
 沒有第二套格式,也不需要轉檔器 —— 你的系統照這個格式吐 zip 就好。
 
-## ⚠️ 先看大小:匯入會讓呼叫端一直等
+## 兩條匯入路徑,選哪一條看誰在等
 
-**匯入端點會把整個封存包寫完才回應**,只有「索引」是排隊非同步的。它的設計目的是**還原你自己匯出的備份**——人按下去、等幾秒、看到結果。
+| | **還原**(同步) | **批次匯入**(非同步) |
+|---|---|---|
+| 端點 | `POST /kb/collections/import` | `POST /kb/collections/imports` |
+| 回應時機 | 全部寫完才回 | **立刻**回 `202` |
+| 適合 | 還原自己匯出的備份,人在螢幕前等幾秒 | 機器推送、沒人看著、大小由來源方決定 |
+| 大檔 | **會逾時**(207MB 曾等十分鐘後 504) | 不受請求時間限制 |
+| 進度 | 無 | 可輪詢:幾份、進了幾份、哪幾份失敗 |
 
-所以**大的封存包會逾時**:一個 207MB 的包等了約十分鐘後拿到 504。純解壓與處理其實只要一兩秒,時間全花在每份文件的資料庫與 blob 寫入上,而請求會一直掛著直到全部做完。
+**外部系統推資料一律用非同步那條。**
 
-**在 #715 落地之前,超過幾十 MB 就要切開分次匯入**:
+### 非同步匯入
 
 ```bash
-# 第一包建立 collection,記下回傳的 id
-curl -X POST "$BASE/kb/collections/import" -F "file=@part-01.zip"
+BASE=http://127.0.0.1:8000/api
 
-# 其餘併進同一個
-curl -X POST "$BASE/kb/collections/$CID/import?mode=overwrite" -F "file=@part-02.zip"
+# 建成新的 collection
+curl -X POST "$BASE/kb/collections/imports" -F "file=@archive.zip"
+# → 202 {"collection_id":"collection:…","import_id":"import-run:…",
+#        "status":"queued","members":1043,"written":0,"finished":false}
+
+# 或併進既有的(mode 同義於同步那條)
+curl -X POST "$BASE/kb/collections/$CID/imports?mode=overwrite" -F "file=@archive.zip"
 ```
 
-**卡片可以全部放在最後一包**,`reference_paths` 照樣指向前面幾包已經進來的路徑 —— 文件分批灌、卡片一次到位,比較好管。
+**回應立刻就有 `collection_id` 和 `members`**(封存包裡有幾份文件)。collection 當下就出現在列表上,只是還空著、正在填。
 
-怎麼決定切多大:先傳一包小的計時。若花 T 秒而你的閘道在 G 秒砍,每包上限抓 `該大小 × G / T / 2`(除以 2 留餘裕)。**別照抄別人的數字**——每份文件的寫入成本取決於你的後端。
+### 查進度
+
+```bash
+curl "$BASE/kb/collections/imports/$IMPORT_ID"
+# → {"members":1043,"written":1043,"errors":[],"finished":true, …}
+```
+
+| 欄位 | 意思 |
+|---|---|
+| `members` | 封存包裡有幾份文件 |
+| `written` | 已經寫進去幾份 |
+| `errors` | **每一份失敗的文件一行**,格式 `路徑: 原因` |
+| `finished` | 這次匯入是否已收尾(卡片已還原、暫存包已釋放) |
+
+**`finished: true` 不代表全部成功。** 一份檔案讀不出來不會拖累同批其他檔案,所以會出現「收尾了、但 `errors` 有東西」——半套匯入看得出來是半套,這正是設計目的。真的要確認全部進去,比對 `written == members`。
+
+### 兩件實作上的取捨
+
+- **卡片在最後才還原。** 文件分批寫完後才處理 manifest 的卡片,所以 `finished` 之前查代號可能還查不到。
+- **暫存的封存包在收尾時釋放。** 一份 200MB 的 blob 不會在解開後繼續留著;它只在這次匯入還可能重試的期間存在。
+
+⚠️ **已知限制**:上傳的封存包在寫入暫存 blob 時仍會在 API 記憶體裡完整存在一次(specstar 的 `Binary` 只吃 bytes,沒有串流介面)。同步那條也是一樣,所以不是退步,但 #715 原本希望的「完全不進記憶體」**沒有做到**。
 
 ## 格式
 
@@ -101,9 +132,9 @@ manifest 裡的卡片是**資料**,跟文件一樣照收。這和「**卡片生�
 
 `Collection.auto_digest` 預設 `False`,而匯入**不會設定它**(只還原 name / description / icon / use_rag / use_wiki / wiki guidance),匯出也不帶這個開關。所以一個匯入進來的 collection 不會自己開始產生卡片。
 
-## 匯入
+## 同步匯入(還原備份用)
 
-**所有後端路由都掛在 `/api` 底下**(根路徑是前端 SPA)。
+**所有後端路由都掛在 `/api` 底下**(根路徑是前端 SPA)。這一條**寫完才回應**,所以只適合你自己匯出的備份;大的封存包請走上面的非同步路徑。
 
 ```bash
 BASE=http://127.0.0.1:8000/api
@@ -159,7 +190,7 @@ curl -N -X POST "$BASE/kb/chats/$CHAT/messages" \
 
 ## 幾個會踩到的前提
 
-- **匯入是非同步的。** 回應是 `status: "indexing"`;文件要索引跑完才搜得到,卡片則是立即生效。
+- **「寫進去」和「搜得到」是兩件事。** 文件寫入完成之後還要跑索引才搜得到(`status: "indexing"` → `ready`);卡片不進語意索引,寫進去就能查。所以非同步匯入的 `finished: true` 只保證**寫完**,不保證**索引完**。
 - **圖片需要 VLM。** 沒有配 `kb.vlm_llm`(或它連不上)時,圖片文件會停在 `error`,夾圖提問則直接回 400。
 - **Office 檔裡內嵌的圖會被丟掉。** `.docx` / `.xlsx` 內嵌的圖片、文字方塊、圖形**完全不會被讀到,而且沒有任何提示**,文件狀態仍顯示完成。`.pptx` / `.pdf` 是整頁轉成圖交給 VLM,所以「這頁在講什麼」留得住,但**不會產生圖片向量**。要讓一張圖成為可被圖片檢索的獨立文件,就得讓它以**獨立檔案**的身分進 zip。
 - **圖搜圖預設是關的**(`kb.image_embedder.kind: none`)。
