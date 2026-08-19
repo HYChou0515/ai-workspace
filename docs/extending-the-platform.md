@@ -350,6 +350,94 @@ body 硬上限 `SKILL_BODY_CAP = 50_000` 字元(兩端都套)。核心載入邏�
 system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill 則**每輪 live 注入**;
 兩者同名時 workspace skill 蓋過 package skill。
 
+### 調校 skill 的 guidance（第二方）
+
+**好的 guidance 是跟模型綁定的**——對某個模型調好的 skill 內文,換一個模型就不是調好的。
+所以部署方(第二方)必須有辦法用**自己的模型、自己的資料**改這份內文並看出差別。
+`python -m workspace_app.skill_eval` 就是這條迴圈:
+
+```
+# 1. 把出貨的 guidance 倒成一個你可以改的檔
+python -m workspace_app.skill_eval --dump-skill verify-number -o ./tune
+
+# 2. 對情境評分,旁邊擺上「完全不給 skill」的對照組
+python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
+    --scenarios sample-scenarios/verify-number --control -o ./tune/run-1
+
+# 3. 改 ./tune/SKILL.md,重跑進 run-2,比對兩份報告
+```
+
+`--skill` 吃**註冊過的名字或一個路徑**,後者才讓第 3 步是一個迴圈而不是 fork 整個 repo。
+
+**模型不用在命令列指定。** 那一輪是用 App 自己的解析路徑 `AppCatalog.resolve` 取得的——
+跟真正的 turn 同一個呼叫——所以 model、endpoint、system prompt 全部來自
+`config.yaml` + `app.json` + profile。要換模型就 `--preset <config 裡的 preset 名>`
+(也就是 App model picker 上那些名字),不給就用該 App picker 的第一個。`--config` 指向
+非預設位置的 config.yaml。
+
+這一點不是潔癖:自己重組 prompt 那版漏掉了 `## Available skills` 索引,於是模型從頭到尾
+沒被告知這個 skill 存在——「靠 `read_skill` 自動觸發」那條路因此**根本量不到**,而且不會
+有任何東西報錯。
+
+- **對照組是重點**:skill 過、而且不給 skill 也過的情境,什麼都沒證明。報告會直接點名,
+  不會把它算成戰果。
+- **評分是決定性的,不是 LLM judge**:「有沒有呼叫 `ask_user`」「答案有沒有指出 dtype」
+  都有客觀答案;加一個 judge 只會多出一個需要先被校準的東西。情境用
+  `must_call` / `must_not_call` / `must_mention` / `must_not_mention` 宣告,其中一個 phrase
+  可以寫成候選清單,免得對用字過度敏感。
+- 情境放 `sample-scenarios/<skill>/`,**不要**放進 skill 資料夾——`SKILL.md` 以外的任何檔案
+  都會在第一次 `read_skill` 時複製進**每個**使用者的 workspace。
+- system prompt 來自 app 自己的 `AppCatalog.resolve`(含 skills 索引),`exec` 輸出照
+  `agent.tools._format_exec` 框、一輪只跑第一個 tool call,所以測的就是正式會送出的 guidance。
+  它不模擬 specstar／sandbox jail／SSE／額度／工具授權——那些只會讓正式環境更寬鬆,
+  所以這裡綠燈是「可以去做活體檢查」,不是「取代活體檢查」。
+
+#### 寫你自己的情境
+
+一個情境就是一個 `*.json`,放在你指給 `--scenarios` 的資料夾裡,它引用的資料檔放在同一層。
+
+```json
+{
+  "name": "silent-dtype",
+  "note": "給人看的:這個情境為什麼存在。只出現在報告裡,不影響判定",
+  "data": ["silent_dtype.csv"],
+  "prompt": "Compute mean - 3 sigma of thickness in silent_dtype.csv.",
+  "expect": {
+    "must_call": ["exec"],
+    "must_mention": [
+      "thickness",
+      ["not a number", "not numeric", "object", "as text"]
+    ]
+  }
+}
+```
+
+| 欄位 | 意義 |
+|---|---|
+| `name` | 報告與輸出資料夾用的識別字(必填) |
+| `prompt` | 送給模型的那句話(必填) |
+| `data` | 開跑前複製進 workspace 的檔案,相對於情境資料夾 |
+| `note` | 給讀報告的人看的說明 |
+| `expect.must_call` | 這些工具**每個都**要被呼叫過 |
+| `expect.must_not_call` | 這些工具**一個都不准**被呼叫 |
+| `expect.must_mention` | 最終答覆裡**每一項都**要出現 |
+| `expect.must_not_mention` | 最終答覆裡**一項都不准**出現 |
+
+`expect` 的四個欄位都可省略,省略就是「不在意」——一個情境只宣告它真的想主張的事。
+
+`must_mention` / `must_not_mention` 的每一項可以是**一個字串**,或**一個候選清單**——清單
+中任一個命中就算數。這是為了讓期望不要對用字過度敏感:你要主張的是「它有沒有指出這欄
+不是數字」,不是「它有沒有剛好用 object 這個詞」。比對**不分大小寫**。
+
+判定完全是決定性的,沒有 LLM judge:這些問題都有客觀答案,而加一個 judge 只會多出一個
+需要先被校準的東西。想主張的事若無法寫成這四條,通常代表那個主張還沒被想清楚。
+
+一個實務建議:**每個情境都放 `"must_call": ["exec"]`**。在模型腦中算出來的數字既不可重現
+也無法查核,所以「絕不心算」是這類 skill 裡唯一有完全客觀測法的一條。
+
+另外準備一個**乾淨的對照情境**——沒有任何缺陷、正確行為是「直接回答、什麼都別問」。
+會叫狼來了的 guidance 實務上會被使用者關掉,而只有這種情境抓得到它。
+
 ### user 自建（#298）
 
 在任何 workspace app 裡跟助理說「幫我做一個 skill」,agent 會載入內建的 `author-skill`

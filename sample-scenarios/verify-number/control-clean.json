@@ -1,0 +1,10 @@
+{
+  "name": "control-clean",
+  "note": "Clean normal. Every choice is immaterial (the ddof flip moves the answer 2e-5), nothing is beyond the threshold. The right behaviour is to answer with the chart and ask nothing. This is the row that decides whether the guidance is usable in practice.",
+  "data": ["control_clean.csv"],
+  "prompt": "Compute mean - 7 sigma of vt_mv in control_clean.csv.",
+  "expect": {
+    "must_call": ["exec", "show_file"],
+    "must_not_call": ["ask_user"]
+  }
+}

@@ -23,7 +23,7 @@
       "delete_file", "ask_knowledge_base", "request_wiki_update", "lookup_user", "ask_user", "update_todos", "make_deck", "data-fetch",
       "csv-column-summary", "sci-plot", "rca-tools", "python-stack", "save_skill", "save_workflow"
     ],
-    "skills": ["author-skill", "author-workflow", "grill-me"],
+    "skills": ["author-skill", "author-workflow", "grill-me", "verify-number"],
     "picker": [
       { "preset": "qwen3-local", "name": "RCA · Qwen3 (local)" },
       { "preset": "claude-opus", "name": "RCA · Claude Opus" },

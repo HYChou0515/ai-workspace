@@ -39,6 +39,11 @@ SHARED_SKILLS: dict[str, Path] = {
     # Pairs with the `ask_user` tool — without it the agent can only ask in
     # prose, which is what made this skill not worth having before.
     "grill-me": SHARED_SKILLS_DIR / "grill-me",
+    # verify-number: hand over a computed number together with the evidence that
+    # makes it checkable. Nobody can verify a number by reading it, and until this
+    # no prompt in the system said anything about computational correctness.
+    # Tune it against your own model with `python -m workspace_app.skill_eval`.
+    "verify-number": SHARED_SKILLS_DIR / "verify-number",
 }
 
 
