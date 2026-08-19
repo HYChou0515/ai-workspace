@@ -389,6 +389,11 @@ def build_lifespan(
             # #175: context-card generation consumer.
             with boot_step("start context-card generation consumer"):
                 app.state.card_gen_coordinator.start_consuming()
+            # #715: archive-import consumer — without it an upload is accepted,
+            # staged, and never written, which reads to the caller as a queue that
+            # simply never moves.
+            with boot_step("start archive-import consumer"):
+                app.state.import_coordinator.start_consuming()
         # #230: seed the platform Help collection from packaged content (repo =
         # source of truth; identical bytes are a no-op). Ingestion needs the
         # embedder, so it runs here (off the loop) and is best-effort — a dead

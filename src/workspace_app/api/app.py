@@ -1069,6 +1069,9 @@ def create_app(
     app.state.index_coordinator = index_coordinator
     card_gen_coordinator = coordinators.card_gen
     app.state.card_gen_coordinator = card_gen_coordinator
+    # #715: the archive-import consumer. On app.state because the lifespan's
+    # consumer gate reaches every coordinator through it.
+    app.state.import_coordinator = coordinators.kb_import
     register_card_gen_routes(api, card_gen_coordinator)
     # #377: the global "待釐清" inbox — answer/discard the clarification questions
     # the digest raised. A term answer becomes a context card (the card-drafter LLM

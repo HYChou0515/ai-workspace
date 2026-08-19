@@ -15,11 +15,15 @@ This walks the flow a real caller walks and asserts on what comes back:
     4. look a term up            (exact key, no model in the loop)
     5. check the card's links resolved to the documents that shipped with it
     6. import the SAME archive again — cards must UPDATE, not duplicate
+    7. import it ASYNCHRONOUSLY (#715) — the request must answer at once, and the
+       run must report what landed
 
 Step 6 is the one worth running twice: a re-import is how anyone corrects a typo in a
-generated archive, and until #701 it doubled every card in the collection.
+generated archive, and until #701 it doubled every card in the collection. Step 7 is
+the path a machine uses — the synchronous one holds the request open for as long as
+the archive takes to write, which is how a 207 MB upload earned a 504 (#715).
 
-The optional step 7 asks a question with an image attached — the platform describes it
+The optional final step asks a question with an image attached — the platform describes it
 with a VLM and searches on that description. It needs `kb.vlm_llm` configured, so it is
 opt-in via --ask and skipped (loudly) when the server rejects the image.
 
@@ -124,6 +128,36 @@ def import_into(client: httpx.Client, cid: str, zip_bytes: bytes, mode: str) -> 
         files={"file": ("archive.zip", zip_bytes, "application/zip")},
     )
     _expect(r.status_code == 200, f"re-import ({mode}) returned {r.status_code}: {r.text[:300]}")
+
+
+def import_async(client: httpx.Client, zip_bytes: bytes) -> dict:
+    """Start an asynchronous import and return the accepted response.
+
+    The point of the 202 is that it comes back before the documents exist, so the
+    check below asserts on WHAT it says (both ids, the document count) rather than
+    timing it — a wall-clock assertion would be flaky on a loaded machine and
+    would not prove the contract anyway."""
+    r = client.post(
+        "/kb/collections/imports", files={"file": ("archive.zip", zip_bytes, "application/zip")}
+    )
+    _expect(r.status_code == 202, f"async import returned {r.status_code}: {r.text[:300]}")
+    return r.json()
+
+
+def await_import(client: httpx.Client, import_id: str, *, timeout_s: float = 120.0) -> dict:
+    """Poll a run until it finishes. Reports what the run says rather than assuming
+    success: a finished run can still carry per-document errors, which is the whole
+    reason it reports them."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        r = client.get(f"/kb/collections/imports/{import_id}")
+        _expect(r.status_code == 200, f"polling the import returned {r.status_code}")
+        run = r.json()
+        if run.get("finished"):
+            return run
+        if time.monotonic() > deadline:
+            _expect(False, f"import {import_id} still unfinished after {timeout_s:.0f}s: {run}")
+        time.sleep(0.5)
 
 
 def documents(client: httpx.Client, cid: str) -> list[dict]:
@@ -264,6 +298,22 @@ def main() -> int:
             after[0].get("reference_doc_ids") == linked,
             "re-importing changed the card's links",
         )
+
+        # 7. the asynchronous path (#715) — the one a machine pushing an archive uses.
+        started = import_async(client, zip_bytes)
+        _say("6. async import", f"202 → {started['members']} documents queued")
+        _expect(started["status"] == "queued", f"expected status=queued, got {started['status']}")
+        _expect(bool(started["collection_id"]), "the 202 did not carry a collection id")
+        _expect(started["members"] == 3, f"expected 3 members, got {started['members']}")
+
+        run = await_import(client, started["import_id"])
+        _say("7. async finished", f"{run['written']}/{run['members']} written")
+        _expect(
+            run["written"] == run["members"],
+            f"documents did not all land: {run['written']}/{run['members']} — {run['errors']}",
+        )
+        async_cards = cards_in(client, started["collection_id"])
+        _expect(len(async_cards) == 1, f"expected 1 card, got {len(async_cards)}")
 
         if args.ask:
             answer = ask_with_image(client, cid, f"這張圖是哪一種?可能是 {args.code} 嗎?")
