@@ -36,6 +36,32 @@ describe("errorInfo", () => {
     expect(settled).toBe("settled");
   });
 
+  /**
+   * The deadline has to be long enough to read a body that arrives the way a
+   * real one does, and every other test here builds its `Response` from a
+   * string — which settles in a microtask, so the timer can never win and a
+   * budget of ZERO would pass all of them. That is the wrong thing to prove:
+   * losing the code is how this whole thread of bugs started, and the guard
+   * would be asserting only that a race exists, not that we win it.
+   */
+  it("still reads a body that arrives after a network delay, not just an instant one", async () => {
+    const arriving = new Response(
+      new ReadableStream({
+        start(controller) {
+          setTimeout(() => {
+            controller.enqueue(
+              new TextEncoder().encode(JSON.stringify({ detail: { error: "user_quota_exceeded" } })),
+            );
+            controller.close();
+          }, 50);
+        },
+      }),
+      { status: 507 },
+    );
+    const info = await errorInfo(arriving);
+    expect(info.code).toBe("user_quota_exceeded");
+  });
+
   it("keeps a non-JSON body as text rather than discarding it", async () => {
     const info = await errorInfo(new Response("upstream connect error", { status: 502 }));
     expect(info.code).toBeUndefined();
