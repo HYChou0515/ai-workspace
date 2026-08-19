@@ -413,7 +413,16 @@ export function useChatSession(
           ...(err as { code?: string; also?: string[]; detail?: QuotaDetail } | null),
           status,
         });
-        const msg = quota ?? (err instanceof Error ? err.message : String(err));
+        const msg =
+          quota ??
+          // #714: the send was refused because the backend could not establish
+          // who is asking. "messages failed: 500" is visible and useless; the
+          // one thing the person can do about it is sign in again.
+          ((err as { code?: string } | null)?.code === "request_env_failed"
+            ? t("chat.send.identityUnavailable")
+            : err instanceof Error
+              ? err.message
+              : String(err));
         setLog((prev) => ({ ...prev, streaming: false, error: msg }));
       }
     },

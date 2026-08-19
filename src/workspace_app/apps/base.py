@@ -94,7 +94,14 @@ class WorkItemBase(Struct):
       member who may not edit them still gets them in their turns.
 
     Treat them as shared-with-the-item, not shared-with-the-owner: an API key put
-    here is visible to everyone the item is shared with."""
+    here is visible to everyone the item is shared with.
+
+    Which is exactly what this field cannot be used for: a value that differs per
+    PERSON (the caller's own session cookie, a header their gateway stamped on).
+    That has its own source — a deploy's ``IRequestEnv`` (#714), read off the
+    request behind a chat send and never stored. The two are merged for the
+    turn's tools, and a name set in both resolves to the value here, since this
+    one was typed deliberately."""
 
     external_refs: list[str] = field(default_factory=list)
     """Tier 1 (#700) — the external records this item has already absorbed, as
