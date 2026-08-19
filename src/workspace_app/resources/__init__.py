@@ -612,6 +612,12 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # for the same cycle reason as the card-gen structs above.
     from ..kb.import_jobs import ImportRun
 
+    # `collection_id` / `finished` are indexed AHEAD of a reader on purpose: adding
+    # an index later needs an operator to run the migrate backfill, and until they
+    # do, un-backfilled rows answer NO predicate on that field — they do not read as
+    # a wrong count, they read as missing rows (#668). Cheap to plant, expensive to
+    # retrofit.
+    #
     # The row carries the caller's uploaded archive as a blob AND names the
     # collection a worker will write into, so it is private to whoever started it —
     # not to the collection's readers, who did not upload it. Without a scope

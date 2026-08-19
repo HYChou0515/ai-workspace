@@ -40,11 +40,13 @@ class _Runner:
             yield  # pragma: no cover
 
 
-def _app() -> tuple[TestClient, SpecStar, dict[str, str]]:
+def _app(
+    superusers: frozenset[str] = frozenset(),
+) -> tuple[TestClient, SpecStar, dict[str, str]]:
     """The acting user is a mutable holder both specstar and the routes read, which
     is how this suite switches identity mid-test."""
     holder = {"id": "alice"}
-    spec = make_spec(default_user=lambda: holder["id"])
+    spec = make_spec(default_user=lambda: holder["id"], superusers=superusers)
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
@@ -53,6 +55,7 @@ def _app() -> tuple[TestClient, SpecStar, dict[str, str]]:
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
         get_user_id=lambda: holder["id"],
+        superusers=superusers,  # MUST match make_spec's set (the route-guard's source)
     )
     return TestClient(app), spec, holder
 
@@ -125,3 +128,14 @@ def test_the_owner_still_sees_their_own_import():
 
     assert r.status_code == 200, r.text
     assert r.json()["import_id"] == started["import_id"]
+
+
+def test_a_superuser_can_still_reach_someone_elses_import():
+    """The fence is owner-only, not owner-exclusive: an operator has to be able to
+    see why an import is stuck, and delete a run that is holding an archive."""
+    client, _, holder = _app(superusers=frozenset({"root"}))
+    started = _start(client, holder, "alice")
+
+    holder["id"] = "root"
+    assert client.get(f"/import-run/{started['import_id']}").status_code == 200
+    assert client.delete(f"/import-run/{started['import_id']}").status_code in (200, 204)

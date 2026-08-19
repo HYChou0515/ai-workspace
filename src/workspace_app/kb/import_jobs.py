@@ -231,16 +231,6 @@ class ImportCoordinator:
             )
         return run_id
 
-    def status(self, run_id: str) -> TaskStatus:
-        """PENDING while batches are outstanding, COMPLETED once finalize ran,
-        FAILED when every batch failed."""
-        run = self._read(run_id)
-        if run is None:
-            return TaskStatus.PENDING
-        if not run.finished:
-            return TaskStatus.PENDING
-        return TaskStatus.FAILED if run.failed and not run.done else TaskStatus.COMPLETED
-
     # ── consumer ─────────────────────────────────────────────────────
     def _handle(self, job) -> None:  # job: Resource[ImportJob]
         """Dispatch one import step by ``kind``, OFF the request. specstar calls this
@@ -348,13 +338,21 @@ class ImportCoordinator:
         candidate set and both create — the duplicate-card defect #701 closed.
         """
         run = self._read(run_id)
-        if run is None:
+        if run is None or run.finished:
+            # A redelivery after the winner finished: the archive it would need is
+            # already released, so reading it would fail and the job would be retried
+            # forever over work that is done. The claim below still handles the
+            # CONCURRENT case, where neither finisher sees `finished` yet.
             return
         zip_data = self._archive_of(run)  # read BEFORE the claim clears it
         claimed = False
 
         def claim(current: ImportRun) -> ImportRun | None:
             nonlocal claimed
+            # Reset per ATTEMPT. The CAS retries on a conflict, and a flag left set
+            # by the losing attempt would tell the loser it had won: it aborts the
+            # write correctly and then restores the cards anyway.
+            claimed = False
             if current.finished:
                 return None  # someone else already won the gate
             claimed = True
@@ -507,11 +505,3 @@ class ImportCoordinator:
         while self._active_count() != 0:
             await asyncio.sleep(_DRAIN_INTERVAL)
         self._stop_consuming()
-
-
-def pending_runs(spec: SpecStar, collection_id: str) -> list[str]:
-    """Ids of a collection's imports that have not finished — used to tell a caller
-    the collection is still filling."""
-    rm = spec.get_resource_manager(ImportRun)
-    q = (QB["collection_id"] == collection_id) & (QB["finished"] == False)  # noqa: E712
-    return [r.info.resource_id for r in rm.list_resources(q.build())]  # ty: ignore[unresolved-attribute]

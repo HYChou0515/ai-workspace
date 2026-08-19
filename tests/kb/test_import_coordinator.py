@@ -373,10 +373,44 @@ async def test_finalize_runs_once_even_if_two_finishers_race(monkeypatch):
     coord._patch(run_id, "u", total=0)
     _enforce_etags(monkeypatch, coord._run_rm)
 
-    barrier = threading.Barrier(2, timeout=20)
+    # Park on the way INTO the write, not before `_finalize`: both finishers must
+    # still be holding a pre-claim view when they try to claim. Parking earlier lets
+    # the first one finish outright, and the second then returns on the cheap
+    # `finished` check without ever exercising the gate — green, guarding nothing.
+    # Count how many finalizers reach the card restore. Asserting on the resulting
+    # CARDS cannot tell the two cases apart: `restore_cards` is idempotent, so a
+    # second one that runs AFTER the first merely updates. The duplicate only appears
+    # when they overlap — and the gate's whole job is that a second one never runs at
+    # all, which is what this counts.
+    import workspace_app.kb.import_jobs as import_jobs_module
+
+    restores: list[int] = []
+    lock = threading.Lock()
+    real_restore = import_jobs_module.restore_cards
+
+    def counted_restore(*a, **kw):
+        with lock:
+            restores.append(1)
+        return real_restore(*a, **kw)
+
+    monkeypatch.setattr(import_jobs_module, "restore_cards", counted_restore)
+
+    # Park between the read and the claim. `_finalize` returns early on an already
+    # finished run — a cheap guard against redelivery — so parking at ENTRY lets the
+    # first finisher complete and the second bounce off that check, never reaching
+    # the gate this test exists to exercise. `_archive_of` sits exactly between the
+    # two, so both finishers hold a not-yet-finished view when they try to claim.
+    start = threading.Barrier(2, timeout=20)
+    real_archive_of = coord._archive_of
+
+    def archive_at_barrier(run):
+        data = real_archive_of(run)
+        start.wait()
+        return data
+
+    monkeypatch.setattr(coord, "_archive_of", archive_at_barrier)
 
     def finalize():
-        barrier.wait()
         coord._finalize(run_id, "u")
 
     threads = [threading.Thread(target=finalize) for _ in range(2)]
@@ -385,4 +419,165 @@ async def test_finalize_runs_once_even_if_two_finishers_race(monkeypatch):
     for t in threads:
         t.join(timeout=30)
 
-    assert [c.keys for c in _cards(spec, cid)] == [["M4"]], "finalize ran twice"
+    assert len(restores) == 1, f"finalize ran {len(restores)} times"
+    assert [c.keys for c in _cards(spec, cid)] == [["M4"]]
+
+
+async def test_a_redelivered_batch_does_not_double_count():
+    """The queue is at-least-once, so the same batch arrives twice. Its slot is
+    already closed, so the second delivery must add nothing — otherwise `written`
+    drifts above the document count and `done` grows past `total`."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({"a.md": b"alpha", "b.md": b"beta"}),
+        mode="overwrite",
+        user="u",
+    )
+    coord._patch(run_id, "u", total=1)
+    payload = ImportPayload(run_id=run_id, kind="process", member_start=0, member_end=50)
+
+    coord._process(payload, "u")
+    coord._process(payload, "u")  # redelivered
+
+    run = _run_of(spec, run_id)
+    assert run.done == [0]
+    assert run.written == 2, f"a redelivery double-counted: written={run.written}"
+
+
+async def test_a_batch_redelivered_after_finalize_is_a_no_op():
+    """A finished run must not be written into again — the archive is gone, so the
+    work cannot be redone, and touching the run would resurrect a closed import."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid, zip_data=_archive({"a.md": b"alpha"}), mode="overwrite", user="u"
+    )
+    await coord.aclose()
+    assert _run_of(spec, run_id).finished
+
+    coord._process(ImportPayload(run_id=run_id, kind="process", member_start=0, member_end=50), "u")
+
+    run = _run_of(spec, run_id)
+    assert run.finished and run.archive is None
+
+
+async def test_a_collection_deleted_mid_import_does_not_crash_the_worker():
+    """`collection_id` cascades, so deleting the collection takes the run with it.
+    Every step then reads nothing and returns — a vanished run is a finished job,
+    not an error to retry forever."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid, zip_data=_archive({"a.md": b"alpha"}), mode="overwrite", user="u"
+    )
+    coord._patch(run_id, "u", total=1)
+    spec.get_resource_manager(Collection).delete(cid)
+
+    coord._process(ImportPayload(run_id=run_id, kind="process", member_start=0, member_end=50), "u")
+    coord._finalize(run_id, "u")
+    coord._split(run_id, "u")
+
+
+async def test_a_member_escaping_the_archive_root_is_dropped():
+    """Same fence as the synchronous path: a zip-slip member is not a document."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+
+    coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({"../escape.md": b"nope", "ok.md": b"fine"}),
+        mode="overwrite",
+        user="u",
+    )
+    await coord.aclose()
+
+    assert [d.path for d in _docs(spec, cid)] == ["ok.md"]
+
+
+async def test_an_archive_with_no_manifest_still_imports_its_documents():
+    """A plain zip is a batch folder upload — no settings, no cards, just files."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.md", b"alpha")
+
+    coord.enqueue(collection_id=cid, zip_data=buf.getvalue(), mode="overwrite", user="u")
+    await coord.aclose()
+
+    assert [d.path for d in _docs(spec, cid)] == ["a.md"]
+    assert _cards(spec, cid) == []
+
+
+async def test_directory_entries_in_the_archive_are_not_documents():
+    """Some zip writers emit explicit directory entries. They are structure, not
+    content — counting them would inflate `members` and queue empty writes."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(zipfile.ZipInfo("M4/"), b"")  # a directory entry
+        zf.writestr("M4/a.md", b"alpha")
+
+    run_id = coord.enqueue(collection_id=cid, zip_data=buf.getvalue(), mode="overwrite", user="u")
+    await coord.aclose()
+
+    assert _run_of(spec, run_id).members == 1
+    assert [d.path for d in _docs(spec, cid)] == ["M4/a.md"]
+
+
+async def test_a_vanished_run_is_a_finished_job_not_an_error():
+    """Every step reads the run first. When it is gone — the collection cascaded
+    away — the step returns rather than raising: a job that keeps failing is
+    redelivered forever over work nobody wants any more."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid, zip_data=_archive({"a.md": b"alpha"}), mode="overwrite", user="u"
+    )
+    spec.get_resource_manager(ImportRun).permanently_delete(run_id)
+
+    coord._split(run_id, "u")
+    coord._process(ImportPayload(run_id=run_id, kind="process", member_start=0, member_end=50), "u")
+    coord._finalize(run_id, "u")
+    coord._patch(run_id, "u", total=9)  # the CAS path, on a row that is not there
+
+
+async def test_the_second_finalizer_does_no_work():
+    """The gate is claimed, so a finalize arriving after the winner returns without
+    restoring the cards a second time."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({}, cards=[{"keys": ["M4"], "title": "M4", "body": "edge"}]),
+        mode="overwrite",
+        user="u",
+    )
+    coord._patch(run_id, "u", total=0)
+
+    coord._finalize(run_id, "u")
+    coord._finalize(run_id, "u")  # redelivered, gate already claimed
+
+    assert [c.keys for c in _cards(spec, cid)] == [["M4"]]
+
+
+async def test_aclose_on_an_idle_coordinator_returns_at_once():
+    """Nothing queued and no consumer started — there is nothing to drain, and
+    starting one just to stop it would leak a thread per call."""
+    spec = make_spec(default_user="u")
+    coord = _coordinator(spec)
+
+    await coord.aclose()
+
+    assert not coord.consuming

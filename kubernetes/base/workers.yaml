@@ -185,6 +185,69 @@ spec:
           type: Utilization
           averageUtilization: 70
 ---
+# ── archive import (#715; IO-bound: blob + row writes, no model) ──────────────
+# Without this Deployment an upload is accepted with 202, staged, and never
+# written under the documented pod-split shape (`server.run_consumers: false`,
+# API as pure producer) — a queue nobody drains looks exactly like a queue that
+# never moves. Memory is sized for the staged archive: a `process` job restores
+# the whole blob to read its batch out, so the ceiling is one archive, not one
+# batch.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-kb-import
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-kb-import
+  template:
+    metadata:
+      labels:
+        app: rca-worker-kb-import
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "kb-import"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rca-worker-kb-import
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rca-worker-kb-import
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
 # ── model-sanity battery (manual, infrequent) — fixed 1 replica, no HPA ───────
 apiVersion: apps/v1
 kind: Deployment
