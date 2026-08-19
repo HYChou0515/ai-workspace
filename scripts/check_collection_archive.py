@@ -318,9 +318,9 @@ def main() -> int:
         if args.ask:
             answer = ask_with_image(client, cid, f"這張圖是哪一種?可能是 {args.code} 嗎?")
             if answer is None:
-                _say("6. image question", "SKIPPED — no kb.vlm_llm configured on this server")
+                _say("8. image question", "SKIPPED — no kb.vlm_llm configured on this server")
             else:
-                _say("6. image question", f"{len(answer)} bytes of stream")
+                _say("8. image question", f"{len(answer)} bytes of stream")
                 _expect(bool(answer.strip()), "the image turn produced an empty stream")
 
         print(f"\nOK — collection {cid} at {args.base_url}", file=sys.stderr)

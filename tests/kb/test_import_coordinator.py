@@ -21,7 +21,12 @@ from specstar.types import PreconditionFailedError
 
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.import_jobs import ImportCoordinator, ImportPayload, ImportRun
+from workspace_app.kb.import_jobs import (
+    MAX_ERROR_LINES,
+    ImportCoordinator,
+    ImportPayload,
+    ImportRun,
+)
 from workspace_app.kb.index_coordinator import IndexCoordinator
 from workspace_app.kb.index_jobs import IndexJob
 from workspace_app.kb.ingest import Ingestor
@@ -581,3 +586,49 @@ async def test_aclose_on_an_idle_coordinator_returns_at_once():
     await coord.aclose()
 
     assert not coord.consuming
+
+
+async def test_two_members_sharing_a_name_are_both_read():
+    """A malformed archive can hold the same name twice. Reading by NAME resolves to
+    the last entry, so one member would be written twice and the other never — the
+    synchronous path reads entries, and so must this one."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("dup.md", b"first")
+        zf.writestr("dup.md", b"second")  # same name, second entry
+
+    run_id = coord.enqueue(collection_id=cid, zip_data=buf.getvalue(), mode="overwrite", user="u")
+    await coord.aclose()
+
+    run = _run_of(spec, run_id)
+    assert run.members == 2  # both entries are members, not one
+    assert run.written == 2
+
+
+async def test_the_failure_list_is_capped_but_the_totals_are_not(monkeypatch):
+    """A wholly-failing archive must not put one row's worth of strings per document
+    into a row every poll returns. The lines are a sample; `written` vs `members`
+    stays the verdict."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+
+    def always_fail(**kw):
+        raise OSError("disk said no")
+
+    monkeypatch.setattr(coord._ingestor, "store_file", always_fail)
+    run_id = coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({f"f{i:03d}.md": b"x" for i in range(MAX_ERROR_LINES + 20)}),
+        mode="overwrite",
+        user="u",
+    )
+    await coord.aclose()
+
+    run = _run_of(spec, run_id)
+    assert len(run.errors) == MAX_ERROR_LINES
+    assert run.members == MAX_ERROR_LINES + 20
+    assert run.written == 0  # the verdict survives the cap

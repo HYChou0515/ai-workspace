@@ -75,6 +75,12 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 # fan-out makes with its unit batches.
 MEMBERS_PER_BATCH = 50
 
+# How many failure lines the run keeps. One line per failed document is what makes a
+# partial import actionable, but a wholly-failing 3000-member archive would put 3000
+# strings in one row that every poll then returns. Past this the count still tells
+# the caller how many failed (`members - written`); the lines are a sample.
+MAX_ERROR_LINES = 100
+
 _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
 _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while the queue drains
 _MAX_CAS_RETRIES = 20  # same ceiling as the card-gen run store
@@ -112,8 +118,9 @@ class ImportRun(msgspec.Struct):  # → resource "import-run"
 
     Mirrors :class:`~workspace_app.kb.card_gen.CardGenRun`. ``done``/``failed`` hold
     BATCH indices (a batch is ``MEMBERS_PER_BATCH`` members), and ``errors`` carries
-    one human-readable line per failed batch — a caller who could not watch the
-    request needs to see a half-applied import as one, not just "finished".
+    up to ``MAX_ERROR_LINES`` ``path: reason`` lines — a caller who could not watch
+    the request needs to see a half-applied import as one, not just "finished".
+    Compare ``written`` with ``members`` for the verdict; ``errors`` is the detail.
 
     ``archive`` is cleared at finalize: a 200 MB blob per import is not something to
     keep once it is unpacked. It is held while the run could still be retried.
@@ -135,14 +142,15 @@ class ImportRun(msgspec.Struct):  # → resource "import-run"
     finished: bool = False
 
 
-def _members_of(zip_data: bytes) -> list[str]:
+def _members_of(zip_data: bytes) -> list[zipfile.ZipInfo]:
     """The archive's document members, in a stable order.
 
     The manifest is metadata, never a document; a member that escapes its root is
     dropped exactly as the synchronous path drops it. Sorted so the batches a
     ``split`` hands out are reproducible — a retry must address the same members.
+    Entries rather than names, so a duplicated name still yields two members.
     """
-    out: list[str] = []
+    out: list[zipfile.ZipInfo] = []
     with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
         for info in zf.infolist():
             if info.is_dir():
@@ -155,8 +163,11 @@ def _members_of(zip_data: bytes) -> list[str]:
             except ValueError:
                 continue  # zip-slip
             if path:
-                out.append(name)
-    return sorted(out)
+                out.append(info)
+    # By entry, never by name: a malformed archive can hold the same name twice, and
+    # `read(name)` resolves to the last of them — so one member would be written
+    # twice and the other never. The synchronous path reads entries; so does this.
+    return sorted(out, key=lambda i: (i.filename, i.header_offset))
 
 
 def _manifest_of(zip_data: bytes) -> dict[str, Any]:
@@ -300,11 +311,12 @@ class ImportCoordinator:
         skipped = 0
         failures: list[str] = []
         with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-            for name in members:
+            for info in members:
                 # Per MEMBER, not per batch: a batch is a scheduling unit, and one
                 # unreadable file must not take its 49 neighbours down with it. The
                 # caller needs to know WHICH document did not land — "batch 3 failed"
                 # is not something anyone can act on.
+                name = info.filename
                 path = canonical_path(name)
                 if run.mode == "skip" and doc_exists(self._spec, run.collection_id, path):
                     # Same judgement as the synchronous path, from the same function:
@@ -317,7 +329,7 @@ class ImportCoordinator:
                         collection_id=run.collection_id,
                         user=requester,
                         path=path,
-                        data=zf.read(name),
+                        data=zf.read(info),
                     )
                 except Exception as exc:  # noqa: BLE001 - the reason belongs on the run
                     failures.append(f"{name}: {type(exc).__name__}: {exc}")
@@ -432,7 +444,9 @@ class ImportCoordinator:
                 done=[*run.done, batch_index] if slot == "done" else run.done,
                 failed=[*run.failed, batch_index] if slot == "failed" else run.failed,
                 written=run.written + written,
-                errors=[*run.errors, *failures],
+                # Capped: see MAX_ERROR_LINES. `written` and `members` still give
+                # the true totals, so the cap costs detail, never the verdict.
+                errors=[*run.errors, *failures][:MAX_ERROR_LINES],
             )
 
         self._cas(run_id, requester, mutate)
