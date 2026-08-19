@@ -15,11 +15,16 @@ export function UserPicker({
   onToggle,
   exclude = [],
   placeholder = "Search people…",
+  labelledBy,
 }: {
   selected: string[];
   onToggle: (id: string) => void;
   exclude?: string[];
   placeholder?: string;
+  /** id of the element naming this field, for callers that render their own
+   * `<label>`. Without it such a label points at nothing: the search box lives
+   * in here, so `htmlFor` on the outside cannot reach it. */
+  labelledBy?: string;
 }) {
   const users = useUsers();
   const [q, setQ] = useState("");
@@ -45,6 +50,7 @@ export function UserPicker({
       <input
         type="search"
         className="kb-input"
+        aria-labelledby={labelledBy}
         placeholder={placeholder}
         value={q}
         onChange={(e) => setQ(e.target.value)}

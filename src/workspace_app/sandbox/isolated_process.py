@@ -33,7 +33,7 @@ from pathlib import Path
 import xxhash
 
 from .local_process import _HOME, LocalProcessSandbox, _validate_sandbox_id
-from .protocol import SandboxHandle, SandboxSpec
+from .protocol import EnforcedLimits, SandboxHandle, SandboxSpec
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,22 @@ class _CgroupManager:
         self._memory_max = _parse_size(memory_max)
         self._cpu_max = _cpu_max(cpu_cores)
         self._pids_max = str(pids_max)
+        # Kept as NUMBERS beside the cgroup spellings above: `effective` has to
+        # answer "what does this sandbox cost", and `"50000 100000"` is a cpu.max
+        # line, not a core count. Same two values, so the fallback below and the
+        # one in `create` can never disagree about which one won.
+        self._cpu_cores = cpu_cores
+        self._memory_bytes = 0 if self._memory_max == "max" else int(self._memory_max)
+
+    def effective(self, cpu_cores: float | None, memory_bytes: int | None) -> EnforcedLimits:
+        """The ceilings `create` would really write for these arguments.
+
+        Same per-dimension fallback, expressed once: a spec stating only memory
+        is charged its own memory and THIS manager's cpu."""
+        return EnforcedLimits(
+            cpu_cores=self._cpu_cores if cpu_cores is None else cpu_cores,
+            memory_bytes=self._memory_bytes if memory_bytes is None else memory_bytes,
+        )
 
     def create(
         self,
@@ -290,6 +306,11 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
             if node == workspace:
                 break
             node = node.parent
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        """What this sandbox will really be capped at — the cgroup manager's own
+        answer, so the number charged is the number written to `cpu.max`."""
+        return self._cgroups.effective(spec.cpu_cores, spec.memory_bytes)
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         handle = await super().create(spec, sandbox_id)

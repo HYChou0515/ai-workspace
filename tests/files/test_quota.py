@@ -14,6 +14,7 @@ import pytest
 from workspace_app.files.facade import WorkspaceFiles, WorkspaceFull
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.filestore.protocol import FileExists
+from workspace_app.quota.disk_ledger import UserDiskFull
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxBusy, SandboxHandle, SandboxSpec
 
@@ -444,3 +445,90 @@ async def test_store_without_usage_accounting_falls_back():
     assert await files.file_size("ws", "/a") is None
     # remaining is then just the whole quota (nothing counted against it)
     assert await files.remaining_quota("ws", "/a") == 1000
+
+
+async def test_gathering_reasons_does_not_charge_the_person_gate():
+    """The per-person gate is NOT a pure predicate: when it allows a write it
+    records the post-write size. `ensure_room_for` never reached it once the
+    workspace rule had already refused, but `room_refusals` deliberately keeps
+    going — so it reached a recording gate for an operation that was already
+    refused, and the owner was charged for a copy that never happened.
+
+    The double records on the allowed path because the real gate does. One that
+    only decided would be immune to exactly this defect — which is how it
+    shipped."""
+    recorded: list[int] = []
+
+    async def gate(_ws: str, new_size: int, _growth: int, *, record: bool = True) -> None:
+        if record:
+            recorded.append(new_size)
+
+    files = WorkspaceFiles(MemoryFileStore(), quota=100, person_gate=gate)
+    await files.write("ws1", "/a", b"x" * 100)  # the workspace is now exactly full
+    # …and that write legitimately charged, through `_ensure_headroom`. Clear it:
+    # what is under test is the ASKING path, not the writing one.
+    recorded.clear()
+
+    # Asking for reasons: the workspace rule refuses, and the person gate must
+    # be consulted (so both can be named) WITHOUT charging anyone.
+    refusals = await files.room_refusals("ws1", 50, record=False)
+    assert [type(r).__name__ for r in refusals] == ["WorkspaceFull"]
+    assert recorded == [], "a refused operation charged the owner"
+
+    # …while a write path still records exactly as before.
+    roomy = WorkspaceFiles(MemoryFileStore(), quota=1000, person_gate=gate)
+    await roomy.write("ws1", "/a", b"x" * 100)
+    recorded.clear()
+    await roomy.ensure_room_for("ws1", 50)
+    assert recorded == [150], "a write path must still keep the ledger current"
+
+
+async def test_both_disk_rules_are_named_not_just_the_first():
+    """The two disk rules are independent — being over one says nothing about
+    the other — and they live behind ONE facade call. Stopping at the first is
+    what made someone delete files, retry, and be told to delete files somewhere
+    else instead.
+
+    Pinned here because the only other `also` test pairs the ENVIRONMENT limit
+    with a disk one, and that pair is refused by two different gates. This pair
+    is refused inside one method, which is exactly why it short-circuited."""
+
+    async def gate(_ws: str, _new: int, growth: int, *, record: bool = True) -> None:
+        # Only the growth under test: the setup write below legitimately passes
+        # through this same gate, and a double that refused everything would
+        # never reach the case being pinned.
+        if growth == 50:
+            raise UserDiskFull(owner="alice", used=999, quota=1000, attempted=growth)
+
+    files = WorkspaceFiles(MemoryFileStore(), quota=100, person_gate=gate)
+    await files.write("ws1", "/a", b"x" * 100)  # this item is full…
+
+    # …and so is its owner's total. Both must be reported.
+    refusals = await files.room_refusals("ws1", 50, record=False)
+    assert [type(r).__name__ for r in refusals] == ["WorkspaceFull", "UserDiskFull"]
+
+
+async def test_a_write_path_charges_nothing_once_another_rule_has_refused():
+    """`ensure_room_for` is the path a folder copy takes — the exact operation
+    the fix for this was written about — and it legitimately passes
+    `record=True`, because a write really is about to happen.
+
+    Right up until the workspace rule refuses it. The first fix set the flag at
+    the two CALLERS and left the gate call unconditional, so the turn gate
+    stopped charging and the folder copy, which is what the commit message
+    described, carried on charging. The test that shipped with it asserted the
+    caller-side flag and a roomy workspace — neither reaches this case."""
+    recorded: list[int] = []
+
+    async def gate(_ws: str, new_size: int, _growth: int, *, record: bool = True) -> None:
+        if record:
+            recorded.append(new_size)
+
+    files = WorkspaceFiles(MemoryFileStore(), quota=100, person_gate=gate)
+    await files.write("ws1", "/a", b"x" * 100)  # the item is now full
+    recorded.clear()
+
+    with pytest.raises(WorkspaceFull):
+        await files.ensure_room_for("ws1", 50)  # a copy that cannot happen
+
+    assert recorded == [], "a refused write charged its owner"

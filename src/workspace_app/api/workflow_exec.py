@@ -34,6 +34,7 @@ from ..workflow.run import RunStatus, WorkflowRun
 from .notifications import notification_sent, notify
 from .rca_messages import to_rca_message
 from .timeutil import now_ms
+from .turn_gate import admit_turn
 from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
 
 if TYPE_CHECKING:
@@ -145,13 +146,12 @@ class WorkflowExecutor:
         baseline = self._run_baseline[chat_key]
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError  # Stop arrived before this turn ran
-        await self._files.ensure_room_for(item_id, 1)
-        # Same pair of gates as an interactive turn (`chat_send.send`). A
+        # The same gate an interactive turn passes (`turn_gate.admit_turn`) — one
+        # rule, called twice, rather than the same two lines written twice. A
         # scheduled headless run is refused too, rather than exempted: an
         # exemption would be a way to spend resources the limit says you do not
         # have, just by scheduling it. #9 in the plan makes the refusal visible.
-        if self._admission is not None:
-            await self._admission.check(item_id)
+        await admit_turn(self._files, self._admission, item_id)
         try:
             rid = chat_key
             got = self._conv_rm.get(rid).data

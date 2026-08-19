@@ -45,6 +45,11 @@ export const RESOURCE_LINK_KEYS = [
   "workspace.overQuota.env",
   "workspace.upload.userFull",
   "workspace.upload.envFull",
+  // The "and also" clause. The workspace one is absent for the same reason its
+  // primary is: its remedy is this item's own files, not anything on
+  // `/my-resources`. There is no environment clause at all — that limit always
+  // leads (see `QUOTA_ALSO_KEY`).
+  "resources.also.user",
 ] as const satisfies readonly MsgKey[];
 
 export function ResourceLinkText({ text }: { text: string }) {

@@ -35,6 +35,7 @@ from functools import cache
 from pathlib import Path
 
 from .protocol import (
+    EnforcedLimits,
     ExecResult,
     FileEntry,
     OutputSink,
@@ -273,6 +274,13 @@ class LocalProcessSandbox:
         `~`/cwd). File ops + walk are scoped here, so tools/caches living in the
         sandbox root (the infra area, outside this) are never seen or synced."""
         return self._require(handle) / _WORKSPACE
+
+    async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
+        """This backend applies no cgroup, so it caps nothing of its own: the
+        answer is exactly what was asked for. A subclass that DOES cap (the
+        isolated backend) overrides this. Charging its owner for a ceiling
+        nobody enforces would be inventing a number."""
+        return EnforcedLimits(cpu_cores=spec.cpu_cores, memory_bytes=spec.memory_bytes)
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         # #345: a given sandbox_id pins the handle id to a STABLE dir on the

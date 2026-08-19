@@ -326,6 +326,14 @@ superuser 在同一頁的最下方多一個**個人額度**區塊,可以直接�
 - **`cpu` / `memory` 的執行者是 sandbox 後端。** 正式環境是 `kind: http`,所以**沒有重新部署
   sandbox-host 就完全沒有效果**。`disk` 由本體執行,不受影響。這也是整套裡唯一沒有在真 host
   上驗證過的一段。
+
+  同樣的理由決定了**用量怎麼算**:一個 App 沒宣告 `resources` 時,`SandboxSpec` 帶的是 `null`
+  =「後端請用你自己的天花板」,而後端真的會套(`SANDBOX_HOST_CPU_CORES` / `sandbox.isolation.*`)。
+  所以計費看的是**後端實際會套的數字**,不是請求裡寫了什麼——照請求算的話,沒宣告的 App 等於
+  免費佔一顆核心,`/my-resources` 會在活著的環境旁顯示 CPU 0,per-user 的 cpu/memory 上限也
+  永遠加總成 0 而不生效。http 後端向 host 的 `/healthz` 要這個數字(能力名 `resource-defaults`);
+  **舊 host 沒有這個欄位就會少算**,而 `/health` 的 sandbox-host 探針會指出映像過舊。完全不設
+  cgroup 的後端(mock、純 local process)回報 `null`,就真的不計費——沒有人執行的上限不該收費。
 - ⚠️ **債務人是 item 的 `owner`,而那個欄位目前誰都能改**(issue #687 仍 OPEN)。它**不是**
   權限擁有者(權限走 specstar 的 `created_by`),所以把 `owner` 設給別人**不會失去任何控制權**
   ——item 照樣是你的,只有帳單跑到對方頭上。**在 #687 落地前,以上額度全部可被繞過。** 這是

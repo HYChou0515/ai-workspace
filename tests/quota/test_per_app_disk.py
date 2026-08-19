@@ -9,9 +9,12 @@ over-quota workspace can always be tidied back under.
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 from specstar import SpecStar
 
 from workspace_app.api import create_app
+from workspace_app.api.file_routes import _stream_upload_to_store, over_upload_quota
+from workspace_app.api.turn_gate import quota_body
 from workspace_app.apps.pm.model import PmProject
 from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.files import WorkspaceFiles, WorkspaceFull
@@ -137,3 +140,106 @@ async def test_remaining_quota_reads_the_items_own_limit():
     files = WorkspaceFiles(MemoryFileStore(), quota={"a": 1000, "b": 100}.__getitem__)
     assert await files.remaining_quota("a", "/f") == 1000
     assert await files.remaining_quota("b", "/f") == 100
+
+
+def test_the_streamed_uploads_507_matches_the_shared_builder_exactly():
+    """Four entry points answer 507, and the wording drifted across them once
+    already. The streamed upload is the one most likely to grow a fifth
+    spelling: it cannot use the app-wide handler (it must stop mid-transfer).
+
+    Asserted on the RESPONSE, not on the source text. The first version of this
+    test grepped `file_routes.py` for `quota_body(` and for one blacklisted
+    literal — which a hand-written body using a DIFFERENT code satisfied, and
+    which a passing mention in a comment failed. It measured the file, not the
+    contract."""
+    client, rca, _pm = _two_app_client()
+    with client:
+        # Something already stored, so `used` is NOT zero. Uploading into an
+        # empty workspace made `used` degenerate: replacing the measurement with
+        # a hardcoded 0 left this assertion green — and `used` is the field
+        # #538 is about ("the SANDBOX measures"), the one whose staleness this
+        # project has actually shipped.
+        assert client.put(f"/a/rca/items/{rca}/files/held", content=b"h" * 50).status_code == 204
+        big = client.put(f"/a/rca/items/{rca}/files/x.bin", content=b"z" * 5000)
+        assert big.status_code == 507, big.text
+        body = big.json()["detail"]
+
+    # EQUAL to what the one builder produces for this refusal — values, not just
+    # keys. A key-set comparison let a hand-written copy that happens to agree
+    # today pass, which is the same hole as the source-grep version it replaced:
+    # both measured a proxy for "one builder" rather than the body itself.
+    assert body == quota_body(WorkspaceFull(used=50, quota=100, attempted=5000))
+
+
+@pytest.mark.parametrize(
+    ("read", "remaining", "cut"),
+    [
+        (1, None, False),  # no ceiling on this workspace — never cut off
+        (10**9, None, False),
+        (99, 100, False),  # under
+        (100, 100, False),  # exactly at the limit still fits…
+        (101, 100, True),  # …one byte past does not
+        (5000, 0, True),  # a workspace with no room left
+        (0, 0, False),  # nothing read yet
+    ],
+)
+def test_the_upload_cut_off_decides_at_the_right_byte(read, remaining, cut):
+    """The cut-off decision, unit-tested, because the route cannot show it.
+
+    An in-process ASGI client buffers the whole body before the route runs, so
+    "refused mid-transfer" and "read it all, then refused" are byte-identical
+    responses — the end-to-end test stayed green with the entire cut-off deleted.
+    The boundary matters in both directions: cutting off at exactly the limit
+    would refuse an upload the pre-flight gate had already approved."""
+    assert over_upload_quota(read, remaining) is cut
+
+
+class _RecordingRequest:
+    """A `Request` stand-in whose body arrives in chunks, counting how many were
+    handed over. Enough surface for `_stream_upload_to_store` and no more."""
+
+    def __init__(self, chunks: list[bytes]) -> None:
+        self._chunks = chunks
+        self.taken = 0
+        self.headers: dict[str, str] = {}
+
+    async def stream(self):  # noqa: ANN201 - mirrors starlette's async iterator
+        for chunk in self._chunks:
+            self.taken += 1
+            yield chunk
+
+
+async def test_the_upload_stops_before_reading_the_rest_of_the_body():
+    """The cut-off has to be WIRED, not merely correct.
+
+    `over_upload_quota` is a pure function with its own exhaustive test — and
+    deleting its call from the route left that test green, lint clean, and the
+    function a caller-less orphan at 100% coverage. Nothing observed the wiring:
+    an in-process ASGI client buffers the whole body before the route runs, so
+    end-to-end the refusal looks identical whether it came at byte 101 or after
+    the last byte.
+
+    Driving the route function directly with a chunked body is what makes it
+    visible: the refusal must arrive with chunks still unread, and nothing may
+    be handed to the store."""
+    files = WorkspaceFiles(MemoryFileStore(), quota=100)
+    await files.write("ws1", "/held", b"x" * 60)  # 40 bytes of headroom left
+
+    stored: list[str] = []
+
+    async def _capture(_ws: str, path: str, *_a: object, **_k: object) -> None:
+        # ASYNC, because the route awaits it. A non-awaitable double makes a
+        # disabled cut-off fail with `TypeError` instead of the assertion below —
+        # red, but for the wrong reason, which is how a test stops explaining
+        # what broke.
+        stored.append(path)
+
+    files.write_from_path = _capture  # ty: ignore[invalid-assignment]
+
+    request = _RecordingRequest([b"y" * 30] * 10)  # 300 bytes, in ten chunks
+    with pytest.raises(HTTPException) as err:
+        await _stream_upload_to_store("ws1", "/big", request, files, max_file_size=0)  # ty: ignore[invalid-argument-type]
+
+    assert err.value.status_code == 507
+    assert request.taken < 10, "the whole body was read before refusing"
+    assert stored == [], "a refused upload reached the store"

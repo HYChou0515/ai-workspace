@@ -12,9 +12,9 @@ import { Icon } from "../../components/Icon";
 import { ResourceLinkText } from "../../components/ResourceLinkText";
 import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
-import { useT } from "../../lib/i18n";
+import { type MsgKey, useT } from "../../lib/i18n";
 import { modCombo } from "../../lib/platform";
-import { quotaKind } from "../../lib/quotaFailure";
+import { type QuotaDetail, type QuotaKind, quotaMessage } from "../../lib/quotaFailure";
 import { pxToRem } from "../../lib/pxToRem";
 
 type Entry = {
@@ -22,6 +22,14 @@ type Entry = {
   cmd: string;
   result: ExecResult | { kind: "running" } | { kind: "error"; message: string };
 };
+
+/** The terminal's own wording for each limit. It wakes a sandbox, so it is one
+ * of only two surfaces where the live-environment limit can appear. */
+const TERMINAL_QUOTA_KEY = {
+  workspace: "terminal.workspaceFull",
+  user: "terminal.userFull",
+  environment: "terminal.envFull",
+} as const satisfies Record<NonNullable<QuotaKind>, MsgKey>;
 
 export function TerminalPane({ investigationId }: { investigationId: string }) {
   const t = useT();
@@ -71,9 +79,13 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
       // meets their live-environment limit. Reporting the raw "exec failed:
       // 507" would be the same failure the review found on the upload path:
       // a status with no remedy attached.
-      const kind = quotaKind(
-        (err as { status?: number }).status,
-        (err as { code?: string }).code,
+      // Built by the SAME helper the chat composer uses: it names every limit
+      // that bound and the numbers behind them. Two surfaces spelling out the
+      // same refusal by hand is how the wording drifted apart before.
+      const quota = quotaMessage(
+        t,
+        TERMINAL_QUOTA_KEY,
+        err as { status?: number; code?: string; also?: string[]; detail?: QuotaDetail },
       );
       setHistory((h) =>
         h.map((e) =>
@@ -84,15 +96,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
                   kind: "error",
                   message: aborted
                     ? t("terminal.aborted")
-                    : kind === "environment"
-                      ? t("terminal.envFull")
-                      : kind === "user"
-                        ? t("terminal.userFull")
-                        : kind === "workspace"
-                          ? t("terminal.workspaceFull")
-                          : err instanceof Error
-                            ? err.message
-                            : String(err),
+                    : (quota ?? (err instanceof Error ? err.message : String(err))),
                 },
               }
             : e,

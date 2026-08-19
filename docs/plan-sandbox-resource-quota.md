@@ -155,6 +155,13 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 2. **已經有活 sandbox 的 item 照樣能用**
 3. 殺掉一個 sandbox 後額度**自己回來**,全程沒有任何 decrement 呼叫
 4. 模擬 pod 猝死(完全不呼叫 `kill`)後,額度仍然回得來
+5. **`cpu` 單獨把人擋下來,而且是在「App 沒宣告 `resources`」的狀態下**——`count` 還有餘額,是 cpu 加總到頂而被拒(端對端,`test_turn_gate.py`,PR #712 補)
+6. 同上,`memory`(閘門層,`test_admission.py`,原本就有)
+7. 一個活著的 sandbox 即使 App 沒宣告,仍被計入 cpu/memory 的加總(`test_routes.py`,PR #712 補)
+
+> ⚠️ 第 5、7 條是**事後補的**,而它們的缺席正是「用量恆為 0」能完整通過整份計劃的原因。原本 1–4 條全部只驗 `count`。
+>
+> ⚠️ 更精確地說:`test_admission.py` **本來就有** cpu / memory 單獨擋人的測試,而且是綠的。它們**直接把數字餵給帳本**(`store.bump(cpu_milli=1000)`),所以驗到的是**閘門**,不是**餵數字那條管線**——而壞掉的正是後者。補第 5 條(端對端、且 App 什麼都沒宣告)時,它立刻抓到閘門的另外半個洞:正式路徑呼叫 `admission.check(item_id)` **從來沒傳 `incoming`**,所以「新開的這一個有多大」一律當成 0,`cpu` 只擋得住**已經超標**的人。**一個綠的單元測試證明不了它上游的餵料是對的。**
 
 **地雷**
 
@@ -190,7 +197,13 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 **交付** 用量 / 上限;cpu/mem 半列出活著的執行環境 + **關閉**鈕;disk 半列出 item 用量 + **刪除**鈕。
 
-**驗收** 親自按過一輪:**被 507 擋住 → 進畫面 → 關掉 / 刪掉 → 同一個操作重試成功**。
+**驗收**
+
+1. 親自按過一輪:**被 507 擋住 → 進畫面 → 關掉 / 刪掉 → 同一個操作重試成功**
+2. **看得見**:每個維度有自己的讀數與自己的量表,而且畫面真的有樣式(PR #709 補)
+3. **維運視角**:superuser 找得到「站台預設是多少」與「誰有特例」,不需要事先知道對方的 id(PR #709 補)
+
+> ⚠️ 第 2、3 條是事後補的。原本只有第 1 條,而一個**零 CSS**、量表是兩個零高度 div、整列擠成一串字的頁面**完全可以通過「按過一輪」**;維運的兩個問題則從頭到尾不在計劃裡。見 §3.3。
 
 **實測結果**(在真的跑起來的服務 + 真 Chromium 上,不是替身):`per_user.count: 1` → 開第二個 item 的 terminal 回 `507 {"error":"sandbox_quota_exceeded","dimension":"sandboxes"}` → `/my-resources` 顯示「執行環境 1 個 / 1 個 · 第二個 · 1 核 · 512 MB」與「儲存空間 2.9 MB / 80 MB」→ 在瀏覽器點「關閉」→ 變成「0 個 / 1 個 · 目前沒有執行中的環境」→ 同一個 exec 回 200。
 
@@ -224,7 +237,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 
 第一輪自評把第 1、6 條都判成通過,實際上兩條都是假的。四條都有實測數據,而且都落在「PR 宣稱不會發生」的那一格:
 
-1. **`kind: http` 會靜默蓋掉 `SANDBOX_HOST_*`。** 解析的最底層原本是 `sandbox.isolation.*`(永遠有值),所以每個 item 都送出具體 cpu/memory,host 自己的設定從此無效。兩邊預設都是 512M/1.0 所以測試看不出來;線上只要 host 被調高過,rollout 後每個 sandbox 都會掉回 512M 被 OOM kill。**修法**:cpu/memory 沒人宣告就解析成 `None` —— 這兩個維度的**執行者是後端**,預設本來就該由它決定;disk 由本 app 執行,才該解析成具體數字。副作用要知道:per-user 的 cpu/memory 上限只對「有宣告成本」的 App 生效,`count` 不受影響。
+1. **`kind: http` 會靜默蓋掉 `SANDBOX_HOST_*`。** 解析的最底層原本是 `sandbox.isolation.*`(永遠有值),所以每個 item 都送出具體 cpu/memory,host 自己的設定從此無效。兩邊預設都是 512M/1.0 所以測試看不出來;線上只要 host 被調高過,rollout 後每個 sandbox 都會掉回 512M 被 OOM kill。**修法**:cpu/memory 沒人宣告就解析成 `None` —— 這兩個維度的**執行者是後端**,預設本來就該由它決定;disk 由本 app 執行,才該解析成具體數字。副作用**當時**是:per-user 的 cpu/memory 上限只對「有宣告成本」的 App 生效。**這條後來被推翻**(PR #712):成本的作者有兩個,App 沒宣告時後端仍會套自己的天花板,而那也是使用者真的被 cgroup 限制住的數字。見 §3.3。
 2. **帳本收不到 sandbox 裡產生的位元組。** mirror sweep 的 `on_measured` 只寫記憶體快取。agent 用 `exec` 跑 `pip install` / `git clone` 產出的位元組**永遠**不會進 owner 的總量(不是「落後一次量測」)。**修法**:sweeper 在每輪 mirror 後把量到的數字餵給帳本。注意 `on_measured` 本身要維持同步 —— 第一次修改把它改成 awaitable,結果把耐久 I/O 塞進 mirror 的走訪迴圈,整個測試套件卡死。
 3. **每次寫檔多 4 次阻塞式 specstar 查詢 + 1 次耐久寫,即使一個額度都沒設。** **修法**:item→(slug, owner) 加 5 秒 memo(對齊量測本來就有的落後視窗);帳本只在「這個人真的被設了 disk 上限」時才寫。實測回到「一次寫檔 ≤1 次查詢、零筆帳本寫入」。
 4. **前端把三種 507 都渲染成「這個工作區滿了」。** 後端刻意分成三種錯誤碼、handler 註解也寫明理由,但 FE 只 branch 在 status。**第一次只修了一半**:接上的是**上傳**路徑,而 `sandbox_quota_exceeded` 只會從終端機 (`POST /exec`) 和送訊息產生 —— 上傳根本走不到 admission gate,所以那個分支在實務上是死路,真正會遇到它的入口一個都沒接。**完整修法**:共用 `quotaKind(status, code)` 判定是哪一種限制,各入口映射成自己的措辭 —— 檔案樹上傳、composer 拖放/貼上附檔(`attach` 現在回傳 `overQuotaKind`)、終端機;`HttpError` 在 `writeFile` 與 `execShell` 都帶上 `code`。順帶把 `MyResourcesPage` 的硬寫中文接上 i18n。
@@ -236,7 +249,7 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 - **純聊天 turn 也會被擋。** sandbox 是 lazy 建立的,但閘門在 `chat_send.send` 無條件執行,所以 `count` 用滿時,在另一個 item 送一則「根本不會跑 code」的訊息也會 507。這是把閘門前移到「訊息持久化之前」的代價 —— 換成等 agent 真的要用 sandbox 才擋,就會白燒一輪 turn。
 - **override 無法表達「這個人無上限」。** `count` / `cpu` 的 `0` 是「未指定」,memory / disk 還能寫 `"max"`。而「某人不設限」正是例外最常見的形狀 —— 這條我認為最該先補。
 - **check 與實際 create 之間沒有保留(TOCTOU)。** 同一個 owner 的兩個 item 同時送 turn,兩邊都會過。derived-tally 本來就沒有 reservation;要修得引入租約,那會把「帳可自癒」這個性質換掉。
-- **per-user cpu/memory 只對「有宣告成本」的 App 生效**,而 repo 裡四個 App 目前都沒宣告。開機會警告(`warn_unenforceable_dimensions`),不是靜默。
+- ~~**per-user cpu/memory 只對「有宣告成本」的 App 生效**~~ —— **已推翻**(PR #712)。沒宣告不等於免費:後端會套自己的天花板,而那才是 cgroup 真的給的數字。`warn_unenforceable_dimensions` 現在問的是**後端有沒有在套**,而不是 App 有沒有宣告。
 - **`test_review_regressions.py` 量的是子集合。** 它 monkeypatch `apps.resolve.find_work_item`,攔不到 `locator.py` 在 import 時就綁定的那份,所以數到的是 quota 這一份而非整個請求。斷言仍然有效(quota 從 4 次降到 1 次),但別把那個數字當成整個請求的總數。
 
 **不在本計畫範圍**:owner 轉移 UI(= #687)。
@@ -244,6 +257,29 @@ app.json `resources` ◇ resources.per_app.default ◇ sandbox.isolation.* / fil
 **建議順序** P4 → P5 → P6 → P8 → P7 → P3 → P9。P4 補完「依 App 設定」的最後一維且不用重新部署;P5/P6/P8 是最短的「看得見」路徑;P3 要決定何時重新部署 sandbox-host,可以晚做,但**不做就等於正式環境沒上**。
 
 ---
+
+## 3.3 這份計劃自己的缺陷 —— 為什麼「全部打勾」之後還有一堆洞
+
+P1–P9 全部對照上面的條件打完勾、宣告完成之後,實際使用時仍然一次撞到:用量恆為 0、頁面沒有樣式、三個維度共用一條量表、找不到誰有特例、被拒絕時只被告知一個上限。這一節記錄**為什麼那些條件擋不住這些洞**,因為下一份計劃會用同樣的寫法。
+
+**一、每一條流量維度的條件都只驗了 `count`。**
+P5 的四條、P7 的三條、P8 的一條,無一例外。`cpu` / `memory` 有「交付」段落,但**沒有任何一條長成「這個維度單獨把人擋下來」**。所以「分子恆為 0」——`registry._bump_activity` 把沒宣告的 App 記成花 0 核心——可以完整通過整份計劃,因為**沒有人要求證明它**。這正是本專案 review 已經歸納出的復發形狀:*一個維度的答案被另一個維度共用*。計劃本身就犯了。
+
+**二、驗收用的設定剛好遮住了缺陷。**
+P8 的實測紀錄顯示畫面上有「1 核 · 512 MB」——那是**每個環境自己那一行**,來自 spec,而 demo 用的 App 有宣告 `resources`,所以它不是 `None`。真正會露餡的是跨環境的**加總**,而當時畫面上沒有 cpu 的加總讀數。**用一個有宣告資源的 App,驗不出「沒宣告時算錯」。**「App 沒宣告」才是 repo 裡四個 App 的實際狀態,卻沒有任何一條在那個狀態下驗過。
+
+**三、「按得動」被當成「做完了」。**
+P8 的條件是「親自按過一輪」。零 CSS 的頁面按得動。計劃裡沒有任何一條關於畫面能不能讀。
+
+**四、整份計劃只從「被拒絕的使用者」視角寫。**
+維運的問題——「誰有特例?」「站台預設是多少?」——一條都沒有。那些功能不是做壞了,是**從來不在計劃裡**。
+
+### 下一份計劃的寫法
+
+1. **有 N 個維度就要有 N 條**「這個維度**單獨**把人擋下來」的條件。不准用一個維度代表其他維度。
+2. **驗收設定挑會露餡的那個**,不是最順的那個。先問「哪一組設定會讓這個功能看起來正常但其實壞掉」,然後用那組驗。
+3. **每個畫面要有一條「看得見」的條件**,與「按得動」分開列。
+4. **維運視角單獨列一節**。使用者看得到自己的額度 ≠ 維運找得到誰有特例。
 
 ## 4. 順手發現(未在本計畫處理)
 

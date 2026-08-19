@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import os
 import time
 from collections.abc import AsyncIterator, Callable, Mapping
@@ -33,6 +34,8 @@ from .nfs_archive import NfsArchive
 from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
 from .tool_cache import ToolCache
 from .tool_resolve import ToolResolver
+
+logger = logging.getLogger(__name__)
 
 # What THIS build does, advertised on /healthz. Which code a running host
 # carries is otherwise invisible — `image: sandbox-host:latest` reads the same
@@ -56,6 +59,10 @@ _CAPABILITIES = frozenset(
         # `create` restores the item's durable archive and marks readiness before
         # returning; `persist` is gated on that marker (#492).
         "host-managed-archive",
+        # `/healthz` publishes the ceilings this host applies when a spec states
+        # nothing. Its absence means the app cannot know what a sandbox costs its
+        # owner and charges zero — visibly under-counting rather than guessing.
+        "resource-defaults",
     }
 )
 
@@ -370,7 +377,33 @@ def make_host_app(
 
     @app.get("/healthz")
     async def healthz() -> dict[str, object]:
-        return {"status": "ok", "version": _version(), "capabilities": sorted(_CAPABILITIES)}
+        # `defaults` is what this host caps a sandbox at when the app states
+        # nothing. The app charges a sandbox's owner for what it holds and
+        # cannot read this service's `SANDBOX_HOST_*`, so without this it could
+        # only charge the request — and an App that declared nothing held a core
+        # for free. Asked of the SANDBOX rather than re-read from settings, so
+        # the number published is the one the cgroup gets.
+        #
+        # Never allowed to fail the response. This endpoint is the deployment's
+        # LIVENESS probe (`deploy/sandbox-host.example.yaml`), so an exception
+        # here would turn "cannot answer a resource question" into a crashloop.
+        # A backend that cannot say publishes nothing, the app then charges
+        # nothing, and that is a visible under-count rather than an outage.
+        defaults: dict[str, object] = {"cpu_cores": None, "memory_bytes": None}
+        try:
+            enforced = await sandbox.effective_limits(SandboxSpec())
+            defaults = {
+                "cpu_cores": enforced.cpu_cores,
+                "memory_bytes": enforced.memory_bytes,
+            }
+        except Exception:  # noqa: BLE001 — liveness must not depend on this
+            logger.warning("healthz: backend could not report its limits", exc_info=True)
+        return {
+            "status": "ok",
+            "version": _version(),
+            "capabilities": sorted(_CAPABILITIES),
+            "defaults": defaults,
+        }
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:

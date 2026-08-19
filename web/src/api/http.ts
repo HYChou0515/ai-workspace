@@ -54,6 +54,10 @@ export class HttpError extends Error {
      * look in the wrong place.
      */
     public code?: string,
+    /** Other limits the SAME refusal named — see `errorInfo`. */
+    public also?: string[],
+    /** The structured error body, when there was one — carries the numbers. */
+    public detail?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "HttpError";
@@ -62,11 +66,31 @@ export class HttpError extends Error {
 
 /** Read the structured error code out of a JSON error body, if there is one. */
 export async function errorCode(resp: Response): Promise<string | undefined> {
+  return (await errorInfo(resp)).code;
+}
+
+/**
+ * The error code AND any other limits the same refusal named (`also`).
+ *
+ * A turn is gated on more than one rule and can be refused by several at once.
+ * Reporting only the first produced a sequence that reads as a bug: free disk,
+ * resend, get told about a different limit.
+ */
+export async function errorInfo(
+  resp: Response,
+): Promise<{ code?: string; also?: string[]; detail?: Record<string, unknown> }> {
   try {
     const body = await resp.clone().json();
     const detail = body?.detail;
-    return typeof detail?.error === "string" ? detail.error : undefined;
+    const code = typeof detail?.error === "string" ? detail.error : undefined;
+    const also = Array.isArray(detail?.also)
+      ? detail.also.filter((c: unknown): c is string => typeof c === "string")
+      : undefined;
+    // The whole object, not just the code: a quota refusal carries the numbers
+    // behind it, and a message that names a limit without one cannot be checked
+    // by the person reading it.
+    return { code, also, detail: detail && typeof detail === "object" ? detail : undefined };
   } catch {
-    return undefined; // not JSON, or no body — the status is all we have
+    return {}; // not JSON, or no body — the status is all we have
   }
 }

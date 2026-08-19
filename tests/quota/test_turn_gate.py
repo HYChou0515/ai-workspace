@@ -30,7 +30,9 @@ ONE_CORE = ResourceLimits(cpu_cores=1.0, memory_bytes=512 * 1024**2, disk_bytes=
 
 
 @contextlib.contextmanager
-def _app(limits: PerUserResources) -> Iterator[tuple[ApiTestClient, SpecStar]]:
+def _app(
+    limits: PerUserResources, *, app_resources: dict[str, ResourceLimits] | None = None
+) -> Iterator[tuple[ApiTestClient, SpecStar]]:
     """An app driven through its LIFESPAN on purpose: the heartbeat row that
     doubles as the per-person ledger is registered there (after `spec.apply`, so
     its CRUD routes stay private). A bare client would exercise a store whose
@@ -38,10 +40,10 @@ def _app(limits: PerUserResources) -> Iterator[tuple[ApiTestClient, SpecStar]]:
     spec = make_spec()
     app = create_app(
         spec=spec,
-        sandbox=MockSandbox(),
+        sandbox=MockSandbox(cpu_cores=2.0, memory_bytes=256 * 1024**2),
         filestore=SpecstarFileStore(spec),
         runner=ScriptedAgentRunner([]),
-        app_resources={"rca": ONE_CORE},
+        app_resources=app_resources or {"rca": ONE_CORE},
         per_user_resources=limits,
     )
     with ApiTestClient(app) as client:
@@ -128,3 +130,84 @@ def test_the_terminal_is_gated_too():
         )
         assert refused.status_code == 507
         assert refused.json()["detail"]["error"] == "sandbox_quota_exceeded"
+
+
+def test_a_refusal_names_every_limit_that_is_at_its_cap():
+    """The two gates ran in a fixed order and only the FIRST to fire was
+    reported. Someone both out of disk and at their environment limit was told
+    to delete files, did, sent again — and was then told something else. Each
+    refusal is true on its own; the SEQUENCE is what reads as a bug, because the
+    first message implies acting on it will let the turn through."""
+    tiny = ResourceLimits(cpu_cores=1.0, memory_bytes=512 * 1024**2, disk_bytes=64)
+    with _app(PerUserResources(count=1), app_resources={"rca": tiny}) as (client, spec):
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        _wake(client, first)  # at the environment limit…
+        # …and this item's workspace is exactly full
+        put = client.put(f"/a/rca/items/{second}/files/big.bin", content=b"x" * 64)
+        assert put.status_code in (200, 204), put.text
+
+        refused = client.post(f"/a/rca/items/{second}/messages", json={"content": "go"})
+        assert refused.status_code == 507
+        detail = refused.json()["detail"]
+        # The environment leads: closing one is a single click on a page the
+        # message links to, while freeing disk means going into the item.
+        assert detail["error"] == "sandbox_quota_exceeded"
+        assert detail["also"] == ["workspace_quota_exceeded"]
+
+
+def test_cpu_alone_refuses_a_turn_when_no_app_declared_anything():
+    """The condition P5 never had: `count` has room, and `cpu` is what refuses —
+    for an App that declares no `resources` at all, which is every App in this
+    repo.
+
+    `test_admission.py` already covered cpu binding, but it feeds the ledger by
+    hand (`store.bump(cpu_milli=...)`), so it proves the GATE and not the
+    pipeline that fills it. The pipeline charged `spec.cpu_cores or 0`, and an
+    undeclared App's spec says `None` — so every term of the sum was 0 and this
+    limit could never fire, while the gate's own tests stayed green."""
+    undeclared = ResourceLimits(cpu_cores=None, memory_bytes=None, disk_bytes=0)
+    # count is generous; cpu is not. One live sandbox at the backend's own
+    # 2-core ceiling already fills it.
+    with _app(PerUserResources(count=10, cpu=2.0), app_resources={"rca": undeclared}) as (
+        client,
+        spec,
+    ):
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        _wake(client, first)
+
+        refused = client.post(f"/a/rca/items/{second}/messages", json={"content": "go"})
+        assert refused.status_code == 507, refused.text
+        detail = refused.json()["detail"]
+        assert detail["error"] == "sandbox_quota_exceeded"
+        assert detail["dimension"] == "cpu"
+
+
+def test_the_text_of_a_combined_refusal_names_every_limit():
+    """A scheduled run has no frontend to read `also`, so `str(exc)` IS the whole
+    message a person gets — `workflow/driver.py` records `f"{type}: {exc}"`.
+    Counting the others ("and 1 more limit(s)") tells them something else is
+    wrong and not what.
+
+    Nothing referenced `TurnRefused` anywhere in the suite, so the naming could
+    be reverted to counting with everything still green."""
+    from workspace_app.api.turn_gate import TurnRefused
+    from workspace_app.files.facade import WorkspaceFull
+    from workspace_app.quota.admission import SandboxQuotaExceeded
+    from workspace_app.quota.disk_ledger import UserDiskFull
+
+    primary = SandboxQuotaExceeded(owner="alice", dimension="cpu", used=4.0, limit=2.0)
+    # TWO others, because an assertion fed one cannot detect truncation: keeping
+    # only the first `also` is invisible when there is only a first.
+    others: list[Exception] = [
+        WorkspaceFull(used=100, quota=100, attempted=1),
+        UserDiskFull(owner="alice", used=999, quota=1000, attempted=1),
+    ]
+    text = str(TurnRefused(primary, others))
+
+    # The property, not one phrasing of it: every refusal's OWN message survives
+    # into the combined text. Asserting a keyword instead let a counting version
+    # back in as long as it happened to contain the word "quota".
+    for refusal in [primary, *others]:
+        assert str(refusal) in text, f"lost: {refusal}"

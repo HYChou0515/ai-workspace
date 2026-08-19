@@ -21,6 +21,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
 
 from ..files import WorkspaceFiles, rel_path
+from ..files.facade import WorkspaceFull
 from ..files.zip_download import (
     DownloadPrepared,
     prepare_zip,
@@ -54,6 +55,7 @@ from .schemas import (
     _WorkspaceUsage,
 )
 from .search import InvalidQuery, compile_query, path_selected, search_text
+from .turn_gate import quota_body
 from .turns import ChatTurnEngine
 
 _READONLY_DIR = ".readonly"
@@ -189,7 +191,7 @@ async def _stream_upload_to_store(
                         max_file_size,
                     )
                     raise HTTPException(status_code=413, detail="file exceeds the size limit")
-                if remaining is not None and size > remaining:
+                if over_upload_quota(size, remaining):
                     used = await files.workspace_usage(workspace_id)
                     # The item's OWN ceiling — the same number the gate used.
                     quota = files.quota_of(workspace_id)
@@ -200,19 +202,39 @@ async def _stream_upload_to_store(
                         quota,
                         size,
                     )
+                    # Built by the one builder every other 507 goes through.
+                    # A hand-written copy here is NOT caught by any test — the
+                    # response stays identical until `quota_body` next changes —
+                    # and four entry points spelling one refusal four ways is how
+                    # this went wrong before.
                     raise HTTPException(
                         status_code=507,
-                        detail={
-                            "error": "workspace_quota_exceeded",
-                            "used": used,
-                            "quota": quota,
-                            "attempted": size,
-                        },
+                        detail=quota_body(WorkspaceFull(used=used, quota=quota, attempted=size)),
                     )
                 f.write(chunk)
         await files.write_from_path(workspace_id, path, tmp, request.headers.get("content-type"))
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def over_upload_quota(bytes_read: int, remaining: int | None) -> bool:
+    """Should a streamed upload be cut off after `bytes_read` bytes?
+
+    A named function because it carries a guarantee no end-to-end test in this
+    codebase can observe: the refusal must arrive DURING the transfer, not after
+    it. An in-process ASGI client buffers the whole request body before the
+    route is even entered, so a version that read the upload to completion and
+    then refused produces a byte-identical response — deleting the cut-off
+    altogether left every suite green. Whatever cannot be asserted through the
+    route can at least be asserted here.
+
+    `None` means this workspace has no ceiling (`remaining_quota` says so), and
+    then nothing is ever cut off. `bytes_read` is the running total INCLUDING
+    the chunk just read, so the boundary is strict: reaching the limit exactly
+    is allowed, exceeding it is not — the same rule the pre-flight gate uses,
+    because an upload that fits must not be refused by the streaming half after
+    the gate has already let it through."""
+    return remaining is not None and bytes_read > remaining
 
 
 def register_file_routes(

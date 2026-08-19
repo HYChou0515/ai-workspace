@@ -295,10 +295,26 @@ async def test_close_streams_is_a_no_op_for_a_key_nobody_watches():
 
 class _RoomAlways:
     """`send` checks for space before it persists anything (#538). These tests
-    stub the service down to the shield, so they stub that out too."""
+    stub the service down to the shield, so they stub that out too.
+
+    Both halves of the facade's disk contract, not just the one `send` happens
+    to call today: a double that models less than the real thing is immune to
+    the change that matters. `send` moved from `ensure_room_for` to
+    `room_refusals` (a refusal names EVERY disk rule it broke, not the first),
+    and this double answering only the old name is what turned that into two
+    unrelated-looking failures."""
 
     async def ensure_room_for(self, _workspace_id: str, _extra: int) -> None:
         return None
+
+    async def room_refusals(
+        self, _workspace_id: str, _extra: int, *, record: bool = True
+    ) -> list[Exception]:
+        # Signature mirrors `WorkspaceFiles.room_refusals`, `record` included.
+        # This double has now fallen behind that contract twice in one branch —
+        # once when the method was added, once when `record` was — and each time
+        # it surfaced as two unrelated-looking failures somewhere else.
+        return []
 
 
 async def test_a_send_survives_its_request_being_cancelled():

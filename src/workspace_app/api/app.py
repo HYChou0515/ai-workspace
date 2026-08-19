@@ -34,7 +34,7 @@ from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
 from ..quota.admission import AdmissionGate, SandboxQuotaExceeded
 from ..quota.disk_ledger import DiskLedger, UserDiskFull, register_disk_ledger
-from ..quota.limits import ResourceLimits, parse_size
+from ..quota.limits import ResourceLimits, parse_size, warn_unenforceable_dimensions
 from ..quota.user_limits import UserLimits, register_user_quota
 from ..resources import (
     AgentConfig,
@@ -92,6 +92,7 @@ from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .tools_routes import register_tools_routes
 from .turn_context import TurnContextBuilder, resolve_item_tools
+from .turn_gate import TurnRefused, quota_body
 from .turns import ChatTurnEngine
 from .version_header import VersionHeaderMiddleware
 from .work_calendar_routes import register_work_calendar_routes
@@ -581,8 +582,14 @@ def create_app(
     disk_ledger = DiskLedger(spec)
     user_limits = UserLimits(spec, per_user_resources or PerUserResources())
 
-    async def _person_disk_gate(item_id: str, new_size: int, growth: int) -> None:
+    async def _person_disk_gate(
+        item_id: str, new_size: int, growth: int, *, record: bool = True
+    ) -> None:
         """The per-person disk total, checked only on GROWTH.
+
+        `record=False` asks the question WITHOUT the side effect below. A caller
+        that is collecting reasons rather than performing a write must not leave
+        the owner charged for a size the workspace will never have.
 
         `new_size` is this workspace's LIVE size (measured on the write path, so
         exact); the ledger supplies the other items' last measured sizes. The
@@ -615,7 +622,13 @@ def create_app(
         # DIFFERENT item is judged against a total that includes this one.
         # Only reached when they are actually capped — an uncapped deploy pays
         # no durable write for an answer nobody asked for.
-        await disk_ledger.record(item_id, owner, new_size)
+        #
+        # `new_size` is what the workspace will be AFTER the write this gate just
+        # allowed, so recording it is only honest if that write is going to
+        # happen. It is not, for a caller that is gathering every reason a turn
+        # is refused — another rule may already have stopped it.
+        if record:
+            await disk_ledger.record(item_id, owner, new_size)
 
     async def _publish_measured(item_id: str) -> None:
         """Hand the freshly measured size of one workspace to the ledger.
@@ -724,6 +737,10 @@ def create_app(
         user_limits.for_user,
         owner_of=_owner_of,
         has_live_sandbox=registry.has_live_sandbox,
+        # The SAME number the ledger charges a live sandbox (`registry._bump`),
+        # so "does one more fit?" and "what is already held?" cannot answer in
+        # different units.
+        cost_of=registry.would_cost,
         # The window over which a heartbeat still counts as a live sandbox. It is
         # the reaper's idle threshold on purpose: shorter under-counts a
         # live-but-idle sandbox that is still holding memory, longer keeps
@@ -758,6 +775,14 @@ def create_app(
         on_result=_persist_check_run,
     )
 
+    async def _warn_resources() -> list[str]:
+        """Any per-person dimension configured here that nothing can enforce."""
+        return warn_unenforceable_dimensions(
+            per_user_resources or PerUserResources(),
+            app_resources or {},
+            enforced=await sandbox.effective_limits(SandboxSpec()),
+        )
+
     lifespan = build_lifespan(
         registry=registry,
         spec=spec,
@@ -782,6 +807,10 @@ def create_app(
         cluster_merge_tau=kb_cluster_merge_tau,
         # #674: warm every app's declared third-party bundles at boot.
         prewarm_tools=lambda: prewarm_external_tools(sandbox, _declared_external_tools()),
+        # Asked of the BACKEND, on the serving loop — see `lifecycle` for why not
+        # at boot. `app_resources` is what this app is actually serving with, so
+        # the check and the enforcement read the same numbers.
+        warn_resources=lambda: _warn_resources(),
     )
 
     # root_path lives on the app (not just uvicorn.run) so OpenAPI servers and
@@ -836,62 +865,32 @@ def create_app(
         app.add_middleware(perf_trace.PerfTraceMiddleware)
 
     @app.exception_handler(WorkspaceFull)
-    async def _workspace_full(_request: Request, exc: WorkspaceFull) -> JSONResponse:
-        """#538: one handler so every route that writes reports a full workspace
-        the same way — 507 with the numbers the FE needs to say "delete
-        something". Registering it here rather than try/except-ing each route is
-        what stops the next write endpoint from silently going ungated, which is
-        exactly how copy/move/the IDE save escaped the original quota."""
-        return JSONResponse(
-            status_code=507,
-            content={
-                "detail": {
-                    "error": "workspace_quota_exceeded",
-                    "used": exc.used,
-                    "quota": exc.quota,
-                    "attempted": exc.attempted,
-                }
-            },
-        )
-
     @app.exception_handler(UserDiskFull)
-    async def _user_disk_full(_request: Request, exc: UserDiskFull) -> JSONResponse:
-        """The per-person sibling of the full-workspace 507. Reported separately
-        because the remedy is different: the space to free may be in a completely
-        different item, so an FE that said "this workspace is full" would send
-        the user looking in the wrong place."""
-        return JSONResponse(
-            status_code=507,
-            content={
-                "detail": {
-                    "error": "user_quota_exceeded",
-                    "used": exc.used,
-                    "quota": exc.quota,
-                    "attempted": exc.attempted,
-                }
-            },
-        )
-
     @app.exception_handler(SandboxQuotaExceeded)
-    async def _sandbox_quota(_request: Request, exc: SandboxQuotaExceeded) -> JSONResponse:
-        """The cpu/memory sibling of the full-workspace 507. Same reasoning for
-        registering it centrally: a gate added at a new entry point should be
-        reported the same way without anyone remembering to convert it.
+    async def _quota_refused(_request: Request, exc: Exception) -> JSONResponse:
+        """#538: one handler so every route reports "you are holding as much as
+        you may hold" the same way — 507 with the numbers the FE needs to say
+        what to do. Registering it here rather than try/except-ing each route is
+        what stops the next write endpoint from silently going ungated, which is
+        exactly how copy/move/the IDE save escaped the original quota.
 
-        507 rather than 429: this is not "slow down", it is "you are holding as
-        much as you may hold" — the fix is to close something, and the body says
-        which dimension bound so the FE can point at the right list."""
-        return JSONResponse(
-            status_code=507,
-            content={
-                "detail": {
-                    "error": "sandbox_quota_exceeded",
-                    "dimension": exc.dimension,
-                    "used": exc.used,
-                    "limit": exc.limit,
-                }
-            },
-        )
+        Three rules share the status and need three different remedies (this
+        item's files / another item's files / a live environment), so the body
+        carries a CODE. They share one handler but not one wording: the body is
+        built by `turn_gate.quota_body`, the same function the combined refusal
+        below uses, so a fourth entry point cannot invent a fourth spelling.
+
+        507 rather than 429: this is not "slow down", it is "you are at your
+        limit" — the fix is to free something, not to wait."""
+        return JSONResponse(status_code=507, content={"detail": quota_body(exc)})
+
+    @app.exception_handler(TurnRefused)
+    async def _turn_refused(_request: Request, exc: TurnRefused) -> JSONResponse:
+        """More than one limit is at its cap. Same shape as one refusal plus an
+        `also` list, so a client that only knows `error` still behaves exactly as
+        it did — and one that reads `also` can stop sending people to fix one
+        limit at a time."""
+        return JSONResponse(status_code=507, content={"detail": exc.body()})
 
     @app.exception_handler(SandboxBusy)
     async def _sandbox_busy(_request: Request, exc: SandboxBusy) -> JSONResponse:

@@ -48,6 +48,7 @@ from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .notifications import notify
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
+from .turn_gate import admit_turn
 from .turns import CONTEXT_NOTICE_ROLE, already_noticed, context_notice_text
 
 if TYPE_CHECKING:
@@ -211,21 +212,11 @@ class ChatSendService:
         reference matters: asyncio holds only a weak one, so an un-referenced task
         can be collected mid-flight, which is the very failure being prevented.
 
-        #538: a workspace with no room left refuses the turn outright, BEFORE
-        the user's message is persisted. Gating each write individually still
-        let the whole turn run — the agent planned, wrote, was refused, retried,
-        wrote somewhere else — so every instruction given to an already-full
-        workspace burned a turn to rediscover the same thing. Refusing before
-        the message lands is what keeps the composer from waiting on a reply
-        that will never come; clearing space needs no agent, because deleting
-        from the file tree is never quota-gated."""
-        await self._files.ensure_room_for(investigation_id, 1)
-        # …and the same reasoning for cpu/memory: if this turn would need a NEW
-        # sandbox its owner may not have, refuse here rather than let the agent
-        # discover it when it first reaches for `exec` — by then the turn is
-        # already spent. Both gates sit before the user's message is persisted.
-        if self._admission is not None:
-            await self._admission.check(investigation_id)
+        #538: a person holding as much as they may hold is refused outright,
+        BEFORE the message is persisted — see `turn_gate.admit_turn` for why the
+        gate sits here rather than on each write, and why it reports every limit
+        that bound rather than the first one to fire."""
+        await admit_turn(self._files, self._admission, investigation_id)
         task = asyncio.create_task(
             self._send(
                 investigation_id,
