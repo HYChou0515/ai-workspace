@@ -47,6 +47,17 @@ class IRequestEnv(abc.ABC):
         exchange sits between the user pressing send and the turn starting, so
         its latency is the send's latency.
 
+        WHICH MEANS THE IMPL MUST BOUND ITS OWN LATENCY, and nothing here will
+        do it for you — the platform cannot know what is a reasonable wait for
+        your gateway, and a bound picked here would refuse sends that were only
+        slow. The failure this avoids is specific and bad: no message has been
+        persisted yet, so if the wait outlives the ingress read timeout the
+        gateway answers 504, which the chat client reads as "an idle proxy cut
+        the POST while the turn runs" and keeps waiting for a reply to a turn
+        that never started. Set a timeout on your own call and raise (or return
+        ``{}``) when it expires; a refusal the client can see beats a wait it
+        cannot.
+
         RAISING FAILS THE WHOLE SEND — the turn does not run and the caller is
         told. That is deliberate: what travels here is identity, and quietly
         substituting "no credential" would let the turn proceed as somebody else

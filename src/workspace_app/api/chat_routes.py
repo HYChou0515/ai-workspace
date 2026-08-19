@@ -46,10 +46,11 @@ from .timeutil import now_ms
 from .turns import ChatTurnEngine
 
 
-# `send_into(investigation_id, rid, conv, engine_key, body, *, author, lane)` — append
-# the user message, build the RCA turn ctx, enqueue the turn. `record_mention(
-# investigation_id, title, user_ids, note, *, actor, author)` — append a mention entry
-# + notify each user.
+# `send_into` — append the user message, build the RCA turn ctx, enqueue the turn.
+# Its parameters are spelled out in the Protocol below rather than paraphrased
+# here: this line used to carry a copy of the signature, and the copy went stale
+# the first time one was added. `record_mention(investigation_id, title,
+# user_ids, note, *, actor, author)` — append a mention entry + notify each user.
 class SendInto(Protocol):
     async def __call__(
         self,

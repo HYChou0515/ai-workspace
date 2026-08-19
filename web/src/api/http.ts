@@ -75,12 +75,28 @@ export class HttpError extends Error {
  * kind of rule that is obeyed on the day it is written and forgotten on the
  * next call site, so it lives here instead.
  *
- * Safe on any response: `errorCode` clones before reading and swallows a body
- * that is not JSON, so callers keep whatever message they already wrote.
+ * Safe on any response — with ONE precondition: the body must not have been
+ * read yet. `clone()` throws on a consumed body and the code comes back
+ * `undefined`, silently. So a caller that already did `await resp.text()` must
+ * either build the error before reading, or keep passing the code itself; this
+ * helper cannot tell the difference and will not warn.
  */
 export async function httpErrorFrom(resp: Response, message: string): Promise<HttpError> {
   return new HttpError(resp.status, message, await errorCode(resp));
 }
+
+/** How long a failed response's body may take to arrive before we give up on
+ *  reading a reason out of it.
+ *
+ *  Deliberately generous rather than tight. The two failure directions are not
+ *  symmetric: too long merely delays a rejection that is still bounded, while
+ *  too short discards a code that WAS coming — and a missing code is not a
+ *  missing detail, it is the wrong message (see `quotaFailure`: three limits
+ *  answer 507, and without the code the UI sends people to free space in the
+ *  wrong place). An error body is a few hundred bytes from a server that has
+ *  already answered, so a second is orders of magnitude past normal and still
+ *  turns "never settles" into "settles". */
+const CODE_READ_BUDGET_MS = 1000;
 
 /** Read the structured error code out of a JSON error body, if there is one. */
 export async function errorCode(resp: Response): Promise<string | undefined> {
@@ -93,12 +109,37 @@ export async function errorCode(resp: Response): Promise<string | undefined> {
  * A turn is gated on more than one rule and can be refused by several at once.
  * Reporting only the first produced a sequence that reads as a bug: free disk,
  * resend, get told about a different limit.
+ *
+ * BOUNDED, and the timer belongs HERE rather than on `errorCode` — this is the
+ * only place the body is read, and the callers that matter most (the item-level
+ * send, `execShell`) reach it directly. A bound placed on the wrapper would look
+ * right and do nothing for them.
+ *
+ * Every caller uses this to decide how to REJECT, so waiting here is waiting to
+ * fail — and a body that is delivered but never closed (an ingress cutting a
+ * stream mid-flight) would otherwise turn a rejection into a promise that never
+ * settles. Downstream that is not a slow error, it is a missing one: the chat's
+ * reconnect loop never re-enters, the composer never unlocks, the write-failure
+ * notice never fires.
+ *
+ * The deadline RESOLVES the read rather than racing it away — the clone is left
+ * to finish or die on its own, its failure already swallowed.
  */
 export async function errorInfo(
   resp: Response,
 ): Promise<{ code?: string; also?: string[]; detail?: Record<string, unknown> }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const body = await resp.clone().json();
+    const parsed = resp
+      .clone()
+      .json()
+      .catch(() => undefined); // not JSON, or no body — the status is all we have
+    const body = await Promise.race([
+      parsed,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), CODE_READ_BUDGET_MS);
+      }),
+    ]);
     const detail = body?.detail;
     const code = typeof detail?.error === "string" ? detail.error : undefined;
     const also = Array.isArray(detail?.also)
@@ -109,6 +150,8 @@ export async function errorInfo(
     // by the person reading it.
     return { code, also, detail: detail && typeof detail === "object" ? detail : undefined };
   } catch {
-    return {}; // not JSON, or no body — the status is all we have
+    return {}; // `clone()` refuses an already-consumed body, synchronously
+  } finally {
+    clearTimeout(timer);
   }
 }

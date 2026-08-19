@@ -1,4 +1,6 @@
 // @vitest-environment happy-dom
+import { readFile } from "node:fs/promises";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HttpError } from "./http";
@@ -26,11 +28,68 @@ function respondWith(status: number, body = "") {
  * streams in underneath it.
  */
 describe("itemChatApi error contract", () => {
+  /**
+   * The claim `httpErrorFrom` was introduced to make is "every throw in this
+   * file carries the code", and behaviour tests can only pin the throws they
+   * exercise — five of the six could be reverted to `new HttpError(...)` with
+   * the whole suite still green, which is exactly how the original asymmetry
+   * survived. So the shape is asserted directly: the point of moving the rule
+   * into a helper is that the next call site cannot forget it.
+   */
+  it("builds every error through the shared constructor, so none can drop the code", async () => {
+    // Vitest runs with `web/` as cwd; `import.meta.url` is not a file: URL here.
+    const source = await readFile("src/api/itemChats.ts", "utf8");
+    expect(source).not.toMatch(/new HttpError\(/);
+    expect(source).toMatch(/httpErrorFrom\(/);
+  });
+
   it("throws a status-carrying HttpError from sendMessage", async () => {
     respondWith(504);
     await expect(
       itemChatApi.sendMessage({ slug: "rca", itemId: "INC-1", chatId: "c1", content: "hi" }),
     ).rejects.toMatchObject({ status: 504 });
+  });
+
+  /**
+   * Reading the error body must not be able to swallow the rejection.
+   *
+   * The old throws fired at the response HEADERS and never touched the body.
+   * Routing them through `errorCode` made every one of them wait for the body
+   * to finish — and a 5xx whose body is delivered but never closed (an ingress
+   * cutting a stream mid-flight) then rejects NEVER instead of in milliseconds.
+   *
+   * On `subscribe` that is the worst shape available: the chat's reconnect loop
+   * only exits on unmount, so a first `next()` that never settles leaves the
+   * chat permanently deaf. On a send it leaves the composer locked forever; on
+   * a mutation it never reaches the write-failure notice, which is the one
+   * place that promises no save fails in silence.
+   */
+  it("rejects at the status even when the error body never finishes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode('{"detail":'));
+                // …and never closes.
+              },
+            }),
+            { status: 502 },
+          ),
+      ),
+    );
+    const settled = await Promise.race([
+      itemChatApi
+        .sendMessage({ slug: "rca", itemId: "INC-1", chatId: "c1", content: "hi" })
+        .then(
+          () => "resolved",
+          (e: unknown) => e,
+        ),
+      new Promise((resolve) => setTimeout(() => resolve("HUNG"), 3000)),
+    ]);
+    expect(settled).toMatchObject({ status: 502 });
   });
 
   /**
