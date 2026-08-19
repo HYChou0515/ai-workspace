@@ -204,7 +204,6 @@ def test_a_dimension_nobody_declared_is_reported_as_never_firing():
     # nothing" through the same value as a host that caps nothing, so a line
     # that stated the first as fact would be the original false claim wearing a
     # different hat.
-    assert "unreachable" in message
 
 
 def test_a_backend_that_caps_an_undeclared_sandbox_silences_the_warning():
@@ -249,8 +248,19 @@ def test_partial_declaration_is_reported_too():
         _limits(rca=(2.0, None, 0), pm=(None, None, 0)),
         enforced=EnforcedLimits(None, None),
     )
-    assert "pm" in message and "rca" not in message
-    assert "partial sum" in message
+    # Golden, for the same reason its sibling above is: substring assertions on
+    # this branch let the retired claim come back ("…In practice this limit
+    # never fires."), let the meaning invert ("binds" → "does not bind") and let
+    # the config pointer be dropped, all while staying green. Fixing one of two
+    # weak guards in the same function is how this branch kept re-finding the
+    # same shape.
+    assert message == (
+        "resources.per_user.cpu is set, but these Apps state no cpu cost: pm "
+        "(app.json `resources`, `resources.per_app.default.cpu`, or the sandbox "
+        "backend). Their sandboxes count as zero, so the limit binds against a "
+        "partial sum — it will fire or not depending on which Apps a person is "
+        "using."
+    )
 
 
 def test_a_fully_declared_dimension_says_nothing():
@@ -412,7 +422,7 @@ def test_a_workable_cap_says_nothing():
     )
 
 
-def test_the_app_actually_runs_the_resource_check_at_startup():
+def test_the_app_actually_runs_the_resource_check_at_startup(capsys):
     """The check moved from an unconditional `print` in `__main__` into an
     OPTIONAL lifespan hook. Deleting either half of that wiring — the argument
     `create_app` passes, or the `if` in the lifespan — left every targeted suite
@@ -454,3 +464,11 @@ def test_the_app_actually_runs_the_resource_check_at_startup():
     assert any("per_user.cpu" in m for m in seen), (
         "startup did not run the check that warns about an unenforceable cap"
     )
+    # …and that startup EMITTED it where an operator reads the boot dump.
+    # Watching only the logger inside `warn_unenforceable_dimensions` meant the
+    # lifespan could call the check and throw the answer away with everything
+    # green — which is exactly what the previous version of this line did, and
+    # what the version before THAT did with a `logger.warning` loop.
+    printed = capsys.readouterr().out
+    assert "⚠ resources:" in printed
+    assert "per_user.cpu" in printed

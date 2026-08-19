@@ -202,6 +202,11 @@ async def _stream_upload_to_store(
                         quota,
                         size,
                     )
+                    # Built by the one builder every other 507 goes through.
+                    # A hand-written copy here is NOT caught by any test — the
+                    # response stays identical until `quota_body` next changes —
+                    # and four entry points spelling one refusal four ways is how
+                    # this went wrong before.
                     raise HTTPException(
                         status_code=507,
                         detail=quota_body(WorkspaceFull(used=used, quota=quota, attempted=size)),
