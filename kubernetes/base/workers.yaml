@@ -189,9 +189,8 @@ spec:
 # Without this Deployment an upload is accepted with 202, staged, and never
 # written under the documented pod-split shape (`server.run_consumers: false`,
 # API as pure producer) — a queue nobody drains looks exactly like a queue that
-# never moves. Memory is sized for the staged archive: a `process` job restores
-# the whole blob to read its batch out, so the ceiling is one archive, not one
-# batch.
+# never moves. The archive is streamed to scratch disk rather than held in RAM,
+# so the sizing that matters here is `ephemeral-storage`, not memory.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -221,9 +220,16 @@ spec:
             requests:
               cpu: "100m"
               memory: "512Mi"
+              # The archive is streamed to a temp file (`_archive_file`) so a batch
+              # costs a chunk of RAM and one archive of SCRATCH DISK. Declaring it
+              # matters: unrequested ephemeral storage is how a pod gets evicted
+              # mid-import, which looks to the caller like a run that stopped for no
+              # reason. This bounds the archive a worker can take.
+              ephemeral-storage: "1Gi"
             limits:
               cpu: "1"
               memory: "2Gi"
+              ephemeral-storage: "4Gi"
       volumes:
         - name: data
           persistentVolumeClaim:

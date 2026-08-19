@@ -29,22 +29,30 @@ row behind and return instead of walking N documents inside the HTTP request):
 - ``finalize`` runs once, restores the manifest's context cards, and releases the
   staged archive.
 
-**Known limitation.** specstar's ``Binary`` takes bytes, so staging still costs one
-in-memory copy of the archive in the API pod while the blob is written. The
-synchronous path had the same peak (``await file.read()``), so this is not a
-regression — but #715's goal of keeping the archive out of memory entirely is NOT
-met by this, and pretending otherwise would leave the next person to discover it
-under load.
+**Where the archive lives.** A worker never holds the whole archive: ``split``,
+``process`` and ``finalize`` stream the staged blob to a local temp file and let
+``zipfile`` seek within it, so a batch costs a chunk of memory plus scratch disk
+rather than the archive's full size once per concurrent job. That is #715's "spill
+to a temp file and let the job read it".
+
+**Known limitation — the UPLOAD side.** specstar's ``Binary`` takes ``bytes`` and
+offers no streaming or file-handle input, so staging still costs one in-memory
+copy in the API pod while the blob is written (specstar#447). The synchronous path
+has the same peak (``await file.read()``), so this is not a regression — but the
+ceiling on what a caller may push is still set by the API pod's RAM, and
+pretending otherwise would leave the next person to discover it under load.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
+import tempfile
 import zipfile
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Annotated, Any
+from collections.abc import Callable, Iterator
+from typing import IO, TYPE_CHECKING, Annotated, Any
 
 import msgspec
 from specstar import QB, Schema
@@ -142,7 +150,7 @@ class ImportRun(msgspec.Struct):  # → resource "import-run"
     finished: bool = False
 
 
-def _members_of(zip_data: bytes) -> list[zipfile.ZipInfo]:
+def _members_of(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     """The archive's document members, in a stable order.
 
     The manifest is metadata, never a document; a member that escapes its root is
@@ -151,31 +159,29 @@ def _members_of(zip_data: bytes) -> list[zipfile.ZipInfo]:
     Entries rather than names, so a duplicated name still yields two members.
     """
     out: list[zipfile.ZipInfo] = []
-    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            name = info.filename
-            if name == MANIFEST_PATH or name.startswith(MANIFEST_DIR):
-                continue
-            try:
-                path = canonical_path(name)
-            except ValueError:
-                continue  # zip-slip
-            if path:
-                out.append(info)
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        name = info.filename
+        if name == MANIFEST_PATH or name.startswith(MANIFEST_DIR):
+            continue
+        try:
+            path = canonical_path(name)
+        except ValueError:
+            continue  # zip-slip
+        if path:
+            out.append(info)
     # By entry, never by name: a malformed archive can hold the same name twice, and
     # `read(name)` resolves to the last of them — so one member would be written
     # twice and the other never. The synchronous path reads entries; so does this.
     return sorted(out, key=lambda i: (i.filename, i.header_offset))
 
 
-def _manifest_of(zip_data: bytes) -> dict[str, Any]:
-    with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-        try:
-            raw = zf.read(MANIFEST_PATH)
-        except KeyError:
-            return {}
+def _manifest_of(zf: zipfile.ZipFile) -> dict[str, Any]:
+    try:
+        raw = zf.read(MANIFEST_PATH)
+    except KeyError:
+        return {}
     parsed = json.loads(raw)
     return parsed if isinstance(parsed, dict) else {}
 
@@ -224,12 +230,14 @@ class ImportCoordinator:
         # see "1000 documents queued" the moment it is accepted rather than zero
         # until a worker picks the run up — a progress number that starts as a lie
         # is worse than no number.
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+            member_count = len(_members_of(zf))
         with self._run_rm.using(user=user):
             run_id = self._run_rm.create(
                 ImportRun(
                     collection_id=collection_id,
                     mode=mode,
-                    members=len(_members_of(zip_data)),
+                    members=member_count,
                     archive=Binary(data=zip_data, content_type="application/zip"),
                 )
             ).resource_id
@@ -267,17 +275,45 @@ class ImportCoordinator:
             return None
         return data if isinstance(data, ImportRun) else None
 
-    def _archive_of(self, run: ImportRun) -> bytes:
-        restored = self._run_rm.restore_binary(run).archive
-        assert restored is not None and isinstance(restored.data, bytes)
-        return restored.data
+    @contextlib.contextmanager
+    def _archive_file(self, run: ImportRun) -> Iterator[IO[bytes]]:
+        """Materialise the staged archive as a seekable LOCAL file.
+
+        #715 asked for the archive to be spilled to a temp file rather than held in
+        memory, because otherwise the size a caller may push is decided by the
+        worker's RAM. A job reads a slice of the zip, which needs random access —
+        so the bytes land on local disk and `zipfile` seeks within them, instead of
+        the whole archive sitting in the heap for the length of the batch.
+
+        Streaming when the blob store offers it. `MemoryBlobStore` does not, so the
+        fallback still restores the blob whole; that path is what unit tests take,
+        and the streaming one is covered by a double that models a store which
+        implements `get_stream` (both disk and S3 do). The fallback is not dead
+        code waiting to rot — it is the only path when a store cannot stream.
+        """
+        with tempfile.TemporaryFile(suffix=".zip") as tmp:
+            stream = None
+            file_id = run.archive.file_id if run.archive is not None else None
+            if isinstance(file_id, str) and file_id:
+                stream = self._run_rm.get_blob_stream(file_id)
+            if stream is not None:
+                for chunk in stream.iterator:
+                    tmp.write(chunk)
+            else:
+                restored = self._run_rm.restore_binary(run).archive
+                assert restored is not None and isinstance(restored.data, bytes)
+                tmp.write(restored.data)
+            tmp.flush()
+            tmp.seek(0)
+            yield tmp
 
     def _split(self, run_id: str, requester: str) -> None:
         """Seed the join state and fan the members out in batches."""
         run = self._read(run_id)
         if run is None or run.finished:
             return
-        members = _members_of(self._archive_of(run))
+        with self._archive_file(run) as fh, zipfile.ZipFile(fh) as zf:
+            members = _members_of(zf)
         batches = [
             (i, members[s : s + MEMBERS_PER_BATCH])
             for i, s in enumerate(range(0, len(members), MEMBERS_PER_BATCH))
@@ -305,12 +341,11 @@ class ImportCoordinator:
         run = self._read(payload.run_id)
         if run is None or run.finished:
             return
-        zip_data = self._archive_of(run)
-        members = _members_of(zip_data)[payload.member_start : payload.member_end]
         written = 0
         skipped = 0
         failures: list[str] = []
-        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+        with self._archive_file(run) as fh, zipfile.ZipFile(fh) as zf:
+            members = _members_of(zf)[payload.member_start : payload.member_end]
             for info in members:
                 # Per MEMBER, not per batch: a batch is a scheduling unit, and one
                 # unreadable file must not take its 49 neighbours down with it. The
@@ -356,29 +391,31 @@ class ImportCoordinator:
             # forever over work that is done. The claim below still handles the
             # CONCURRENT case, where neither finisher sees `finished` yet.
             return
-        zip_data = self._archive_of(run)  # read BEFORE the claim clears it
-        claimed = False
-
-        def claim(current: ImportRun) -> ImportRun | None:
-            nonlocal claimed
-            # Reset per ATTEMPT. The CAS retries on a conflict, and a flag left set
-            # by the losing attempt would tell the loser it had won: it aborts the
-            # write correctly and then restores the cards anyway.
+        # Materialise BEFORE the claim: the claim releases the archive, so a
+        # finalize that claimed first and read second would find nothing.
+        with self._archive_file(run) as fh, zipfile.ZipFile(fh) as zf:
             claimed = False
-            if current.finished:
-                return None  # someone else already won the gate
-            claimed = True
-            return msgspec.structs.replace(current, finished=True, archive=None)
 
-        self._cas(run_id, requester, claim)
-        if not claimed:
-            return
-        restore_cards(
-            self._spec,
-            run.collection_id,
-            _manifest_of(zip_data).get("context_cards", []),
-            run.mode,
-        )
+            def claim(current: ImportRun) -> ImportRun | None:
+                nonlocal claimed
+                # Reset per ATTEMPT. The CAS retries on a conflict, and a flag left
+                # set by the losing attempt would tell the loser it had won: it
+                # aborts the write correctly and then restores the cards anyway.
+                claimed = False
+                if current.finished:
+                    return None  # someone else already won the gate
+                claimed = True
+                return msgspec.structs.replace(current, finished=True, archive=None)
+
+            self._cas(run_id, requester, claim)
+            if not claimed:
+                return
+            restore_cards(
+                self._spec,
+                run.collection_id,
+                _manifest_of(zf).get("context_cards", []),
+                run.mode,
+            )
 
     # ── run bookkeeping ──────────────────────────────────────────────
     def _cas(

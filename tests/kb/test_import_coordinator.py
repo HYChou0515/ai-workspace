@@ -10,6 +10,7 @@ the writing on a worker.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import threading
@@ -17,7 +18,7 @@ import zipfile
 
 import pytest
 from specstar import QB, SpecStar
-from specstar.types import PreconditionFailedError
+from specstar.types import BlobStreamInfo, PreconditionFailedError
 
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
@@ -400,20 +401,22 @@ async def test_finalize_runs_once_even_if_two_finishers_race(monkeypatch):
 
     monkeypatch.setattr(import_jobs_module, "restore_cards", counted_restore)
 
-    # Park between the read and the claim. `_finalize` returns early on an already
-    # finished run — a cheap guard against redelivery — so parking at ENTRY lets the
-    # first finisher complete and the second bounce off that check, never reaching
-    # the gate this test exists to exercise. `_archive_of` sits exactly between the
-    # two, so both finishers hold a not-yet-finished view when they try to claim.
+    # Park between materialising the archive and the claim. `_finalize` returns
+    # early on an already finished run — a cheap guard against redelivery — so
+    # parking at ENTRY lets the first finisher complete and the second bounce off
+    # that check, never reaching the gate this test exists to exercise.
+    # `_archive_file` sits exactly between the two, so both finishers hold a
+    # not-yet-finished view when they try to claim.
     start = threading.Barrier(2, timeout=20)
-    real_archive_of = coord._archive_of
+    real_archive_file = coord._archive_file
 
+    @contextlib.contextmanager
     def archive_at_barrier(run):
-        data = real_archive_of(run)
-        start.wait()
-        return data
+        with real_archive_file(run) as fh:
+            start.wait()
+            yield fh
 
-    monkeypatch.setattr(coord, "_archive_of", archive_at_barrier)
+    monkeypatch.setattr(coord, "_archive_file", archive_at_barrier)
 
     def finalize():
         coord._finalize(run_id, "u")
@@ -698,3 +701,52 @@ async def test_the_loser_of_a_claim_conflict_restores_nothing(monkeypatch):
 
     assert len(restores) == 1, f"the losing finalizer still restored: {len(restores)} runs"
     assert [c.keys for c in _cards(spec, cid)] == [["M4"]]
+
+
+async def test_the_archive_is_streamed_to_disk_when_the_blob_store_can(monkeypatch):
+    """#715 asked for the archive to be spilled to a file, not held in memory.
+
+    A double, because the contract is the other side's: `MemoryBlobStore` has no
+    `get_stream`, so under a bare test spec the streaming branch never runs — while
+    in production (disk and S3 stores both implement it) it is the ONLY branch. A
+    test that exercised just the fallback would leave the deployed path unproven.
+
+    Asserting the documents landed is not enough on its own: the fallback lands
+    them too. So this also asserts the stream was consumed AND that nothing
+    restored the whole blob — otherwise a silent regression to loading the archive
+    into memory would keep this test green.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    zip_data = _archive({"a.md": b"alpha", "b.md": b"beta"})
+    coord.enqueue(collection_id=cid, zip_data=zip_data, mode="overwrite", user="u")
+
+    served: list[int] = []
+    restored: list[int] = []
+    real_restore_binary = coord._run_rm.restore_binary
+
+    def chunks():
+        for i in range(0, len(zip_data), 64):
+            served.append(1)
+            yield zip_data[i : i + 64]
+
+    # A NEW generator per call: split, process and finalize each materialise the
+    # archive, and a single shared iterator would be exhausted after the first.
+    monkeypatch.setattr(
+        coord._run_rm,
+        "get_blob_stream",
+        lambda file_id: BlobStreamInfo(chunks(), size=len(zip_data)),
+    )
+
+    def counted_restore_binary(run):
+        restored.append(1)
+        return real_restore_binary(run)
+
+    monkeypatch.setattr(coord._run_rm, "restore_binary", counted_restore_binary)
+
+    await coord.aclose()
+
+    assert served, "the blob store offered a stream and nothing consumed it"
+    assert not restored, "loaded the whole blob despite a store that can stream"
+    assert sorted(d.path for d in _docs(spec, cid)) == ["a.md", "b.md"]
