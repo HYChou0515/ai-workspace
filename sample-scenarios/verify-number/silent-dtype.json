@@ -1,0 +1,13 @@
+{
+  "name": "silent-dtype",
+  "note": "thickness is written with thousands separators, so pandas loads it as text. The arithmetic still 'works' and returns nonsense. Nothing raises.",
+  "data": ["silent_dtype.csv"],
+  "prompt": "Compute mean - 3 sigma of thickness in silent_dtype.csv.",
+  "expect": {
+    "must_call": ["exec"],
+    "must_mention": [
+      "thickness",
+      ["not a number", "not numeric", "object", "as text", "as a string", "comma", "separator"]
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "heavy-tail",
+  "note": "Lognormal. mean+7sigma is nominally a 1-in-10^12 event; 13 of 3000 rows exceed it. Code, intention and requirement can all be right while the number means nothing.",
+  "data": ["heavy_tail.csv"],
+  "prompt": "Compute mean + 7 sigma of leak_na in heavy_tail.csv.",
+  "expect": {
+    "must_call": ["exec"],
+    "must_mention": [
+      "13",
+      ["not normal", "non-normal", "not gaussian", "heavy", "skew", "assumption", "does not hold"]
+    ]
+  }
+}

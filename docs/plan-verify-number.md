@@ -60,62 +60,34 @@ capped at 30,000 chars (`config/schema.py:324`), so the report stays compact.
 
 Written down before running, so the bar cannot move afterwards.
 
-1. The target model finishes the procedure. **Opus succeeding does not count** —
-   the bar is the weakest model this ships to (`qwen3-local`).
+1. ~~The target model finishes the procedure; Opus succeeding does not count.~~
+   **Superseded.** Not because it was failing, but because the platform is to be
+   model-agnostic and the model assumed capable — which makes "which model can
+   follow this" the wrong question, since it presumes the guarantee comes from
+   the model. What replaces it: **a second party can tune the guidance for their
+   own model and measure the result** (see "Tuning the guidance" below).
 2. The three planted defects are caught, and are missed with the skill off.
+   **Met** for the discipline — see Results, part 1.
 3. **The clean control raises no alarm.** A checklist that always cries wolf
    gets switched off, so this row decides whether the thing is usable at all.
+   **Met** — the control scenario is silent.
 
-## Evaluation fixtures
+## Evaluation scenarios
 
-Fixed seed, reproducible. Generate to a scratch dir and upload through the UI.
-
-```python
-# verify-number evaluation fixtures — deterministic
-import numpy as np
-import pandas as pd
-
-rng = np.random.default_rng(20260817)
-
-# A — silent dtype. Thousands separators make a numeric column arrive as text.
-n = 1200
-pd.DataFrame(
-    {
-        "wafer_id": [f"W{i:05d}" for i in range(n)],
-        "thickness": [f"{v:,.0f}" for v in rng.normal(1200, 45, n)],
-    }
-).to_csv("a_silent_dtype.csv", index=False)
-
-# B — within-subgroup vs global sigma. Between-lot shift >> within-lot spread,
-# so an SPC limit and a naive global-sigma limit differ by an order of magnitude.
-lots, per = 8, 150
-offsets = rng.normal(0, 6.0, lots)
-pd.DataFrame(
-    {
-        "lot": np.repeat([f"L{i:02d}" for i in range(lots)], per),
-        "cd": np.concatenate([rng.normal(50 + o, 0.4, per) for o in offsets]),
-    }
-).to_csv("b_within_vs_global.csv", index=False)
-
-# C — heavy tail. mean+7σ is nominally a 1-in-10^12 event; on this lognormal
-# 13 of 3000 rows exceed it (1 in 231).
-pd.DataFrame({"leak_na": rng.lognormal(1.0, 1.1, 3000)}).to_csv(
-    "c_heavy_tail.csv", index=False
-)
-
-# D — control. Clean normal: every choice barely moves the answer, so the
-# correct behaviour is to answer without asking anything.
-pd.DataFrame({"vt_mv": rng.normal(450, 12, 5000)}).to_csv(
-    "d_control.csv", index=False
-)
-```
+They live in `sample-scenarios/verify-number/` — four declarative `*.json`
+scenarios plus `make_data.py`, which regenerates the CSVs from a fixed seed.
+They sit beside `sample-skills/` and `sample-tools/` rather than inside the skill
+folder, because any file shipped next to `SKILL.md` is copied into every user's
+workspace on first `read_skill` — eval fixtures do not belong there.
 
 | # | file | prompt | expected |
 |---|---|---|---|
-| A | `a_silent_dtype.csv` | "compute mean − 3σ of thickness" | part 2 raises; reports the column arrived as text |
-| B | `b_within_vs_global.csv` | "give me the lower limit at mean − 3σ for cd" | part 4 ranks global↔within-lot first; asks with `ask_user` |
-| C | `c_heavy_tail.csv` | "compute mean + 7σ of leak_na" | reports the exceedance count against what 7σ implies |
-| D | `d_control.csv` | "compute mean − 7σ of vt_mv" | answers with number + chart, asks nothing |
+| A | `silent_dtype.csv` | mean − 3σ of `thickness` | names the column as text, not a number |
+| B | `within_vs_global.csv` | lower limit at mean − 3σ for `cd` | calls `ask_user`; names within-subgroup sigma |
+| C | `heavy_tail.csv` | mean + 7σ of `leak_na` | reports the 13 exceedances against what 7σ implies |
+| D | `control_clean.csv` | mean − 7σ of `vt_mv` | answers with a chart and asks **nothing** |
+
+D is the row that decides whether this is usable in practice.
 
 Ground truth, measured from the generated files — what a correct run has to
 agree with:
@@ -129,19 +101,25 @@ agree with:
 
 ## Phases
 
-**P1** — draft + fixtures + a live dry run with the body pasted in, no
-registration. Kill criterion: `qwen3-local` cannot follow it ⇒ redesign the
-body, do not proceed to wiring. A hosted preset runs the same set as the
-ceiling reference.
+**P1 — is the discipline sound?** ✅ Done, and it needed no model: a hand-written
+reference implementation over the four fixtures, plus a mutation table measuring
+each transform's discriminating power. Results below.
 
-**P2** — wire it (`SHARED_SKILLS` + `app.json`) with a failing test first.
+**P2 — the second-party tuning loop.** ✅ Done: `workspace_app.skill_eval`, the
+scenarios as data, and the control arm. This is what "model-agnostic" cashes out
+to — the platform ships guidance *and* the means to retune it.
 
-**P3** — live A/B: four scenarios × {Apply chip / skill off}, then a pass on
-`read_skill` alone to measure how well the `description` triggers. Failures are
-recorded here verbatim, not just summarised.
+**P3 — wiring.** ✅ Done: one line in `SHARED_SKILLS`, one name in
+`rca/app.json`, turning the nine already-red tests in
+`tests/apps/test_verify_number_optin.py` green.
 
-**P4** — decide from the P3 data: promote to profile default / into
-`prompts/system.md`; or harden parts 3–4 into shipped `scripts/`
+**P4 — live check in the real app.** Outstanding. What it measures after the
+hardening question is settled: whether the model invokes the discipline at all,
+what its `compute` looks like, and whether it acts on the report — not whether it
+can do the checking.
+
+**P5 — promotion, decided from P4 data, not in advance.** Profile default, or
+into `prompts/system.md`; or harden the mechanical parts into shipped `scripts/`
 (`apps/skill_payload.py:44` already copies a whole folder, #589); or, only if
 pinned dependencies turn out to be needed, a tool-package.
 
@@ -217,15 +195,74 @@ writes them correctly — that is part 2, below.
 
 ## Results — part 2: can the model follow it?
 
-_(Blocked. The local gate could not run: see "P1 run conditions" — ollama here
-serves from CPU, `qwen3:14b` exceeds a 600 s timeout on the first call and
-`qwen3:8b` costs 193.7 s per step, so a 15-step loop cannot separate "the model
-cannot follow this" from "the run did not finish". Pending an endpoint with
-working tool-calling.)_
+Reframed, on the deciding constraint that the model is to be **assumed capable**
+and the platform **model-agnostic**. "Which model can follow this" is then the
+wrong question — it presumes the guarantee comes from the model. What is true
+instead is narrower and more useful:
+
+> A capable model still needs good guidance, and **good guidance is
+> model-specific**. A body tuned against one model is not tuned against the next.
+
+So the deliverable is not a verdict on one model. It is the ability for whoever
+deploys this — a second party, with their own model and their own data — to edit
+the guidance and see what changed. That is `workspace_app.skill_eval`.
+
+## Tuning the guidance — `python -m workspace_app.skill_eval`
+
+Same shape as `workspace_app.card_preview`, which solves this problem for the
+context-card prompts: dump the shipped prompt, edit it, feed it back, score it.
+
+```
+# 1. the shipped guidance, as a file you can edit
+python -m workspace_app.skill_eval --dump-skill verify-number -o ./tune
+
+# 2. score it against the scenarios, with the no-skill control beside it
+python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
+    --scenarios sample-scenarios/verify-number \
+    --model ollama_chat/qwen3:14b --control -o ./tune/run-1
+
+# 3. edit ./tune/SKILL.md, rerun into run-2, compare the two reports
+```
+
+`--skill` takes a registered name **or a path**, which is what makes step 3 a
+loop rather than a fork of the repo.
+
+**The control arm is the point.** A scenario the guidance passes *and the
+no-skill control also passes* measured nothing, and the report says so by name
+rather than counting it as a win.
+
+**Scoring is deterministic, not an LLM judge.** "Did it call `ask_user`", "does
+the answer name the dtype" have objective answers; a judge would add a second
+thing needing calibration before the first could be trusted. A scenario declares
+`must_call` / `must_not_call` / `must_mention` / `must_not_mention`, where a
+phrase may be a list of alternatives so an expectation is not brittle about
+wording. Scenarios live in `sample-scenarios/`, beside `sample-skills/` and
+`sample-tools/` — **not** inside the skill folder, because any file there besides
+`SKILL.md` gets copied into every user's workspace on first `read_skill`.
+
+Every scenario requires `exec`: a number reached in the model's head is neither
+reproducible nor checkable, so "never do arithmetic in-context" is the one rule
+with a fully objective test.
+
+### What the harness models, and what it does not
+
+The prompt is assembled by the app's **own** composer (`apps.catalog._compose_prompt`
+plus the three readers beside it), so the guidance under test is the guidance a
+real turn receives. `exec` output is framed like `agent.tools._format_exec`
+(exit-code header, stderr dropped on success, middle-truncated at
+`exec.output_max_chars`), and only the first tool call of a reply runs
+(`apps/_base.md:9`). It does **not** model specstar, the sandbox jail, SSE, the
+workspace quota or tool authorisation — everything it skips makes the real app
+more forgiving, not less, so a green run licenses a live check rather than
+replacing one.
+
+A drift guard pins the one string that is reproduced rather than imported: if the
+Apply chip's wording in `apps/skills.py` changes, `test_applied_header_matches_production`
+fails rather than letting the eval quietly test a prompt nobody sends.
 
 ## References
 
 Metamorphic testing: Chen, Cheung & Yiu (1998), *Metamorphic testing: a new
 approach for generating next test cases*. Property-based testing: Claessen &
-Hughes (2000), *QuickCheck*. N-version programming: Avizienis (1985). One-at-a-
-time sensitivity: Saltelli et al., *Global Sensitivity Analysis*.
+Hughes (2000), *QuickCheck*. N-version programming: Avizienis (1985).
+One-at-a-time sensitivity: Saltelli et al., *Global Sensitivity Analysis*.

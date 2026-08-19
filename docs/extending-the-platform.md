@@ -350,6 +350,40 @@ body 硬上限 `SKILL_BODY_CAP = 50_000` 字元(兩端都套)。核心載入邏�
 system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill 則**每輪 live 注入**;
 兩者同名時 workspace skill 蓋過 package skill。
 
+### 調校 skill 的 guidance（第二方）
+
+**好的 guidance 是跟模型綁定的**——對某個模型調好的 skill 內文,換一個模型就不是調好的。
+所以部署方(第二方)必須有辦法用**自己的模型、自己的資料**改這份內文並看出差別。
+`python -m workspace_app.skill_eval` 就是這條迴圈,形狀刻意跟
+`workspace_app.card_preview`(context card 的 prompt 調校)一致:
+
+```
+# 1. 把出貨的 guidance 倒成一個你可以改的檔
+python -m workspace_app.skill_eval --dump-skill verify-number -o ./tune
+
+# 2. 對情境評分,旁邊擺上「完全不給 skill」的對照組
+python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
+    --scenarios sample-scenarios/verify-number \
+    --model ollama_chat/qwen3:14b --control -o ./tune/run-1
+
+# 3. 改 ./tune/SKILL.md,重跑進 run-2,比對兩份報告
+```
+
+`--skill` 吃**註冊過的名字或一個路徑**,後者才讓第 3 步是一個迴圈而不是 fork 整個 repo。
+
+- **對照組是重點**:skill 過、而且不給 skill 也過的情境,什麼都沒證明。報告會直接點名,
+  不會把它算成戰果。
+- **評分是決定性的,不是 LLM judge**:「有沒有呼叫 `ask_user`」「答案有沒有指出 dtype」
+  都有客觀答案;加一個 judge 只會多出一個需要先被校準的東西。情境用
+  `must_call` / `must_not_call` / `must_mention` / `must_not_mention` 宣告,其中一個 phrase
+  可以寫成候選清單,免得對用字過度敏感。
+- 情境放 `sample-scenarios/<skill>/`,**不要**放進 skill 資料夾——`SKILL.md` 以外的任何檔案
+  都會在第一次 `read_skill` 時複製進**每個**使用者的 workspace。
+- system prompt 是用 app 自己的 `apps/catalog._compose_prompt` 組的,`exec` 輸出也照
+  `agent.tools._format_exec` 框、一輪只跑第一個 tool call,所以測的就是正式會送出的 guidance。
+  它不模擬 specstar／sandbox jail／SSE／額度／工具授權——那些只會讓正式環境更寬鬆,
+  所以這裡綠燈是「可以去做活體檢查」,不是「取代活體檢查」。
+
 ### user 自建（#298）
 
 在任何 workspace app 裡跟助理說「幫我做一個 skill」,agent 會載入內建的 `author-skill`
