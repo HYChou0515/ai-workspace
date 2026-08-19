@@ -750,3 +750,24 @@ async def test_the_archive_is_streamed_to_disk_when_the_blob_store_can(monkeypat
     assert served, "the blob store offered a stream and nothing consumed it"
     assert not restored, "loaded the whole blob despite a store that can stream"
     assert sorted(d.path for d in _docs(spec, cid)) == ["a.md", "b.md"]
+
+
+async def test_the_materialised_archive_is_handed_over_rewound():
+    """`_archive_file` yields a handle, and a handle has a position.
+
+    Its three callers all pass it to `zipfile`, which seeks absolutely to find the
+    central directory and so cannot tell a rewound handle from one left at EOF —
+    delete the `seek(0)` and every other test still passes (probed). That makes the
+    rewind an interface contract rather than a guard, and this is the test that
+    holds the contract for the next caller, who may simply read it.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    zip_data = _archive({"a.md": b"alpha"})
+    run_id = coord.enqueue(collection_id=cid, zip_data=zip_data, mode="overwrite", user="u")
+    run = _run_of(spec, run_id)
+
+    with coord._archive_file(run) as fh:
+        assert fh.tell() == 0, "the handle was not rewound before being handed over"
+        assert fh.read() == zip_data
