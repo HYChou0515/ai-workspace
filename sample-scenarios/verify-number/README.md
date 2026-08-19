@@ -7,6 +7,7 @@ guidance against your own model:
 python -m workspace_app.skill_eval --dump-skill verify-number -o ./tune
 python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
     --scenarios sample-scenarios/verify-number --control -o ./tune/run-1
+# another of the App picker's presets:  --preset claude-opus
 ```
 
 Three carry a planted defect the guidance must surface; `control-clean` carries

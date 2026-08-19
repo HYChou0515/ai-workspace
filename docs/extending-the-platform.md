@@ -354,8 +354,7 @@ system prompt build 時**靜態**列入 index(`apps/catalog.py`),workspace skill
 
 **好的 guidance 是跟模型綁定的**——對某個模型調好的 skill 內文,換一個模型就不是調好的。
 所以部署方(第二方)必須有辦法用**自己的模型、自己的資料**改這份內文並看出差別。
-`python -m workspace_app.skill_eval` 就是這條迴圈,形狀刻意跟
-`workspace_app.card_preview`(context card 的 prompt 調校)一致:
+`python -m workspace_app.skill_eval` 就是這條迴圈:
 
 ```
 # 1. 把出貨的 guidance 倒成一個你可以改的檔
@@ -363,13 +362,22 @@ python -m workspace_app.skill_eval --dump-skill verify-number -o ./tune
 
 # 2. 對情境評分,旁邊擺上「完全不給 skill」的對照組
 python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
-    --scenarios sample-scenarios/verify-number \
-    --model ollama_chat/qwen3:14b --control -o ./tune/run-1
+    --scenarios sample-scenarios/verify-number --control -o ./tune/run-1
 
 # 3. 改 ./tune/SKILL.md,重跑進 run-2,比對兩份報告
 ```
 
 `--skill` 吃**註冊過的名字或一個路徑**,後者才讓第 3 步是一個迴圈而不是 fork 整個 repo。
+
+**模型不用在命令列指定。** 那一輪是用 App 自己的解析路徑 `AppCatalog.resolve` 取得的——
+跟真正的 turn 同一個呼叫——所以 model、endpoint、system prompt 全部來自
+`config.yaml` + `app.json` + profile。要換模型就 `--preset <config 裡的 preset 名>`
+(也就是 App model picker 上那些名字),不給就用該 App picker 的第一個。`--config` 指向
+非預設位置的 config.yaml。
+
+這一點不是潔癖:自己重組 prompt 那版漏掉了 `## Available skills` 索引,於是模型從頭到尾
+沒被告知這個 skill 存在——「靠 `read_skill` 自動觸發」那條路因此**根本量不到**,而且不會
+有任何東西報錯。
 
 - **對照組是重點**:skill 過、而且不給 skill 也過的情境,什麼都沒證明。報告會直接點名,
   不會把它算成戰果。
@@ -379,7 +387,7 @@ python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
   可以寫成候選清單,免得對用字過度敏感。
 - 情境放 `sample-scenarios/<skill>/`,**不要**放進 skill 資料夾——`SKILL.md` 以外的任何檔案
   都會在第一次 `read_skill` 時複製進**每個**使用者的 workspace。
-- system prompt 是用 app 自己的 `apps/catalog._compose_prompt` 組的,`exec` 輸出也照
+- system prompt 來自 app 自己的 `AppCatalog.resolve`(含 skills 索引),`exec` 輸出照
   `agent.tools._format_exec` 框、一輪只跑第一個 tool call,所以測的就是正式會送出的 guidance。
   它不模擬 specstar／sandbox jail／SSE／額度／工具授權——那些只會讓正式環境更寬鬆,
   所以這裡綠燈是「可以去做活體檢查」,不是「取代活體檢查」。

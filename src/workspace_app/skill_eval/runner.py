@@ -3,9 +3,11 @@
 The model arrives as a ``chat`` callable, so everything here is exercisable with
 a scripted double and no LLM. The litellm-backed implementation lives in the CLI.
 
-The prompt is assembled by the app's OWN functions (``apps.catalog._compose_prompt``
-and the three readers beside it), so the guidance under test is the guidance a
-real turn would receive, and cannot drift from it.
+The system prompt arrives as data. The CLI gets it from the app's OWN resolve
+path (``AppCatalog.resolve``), the same call a live turn makes, so the guidance
+under test is the guidance production sends — including the ``## Available
+skills`` index, which is what makes ``read_skill`` triggering measurable at all.
+Hand-composing it here instead was how that index went missing.
 """
 
 from __future__ import annotations
@@ -16,13 +18,6 @@ from pathlib import Path
 import msgspec
 
 from ..apps import skills as skills_mod
-from ..apps.catalog import (
-    _compose_prompt,
-    _read_app_text,
-    _read_base_preamble,
-    _read_sandbox_preamble,
-)
-from ..apps.manifest import load_app_manifest
 from .scenario import Scenario
 from .tools import Event, schemas
 from .tools import run as run_tool
@@ -66,19 +61,6 @@ class Transcript(msgspec.Struct, frozen=True):
     ended: str
 
 
-def system_prompt(app_slug: str = "rca") -> str:
-    """What a turn of ``app_slug`` really starts with, built by the app's own
-    composer so this cannot drift from production."""
-    manifest = load_app_manifest(app_slug)
-    return _compose_prompt(
-        _read_app_text(app_slug, manifest.agent.prompt_file),
-        "",
-        [],
-        preamble=_read_base_preamble(),
-        sandbox_preamble=_read_sandbox_preamble(),
-    )
-
-
 def applied_block(skill_name: str, skill_md: str) -> str:
     """The skill body wrapped exactly as the Apply chip wraps it."""
     _front, body = skills_mod._parse_frontmatter(skill_md.encode())
@@ -90,9 +72,9 @@ def run_scenario(
     scenario: Scenario,
     work: Path,
     *,
+    system_prompt: str,
     skill_name: str = "",
     skill_md: str = "",
-    app_slug: str = "rca",
     max_steps: int = 20,
 ) -> Transcript:
     """Drive one scenario to an answer or the step limit.
@@ -104,7 +86,7 @@ def run_scenario(
     if skill_md:
         first = f"{applied_block(skill_name, skill_md)}\n\n{scenario.prompt}"
     messages: list[dict] = [
-        {"role": "system", "content": system_prompt(app_slug)},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": first},
     ]
     tools, calls, events = schemas(), [], []

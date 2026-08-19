@@ -209,8 +209,9 @@ the guidance and see what changed. That is `workspace_app.skill_eval`.
 
 ## Tuning the guidance — `python -m workspace_app.skill_eval`
 
-Same shape as `workspace_app.card_preview`, which solves this problem for the
-context-card prompts: dump the shipped prompt, edit it, feed it back, score it.
+Dump the shipped prompt, edit it, feed it back, score it. The model is not a
+flag: the turn comes from `AppCatalog.resolve`, so it is the deployment's own
+model, endpoint and prompt. `--preset` picks another of the App picker's presets.
 
 ```
 # 1. the shipped guidance, as a file you can edit
@@ -218,8 +219,7 @@ python -m workspace_app.skill_eval --dump-skill verify-number -o ./tune
 
 # 2. score it against the scenarios, with the no-skill control beside it
 python -m workspace_app.skill_eval --skill ./tune/SKILL.md \
-    --scenarios sample-scenarios/verify-number \
-    --model ollama_chat/qwen3:14b --control -o ./tune/run-1
+    --scenarios sample-scenarios/verify-number --control -o ./tune/run-1
 
 # 3. edit ./tune/SKILL.md, rerun into run-2, compare the two reports
 ```
@@ -246,9 +246,10 @@ with a fully objective test.
 
 ### What the harness models, and what it does not
 
-The prompt is assembled by the app's **own** composer (`apps.catalog._compose_prompt`
-plus the three readers beside it), so the guidance under test is the guidance a
-real turn receives. `exec` output is framed like `agent.tools._format_exec`
+The prompt comes from the app's **own** `AppCatalog.resolve` — the same call a live
+turn makes — so the guidance under test is the guidance a real turn receives,
+including the `## Available skills` index that makes `read_skill` triggering
+measurable at all. `exec` output is framed like `agent.tools._format_exec`
 (exit-code header, stderr dropped on success, middle-truncated at
 `exec.output_max_chars`), and only the first tool call of a reply runs
 (`apps/_base.md:9`). It does **not** model specstar, the sandbox jail, SSE, the
