@@ -6,10 +6,10 @@ import { itemChatApi } from "./itemChats";
 
 afterEach(() => vi.unstubAllGlobals());
 
-function respondWith(status: number) {
+function respondWith(status: number, body = "") {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response("", { status })),
+    vi.fn(async () => new Response(body, { status })),
   );
 }
 
@@ -31,6 +31,38 @@ describe("itemChatApi error contract", () => {
     await expect(
       itemChatApi.sendMessage({ slug: "rca", itemId: "INC-1", chatId: "c1", content: "hi" }),
     ).rejects.toMatchObject({ status: 504 });
+  });
+
+  /**
+   * The same asymmetry one level down, found the same way (#714).
+   *
+   * The status was fixed here once; the machine-readable REASON was not, and it
+   * is the half that carries meaning when the status cannot. A refusal the
+   * backend explains as `request_env_failed` arrives as plain 500, and 500 has
+   * no fallback the way 507 does — so the composer rendered "send failed: 500",
+   * the exact string the feature existed to replace. This asserts at the
+   * transport, because a hook test can always hand itself a `code` no client
+   * produces.
+   */
+  it("carries the backend's machine-readable reason out of sendMessage", async () => {
+    respondWith(500, JSON.stringify({ detail: { error: "request_env_failed" } }));
+    await expect(
+      itemChatApi.sendMessage({ slug: "rca", itemId: "INC-1", chatId: "c1", content: "hi" }),
+    ).rejects.toMatchObject({ status: 500, code: "request_env_failed" });
+  });
+
+  /**
+   * The inputs the hand-written throws already handled, kept working after they
+   * were routed through `httpErrorFrom`: an empty or non-JSON body must still
+   * produce the same status and message, with `code` simply absent. `errorCode`
+   * clones before reading and swallows a parse failure, so no caller loses the
+   * wording it wrote.
+   */
+  it("still reports status and message when the body carries no reason", async () => {
+    respondWith(504, "gateway timeout, in plain text");
+    await expect(
+      itemChatApi.sendMessage({ slug: "rca", itemId: "INC-1", chatId: "c1", content: "hi" }),
+    ).rejects.toMatchObject({ status: 504, message: "send failed: 504", code: undefined });
   });
 
   it("throws a status-carrying HttpError from a JSON read", async () => {

@@ -64,6 +64,24 @@ export class HttpError extends Error {
   }
 }
 
+/**
+ * Build an `HttpError` from a failed response — code included, always.
+ *
+ * The code is what lets the UI say something a person can act on, and it only
+ * ever arrives if the throw site remembers to ask for it. It did not: the
+ * item-level send passed it and the chat-scoped send did not, so the identity
+ * refusal #714 added rendered as "send failed: 500" on the surface every
+ * composer actually uses. Attaching it at each `throw new HttpError(...)` is the
+ * kind of rule that is obeyed on the day it is written and forgotten on the
+ * next call site, so it lives here instead.
+ *
+ * Safe on any response: `errorCode` clones before reading and swallows a body
+ * that is not JSON, so callers keep whatever message they already wrote.
+ */
+export async function httpErrorFrom(resp: Response, message: string): Promise<HttpError> {
+  return new HttpError(resp.status, message, await errorCode(resp));
+}
+
 /** Read the structured error code out of a JSON error body, if there is one. */
 export async function errorCode(resp: Response): Promise<string | undefined> {
   return (await errorInfo(resp)).code;

@@ -50,10 +50,6 @@ class MockSandbox:
         # it never appears in walk/exists (it lives outside the workspace on a
         # real backend). A handle id here ⇔ its sandbox is marked authoritative.
         self._ready: set[str] = set()
-        # The user-env delivery file. Kept outside `_fs` for the same reason as
-        # `_ready`: on a real backend it sits beside the workspace, so it must
-        # never surface in walk/exists.
-        self._user_env: dict[str, str] = {}
 
     def _require(self, handle: SandboxHandle) -> dict[str, bytes]:
         if handle.id not in self._fs:
@@ -84,7 +80,6 @@ class MockSandbox:
         del self._fs[handle.id]
         self._dirs.pop(handle.id, None)
         self._exposed.pop(handle.id, None)
-        self._user_env.pop(handle.id, None)  # delivery file dies with the sandbox
         self._ready.discard(handle.id)  # #366: teardown drops the readiness mark
 
     async def mark_ready(self, handle: SandboxHandle) -> None:
