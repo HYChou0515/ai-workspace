@@ -43,14 +43,24 @@ import asyncio
 import io
 import json
 import zipfile
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Annotated, Any
 
 import msgspec
 from specstar import QB, Schema
-from specstar.types import Binary, Job, OnDelete, Ref, TaskStatus
+from specstar.types import (
+    Binary,
+    Job,
+    OnDelete,
+    PreconditionFailedError,
+    Ref,
+    ResourceNotFoundError,
+    RevisionStatus,
+    TaskStatus,
+)
 
 from .collection_export import MANIFEST_DIR, MANIFEST_PATH
-from .collection_import import restore_cards
+from .collection_import import doc_exists, restore_cards
 from .doc_id import canonical_path
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -67,6 +77,7 @@ MEMBERS_PER_BATCH = 50
 
 _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
 _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while the queue drains
+_MAX_CAS_RETRIES = 20  # same ceiling as the card-gen run store
 
 
 class ImportPayload(msgspec.Struct):
@@ -242,7 +253,7 @@ class ImportCoordinator:
         if payload.kind == "process":
             self._process(payload, requester)
         elif payload.kind == "finalize":
-            self._finalize(payload.run_id)
+            self._finalize(payload.run_id, requester)
         else:
             self._split(payload.run_id, requester)
 
@@ -270,7 +281,7 @@ class ImportCoordinator:
             (i, members[s : s + MEMBERS_PER_BATCH])
             for i, s in enumerate(range(0, len(members), MEMBERS_PER_BATCH))
         ]
-        self._patch(run_id, total=len(batches))
+        self._patch(run_id, requester, total=len(batches))
         if not batches:
             # Nothing to write — cards still have to be restored, so go straight
             # to finalize rather than leaving the run pending forever.
@@ -296,6 +307,7 @@ class ImportCoordinator:
         zip_data = self._archive_of(run)
         members = _members_of(zip_data)[payload.member_start : payload.member_end]
         written = 0
+        skipped = 0
         failures: list[str] = []
         with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
             for name in members:
@@ -303,11 +315,18 @@ class ImportCoordinator:
                 # unreadable file must not take its 49 neighbours down with it. The
                 # caller needs to know WHICH document did not land — "batch 3 failed"
                 # is not something anyone can act on.
+                path = canonical_path(name)
+                if run.mode == "skip" and doc_exists(self._spec, run.collection_id, path):
+                    # Same judgement as the synchronous path, from the same function:
+                    # `mode` decides a DOCUMENT collision as well as a card one, and
+                    # writing anyway would make `skip` mean its opposite for files.
+                    skipped += 1
+                    continue
                 try:
                     doc_id = self._ingestor.store_file(
                         collection_id=run.collection_id,
                         user=requester,
-                        path=canonical_path(name),
+                        path=path,
                         data=zf.read(name),
                     )
                 except Exception as exc:  # noqa: BLE001 - the reason belongs on the run
@@ -316,48 +335,109 @@ class ImportCoordinator:
                 written += 1
                 if doc_id is not None:
                     self._index.enqueue(doc_id, run.collection_id)
-        self._record(payload.run_id, payload.batch_index, written, failures)
+        self._record(payload.run_id, requester, payload.batch_index, written + skipped, failures)
         if self._all_accounted(payload.run_id):
             self._enqueue_step(payload.run_id, "finalize", requester)
 
-    def _finalize(self, run_id: str) -> None:
-        """Restore the cards and release the archive — exactly once."""
+    def _finalize(self, run_id: str, requester: str) -> None:
+        """Restore the cards and release the archive — exactly once.
+
+        The gate is CLAIMED before the work, not after: two batches can both see the
+        last slot close, and a broker can redeliver. `restore_cards` snapshots the
+        collection before writing, so two finalizers would each see an empty
+        candidate set and both create — the duplicate-card defect #701 closed.
+        """
         run = self._read(run_id)
-        if run is None or run.finished:
+        if run is None:
             return
-        zip_data = self._archive_of(run)
+        zip_data = self._archive_of(run)  # read BEFORE the claim clears it
+        claimed = False
+
+        def claim(current: ImportRun) -> ImportRun | None:
+            nonlocal claimed
+            if current.finished:
+                return None  # someone else already won the gate
+            claimed = True
+            return msgspec.structs.replace(current, finished=True, archive=None)
+
+        self._cas(run_id, requester, claim)
+        if not claimed:
+            return
         restore_cards(
             self._spec,
             run.collection_id,
             _manifest_of(zip_data).get("context_cards", []),
             run.mode,
         )
-        self._patch(run_id, finished=True, archive=None)
 
     # ── run bookkeeping ──────────────────────────────────────────────
-    def _patch(self, run_id: str, **fields: object) -> None:
-        run = self._read(run_id)
-        if run is None:
-            return
-        self._run_rm.create_or_update(run_id, msgspec.structs.replace(run, **fields))
+    def _cas(
+        self, run_id: str, requester: str, mutate: Callable[[ImportRun], ImportRun | None]
+    ) -> ImportRun | None:
+        """Optimistic read-modify-write on the run. ``mutate`` returns the next run,
+        or ``None`` to abort with no write (an idempotent no-op).
 
-    def _record(self, run_id: str, batch_index: int, written: int, failures: list[str]) -> None:
+        `process` jobs carry ``partition_key=None`` so they parallelise on purpose,
+        and the partition check the queue backends do is documented as best-effort —
+        so a plain read-modify-write loses updates. A lost update here is not a
+        miscount: the finalize gate counts slots, so one dropped slot means finalize
+        never fires, the cards are never restored, the staged archive is never
+        released, and the caller polls a finished import forever. Copied from
+        ``CardGenRunStore._cas``, which solves the same problem one file over.
+
+        The write acts AS the requester: the run is owner-only, so a worker writing
+        as itself is a stranger to it, and a rule phrased around identity would then
+        have to name the worker — the shape ``GraphMirrorChecker`` warns about.
+        """
+        for _ in range(_MAX_CAS_RETRIES):
+            try:
+                res = self._run_rm.get(run_id)
+            except ResourceNotFoundError:
+                return None  # cascaded away (collection deleted mid-flight)
+            run = res.data
+            if not isinstance(run, ImportRun):  # pragma: no cover - defensive
+                return None
+            new = mutate(run)
+            if new is None:
+                return None
+            try:
+                with self._run_rm.using(user=requester):
+                    self._run_rm.modify(
+                        run_id,
+                        new,
+                        status=RevisionStatus.draft,
+                        expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
+                    )
+                return new
+            except PreconditionFailedError:
+                continue  # another writer won the race — re-read and retry
+        raise RuntimeError(f"ImportRun CAS exhausted retries for {run_id}")  # pragma: no cover
+
+    def _patch(self, run_id: str, requester: str, **fields: object) -> None:
+        self._cas(run_id, requester, lambda run: msgspec.structs.replace(run, **fields))
+
+    def _record(
+        self, run_id: str, requester: str, batch_index: int, written: int, failures: list[str]
+    ) -> None:
         """Close one batch's slot in the join AND add its per-document outcome.
 
         Two different readers: the finalize gate counts BATCHES (it only needs to know
         every slot is closed), while a caller wants documents — how many landed, and
         the path plus reason for each that did not."""
-        run = self._read(run_id)
-        if run is None or batch_index in run.done or batch_index in run.failed:
-            return  # idempotent: a redelivered batch must not double-count
-        slot = "failed" if failures and not written else "done"
-        self._patch(
-            run_id,
-            done=[*run.done, batch_index] if slot == "done" else run.done,
-            failed=[*run.failed, batch_index] if slot == "failed" else run.failed,
-            written=run.written + written,
-            errors=[*run.errors, *failures],
-        )
+
+        def mutate(run: ImportRun) -> ImportRun | None:
+            if batch_index in run.done or batch_index in run.failed:
+                return None  # idempotent: a redelivered batch must not double-count
+            slot = "failed" if failures and not written else "done"
+            return msgspec.structs.replace(
+                run,
+                done=[*run.done, batch_index] if slot == "done" else run.done,
+                failed=[*run.failed, batch_index] if slot == "failed" else run.failed,
+                written=run.written + written,
+                errors=[*run.errors, *failures],
+            )
+
+        self._cas(run_id, requester, mutate)
 
     def _all_accounted(self, run_id: str) -> bool:
         run = self._read(run_id)

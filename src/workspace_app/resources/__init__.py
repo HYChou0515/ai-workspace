@@ -25,6 +25,7 @@ from ..perm import Permission
 from ..perm.checker import (
     collection_permission_event_handler,
     graph_mirror_event_handler,
+    owner_only_event_handler,
     source_doc_permission_event_handler,
 )
 from ..perm.scope import (
@@ -34,6 +35,7 @@ from ..perm.scope import (
     graph_entity_access_scope,
     graph_evidence_access_scope,
     kbchat_access_scope,
+    owner_only_access_scope,
     source_doc_access_scope,
 )
 from ..workflow.run import WorkflowRun
@@ -610,7 +612,20 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # for the same cycle reason as the card-gen structs above.
     from ..kb.import_jobs import ImportRun
 
-    spec.add_model(ImportRun, indexed_fields=["collection_id", "finished"])
+    # The row carries the caller's uploaded archive as a blob AND names the
+    # collection a worker will write into, so it is private to whoever started it —
+    # not to the collection's readers, who did not upload it. Without a scope
+    # specstar's AllowAll default serves every row to every caller (the comment on
+    # graph-claim below spells this out), and the gate on the hand-written route is
+    # decorative while the same row is served unscoped one path over. The write half
+    # matters more than the read half: repointing `collection_id` redirects a
+    # victim's documents, and deleting the row strands their import.
+    spec.add_model(
+        ImportRun,
+        indexed_fields=["collection_id", "finished"],
+        access_scope=owner_only_access_scope(superusers),
+        event_handlers=[owner_only_event_handler(superusers)],
+    )
     # #511: proposals as first-class rows (extracted from CardGenRun.proposals) so
     # the 待審核 views page via native offset/limit. collection_id + decision indexed
     # → the flat "active proposals in this collection" query; run_id indexed → list

@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import io
 import json
+import threading
 import zipfile
 
 import pytest
 from specstar import QB, SpecStar
+from specstar.types import PreconditionFailedError
 
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.import_jobs import ImportCoordinator, ImportRun
+from workspace_app.kb.import_jobs import ImportCoordinator, ImportPayload, ImportRun
 from workspace_app.kb.index_coordinator import IndexCoordinator
 from workspace_app.kb.index_jobs import IndexJob
 from workspace_app.kb.ingest import Ingestor
@@ -87,6 +89,34 @@ def _run_of(spec: SpecStar, run_id: str) -> ImportRun:
     data = spec.get_resource_manager(ImportRun).get(run_id).data
     assert isinstance(data, ImportRun)
     return data
+
+
+def _enforce_etags(monkeypatch, rm) -> None:
+    """Make ``modify(expected_etag=…)`` behave the way a real backend promises.
+
+    The in-memory backend does NOT: two writers holding the same etag both succeed
+    (probed directly — zero conflicts in twenty rounds). Every compare-and-swap in
+    this codebase is therefore untestable against it, and a race test written
+    against it proves nothing and fails at random. This double models the other
+    side's contract — compare-and-set under a lock — which is what the code is
+    written against.
+    """
+    real_modify = rm.modify
+    real_get = rm.get
+    guard = threading.Lock()
+    latest: dict[str, object] = {}
+
+    def checked_modify(resource_id, data, **kw):
+        expected = kw.pop("expected_etag", None)
+        with guard:
+            current = latest.get(resource_id, real_get(resource_id).info.etag)
+            if expected is not None and expected != current:
+                raise PreconditionFailedError(resource_id, str(expected), str(current))
+            out = real_modify(resource_id, data, **kw)
+            latest[resource_id] = real_get(resource_id).info.etag
+            return out
+
+    monkeypatch.setattr(rm, "modify", checked_modify)
 
 
 async def test_enqueue_returns_before_any_document_is_written():
@@ -216,3 +246,143 @@ async def test_one_unreadable_document_does_not_take_its_batch_down_with_it(monk
     assert len(run.errors) == 1
     assert run.errors[0].startswith("b.md: OSError")
     assert run.finished is True  # a partial import still finishes — and says so
+
+
+@pytest.mark.parametrize("mode", ["overwrite", "skip"])
+async def test_mode_applies_to_documents_too_not_only_cards(mode: str):
+    """`mode` decides a DOCUMENT collision as well as a card one.
+
+    The synchronous path skips a colliding path outright; the asynchronous one wrote
+    unconditionally, so `skip` quietly replaced files it had promised to leave alone.
+    The earlier mode test parametrised both values but asserted only on cards, so it
+    stayed green over that.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    coord._ingestor.store_file(collection_id=cid, user="u", path="a.md", data=b"ORIGINAL")
+
+    coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({"a.md": b"REPLACED"}),
+        mode=mode,
+        user="u",
+    )
+    await coord.aclose()
+
+    rm = spec.get_resource_manager(SourceDoc)
+    (doc,) = [d for d in _docs(spec, cid) if d.path == "a.md"]
+    body = rm.restore_binary(doc).content.data
+    assert body == (b"REPLACED" if mode == "overwrite" else b"ORIGINAL")
+
+
+async def test_concurrent_batches_do_not_lose_join_slots(monkeypatch):
+    """`process` jobs carry `partition_key=None` so they parallelise on purpose. A
+    plain read-modify-write on the run then loses slots, and a lost slot is not a
+    cosmetic miscount: `_all_accounted` never holds, so finalize never fires, the
+    cards are never restored, the staged archive is never released, and the caller
+    polls `queued` forever over an import whose documents all landed.
+
+    Driven against a double that ENFORCES `expected_etag`, because the in-memory
+    backend does not: two writers holding the same etag both succeed there (probed
+    directly — zero conflicts in 20 rounds), so a race test against it proves
+    nothing about the code and fails at random. The double models what a real
+    backend promises — compare-and-set under a lock — which is the contract this
+    code is written against.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    members = {f"f{i:03d}.md": f"body {i}".encode() for i in range(120)}
+    run_id = coord.enqueue(
+        collection_id=cid, zip_data=_archive(members), mode="overwrite", user="u"
+    )
+    # Seed the join directly rather than via `_split`: that enqueues real jobs, and a
+    # consumer left running by an earlier test drains them, finalizes, and these
+    # threads then find `run.finished` and return without ever racing.
+    coord._patch(run_id, "u", total=3)  # 50 / 50 / 20
+
+    rm = coord._run_rm
+    _enforce_etags(monkeypatch, rm)
+    barrier = threading.Barrier(3, timeout=20)
+    parked = threading.local()
+    parked_modify = rm.modify
+
+    def modify_at_barrier(resource_id, data, **kw):
+        # Park each thread once on the way INTO the write, so all three hold an etag
+        # read before any write landed — the lost-update setup. (Parking on the first
+        # READ instead let the CAS's own re-read stagger them, and the test then
+        # passed with the CAS deleted, which is no guard at all.)
+        if not getattr(parked, "done", False):
+            parked.done = True
+            barrier.wait()
+        return parked_modify(resource_id, data, **kw)
+
+    monkeypatch.setattr(rm, "modify", modify_at_barrier)
+    raised: list[BaseException] = []
+
+    def work(index: int) -> None:
+        try:
+            coord._process(
+                ImportPayload(
+                    run_id=run_id,
+                    kind="process",
+                    member_start=index * 50,
+                    member_end=index * 50 + 50,
+                    batch_index=index,
+                ),
+                "u",
+            )
+        except BaseException as exc:  # noqa: BLE001 - reported below
+            raised.append(exc)
+
+    try:
+        threads = [threading.Thread(target=work, args=(i,)) for i in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+    finally:
+        for t in threads:
+            assert not t.is_alive(), "a batch never finished"
+
+    assert not raised, f"a batch raised instead of recording: {raised!r}"
+    run = _run_of(spec, run_id)
+    assert len(run.done) + len(run.failed) == run.total, (
+        f"join slots lost: done={run.done} failed={run.failed} total={run.total}"
+    )
+    assert run.written == 120, f"written undercounts: {run.written}"
+
+
+async def test_finalize_runs_once_even_if_two_finishers_race(monkeypatch):
+    """Two batches can both see the last slot close, and a broker can redeliver a
+    finalize job. Without a claimed gate each finalizer restores the manifest's cards
+    against a snapshot taken before the other wrote — which is exactly the
+    duplicate-card defect #701 closed."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({}, cards=[{"keys": ["M4"], "title": "M4", "body": "edge"}]),
+        mode="overwrite",
+        user="u",
+    )
+    # Same reason as above: no enqueued jobs, so nothing but these two threads can
+    # reach finalize.
+    coord._patch(run_id, "u", total=0)
+    _enforce_etags(monkeypatch, coord._run_rm)
+
+    barrier = threading.Barrier(2, timeout=20)
+
+    def finalize():
+        barrier.wait()
+        coord._finalize(run_id, "u")
+
+    threads = [threading.Thread(target=finalize) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert [c.keys for c in _cards(spec, cid)] == [["M4"]], "finalize ran twice"

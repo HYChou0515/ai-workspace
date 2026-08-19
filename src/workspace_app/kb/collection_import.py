@@ -159,7 +159,12 @@ def restore_cards(
             rm.update(target[0], restored)
 
 
-def _doc_exists(spec: SpecStar, collection_id: str, path: str) -> bool:
+def doc_exists(spec: SpecStar, collection_id: str, path: str) -> bool:
+    """Whether ``path`` already names a document here — the `skip` test.
+
+    Public because BOTH importers ask it (#715). A second copy of "what counts as a
+    colliding document" is the same split #701 spent four rounds closing for cards.
+    """
     rm = spec.get_resource_manager(SourceDoc)
     try:
         rm.get(encode_doc_id(collection_id, path))
@@ -200,7 +205,7 @@ def import_collection(
                 continue  # zip-slip: a member escaping its root — drop it
             if not path:
                 continue  # empty after canonicalisation
-            if mode == "skip" and _doc_exists(spec, collection_id, path):
+            if mode == "skip" and doc_exists(spec, collection_id, path):
                 continue
             doc_id = ingestor.store_file(
                 collection_id=collection_id, user=user, path=path, data=zf.read(info)
