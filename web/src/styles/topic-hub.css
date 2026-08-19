@@ -42,7 +42,9 @@
   margin-top: 4px;
   width: 300px;
   max-width: 90vw;
-  z-index: 20;
+  /* A menu, so it rides the popover layer — at a hand-written 20 it rendered
+     under the chat rail (which becomes a z-index'd overlay when narrow). */
+  z-index: var(--z-popover);
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -174,7 +176,7 @@
   margin-top: 4px;
   width: 280px;
   max-width: 90vw;
-  z-index: 20;
+  z-index: var(--z-popover);
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -248,7 +250,7 @@
   margin-top: 4px;
   width: 280px;
   max-width: 90vw;
-  z-index: 20;
+  z-index: var(--z-popover);
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -291,7 +293,7 @@
 .manage-chats__overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;

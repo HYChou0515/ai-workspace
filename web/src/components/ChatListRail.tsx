@@ -17,20 +17,13 @@ import type { AppItem } from "../api/types";
 import { useChatActions } from "../hooks/useChatActions";
 import { useCreateChat } from "../hooks/useCreateChat";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { useMinWidth } from "../hooks/useMediaQuery";
-import { useAppItems, useApps } from "../hooks/useResources";
+import { useIsNarrow, useMinWidth } from "../hooks/useMediaQuery";
+import { useAppItems, useAppManifest, useApps } from "../hooks/useResources";
+import { usePlatformDestinations } from "../hooks/usePlatformDestinations";
+import { itemNouns } from "../lib/itemNoun";
 import { BREAKPOINTS } from "../lib/breakpoints";
 import { ShareChatDialog } from "./ShareChatDialog";
 import { UserChip } from "./UserChip";
-
-// Platform destinations that live behind the menu (App-agnostic — the App
-// switcher is data-driven from useApps, these are the fixed platform surfaces).
-const PLATFORM_LINKS: { to: string; label: string }[] = [
-  { to: "/kb", label: "Knowledge base" },
-  { to: "/review", label: "Review" },
-  { to: "/diagnostics", label: "Diagnostics" },
-  { to: "/help", label: "Help" },
-];
 
 type Tab = "mine" | "shared";
 
@@ -50,6 +43,12 @@ export function ChatListRail({
   currentId: string;
 }) {
   const { items, isPending } = useAppItems(slug, resourceRoute);
+  // The rail lists ITEMS, so it uses the App's word for one. Hardcoding
+  // "chat" named the wrong level wherever an item holds many conversations.
+  const nouns = itemNouns(useAppManifest(slug));
+  // Shared with GlobalNav's switcher — the rail used to keep its own copy and
+  // silently lacked My resources, Groups and Work calendar.
+  const destinations = usePlatformDestinations();
   const apps = useApps();
   const me = useCurrentUser();
   const createChat = useCreateChat(slug);
@@ -74,6 +73,25 @@ export function ChatListRail({
   useEffect(() => {
     setCollapsed(!railFits);
   }, [railFits]);
+  // Below `narrow` the open rail OVERLAYS the chat (chat-rail.css mirrors this
+  // breakpoint), which makes it a drawer — and a drawer has to close when you
+  // look away from it. Without that it parks itself on top of the chat's own
+  // toolbar: the chat switcher sits at the bar's left edge, so it stops
+  // responding entirely, and collapsing the rail by hand was the only way back.
+  // Above the breakpoint the rail holds its own column beside the chat, covers
+  // nothing, and must stay put.
+  const overlays = useIsNarrow();
+  const dismissDrawer = () => {
+    if (overlays) setCollapsed(true);
+  };
+  useEffect(() => {
+    if (!overlays || collapsed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCollapsed(true);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [overlays, collapsed]);
   // #chat-private: split my chats from ones shared with me (owner !== me).
   const mine = items.filter((it) => it.owner === me);
   const shared = items.filter((it) => it.owner !== me);
@@ -93,11 +111,11 @@ export function ChatListRail({
 
   if (collapsed) {
     return (
-      <nav className="chat-rail chat-rail--collapsed" aria-label="chats">
+      <nav className="chat-rail chat-rail--collapsed" aria-label={nouns.plural.toLowerCase()}>
         <button
           type="button"
           className="chat-rail__expand"
-          aria-label="Show chats"
+          aria-label={`Show ${nouns.plural}`}
           onClick={() => setCollapsed(false)}
         >
           »
@@ -107,111 +125,126 @@ export function ChatListRail({
   }
 
   return (
-    <nav className="chat-rail" aria-label="chats">
-      <div className="chat-rail__head">
-        <button
-          type="button"
-          className="chat-rail__menu-btn"
-          aria-label="Platform menu"
-          aria-expanded={menuOpen}
-          onClick={() => setMenuOpen((o) => !o)}
-        >
-          ☰
-        </button>
-        <button
-          type="button"
-          className="chat-rail__new"
-          onClick={() => createChat.mutate()}
-          disabled={createChat.isPending}
-        >
-          + New chat
-        </button>
-        <button
-          type="button"
-          className="chat-rail__collapse"
-          aria-label="Collapse chats"
+    <>
+      {/* Only mounted where the rail overlays, so it can carry the dismissal
+          without a media query of its own. It sits UNDER the rail and over the
+          chat, so one click closes the drawer rather than also firing whatever
+          it was covering. */}
+      {overlays && (
+        <div
+          className="chat-rail__scrim"
+          data-testid="chat-rail-scrim"
           onClick={() => setCollapsed(true)}
-        >
-          «
-        </button>
-      </div>
-
-      {menuOpen && (
-        <>
-          <div className="chat-rail__backdrop" onClick={closeMenu} />
-          <div className="chat-rail__menu" role="menu">
-            <div className="chat-rail__menu-label">Apps</div>
-            {apps.map((a) => (
-              <Link
-                key={a.slug}
-                role="menuitem"
-                className="chat-rail__menu-item"
-                to={`/a/${a.slug}`}
-                onClick={closeMenu}
-              >
-                {a.title}
-              </Link>
-            ))}
-            <div className="chat-rail__menu-sep" />
-            {PLATFORM_LINKS.map((l) => (
-              <Link
-                key={l.to}
-                role="menuitem"
-                className="chat-rail__menu-item"
-                to={l.to}
-                onClick={closeMenu}
-              >
-                {l.label}
-              </Link>
-            ))}
-          </div>
-        </>
+        />
       )}
+      <nav className="chat-rail" aria-label={nouns.plural.toLowerCase()}>
+        <div className="chat-rail__head">
+          <button
+            type="button"
+            className="chat-rail__menu-btn"
+            aria-label="Platform menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((o) => !o)}
+          >
+            ☰
+          </button>
+          <button
+            type="button"
+            className="chat-rail__new"
+            onClick={() => createChat.mutate()}
+            disabled={createChat.isPending}
+          >
+            + {nouns.createLabel}
+          </button>
+          <button
+            type="button"
+            className="chat-rail__collapse"
+            aria-label={`Collapse ${nouns.plural}`}
+            onClick={() => setCollapsed(true)}
+          >
+            «
+          </button>
+        </div>
 
-      <div className="chat-rail__tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "mine"}
-          className="chat-rail__tab"
-          data-active={tab === "mine" ? "true" : undefined}
-          onClick={() => setTab("mine")}
-        >
-          My chats
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "shared"}
-          className="chat-rail__tab"
-          data-active={tab === "shared" ? "true" : undefined}
-          onClick={() => setTab("shared")}
-        >
-          Shared with me
-        </button>
-      </div>
-
-      <div className="chat-rail__list">
-        {isPending && items.length === 0 ? (
-          <div className="chat-rail__empty">Loading…</div>
-        ) : shown.length === 0 ? (
-          <div className="chat-rail__empty">
-            {tab === "mine" ? "No chats yet" : "Nothing shared with you yet"}
-          </div>
-        ) : (
-          shown.map((it: AppItem) => (
-            <ChatRailItem
-              key={it.resource_id}
-              slug={slug}
-              item={it}
-              active={it.resource_id === currentId}
-              onRename={actions.rename}
-              onDelete={actions.remove}
-            />
-          ))
+        {menuOpen && (
+          <>
+            <div className="chat-rail__backdrop" onClick={closeMenu} />
+            <div className="chat-rail__menu" role="menu">
+              <div className="chat-rail__menu-label">Apps</div>
+              {apps.map((a) => (
+                <Link
+                  key={a.slug}
+                  role="menuitem"
+                  className="chat-rail__menu-item"
+                  to={`/a/${a.slug}`}
+                  onClick={closeMenu}
+                >
+                  {a.title}
+                </Link>
+              ))}
+              <div className="chat-rail__menu-sep" />
+              {destinations.map((l) => (
+                <Link
+                  key={l.to}
+                  role="menuitem"
+                  className="chat-rail__menu-item"
+                  to={l.to}
+                  onClick={closeMenu}
+                >
+                  {l.label}
+                </Link>
+              ))}
+            </div>
+          </>
         )}
-      </div>
-    </nav>
+
+        <div className="chat-rail__tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "mine"}
+            className="chat-rail__tab"
+            data-active={tab === "mine" ? "true" : undefined}
+            onClick={() => setTab("mine")}
+          >
+            My {nouns.plural}
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "shared"}
+            className="chat-rail__tab"
+            data-active={tab === "shared" ? "true" : undefined}
+            onClick={() => setTab("shared")}
+          >
+            Shared with me
+          </button>
+        </div>
+
+        <div className="chat-rail__list">
+          {isPending && items.length === 0 ? (
+            <div className="chat-rail__empty">Loading…</div>
+          ) : shown.length === 0 ? (
+            <div className="chat-rail__empty">
+              {tab === "mine" ? `No ${nouns.plural} yet` : "Nothing shared with you yet"}
+            </div>
+          ) : (
+            shown.map((it: AppItem) => (
+              <ChatRailItem
+                key={it.resource_id}
+                slug={slug}
+                item={it}
+                active={it.resource_id === currentId}
+                noun={nouns.noun}
+                onOpen={dismissDrawer}
+                onRename={actions.rename}
+                onDelete={actions.remove}
+              />
+            ))
+          )}
+        </div>
+      </nav>
+    </>
   );
 }
 
@@ -221,12 +254,18 @@ function ChatRailItem({
   slug,
   item,
   active,
+  noun,
+  onOpen,
   onRename,
   onDelete,
 }: {
   slug: string;
   item: AppItem;
   active: boolean;
+  /** What this App calls one item ("Project"), for the row's own labels. */
+  noun: string;
+  /** Opening a row is the end of the drawer's job — see `dismissDrawer`. */
+  onOpen: () => void;
   onRename: (id: string, title: string) => void;
   onDelete: (id: string) => void;
 }) {
@@ -236,7 +275,7 @@ function ChatRailItem({
   const [draft, setDraft] = useState("");
   const me = useCurrentUser();
   const shared = item.owner !== me; // shared WITH me → I don't own it
-  const title = item.title || "Untitled chat";
+  const title = item.title || `Untitled ${noun.toLowerCase()}`;
 
   if (editing) {
     const commit = (value: string) => {
@@ -249,7 +288,7 @@ function ChatRailItem({
         // eslint-disable-next-line jsx-a11y/no-autofocus
         autoFocus
         className="chat-rail__rename"
-        aria-label="Rename chat"
+        aria-label={`Rename ${noun}`}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
@@ -268,6 +307,7 @@ function ChatRailItem({
         className="chat-rail__item"
         data-active={active ? "true" : undefined}
         title={title}
+        onClick={onOpen}
       >
         <span className="chat-rail__item-title">{title}</span>
         {/* Whose chat this is. A shared row is otherwise indistinguishable from
@@ -286,7 +326,7 @@ function ChatRailItem({
           <button
             type="button"
             className="chat-rail__more"
-            aria-label={`Chat options for ${title}`}
+            aria-label={`${noun} options for ${title}`}
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((o) => !o)}
           >

@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BREAKPOINTS } from "../lib/breakpoints";
+import { QueryWrap } from "../test/queryWrapper";
 import { ChatListRail } from "./ChatListRail";
 
 const items = [
@@ -12,8 +13,12 @@ const items = [
   { resource_id: "rca-investigation/2", title: "Sensor noise", owner: "me" },
   { resource_id: "rca-investigation/9", title: "From a teammate", owner: "someone-else" },
 ];
+const manifest = {
+  item: { noun: "Project", noun_plural: "Projects", create_label: "Start a Project" },
+};
 vi.mock("../hooks/useResources", () => ({
   useAppItems: () => ({ items, isPending: false }),
+  useAppManifest: () => manifest,
   useApps: () => [
     { slug: "rca", title: "RCA" },
     { slug: "pm", title: "Product" },
@@ -69,13 +74,60 @@ afterEach(() => {
 
 function renderRail(currentId = "rca-investigation/1") {
   return render(
-    <MemoryRouter>
-      <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId={currentId} />
-    </MemoryRouter>,
+    <QueryWrap>
+      <MemoryRouter>
+        <ChatListRail slug="rca" resourceRoute="/rca-investigation" currentId={currentId} />
+      </MemoryRouter>
+    </QueryWrap>,
   );
 }
 
 describe("ChatListRail", () => {
+  it("offers the same platform destinations the global switcher does", () => {
+    // The rail kept its own hardcoded list and had silently fallen behind: no
+    // My resources at all, and no way to express the conditional entries. Both
+    // menus now render one shared, viewer-aware list, so a destination cannot
+    // exist in one and not the other.
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /platform menu/i }));
+
+    // Assert the DESTINATIONS, not the words: two of the labels are i18n keys,
+    // and it is the reachable set that had drifted.
+    const hrefs = within(screen.getByRole("menu"))
+      .getAllByRole("menuitem")
+      .map((el) => el.getAttribute("href"));
+    expect(hrefs).toEqual(
+      expect.arrayContaining(["/kb", "/review", "/diagnostics", "/my-resources", "/help"]),
+    );
+  });
+
+  it("calls an item what the App calls it, not a chat (#pm)", () => {
+    // The rail lists ITEMS. Where an item holds many conversations — a PM
+    // project does — calling it a "chat" names the wrong level, and the
+    // manifest already declares the right word.
+    renderRail();
+
+    expect(screen.getByRole("button", { name: /Start a Project/i })).toBeInTheDocument();
+    // Deliberately unequal to the "New <noun>" fallback, so this asserts the
+    // manifest is READ rather than that the fallback happens to match.
+    expect(screen.getByRole("tab", { name: /My Projects/i })).toBeInTheDocument();
+    expect(screen.queryByText(/New chat/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/My chats/i)).not.toBeInTheDocument();
+  });
+
+  it("names an item by the App's noun in the accessible copy too (#pm)", () => {
+    // The visible strings were converted first; these were missed because
+    // nothing reads them on screen — a screen-reader user would still have been
+    // told "chats".
+    renderRail();
+
+    expect(screen.getByRole("navigation", { name: "projects" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Project options for Oven drift/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Chat options/i })).not.toBeInTheDocument();
+  });
+
   it("lists the app's chats, links each to its item (slash id encoded), marks the current one", () => {
     renderRail();
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
@@ -87,23 +139,23 @@ describe("ChatListRail", () => {
 
   it("creates a chat with defaults when New chat is pressed (no create form)", () => {
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /New chat/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Start a Project/i }));
     expect(newChat).toHaveBeenCalled();
   });
 
   it("deletes a chat from its ⋯ menu, after a confirm", () => {
     window.confirm = vi.fn(() => true); // happy-dom has no confirm — stub it
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(chatActions.remove).toHaveBeenCalledWith("rca-investigation/1");
   });
 
   it("renames a chat inline from its ⋯ menu", () => {
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
-    const input = screen.getByRole("textbox", { name: /Rename chat/i });
+    const input = screen.getByRole("textbox", { name: /Rename Project/i });
     fireEvent.change(input, { target: { value: "Oven drift RCA" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(chatActions.rename).toHaveBeenCalledWith("rca-investigation/1", "Oven drift RCA");
@@ -119,7 +171,7 @@ describe("ChatListRail", () => {
     expect(screen.getByText("From a teammate")).toBeInTheDocument();
     expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
     const row = screen.getByText("From a teammate").closest(".chat-rail__row") as HTMLElement;
-    expect(within(row).queryByRole("button", { name: /Chat options/i })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /Project options/i })).not.toBeInTheDocument();
   });
 
   // A chat I didn't make shows up in my rail with only its title — nothing said
@@ -159,14 +211,14 @@ describe("ChatListRail", () => {
 
   it("still lets you cross to the other tab from a shared chat", () => {
     renderRail("rca-investigation/9");
-    fireEvent.click(screen.getByRole("tab", { name: /My chats/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /My Projects/i }));
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
     expect(screen.queryByText("From a teammate")).not.toBeInTheDocument();
   });
 
   it("opens the share dialog from a chat's ⋯ menu", () => {
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Share" }));
     expect(screen.getByTestId("share-dialog")).toBeInTheDocument();
   });
@@ -174,9 +226,9 @@ describe("ChatListRail", () => {
   it("collapses to a thin bar and re-expands", () => {
     renderRail();
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /collapse chats/i }));
+    fireEvent.click(screen.getByRole("button", { name: /collapse projects/i }));
     expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /show chats/i }));
+    fireEvent.click(screen.getByRole("button", { name: /show projects/i }));
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
   });
 
@@ -210,7 +262,7 @@ describe("ChatListRail on a narrow viewport (#fe-responsive)", () => {
     setViewport(BREAKPOINTS.shell + BREAKPOINTS.chatRail - 1);
     renderRail();
     expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /show chats/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show projects/i })).toBeInTheDocument();
   });
 
   it("stays tucked on a phone", () => {
@@ -228,7 +280,64 @@ describe("ChatListRail on a narrow viewport (#fe-responsive)", () => {
   it("can still be opened when tucked — tucked is a default, not a lockout", () => {
     setViewport(390);
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /show chats/i }));
+    fireEvent.click(screen.getByRole("button", { name: /show projects/i }));
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The overlay rail is a DRAWER, and a drawer you cannot dismiss by looking away
+ * is a trap: below 768px it sits ON TOP of the chat's own toolbar, so the chat
+ * switcher and everything else on the bar's left edge stop responding — the
+ * clicks land on the rail. Measured in Chromium at 760px wide: reopening the
+ * rail moves the switcher's trigger to x=8 under a rail spanning 0–240, and a
+ * click there resolves to `chat-rail__tab` while the switcher's menu never
+ * opens. Collapsing the rail by hand was the only way back to it.
+ *
+ * Only where the rail actually overlays. Above the breakpoint it holds its own
+ * column and nothing is covered, so dismissing it on a stray click would be its
+ * own bug — a rail that will not stay open.
+ */
+describe("ChatListRail as a drawer (#pm)", () => {
+  const openDrawer = () => fireEvent.click(screen.getByRole("button", { name: /show projects/i }));
+  const isOpen = () => screen.queryByText("Oven drift") !== null;
+
+  it("closes when you click away from it", () => {
+    stubViewport(390);
+    renderRail();
+    openDrawer();
+    expect(isOpen()).toBe(true);
+
+    fireEvent.click(screen.getByTestId("chat-rail-scrim"));
+    expect(isOpen()).toBe(false);
+  });
+
+  it("closes on Escape", () => {
+    stubViewport(390);
+    renderRail();
+    openDrawer();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(isOpen()).toBe(false);
+  });
+
+  it("closes once you pick something — it would cover what you just opened", () => {
+    stubViewport(390);
+    renderRail();
+    openDrawer();
+
+    fireEvent.click(screen.getByRole("link", { name: /Sensor noise/ }));
+    expect(isOpen()).toBe(false);
+  });
+
+  it("does none of that when the rail has its own column", () => {
+    stubViewport(BREAKPOINTS.shell + BREAKPOINTS.chatRail);
+    renderRail();
+    expect(isOpen()).toBe(true);
+    expect(screen.queryByTestId("chat-rail-scrim")).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(screen.getByRole("link", { name: /Sensor noise/ }));
+    expect(isOpen()).toBe(true);
   });
 });
