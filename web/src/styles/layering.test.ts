@@ -39,12 +39,21 @@ describe("stacking scale", () => {
     expect(tokenValue(tokens, "--z-dialog")).toBeGreaterThan(modal);
   });
 
-  it("leaves no hand-written z-index in the rail or the switcher's menu", () => {
+  it.each([".chat-switcher__menu", ".new-item-picker__menu", ".wf-launch-menu__menu"])(
+    "opens %s on the popover layer",
+    (selector) => {
+      // Scoping this to the switcher alone was the original miss: its two
+      // siblings in the same bar carried the same hand-written 20, so the
+      // `New…` dropdown still opened under the rail after the switcher was fixed.
+      const rule = read("topic-hub.css").split(selector)[1]?.split("}")[0] ?? "";
+      expect(rule).toMatch(/--z-popover/);
+    },
+  );
+
+  it("leaves no hand-written z-index in the rail or the chat furniture", () => {
     // The values are the scale's job. A literal here is how the two drifted
     // apart in the first place.
     expect(read("chat-rail.css")).not.toMatch(/z-index:\s*\d/);
-    const switcherMenu = read("topic-hub.css").split(".chat-switcher__menu")[1]?.split("}")[0] ?? "";
-    expect(switcherMenu).not.toMatch(/z-index:\s*\d/);
-    expect(switcherMenu).toMatch(/--z-popover/);
+    expect(read("topic-hub.css")).not.toMatch(/z-index:\s*\d/);
   });
 });

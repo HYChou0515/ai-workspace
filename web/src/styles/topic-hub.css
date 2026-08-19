@@ -176,7 +176,7 @@
   margin-top: 4px;
   width: 280px;
   max-width: 90vw;
-  z-index: 20;
+  z-index: var(--z-popover);
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -250,7 +250,7 @@
   margin-top: 4px;
   width: 280px;
   max-width: 90vw;
-  z-index: 20;
+  z-index: var(--z-popover);
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
@@ -293,7 +293,7 @@
 .manage-chats__overlay {
   position: fixed;
   inset: 0;
-  z-index: 50;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
