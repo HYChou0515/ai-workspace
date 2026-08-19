@@ -632,3 +632,69 @@ async def test_the_failure_list_is_capped_but_the_totals_are_not(monkeypatch):
     assert len(run.errors) == MAX_ERROR_LINES
     assert run.members == MAX_ERROR_LINES + 20
     assert run.written == 0  # the verdict survives the cap
+
+
+async def test_the_loser_of_a_claim_conflict_restores_nothing(monkeypatch):
+    """The OTHER finalize race: the loser's compare-and-swap actually conflicts.
+
+    `test_finalize_runs_once_even_if_two_finishers_race` lets the two finishers
+    reach the claim in any order, so the loser usually re-reads AFTER the winner
+    wrote and bounces off `current.finished` on its FIRST attempt — a path that
+    never sets `claimed` at all. That ordering leaves the reset inside `claim`
+    unproven: delete the reset and that test still passes (probed, not assumed).
+
+    This one forces the ordering the reset exists for. Both finishers read, then
+    park on the way into the write, so the loser attempts with a stale etag and
+    gets a PreconditionFailedError. It retries, re-reads, and sees a finished run —
+    and `claimed` must not still carry the True its first attempt set, or the loser
+    correctly abandons the write and then restores the cards anyway.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({}, cards=[{"keys": ["M4"], "title": "M4", "body": "edge"}]),
+        mode="overwrite",
+        user="u",
+    )
+    coord._patch(run_id, "u", total=0)
+    _enforce_etags(monkeypatch, coord._run_rm)
+
+    import workspace_app.kb.import_jobs as import_jobs_module
+
+    restores: list[int] = []
+    count_lock = threading.Lock()
+    real_restore = import_jobs_module.restore_cards
+
+    def counted_restore(*a, **kw):
+        with count_lock:
+            restores.append(1)
+        return real_restore(*a, **kw)
+
+    monkeypatch.setattr(import_jobs_module, "restore_cards", counted_restore)
+
+    # Park on the way INTO the first write only. Both finishers have then completed
+    # their CAS read holding the same etag, which is what makes the second write
+    # CONFLICT rather than simply observe an already-finished run.
+    barrier = threading.Barrier(2, timeout=20)
+    parked = threading.local()
+    guarded_modify = coord._run_rm.modify
+
+    def modify_once_at_barrier(resource_id, data, **kw):
+        if not getattr(parked, "done", False):
+            parked.done = True
+            barrier.wait()
+        return guarded_modify(resource_id, data, **kw)
+
+    monkeypatch.setattr(coord._run_rm, "modify", modify_once_at_barrier)
+
+    threads = [threading.Thread(target=lambda: coord._finalize(run_id, "u")) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+        assert not t.is_alive(), "a finalizer never finished"
+
+    assert len(restores) == 1, f"the losing finalizer still restored: {len(restores)} runs"
+    assert [c.keys for c in _cards(spec, cid)] == [["M4"]]
