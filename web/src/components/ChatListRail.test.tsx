@@ -115,6 +115,19 @@ describe("ChatListRail", () => {
     expect(screen.queryByText(/My chats/i)).not.toBeInTheDocument();
   });
 
+  it("names an item by the App's noun in the accessible copy too (#pm)", () => {
+    // The visible strings were converted first; these were missed because
+    // nothing reads them on screen — a screen-reader user would still have been
+    // told "chats".
+    renderRail();
+
+    expect(screen.getByRole("navigation", { name: "projects" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Project options for Oven drift/i }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Chat options/i })).not.toBeInTheDocument();
+  });
+
   it("lists the app's chats, links each to its item (slash id encoded), marks the current one", () => {
     renderRail();
     expect(screen.getByText("Oven drift")).toBeInTheDocument();
@@ -133,14 +146,14 @@ describe("ChatListRail", () => {
   it("deletes a chat from its ⋯ menu, after a confirm", () => {
     window.confirm = vi.fn(() => true); // happy-dom has no confirm — stub it
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Delete" }));
     expect(chatActions.remove).toHaveBeenCalledWith("rca-investigation/1");
   });
 
   it("renames a chat inline from its ⋯ menu", () => {
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename" }));
     const input = screen.getByRole("textbox", { name: /Rename Project/i });
     fireEvent.change(input, { target: { value: "Oven drift RCA" } });
@@ -158,7 +171,7 @@ describe("ChatListRail", () => {
     expect(screen.getByText("From a teammate")).toBeInTheDocument();
     expect(screen.queryByText("Oven drift")).not.toBeInTheDocument();
     const row = screen.getByText("From a teammate").closest(".chat-rail__row") as HTMLElement;
-    expect(within(row).queryByRole("button", { name: /Chat options/i })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /Project options/i })).not.toBeInTheDocument();
   });
 
   // A chat I didn't make shows up in my rail with only its title — nothing said
@@ -205,7 +218,7 @@ describe("ChatListRail", () => {
 
   it("opens the share dialog from a chat's ⋯ menu", () => {
     renderRail();
-    fireEvent.click(screen.getByRole("button", { name: /Chat options for Oven drift/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Project options for Oven drift/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Share" }));
     expect(screen.getByTestId("share-dialog")).toBeInTheDocument();
   });

@@ -106,7 +106,7 @@ export function ChatListRail({
   }
 
   return (
-    <nav className="chat-rail" aria-label="chats">
+    <nav className="chat-rail" aria-label={nouns.plural.toLowerCase()}>
       <div className="chat-rail__head">
         <button
           type="button"
@@ -239,7 +239,7 @@ function ChatRailItem({
   const [draft, setDraft] = useState("");
   const me = useCurrentUser();
   const shared = item.owner !== me; // shared WITH me → I don't own it
-  const title = item.title || "Untitled chat";
+  const title = item.title || `Untitled ${noun.toLowerCase()}`;
 
   if (editing) {
     const commit = (value: string) => {
@@ -289,7 +289,7 @@ function ChatRailItem({
           <button
             type="button"
             className="chat-rail__more"
-            aria-label={`Chat options for ${title}`}
+            aria-label={`${noun} options for ${title}`}
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((o) => !o)}
           >
