@@ -44,6 +44,7 @@ from workspace_app.factories import (
     get_kb_quality_judge_llm,
     get_parser_registry,
     get_replay_service,
+    get_request_env,
     get_runner,
     get_sandbox,
     get_sandbox_filestore,
@@ -216,6 +217,10 @@ def main() -> None:
         app = create_app(
             spec=spec,
             get_user_id=get_user_id,
+            # #714: the deploy's own request→env impl (`server.request_env`), so a
+            # chat send's cookies/headers can become that turn's tool env. None
+            # when unconfigured ⇒ no such seam.
+            request_env=get_request_env(settings.server.request_env),
             # #262: same superuser set threaded into get_spec(...) above, so the
             # route-level authorize() guards agree with the storage access_scope.
             superusers=frozenset(settings.server.superusers),

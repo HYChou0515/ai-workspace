@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol, cast
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Response, status
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from specstar import SpecStar
 
@@ -60,6 +60,12 @@ class SendInto(Protocol):
         body: _MessageBody,
         author: str | None = None,
         lane: CallLane = "background",
+        # #615: set when the goal driver is continuing a chat by itself.
+        driven_by: str | None = None,
+        # #714: the request this send came from, so its cookies/headers can be
+        # turned into the turn's tool env while it is still open. None for every
+        # caller that has no request — which is every caller but these routes.
+        request: Request | None = None,
     ) -> None: ...
 
 
@@ -95,14 +101,26 @@ def register_chat_routes(
         "/a/{slug}/items/{item_id}/messages",
         status_code=status.HTTP_202_ACCEPTED,
     )
-    async def send_message(slug: str, item_id: str, body: _MessageBody) -> Response:
+    async def send_message(
+        request: Request, slug: str, item_id: str, body: _MessageBody
+    ) -> Response:
         investigation_id = locator.require_access(slug, item_id, "converse")
         # Item-level (no chat_id) → the implicit default chat, keyed on item_id so the
         # workflow drive path + file-change broadcasts share its stream (manual §3).
         rid, conv = locator.conversation_for(investigation_id)
         # A person is on the other end of this request — the one lane that is not
-        # the default (see `AgentToolContext.call_lane`).
-        await send_into(investigation_id, rid, conv, investigation_id, body, lane="interactive")
+        # the default (see `AgentToolContext.call_lane`). #714: and it is that
+        # person's own request that carries their identity, so it travels with
+        # the send rather than being looked up later, when it is gone.
+        await send_into(
+            investigation_id,
+            rid,
+            conv,
+            investigation_id,
+            body,
+            lane="interactive",
+            request=request,
+        )
         return Response(status_code=status.HTTP_202_ACCEPTED)
 
     @app.get("/a/{slug}/items/{item_id}/stream")
@@ -258,7 +276,7 @@ def register_chat_routes(
         status_code=status.HTTP_202_ACCEPTED,
     )
     async def send_chat_message(
-        slug: str, item_id: str, chat_id: str, body: _MessageBody
+        request: Request, slug: str, item_id: str, chat_id: str, body: _MessageBody
     ) -> Response:
         investigation_id = locator.require_access(slug, item_id, "converse")
         rid, conv = locator.require_chat(slug, item_id, chat_id)
@@ -269,6 +287,7 @@ def register_chat_routes(
             locator.engine_key(investigation_id, rid),
             body,
             lane="interactive",
+            request=request,
         )
         return Response(status_code=status.HTTP_202_ACCEPTED)
 

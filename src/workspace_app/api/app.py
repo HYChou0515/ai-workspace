@@ -84,6 +84,7 @@ from .notifications import register_notification_routes
 from .quota_routes import register_quota_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
+from .request_env import IRequestEnv
 from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore, register_sandbox_activity
@@ -245,6 +246,11 @@ def create_app(
     # __main__ passes factories.get_designed_pptx_vlm(settings).
     deck_vlm: IVlm | None = None,
     get_user_id: Callable[[], str] | None = None,
+    # #714: turns the REQUEST behind a chat send (its cookies / headers) into
+    # environment variables for that turn's tools — the per-person half of what
+    # the item's shared `env_vars` cannot carry. None (default) ⇒ no such seam.
+    # __main__ passes factories.get_request_env(settings.server.request_env).
+    request_env: IRequestEnv | None = None,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
     # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
@@ -1564,6 +1570,9 @@ def create_app(
         flush_item=_reconcile_after_turn(registry.flush, files.forget_measurement),
         # #493 symptom 1 (504): detach a long turn from its POST past this deadline.
         send_await_timeout=send_await_timeout,
+        # #714: the deploy's request→env impl. None (the default) ⇒ no seam, and
+        # a turn's tools see the item's env_vars alone, exactly as before.
+        request_env=request_env,
     )
 
     # #615: the sweeper task (built in the lifespan, before this point) reaches
