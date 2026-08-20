@@ -139,3 +139,36 @@ def test_a_superuser_can_still_reach_someone_elses_import():
     holder["id"] = "root"
     assert client.get(f"/import-run/{started['import_id']}").status_code == 200
     assert client.delete(f"/import-run/{started['import_id']}").status_code in (200, 204)
+
+
+def test_a_stranger_cannot_read_someone_elses_import_through_the_polling_route():
+    """The fence has to hold on the route callers are actually told to poll.
+
+    `owner_only_access_scope` fences the auto-CRUD `/import-run/*` routes, and its
+    docstring is explicit that naming a collection does not entitle that
+    collection's readers to the row. `GET /kb/collections/imports/{id}` — the one
+    the 202 response and the docs point at — read the run UNSCOPED and then asked
+    a question about the COLLECTION, so a run into any collection a stranger can
+    see was theirs to read: member counts, and `errors`, which spells out the
+    document PATHS inside someone else's archive. Two rules for one row is one
+    rule that will be wrong.
+    """
+    client, _, holder = _app()
+    started = _start(client, holder, "alice")
+
+    holder["id"] = "mallory"
+    r = client.get(f"/kb/collections/imports/{started['import_id']}")
+
+    assert r.status_code in (403, 404), f"a stranger polled someone else's import: {r.text[:200]}"
+
+
+def test_a_superuser_can_poll_someone_elses_import():
+    """Owner-only, not owner-exclusive — the same exception the auto-CRUD fence
+    makes, so an operator can still see why an import is stuck."""
+    client, _, holder = _app(superusers=frozenset({"root"}))
+    started = _start(client, holder, "alice")
+
+    holder["id"] = "root"
+    r = client.get(f"/kb/collections/imports/{started['import_id']}")
+
+    assert r.status_code == 200, r.text

@@ -1772,13 +1772,28 @@ def register_kb_routes(
         """How one import went: how many documents the archive held, how many
         landed, and one line per document that did not. A caller who could not
         watch the request sees a half-applied import as one."""
+        rm = spec.get_resource_manager(ImportRun)
         try:
-            data = spec.get_resource_manager(ImportRun).get(import_id).data
+            data = rm.get(import_id).data
+            owner = rm.get_meta(import_id).created_by
         except ResourceNotFoundError as exc:
             raise HTTPException(status_code=404, detail="import not found") from exc
         if not isinstance(data, ImportRun):  # pragma: no cover - defensive
             raise HTTPException(status_code=404, detail="import not found")
-        _authorize_collection(data.collection_id, "read_meta")
+        # #715 — the run's OWNER, not the collection's readers. `rm.get` is not
+        # access-scoped, so this route has to re-state the fence the auto-CRUD
+        # `/import-run/*` routes get from `owner_only_access_scope`, whose docstring
+        # is explicit that naming a collection entitles nobody to the row: `errors`
+        # lists the document paths inside someone else's archive. Gating on the
+        # collection instead left two rules for one row, and this is the route the
+        # 202 and the docs tell callers to poll. 404, not 403 — a stranger learns
+        # nothing about whether the import exists.
+        me = get_user_id()
+        if me != owner and me not in superusers:
+            _LOGGER.warning(
+                "authorize deny 404: import_run=%s actor=%s owner=%s", import_id, me, owner
+            )
+            raise HTTPException(status_code=404, detail="import not found")
         return _import_out(import_id, data)
 
     @app.post("/kb/collections/{collection_id}/sync")
