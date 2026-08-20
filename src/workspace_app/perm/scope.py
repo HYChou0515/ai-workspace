@@ -312,6 +312,27 @@ def conversation_access_scope(
     )
 
 
+def owner_only_access_scope(superusers: frozenset[str] = frozenset()) -> AccessScope:
+    """#715 — a row nobody but its creator has any business reading.
+
+    Unlike every scope above, this one asks nothing about a collection: the row is
+    a record of ONE person's operation, and the fact that it names a collection does
+    not make the collection's readers entitled to it. An :class:`ImportRun` carries
+    the caller's uploaded archive as a blob, so "who else can see this collection"
+    is the wrong question — nobody else uploaded it.
+
+    No denormalized mirror and so no migration: specstar's own ``created_by`` is the
+    owner, and it is always present.
+    """
+
+    def scope(user: str) -> ConditionBuilder | _Unrestricted:
+        if user in superusers:
+            return UNRESTRICTED  # the single greppable "see everything" path
+        return QB.created_by() == user
+
+    return scope
+
+
 def work_item_access_scope(
     superusers: frozenset[str] = frozenset(),
     groups_provider: GroupsProvider | None = None,

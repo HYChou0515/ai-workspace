@@ -60,6 +60,10 @@ def build_bundle(
         # creator across the lifecycle (preserve_job_creator), so the default is
         # only the fallback for worker-authored artifacts (#83 acting-user).
         get_user_id=lambda: settings.server.default_user,
+        # Same set `create_app` gates its routes on. A worker deciding an
+        # `add_content` check with an empty set would refuse imports the API would
+        # have allowed — the two must agree or the answer depends on which pod ran.
+        superusers=frozenset(settings.server.superusers),
         quality_judge_llm=f.get_kb_quality_judge_llm(settings),
         card_drafter_llm=card_drafter_llm,
         sanity_llm_factory=f.get_sanity_llm_factory(settings),

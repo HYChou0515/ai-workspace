@@ -34,6 +34,9 @@ _JOBTYPE_ATTR = {
     "sanity": "sanity",
     "eval": "eval",
     "graph": "graph",
+    # #715: archive imports — a worker pod drains the document writes so a large
+    # archive never runs inside an HTTP request.
+    "kb-import": "kb_import",
 }
 
 

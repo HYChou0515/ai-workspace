@@ -25,6 +25,7 @@ from ..perm import Permission
 from ..perm.checker import (
     collection_permission_event_handler,
     graph_mirror_event_handler,
+    owner_only_event_handler,
     source_doc_permission_event_handler,
 )
 from ..perm.scope import (
@@ -34,6 +35,7 @@ from ..perm.scope import (
     graph_entity_access_scope,
     graph_evidence_access_scope,
     kbchat_access_scope,
+    owner_only_access_scope,
     source_doc_access_scope,
 )
 from ..workflow.run import WorkflowRun
@@ -603,6 +605,33 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
     # to merge + raise questions from). Transient; deleted at finalize.
     spec.add_model(CardGenUnit, indexed_fields=["run_id"])
+    # #715: one row per archive import — the staged archive, the fan-out join
+    # state, and the per-batch outcome a caller polls. `collection_id` indexed so
+    # "is this collection still filling?" is a query rather than a scan; `finished`
+    # indexed so that query narrows to the runs still outstanding. Imported lazily
+    # for the same cycle reason as the card-gen structs above.
+    from ..kb.import_jobs import ImportRun
+
+    # `collection_id` / `finished` are indexed AHEAD of a reader on purpose: adding
+    # an index later needs an operator to run the migrate backfill, and until they
+    # do, un-backfilled rows answer NO predicate on that field — they do not read as
+    # a wrong count, they read as missing rows (#668). Cheap to plant, expensive to
+    # retrofit.
+    #
+    # The row carries the caller's uploaded archive as a blob AND names the
+    # collection a worker will write into, so it is private to whoever started it —
+    # not to the collection's readers, who did not upload it. Without a scope
+    # specstar's AllowAll default serves every row to every caller (the comment on
+    # graph-claim below spells this out), and the gate on the hand-written route is
+    # decorative while the same row is served unscoped one path over. The write half
+    # matters more than the read half: repointing `collection_id` redirects a
+    # victim's documents, and deleting the row strands their import.
+    spec.add_model(
+        ImportRun,
+        indexed_fields=["collection_id", "finished"],
+        access_scope=owner_only_access_scope(superusers),
+        event_handlers=[owner_only_event_handler(superusers)],
+    )
     # #511: proposals as first-class rows (extracted from CardGenRun.proposals) so
     # the 待審核 views page via native offset/limit. collection_id + decision indexed
     # → the flat "active proposals in this collection" query; run_id indexed → list

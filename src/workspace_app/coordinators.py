@@ -24,6 +24,7 @@ import msgspec
 from .kb.card_drafter import LlmCardDrafter, NullCardDrafter
 from .kb.card_gen_coordinator import CardGenCoordinator
 from .kb.chunker import FixedTokenChunker
+from .kb.import_jobs import ImportCoordinator
 from .kb.index_coordinator import IndexCoordinator
 from .kb.ingest import Ingestor
 from .kb.quality import QualityScorer
@@ -64,6 +65,9 @@ class CoordinatorBundle:
     eval: EvalCoordinator | None
     # #534: the metric-extraction fan-out. None when no KB LLM is wired.
     graph: GraphCoordinator | None
+    # #715: archive imports. Always built — it needs no LLM, only the ingestor and
+    # the index queue it hands each restored document to.
+    kb_import: ImportCoordinator
 
 
 def build_ingestor(
@@ -138,6 +142,11 @@ def build_coordinators(
     catalog: AgentConfigCatalog,
     message_queue_factory: object | None,
     get_user_id: Callable[[], str] | None,
+    # #715: the archive importer re-checks `add_content` on the run's collection at
+    # each write, because the worker's only authority is a field the run's owner may
+    # PATCH. It has to reach the SAME verdict the HTTP route would, so it needs the
+    # same superuser set — an empty one here would silently exclude them.
+    superusers: frozenset[str] = frozenset(),
     quality_judge_llm: ILlm | None,
     card_drafter_llm: ILlm | None,
     sanity_llm_factory: LlmFactory | None,
@@ -246,6 +255,16 @@ def build_coordinators(
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
     )
+    # #715: archive imports write their documents on a worker instead of inside the
+    # request, so a large archive cannot be cut off by a gateway timeout. Built after
+    # `index` because every restored document is handed to that queue.
+    kb_import = ImportCoordinator(
+        spec,
+        ingestor=ingestor,
+        index_coordinator=index,
+        message_queue_factory=message_queue_factory,
+        superusers=superusers,
+    )
     # Model-sanity battery: a background consumer runs matrix cells (heavy live
     # LLM) off the request path. Only built when an LLM factory is wired.
     sanity = None
@@ -283,11 +302,12 @@ def build_coordinators(
             message_queue_factory=message_queue_factory,
         )
         logger.info("coordinators: metric-extraction (graph) coordinator wired")
-    logger.info("coordinators: built wiki/index/card_gen coordinators")
+    logger.info("coordinators: built wiki/index/card_gen/kb_import coordinators")
     return CoordinatorBundle(
         wiki=wiki,
         index=index,
         card_gen=card_gen,
+        kb_import=kb_import,
         quality=quality,
         sanity=sanity,
         eval=eval_coordinator,

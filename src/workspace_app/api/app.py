@@ -1060,6 +1060,7 @@ def create_app(
         catalog=catalog,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
+        superusers=superusers,
         quality_judge_llm=quality_judge_llm,
         card_drafter_llm=card_drafter_llm,
         sanity_llm_factory=sanity_llm_factory,  # ty: ignore[invalid-argument-type]
@@ -1114,6 +1115,9 @@ def create_app(
     app.state.index_coordinator = index_coordinator
     card_gen_coordinator = coordinators.card_gen
     app.state.card_gen_coordinator = card_gen_coordinator
+    # #715: the archive-import consumer. On app.state because the lifespan's
+    # consumer gate reaches every coordinator through it.
+    app.state.import_coordinator = coordinators.kb_import
     register_card_gen_routes(api, card_gen_coordinator)
     # #377: the global "待釐清" inbox — answer/discard the clarification questions
     # the digest raised. A term answer becomes a context card (the card-drafter LLM
@@ -1174,6 +1178,7 @@ def create_app(
         wiki_coordinator,
         graph_coordinator=coordinators.graph,
         index_coordinator=index_coordinator,
+        import_coordinator=coordinators.kb_import,
         retriever=kb_retriever,
         get_user_id=get_user_id,
         superusers=superusers,

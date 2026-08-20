@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.aggregates import Count, ForeignAggregate, Max, Sum
-from specstar.types import Binary, ResourceIDNotFoundError
+from specstar.types import Binary, ResourceIDNotFoundError, ResourceNotFoundError
 
 from ..files.zip_download import (
     DownloadPrepared,
@@ -34,7 +34,11 @@ from ..kb.collection_export import (
     build_kb_subtree_zip,
     collection_zip_filename,
 )
-from ..kb.collection_import import import_collection
+from ..kb.collection_import import (
+    create_collection_row,
+    import_collection,
+    read_manifest,
+)
 from ..kb.doc_id import canonical_path, encode_doc_id
 from ..kb.doc_permission import (
     collection_mirror_fields,
@@ -53,6 +57,7 @@ from ..kb.findability import (
 from ..kb.graph.mention_write import wipe_doc_mentions
 from ..kb.graph.review import accept_proposal, entity_page, list_proposals, reject_proposal
 from ..kb.graph.write import wipe_doc_claims
+from ..kb.import_jobs import ImportRun
 from ..kb.ingest import Ingestor, teardown_doc_chunks
 from ..kb.links import rewrite_md_links
 from ..kb.llm import ILlm
@@ -71,6 +76,7 @@ from .permission_body import granted_user_ids as _granted_user_ids
 
 if TYPE_CHECKING:
     from ..kb.graph.coordinator import GraphCoordinator
+    from ..kb.import_jobs import ImportCoordinator
     from ..kb.index_coordinator import IndexCoordinator
     from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
 
@@ -613,6 +619,20 @@ class DocumentRow(BaseModel):
     parent_doc_id: str = ""
 
 
+class ImportStarted(BaseModel):
+    """#715: an archive import that a worker is doing. `status` is `queued` until
+    the run finishes; `members` / `written` / `errors` are the per-document outcome
+    a caller polls for, since it could not watch the request."""
+
+    collection_id: str
+    import_id: str
+    status: str = "queued"
+    members: int = 0
+    written: int = 0
+    errors: list[str] = []
+    finished: bool = False
+
+
 class CollectionImported(BaseModel):
     """Issue #101: result of importing an exported zip. `collection_id` is the
     target — a freshly created one (new-collection import) or the existing one
@@ -838,6 +858,7 @@ def register_kb_routes(
     *,
     graph_coordinator: GraphCoordinator | None = None,
     index_coordinator: IndexCoordinator,
+    import_coordinator: ImportCoordinator | None = None,
     retriever: Retriever,
     get_user_id: Callable[[], str],
     superusers: frozenset[str] = frozenset(),
@@ -1672,6 +1693,108 @@ def register_kb_routes(
             document_ids=result.document_ids,
             status=result.status,
         )
+
+    # ── #715: asynchronous import ────────────────────────────────────
+    # The synchronous routes above stay: they are the right shape for restoring a
+    # backup you exported yourself. These are for the other caller — a machine
+    # pushing a prepared archive, where nobody is watching and the sender decides
+    # the size. The request stages the archive and returns; a worker writes the
+    # documents, so no gateway timeout can cut the operation in half.
+
+    def _run_row(run_id: str) -> ImportRun:
+        data = spec.get_resource_manager(ImportRun).get(run_id).data
+        assert isinstance(data, ImportRun)  # just written by enqueue
+        return data
+
+    def _import_out(run_id: str, run: ImportRun) -> ImportStarted:
+        return ImportStarted(
+            collection_id=run.collection_id,
+            import_id=run_id,
+            status="finished" if run.finished else "queued",
+            members=run.members,
+            written=run.written,
+            errors=list(run.errors),
+            finished=run.finished,
+        )
+
+    @app.post("/kb/collections/imports", status_code=202)
+    async def start_import_as_new_collection(
+        file: UploadFile = File(...),  # noqa: B008
+    ) -> ImportStarted:
+        """Stage an archive as a NEW collection and queue its restore.
+
+        The collection row is created HERE, cheaply, so the caller gets its id at
+        once and the collection is visible — empty and filling — rather than
+        springing into existence only when the work finishes. 202: accepted, not
+        done."""
+        assert import_coordinator is not None
+        data = await file.read()
+        fallback = Path(file.filename or "import").stem or "imported"
+        manifest = read_manifest(data) or {}
+        collection_id = await asyncio.to_thread(
+            create_collection_row, spec, manifest.get("collection", {}), fallback
+        )
+        run_id = await asyncio.to_thread(
+            import_coordinator.enqueue,
+            collection_id=collection_id,
+            zip_data=data,
+            mode="overwrite",
+            user=get_user_id(),
+        )
+        return _import_out(run_id, _run_row(run_id))
+
+    @app.post("/kb/collections/{collection_id}/imports", status_code=202)
+    async def start_import_into_collection(
+        collection_id: str,
+        file: UploadFile = File(...),  # noqa: B008
+        mode: str = Query("overwrite"),
+    ) -> ImportStarted:
+        """Stage an archive to MERGE into an existing collection and queue it.
+
+        `mode` is validated here rather than on the worker: an unknown value must
+        not reach a place where it silently means overwrite."""
+        assert import_coordinator is not None
+        if mode not in ("overwrite", "skip"):
+            raise HTTPException(status_code=400, detail="mode must be 'overwrite' or 'skip'")
+        _authorize_collection(collection_id, "add_content")  # #262 (404 unknown / hidden)
+        data = await file.read()
+        run_id = await asyncio.to_thread(
+            import_coordinator.enqueue,
+            collection_id=collection_id,
+            zip_data=data,
+            mode=mode,
+            user=get_user_id(),
+        )
+        return _import_out(run_id, _run_row(run_id))
+
+    @app.get("/kb/collections/imports/{import_id}")
+    def read_import(import_id: str) -> ImportStarted:
+        """How one import went: how many documents the archive held, how many
+        landed, and one line per document that did not. A caller who could not
+        watch the request sees a half-applied import as one."""
+        rm = spec.get_resource_manager(ImportRun)
+        try:
+            data = rm.get(import_id).data
+            owner = rm.get_meta(import_id).created_by
+        except ResourceNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="import not found") from exc
+        if not isinstance(data, ImportRun):  # pragma: no cover - defensive
+            raise HTTPException(status_code=404, detail="import not found")
+        # #715 — the run's OWNER, not the collection's readers. `rm.get` is not
+        # access-scoped, so this route has to re-state the fence the auto-CRUD
+        # `/import-run/*` routes get from `owner_only_access_scope`, whose docstring
+        # is explicit that naming a collection entitles nobody to the row: `errors`
+        # lists the document paths inside someone else's archive. Gating on the
+        # collection instead left two rules for one row, and this is the route the
+        # 202 and the docs tell callers to poll. 404, not 403 — a stranger learns
+        # nothing about whether the import exists.
+        me = get_user_id()
+        if me != owner and me not in superusers:
+            _LOGGER.warning(
+                "authorize deny 404: import_run=%s actor=%s owner=%s", import_id, me, owner
+            )
+            raise HTTPException(status_code=404, detail="import not found")
+        return _import_out(import_id, data)
 
     @app.post("/kb/collections/{collection_id}/sync")
     async def sync_collection(collection_id: str) -> SyncOut:
