@@ -22,6 +22,9 @@ from specstar import QB, SpecStar
 from specstar.types import Binary, BlobStreamInfo, PreconditionFailedError, RevisionStatus
 
 from workspace_app.kb.chunker import FixedTokenChunker
+from workspace_app.kb.collection_export import MANIFEST_DIR
+from workspace_app.kb.collection_import import import_collection
+from workspace_app.kb.doc_id import canonical_path
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.import_jobs import (
     MAX_ERROR_LINES,
@@ -29,6 +32,7 @@ from workspace_app.kb.import_jobs import (
     ImportJob,
     ImportPayload,
     ImportRun,
+    _members_of,
 )
 from workspace_app.kb.index_coordinator import IndexCoordinator
 from workspace_app.kb.index_jobs import IndexJob
@@ -1216,3 +1220,84 @@ async def test_a_redelivered_refusal_does_not_append_a_second_reason():
     run = _run_of(spec, run_id)
     assert run.errors == ["first"], f"a redelivery appended again: {run.errors}"
     assert run.finished
+
+
+def _hostile_archive() -> bytes:
+    """One archive holding every member class the predicate has to judge."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("good.md", b"keep me")
+        zf.writestr("nested/also-good.md", b"keep me too")
+        zf.writestr("dup.md", b"first")
+        zf.writestr("dup.md", b"second")  # same name, two entries
+        zf.writestr("../escaped.md", b"zip-slip")  # must never become a document
+        zf.writestr("adir/", b"")  # a directory entry, not a file
+        zf.writestr(MANIFEST_PATH, json.dumps({"version": 1, "context_cards": []}))
+        zf.writestr(f"{MANIFEST_DIR}other.bin", b"reserved dir, still metadata")  # DIR ends in /
+    return buf.getvalue()
+
+
+async def test_both_importers_select_the_same_members_from_a_hostile_archive():
+    """#715's locked decision 5 — the two paths share the restore rules.
+
+    The member predicate is security-relevant (it is what drops zip-slip) and it
+    was written out twice, once per importer. Two copies of a rule is one rule
+    that will be wrong: a hardening applied to the path someone happens to be
+    reading leaves the other exactly as it was. This asserts BOTH halves — the
+    concrete verdict, so a wrong predicate fails, and that the two paths reach it
+    identically, so a re-inlined copy fails too.
+    """
+    data = _hostile_archive()
+    expected = ["dup.md", "dup.md", "good.md", "nested/also-good.md"]
+
+    # asynchronous: what `split` would fan out
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        chosen = sorted(canonical_path(i.filename) for i in _members_of(zf))
+    assert chosen == expected, chosen
+
+    # synchronous: what `import_collection` actually writes
+    spec = make_spec(default_user="u")
+    ing = Ingestor(
+        spec, chunker=FixedTokenChunker(max_tokens=64), embedder=HashEmbedder(dim=EMBED_DIM)
+    )
+    result = import_collection(
+        spec=spec,
+        ingestor=ing,
+        index_coordinator=IndexCoordinator(spec, ing),
+        zip_data=data,
+        user="u",
+        fallback_name="hostile",
+    )
+    cid = result.collection_id
+    written = sorted(d.path for d in _docs(spec, cid))
+    # `dup.md` collapses to ONE document — two entries, one path, last write wins.
+    assert written == sorted(set(expected)), written
+    assert set(chosen) == set(written), (
+        f"the two importers disagree about what is a document: {set(chosen) ^ set(written)}"
+    )
+
+
+def test_batching_is_decided_by_the_content_not_by_the_zip_write_order():
+    """`split` hands out batches as index RANGES into `_members_of`.
+
+    So what "members 50-99" denotes has to follow from WHAT is in the archive,
+    not from the order a particular zip writer happened to emit. Two archives
+    holding the same documents in different write order must split identically,
+    or the same content produces different batches and a `member_start` in an
+    error line means nothing outside the one run that produced it.
+    """
+    names = ["b.md", "a/deep.md", "z.md", "a/shallow.md", "c.md"]
+    orders = (names, list(reversed(names)))
+    layouts = []
+    for order in orders:
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            for name in order:
+                zf.writestr(name, b"x")
+        with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as zf:
+            layouts.append([i.filename for i in _members_of(zf)])
+
+    assert layouts[0] == layouts[1], (
+        f"the same documents split differently depending on zip write order: {layouts}"
+    )
+    assert layouts[0] == sorted(names), layouts[0]

@@ -70,8 +70,8 @@ from specstar.types import (
 from ..perm.authorize import Actor, authorize
 from ..resources.groups import groups_of
 from ..resources.kb import Collection
-from .collection_export import MANIFEST_DIR, MANIFEST_PATH
-from .collection_import import doc_exists, restore_cards
+from .collection_export import MANIFEST_PATH
+from .collection_import import doc_exists, document_members, restore_cards
 from .doc_id import canonical_path
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -165,30 +165,30 @@ class ImportRun(msgspec.Struct):  # → resource "import-run"
 
 
 def _members_of(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
-    """The archive's document members, in a stable order.
+    """The archive's document members, ordered by PATH.
 
-    The manifest is metadata, never a document; a member that escapes its root is
-    dropped exactly as the synchronous path drops it. Sorted so the batches a
-    ``split`` hands out are reproducible — a retry must address the same members.
-    Entries rather than names, so a duplicated name still yields two members.
+    Which members are documents is `document_members` — shared with the
+    synchronous importer, because the two had the same predicate written out
+    twice. What is added here is the ordering, and only this path needs it:
+    ``split`` hands out batches as index RANGES into this list, so what a range
+    means has to be a property of the archive's CONTENT rather than of however
+    the zip happened to be written. Two archives holding the same documents then
+    split into the same batches, which is what makes a `member_start` in an
+    error line, or a comparison between two runs of the same content, mean
+    anything.
+
+    It is NOT what makes a retry safe — that comes from the staged blob being
+    immutable, so `infolist()` would already return the same order twice. Saying
+    otherwise would credit the sort with a guarantee it does not provide, and
+    leave the real one undocumented.
+
+    `sorted` is stable, so two entries sharing a name keep their archive order —
+    which `mode="skip"` can observe (the first is written, the second skipped).
     """
-    out: list[zipfile.ZipInfo] = []
-    for info in zf.infolist():
-        if info.is_dir():
-            continue
-        name = info.filename
-        if name == MANIFEST_PATH or name.startswith(MANIFEST_DIR):
-            continue
-        try:
-            path = canonical_path(name)
-        except ValueError:
-            continue  # zip-slip
-        if path:
-            out.append(info)
-    # By entry, never by name: a malformed archive can hold the same name twice, and
-    # `read(name)` resolves to the last of them — so one member would be written
-    # twice and the other never. The synchronous path reads entries; so does this.
-    return sorted(out, key=lambda i: (i.filename, i.header_offset))
+    return sorted(
+        (info for info, _ in document_members(zf)),
+        key=lambda i: (i.filename, i.header_offset),
+    )
 
 
 def _manifest_of(zf: zipfile.ZipFile) -> dict[str, Any]:

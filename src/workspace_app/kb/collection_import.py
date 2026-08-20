@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -85,6 +86,37 @@ def create_collection_row(spec: SpecStar, settings: dict[str, Any], fallback_nam
     )
     rev = spec.get_resource_manager(Collection).create(coll)
     return rev.resource_id
+
+
+def document_members(zf: zipfile.ZipFile) -> Iterator[tuple[zipfile.ZipInfo, str]]:
+    """The archive members that are DOCUMENTS, each with its canonical path.
+
+    Both importers need exactly this predicate, and it was written out twice: a
+    directory entry is not a file, the reserved manifest dir is metadata rather
+    than a document, and a member whose name escapes its root (zip-slip) or
+    canonicalises to nothing is dropped. Two copies of a rule is one rule that
+    will be wrong — a hardening applied here would have left the asynchronous
+    path exactly as it was, which is the shape #701 spent four rounds fixing for
+    cards and #715's `mode` handling repeated for documents.
+
+    Yields ENTRIES, never names: a malformed archive can hold one name twice and
+    `read(name)` resolves to the last of them, so one member would be written
+    twice and the other never. Order is the archive's own — a caller that needs a
+    reproducible one (``split`` hands batches out by index) sorts it.
+    """
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        name = info.filename
+        if name == MANIFEST_PATH or name.startswith(MANIFEST_DIR):
+            continue
+        try:
+            path = canonical_path(name)
+        except ValueError:
+            continue  # zip-slip: a member escaping its root — drop it
+        if not path:
+            continue  # empty after canonicalisation
+        yield info, path
 
 
 def restore_cards(
@@ -192,19 +224,7 @@ def import_collection(
 
     document_ids: list[str] = []
     with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            name = info.filename
-            # The reserved manifest dir is metadata, never a document.
-            if name == MANIFEST_PATH or name.startswith(MANIFEST_DIR):
-                continue
-            try:
-                path = canonical_path(name)
-            except ValueError:
-                continue  # zip-slip: a member escaping its root — drop it
-            if not path:
-                continue  # empty after canonicalisation
+        for info, path in document_members(zf):
             if mode == "skip" and doc_exists(spec, collection_id, path):
                 continue
             doc_id = ingestor.store_file(
