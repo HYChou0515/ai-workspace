@@ -18,20 +18,23 @@ import zipfile
 
 import pytest
 from specstar import QB, SpecStar
-from specstar.types import BlobStreamInfo, PreconditionFailedError
+from specstar.types import Binary, BlobStreamInfo, PreconditionFailedError
 
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.import_jobs import (
     MAX_ERROR_LINES,
     ImportCoordinator,
+    ImportJob,
     ImportPayload,
     ImportRun,
 )
 from workspace_app.kb.index_coordinator import IndexCoordinator
 from workspace_app.kb.index_jobs import IndexJob
 from workspace_app.kb.ingest import Ingestor
+from workspace_app.perm.model import Permission
 from workspace_app.resources import make_spec
+from workspace_app.resources.groups import Group
 from workspace_app.resources.kb import EMBED_DIM, Collection, ContextCard, SourceDoc
 
 MANIFEST_PATH = ".kb-collection/manifest.json"
@@ -52,7 +55,7 @@ def _archive(members: dict[str, bytes], cards: list[dict] | None = None) -> byte
     return buf.getvalue()
 
 
-def _coordinator(spec: SpecStar) -> ImportCoordinator:
+def _coordinator(spec: SpecStar, *, superusers: frozenset[str] = frozenset()) -> ImportCoordinator:
     """The real IndexCoordinator, never consumed.
 
     A hand-written stub here would only ever prove "we called enqueue", which
@@ -62,7 +65,12 @@ def _coordinator(spec: SpecStar) -> ImportCoordinator:
     ing = Ingestor(
         spec, chunker=FixedTokenChunker(max_tokens=64), embedder=HashEmbedder(dim=EMBED_DIM)
     )
-    return ImportCoordinator(spec, ingestor=ing, index_coordinator=IndexCoordinator(spec, ing))
+    return ImportCoordinator(
+        spec,
+        ingestor=ing,
+        index_coordinator=IndexCoordinator(spec, ing),
+        superusers=superusers,
+    )
 
 
 def _index_jobs(spec: SpecStar) -> int:
@@ -771,3 +779,272 @@ async def test_the_materialised_archive_is_handed_over_rewound():
     with coord._archive_file(run) as fh:
         assert fh.tell() == 0, "the handle was not rewound before being handed over"
         assert fh.read() == zip_data
+
+
+def _worker_spec() -> SpecStar:
+    """A spec whose AMBIENT user is the worker pod — NOT the uploader.
+
+    Every other spec in this file is `make_spec(default_user="u")` driven with
+    `user="u"`, so requester, ambient user and route caller are one string. That
+    makes every rule phrased around IDENTITY untested by construction, and it is
+    not what the deployment this feature exists for looks like: `python -m
+    workspace_app.worker` sets the ambient user to `server.default_user`, while
+    the requester is whoever uploaded. The gap hid two defects behind a green
+    suite — see the two tests below.
+    """
+    return make_spec(default_user="worker-pod")
+
+
+async def test_a_worker_running_as_itself_still_completes_an_upload_by_someone_else():
+    """The run's own permission fence must not lock out the worker that drains it.
+
+    `ImportRun` is owner-only for writes (#715 round 1). A worker pod writes under
+    the AMBIENT identity unless told otherwise, and that identity is not the
+    uploader — so every `_cas` and every `_enqueue_step` would be refused, and the
+    import would stall after a 202 with nothing on the run to say why. That is the
+    exact failure this feature exists to remove, so it gets a test rather than a
+    comment.
+    """
+    spec = _worker_spec()
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({"a.md": b"alpha"}, cards=[{"keys": ["M4"], "title": "M4", "body": "e"}]),
+        mode="overwrite",
+        user="alice",
+    )
+    await coord.aclose()
+
+    run = _run_of(spec, run_id)
+    assert run.finished, "the run never finalized under a worker-pod ambient identity"
+    assert run.written == run.members == 1
+    assert [d.path for d in _docs(spec, cid)] == ["a.md"]
+    assert [c.keys for c in _cards(spec, cid)] == [["M4"]]
+
+
+async def test_the_worker_refuses_to_write_where_the_requester_may_not():
+    """The async path must re-check the collection, because the route no longer can.
+
+    The synchronous import authorises `add_content` in the request. The async one
+    moves the write to a worker whose only authority is `ImportRun.collection_id`
+    — a field the run's own owner may PATCH. Without a check at the write itself,
+    anyone can stage an import and re-point it at a collection they cannot even
+    read, and the worker performs it: documents land, and `restore_cards` OVERWRITES
+    that collection's context cards by key. Context cards are injected into agent
+    prompts, so this is persistent prompt injection against another tenant, not
+    just an unwanted file.
+    """
+    spec = _worker_spec()
+    crm = spec.get_resource_manager(Collection)
+    with crm.using(user="alice"):
+        victim = crm.create(
+            Collection(name="alice-private", permission=Permission(visibility="private"))
+        ).resource_id
+
+    coord = _coordinator(spec)
+    coord.enqueue(
+        collection_id=victim,
+        zip_data=_archive(
+            {"PWNED.md": b"x"}, cards=[{"keys": ["POLICY"], "title": "p", "body": "b"}]
+        ),
+        mode="overwrite",
+        user="mallory",
+    )
+    await coord.aclose()
+
+    assert [d.path for d in _docs(spec, victim)] == [], "mallory wrote into a private collection"
+    assert _cards(spec, victim) == [], "mallory overwrote another tenant's context cards"
+
+
+async def _import_into(spec: SpecStar, cid: str, *, user: str, superusers=frozenset()) -> str:
+    """Drive one single-document import to completion and return its run id."""
+    coord = _coordinator(spec, superusers=superusers)
+    run_id = coord.enqueue(
+        collection_id=cid,
+        zip_data=_archive({"a.md": b"alpha"}, cards=[{"keys": ["K"], "title": "K", "body": "b"}]),
+        mode="overwrite",
+        user=user,
+    )
+    await coord.aclose()
+    return run_id
+
+
+def _private_collection(spec: SpecStar, owner: str) -> str:
+    crm = spec.get_resource_manager(Collection)
+    with crm.using(user=owner):
+        return crm.create(
+            Collection(name="private", permission=Permission(visibility="private"))
+        ).resource_id
+
+
+async def test_a_superuser_may_import_into_a_collection_they_do_not_own():
+    """The refusal must not be stricter than the route it stands in for.
+
+    `create_app` gates every collection route on `settings.server.superusers`; a
+    worker that decided `add_content` without that set would refuse imports the
+    HTTP path allows, and the answer would depend on which pod ran the job. This
+    is the positive half of the same gate `test_the_worker_refuses_to_write...`
+    checks — a knob that only ever denies is indistinguishable from a hardcoded no.
+    """
+    spec = _worker_spec()
+    victim = _private_collection(spec, "alice")
+
+    await _import_into(spec, victim, user="root", superusers=frozenset({"root"}))
+
+    assert [d.path for d in _docs(spec, victim)] == ["a.md"]
+
+
+async def test_a_group_grant_on_the_collection_is_honoured_by_the_worker():
+    """`group:<id>` has to keep working, or the fix quietly narrows who can import.
+
+    The route resolves the caller's groups (`groups_of`) before authorizing, so a
+    collection shared with a TEAM is reachable. Re-deriving the verdict worker-side
+    from the requester's id ALONE would look correct in every test where the
+    requester is also the owner, and would break exactly the collections that are
+    shared — the ones an archive import is most likely aimed at.
+    """
+    spec = _worker_spec()
+    grm = spec.get_resource_manager(Group)
+    with grm.using(user="alice"):
+        gid = grm.create(Group(name="team", members=["bob"])).resource_id
+    crm = spec.get_resource_manager(Collection)
+    with crm.using(user="alice"):
+        cid = crm.create(
+            Collection(
+                name="shared",
+                # `restricted`, not `private`: a grant list only bites at that tier
+                # (`private` denies everyone but the owner, by design). The subject
+                # is `group:` + the group's own id, matching `tests/api/test_groups`
+                # and what `Actor.subjects` builds via `group_subject`.
+                permission=Permission(visibility="restricted", add_content=[f"group:{gid}"]),
+            )
+        ).resource_id
+
+    await _import_into(spec, cid, user="bob")
+
+    assert [d.path for d in _docs(spec, cid)] == ["a.md"], "a group grant did not reach the worker"
+
+
+async def test_a_refused_run_stops_and_says_so_instead_of_polling_forever():
+    """A refusal the caller cannot see is the silence #715 exists to remove.
+
+    The documented verdict is `written` vs `members` with `errors` for the detail,
+    so a refusal has to land there — and the run has to FINISH, or the poller waits
+    on a job that will be refused identically on every retry while 200 MB stays
+    staged.
+    """
+    spec = _worker_spec()
+    victim = _private_collection(spec, "alice")
+
+    run_id = await _import_into(spec, victim, user="mallory")
+
+    run = _run_of(spec, run_id)
+    assert run.finished, "a refused run must not leave the caller polling"
+    assert run.written == 0
+    assert run.archive is None, "the staged archive outlives a refusal it cannot survive"
+    assert run.errors and "may not add content" in run.errors[0]
+    # Refused at SPLIT, before the fan-out: a check left to the write steps alone
+    # would still be safe, but it would seed `total` and put one job per batch on
+    # the broker for every one of them to refuse — a rejected 200 MB import
+    # costing 60 deliveries instead of one.
+    assert run.total == 0, "a refused run fanned its batches out anyway"
+    jrm = spec.get_resource_manager(ImportJob)
+    kinds = []
+    for r in jrm.list_resources(QB.all().build()):
+        assert isinstance(r.data, ImportJob)
+        kinds.append(r.data.payload.kind)
+    assert "process" not in kinds, f"refused at split, yet process jobs were queued: {kinds}"
+
+
+async def test_a_duplicate_name_writes_the_ENTRY_it_read_not_the_last_one():
+    """The counting half of `zf.read(info)` has a test; the READING half did not.
+
+    `test_two_members_sharing_a_name_are_both_read` pins that both entries are
+    MEMBERS — and it passes just as happily if the bytes written come from
+    `zf.read(info.filename)`, which resolves a duplicate name to the LAST entry.
+    Under `overwrite` that difference is invisible (the last write wins either
+    way), which is why it stayed uncovered.
+
+    `skip` makes it observable: the first entry is written because the document
+    does not exist yet, and the second is skipped because now it does. So the
+    stored bytes must be the FIRST entry's. Reading by name would store the
+    second entry's bytes under the first entry's decision — silently serving
+    content the archive never placed at that path.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("dup.md", b"first")
+        zf.writestr("dup.md", b"second")
+
+    run_id = coord.enqueue(collection_id=cid, zip_data=buf.getvalue(), mode="skip", user="u")
+    await coord.aclose()
+
+    run = _run_of(spec, run_id)
+    assert run.members == 2
+    docs = _docs(spec, cid)
+    assert len(docs) == 1, "skip must leave one document, not two"
+    rm = spec.get_resource_manager(SourceDoc)
+    stored = rm.restore_binary(docs[0]).content
+    assert stored is not None and stored.data == b"first", (
+        "the written bytes came from the LAST entry sharing the name, not the one read"
+    )
+
+
+def _staged_run(spec: SpecStar, cid: str, owner: str) -> str:
+    """A run in the state `split` leaves behind: archive staged, `total` seeded,
+    nothing written — and pointing at `cid`, which its owner may have re-pointed
+    it to a moment ago."""
+    rrm = spec.get_resource_manager(ImportRun)
+    with rrm.using(user=owner):
+        return rrm.create(
+            ImportRun(
+                collection_id=cid,
+                mode="overwrite",
+                members=1,
+                total=1,
+                archive=Binary(
+                    data=_archive(
+                        {"a.md": b"x"}, cards=[{"keys": ["K"], "title": "K", "body": "b"}]
+                    ),
+                    content_type="application/zip",
+                ),
+            )
+        ).resource_id
+
+
+async def test_a_repointed_run_is_refused_at_the_write_step_not_only_at_split():
+    """The gate at `split` guards a value that can still change under it.
+
+    `collection_id` stays PATCHable for the run's whole life, and the steps are
+    separate broker deliveries — so the owner can stage an import at a collection
+    they may write, let split pass, then re-point the run before a document lands.
+    `_process` and `_finalize` therefore have to re-derive the verdict rather than
+    inherit split's, and this test enters at exactly the state that produces: a
+    run already fanned out, now pointing somewhere the requester cannot write, and
+    its jobs arriving at `_handle` — the method specstar itself calls.
+    """
+    spec = _worker_spec()
+    victim = _private_collection(spec, "alice")
+    coord = _coordinator(spec)
+    jrm = spec.get_resource_manager(ImportJob)
+    run_id = _staged_run(spec, victim, "mallory")
+
+    steps = (
+        ("process", {"member_start": 0, "member_end": 50, "batch_index": 0}),
+        ("finalize", {}),
+    )
+    for kind, extra in steps:
+        # A FRESH run per step. Delivering both to one run proves only the first:
+        # `_process`'s refusal finishes the run, and `_finalize` then returns at its
+        # `run.finished` check without ever reaching its own gate.
+        rid = run_id if kind == "process" else _staged_run(spec, victim, "mallory")
+        with jrm.using(user="mallory"):
+            job = jrm.create(ImportJob(payload=ImportPayload(run_id=rid, kind=kind, **extra)))
+        coord._handle(jrm.get(job.resource_id))
+
+    assert [d.path for d in _docs(spec, victim)] == [], "a re-pointed run wrote anyway"
+    assert _cards(spec, victim) == [], "a re-pointed run overwrote another tenant's cards"

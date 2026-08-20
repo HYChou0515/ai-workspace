@@ -67,6 +67,9 @@ from specstar.types import (
     TaskStatus,
 )
 
+from ..perm.authorize import Actor, authorize
+from ..resources.groups import groups_of
+from ..resources.kb import Collection
 from .collection_export import MANIFEST_DIR, MANIFEST_PATH
 from .collection_import import doc_exists, restore_cards
 from .doc_id import canonical_path
@@ -88,6 +91,11 @@ MEMBERS_PER_BATCH = 50
 # strings in one row that every poll then returns. Past this the count still tells
 # the caller how many failed (`members - written`); the lines are a sample.
 MAX_ERROR_LINES = 100
+
+# What a caller sees when the run is refused. Deliberately the same line whether the
+# collection is private, restricted or gone: a distinguishable message would turn the
+# import queue into an existence oracle for collections the requester cannot read.
+_DENIED = "import refused: you may not add content to this collection"
 
 _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
 _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while the queue drains
@@ -200,10 +208,14 @@ class ImportCoordinator:
         ingestor: Ingestor,
         index_coordinator: IndexCoordinator,
         message_queue_factory: object | None = None,
+        superusers: frozenset[str] = frozenset(),
     ) -> None:
         self._spec = spec
         self._ingestor = ingestor
         self._index = index_coordinator
+        # Same set the HTTP routes gate on. The worker has to reach the same verdict
+        # the request would have, so it needs the same inputs — see `_may_write`.
+        self._superusers = superusers
         if message_queue_factory is None:
             from specstar.message_queue import SimpleMessageQueueFactory
 
@@ -307,10 +319,71 @@ class ImportCoordinator:
             tmp.seek(0)
             yield tmp
 
+    # ── authorization ────────────────────────────────────────────────
+    def _may_write(self, collection_id: str, requester: str) -> bool:
+        """May ``requester`` add content to this collection, right now?
+
+        The synchronous importer authorises inside the request, so the caller's
+        identity and the write are one step apart. Moving the write to a worker
+        splits them, and what survives the split is a FIELD — ``collection_id`` on a
+        run whose owner may PATCH it. Trusting that field is trusting the requester
+        to name their own target: stage an import, re-point it at a collection you
+        cannot even read, and the worker performs the write with no one left to say
+        no. ``restore_cards`` makes that worse than a stray file, because it matches
+        by KEY and overwrites — and context cards are injected into agent prompts.
+
+        So the worker re-derives the verdict the route would have reached, from the
+        same primitive (`authorize`) with the same inputs (`created_by`, the
+        superuser set, the requester's GROUPS — a `group:<id>` grant has to keep
+        working here or the fix would quietly narrow who can import). Checked at
+        each write STEP rather than once at the start: `collection_id` is mutable
+        for as long as the run is, so a check at split is a check on a value that
+        can still change underneath the batches.
+        """
+        rm = self._spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+            created_by = rm.get_meta(collection_id).created_by
+        except ResourceNotFoundError:
+            return False  # deleted mid-run — nothing to write into
+        assert isinstance(coll, Collection)
+        return authorize(
+            Actor.human(requester, groups=groups_of(self._spec, requester)),
+            "add_content",
+            coll.permission,  # None ≡ public, as everywhere else
+            created_by=created_by,
+            superusers=self._superusers,
+        )
+
+    def _refuse(self, run_id: str, requester: str, reason: str) -> None:
+        """End the run without writing, and say why on the row the caller polls.
+
+        A refusal that only returned would leave the caller polling a run that never
+        moves — the same silence #715 exists to remove. The archive is released with
+        it: a retry would be refused identically, so keeping 200 MB staged buys
+        nothing. `written` stays below `members`, which is the documented verdict for
+        an incomplete import, and the reason lands in `errors` beside it.
+        """
+
+        def deny(current: ImportRun) -> ImportRun | None:
+            if current.finished:
+                return None
+            return msgspec.structs.replace(
+                current,
+                finished=True,
+                archive=None,
+                errors=[*current.errors, reason][:MAX_ERROR_LINES],
+            )
+
+        self._cas(run_id, requester, deny)
+
     def _split(self, run_id: str, requester: str) -> None:
         """Seed the join state and fan the members out in batches."""
         run = self._read(run_id)
         if run is None or run.finished:
+            return
+        if not self._may_write(run.collection_id, requester):
+            self._refuse(run_id, requester, _DENIED)
             return
         with self._archive_file(run) as fh, zipfile.ZipFile(fh) as zf:
             members = _members_of(zf)
@@ -340,6 +413,9 @@ class ImportCoordinator:
         """Write one batch of members, then record it on the run."""
         run = self._read(payload.run_id)
         if run is None or run.finished:
+            return
+        if not self._may_write(run.collection_id, requester):
+            self._refuse(payload.run_id, requester, _DENIED)
             return
         written = 0
         skipped = 0
@@ -390,6 +466,12 @@ class ImportCoordinator:
             # already released, so reading it would fail and the job would be retried
             # forever over work that is done. The claim below still handles the
             # CONCURRENT case, where neither finisher sees `finished` yet.
+            return
+        if not self._may_write(run.collection_id, requester):
+            # `restore_cards` writes by KEY into the collection, so finalize is a
+            # write boundary in its own right — not a bookkeeping step that inherits
+            # `_process`'s verdict.
+            self._refuse(run_id, requester, _DENIED)
             return
         # Materialise BEFORE the claim: the claim releases the archive, so a
         # finalize that claimed first and read second would find nothing.

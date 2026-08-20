@@ -142,6 +142,11 @@ def build_coordinators(
     catalog: AgentConfigCatalog,
     message_queue_factory: object | None,
     get_user_id: Callable[[], str] | None,
+    # #715: the archive importer re-checks `add_content` on the run's collection at
+    # each write, because the worker's only authority is a field the run's owner may
+    # PATCH. It has to reach the SAME verdict the HTTP route would, so it needs the
+    # same superuser set — an empty one here would silently exclude them.
+    superusers: frozenset[str] = frozenset(),
     quality_judge_llm: ILlm | None,
     card_drafter_llm: ILlm | None,
     sanity_llm_factory: LlmFactory | None,
@@ -258,6 +263,7 @@ def build_coordinators(
         ingestor=ingestor,
         index_coordinator=index,
         message_queue_factory=message_queue_factory,
+        superusers=superusers,
     )
     # Model-sanity battery: a background consumer runs matrix cells (heavy live
     # LLM) off the request path. Only built when an LLM factory is wired.

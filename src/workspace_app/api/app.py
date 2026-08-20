@@ -1015,6 +1015,7 @@ def create_app(
         catalog=catalog,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
+        superusers=superusers,
         quality_judge_llm=quality_judge_llm,
         card_drafter_llm=card_drafter_llm,
         sanity_llm_factory=sanity_llm_factory,  # ty: ignore[invalid-argument-type]
