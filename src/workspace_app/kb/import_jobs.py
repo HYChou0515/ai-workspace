@@ -97,6 +97,12 @@ MAX_ERROR_LINES = 100
 # import queue into an existence oracle for collections the requester cannot read.
 _DENIED = "import refused: you may not add content to this collection"
 
+# Prefixes for the two failures that belong to no single document: the staged
+# archive could not be opened at all, and the manifest's cards could not be
+# restored after the documents already landed.
+_UNREADABLE = "archive could not be read"
+_CARDS_FAILED = "context cards were not restored"
+
 _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
 _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while the queue drains
 _MAX_CAS_RETRIES = 20  # same ceiling as the card-gen run store
@@ -355,6 +361,19 @@ class ImportCoordinator:
             superusers=self._superusers,
         )
 
+    def _patch_errors(self, run_id: str, requester: str, reason: str) -> None:
+        """Add one line to the run's failure list, leaving everything else alone.
+
+        `_record` closes a BATCH slot as well as adding lines, so it is the wrong
+        tool for a failure that belongs to no batch."""
+
+        def mutate(current: ImportRun) -> ImportRun | None:
+            return msgspec.structs.replace(
+                current, errors=[*current.errors, reason][:MAX_ERROR_LINES]
+            )
+
+        self._cas(run_id, requester, mutate)
+
     def _refuse(self, run_id: str, requester: str, reason: str) -> None:
         """End the run without writing, and say why on the row the caller polls.
 
@@ -385,8 +404,17 @@ class ImportCoordinator:
         if not self._may_write(run.collection_id, requester):
             self._refuse(run_id, requester, _DENIED)
             return
-        with self._archive_file(run) as fh, zipfile.ZipFile(fh) as zf:
-            members = _members_of(zf)
+        try:
+            with self._archive_file(run) as fh, zipfile.ZipFile(fh) as zf:
+                members = _members_of(zf)
+        except Exception as exc:  # noqa: BLE001 - the reason belongs on the run
+            # Nothing has been written yet, so this is terminal rather than partial.
+            # Letting it propagate would retry until the job died and leave the run
+            # at `finished=false, errors=[]` for ever — a caller polling a 202 that
+            # never moves, which is the exact silence #715 exists to remove. A
+            # visible failure they can act on beats an invisible retry they cannot.
+            self._refuse(run_id, requester, f"{_UNREADABLE}: {type(exc).__name__}: {exc}")
+            return
         batches = [
             (i, members[s : s + MEMBERS_PER_BATCH])
             for i, s in enumerate(range(0, len(members), MEMBERS_PER_BATCH))
@@ -420,8 +448,32 @@ class ImportCoordinator:
         written = 0
         skipped = 0
         failures: list[str] = []
-        with self._archive_file(run) as fh, zipfile.ZipFile(fh) as zf:
-            members = _members_of(zf)[payload.member_start : payload.member_end]
+        with contextlib.ExitStack() as stack:
+            try:
+                # Entering is where the archive is actually fetched, so this is the
+                # step that fails on a corrupt or vanished blob. The per-member
+                # `try` below cannot cover it — that one is about ONE document.
+                fh = stack.enter_context(self._archive_file(run))
+                zf = stack.enter_context(zipfile.ZipFile(fh))
+                # Inside the same guard as the open, because `split` guards it too:
+                # leaving it out would make one step survive a malformed central
+                # directory and the other wedge on it, for no stated reason.
+                members = _members_of(zf)[payload.member_start : payload.member_end]
+            except Exception as exc:  # noqa: BLE001 - the reason belongs on the run
+                # Close this batch's slot with the reason instead of raising, or the
+                # finalize gate never sees every slot closed: cards are never
+                # restored, the archive is never released, and the caller polls a
+                # run that is over in every sense except the one it reports.
+                self._record(
+                    payload.run_id,
+                    requester,
+                    payload.batch_index,
+                    0,
+                    [f"{_UNREADABLE}: {type(exc).__name__}: {exc}"],
+                )
+                if self._all_accounted(payload.run_id):
+                    self._enqueue_step(payload.run_id, "finalize", requester)
+                return
             for info in members:
                 # Per MEMBER, not per batch: a batch is a scheduling unit, and one
                 # unreadable file must not take its 49 neighbours down with it. The
@@ -475,7 +527,19 @@ class ImportCoordinator:
             return
         # Materialise BEFORE the claim: the claim releases the archive, so a
         # finalize that claimed first and read second would find nothing.
-        with self._archive_file(run) as fh, zipfile.ZipFile(fh) as zf:
+        with contextlib.ExitStack() as stack:
+            try:
+                fh = stack.enter_context(self._archive_file(run))
+                zf = stack.enter_context(zipfile.ZipFile(fh))
+            except Exception as exc:  # noqa: BLE001 - the reason belongs on the run
+                # Every batch is already accounted for, so the documents are in and
+                # the only thing left was the cards. Raising would retry a read that
+                # will fail identically and leave the run at `finished=false` for
+                # ever — the whole import invisible because its last step could not
+                # open a file. `_refuse` is idempotent (it aborts on `finished`), so
+                # two finalizers racing here still write once.
+                self._refuse(run_id, requester, f"{_UNREADABLE}: {type(exc).__name__}: {exc}")
+                return
             claimed = False
 
             def claim(current: ImportRun) -> ImportRun | None:
@@ -492,12 +556,24 @@ class ImportCoordinator:
             self._cas(run_id, requester, claim)
             if not claimed:
                 return
-            restore_cards(
-                self._spec,
-                run.collection_id,
-                _manifest_of(zf).get("context_cards", []),
-                run.mode,
-            )
+            try:
+                restore_cards(
+                    self._spec,
+                    run.collection_id,
+                    _manifest_of(zf).get("context_cards", []),
+                    run.mode,
+                )
+            except Exception as exc:  # noqa: BLE001 - the reason belongs on the run
+                # The claim above already set `finished` and released the archive —
+                # it has to, or two finalizers both restore (#701's duplicate cards).
+                # So a raise here cannot be retried, and without this the run reports
+                # `written == members`, `errors: []`, `finished: true` with NOT ONE
+                # CARD restored: byte-identical to complete success. The documents
+                # did land, so this is not a refusal — it is one more line in the
+                # channel the per-document failures already use.
+                self._patch_errors(
+                    run_id, requester, f"{_CARDS_FAILED}: {type(exc).__name__}: {exc}"
+                )
 
     # ── run bookkeeping ──────────────────────────────────────────────
     def _cas(

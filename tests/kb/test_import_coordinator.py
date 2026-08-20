@@ -16,9 +16,10 @@ import json
 import threading
 import zipfile
 
+import msgspec
 import pytest
 from specstar import QB, SpecStar
-from specstar.types import Binary, BlobStreamInfo, PreconditionFailedError
+from specstar.types import Binary, BlobStreamInfo, PreconditionFailedError, RevisionStatus
 
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
@@ -1048,3 +1049,170 @@ async def test_a_repointed_run_is_refused_at_the_write_step_not_only_at_split():
 
     assert [d.path for d in _docs(spec, victim)] == [], "a re-pointed run wrote anyway"
     assert _cards(spec, victim) == [], "a re-pointed run overwrote another tenant's cards"
+
+
+def _corrupt_the_staged_archive(spec: SpecStar, run_id: str, owner: str) -> None:
+    """Replace the staged blob with bytes that are not a zip.
+
+    `enqueue` opens the archive to count members, so a corrupt archive cannot be
+    submitted — it can only appear afterwards, which is exactly the case the steps
+    have to survive: a blob store that returns something else, a truncated write, a
+    restore from a half-written backup."""
+    rrm = spec.get_resource_manager(ImportRun)
+    cur = rrm.get(run_id)
+    assert isinstance(cur.data, ImportRun)
+    with rrm.using(user=owner):
+        rrm.modify(
+            run_id,
+            msgspec.structs.replace(
+                cur.data, archive=Binary(data=b"not a zip at all", content_type="application/zip")
+            ),
+            status=RevisionStatus.draft,
+        )
+
+
+async def test_an_unreadable_archive_ends_the_run_instead_of_wedging_it_at_split():
+    """`split` had no failure channel at all — only `process` did.
+
+    An archive that cannot be opened made the step raise, which the queue retries
+    until the job gives up. The run then sits at `finished=false`, `errors=[]` for
+    ever: a caller polling a 202 that never moves and never says why, which is the
+    precise failure this feature exists to remove.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = coord.enqueue(
+        collection_id=cid, zip_data=_archive({"a.md": b"x"}), mode="overwrite", user="u"
+    )
+    _corrupt_the_staged_archive(spec, run_id, "u")
+
+    await coord.aclose()
+
+    run = _run_of(spec, run_id)
+    assert run.finished, "an unreadable archive left the run polling for ever"
+    assert run.written == 0
+    assert run.errors and "archive could not be read" in run.errors[0], run.errors
+
+
+async def test_an_unreadable_archive_closes_the_batch_slot_instead_of_wedging_finalize():
+    """`process`'s containment is per MEMBER, so it never covered the archive itself.
+
+    A batch that raises before its loop closes no slot, and the finalize gate counts
+    slots — so cards are never restored, the staged archive is never released, and
+    the run reports `finished: false` with nothing in `errors` for ever, even though
+    every other batch is done.
+    """
+    spec = _worker_spec()
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = _staged_run(spec, cid, "alice")
+    _corrupt_the_staged_archive(spec, run_id, "alice")
+    jrm = spec.get_resource_manager(ImportJob)
+    with jrm.using(user="alice"):
+        job = jrm.create(
+            ImportJob(
+                payload=ImportPayload(
+                    run_id=run_id, kind="process", member_start=0, member_end=50, batch_index=0
+                )
+            )
+        )
+
+    coord._handle(jrm.get(job.resource_id))
+    await coord.aclose()  # the finalize this batch's closed slot should have queued
+
+    run = _run_of(spec, run_id)
+    assert run.errors and "archive could not be read" in run.errors[0], run.errors
+    assert run.finished, "the batch closed no slot, so finalize never fired"
+
+
+async def test_cards_that_fail_to_restore_are_not_reported_as_a_clean_import():
+    """The worst shape a failure can take: byte-identical to success.
+
+    `finalize` claims the run — setting `finished` and releasing the archive —
+    BEFORE restoring the cards, because two finalizers must not both restore
+    (#701's duplicate cards). So a `restore_cards` that raises cannot be retried,
+    and with no channel of its own it produced `written == members`, `errors: []`,
+    `finished: true` and not one card. The documents did land, so this is not a
+    refusal: it is one more line in the channel the per-document failures use.
+    """
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("a.md", b"alpha")
+        zf.writestr(
+            ".kb-collection/manifest.json",
+            json.dumps({"version": 1, "context_cards": ["this is not a card object"]}),
+        )
+
+    run_id = coord.enqueue(collection_id=cid, zip_data=buf.getvalue(), mode="overwrite", user="u")
+    await coord.aclose()
+
+    run = _run_of(spec, run_id)
+    assert [d.path for d in _docs(spec, cid)] == ["a.md"], "the documents should still land"
+    assert _cards(spec, cid) == [], "the malformed card should not have been created"
+    assert run.errors and "context cards were not restored" in run.errors[0], (
+        f"a failed card restore reported a clean import: written={run.written} "
+        f"members={run.members} errors={run.errors} finished={run.finished}"
+    )
+
+
+async def test_one_unreadable_batch_does_not_finalize_a_run_that_has_batches_left():
+    """Closing a slot is not the same as closing the LAST slot.
+
+    The containment above enqueues `finalize` when the failed batch turns out to be
+    the last one outstanding. It must ask — an unconditional enqueue would restore
+    the cards and release the archive while other batches are still writing, which
+    is the duplicate-card gate (#701) reopened from the failure path.
+    """
+    spec = _worker_spec()
+    cid = _collection(spec)
+    coord = _coordinator(spec)
+    run_id = _staged_run(spec, cid, "alice")
+    rrm = spec.get_resource_manager(ImportRun)
+    cur = rrm.get(run_id)
+    assert isinstance(cur.data, ImportRun)
+    with rrm.using(user="alice"):
+        rrm.modify(  # two batches, so closing one leaves one outstanding
+            run_id, msgspec.structs.replace(cur.data, total=2), status=RevisionStatus.draft
+        )
+    _corrupt_the_staged_archive(spec, run_id, "alice")
+    jrm = spec.get_resource_manager(ImportJob)
+    with jrm.using(user="alice"):
+        job = jrm.create(
+            ImportJob(
+                payload=ImportPayload(
+                    run_id=run_id, kind="process", member_start=0, member_end=50, batch_index=0
+                )
+            )
+        )
+
+    coord._handle(jrm.get(job.resource_id))
+
+    run = _run_of(spec, run_id)
+    assert run.errors and "archive could not be read" in run.errors[0], run.errors
+    assert not run.finished, "finalize fired with a batch still outstanding"
+    assert run.archive is not None, "the archive was released while a batch was still to run"
+
+
+async def test_a_redelivered_refusal_does_not_append_a_second_reason():
+    """`_refuse` is claimed to be idempotent — `_finalize` leans on it by name.
+
+    A refused step can be redelivered (the broker retries, and two finalizers can
+    reach the unopenable archive at once). Without the `finished` abort, each
+    delivery would add another identical line to `errors`, so a caller reading the
+    reason would see the same sentence N times and infer N distinct failures.
+    """
+    spec = _worker_spec()
+    victim = _private_collection(spec, "alice")
+    run_id = _staged_run(spec, victim, "mallory")
+    coord = _coordinator(spec)
+
+    coord._refuse(run_id, "mallory", "first")
+    coord._refuse(run_id, "mallory", "second")
+
+    run = _run_of(spec, run_id)
+    assert run.errors == ["first"], f"a redelivery appended again: {run.errors}"
+    assert run.finished
