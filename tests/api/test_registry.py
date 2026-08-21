@@ -988,3 +988,59 @@ async def test_host_managed_wake_refuses_to_build_a_sandbox_it_cannot_fill_492()
     with pytest.raises(OSError, match="nfs unreachable"):
         await registry.ensure_handle(await registry.session("ws-1"))
     assert sandbox._fs == {}  # never created — not even an empty one to work in
+
+
+async def test_close_session_closes_a_sandbox_this_pod_never_warmed():
+    """Closing must not depend on which replica the request landed on.
+
+    `_sessions` is one pod's memory. A close handled by a pod that never woke
+    the item found nothing and returned — while the route went on to clear the
+    ledger row, so the panel stopped listing an environment that was still
+    running. Restarting the backend produces the same state on a single pod:
+    the sessions map is empty, the sandbox and its published address are not."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    warm_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+    other_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    handle = await warm_pod.ensure_handle(await warm_pod.session("ws-1"))
+    await sandbox.exists(handle, "/a")  # alive: a live handle answers, dead one raises
+
+    await other_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(handle, "/a")  # the sandbox outlived its close
+    assert await addr.get("ws-1") is None, "the address outlived the sandbox"
+
+
+async def test_close_session_tolerates_a_sandbox_someone_already_deleted():
+    """An operator deleting a sandbox out of band is a supported thing to do.
+
+    `kill` then raises `SandboxNotFound` — which IS the goal, the same reasoning
+    `kill_idle` already applies. Letting it propagate meant the session was never
+    evicted and the ledger row never cleared, so the panel kept offering a Close
+    that could only ever fail: the one entry you could neither use nor remove."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    session = await registry.session("ws-1")
+    handle = await registry.ensure_handle(session)
+    await sandbox.kill(handle)  # the operator went in and removed it
+
+    await registry.close_session("ws-1")  # must not raise
+
+    assert await registry.session("ws-1") is not session, "the dead session was kept"
+    assert await addr.get("ws-1") is None

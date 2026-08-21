@@ -183,9 +183,13 @@ def register_quota_routes(
         owner = locator.owner_of(item_id)
         if owner != get_user_id() and get_user_id() not in superusers:
             raise HTTPException(status_code=404, detail="unknown environment")
+        # `close_session` owns the whole teardown, INCLUDING clearing the
+        # heartbeat. Clearing it here as well was the shape of the bug: the close
+        # could quietly do nothing — no session on this replica — and this line
+        # still ran, so the panel stopped listing an environment that was still
+        # running, and there was no longer anything to click. A refusal to close
+        # must leave the row alone, which it can only do if one place owns both.
         await registry.close_session(item_id)
-        if activity is not None:
-            await activity.forget(item_id)
 
     # Registered BEFORE the `/{user_id}` route: a bare GET on the collection
     # would otherwise be matched as a person literally called "".

@@ -224,3 +224,29 @@ def test_a_live_environment_is_charged_what_the_backend_really_caps_it_at():
         assert got["live"][0]["cpu_cores"] == 2.0
         assert got["cpu_in_use"] == 2.0
         assert got["memory_in_use"] == 256 * 1024**2
+
+
+def test_closing_frees_the_slot_and_stops_listing_it_together():
+    """The panel's list and the machine must move as ONE.
+
+    The route used to clear the heartbeat itself, right after asking the registry
+    to close. When the close quietly did nothing — no session on this replica,
+    which is every request after a restart — the row was cleared anyway: the
+    environment vanished from the panel while still running, and with nothing
+    left to click there was no way to try again. Whoever clears the row has to be
+    whoever killed the sandbox."""
+    with _app(PerUserResources(count=1)) as (client, spec):
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        client.post(f"/a/rca/items/{first}/exec", json={"cmd": ["echo", "hi"]})
+        assert [e["item_id"] for e in client.get("/me/resources").json()["live"]] == [first]
+
+        assert client.delete(f"/me/resources/live/{first}").status_code == 204
+
+        # gone from the panel…
+        assert client.get("/me/resources").json()["live"] == []
+        # …and the slot it was holding is genuinely free again
+        assert (
+            client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo", "hi"]}).status_code
+            == 200
+        )
