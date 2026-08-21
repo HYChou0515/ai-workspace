@@ -108,6 +108,29 @@ def test_you_cannot_close_someone_elses_environment():
         assert client.delete(f"/me/resources/live/{theirs}").status_code == 404
 
 
+def test_a_refused_close_leaves_the_other_person_s_environment_alone():
+    """404 must be a refusal, not a partial close.
+
+    The check that answers 404 and the code that clears the row live in
+    different places, so a clear that ran first — or ran regardless — would take
+    someone else's environment off their panel while it kept running, and they
+    would have no way to get it back."""
+    # count=1, so bob holding one environment means his next one is refused.
+    # That refusal is the only thing that can tell "his row survived" apart from
+    # "his row was cleared" — with a generous limit both look identical.
+    with _app(PerUserResources(count=1)) as (client, spec):  # me == alice
+        theirs = _mk(spec, "bob")
+        client.post(f"/a/rca/items/{theirs}/exec", json={"cmd": ["echo", "hi"]})
+
+        assert client.delete(f"/me/resources/live/{theirs}").status_code == 404
+
+        another = _mk(spec, "bob")
+        assert (
+            client.post(f"/a/rca/items/{another}/exec", json={"cmd": ["echo", "hi"]}).status_code
+            == 507
+        ), "the refused close released bob's slot"
+
+
 # ─── the admin override ────────────────────────────────────────────────
 
 

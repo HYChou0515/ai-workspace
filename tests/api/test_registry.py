@@ -1043,4 +1043,109 @@ async def test_close_session_tolerates_a_sandbox_someone_already_deleted():
     await registry.close_session("ws-1")  # must not raise
 
     assert await registry.session("ws-1") is not session, "the dead session was kept"
+    # The address is deliberately NOT erased. `SandboxNotFound` cannot tell
+    # "reaped" from "could not reach it" — the http client maps every transport
+    # error onto it — and erasing the address of a sandbox that is actually
+    # alive strands it where no pod can find it. Leaving a dead one costs
+    # nothing, which the next line demonstrates:
+    fresh = await registry.ensure_handle(await registry.session("ws-1"))
+    assert fresh != handle, "the next acquire should have rebuilt"
+    await sandbox.exists(fresh, "/a")  # …and the rebuilt one is live
+
+
+async def test_close_session_kills_what_the_address_names_when_the_session_has_no_handle():
+    """A session with no handle is the NORMAL state, not an edge case.
+
+    Sandboxes are lazy — only `exec` creates one — so any pod that has served a
+    chat turn holds a session whose handle is None. Deciding the teardown on
+    "is there a session" rather than "is there a live handle" skipped the kill
+    while still erasing the address, which strands the sandbox where no pod can
+    address it and lets the next acquire build a SECOND one beside it."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    warm_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+    chat_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    handle = await warm_pod.ensure_handle(await warm_pod.session("ws-1"))
+    await chat_pod.session("ws-1")  # a chat turn: session exists, handle is None
+
+    await chat_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(handle, "/a")  # it really was killed
     assert await addr.get("ws-1") is None
+
+
+async def test_close_session_keeps_every_record_when_it_could_not_finish():
+    """A busy host is told to retry — which is only useful if there is still
+    something to retry against.
+
+    Anything other than `SandboxNotFound` propagates, and then neither the
+    heartbeat nor the address may be touched: clearing them turns "try again in
+    a moment" into an environment that is gone from the panel, still running,
+    and unreachable."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+    from workspace_app.sandbox.protocol import SandboxBusy
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    register_sandbox_activity(spec)
+
+    class _BusyOnKill(_HttpStyleSandbox):
+        async def kill(self, handle):
+            raise SandboxBusy(handle.id)
+
+    sandbox = _BusyOnKill()
+    addr = SpecstarAddressStore(spec)
+    activity = SpecstarActivityStore(spec)
+    registry = InvestigationRegistry(
+        sandbox=sandbox, address=addr, activity=activity, owner_of=lambda _i: "alice"
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+
+    with pytest.raises(SandboxBusy):
+        await registry.close_session("ws-1")
+
+    assert await addr.get("ws-1") is not None, "the address was erased on a failed close"
+    assert await activity.last_active_ms("ws-1") is not None, "the row was cleared anyway"
+
+
+async def test_close_session_does_not_report_a_kill_it_never_attempted():
+    """When the writeback cannot reach the sandbox, the kill has nothing to act
+    on — and the address must survive.
+
+    Suppressing `SandboxNotFound` across BOTH steps reported success for a close
+    that never tried: `persist` raising on a refused connection skipped the kill
+    entirely, cleared both records, and answered 204. The sandbox was alive, the
+    panel no longer showed it, and nothing could address it."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    class _UnreachableWriteback:
+        async def restore(self, workspace_id, handle, *, on_progress=None):
+            return 0
+
+        async def mirror(self, workspace_id, handle):
+            raise SandboxNotFound(handle.id)  # what a refused connection becomes
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, address=addr, sync=_UnreachableWriteback())
+
+    handle = await registry.ensure_handle(await registry.session("ws-1"))
+    await registry.close_session("ws-1")  # must not raise
+
+    assert await addr.get("ws-1") is not None, "an unconfirmed kill erased the address"
+    await sandbox.exists(handle, "/a")  # still alive — nothing claimed otherwise

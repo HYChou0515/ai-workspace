@@ -613,54 +613,67 @@ class InvestigationRegistry:
         survives. `kill_idle` already reasons this way about the shared dir; this
         path simply never did."""
         s = self._sessions.get(investigation_id)
+        handle: SandboxHandle | None = None
         if s is not None:
             async with s.lock:
                 # Re-read under the lock: a concurrent close may have finished.
                 if self._sessions.get(investigation_id) is s:
-                    logger.info("registry: close_session tearing down item %s", investigation_id)
                     handle, s.handle = s.handle, None
-                    if handle is not None:
-                        await self._teardown(investigation_id, handle)
-            self._sessions.pop(investigation_id, None)
-        else:
-            # No session HERE does not mean no sandbox anywhere. `_sessions` is
-            # this replica's memory: a close handled by a pod that never woke the
-            # item, or by any pod after a restart, used to return silently while
-            # the caller went on to clear the ledger row — so the panel stopped
-            # listing an environment that was still running, and there was no
-            # longer anything to click.
-            #
-            # The shared address is what knows where it actually is (#366). Only
-            # consulted when one is wired: without it (`kind: local`) an unknown
-            # item is genuinely unknown, and deriving a handle for a cold item
-            # would delete a workspace nobody asked to close.
-            handle = await self.address.get(investigation_id) if self.address else None
-            if handle is not None:
-                logger.info(
-                    "registry: close_session tearing down item %s via its published "
-                    "address (no local session)",
-                    investigation_id,
-                )
-                await self._teardown(investigation_id, handle)
 
-        # The address must never outlive the sandbox it names — a live one left
-        # behind is what a later acquire would reattach to, handing back the
-        # sandbox this call was asked to get rid of.
-        if self.address is not None:
-            await self.address.forget(investigation_id)
+        # A session with NO handle is the normal state, not an edge case:
+        # sandboxes are lazy, so every pod that has served one chat turn holds
+        # one. Deciding on "is there a session" rather than "is there a live
+        # handle" skipped the teardown while still erasing the address below —
+        # leaving a sandbox alive that no pod could address any more, and a
+        # Close button that could never work.
+        if handle is None and self.address is not None:
+            handle = await self.address.get(investigation_id)
 
-    async def _teardown(self, item: str, handle: SandboxHandle) -> None:
-        """Persist, kill, and stop charging for one sandbox.
+        killed = False
+        if handle is not None:
+            logger.info("registry: close_session tearing down item %s", investigation_id)
+            killed = await self._teardown(investigation_id, handle)
 
-        Every step tolerates the sandbox having ALREADY gone: an operator
-        deleting one out of band is a supported thing to do, and `SandboxNotFound`
-        then means the goal is met — the same reading `kill_idle` has always
-        taken. Letting it propagate stopped the session being evicted and the
-        ledger row cleared, leaving an entry that could be neither used nor
-        removed, whose Close button could only fail."""
-        with contextlib.suppress(SandboxNotFound):
-            if self._has_durable:
-                await self._writeback(item, handle, delete=True)
-            await self.sandbox.kill(handle)
+        # Stop charging for it either way. This is the same under-count the
+        # panel's own window already accepts (`live_for`): better to release a
+        # slot we are unsure about than to leave someone unable to work with no
+        # way to clear it.
         if self.activity is not None:
-            await self.activity.forget(item)
+            await self.activity.forget(investigation_id)
+
+        # The address, though, only when the kill was CONFIRMED. The two
+        # mistakes are not symmetrical: a dead address left behind costs
+        # nothing, because the next acquire probes it, finds it dead and
+        # rebuilds — while erasing the address of a sandbox that is actually
+        # alive is unrecoverable. Nothing can find it again, and the next
+        # acquire builds a SECOND one beside it, which is exactly the split-brain
+        # the address store exists to prevent.
+        if killed and self.address is not None:
+            await self.address.forget(investigation_id)
+        self._sessions.pop(investigation_id, None)
+
+    async def _teardown(self, item: str, handle: SandboxHandle) -> bool:
+        """Persist and kill one sandbox. True only if the kill was CONFIRMED.
+
+        `SandboxNotFound` does not mean "gone" as reliably as it reads: the http
+        client maps every non-timeout transport error onto it, so a refused
+        connection is indistinguishable from a reaped sandbox. That ambiguity is
+        why this returns a verdict rather than simply swallowing the exception —
+        the caller decides what may be erased on an unconfirmed kill, and the
+        answer is "not the address".
+
+        A writeback that cannot reach the sandbox also means the kill has
+        nothing to act on, so it stops there rather than reporting a kill it
+        never attempted. Anything OTHER than `SandboxNotFound` propagates: a busy
+        host is told to retry (503), and every record stays put so there is
+        something left to retry against."""
+        if self._has_durable:
+            try:
+                await self._writeback(item, handle, delete=True)
+            except SandboxNotFound:
+                return False
+        try:
+            await self.sandbox.kill(handle)
+        except SandboxNotFound:
+            return False
+        return True
