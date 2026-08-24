@@ -870,6 +870,12 @@ export const messages = {
   "resources.live.heading": { "zh-TW": "執行環境", en: "Live environments" },
   "resources.live.empty": { "zh-TW": "目前沒有執行中的環境。", en: "No live environments." },
   "resources.live.close": { "zh-TW": "關閉", en: "Close" },
+  // Says what happened and what to do, not which call returned what. The row
+  // stays put deliberately, so "再試一次" points at something that is still there.
+  "resources.live.close_failed": {
+    "zh-TW": "無法確認這個環境已經關閉，請再試一次。",
+    en: "Could not confirm this environment shut down. Try again.",
+  },
   "resources.live.count": { "zh-TW": "{n} 個", en: "{n}" },
   "resources.live.cores": { "zh-TW": "{n} 核", en: "{n} cores" },
   // English needs the singular; Chinese has no plural form, so both keys carry

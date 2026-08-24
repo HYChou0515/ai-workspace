@@ -72,3 +72,23 @@ describe("board card number contrast", () => {
     expect(contrast(ink, card)).toBeGreaterThanOrEqual(4);
   });
 });
+
+
+describe("error-message ink", () => {
+  // A refusal the person has to read and act on — "could not confirm this
+  // environment shut down" — is a sentence, not a badge, so it is held to the
+  // small-text floor rather than the 3:1 UI-component one. It needs its own
+  // token because `--err` is a FILL (white sits on it) and reads 3.7:1 as ink
+  // on the dark paper: a message coloured with it would be tuned for cream and
+  // dim on ink, unnoticed by anyone developing in one theme.
+  for (const [label, block] of [
+    ["light mode (on cream)", LIGHT],
+    ["dark mode (on ink)", DARK],
+  ] as const) {
+    it(`stays legible in ${label}`, () => {
+      const ink = tokenIn(TOKENS_CSS, block, "--err-ink");
+      const paper = tokenIn(TOKENS_CSS, block, "--paper");
+      expect(contrast(ink, paper)).toBeGreaterThanOrEqual(4);
+    });
+  }
+});

@@ -325,3 +325,25 @@ describe("formatting", () => {
     expect(formatAgainstLimit(5, 10, (n) => `${n}`)).toBe("5 / 10");
   });
 });
+
+describe("a close that could not be confirmed", () => {
+  afterEach(cleanup);
+
+  it("says so, and leaves the row there to press again", async () => {
+    // The backend can now answer "I found a sandbox, asked it to go, and could
+    // not confirm that it did". Rendering nothing for that is what made this
+    // button unreliable: the person is told it worked while it did not, and
+    // there is nothing on the page to act on either way.
+    const closeEnvironment = vi.fn(async () => {
+      throw new Error("close environment failed: 409");
+    });
+    render(<MyResourcesPage client={client({ closeEnvironment })} />, {
+      wrapper: Wrap,
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "關閉" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/無法確認/);
+    // still listed, so "try again" points at something that is there
+    expect(screen.getByRole("button", { name: "關閉" })).toBeTruthy();
+  });
+});

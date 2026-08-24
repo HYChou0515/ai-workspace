@@ -16,7 +16,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from typing import Protocol
+from typing import Literal, Protocol
 
 from ..quota.limits import ResourceLimits
 from ..sandbox.protocol import (
@@ -68,6 +68,18 @@ class InvestigationSession:
     # Serializes sandbox creation (ensure_handle) for this investigation. Turn
     # lifecycle (the in-flight agent turn) lives in ChatTurnEngine, not here.
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+
+CloseOutcome = Literal["closed", "absent", "unconfirmed"]
+"""What a close actually managed to do.
+
+Three answers, because two of them look identical from the outside and need
+opposite handling. `closed` killed the sandbox. `absent` found nothing to kill,
+which is not a failure — a stale page, a double click, or a workflow pausing an
+item that never ran one all arrive that way. `unconfirmed` found something,
+tried, and could not confirm it went: the one case a person has to be told
+about, because answering "done" there is how a Close button teaches people it
+does not work."""
 
 
 def _bare_spec(_item: str) -> SandboxSpec:
@@ -622,7 +634,7 @@ class InvestigationRegistry:
                     await self._writeback(inv_id, s.handle, delete=True)
                 await self.sandbox.kill(s.handle)
 
-    async def close_session(self, investigation_id: str) -> None:
+    async def close_session(self, investigation_id: str) -> CloseOutcome:
         """Tear down one item's sandbox — from ANY replica, and clear a record
         only once there is evidence the sandbox is gone.
 
@@ -684,11 +696,13 @@ class InvestigationRegistry:
                 # and replaced the session, and popping THAT one below would
                 # evict a session someone else is actively using.
                 if self._sessions.get(investigation_id) is not s:
-                    return
+                    return "absent"
                 handle, s.handle = s.handle, None
 
         killed = False
+        tried = False
         if handle is not None:
+            tried = True
             killed = await self._teardown(investigation_id, handle)
 
         # A session with no handle at all is the NORMAL state, not an edge case:
@@ -697,10 +711,12 @@ class InvestigationRegistry:
         if not killed and self.address is not None:
             published = await self.address.get(investigation_id)
             if published is not None and published != handle:
+                tried = True
                 killed = await self._teardown(investigation_id, published)
 
         if not killed:
-            killed = await self._close_unrecorded(investigation_id)
+            found, killed = await self._close_unrecorded(investigation_id)
+            tried = tried or found
 
         if killed:
             if self.activity is not None:
@@ -708,8 +724,11 @@ class InvestigationRegistry:
             if self.address is not None:
                 await self.address.forget(investigation_id)
         self._sessions.pop(investigation_id, None)
+        if killed:
+            return "closed"
+        return "unconfirmed" if tried else "absent"
 
-    async def _close_unrecorded(self, item: str) -> bool:
+    async def _close_unrecorded(self, item: str) -> tuple[bool, bool]:
         """Tear down a sandbox for `item` that no record of ours names.
 
         This is how an orphan gets cleared. A sandbox whose address was lost —
@@ -723,17 +742,20 @@ class InvestigationRegistry:
         every sandbox on the pod that took the request, and picking the wrong
         entry closes a stranger's environment mid-turn.
 
-        `None` (the backend cannot say) yields False, the same as an empty
-        answer — this only ever ADDS a way to find something, so a backend that
-        cannot enumerate simply leaves the earlier sources to it."""
+        Returns `(found, killed)`: a backend that cannot say (`None`) found
+        nothing, the same as an empty answer — this only ever ADDS a way to find
+        something, so its silence leaves the earlier sources to it. The two
+        halves are separate because "there was nothing to close" and "there was,
+        and it would not go" are opposite answers to the person who clicked."""
         listed = await self.sandbox.running_sandboxes()
         if not listed:
-            return False
-        killed = False
+            return False, False
+        found = killed = False
         for entry in listed:
             if entry.item_id == item:
+                found = True
                 killed = await self._teardown(item, entry.handle) or killed
-        return killed
+        return found, killed
 
     async def _teardown(self, item: str, handle: SandboxHandle) -> bool:
         """Persist and kill one sandbox. True only if the kill was CONFIRMED.

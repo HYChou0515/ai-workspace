@@ -46,6 +46,15 @@
   --err:   #C44A3A;
   --info:  #2D6CC9;
 
+  /* `--err` as INK on the paper surface. A separate token because the semantic
+   * five above are fills — a red block with white on it — and a fill colour is
+   * not automatically a legible text colour on the same theme's background.
+   * `--err` reads 4.1:1 on cream (fine) and 3.7:1 on ink (not fine), so a
+   * message using it directly would be tuned for one theme and dim in the
+   * other, which is exactly the failure the dark block below exists to prevent.
+   * Guarded in contrast.test.ts. */
+  --err-ink: #A93A2C;
+
   /* Categorical chip palette (#GH-projects B) — a small, muted, on-brand set of
    * hues auto-assigned to single-select values (status/labels). A soft rgba fill
    * over the theme paper + a readable ink. The inks are tuned per theme: these
@@ -161,6 +170,10 @@
 
   /* cream stroke for the mark on the dark surface (= rca-mark-light.svg) */
   --brand-mark:  #F1ECE0;
+
+  /* Lighter on ink, for the same reason the chip inks are: the cream-tuned red
+   * lands at ~3.7:1 here, below the floor for a sentence someone has to read. */
+  --err-ink: #F08678;
 
   /* Categorical chips need LIGHTER inks on ink than on cream — the light-mode
    * mid-tones read ~2.9:1 here. Slightly stronger fills + brighter inks clear a

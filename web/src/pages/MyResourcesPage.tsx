@@ -124,6 +124,13 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
           limit={limits.memory_bytes}
           format={formatBytes}
         />
+        {close.isError ? (
+          // A close that could not be confirmed leaves its row in place, so
+          // this sits beside something the person can press again.
+          <p className="error" role="alert">
+            {t("resources.live.close_failed")}
+          </p>
+        ) : null}
         {data.live.length === 0 ? (
           <p className="empty">{t("resources.live.empty")}</p>
         ) : (

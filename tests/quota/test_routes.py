@@ -337,3 +337,49 @@ def test_the_panel_does_not_list_someone_elses_environment():
         _forget_heartbeat(spec, theirs)
 
         assert client.get("/me/resources").json()["live"] == []
+
+
+def test_a_close_that_could_not_finish_says_so():
+    """Silence is what made this unreliable in the first place.
+
+    A Close that answers 204 having killed nothing tells the person it worked.
+    They watch the row stay, or worse it goes and the environment keeps running,
+    and there is nothing to act on either way. If we could not confirm it, the
+    honest answer is to say so and leave the row there to press again."""
+    from workspace_app.sandbox.protocol import SandboxNotFound
+
+    class _VanishesOnKill(MockSandbox):
+        async def kill(self, handle):
+            raise SandboxNotFound(handle.id)
+
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=_VanishesOnKill(cpu_cores=2.0, memory_bytes=256 * 1024**2),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        workspace_quota=0,
+        app_resources={"rca": ONE_CORE},
+        per_user_resources=PerUserResources(count=3),
+        get_user_id=lambda: "alice",
+    )
+    with ApiTestClient(app) as client:
+        item = _mk(spec, "alice")
+        client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo", "hi"]})
+
+        refused = client.delete(f"/me/resources/live/{item}")
+        assert refused.status_code == 409, refused.text
+        # …and the row is still there to press again
+        assert [e["item_id"] for e in client.get("/me/resources").json()["live"]] == [item]
+
+
+def test_closing_something_that_was_never_running_is_not_an_error():
+    """Nothing to close is not a failure to close.
+
+    Every item has a Close-able row only while it holds a sandbox, but a stale
+    page, a double click, or a workflow pausing an item that never ran one all
+    arrive here with nothing to do. Answering 409 would teach people that the
+    button is broken."""
+    with _app(PerUserResources(count=3)) as (client, spec):
+        item = _mk(spec, "alice")  # no exec: nothing was ever created
+        assert client.delete(f"/me/resources/live/{item}").status_code == 204

@@ -64,6 +64,14 @@
   color: var(--text-paper-d);
 }
 
+/* A close that could not be confirmed. Sits directly above the row it is about,
+ * which stays put so there is still something to press again. */
+.page .error {
+  margin: 0 0 var(--space-8);
+  font-size: var(--text-body-sm);
+  color: var(--err-ink);
+}
+
 /* The bar. `--paper-3` is the same track colour the app's other inset surfaces
    use; the fill is the accent so it reads as "yours", not as an alert — being
    near a limit is normal, not an error. */
