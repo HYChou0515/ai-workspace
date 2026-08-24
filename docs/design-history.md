@@ -89,6 +89,9 @@
 [501](plan-issue-501.md) ·
 [513](plan-issue-513.md)
 
+依主題命名的:
+[撞到步數上限不該終止一個 goal(#721)](plan-max-turns-continues-goal.md)
+
 彙整型：[plan-issues.md](plan-issues.md) · [plan-followups.md](plan-followups.md)
 
 ## 前端 handoff 與設計交接
