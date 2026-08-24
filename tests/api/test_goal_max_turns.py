@@ -17,10 +17,12 @@ from __future__ import annotations
 
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 from workspace_app.api import create_app
 from workspace_app.api.events import MaxTurnsExceeded, MessageDelta, ToolEnd, ToolStart
 from workspace_app.api.runner import ScriptedAgentRunner
+from workspace_app.config.schema import OffHoursSettings
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import Conversation, make_spec
@@ -48,7 +50,16 @@ def _capped_runner() -> ScriptedAgentRunner:
     return ScriptedAgentRunner([MessageDelta(text="reading the logs"), MaxTurnsExceeded(turns=30)])
 
 
-def _app(checker: ILlm, *, runner, max_rounds: int = 3):
+def _today_is_a_workday(spec) -> None:  # noqa: ANN001 — SpecStar, matches the sibling suites
+    """Pin today as a working day, so the WINDOW — not whichever weekday the
+    suite happens to run on — decides whether it is after hours."""
+    from workspace_app.resources.work_calendar import WorkCalendar, upsert_work_calendar
+
+    today = datetime.now(UTC).date().isoformat()
+    upsert_work_calendar(spec, WorkCalendar(overrides={today: "work"}), user="alice")
+
+
+def _app(checker: ILlm, *, runner, max_rounds: int = 3, offhours=None):  # noqa: ANN001
     spec = make_spec(default_user="u")
     iid = register_rca_item(spec)
     app = create_app(
@@ -59,6 +70,7 @@ def _app(checker: ILlm, *, runner, max_rounds: int = 3):
         get_user_id=lambda: "alice",
         goal_checker_llm=checker,
         goal_max_rounds=max_rounds,
+        goal_offhours=offhours,
     )
     return app, spec, iid
 
@@ -84,6 +96,49 @@ def _start(client, spec, iid, condition: str = "the report exists"):
     base = f"/a/rca/items/{iid}/chats/{rid}"
     client.put(f"{base}/goal", json={"condition": condition})
     return rid, base
+
+
+def _window_around_now() -> str:
+    now = datetime.now(UTC)
+    return f"{(now - timedelta(hours=2)):%H:%M}-{(now + timedelta(hours=2)):%H:%M}"
+
+
+def test_overnight_follows_the_same_rule_and_spends_the_night_budget():
+    """One rule, both times of day — decided so that behaviour does not fork on
+    the clock, and because "a big problem takes a while" is MORE true when
+    nobody is watching.
+
+    Before this, a capped turn at night was read as no-progress twice running
+    and parked as stuck at two rounds. Now it spends the NIGHT counter, and the
+    work-hours counter stays untouched so the morning does not read the goal as
+    exhausted against the much smaller office cap.
+    """
+    llm = _ScriptLlm([])  # never satisfied
+    # `yield_after_human_minutes=0` because the seeding message is a human's and
+    # was sent a second ago: at the default 30 minutes the driver correctly
+    # stands down on round 2 rather than talking over someone who just spoke,
+    # and the test would be measuring THAT gate instead of this one.
+    offhours = OffHoursSettings(
+        window=_window_around_now(),
+        timezone="UTC",
+        max_rounds=2,
+        yield_after_human_minutes=0,
+    )
+    app, spec, iid = _app(llm, runner=_NewCallThenOutOfSteps(), max_rounds=1, offhours=offhours)
+    with TestClient(app) as client:
+        _today_is_a_workday(spec)
+        chat = client.post(f"/a/rca/items/{iid}/chats", json={"title": "t"}).json()
+        rid = chat["chat_id"]
+        base = f"/a/rca/items/{iid}/chats/{rid}"
+        client.put(f"{base}/goal", json={"condition": "the report exists", "offhours": True})
+
+        client.post(f"{base}/messages", json={"content": "go"})
+
+        _wait(lambda: (g := read_goal(spec, rid)) is not None and g.state == "exhausted")
+        goal = read_goal(spec, rid)
+        assert goal is not None
+        assert goal.offhours_rounds_used == 2  # the night budget is what it spent
+        assert goal.rounds_used == 0  # …and the office counter is untouched
 
 
 class _BrokenLlm(ILlm):
@@ -143,17 +198,33 @@ def test_circling_still_parks_the_goal_even_when_it_runs_out_of_steps():
         assert any("卡住" in m.content for m in _messages(spec, rid) if m.role == "goal")
 
 
+class _NewCallThenOutOfSteps:
+    """An agent actually working AND running out of room: a different file every
+    round, and the step limit every round."""
+
+    def __init__(self) -> None:
+        self.turn = 0
+
+    async def run(self, prompt: str, ctx):  # noqa: ANN001, ANN201 — mirrors the protocol
+        self.turn += 1
+        yield ToolStart(call_id=f"t{self.turn}", name="read_file", args={"path": f"{self.turn}.md"})
+        yield ToolEnd(call_id=f"t{self.turn}", output="…")
+        yield MaxTurnsExceeded(turns=30)
+
+
 def test_capped_turns_in_a_row_are_not_mistaken_for_going_in_circles():
     """The stall gate (#615) parks a goal after two turns with no progress, and
     it used to read "not ok" as its signal — so two step-capped turns looked
     identical to an agent re-issuing the same command, and a long job was parked
     for a human two rounds in.
 
-    Circling is still caught, by the thing that actually detects it: the tool
-    calls' fingerprint. This turn makes none, so it can never match.
+    A DIFFERENT tool call each round, which is what "making progress" looks like
+    to the only judgement that can tell: the fingerprint. Written this way on
+    purpose — a turn with no tool calls at all fingerprints as "" and can never
+    match, so it would pass this test without the gate being right.
     """
     llm = _ScriptLlm([])  # never satisfied — every verdict is NOT_MET
-    app, spec, iid = _app(llm, runner=_capped_runner(), max_rounds=3)
+    app, spec, iid = _app(llm, runner=_NewCallThenOutOfSteps(), max_rounds=3)
     with TestClient(app) as client:
         rid, base = _start(client, spec, iid)
 
