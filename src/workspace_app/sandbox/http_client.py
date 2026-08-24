@@ -30,6 +30,7 @@ from .protocol import (
     EnforcedLimits,
     ExecResult,
     FileEntry,
+    LiveSandbox,
     OutputSink,
     SandboxBusy,
     SandboxHandle,
@@ -346,6 +347,34 @@ class HttpSandbox:
         data = resp.json()
         logger.info("sandbox-http: created sandbox for item %s", sandbox_id)
         return SandboxHandle(id=_encode_handle(data["pod_url"], data["remote_id"]))
+
+    async def live_sandboxes(self) -> list[LiveSandbox] | None:
+        """Ask the host what it is running. See `Sandbox.live_sandboxes`.
+
+        Sent to the SERVICE, so it is answered by one arbitrary pod — hence the
+        contract that this is evidence of existence and never of absence. Each
+        entry carries the answering pod's own url, so the handle built here
+        addresses that pod directly, exactly like the one `create` returns.
+
+        Every failure yields `None`, never `[]`: an unreachable or too-old host
+        has told us nothing, and a caller that mistook that for "nothing is
+        running" would retire live sandboxes' records on a blip."""
+        try:
+            resp = await self._client.get(f"{self._base_url}/sandboxes", timeout=5.0)
+            resp.raise_for_status()
+            listed = resp.json().get("sandboxes")
+        except Exception:  # noqa: BLE001 — "could not ask" is an answer here, not a failure
+            logger.warning("sandbox-http: could not list the host's sandboxes", exc_info=True)
+            return None
+        if not isinstance(listed, list):
+            return None
+        return [
+            LiveSandbox(
+                handle=SandboxHandle(id=_encode_handle(e["pod_url"], e["remote_id"])),
+                item_id=e.get("item_id"),
+            )
+            for e in listed
+        ]
 
     async def resolve_tools(self, declared: Mapping[str, str]) -> dict[str, Any]:
         """#674: ask the host to make these third-party tools available.

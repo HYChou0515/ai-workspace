@@ -498,7 +498,14 @@ def make_host_app(
         environment could report success while the sandbox kept running, and how
         clearing a heartbeat could tell every replica's reaper that a directory
         somebody was working in was idle."""
-        return {"sandboxes": controller.live()}
+        # `advertise_url` for the same reason `create` returns it: the Service in
+        # front of this deployment load-balances, so this answer is THIS pod's,
+        # and anything the app then wants to do to a listed sandbox has to reach
+        # this pod. Without it the app could see an orphan and not be able to
+        # kill it. For the same reason the listing is evidence that something
+        # EXISTS and never evidence that something does not — another pod's
+        # sandboxes are simply not in this answer.
+        return {"sandboxes": [{**s, "pod_url": advertise_url} for s in controller.live()]}
 
     @app.post("/sandboxes")
     async def create(body: _CreateBody) -> Response:

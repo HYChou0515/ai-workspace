@@ -38,6 +38,7 @@ from .protocol import (
     EnforcedLimits,
     ExecResult,
     FileEntry,
+    LiveSandbox,
     OutputSink,
     SandboxHandle,
     SandboxNotFound,
@@ -356,6 +357,17 @@ class LocalProcessSandbox:
             return SandboxHandle(id=_validate_sandbox_id(sandbox_id))
         except ValueError:
             return None
+
+    async def live_sandboxes(self) -> list[LiveSandbox] | None:
+        """`None` — this backend has nothing to enumerate.
+
+        A sandbox here is a DIRECTORY on the shared volume, not a process: it
+        holds no cpu or memory, and it survives every restart. Listing the item
+        dirs would answer a different question ("who has files") in the place
+        that asks "what is running", so the honest answer is that it cannot say.
+        The hosted backend, where a sandbox really is a running thing under a
+        cgroup, is the one that can."""
+        return None
 
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)

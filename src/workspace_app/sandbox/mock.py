@@ -8,6 +8,7 @@ from .protocol import (
     EnforcedLimits,
     ExecResult,
     FileEntry,
+    LiveSandbox,
     OutputSink,
     SandboxHandle,
     SandboxNotFound,
@@ -74,6 +75,11 @@ class MockSandbox:
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
         # #345: the in-memory store is keyed by id, so the handle is the id.
         return SandboxHandle(id=sandbox_id)
+
+    async def live_sandboxes(self) -> list[LiveSandbox] | None:
+        # Keyed by id, and an entry exists exactly while the sandbox does — so
+        # this stand-in can answer the question truthfully rather than shrug.
+        return [LiveSandbox(handle=SandboxHandle(id=hid), item_id=hid) for hid in self._fs]
 
     async def kill(self, handle: SandboxHandle) -> None:
         self._require(handle)

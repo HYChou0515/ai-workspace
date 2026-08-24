@@ -197,10 +197,10 @@ async def test_the_host_can_say_which_items_have_a_live_sandbox():
         assert (await c.get("/sandboxes")).json()["sandboxes"] == []
 
         first = (await c.post("/sandboxes", json={"item_id": "item-a"})).json()["remote_id"]
-        await c.post("/sandboxes", json={"item_id": "item-b"})
+        second = (await c.post("/sandboxes", json={"item_id": "item-b"})).json()["remote_id"]
         listed = (await c.get("/sandboxes")).json()["sandboxes"]
         assert sorted(s["item_id"] for s in listed) == ["item-a", "item-b"]
-        assert {s["remote_id"] for s in listed} == {s["remote_id"] for s in listed}, (
+        assert {s["remote_id"] for s in listed} == {first, second}, (
             "each entry names the sandbox it is about"
         )
 
@@ -228,3 +228,18 @@ async def test_a_sandbox_created_without_an_item_is_listed_as_anonymous():
         listed = (await c.get("/sandboxes")).json()["sandboxes"]
         assert len(listed) == 1
         assert listed[0]["item_id"] is None
+
+
+async def test_a_listed_sandbox_can_be_addressed_directly():
+    """Naming the item is not enough to DO anything about it.
+
+    The service in front of the host load-balances, so a listing answers for the
+    one pod that happened to take the request, and every later call has to reach
+    THAT pod. `create` already solves this by returning the answering pod's own
+    directly-addressable url; a listing that omitted it would let the app see an
+    orphaned sandbox and still have no way to kill it."""
+    app = make_host_app(MockSandbox(), advertise_url="http://pod-7:8000")
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={"item_id": "item-a"})
+        listed = (await c.get("/sandboxes")).json()["sandboxes"]
+        assert [s["pod_url"] for s in listed] == ["http://pod-7:8000"]
