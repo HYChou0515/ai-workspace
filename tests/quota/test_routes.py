@@ -273,3 +273,67 @@ def test_closing_frees_the_slot_and_stops_listing_it_together():
             client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo", "hi"]}).status_code
             == 200
         )
+
+
+def _forget_heartbeat(spec: SpecStar, item_id: str) -> None:
+    """Lose the ledger row while the sandbox keeps running — the state every one
+    of these tests is about, reached the way production reaches it."""
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore
+
+    SpecstarActivityStore(spec)._forget_sync(item_id)
+
+
+def test_the_panel_lists_an_environment_no_ledger_row_names():
+    """The symptom: nothing on the page, and the sandbox is still running.
+
+    The list was drawn entirely from the heartbeat ledger, which is belief, and
+    belief goes missing — a pod that died between create and its first bump, a
+    row cleared by a close that killed nothing, a heartbeat that simply aged out
+    of the window while the sandbox kept running. Whatever the cause, the
+    environment vanished from the one page that offers a Close button, so there
+    was no longer anything to click, and it went on costing its owner.
+
+    Asking the backend what it is really running is the only cure, because no
+    record can be checked against another record."""
+    with _app(PerUserResources(count=3)) as (client, spec):
+        item = _mk(spec, "alice")
+        client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo", "hi"]})
+        # the ledger loses it, the machine does not
+        _forget_heartbeat(spec, item)
+        assert client.get("/me/resources").json()["live"] != [], (
+            "the panel only knew what it had written down"
+        )
+
+
+def test_an_environment_found_that_way_also_starts_counting_again():
+    """A panel that is honest while the gate stays blind is half a fix.
+
+    The limit counts the ledger, not the page. Re-arming the heartbeat is what
+    makes the two agree: the environment is running, so it costs, so the next
+    one is refused — which is also what makes the Close button on that row
+    worth pressing."""
+    with _app(PerUserResources(count=1)) as (client, spec):
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        client.post(f"/a/rca/items/{first}/exec", json={"cmd": ["echo", "hi"]})
+        _forget_heartbeat(spec, first)
+
+        # opening the panel finds it…
+        assert [e["item_id"] for e in client.get("/me/resources").json()["live"]] == [first]
+        # …and it is charged again, so the slot really is taken
+        assert (
+            client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo", "hi"]}).status_code
+            == 507
+        )
+
+
+def test_the_panel_does_not_list_someone_elses_environment():
+    """The backend answers about every sandbox on the pod that took the request,
+    not just mine. Attributing one of them to the reader would show a stranger's
+    work on their page — and hand them a Close button for it."""
+    with _app(PerUserResources(count=3)) as (client, spec):  # me == alice
+        theirs = _mk(spec, "bob")
+        client.post(f"/a/rca/items/{theirs}/exec", json={"cmd": ["echo", "hi"]})
+        _forget_heartbeat(spec, theirs)
+
+        assert client.get("/me/resources").json()["live"] == []

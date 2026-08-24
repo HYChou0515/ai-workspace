@@ -86,7 +86,7 @@ class EnforcedLimits:
 
 
 @dataclass(frozen=True)
-class LiveSandbox:
+class RunningSandbox:
     """One sandbox a backend reports as ACTUALLY running, right now.
 
     `item_id` is what the app calls it — the only name it has — and is `None`
@@ -235,7 +235,7 @@ class Sandbox(Protocol):
         See `EnforcedLimits`."""
         ...
 
-    async def live_sandboxes(self) -> list[LiveSandbox] | None:
+    async def running_sandboxes(self) -> list[RunningSandbox] | None:
         """What this backend is REALLY running — or `None` when it cannot say.
 
         Everything else the app knows about live sandboxes is stored belief: a

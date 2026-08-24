@@ -9,7 +9,12 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.filestore.migrating import MigratingFileStore
 from workspace_app.filestore.nfs_tree import NfsTreeFileStore
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
+from workspace_app.sandbox.protocol import (
+    RunningSandbox,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 
 
 class _CountingSandbox(MockSandbox):
@@ -39,10 +44,23 @@ class _HttpStyleSandbox(MockSandbox):
         super().__init__()
         self.create_calls = 0
         self.kill_calls = 0
+        # The host records which item each sandbox serves and can be asked. Not
+        # modelling that would make every test of the listing vacuous — the
+        # double would answer about handles nobody asked about.
+        self._item_of: dict[str, str] = {}
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         self.create_calls += 1
-        return await super().create(spec, sandbox_id=None)  # ignore id → fresh uuid
+        handle = await super().create(spec, sandbox_id=None)  # ignore id → fresh uuid
+        if sandbox_id is not None:
+            self._item_of[handle.id] = sandbox_id
+        return handle
+
+    async def running_sandboxes(self):
+        return [
+            RunningSandbox(handle=SandboxHandle(id=hid), item_id=self._item_of.get(hid))
+            for hid in self._fs
+        ]
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
         return None
@@ -1149,3 +1167,155 @@ async def test_close_session_does_not_report_a_kill_it_never_attempted():
 
     assert await addr.get("ws-1") is not None, "an unconfirmed kill erased the address"
     await sandbox.exists(handle, "/a")  # still alive — nothing claimed otherwise
+
+
+async def test_close_session_does_not_free_a_slot_it_did_not_free():
+    """An unconfirmed close must leave the tally alone.
+
+    The heartbeat is not bookkeeping — it is what a per-person limit counts, and
+    it is what tells every OTHER replica's reaper that an item is in use. Clearing
+    it after a kill that could not be confirmed does two things at once: it lets
+    the owner start another environment beside the one still running, and it
+    unlocks a reaper somewhere else to rmtree a directory somebody is working in.
+
+    The asymmetry decides it. Keeping a stale row costs a slot until the owner
+    clicks Close again — the row is still there, still clickable. Clearing a live
+    one cannot be undone by anybody."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    register_sandbox_activity(spec)
+
+    class _VanishedOnKill(_HttpStyleSandbox):
+        """The blip: the host is unreachable for a moment. The client cannot tell
+        that from a sandbox that was really reaped — it maps every non-timeout
+        transport error onto the same exception."""
+
+        async def kill(self, handle):
+            raise SandboxNotFound(handle.id)
+
+    sandbox = _VanishedOnKill()
+    addr = SpecstarAddressStore(spec)
+    activity = SpecstarActivityStore(spec)
+    registry = InvestigationRegistry(
+        sandbox=sandbox, address=addr, activity=activity, owner_of=lambda _i: "alice"
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+
+    await registry.close_session("ws-1")  # tolerated — it must not raise
+
+    assert await activity.last_active_ms("ws-1") is not None, (
+        "an unconfirmed close released the slot anyway"
+    )
+    assert await addr.get("ws-1") is not None, "and erased the only way to find it"
+
+
+async def test_close_session_falls_back_to_the_address_when_its_own_handle_is_stale():
+    """A cached handle is this pod's memory, and it can be out of date.
+
+    The host reaps on its own idle timer and pods die, so the handle a session
+    holds may name a sandbox that no longer exists while the item has since been
+    rebuilt somewhere else — `ensure_handle` already probes for exactly this. A
+    close that stopped at the stale handle killed nothing, reported that it had,
+    and left the real sandbox running."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    stale_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+    live_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    old_handle = await stale_pod.ensure_handle(await stale_pod.session("ws-1"))
+    await sandbox.kill(old_handle)  # the host reaped it out from under this pod
+    await addr.forget("ws-1")
+    live = await live_pod.ensure_handle(await live_pod.session("ws-1"))
+    assert live != old_handle
+
+    await stale_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(live, "/a")  # the one that was really running
+
+
+async def test_close_session_finds_a_sandbox_no_record_names():
+    """The last resort, and the only one that can clear an orphan.
+
+    A sandbox whose address was lost — an app pod that died between `create` and
+    the CAS publish, a record cleared by an older build of this very method — is
+    invisible to every record the app keeps. It keeps running and keeps costing
+    its owner, from a row that either is not there or has nothing behind it.
+    Asking the backend what it is actually running is the only way to reach it."""
+    sandbox = _HttpStyleSandbox()
+    orphaning_pod = InvestigationRegistry(sandbox=sandbox)
+    handle = await orphaning_pod.ensure_handle(await orphaning_pod.session("ws-1"))
+    orphaning_pod._sessions.clear()  # the pod died; nothing records this sandbox
+
+    fresh_pod = InvestigationRegistry(sandbox=sandbox)
+    await fresh_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(handle, "/a")
+
+
+async def test_close_session_does_not_kill_a_sandbox_belonging_to_another_item():
+    """The listing names every sandbox on the answering pod, not just ours.
+
+    Picking the wrong entry closes a stranger's environment mid-turn, which is
+    the worst thing this method could do and the reason it matches on item id
+    rather than on "the only one running"."""
+    sandbox = _HttpStyleSandbox()
+    pod = InvestigationRegistry(sandbox=sandbox)
+    mine = await pod.ensure_handle(await pod.session("ws-1"))
+    theirs = await pod.ensure_handle(await pod.session("ws-2"))
+    pod._sessions.clear()
+
+    await InvestigationRegistry(sandbox=sandbox).close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(mine, "/a")
+    await sandbox.exists(theirs, "/a")  # untouched
+
+
+async def test_close_session_keeps_the_records_when_only_the_kill_could_not_land():
+    """The write-back succeeding says nothing about the kill.
+
+    They are separate calls to the same host, and only the second one is what
+    actually frees the machine. Treating a completed write-back as a completed
+    close is the same mistake as clearing the row without killing anything."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    register_sandbox_activity(spec)
+
+    class _KillVanishes(_HttpStyleSandbox):
+        async def kill(self, handle):
+            raise SandboxNotFound(handle.id)
+
+    sandbox = _KillVanishes()
+    addr = SpecstarAddressStore(spec)
+    activity = SpecstarActivityStore(spec)
+    registry = InvestigationRegistry(
+        sandbox=sandbox,
+        address=addr,
+        activity=activity,
+        sync=_RecordingSync(),  # a durable store, so the write-back really runs
+        owner_of=lambda _i: "alice",
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+
+    await registry.close_session("ws-1")
+
+    assert await addr.get("ws-1") is not None
+    assert await activity.last_active_ms("ws-1") is not None

@@ -30,8 +30,8 @@ from .protocol import (
     EnforcedLimits,
     ExecResult,
     FileEntry,
-    LiveSandbox,
     OutputSink,
+    RunningSandbox,
     SandboxBusy,
     SandboxHandle,
     SandboxNotFound,
@@ -348,8 +348,8 @@ class HttpSandbox:
         logger.info("sandbox-http: created sandbox for item %s", sandbox_id)
         return SandboxHandle(id=_encode_handle(data["pod_url"], data["remote_id"]))
 
-    async def live_sandboxes(self) -> list[LiveSandbox] | None:
-        """Ask the host what it is running. See `Sandbox.live_sandboxes`.
+    async def running_sandboxes(self) -> list[RunningSandbox] | None:
+        """Ask the host what it is running. See `Sandbox.running_sandboxes`.
 
         Sent to the SERVICE, so it is answered by one arbitrary pod — hence the
         contract that this is evidence of existence and never of absence. Each
@@ -369,7 +369,7 @@ class HttpSandbox:
         if not isinstance(listed, list):
             return None
         return [
-            LiveSandbox(
+            RunningSandbox(
                 handle=SandboxHandle(id=_encode_handle(e["pod_url"], e["remote_id"])),
                 item_id=e.get("item_id"),
             )

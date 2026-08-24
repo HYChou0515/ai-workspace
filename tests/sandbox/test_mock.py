@@ -306,14 +306,14 @@ async def test_the_mock_reports_what_it_is_holding():
     listing can be tested against it — and `None` (cannot say) would make every
     such test vacuously pass."""
     sandbox = MockSandbox()
-    assert await sandbox.live_sandboxes() == []
+    assert await sandbox.running_sandboxes() == []
 
     await sandbox.create(SandboxSpec(), sandbox_id="item-a")
     b = await sandbox.create(SandboxSpec(), sandbox_id="item-b")
-    assert sorted(e.item_id or "" for e in await sandbox.live_sandboxes() or []) == [
+    assert sorted(e.item_id or "" for e in await sandbox.running_sandboxes() or []) == [
         "item-a",
         "item-b",
     ]
 
     await sandbox.kill(b)
-    assert [e.item_id for e in await sandbox.live_sandboxes() or []] == ["item-a"]
+    assert [e.item_id for e in await sandbox.running_sandboxes() or []] == ["item-a"]

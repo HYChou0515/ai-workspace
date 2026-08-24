@@ -128,6 +128,50 @@ def register_quota_routes(
     def _describe(item_id: str) -> tuple[str, str]:
         return locator.slug_of(item_id) or "", locator.title_of(item_id) or ""
 
+    async def _found_running(owner: str, already_listed: set[str]) -> list[_LiveEnvironment]:
+        """This person's environments that are RUNNING but that no ledger row
+        names — and, on the way past, put them back in the ledger.
+
+        The list used to be drawn entirely from the heartbeat, which is belief,
+        and belief goes missing: a pod that died between `create` and its first
+        bump, a row cleared by a close that killed nothing, a heartbeat that
+        aged out of the window while the sandbox kept running. Whatever the
+        cause, the environment disappeared from the one page that offers a Close
+        button — so there was nothing left to click — while it went on costing
+        its owner. Only the backend can settle it, because no record can be
+        checked against another record.
+
+        Re-arming the heartbeat is half the point. The per-person limit counts
+        the ledger, not this page, so a panel that were merely honest would
+        leave the gate blind — the environment would be visible and still not
+        charged. It runs, so it costs.
+
+        Scoped to the reader: the backend answers about every sandbox on the
+        replica that took the request, and one of them belonging to somebody
+        else must not appear on this page, let alone with a Close button. An
+        item nobody owns any more is skipped for the same reason.
+
+        A backend that cannot say (`None`) simply adds nothing; this only ever
+        finds MORE, so its absence leaves today's behaviour untouched."""
+        running = await registry.running_items()
+        found = []
+        for item_id in running or []:
+            if item_id in already_listed or locator.owner_of(item_id) != owner:
+                continue
+            await registry.record_running(item_id)
+            cost = await registry.would_cost(item_id)
+            slug, title = _describe(item_id)
+            found.append(
+                _LiveEnvironment(
+                    item_id=item_id,
+                    slug=slug,
+                    title=title,
+                    cpu_cores=cost.cpu_cores or 0.0,
+                    memory_bytes=cost.memory_bytes or 0,
+                )
+            )
+        return found
+
     async def _resources_of(owner: str) -> _MyResources:
         limits = await user_limits.for_user(owner)
         live_rows = (
@@ -147,6 +191,7 @@ def register_quota_routes(
                     memory_bytes=row.memory_bytes,
                 )
             )
+        live += await _found_running(owner, {row.item_id for row in live_rows})
         owned = []
         for item_id, used in await disk_ledger.per_item_for(owner):
             slug, title = _describe(item_id)

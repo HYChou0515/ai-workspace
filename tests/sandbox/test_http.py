@@ -903,7 +903,7 @@ async def test_the_client_can_ask_what_is_really_running(http_sandbox: HttpSandb
     a = await http_sandbox.create(SandboxSpec(), sandbox_id="item-a")
     await http_sandbox.create(SandboxSpec(), sandbox_id="item-b")
 
-    live = await http_sandbox.live_sandboxes()
+    live = await http_sandbox.running_sandboxes()
     assert live is not None
     assert sorted(e.item_id or "" for e in live) == ["item-a", "item-b"]
     # the handle the listing hands back is the one create minted, so the app can
@@ -911,7 +911,7 @@ async def test_the_client_can_ask_what_is_really_running(http_sandbox: HttpSandb
     assert a in {e.handle for e in live}
 
     await http_sandbox.kill(a)
-    live = await http_sandbox.live_sandboxes()
+    live = await http_sandbox.running_sandboxes()
     assert live is not None
     assert [e.item_id for e in live] == ["item-b"]
 
@@ -925,7 +925,7 @@ async def test_a_host_that_cannot_be_reached_says_so_rather_than_nothing():
     unrecoverable direction this listing exists to prevent."""
     async with httpx.AsyncClient() as client:
         sandbox = HttpSandbox(base_url=f"http://127.0.0.1:{_closed_port()}", client=client)
-        assert await sandbox.live_sandboxes() is None
+        assert await sandbox.running_sandboxes() is None
 
 
 async def test_a_host_too_old_to_answer_is_not_read_as_empty():
@@ -935,4 +935,4 @@ async def test_a_host_too_old_to_answer_is_not_read_as_empty():
     app = FastAPI()  # no /sandboxes route at all
     async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
         sandbox = HttpSandbox(base_url=_ADVERTISE, client=client)
-        assert await sandbox.live_sandboxes() is None
+        assert await sandbox.running_sandboxes() is None

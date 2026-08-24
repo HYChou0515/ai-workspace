@@ -38,8 +38,8 @@ from .protocol import (
     EnforcedLimits,
     ExecResult,
     FileEntry,
-    LiveSandbox,
     OutputSink,
+    RunningSandbox,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
@@ -358,7 +358,7 @@ class LocalProcessSandbox:
         except ValueError:
             return None
 
-    async def live_sandboxes(self) -> list[LiveSandbox] | None:
+    async def running_sandboxes(self) -> list[RunningSandbox] | None:
         """`None` — this backend has nothing to enumerate.
 
         A sandbox here is a DIRECTORY on the shared volume, not a process: it
