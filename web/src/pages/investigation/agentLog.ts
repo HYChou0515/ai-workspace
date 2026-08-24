@@ -536,7 +536,15 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         at: ev.created_at || now,
         message: { role: "user", author: ev.author, content: ev.content },
       });
-      return { ...log, entries, streaming: true, streamingBy: ev.author ?? null };
+      // #721: and the previous turn's error stops describing anything. `error`
+      // is sticky by design — nothing else clears it and `reconcileSnapshot`
+      // keeps it across a re-hydrate — which was right while a step-limited turn
+      // really did end the conversation. A goal now continues by itself, so
+      // without this the standing box would keep saying the conversation had
+      // stopped while the chat carried on in full view, and no reload would
+      // shift it. The BANNER stays in the transcript: that the turn ran out of
+      // room is still true, and still worth reading.
+      return { ...log, entries, streaming: true, streamingBy: ev.author ?? null, error: null };
 
     case "file_changed":
       // #43: a workspace file changed — a side effect handled in the hook

@@ -1,3 +1,6 @@
+// A NEW TURN CLEARS THE PREVIOUS TURN'S ERROR (#721) — see the describe block
+// at the foot of this file.
+//
 // happy-dom (not node) so the locale is deterministic: the reducer localizes
 // banners via initialLocale(), which reads navigator.language — present and
 // varying across Node versions/CI, absent locally. Pin it explicitly below so
@@ -6,6 +9,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import type { AgentEvent } from "../../events";
+import type { Message } from "../../api/types";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -15,6 +19,7 @@ import {
   logFromMessages,
   turnsFromEntry,
   turnPhase,
+  reconcileSnapshot,
   reduceAgent,
   tokensPerSec,
 } from "./agentLog";
@@ -734,5 +739,67 @@ describe("restore progress (#492 P11)", () => {
       elapsed_ms: 0,
     });
     expect(next.restore).toBeNull(); // a fresh turn starts clean
+  });
+});
+
+describe("a new turn clears the previous turn's error (#721)", () => {
+  /**
+   * `max_turns_exceeded` is the only terminal event that sets `log.error`, and
+   * that field is sticky ON PURPOSE: no reducer case clears it, and
+   * `reconcileSnapshot` deliberately keeps `prev.error` across a re-hydrate.
+   *
+   * That was right while hitting the step limit really did end the
+   * conversation. Since #721 a goal continues by itself, so the standing red
+   * box would go on telling the reader the conversation had stopped while the
+   * chat visibly carries on — a sentence that used to be true and is now
+   * permanently false, and one no reload can clear.
+   *
+   * A new turn is precisely the moment a previous turn's error stops describing
+   * anything, so that is where it clears. The BANNER stays: the transcript
+   * should still record that the turn ran out of room.
+   */
+  const capped = (): AgentLog =>
+    reduceAgent(EMPTY_LOG, { type: "max_turns_exceeded", turns: 30 } as AgentEvent);
+
+  const nextTurn = (log: AgentLog): AgentLog =>
+    reduceAgent(log, {
+      type: "user_message",
+      author: "goal-driver",
+      content: "[goal] keep going",
+    } as AgentEvent);
+
+  it("leaves the error up while nothing else has happened", () => {
+    expect(capped().error).toContain("30");
+  });
+
+  it("clears it when the next turn opens", () => {
+    const next = nextTurn(capped());
+    expect(next.error).toBeNull();
+    expect(next.streaming).toBe(true);
+  });
+
+  it("keeps the banner in the transcript — only the standing box goes", () => {
+    const next = nextTurn(capped());
+    expect(next.entries.some((e) => e.kind === "banner" && e.text.includes("30"))).toBe(true);
+  });
+
+  it("stays cleared through the re-hydrate that follows every turn", () => {
+    // `reconcileSnapshot` keeps `prev.error ?? snap.error`, and the step-limit
+    // message IS persisted as `role="error"`. If the snapshot derived an error
+    // from it, clearing above would be undone the moment the next turn ended —
+    // the fix would work until the first re-read, which is the worst place for
+    // it to stop working.
+    const continued = nextTurn(capped());
+    const rehydrated = reconcileSnapshot(continued, {
+      messages: [
+        { role: "user", content: "go" },
+        { role: "error", content: "The agent stopped after reaching its step limit (30)." },
+        { role: "user", content: "[goal] keep going" },
+        { role: "assistant", content: "carrying on" },
+      ] as Message[],
+    });
+    expect(rehydrated.error).toBeNull();
+    // …and the reader still sees that the turn ran out of room.
+    expect(rehydrated.entries.some((e) => e.kind === "banner" && e.text.includes("30"))).toBe(true);
   });
 });
