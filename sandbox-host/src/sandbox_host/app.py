@@ -285,6 +285,14 @@ class _HostController:
     async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
         handle = await self.sandbox.create(spec)
         self._last_active[handle.id] = self.clock()
+        # Recorded whether or not an archive is wired. It began as `persist`'s
+        # private lookup, so it was only filled on the archive path — but it is
+        # also the only name the APP knows a sandbox by, and `GET /sandboxes`
+        # exists so the app can check its records against what is really running.
+        # Keyed on every create, or that listing is blank on any deployment
+        # without an archive.
+        if item_id is not None:
+            self._item_of[handle.id] = item_id
         # #492: restore the durable archive into the fresh local dir (no-op when
         # nothing archived yet — a brand-new item starts empty), then mark the
         # sandbox ready. rsync restore is SYNCHRONOUS here, so by the time create
@@ -293,7 +301,6 @@ class _HostController:
         # is written LAST so a crash mid-restore leaves it absent and persist
         # (gated on ready) can't push a half-restored dir back over the archive.
         if self._archive is not None and item_id is not None:
-            self._item_of[handle.id] = item_id
             await self._archive.restore(item_id, self.sandbox.workspace_dir(handle))
             # #504: the bulk rsync restore writes files as root (no `-o`), so the
             # restored tree comes back root-owned. Re-own it to the sandbox uid
@@ -301,6 +308,16 @@ class _HostController:
             await self.sandbox.reown(handle)
             await self.sandbox.mark_ready(handle)
         return handle
+
+    def live(self) -> list[dict[str, object]]:
+        """Every sandbox this host is running, and which item it serves.
+
+        Read from the same two dicts the idle reaper already keeps, so a sandbox
+        cannot be live for one and absent from the other."""
+        return [
+            {"remote_id": rid, "item_id": self._item_of.get(rid), "last_active": at}
+            for rid, at in self._last_active.items()
+        ]
 
     async def persist(self, rid: str, *, delete: bool) -> None:
         """#492: rsync the sandbox's live working dir → its durable NFS archive.
@@ -468,6 +485,20 @@ def make_host_app(
     @app.exception_handler(FileNotFoundError)
     async def _file_not_found(_request: Request, exc: FileNotFoundError) -> JSONResponse:
         return _error(exc)
+
+    @app.get("/sandboxes")
+    async def list_sandboxes() -> dict[str, object]:
+        """What is ACTUALLY running here, keyed by item.
+
+        The app keeps records — a heartbeat that bills people, an address that
+        routes, a panel offering a Close button — and until this existed it had
+        no way to check any of them against reality. A stale record read exactly
+        like a true one, so clearing a record became the only available way to
+        say "gone", including when it was not: that is how closing an
+        environment could report success while the sandbox kept running, and how
+        clearing a heartbeat could tell every replica's reaper that a directory
+        somebody was working in was idle."""
+        return {"sandboxes": controller.live()}
 
     @app.post("/sandboxes")
     async def create(body: _CreateBody) -> Response:

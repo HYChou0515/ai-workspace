@@ -179,3 +179,52 @@ async def test_healthz_survives_a_backend_that_cannot_answer():
         resp = await c.get("/healthz")
     assert resp.status_code == 200
     assert resp.json()["defaults"] == {"cpu_cores": None, "memory_bytes": None}
+
+
+async def test_the_host_can_say_which_items_have_a_live_sandbox():
+    """The app cannot otherwise find out what exists.
+
+    Every record it keeps — the heartbeat that bills people, the address that
+    routes to a sandbox, the panel that offers a Close button — is a belief
+    written down at some past moment. Nothing could check those beliefs against
+    the machine, so a stale one was indistinguishable from a true one, and
+    clearing a record became the only way to say "gone" even when it was not.
+
+    Keyed by ITEM, because that is the only name the app has. The host already
+    tracks both halves for its own idle reaper."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")
+    async with _client(app) as c:
+        assert (await c.get("/sandboxes")).json()["sandboxes"] == []
+
+        first = (await c.post("/sandboxes", json={"item_id": "item-a"})).json()["remote_id"]
+        await c.post("/sandboxes", json={"item_id": "item-b"})
+        listed = (await c.get("/sandboxes")).json()["sandboxes"]
+        assert sorted(s["item_id"] for s in listed) == ["item-a", "item-b"]
+        assert {s["remote_id"] for s in listed} == {s["remote_id"] for s in listed}, (
+            "each entry names the sandbox it is about"
+        )
+
+        await c.delete(f"/sandboxes/{first}")
+        assert [s["item_id"] for s in (await c.get("/sandboxes")).json()["sandboxes"]] == ["item-b"]
+
+
+async def test_a_sandbox_created_without_an_archive_still_remembers_its_item():
+    """`_item_of` was filled only when an NFS archive was wired, because until
+    now its only reader was `persist`. A listing keyed by item is useless on a
+    deployment with no archive if the mapping is not there."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")  # no archive
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={"item_id": "item-a"})
+        assert [s["item_id"] for s in (await c.get("/sandboxes")).json()["sandboxes"]] == ["item-a"]
+
+
+async def test_a_sandbox_created_without_an_item_is_listed_as_anonymous():
+    """An older app, or a caller that has no item, still gets a sandbox — and it
+    must appear in the listing, or the host would under-report what it is
+    running."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={})
+        listed = (await c.get("/sandboxes")).json()["sandboxes"]
+        assert len(listed) == 1
+        assert listed[0]["item_id"] is None
