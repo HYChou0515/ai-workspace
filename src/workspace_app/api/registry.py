@@ -716,7 +716,6 @@ class InvestigationRegistry:
         """
         s = self._sessions.get(investigation_id)
         handle: SandboxHandle | None = None
-        gone = False
         killed_here = False
         # Each source can name a sandbox an earlier one already tried, and a
         # teardown is not free — it rsyncs the whole workspace to the durable
@@ -738,7 +737,7 @@ class InvestigationRegistry:
                     # writes into it, and this kill then rmtrees the dir under
                     # an acknowledged write.
                     tried.add(handle.id)
-                    gone, killed_here = await self._teardown(investigation_id, handle)
+                    killed_here = await self._teardown(investigation_id, handle)
 
         # A session with no handle at all is the NORMAL state, not an edge case:
         # sandboxes are lazy, so every pod that has served one chat turn holds
@@ -750,12 +749,10 @@ class InvestigationRegistry:
             published = await self.address.get(investigation_id)
             if published is not None and published.id not in tried:
                 tried.add(published.id)
-                went, killed_here = await self._teardown(investigation_id, published)
-                gone = gone or went
+                killed_here = await self._teardown(investigation_id, published)
 
         if not killed_here:
-            went, killed_here = await self._close_unrecorded(investigation_id, tried)
-            gone = gone or went
+            killed_here = await self._close_unrecorded(investigation_id, tried)
 
         if self.activity is not None:
             await self.activity.forget(investigation_id)
@@ -769,7 +766,7 @@ class InvestigationRegistry:
         elif s is None:
             self._sessions.pop(investigation_id, None)
 
-    async def _close_unrecorded(self, item: str, tried: set[str]) -> tuple[bool, bool]:
+    async def _close_unrecorded(self, item: str, tried: set[str]) -> bool:
         """Tear down a sandbox for `item` that no record of ours names.
 
         This is how an orphan gets cleared. A sandbox whose address was lost —
@@ -788,45 +785,41 @@ class InvestigationRegistry:
         the session just failed to kill, and re-running the teardown would rsync
         the whole workspace to the archive a second time for nothing.
 
-        Returns `_teardown`'s pair, ORed over the matches. A backend that cannot
-        say (`None`) reports the same as an empty answer — this only ever ADDS a
-        way to find something, so its silence leaves the earlier sources to it.
+        True if any match was killed here. A backend that cannot say (`None`)
+        reports the same as an empty answer — this only ever ADDS a way to find
+        something, so its silence leaves the earlier sources to it.
         """
         listed = await self.sandbox.running_sandboxes()
         if not listed:
-            return False, False
-        gone = killed = False
+            return False
+        killed = False
         for entry in listed:
             if entry.item_id == item and entry.handle.id not in tried:
                 tried.add(entry.handle.id)
-                went, did = await self._teardown(item, entry.handle)
-                gone = gone or went
-                killed = killed or did
-        return gone, killed
+                killed = await self._teardown(item, entry.handle) or killed
+        return killed
 
-    async def _teardown(self, item: str, handle: SandboxHandle) -> tuple[bool, bool]:
-        """Persist and kill one sandbox. Returns `(gone, killed_here)`.
+    async def _teardown(self, item: str, handle: SandboxHandle) -> bool:
+        """Persist and kill one sandbox. True when THIS call completed the kill.
 
-        Two answers because two records are governed by different questions.
+        The answer steers the SEARCH and nothing else: while no source has
+        actually ended a sandbox, the next source is still worth asking. That is
+        why it is not "is it gone" — a stale cached handle is gone, and the
+        sandbox the published address names is still running, so stopping there
+        would leave the live one behind.
 
-        `gone` — the sandbox is not there any more, whether this call ended it or
-        found it already ended. `SandboxNotFound` counts: it is exactly what
-        `kill_idle` suppresses before forgetting the heartbeat, and what `_alive`
-        reads as "rebuild". The case where the sandbox IS alive has its own
-        signal — a reachable-but-slow host raises `SandboxBusy` (#492), which
-        propagates out of here untouched so every record stays put and the caller
-        is told to retry (503).
-
-        `killed_here` — this call completed the kill. It steers the SEARCH and
-        nothing else: while no source has actually ended a sandbox, the next
-        source is still worth asking (a stale cached handle reports gone while
-        the sandbox the address names is still running). It governs no deletion,
-        so being wrong about it costs a redundant lookup, never a record.
+        It governs no deletion, so being wrong about it costs a redundant lookup
+        rather than a record. `SandboxNotFound` is therefore just False: the
+        sandbox is not there (the same reading `kill_idle` and `_alive` already
+        give that signal), and the caller carries on looking. The case where the
+        sandbox IS alive has its own signal — a reachable-but-slow host raises
+        `SandboxBusy` (#492), which propagates from here untouched so every
+        record stays put and the caller is told to retry (503).
 
         A write-back that cannot reach the sandbox means the kill has nothing to
-        act on, so it stops there — gone, but not killed here. A write-back that
-        SUCCEEDS says nothing about the kill: they are separate calls to the same
-        host and only the second frees the machine."""
+        act on, so it stops there. A write-back that SUCCEEDS says nothing about
+        the kill: they are separate calls to the same host and only the second
+        frees the machine."""
         if self._has_durable:
             try:
                 await self._writeback(item, handle, delete=True)
@@ -836,11 +829,11 @@ class InvestigationRegistry:
                     handle.id,
                     item,
                 )
-                return True, False
+                return False
         logger.info("registry: close_session killing sandbox %s for item %s", handle.id, item)
         try:
             await self.sandbox.kill(handle)
         except SandboxNotFound:
             logger.info("registry: sandbox %s for item %s was already gone", handle.id, item)
-            return True, False
-        return True, True
+            return False
+        return True
