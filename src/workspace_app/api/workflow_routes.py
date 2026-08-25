@@ -126,7 +126,7 @@ def register_workflow_routes(
 
         return go
 
-    async def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str = ""):
+    async def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str):
         """Validate the item belongs to the slug AND carries the requested workflow —
         a package workflow on its profile (manual §4) OR a WORKSPACE-authored
         ``.workflows/<id>.json`` (§22 P4, shadowing same-id package). Returns
@@ -484,8 +484,9 @@ def register_workflow_routes(
     ) -> dict:
         """#100 (manual §10): answer a `human_gate` — records the decision artifact
         and resumes the run (completed steps skip; the gate reads the decision)."""
-        locator.require_access(slug, item_id, "converse")  # #306 PR3: resumes/drives the run
-        investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
+        # #306 PR3: resumes/drives the run.
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        profile = locator.profile_of(investigation_id)
         try:
             await workflow_orchestrator.decide(
                 slug=slug,
@@ -496,6 +497,9 @@ def register_workflow_routes(
                 input=body.input,
                 decided_by=get_user_id(),
             )
+        except ResourceIDNotFoundError as exc:
+            logger.warning("workflow_routes: decision for unknown run %s: %s", run_id, exc)
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
         except NotAwaitingDecision as exc:
             logger.warning(
                 "workflow_routes: decision for run %s not awaiting a gate: %s", run_id, exc
@@ -520,8 +524,9 @@ def register_workflow_routes(
         then runs the read-only steerer in the background — it streams into the run's
         chat and, when it has a plan, suspends the run `awaiting_human` with
         `pending_steer` set for the human to confirm (the FE refetches the run)."""
-        locator.require_access(slug, item_id, "converse")  # #306 PR3: stops + steers the run
-        investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
+        # #306 PR3: stops + steers the run.
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        profile = locator.profile_of(investigation_id)
         try:
             await workflow_orchestrator.steer(
                 slug=slug,
@@ -548,8 +553,9 @@ def register_workflow_routes(
         """#288 (manual §10): resolve a pending steer plan — approve to apply the edits +
         invalidate the steps and resume the same run (the valid prefix skips, §9), or
         reject to discard it (the run returns to its gate or to a stopped state)."""
-        locator.require_access(slug, item_id, "converse")  # #306 PR3: resolves the steer plan
-        investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
+        # #306 PR3: resolves the steer plan.
+        investigation_id = locator.require_access(slug, item_id, "converse")
+        profile = locator.profile_of(investigation_id)
         try:
             await workflow_orchestrator.confirm_steer(
                 slug=slug,
@@ -559,6 +565,9 @@ def register_workflow_routes(
                 approve=body.approve,
                 decided_by=get_user_id(),
             )
+        except ResourceIDNotFoundError as exc:
+            logger.warning("workflow_routes: steer confirm for unknown run %s: %s", run_id, exc)
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
         except NotAwaitingSteer as exc:
             logger.warning(
                 "workflow_routes: steer confirm for run %s not awaiting: %s", run_id, exc
