@@ -624,20 +624,35 @@ class InvestigationRegistry:
         already reaped (its own idle TTL, a restart) raises `SandboxNotFound`
         here, and letting that abort the loop leaked every session after it —
         on the one path whose whole job is to leave nothing behind. Already gone
-        is the goal, so it is not even a warning."""
+        is the goal, so it is not even a warning.
+
+        Anything else IS a warning, and stops that one item rather than killing
+        past it: a kill can rmtree the item's shared dir, so proceeding after a
+        write-back we know did not land trades a slow shutdown for lost work."""
         logger.info("registry: close_all reaping %d session(s)", len(self._sessions))
         for inv_id in list(self._sessions):
             s = self._sessions.pop(inv_id)
             if s.handle is None:
                 continue
             try:
-                with contextlib.suppress(SandboxNotFound):
-                    if self._has_durable:
+                if self._has_durable:
+                    # A write-back that fails for any reason OTHER than "the
+                    # sandbox is already gone" stops this item here, KEEPING the
+                    # sandbox: killing it can rmtree the item's shared dir, and
+                    # doing that on top of a durable snapshot we know is stale
+                    # is how shutdown turns a bad minute into lost work. The dir
+                    # outlives this process; the next pod warms it.
+                    try:
                         await self._writeback(inv_id, s.handle, delete=True)
+                    except SandboxNotFound:
+                        continue  # already gone — nothing to mirror, nothing to kill
+                with contextlib.suppress(SandboxNotFound):
                     await self.sandbox.kill(s.handle)
             except Exception:  # noqa: BLE001 — one bad item must not strand the rest
                 logger.warning(
-                    "registry: close_all skipped item %s (teardown failed)", inv_id, exc_info=True
+                    "registry: close_all left item %s behind (teardown failed)",
+                    inv_id,
+                    exc_info=True,
                 )
 
     async def close_session(self, investigation_id: str) -> None:
@@ -701,14 +716,6 @@ class InvestigationRegistry:
         """
         s = self._sessions.get(investigation_id)
         handle: SandboxHandle | None = None
-        if s is not None:
-            async with s.lock:
-                # Re-read under the lock: a concurrent close may have finished
-                # and replaced the session. Its sandbox still has to be torn
-                # down, so the search below carries on either way.
-                if self._sessions.get(investigation_id) is s:
-                    handle, s.handle = s.handle, None
-
         gone = False
         killed_here = False
         # Each source can name a sandbox an earlier one already tried, and a
@@ -716,9 +723,22 @@ class InvestigationRegistry:
         # archive before killing. Carrying the ids keeps the fallbacks a search
         # for something NEW rather than a retry of the same handle.
         tried: set[str] = set()
-        if handle is not None:
-            tried.add(handle.id)
-            gone, killed_here = await self._teardown(investigation_id, handle)
+        if s is not None:
+            async with s.lock:
+                # Re-read under the lock: a concurrent close may have finished
+                # and replaced the session. Its sandbox still has to be torn
+                # down, so the search below carries on either way.
+                if self._sessions.get(investigation_id) is s:
+                    handle, s.handle = s.handle, None
+                if handle is not None:
+                    # INSIDE the lock — see the paragraph above. Taking the
+                    # handle under it and then tearing down outside restores the
+                    # #345 race in full: the window between the two is exactly
+                    # where a concurrent file op re-warms the same item dir and
+                    # writes into it, and this kill then rmtrees the dir under
+                    # an acknowledged write.
+                    tried.add(handle.id)
+                    gone, killed_here = await self._teardown(investigation_id, handle)
 
         # A session with no handle at all is the NORMAL state, not an edge case:
         # sandboxes are lazy, so every pod that has served one chat turn holds

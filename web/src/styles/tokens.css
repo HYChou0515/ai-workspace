@@ -46,7 +46,6 @@
   --err:   #C44A3A;
   --info:  #2D6CC9;
 
-
   /* Categorical chip palette (#GH-projects B) — a small, muted, on-brand set of
    * hues auto-assigned to single-select values (status/labels). A soft rgba fill
    * over the theme paper + a readable ink. The inks are tuned per theme: these

@@ -149,6 +149,13 @@ class HttpSandbox:
         # each wrote the cache and the LAST writer won — so a failing probe
         # could overwrite an answer the host had already given correctly.
         self._host_defaults_lock = asyncio.Lock()
+        # Same backoff, for the listing. It is on the panel render AND the close
+        # path, and it has no cache on purpose — a stale answer to "what is
+        # running" is worth much less than a stale ceiling, which only changes
+        # when the host is redeployed. What it does need is the FAILURE memory:
+        # without it a down host makes every concurrent caller pay its own full
+        # timeout, which is the queue `_host_defaults_retry_at` exists to stop.
+        self._listing_retry_at = 0.0
 
     async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
         """What the HOST will really cap this sandbox at.
@@ -358,7 +365,15 @@ class HttpSandbox:
 
         Every failure yields `None`, never `[]`: an unreachable or too-old host
         has told us nothing, and a caller that mistook that for "nothing is
-        running" would retire live sandboxes' records on a blip."""
+        running" would retire live sandboxes' records on a blip.
+
+        A failure is remembered briefly (`host_defaults_retry_after`, the same
+        budget the ceilings use). Not remembering it meant a down host cost every
+        concurrent caller a full timeout each, on a page anyone can open — and
+        the answer they would all wait for is the same `None`. Successes are NOT
+        cached: what is running changes constantly, unlike a ceiling."""
+        if self._monotonic() < self._listing_retry_at:
+            return None
         try:
             resp = await self._client.get(f"{self._base_url}/sandboxes", timeout=5.0)
             resp.raise_for_status()
@@ -376,6 +391,7 @@ class HttpSandbox:
             ]
         except Exception:  # noqa: BLE001 — "could not ask" is an answer here, not a failure
             logger.warning("sandbox-http: could not list the host's sandboxes", exc_info=True)
+            self._listing_retry_at = self._monotonic() + self._host_defaults_retry_after
             return None
 
     async def resolve_tools(self, declared: Mapping[str, str]) -> dict[str, Any]:

@@ -72,5 +72,3 @@ describe("board card number contrast", () => {
     expect(contrast(ink, card)).toBeGreaterThanOrEqual(4);
   });
 });
-
-

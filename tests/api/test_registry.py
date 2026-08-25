@@ -48,6 +48,15 @@ class _HttpStyleSandbox(MockSandbox):
         # modelling that would make every test of the listing vacuous — the
         # double would answer about handles nobody asked about.
         self._item_of: dict[str, str] = {}
+        # Handles the LISTING will not name. The real host runs several replicas
+        # behind a load balancer, so `GET /sandboxes` answers for the one pod
+        # that took the request and no more — put a handle here to place it on
+        # another pod. Answering about everything instead made the double
+        # STRICTLY more informative than the wire, which silently retired the
+        # published address: `_close_unrecorded` reached every sandbox the
+        # address existed to reach, so deleting the address branch outright left
+        # every test green, including the one named after it.
+        self.on_other_replica: set[str] = set()
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         self.create_calls += 1
@@ -60,6 +69,7 @@ class _HttpStyleSandbox(MockSandbox):
         return [
             RunningSandbox(handle=SandboxHandle(id=hid), item_id=self._item_of.get(hid))
             for hid in self._fs
+            if hid not in self.on_other_replica
         ]
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
@@ -1388,25 +1398,32 @@ async def test_close_session_writes_back_before_it_gives_up_on_the_kill():
 
 
 async def test_close_session_leaves_a_session_that_woke_up_under_it():
-    """The lock is released before the teardown, so a turn can re-acquire into
-    the SAME session object while it runs.
+    """The fallbacks run OUTSIDE the session lock, so a turn can re-acquire into
+    the same session object while one of them is in flight.
 
-    Popping that session drops a live handle on the floor: the next file op
-    builds a fresh one for an item that already has a running sandbox, and the
-    two working dirs diverge. Only a session still holding the `None` this
-    method put there may be evicted."""
+    (The pod's own cached handle is torn down under the lock — that is the #345
+    guarantee, and a concurrent file op simply waits and then re-acquires. The
+    address and the listing name handles this pod does not own, and holding a
+    local lock across a call to another replica would buy nothing.)
+
+    Popping such a session drops a live handle on the floor: the next file op
+    builds a fresh sandbox for an item that already has one, and the two working
+    dirs diverge. Only a session still holding the `None` this method put there
+    may be evicted."""
     sandbox = _HttpStyleSandbox()
     registry = InvestigationRegistry(sandbox=sandbox)
+    # A session with no cached handle — the normal state for a pod that served a
+    # chat turn — so the teardown comes from the listing, outside the lock.
     session = await registry.session("ws-1")
-    await registry.ensure_handle(session)
+    orphan = await sandbox.create(SandboxSpec(), sandbox_id="ws-1")
 
     reacquired = []
+    real_kill = sandbox.kill
 
     async def _wake_mid_teardown(handle):
-        # stands in for a turn arriving while the kill is in flight
-        if not reacquired:
+        if not reacquired:  # stands in for a turn arriving while the kill runs
             reacquired.append(await registry.ensure_handle(session))
-        return await _HttpStyleSandbox.kill(sandbox, handle)
+        return await real_kill(handle)
 
     sandbox.kill = _wake_mid_teardown  # ty: ignore[invalid-assignment]
     await registry.close_session("ws-1")
@@ -1414,3 +1431,76 @@ async def test_close_session_leaves_a_session_that_woke_up_under_it():
     assert reacquired, "the test never exercised the race it is about"
     assert registry._sessions.get("ws-1") is session, "evicted a session holding a live handle"
     assert session.handle == reacquired[0]
+    assert reacquired[0] != orphan
+
+
+async def test_close_session_kills_what_only_the_address_can_name():
+    """The listing cannot stand in for the published address.
+
+    `GET /sandboxes` answers for the ONE host replica that took the request, so
+    a sandbox on any other pod is simply absent from it — which is the whole
+    reason the address store exists. A close that reached only the listing would
+    work or not by which replica the load balancer picked."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    warm_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+    other_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    handle = await warm_pod.ensure_handle(await warm_pod.session("ws-1"))
+    sandbox.on_other_replica.add(handle.id)  # the listing will not name it
+    assert [e.item_id for e in await sandbox.running_sandboxes() or []] == []
+
+    await other_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(handle, "/a")
+
+
+async def test_close_all_keeps_a_sandbox_whose_durable_snapshot_did_not_land():
+    """Shutdown must not kill past a failed write-back.
+
+    `kill` can rmtree the item's shared dir (#345), so ending a sandbox whose
+    durable snapshot we know is stale trades a slow shutdown for lost work. The
+    dir outlives this process either way — the next pod warms it — so stopping
+    at that item is free, and the alternative is not."""
+    sandbox = _CountingSandbox()
+
+    class _FailingSync(_RecordingSync):
+        async def mirror(self, workspace_id, handle):
+            raise RuntimeError("the durable store is unreachable")
+
+    registry = InvestigationRegistry(sandbox=sandbox, sync=_FailingSync())
+    await registry.ensure_handle(await registry.session("ws-1"))
+
+    await registry.close_all()  # must not raise
+
+    assert sandbox.kill_calls == 0, "killed a sandbox whose snapshot never landed"
+
+
+async def test_close_all_carries_on_past_one_item_it_could_not_finish():
+    """The one path whose whole job is to leave nothing behind used to leak
+    every session after the first failure."""
+    sandbox = _CountingSandbox()
+    real_kill = sandbox.kill
+
+    async def _first_one_fails(handle):
+        if sandbox.kill_calls == 0:
+            sandbox.kill_calls += 1
+            raise RuntimeError("device busy")
+        return await real_kill(handle)
+
+    registry = InvestigationRegistry(sandbox=sandbox)
+    await registry.ensure_handle(await registry.session("ws-1"))
+    await registry.ensure_handle(await registry.session("ws-2"))
+    sandbox.kill = _first_one_fails  # ty: ignore[invalid-assignment]
+
+    await registry.close_all()
+
+    assert sandbox.kill_calls == 2, "the second session was stranded by the first"
+    assert registry._sessions == {}
