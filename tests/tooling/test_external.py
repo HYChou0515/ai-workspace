@@ -43,6 +43,7 @@ _ANSWER = {
         "wafer-history": {
             "sha": "a" * 64,
             "version": "1.4.2",
+            "author": "Wafer Team <wafer@example.com>",
             "stale": False,
             "commands": [
                 {
@@ -121,8 +122,49 @@ async def test_a_tool_served_from_the_last_known_good_copy_is_flagged() -> None:
 
     external = await resolve_external_tools(_Host(answer), {"wafer-history": "u"})
 
-    assert external.stale == ("wafer-history",)
+    assert external.provenance["wafer-history"].stale is True
     assert external.shas == {"wafer-history": "a" * 64}  # still usable
+
+
+async def test_the_release_and_its_author_survive_the_resolve() -> None:
+    """#724: the host answers with both and the app used to keep neither, so
+    "which version is this and who wrote it" had no answer anywhere above the
+    host — including for the person the tool just misbehaved for."""
+    external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "https://g/m"})
+
+    got = external.provenance["wafer-history"]
+    assert got.version == "1.4.2"
+    assert got.author == "Wafer Team <wafer@example.com>"
+    assert got.stale is False
+
+
+async def test_a_tool_published_without_an_author_still_resolves() -> None:
+    """Every bundle built before the builder wrote the field. Dropping the key
+    must not be the thing that fails a turn."""
+    answer = {
+        "tools": {
+            "wafer-history": {
+                k: v for k, v in _ANSWER["tools"]["wafer-history"].items() if k != "author"
+            }
+        },
+        "refused": {},
+    }
+
+    external = await resolve_external_tools(_Host(answer), {"wafer-history": "u"})
+
+    assert external.provenance["wafer-history"].author is None
+    assert external.shas == {"wafer-history": "a" * 64}
+
+
+async def test_confining_to_what_is_mounted_drops_the_provenance_too() -> None:
+    """A tool the live sandbox never mounted is not running, so claiming a
+    version for it would be describing something that is not there."""
+    external = await resolve_external_tools(_Host(_ANSWER), {"wafer-history": "u"})
+
+    confined = confine_to_mounted(external, live=True, mounted={})
+
+    assert confined.provenance == {}
+    assert "wafer-history" in confined.refused
 
 
 async def test_prewarm_pulls_every_apps_tools_into_the_cache() -> None:

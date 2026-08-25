@@ -1278,6 +1278,18 @@ export const messages = {
   "tools.save": { "zh-TW": "儲存", en: "Save" },
   "tools.cancel": { "zh-TW": "取消", en: "Cancel" },
   "tools.loading": { "zh-TW": "載入工具中…", en: "Loading tools…" },
+  "tools.external.title": { "zh-TW": "第三方工具", en: "Third-party tools" },
+  "tools.external.desc": {
+    "zh-TW": "由外部作者發布、隨他們的版本更新，所以這裡只說明現在跑的是哪一版，沒有開關。",
+    en: "Published by outside authors and updated on their release schedule, so this says which release is running rather than offering a switch.",
+  },
+  "tools.external.by": { "zh-TW": "作者 {author}", en: "by {author}" },
+  "tools.external.noAuthor": { "zh-TW": "未註明作者", en: "No author published" },
+  "tools.external.stale": {
+    "zh-TW": "取自快取副本，可能不是最新版",
+    en: "From the cached copy — may not be the latest",
+  },
+  "tools.external.unavailable": { "zh-TW": "目前無法取得：{reason}", en: "Unavailable: {reason}" },
   "tools.discard": {
     "zh-TW": "尚未儲存的變更會遺失，要關閉嗎？",
     en: "Discard unsaved changes?",

@@ -262,6 +262,26 @@ export type ItemToolState = {
   effective: boolean;
 };
 
+/** #674/#724: one third-party tool the App declares, as the server resolved it
+ * for this item (GET /a/{slug}/items/{id}/tools → `external`). Read-only —
+ * these have no per-item switch — so every field answers "what am I actually
+ * running": which release, whose, and whether it came from the host's cached
+ * copy. `version`/`author` are null exactly when `unavailable` is set. */
+export type ExternalToolState = {
+  key: string;
+  version: string | null;
+  author: string | null;
+  stale: boolean;
+  unavailable: string | null;
+};
+
+/** The whole per-item tools response: the pickable App tools plus the
+ * read-only third-party section. */
+export type ItemTools = {
+  tools: ItemToolState[];
+  external: ExternalToolState[];
+};
+
 /** #380: one available skill's per-item picker state (GET
  * /a/{slug}/items/{id}/skills), the skill sibling of ItemToolState. `source` is
  * where it comes from (`shared` / `profile` / `workspace`); the tri-state toggle
@@ -452,7 +472,7 @@ export interface ApiClient {
   getToolsCatalog(): Promise<ToolCatalogEntry[]>;
   /** GET /a/{slug}/items/{id}/tools — the per-item tool picker state (per-tool
    * tri-state, resolved server-side) the tool picker reads (#322). */
-  getItemTools(slug: string, itemId: string): Promise<ItemToolState[]>;
+  getItemTools(slug: string, itemId: string): Promise<ItemTools>;
   /** GET /a/{slug}/items/{id}/skills — the per-item skills picker state (per-skill
    * source + tri-state + effective), resolved server-side (#380). */
   getItemSkills(slug: string, itemId: string): Promise<ItemSkillState[]>;

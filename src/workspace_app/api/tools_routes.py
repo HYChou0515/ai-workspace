@@ -10,6 +10,13 @@ per ``app.json`` ``tools[]`` entry with its human label, the profile default
 ``effective`` state. The effective state comes from the SAME
 ``AppCatalog.resolve`` a real turn uses, so the picker can never drift from the
 toolset the agent actually runs.
+
+The same response carries the app's **third-party** tools (#674/#724) in a
+separate ``external`` list. Separate because they are not pickable: #674 P8
+settled that they stay out of the picker rows, there being no switch to press.
+What they need instead is disclosure — whose release this is and which one —
+because unlike an app tool they ship on somebody else's schedule and can change
+between two turns with nothing here edited.
 """
 
 from __future__ import annotations
@@ -24,9 +31,11 @@ from ..apps.catalog import AppCatalog
 from ..apps.manifest import load_app_manifest
 from ..apps.profiles import load_profile
 from ..apps.resolve import find_work_item
+from ..sandbox.protocol import Sandbox
 from ..tooling.catalog import flat_catalog, picker_units
 from ..tooling.registry import PackageInfo
 from .locator import ItemLocator
+from .turn_context import resolve_item_tools
 
 
 class ToolCatalogEntry(BaseModel):
@@ -51,8 +60,32 @@ class ItemToolState(BaseModel):
     effective: bool
 
 
+class ExternalToolState(BaseModel):
+    """One third-party tool this App declares (#674/#724). Read-only: there is
+    no per-item switch for these, so every field here answers "what am I
+    actually running", not "what do I want".
+
+    ``version``/``author`` are ``None`` together with a non-null
+    ``unavailable`` — nothing resolved, so there is nothing to describe."""
+
+    key: str
+    version: str | None = None
+    author: str | None = None
+    """Who published it, as they wrote it in their own ``pyproject``. Shown,
+    never trusted: identity is the certificate the platform signed."""
+    stale: bool = False
+    """Served from the host's last-known-good copy. Usable, but not
+    necessarily the latest — and a version number that might be a release
+    behind is worse than no version number if it does not say so."""
+    unavailable: str | None = None
+    """Why it could not be resolved, or ``None``. Listed rather than dropped:
+    a declared tool that silently vanishes makes an outage look like a
+    configuration the reader imagined (#480)."""
+
+
 class ItemTools(BaseModel):
     tools: list[ItemToolState]
+    external: list[ExternalToolState] = []
 
 
 def register_tools_routes(
@@ -62,6 +95,7 @@ def register_tools_routes(
     app_catalog: AppCatalog,
     packages: list[PackageInfo] | None,
     locator: ItemLocator,
+    sandbox: Sandbox,
 ) -> None:
     pkgs = packages or []
 
@@ -97,7 +131,31 @@ def register_tools_routes(
             )
             for unit in picker_units(ceiling, pkgs)
         ]
-        return ItemTools(tools=rows)
+        return ItemTools(tools=rows, external=await _external_rows(item_id))
+
+    async def _external_rows(item_id: str) -> list[ExternalToolState]:
+        """Resolve the app's third-party declarations for this item.
+
+        Costs a host round-trip, and nothing for the apps that declare none —
+        `resolve_item_tools` answers an empty declaration without asking. The
+        alternative, reading a record of what the last turn got, would answer a
+        different question: an author can publish between that turn and this
+        read, and what the picker should show is what would run now."""
+        external = await resolve_item_tools(sandbox, locator, item_id)
+        rows = [
+            ExternalToolState(
+                key=name,
+                version=prov.version,
+                author=prov.author,
+                stale=prov.stale,
+            )
+            for name, prov in external.provenance.items()
+        ]
+        rows += [
+            ExternalToolState(key=name, unavailable=reason)
+            for name, reason in external.refused.items()
+        ]
+        return sorted(rows, key=lambda r: r.key)
 
 
 def _pref_state(value: bool | None) -> Literal["follow", "on", "off"]:

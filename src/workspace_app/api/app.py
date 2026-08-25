@@ -1625,6 +1625,7 @@ def create_app(
         app_catalog=app_catalog,
         packages=packages,
         locator=locator,
+        sandbox=sandbox,
     )
 
     register_capability_routes(

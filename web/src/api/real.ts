@@ -30,7 +30,7 @@ import type {
   ExecuteCellArgs,
   FileInfo,
   ItemSkillState,
-  ItemToolState,
+  ItemTools,
   ToolCatalogEntry,
   WorkspaceUsage,
   NotebookRef,
@@ -149,12 +149,14 @@ export const realApi: ApiClient = {
   },
 
   async getItemTools(slug: string, itemId: string) {
-    const r = await json<{ tools: ItemToolState[] }>(
+    // The whole envelope: `external` is a separate list, not a kind of row,
+    // because third-party tools have no switch to press (#674 P8 / #724).
+    const r = await json<ItemTools>(
       await apiFetch(
         `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/tools`,
       ),
     );
-    return r.tools;
+    return { tools: r.tools, external: r.external ?? [] };
   },
 
   async getItemSkills(slug: string, itemId: string) {

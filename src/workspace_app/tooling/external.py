@@ -40,6 +40,25 @@ class ToolResolvingSandbox(Protocol):
 
 
 @dataclass(frozen=True)
+class ToolProvenance:
+    """Which release of one third-party tool this turn got, and who published
+    it (#724).
+
+    The app cannot look any of this up: it holds no artifact-store credential
+    and never reads a manifest, by design. What the host returned here is the
+    only account of what actually ran, which is why it is kept rather than
+    thrown away — "the tool is behaving oddly" has no answer without it."""
+
+    version: str
+    author: str | None = None
+    """``None`` for a bundle built before the builder published the field."""
+    stale: bool = False
+    """Served from the host's last-known-good copy because the artifact store
+    was unreachable. Usable, but not necessarily the latest — and the two must
+    not look alike to whoever is reading."""
+
+
+@dataclass(frozen=True)
 class ExternalTools:
     """What one turn learned about this app's third-party tools."""
 
@@ -50,9 +69,10 @@ class ExternalTools:
     """`{name: reason}`. A refusal removes one tool and leaves the turn alone;
     the reason exists so the agent and the user learn WHY it is missing rather
     than watching it quietly not be there (the #480 shape)."""
-    stale: tuple[str, ...] = ()
-    """Tools served from the host's last-known-good copy because the artifact
-    store was unreachable. Usable, but not necessarily the latest."""
+    provenance: dict[str, ToolProvenance] = field(default_factory=dict)
+    """`{name: provenance}` for the tools that resolved. Keyed the same as
+    `shas`, and always the same set: a tool that is going to be mounted is a
+    tool something eventually has to be able to describe."""
 
 
 def _package(name: str, described: dict[str, Any]) -> PackageInfo:
@@ -93,7 +113,18 @@ async def resolve_external_tools(sandbox: object, declared: Mapping[str, str]) -
         packages=tuple(_package(name, described) for name, described in tools.items()),
         shas={name: described["sha"] for name, described in tools.items()},
         refused=refused,
-        stale=tuple(name for name, described in tools.items() if described.get("stale")),
+        provenance={
+            name: ToolProvenance(
+                version=described["version"],
+                # `.get`, not `[]`: a host that has not been redeployed yet
+                # answers without this key, and an app that raised over it
+                # would take every third-party tool down for the length of a
+                # rolling upgrade.
+                author=described.get("author"),
+                stale=bool(described.get("stale")),
+            )
+            for name, described in tools.items()
+        },
     )
 
 
@@ -146,7 +177,7 @@ def confine_to_mounted(
                 for name in absent
             },
         },
-        stale=tuple(n for n in external.stale if n not in absent),
+        provenance={n: p for n, p in external.provenance.items() if n not in absent},
     )
 
 
