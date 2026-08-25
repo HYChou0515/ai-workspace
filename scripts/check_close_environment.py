@@ -78,6 +78,29 @@ filestore:
 """
 
 
+def _tools_dir(repo: Path) -> Path:
+    """Where the prebuilt tool packages live — the app refuses to boot without
+    them, and a git WORKTREE does not carry them: `.workspace-tools` is build
+    output, not a tracked file, so it only exists in the checkout that ran
+    `prebuild_tools.py`. Running this script from a worktree therefore has to
+    reach across to the main checkout, which `--git-common-dir` names."""
+    here = repo / ".workspace-tools"
+    if here.is_dir():
+        return here
+    try:
+        common = subprocess.run(  # noqa: S603
+            ["git", "rev-parse", "--git-common-dir"],  # noqa: S607
+            cwd=repo,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):  # pragma: no cover - not a checkout
+        return here
+    main = (repo / common).resolve().parent
+    return main / ".workspace-tools"
+
+
 def _free_port() -> int:
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -139,22 +162,23 @@ def main() -> None:
 
     env = dict(os.environ)
     env["WORKSPACE_APP_CONFIG"] = str(tmp / "config.yaml")
-    # A git worktree does not carry the prebuilt tool dir; the app refuses to
-    # boot without one, so point at whatever this checkout's build produced.
-    env.setdefault("WORKSPACE_TOOLS_DIR", str(repo / ".workspace-tools"))
+    env.setdefault("WORKSPACE_TOOLS_DIR", str(_tools_dir(repo)))
 
-    procs = [
-        subprocess.Popen(  # noqa: S603
-            [sys.executable, str(tmp / "boot.py")], env={**env, "PORT": str(host_port)}
-        ),
-        None,
-    ]
-    _wait(f"{host_url}/healthz")
-    procs[1] = subprocess.Popen([sys.executable, "-m", "workspace_app"], env=env)  # noqa: S603
-    _wait(f"{api}/apps")
-
+    # Started INSIDE the try, or a service that fails to come up leaves the
+    # other one orphaned: `_wait` raises, and a `finally` that has not been
+    # entered yet cleans up nothing. That left stray hosts holding ports.
+    procs: list[subprocess.Popen] = []
     check = _Check()
     try:
+        procs.append(
+            subprocess.Popen(  # noqa: S603
+                [sys.executable, str(tmp / "boot.py")], env={**env, "PORT": str(host_port)}
+            )
+        )
+        _wait(f"{host_url}/healthz")
+        procs.append(subprocess.Popen([sys.executable, "-m", "workspace_app"], env=env))  # noqa: S603
+        _wait(f"{api}/apps")
+
         print("\n=== 0. warm a sandbox for an item")
         _, created = _req("POST", f"{api}/a/rca/items", {"title": "live close check"})
         item = created["resource_id"]
@@ -206,12 +230,11 @@ def main() -> None:
             print(f"\nleft running: host {host_url}, app {api}")
         else:
             for proc in procs:
-                if proc is not None:
-                    proc.send_signal(signal.SIGTERM)
-                    try:
-                        proc.wait(timeout=20)
-                    except subprocess.TimeoutExpired:  # pragma: no cover - stubborn child
-                        proc.kill()
+                proc.send_signal(signal.SIGTERM)
+                try:
+                    proc.wait(timeout=20)
+                except subprocess.TimeoutExpired:  # pragma: no cover - stubborn child
+                    proc.kill()
 
     print()
     if check.failed:
