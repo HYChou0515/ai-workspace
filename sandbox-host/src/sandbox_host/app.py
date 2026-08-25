@@ -312,8 +312,11 @@ class _HostController:
     def live(self) -> list[dict[str, object]]:
         """Every sandbox this host is running, and which item it serves.
 
-        Read from the same two dicts the idle reaper already keeps, so a sandbox
-        cannot be live for one and absent from the other."""
+        Driven by `_last_active`, which is the same dict the idle reaper walks —
+        so this listing cannot miss a sandbox the reaper can still see. The item
+        name is looked up beside it and may be absent (an anonymous create), which
+        is reported as `None` rather than skipped: a sandbox nobody can name is
+        exactly the kind worth showing."""
         return [
             {"remote_id": rid, "item_id": self._item_of.get(rid), "last_active": at}
             for rid, at in self._last_active.items()

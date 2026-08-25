@@ -90,8 +90,9 @@ class RunningSandbox:
     """One sandbox a backend reports as ACTUALLY running, right now.
 
     `item_id` is what the app calls it — the only name it has — and is `None`
-    for a sandbox created without one (nothing in this app does that, but the
-    wire allows it, and an unnamed orphan is still worth showing).
+    for a sandbox created without one. An unnamed orphan is still worth showing,
+    and it cannot be matched to an item: `_close_unrecorded` will never pick it,
+    which is the safe direction.
 
     The handle is the real, addressable one, so what is found can be acted on.
     """

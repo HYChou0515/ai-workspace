@@ -359,14 +359,19 @@ class LocalProcessSandbox:
             return None
 
     async def running_sandboxes(self) -> list[RunningSandbox] | None:
-        """`None` — this backend has nothing to enumerate.
+        """`None` — this backend keeps no register of what is running.
 
-        A sandbox here is a DIRECTORY on the shared volume, not a process: it
-        holds no cpu or memory, and it survives every restart. Listing the item
-        dirs would answer a different question ("who has files") in the place
-        that asks "what is running", so the honest answer is that it cannot say.
-        The hosted backend, where a sandbox really is a running thing under a
-        cgroup, is the one that can."""
+        A sandbox here is a DIRECTORY on a shared volume that outlives every
+        process and every restart, so the item dirs answer "who has files", not
+        "what is running", and returning them would hand a caller the wrong
+        question's answer. Nothing tracks the second question: commands are
+        transient `exec`s, not a resident thing that could be listed.
+
+        That holds for `IsolatedProcessSandbox` too, which DOES hold real cpu
+        and memory (a per-item cgroup, which is what its `effective_limits`
+        reports and what the owner is charged): those live with the cgroup, not
+        with a registry this could read. Only the hosted backend keeps one, and
+        it is the deployment this listing exists for."""
         return None
 
     async def kill(self, handle: SandboxHandle) -> None:

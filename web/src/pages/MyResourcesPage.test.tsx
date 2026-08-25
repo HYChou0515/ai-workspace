@@ -326,24 +326,57 @@ describe("formatting", () => {
   });
 });
 
-describe("a close that could not be confirmed", () => {
+describe("a close that could not be done", () => {
   afterEach(cleanup);
 
-  it("says so, and leaves the row there to press again", async () => {
-    // The backend can now answer "I found a sandbox, asked it to go, and could
-    // not confirm that it did". Rendering nothing for that is what made this
-    // button unreliable: the person is told it worked while it did not, and
-    // there is nothing on the page to act on either way.
+  it("says so on the row it failed on, which is still there to press again", async () => {
+    // The backend raises rather than answering 204 when it cannot shut the
+    // sandbox down right now (a reachable-but-slow host is 503 + Retry-After).
+    // Rendering nothing for that is what made this button unreliable: the
+    // person is told it worked while it did not.
     const closeEnvironment = vi.fn(async () => {
-      throw new Error("close environment failed: 409");
+      throw new Error("close environment failed: 503");
     });
-    render(<MyResourcesPage client={client({ closeEnvironment })} />, {
+    // Refetching WOULD empty the list, so "the row survived" can only be true
+    // because the failure suppressed the refetch — with a constant `get` the
+    // assertion could not fail and would measure nothing.
+    const get = vi
+      .fn<() => Promise<MyResources>>()
+      .mockResolvedValueOnce(data())
+      .mockResolvedValue(data({ live: [], cpu_in_use: 0, memory_in_use: 0 }));
+
+    render(<MyResourcesPage client={client({ get, closeEnvironment })} />, {
       wrapper: Wrap,
     });
     await userEvent.click(await screen.findByRole("button", { name: "關閉" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/無法確認/);
-    // still listed, so "try again" points at something that is there
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/關不掉/);
+    // …inside the row it is about, so with several environments the reader can
+    // tell which press failed
+    expect(alert.closest("li")).not.toBeNull();
     expect(screen.getByRole("button", { name: "關閉" })).toBeTruthy();
+  });
+
+  it("marks only the row that failed, not every row", async () => {
+    const closeEnvironment = vi.fn(async () => {
+      throw new Error("close environment failed: 503");
+    });
+    const two = data({
+      live: [
+        { item_id: "i-1", slug: "rca", title: "Line 3 stoppage", cpu_cores: 1, memory_bytes: 800 },
+        { item_id: "i-2", slug: "rca", title: "Line 9 stoppage", cpu_cores: 1, memory_bytes: 800 },
+      ],
+    });
+    render(
+      <MyResourcesPage client={client({ get: vi.fn(async () => two), closeEnvironment })} />,
+      { wrapper: Wrap },
+    );
+    const buttons = await screen.findAllByRole("button", { name: "關閉" });
+    await userEvent.click(buttons[1]);
+
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(within(alerts[0].closest("li")!).getByText("Line 9 stoppage")).toBeTruthy();
   });
 });

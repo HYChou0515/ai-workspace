@@ -339,23 +339,25 @@ def test_the_panel_does_not_list_someone_elses_environment():
         assert client.get("/me/resources").json()["live"] == []
 
 
-def test_a_close_that_could_not_finish_says_so():
-    """Silence is what made this unreliable in the first place.
+def test_a_close_that_cannot_be_done_right_now_says_so():
+    """Silence is what made this button unreliable.
 
-    A Close that answers 204 having killed nothing tells the person it worked.
-    They watch the row stay, or worse it goes and the environment keeps running,
-    and there is nothing to act on either way. If we could not confirm it, the
-    honest answer is to say so and leave the row there to press again."""
-    from workspace_app.sandbox.protocol import SandboxNotFound
+    A busy host is reachable but not answering yet — the sandbox is very much
+    alive (#492 keeps that case apart from a missing one precisely so it is not
+    rebuilt or written off). Answering 204 there tells the person it worked;
+    they watch the row stay and read the button as broken. 503 with Retry-After
+    says what it is, and every record stays put so the retry has something to
+    act on."""
+    from workspace_app.sandbox.protocol import SandboxBusy
 
-    class _VanishesOnKill(MockSandbox):
+    class _BusyOnKill(MockSandbox):
         async def kill(self, handle):
-            raise SandboxNotFound(handle.id)
+            raise SandboxBusy(handle.id)
 
     spec = make_spec()
     app = create_app(
         spec=spec,
-        sandbox=_VanishesOnKill(cpu_cores=2.0, memory_bytes=256 * 1024**2),
+        sandbox=_BusyOnKill(cpu_cores=2.0, memory_bytes=256 * 1024**2),
         filestore=SpecstarFileStore(spec),
         runner=ScriptedAgentRunner([]),
         workspace_quota=0,
@@ -368,9 +370,48 @@ def test_a_close_that_could_not_finish_says_so():
         client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo", "hi"]})
 
         refused = client.delete(f"/me/resources/live/{item}")
-        assert refused.status_code == 409, refused.text
+        assert refused.status_code == 503, refused.text
         # …and the row is still there to press again
         assert [e["item_id"] for e in client.get("/me/resources").json()["live"]] == [item]
+
+
+def test_closing_a_sandbox_that_is_already_gone_clears_the_row():
+    """An operator deleting a sandbox out of band is a supported thing to do,
+    and the panel has to catch up rather than argue.
+
+    `kill` then raises `SandboxNotFound`, which is the GOAL — the same reading
+    `kill_idle` gives it before forgetting the heartbeat. Treating it as "found
+    it, could not confirm" instead left the owner charged for an environment
+    that did not exist, with a Close button that refused for the whole idle
+    window (8 hours by default)."""
+    from workspace_app.sandbox.protocol import SandboxNotFound
+
+    class _AlreadyGone(MockSandbox):
+        async def kill(self, handle):
+            raise SandboxNotFound(handle.id)
+
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=_AlreadyGone(cpu_cores=2.0, memory_bytes=256 * 1024**2),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        workspace_quota=0,
+        app_resources={"rca": ONE_CORE},
+        per_user_resources=PerUserResources(count=1),
+        get_user_id=lambda: "alice",
+    )
+    with ApiTestClient(app) as client:
+        first = _mk(spec, "alice")
+        second = _mk(spec, "alice")
+        client.post(f"/a/rca/items/{first}/exec", json={"cmd": ["echo", "hi"]})
+
+        assert client.delete(f"/me/resources/live/{first}").status_code == 204
+        # the slot it was holding is genuinely free again, on the FIRST press
+        assert (
+            client.post(f"/a/rca/items/{second}/exec", json={"cmd": ["echo", "hi"]}).status_code
+            == 200
+        )
 
 
 def test_closing_something_that_was_never_running_is_not_an_error():

@@ -50,7 +50,10 @@ sandbox。
 | `POST /tools/resolve` | `{tools: {名稱: manifest 網址}}` | `200 {tools: {名稱: {sha, version, stale, commands}}, refused: {名稱: 原因}}` | 第三方工具:抓→驗→裝,並回傳要掛的 sha 與要給模型的 schema(#674) |
 
 **`GET /sandboxes` —— app 唯一能問「現在到底有什麼」的地方**:回
-`{sandboxes: [{remote_id, item_id, last_active}]}`,**以 item 為鍵**,因為那是 app 唯一認得的名字。
+`{sandboxes: [{remote_id, item_id, pod_url, last_active}]}`。`item_id` 是 app 唯一認得的名字
+(沒帶 item 建的沙盒回 `null`);`pod_url` 跟 `POST /sandboxes` 回的是同一個東西,**不可省略**
+——Service 會做負載平衡,這份答案是**回答的那個 pod** 的,之後要對某個沙盒做任何事都得打回那個
+pod,少了它 app 只能看著孤兒卻殺不掉。
 
 在它之前,app 保存的每一樣東西都是「某個過去時刻寫下來的信念」——計費用的心跳、路由用的位址、
 面板上那顆 Close 按鈕——而**沒有任何方法拿它們去對現實**。一筆過期的紀錄跟一筆真的紀錄長得
@@ -58,9 +61,12 @@ sandbox。
 「關閉回報成功但 sandbox 還在跑」以及「清掉心跳等於告訴每個 replica 的 reaper:那個有人正在
 用的目錄是閒置的」的共同來源。
 
-資料源是 host 自己 idle reaper 就在用的那兩張表,所以不可能「對 reaper 是活的、對這個端點卻不在」。
-`item_id` 現在**每次 create 都記**(以前只在接了 NFS archive 時才記,因為當時唯一的讀者是
-`persist`);沒帶 `item_id` 的 create 仍會被列出,`item_id` 為 `null`。
+資料源是 `_last_active`——idle reaper 走的同一張表,所以這份清單不可能漏掉 reaper 還看得到的沙盒。
+item 名字在旁邊查(`_item_of`),而 `item_id` 現在**每次 create 都記**(以前只在接了 NFS archive
+時才記,因為當時唯一的讀者是 `persist`)。
+
+**這份答案是「存在的證據」,不是「不存在的證明」**:host 是多 replica,列表只涵蓋接下這次請求的
+那一個 pod。要判定**某一個**沙盒沒了,只能拿它自己的 handle 去探(那會直接打到擁有它的 pod)。
 
 維運用(不屬於 sandbox 表面)：`GET /healthz`(回
 `{status, version, capabilities: [str], defaults: {cpu_cores, memory_bytes}}`——能力名與行為同

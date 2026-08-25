@@ -362,19 +362,21 @@ class HttpSandbox:
         try:
             resp = await self._client.get(f"{self._base_url}/sandboxes", timeout=5.0)
             resp.raise_for_status()
-            listed = resp.json().get("sandboxes")
+            listed = resp.json()["sandboxes"]
+            # Decoded INSIDE the try, or the promise above is not kept: a
+            # malformed entry would raise `KeyError` out of a method whose whole
+            # contract is that it answers `None` instead of failing, and the two
+            # callers are a panel render and the close path.
+            return [
+                RunningSandbox(
+                    handle=SandboxHandle(id=_encode_handle(e["pod_url"], e["remote_id"])),
+                    item_id=e.get("item_id"),
+                )
+                for e in listed
+            ]
         except Exception:  # noqa: BLE001 — "could not ask" is an answer here, not a failure
             logger.warning("sandbox-http: could not list the host's sandboxes", exc_info=True)
             return None
-        if not isinstance(listed, list):
-            return None
-        return [
-            RunningSandbox(
-                handle=SandboxHandle(id=_encode_handle(e["pod_url"], e["remote_id"])),
-                item_id=e.get("item_id"),
-            )
-            for e in listed
-        ]
 
     async def resolve_tools(self, declared: Mapping[str, str]) -> dict[str, Any]:
         """#674: ask the host to make these third-party tools available.

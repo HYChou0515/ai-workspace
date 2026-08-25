@@ -873,8 +873,8 @@ export const messages = {
   // Says what happened and what to do, not which call returned what. The row
   // stays put deliberately, so "再試一次" points at something that is still there.
   "resources.live.close_failed": {
-    "zh-TW": "無法確認這個環境已經關閉，請再試一次。",
-    en: "Could not confirm this environment shut down. Try again.",
+    "zh-TW": "目前關不掉這個環境，請稍後再試一次。",
+    en: "Could not shut this environment down just now. Try again shortly.",
   },
   "resources.live.count": { "zh-TW": "{n} 個", en: "{n}" },
   "resources.live.cores": { "zh-TW": "{n} 核", en: "{n} cores" },

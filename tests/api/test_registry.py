@@ -1169,18 +1169,18 @@ async def test_close_session_does_not_report_a_kill_it_never_attempted():
     await sandbox.exists(handle, "/a")  # still alive — nothing claimed otherwise
 
 
-async def test_close_session_does_not_free_a_slot_it_did_not_free():
-    """An unconfirmed close must leave the tally alone.
+async def test_close_session_frees_the_slot_when_the_sandbox_is_not_there():
+    """`SandboxNotFound` means it is not there, which is the goal.
 
-    The heartbeat is not bookkeeping — it is what a per-person limit counts, and
-    it is what tells every OTHER replica's reaper that an item is in use. Clearing
-    it after a kill that could not be confirmed does two things at once: it lets
-    the owner start another environment beside the one still running, and it
-    unlocks a reaper somewhere else to rmtree a directory somebody is working in.
+    That is the reading `kill_idle` and `_alive` already give the same signal,
+    and #492 already carved out the case where the sandbox is ALIVE: a
+    reachable-but-slow host raises `SandboxBusy`, which clears nothing. Making
+    `SandboxNotFound` a third category — "found it, could not confirm" — left an
+    operator who had deleted a sandbox out of band with a row that refused to
+    clear and a Close button that said so for the whole 8-hour idle window.
 
-    The asymmetry decides it. Keeping a stale row costs a slot until the owner
-    clicks Close again — the row is still there, still clickable. Clearing a live
-    one cannot be undone by anybody."""
+    The ADDRESS is a different question and stays where it is; see the next
+    test."""
     from specstar import SpecStar
 
     from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
@@ -1190,15 +1190,11 @@ async def test_close_session_does_not_free_a_slot_it_did_not_free():
     register_sandbox_address(spec)
     register_sandbox_activity(spec)
 
-    class _VanishedOnKill(_HttpStyleSandbox):
-        """The blip: the host is unreachable for a moment. The client cannot tell
-        that from a sandbox that was really reaped — it maps every non-timeout
-        transport error onto the same exception."""
-
+    class _AlreadyGone(_HttpStyleSandbox):
         async def kill(self, handle):
             raise SandboxNotFound(handle.id)
 
-    sandbox = _VanishedOnKill()
+    sandbox = _AlreadyGone()
     addr = SpecstarAddressStore(spec)
     activity = SpecstarActivityStore(spec)
     registry = InvestigationRegistry(
@@ -1208,10 +1204,40 @@ async def test_close_session_does_not_free_a_slot_it_did_not_free():
 
     await registry.close_session("ws-1")  # tolerated — it must not raise
 
-    assert await activity.last_active_ms("ws-1") is not None, (
-        "an unconfirmed close released the slot anyway"
+    assert await activity.last_active_ms("ws-1") is None, (
+        "the owner is still charged for an environment that is not there"
     )
-    assert await addr.get("ws-1") is not None, "and erased the only way to find it"
+
+
+async def test_close_session_keeps_the_address_of_a_kill_it_did_not_complete():
+    """The address is the one record `SandboxNotFound` may not clear.
+
+    The two mistakes are not symmetrical. A dead address left behind costs
+    nothing — the next acquire probes it, finds it dead and rebuilds. Erasing
+    the address of a sandbox that is really alive (the http client maps a
+    refused connection onto the same exception) strands it where no pod can find
+    it, and the next acquire builds a SECOND one beside it. `kill_idle` draws
+    the line in the same place: it forgets the heartbeat and never touches the
+    address."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+
+    class _AlreadyGone(_HttpStyleSandbox):
+        async def kill(self, handle):
+            raise SandboxNotFound(handle.id)
+
+    sandbox = _AlreadyGone()
+    addr = SpecstarAddressStore(spec)
+    registry = InvestigationRegistry(sandbox=sandbox, address=addr)
+    await registry.ensure_handle(await registry.session("ws-1"))
+
+    await registry.close_session("ws-1")
+
+    assert await addr.get("ws-1") is not None, "erased the only way to find a live sandbox"
 
 
 async def test_close_session_falls_back_to_the_address_when_its_own_handle_is_stale():
@@ -1284,12 +1310,13 @@ async def test_close_session_does_not_kill_a_sandbox_belonging_to_another_item()
     await sandbox.exists(theirs, "/a")  # untouched
 
 
-async def test_close_session_keeps_the_records_when_only_the_kill_could_not_land():
+async def test_close_session_writes_back_before_it_gives_up_on_the_kill():
     """The write-back succeeding says nothing about the kill.
 
-    They are separate calls to the same host, and only the second one is what
-    actually frees the machine. Treating a completed write-back as a completed
-    close is the same mistake as clearing the row without killing anything."""
+    They are separate calls to the same host and only the second frees the
+    machine, so the write-back must run and must not be read as a completed
+    close: the heartbeat goes (the sandbox is not there), the address stays (we
+    did not end it ourselves)."""
     from specstar import SpecStar
 
     from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
@@ -1306,16 +1333,19 @@ async def test_close_session_keeps_the_records_when_only_the_kill_could_not_land
     sandbox = _KillVanishes()
     addr = SpecstarAddressStore(spec)
     activity = SpecstarActivityStore(spec)
+    sync = _RecordingSync()
     registry = InvestigationRegistry(
         sandbox=sandbox,
         address=addr,
         activity=activity,
-        sync=_RecordingSync(),  # a durable store, so the write-back really runs
+        sync=sync,
         owner_of=lambda _i: "alice",
     )
     await registry.ensure_handle(await registry.session("ws-1"))
+    sync.calls.clear()
 
     await registry.close_session("ws-1")
 
+    assert sync.calls == [("mirror", "ws-1")], "the durable snapshot was skipped"
+    assert await activity.last_active_ms("ws-1") is None
     assert await addr.get("ws-1") is not None
-    assert await activity.last_active_ms("ws-1") is not None

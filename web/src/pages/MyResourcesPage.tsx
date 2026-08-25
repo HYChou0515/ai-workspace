@@ -124,13 +124,6 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
           limit={limits.memory_bytes}
           format={formatBytes}
         />
-        {close.isError ? (
-          // A close that could not be confirmed leaves its row in place, so
-          // this sits beside something the person can press again.
-          <p className="error" role="alert">
-            {t("resources.live.close_failed")}
-          </p>
-        ) : null}
         {data.live.length === 0 ? (
           <p className="empty">{t("resources.live.empty")}</p>
         ) : (
@@ -156,6 +149,15 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
                 >
                   {t("resources.live.close")}
                 </button>
+                {/* On the row it is about, not above the list: a page-level
+                    message names no item, and with more than one environment
+                    the reader cannot tell which press failed. `variables` is
+                    the item id the failed mutation was called with. */}
+                {close.isError && close.variables === env.item_id ? (
+                  <p className="error" role="alert">
+                    {t("resources.live.close_failed")}
+                  </p>
+                ) : null}
               </li>
             ))}
           </ul>

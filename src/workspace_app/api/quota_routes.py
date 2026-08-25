@@ -234,16 +234,13 @@ def register_quota_routes(
         # still ran, so the panel stopped listing an environment that was still
         # running, and there was no longer anything to click. A refusal to close
         # must leave the row alone, which it can only do if one place owns both.
-        if await registry.close_session(item_id) == "unconfirmed":
-            # We found a sandbox, asked for it to go, and could not confirm that
-            # it did. Answering 204 here is what made this button unreliable:
-            # the person is told it worked, and either the row stays (looking
-            # broken) or it goes while the environment keeps running. 409 leaves
-            # the row where it is, to press again.
-            raise HTTPException(
-                status_code=409,
-                detail={"error": "close_unconfirmed"},
-            )
+        # A close that cannot be done RIGHT NOW raises rather than returning:
+        # a reachable-but-slow host is `SandboxBusy` → 503 + Retry-After, and
+        # every record stays put so there is something left to retry against.
+        # Nothing to close is not a failure — a stale page or a double click
+        # both arrive that way, and refusing them would teach people the button
+        # is broken.
+        await registry.close_session(item_id)
 
     # Registered BEFORE the `/{user_id}` route: a bare GET on the collection
     # would otherwise be matched as a person literally called "".
