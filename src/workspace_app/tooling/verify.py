@@ -55,6 +55,11 @@ class VerifyReport:
     version: str
     sha: str
     commands: tuple[str, ...]
+    #: Who PUBLISHED it, as they wrote it in their own `pyproject` (#724).
+    #: Unverified by construction — an operator registering a stranger's tool
+    #: is exactly who should see the claim and decide whether it matches the
+    #: person who handed them the URL.
+    author: str | None = None
     #: Who on the platform team signed the certificate that let this artifact
     #: weigh what it does, or None when it is inside the default limit and no
     #: certificate bore on the decision. Read from the KEY that signed, so it
@@ -136,6 +141,7 @@ def verify_artifact(
         version=manifest.version,
         sha=manifest.bundle.sha256,
         commands=tuple(c.name for c in manifest.commands),
+        author=manifest.author,
         granted_by=_granted_by(manifest),
     )
 
@@ -236,8 +242,9 @@ def main(argv: list[str]) -> int:
         print(f"refused: {exc}", file=sys.stderr)
         return 1
     granted = f", size granted by {report.granted_by}" if report.granted_by else ""
+    by = f" by {report.author}" if report.author else " (no author published)"
     print(
-        f"accepted: {report.name} {report.version} "
+        f"accepted: {report.name} {report.version}{by} "
         f"({', '.join(report.commands) or 'no commands'}) sha256={report.sha}{granted}"
     )
     return 0

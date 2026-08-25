@@ -21,6 +21,7 @@ between two turns with nothing here edited.
 
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, FastAPI
@@ -36,6 +37,8 @@ from ..tooling.catalog import flat_catalog, picker_units
 from ..tooling.registry import PackageInfo
 from .locator import ItemLocator
 from .turn_context import resolve_item_tools
+
+logger = logging.getLogger(__name__)
 
 
 class ToolCatalogEntry(BaseModel):
@@ -131,17 +134,30 @@ def register_tools_routes(
             )
             for unit in picker_units(ceiling, pkgs)
         ]
-        return ItemTools(tools=rows, external=await _external_rows(item_id))
+        return ItemTools(
+            tools=rows,
+            external=await _external_rows(item_id, manifest.agent.external_tools),
+        )
 
-    async def _external_rows(item_id: str) -> list[ExternalToolState]:
+    async def _external_rows(item_id: str, declared: dict[str, str]) -> list[ExternalToolState]:
         """Resolve the app's third-party declarations for this item.
 
         Costs a host round-trip, and nothing for the apps that declare none —
         `resolve_item_tools` answers an empty declaration without asking. The
         alternative, reading a record of what the last turn got, would answer a
         different question: an author can publish between that turn and this
-        read, and what the picker should show is what would run now."""
-        external = await resolve_item_tools(sandbox, locator, item_id)
+        read, and what the picker offers to describe is the release that
+        resolves now.
+
+        A failure degrades to naming the declared tools with the reason. This
+        request is the tool PICKER, and the pickable App tools have nothing to
+        do with any artifact store — letting one unreachable host 500 the whole
+        modal would take away the switches someone came here to press."""
+        try:
+            external = await resolve_item_tools(sandbox, locator, item_id)
+        except Exception as exc:  # noqa: BLE001 - any failure degrades the same way
+            logger.warning("item %s: third-party tools could not be resolved: %s", item_id, exc)
+            return [ExternalToolState(key=name, unavailable=str(exc)) for name in sorted(declared)]
         rows = [
             ExternalToolState(
                 key=name,

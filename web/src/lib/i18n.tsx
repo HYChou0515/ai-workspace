@@ -1280,8 +1280,8 @@ export const messages = {
   "tools.loading": { "zh-TW": "載入工具中…", en: "Loading tools…" },
   "tools.external.title": { "zh-TW": "第三方工具", en: "Third-party tools" },
   "tools.external.desc": {
-    "zh-TW": "由外部作者發布、隨他們的版本更新，所以這裡只說明現在跑的是哪一版，沒有開關。",
-    en: "Published by outside authors and updated on their release schedule, so this says which release is running rather than offering a switch.",
+    "zh-TW": "由外部作者發布、隨他們的版本更新，所以這裡沒有開關，只說明目前解析到的是哪一版。已經開著的工作區會沿用它啟動時掛上的那一版，直到重新建立。",
+    en: "Published by outside authors and updated on their own schedule, so this offers no switch — it names the release that resolves right now. A workspace already running keeps whatever it mounted at startup until it is rebuilt.",
   },
   "tools.external.by": { "zh-TW": "作者 {author}", en: "by {author}" },
   "tools.external.noAuthor": { "zh-TW": "未註明作者", en: "No author published" },

@@ -190,6 +190,27 @@ def test_the_command_reports_an_accepted_artifact_for_a_human(monkeypatch, capsy
     assert verify_mod.main([_MANIFEST_URL, "--name", "wafer-history"]) == 0
     out = capsys.readouterr().out
     assert "wafer-history 1.4.2" in out and "trend" in out
+    # An artifact built before authors existed says so, rather than leaving a
+    # blank an operator would read as "nobody claimed this".
+    assert "no author published" in out
+
+
+def test_the_command_names_the_author_when_there_is_one(monkeypatch, capsys) -> None:
+    """#724: registering someone else's tool is the one moment a person is
+    asked to decide whether this URL came from who they think it did."""
+    from workspace_app.tooling import verify as verify_mod
+
+    monkeypatch.setenv("TOOL_BUILDER_ID", _BUILDER)
+    monkeypatch.setattr(
+        verify_mod,
+        "verify_artifact",
+        lambda url, **kw: verify_mod.VerifyReport(
+            "wafer-history", "1.4.2", "a" * 64, ("trend",), author="Wafer Team <wafer@example.com>"
+        ),
+    )
+
+    assert verify_mod.main([_MANIFEST_URL, "--name", "wafer-history"]) == 0
+    assert "by Wafer Team <wafer@example.com>" in capsys.readouterr().out
 
 
 def test_the_command_fails_loudly_with_the_reason(monkeypatch, capsys) -> None:
@@ -550,3 +571,28 @@ def test_the_same_commands_in_a_different_order_are_the_same_commands(signing) -
     )
 
     assert sorted(report.commands) == ["compare", "trend"]
+
+
+def test_verify_reports_the_author_an_operator_is_about_to_register(signing) -> None:
+    """#724: registering a tool is the moment someone decides whether the URL
+    they were handed really came from the person they think. The claim is
+    unverified by construction — showing it to the one human in the loop is
+    the whole use for it."""
+    data = _bundle()
+
+    report = verify_artifact(
+        _MANIFEST_URL,
+        expected_name="wafer-history",
+        builder=_BUILDER,
+        arch="x86_64",
+        fetch=_wire(
+            manifest=_manifest(
+                data,
+                grant=_certify(max_bytes=10_000_000),
+                author="Wafer Team <wafer@example.com>",
+            ),
+            bundle=data,
+        ),
+    )
+
+    assert report.author == "Wafer Team <wafer@example.com>"

@@ -136,3 +136,38 @@ def test_item_tools_has_no_third_party_section_when_an_app_declares_none(harness
     """The common case, and it must cost nothing: no host round-trip, no empty
     heading in the picker."""
     assert harness.client.get(harness.wpath("/tools")).json()["external"] == []
+
+
+def test_item_tools_still_answers_when_the_third_party_host_is_unreachable(
+    harness: Harness, monkeypatch
+):
+    """The pickable App tools have nothing to do with any artifact store. One
+    unreachable host must not take away the switches someone opened this modal
+    to press — it may only cost the section that describes third-party tools."""
+    from workspace_app.api import tools_routes
+
+    async def _boom(sandbox, locator, item_id):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(tools_routes, "resolve_item_tools", _boom)
+    monkeypatch.setattr(
+        tools_routes,
+        "load_app_manifest",
+        lambda slug: type(
+            "M",
+            (),
+            {
+                "agent": type(
+                    "A", (), {"tools": [], "external_tools": {"wafer-history": "https://g/m"}}
+                )
+            },
+        ),
+    )
+    iid = register_rca_item(harness.spec)
+
+    r = harness.client.get(f"/a/rca/items/{iid}/tools")
+
+    assert r.status_code == 200
+    (row,) = r.json()["external"]
+    assert row["key"] == "wafer-history"
+    assert "connection refused" in row["unavailable"]
