@@ -50,7 +50,7 @@ sandbox。
 | `POST /tools/resolve` | `{tools: {名稱: manifest 網址}}` | `200 {tools: {名稱: {sha, version, stale, commands}}, refused: {名稱: 原因}}` | 第三方工具:抓→驗→裝,並回傳要掛的 sha 與要給模型的 schema(#674) |
 
 **`GET /sandboxes` —— app 唯一能問「現在到底有什麼」的地方**:回
-`{sandboxes: [{remote_id, item_id, pod_url, last_active}]}`。`item_id` 是 app 唯一認得的名字
+`{sandboxes: [{remote_id, item_id, pod_url}]}`。`item_id` 是 app 唯一認得的名字
 (沒帶 item 建的沙盒回 `null`);`pod_url` 跟 `POST /sandboxes` 回的是同一個東西,**不可省略**
 ——Service 會做負載平衡,這份答案是**回答的那個 pod** 的,之後要對某個沙盒做任何事都得打回那個
 pod,少了它 app 只能看著孤兒卻殺不掉。
@@ -152,6 +152,10 @@ host 把「沒送」和「空的」視為同一件事。
 rsync)、`exec`(有自己的期限)**一律不重試**。
 
 ## Auth
+
+`GET /sandboxes` 是唯一一支**列舉**的端點:不需要先知道任何 `remote_id`,一次就吐出這個 pod 上
+所有租戶的 item id。其餘端點都要先有 handle。在下面這個「namespace 內全開」的模型下這不改變
+結論,但哪天要上 auth,這支是門檻最低的那一支。
 
 v1 沒有:host 只在 cluster namespace 內可達
 (NetworkPolicy / ClusterIP)。任何 namespace 內的 caller 都能驅動它——這是可接受的。

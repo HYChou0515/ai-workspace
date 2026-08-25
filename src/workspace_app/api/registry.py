@@ -282,7 +282,11 @@ class InvestigationRegistry:
         listed = await self.sandbox.running_sandboxes()
         if listed is None:
             return None
-        return [e.item_id for e in listed if e.item_id]
+        # Deduped: an item can legitimately have two live sandboxes for a moment
+        # (a #366 CAS loser before it kills its orphan; a rebuild after a probe
+        # read a blip as death), and a caller counting what a person holds must
+        # not charge them twice for one environment.
+        return list(dict.fromkeys(e.item_id for e in listed if e.item_id))
 
     async def record_running(self, item: str) -> None:
         """Say that this item's sandbox is alive right now.
@@ -652,29 +656,34 @@ class InvestigationRegistry:
         3. what the backend says it is actually RUNNING — the last resort, and
            the only thing that can reach a sandbox whose address was lost.
 
-        **Clearing.** `SandboxNotFound` means the sandbox is not there, which is
-        the goal, so the heartbeat goes — the same reading `kill_idle` and
-        `_alive` already give that signal, and #492 already carved out the case
-        where the sandbox IS alive: a host that is merely slow raises
-        `SandboxBusy`, which propagates here and clears nothing (503, retry).
-        Treating `SandboxNotFound` as its own third category instead was worse
-        than the bug it was meant to prevent: an operator deleting a sandbox out
-        of band, or a host that had already reaped one, left a row that refused
-        to clear and a Close button that answered "could not confirm" for the
-        whole `idle_timeout` window — 8 hours by default.
+        **Clearing the heartbeat.** It goes whenever this returns — including
+        when no source could name a sandbox at all. The heartbeat is a record of
+        what the app believes is running, and if nothing the app can reach is
+        running for this item, continuing to charge for it is charging for a
+        belief nothing supports. `SandboxNotFound` counts as gone for the same
+        reason `kill_idle` and `_alive` already read it that way; #492 already
+        carved out the case where the sandbox IS alive, and it has its own
+        signal — a reachable-but-slow host raises `SandboxBusy`, which
+        propagates from here before anything is cleared (503, retry).
 
-        The address is different, and stays gated on a kill this pod actually
-        completed. The two mistakes are not symmetrical: a dead address left
-        behind costs nothing, because the next acquire probes it, finds it dead
-        and rebuilds — while erasing the address of a sandbox that is really
-        alive strands it where no pod can find it and lets the next acquire
-        build a SECOND one beside it, which is the split-brain the address store
-        exists to prevent. `kill_idle` draws the line in the same place.
+        Refusing to clear when nothing was found is the version of this that got
+        written first, and it was worse than the bug it was meant to prevent.
+        The listing covers only the host replica that answered, so a genuinely
+        orphaned sandbox is found with probability 1/N — and on a miss the
+        person got a 204 saying it worked, a row that stayed, and a slot they
+        could not free for the whole `idle_timeout` window (8 hours by default).
+        Over-clearing has a way back: the panel asks the backend what is running
+        and re-arms what it finds (`record_running`). Under-clearing has none.
 
-        A heartbeat cleared for a sandbox that turns out to be alive now heals
-        itself: the panel asks the backend what is running and re-arms what it
-        finds (`record_running`), so the slot comes back. Before that listing
-        existed there was nothing to heal it with.
+        **The address is never cleared here**, exactly as `kill_idle` never
+        clears it. It does not need to be: `_acquire` probes a published address
+        and CAS-swaps a dead one for the sandbox it builds, so a stale row costs
+        nothing. Deleting it is what carries risk — the delete cannot be made
+        conditional on the handle we killed (specstar's `delete` takes no
+        expected-etag), so a peer that rebuilt the item while this teardown was
+        in flight would have ITS live address erased, and the next acquire would
+        build a second sandbox beside it. That is the split-brain the address
+        store exists to prevent.
 
         The session's cached handle is taken UNDER its lock and before the
         teardown. Popping the session first and then writing back + killing loses
@@ -692,17 +701,13 @@ class InvestigationRegistry:
         """
         s = self._sessions.get(investigation_id)
         handle: SandboxHandle | None = None
-        replaced = False
         if s is not None:
             async with s.lock:
-                # Re-read under the lock: a concurrent close may have finished and
-                # replaced the session. Its sandbox still has to be torn down —
-                # the search below carries on — but the NEW session must not be
-                # popped at the end, or a caller mid-request loses it.
+                # Re-read under the lock: a concurrent close may have finished
+                # and replaced the session. Its sandbox still has to be torn
+                # down, so the search below carries on either way.
                 if self._sessions.get(investigation_id) is s:
                     handle, s.handle = s.handle, None
-                else:
-                    replaced = True
 
         gone = False
         killed_here = False
@@ -732,11 +737,16 @@ class InvestigationRegistry:
             went, killed_here = await self._close_unrecorded(investigation_id, tried)
             gone = gone or went
 
-        if gone and self.activity is not None:
+        if self.activity is not None:
             await self.activity.forget(investigation_id)
-        if killed_here and self.address is not None:
-            await self.address.forget(investigation_id)
-        if not replaced:
+        # Pop only a session that is still the one we emptied. `ensure_handle`
+        # may have re-acquired into the SAME object while the teardown ran (the
+        # lock is released before it), and popping that drops a live handle on
+        # the floor; a concurrent close may have replaced the object outright.
+        current = self._sessions.get(investigation_id)
+        if current is not None and current is s and current.handle is None:
+            del self._sessions[investigation_id]
+        elif s is None:
             self._sessions.pop(investigation_id, None)
 
     async def _close_unrecorded(self, item: str, tried: set[str]) -> tuple[bool, bool]:
@@ -787,10 +797,11 @@ class InvestigationRegistry:
         propagates out of here untouched so every record stays put and the caller
         is told to retry (503).
 
-        `killed_here` — this call completed the kill. Only that may erase the
-        published ADDRESS, because a dead address costs nothing (the next acquire
-        probes it and rebuilds) while erasing a live one strands the sandbox and
-        splits the item across two.
+        `killed_here` — this call completed the kill. It steers the SEARCH and
+        nothing else: while no source has actually ended a sandbox, the next
+        source is still worth asking (a stale cached handle reports gone while
+        the sandbox the address names is still running). It governs no deletion,
+        so being wrong about it costs a redundant lookup, never a record.
 
         A write-back that cannot reach the sandbox means the kill has nothing to
         act on, so it stops there — gone, but not killed here. A write-back that

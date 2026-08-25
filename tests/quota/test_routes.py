@@ -424,3 +424,47 @@ def test_closing_something_that_was_never_running_is_not_an_error():
     with _app(PerUserResources(count=3)) as (client, spec):
         item = _mk(spec, "alice")  # no exec: nothing was ever created
         assert client.delete(f"/me/resources/live/{item}").status_code == 204
+
+
+def test_one_environment_is_charged_once_even_if_the_host_lists_it_twice():
+    """An item can hold two live sandboxes for a moment — a #366 CAS loser
+    before it kills its orphan, or a rebuild after a probe read a transport blip
+    as death — and the host names each of them separately.
+
+    Counting both puts "2 / 1" on the panel beside one environment and doubles
+    the cpu and memory it reports, which is the gauge telling the person to free
+    something that is not there."""
+    from workspace_app.sandbox.protocol import RunningSandbox, SandboxHandle
+
+    class _DoubleListing(MockSandbox):
+        async def running_sandboxes(self):
+            listed = await super().running_sandboxes() or []
+            return [
+                *listed,
+                *(
+                    RunningSandbox(
+                        handle=SandboxHandle(id=f"{e.handle.id}-twin"), item_id=e.item_id
+                    )
+                    for e in listed
+                ),
+            ]
+
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=_DoubleListing(cpu_cores=2.0, memory_bytes=256 * 1024**2),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        workspace_quota=0,
+        app_resources={"rca": ONE_CORE},
+        per_user_resources=PerUserResources(count=3),
+        get_user_id=lambda: "alice",
+    )
+    with ApiTestClient(app) as client:
+        item = _mk(spec, "alice")
+        client.post(f"/a/rca/items/{item}/exec", json={"cmd": ["echo", "hi"]})
+        _forget_heartbeat(spec, item)
+
+        body = client.get("/me/resources").json()
+        assert [e["item_id"] for e in body["live"]] == [item]
+        assert body["cpu_in_use"] == 1.0

@@ -1641,6 +1641,11 @@ def create_app(
         spec=spec,
         locator=locator,
         registry=registry,
+        # The CACHED (slug, owner) pair, not the locator's uncached lookups: the
+        # panel asks about every sandbox on a host replica, which is every
+        # tenant's, so an uncached owner check is one specstar round trip per
+        # sandbox in the cluster on a page anyone can open.
+        facts_of=_facts_of,
         files=files,
         activity=activity_store,
         disk_ledger=disk_ledger,

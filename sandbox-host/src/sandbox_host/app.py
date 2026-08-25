@@ -317,10 +317,10 @@ class _HostController:
         name is looked up beside it and may be absent (an anonymous create), which
         is reported as `None` rather than skipped: a sandbox nobody can name is
         exactly the kind worth showing."""
-        return [
-            {"remote_id": rid, "item_id": self._item_of.get(rid), "last_active": at}
-            for rid, at in self._last_active.items()
-        ]
+        # No last-active timestamp: this host's clock is `time.monotonic()`,
+        # which is process-relative and means nothing to another service. A
+        # field a reader cannot interpret is worse than an absent one.
+        return [{"remote_id": rid, "item_id": self._item_of.get(rid)} for rid in self._last_active]
 
     async def persist(self, rid: str, *, delete: bool) -> None:
         """#492: rsync the sandbox's live working dir → its durable NFS archive.
@@ -337,9 +337,17 @@ class _HostController:
         await self._archive.persist(item, self.sandbox.workspace_dir(handle), delete=delete)
 
     async def kill(self, rid: str) -> None:
+        """Forget it only once it is really gone.
+
+        Popping first meant a kill that raised left a sandbox still running and
+        invisible to BOTH the idle reaper (`_last_active`) and `GET /sandboxes`
+        — so nothing would ever retry it and nothing could report it, which
+        defeats the one mechanism the app has for finding an orphan. An
+        already-unknown handle raises `SandboxNotFound` from the backend before
+        anything is dropped, which is the same answer as before."""
+        await self.sandbox.kill(SandboxHandle(id=rid))
         self._last_active.pop(rid, None)
         self._item_of.pop(rid, None)
-        await self.sandbox.kill(SandboxHandle(id=rid))
 
     async def sweep_tool_cache(self, *, max_bytes: int | None = None) -> list[str]:
         """#674: reclaim third-party bundles nothing is running any more.
@@ -361,9 +369,18 @@ class _HostController:
             return []
         now = self.clock()
         stale = [r for r, t in self._last_active.items() if now - t > self.idle_ttl]
+        reaped = []
         for rid in stale:
-            await self.kill(rid)
-        return stale
+            # Per item: one sandbox whose teardown fails used to abort the whole
+            # sweep, so every idle sandbox after it survived the pass — and the
+            # next pass hits the same one first and stops in the same place.
+            try:
+                await self.kill(rid)
+            except Exception:  # noqa: BLE001 - one bad sandbox must not strand the rest
+                logger.warning("host: idle reap failed for %s", rid, exc_info=True)
+                continue
+            reaped.append(rid)
+        return reaped
 
 
 def make_host_app(

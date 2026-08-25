@@ -114,6 +114,7 @@ def register_quota_routes(
     spec: SpecStar,
     locator: ItemLocator,
     registry: InvestigationRegistry,
+    facts_of: Callable[[str], tuple[str, str]],
     files: WorkspaceFiles,
     activity: IActivityStore | None,
     disk_ledger: DiskLedger,
@@ -146,17 +147,34 @@ def register_quota_routes(
         leave the gate blind — the environment would be visible and still not
         charged. It runs, so it costs.
 
-        Scoped to the reader: the backend answers about every sandbox on the
-        replica that took the request, and one of them belonging to somebody
-        else must not appear on this page, let alone with a Close button. An
-        item nobody owns any more is skipped for the same reason.
+        Scoped to the SUBJECT — `owner`, who is the reader on `/me/resources`
+        and somebody else on the admin read. The backend answers about every
+        sandbox on the replica that took the request, and one belonging to a
+        third party must not appear here, let alone with a Close button. An item
+        nobody owns any more is skipped for the same reason, which leaves it
+        visible on no page at all — known, and wanting an operator-facing
+        listing rather than a wrong owner.
+
+        Re-arming a heartbeat from a GET also postpones app-side idle reaping of
+        what it finds. That is deliberate: the row it writes is both the cost
+        ledger and the liveness signal (one row, so a quota can never disagree
+        with itself), and the sandbox really is running. The host's own idle TTL
+        is unaffected — this listing does not touch its activity clock.
 
         A backend that cannot say (`None`) simply adds nothing; this only ever
         finds MORE, so its absence leaves today's behaviour untouched."""
         running = await registry.running_items()
         found = []
         for item_id in running or []:
-            if item_id in already_listed or locator.owner_of(item_id) != owner:
+            # `facts_of` and NOT `locator.owner_of`: the answer names every
+            # sandbox on the replica that took the request — every tenant's, not
+            # the reader's — so this runs once per sandbox on that host, and
+            # `owner_of` is an uncached synchronous specstar round trip
+            # (~200ms in production). One page load measured 42 of them. That is
+            # the #657 shape, on a page anyone can open.
+            if item_id in already_listed:
+                continue
+            if facts_of(item_id)[1] != owner:
                 continue
             await registry.record_running(item_id)
             cost = await registry.would_cost(item_id)

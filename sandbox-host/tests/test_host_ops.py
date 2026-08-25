@@ -243,3 +243,55 @@ async def test_a_listed_sandbox_can_be_addressed_directly():
         await c.post("/sandboxes", json={"item_id": "item-a"})
         listed = (await c.get("/sandboxes")).json()["sandboxes"]
         assert [s["pod_url"] for s in listed] == ["http://pod-7:8000"]
+
+
+async def test_a_sandbox_whose_teardown_failed_is_still_listed():
+    """Forgetting it would leave it running and invisible to everything.
+
+    The idle reaper walks the same table, so dropping the entry before the kill
+    succeeded meant nothing would ever retry the teardown AND nothing could
+    report the sandbox — the app's last-resort way of finding an orphan would be
+    blind to precisely the sandbox most likely to have become one."""
+
+    class _StubbornSandbox(MockSandbox):
+        async def kill(self, handle):
+            raise RuntimeError("device busy")
+
+    app = make_host_app(_StubbornSandbox(), advertise_url="http://h")
+    ctrl = app.state.controller
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-a"})).json()["remote_id"]
+        # Driven on the controller: the route has no handler for an arbitrary
+        # backend failure, and this is about what the host REMEMBERS afterwards,
+        # not about which status that failure maps to.
+        with pytest.raises(RuntimeError):
+            await ctrl.kill(rid)
+
+        listed = (await c.get("/sandboxes")).json()["sandboxes"]
+        assert [s["item_id"] for s in listed] == ["item-a"]
+
+
+async def test_one_sandbox_that_will_not_die_does_not_strand_the_rest():
+    """The reaper used to stop at the first failure, so every idle sandbox after
+    it survived the pass — and the next pass hits the same one first and stops
+    in the same place, so they survive forever."""
+    clock = {"t": 0.0}
+
+    class _OneStubborn(MockSandbox):
+        stubborn = ""
+
+        async def kill(self, handle):
+            if handle.id == self.stubborn:
+                raise RuntimeError("device busy")
+            await super().kill(handle)
+
+    backend = _OneStubborn()
+    app = make_host_app(backend, advertise_url="http://h", idle_ttl=100.0, clock=lambda: clock["t"])
+    ctrl = app.state.controller
+    async with _client(app) as c:
+        first = (await c.post("/sandboxes", json={"item_id": "a"})).json()["remote_id"]
+        second = (await c.post("/sandboxes", json={"item_id": "b"})).json()["remote_id"]
+    backend.stubborn = first
+
+    clock["t"] = 201.0
+    assert await ctrl.reap_idle() == [second], "the second sandbox was stranded by the first"

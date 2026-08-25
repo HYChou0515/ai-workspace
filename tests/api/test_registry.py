@@ -1034,7 +1034,13 @@ async def test_close_session_closes_a_sandbox_this_pod_never_warmed():
 
     with pytest.raises(SandboxNotFound):
         await sandbox.exists(handle, "/a")  # the sandbox outlived its close
-    assert await addr.get("ws-1") is None, "the address outlived the sandbox"
+    # The address row is deliberately left behind — see
+    # `test_close_session_never_erases_the_published_address`. What matters is
+    # that it cannot resurrect the dead sandbox: the next acquire probes it,
+    # finds it dead, and swaps its own in.
+    rebuilt = await other_pod.ensure_handle(await other_pod.session("ws-1"))
+    assert rebuilt != handle
+    await sandbox.exists(rebuilt, "/a")
 
 
 async def test_close_session_tolerates_a_sandbox_someone_already_deleted():
@@ -1097,7 +1103,6 @@ async def test_close_session_kills_what_the_address_names_when_the_session_has_n
 
     with pytest.raises(SandboxNotFound):
         await sandbox.exists(handle, "/a")  # it really was killed
-    assert await addr.get("ws-1") is None
 
 
 async def test_close_session_keeps_every_record_when_it_could_not_finish():
@@ -1209,35 +1214,67 @@ async def test_close_session_frees_the_slot_when_the_sandbox_is_not_there():
     )
 
 
-async def test_close_session_keeps_the_address_of_a_kill_it_did_not_complete():
-    """The address is the one record `SandboxNotFound` may not clear.
+async def test_close_session_never_erases_the_published_address():
+    """`kill_idle` does not clear it either, and it does not need to be cleared:
+    `_acquire` probes a published address and CAS-swaps a dead one for the
+    sandbox it builds, so a stale row costs nothing.
 
-    The two mistakes are not symmetrical. A dead address left behind costs
-    nothing — the next acquire probes it, finds it dead and rebuilds. Erasing
-    the address of a sandbox that is really alive (the http client maps a
-    refused connection onto the same exception) strands it where no pod can find
-    it, and the next acquire builds a SECOND one beside it. `kill_idle` draws
-    the line in the same place: it forgets the heartbeat and never touches the
-    address."""
+    Deleting it is what carries risk, and the risk cannot be designed away here:
+    specstar's `delete` takes no expected-etag, so the delete cannot be made
+    conditional on the handle we killed. A peer that rebuilt the item while this
+    teardown was in flight would have ITS live address erased, and the next
+    acquire would build a second sandbox beside it — the split-brain the address
+    store exists to prevent."""
     from specstar import SpecStar
 
     from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
 
     spec = SpecStar()
     register_sandbox_address(spec)
-
-    class _AlreadyGone(_HttpStyleSandbox):
-        async def kill(self, handle):
-            raise SandboxNotFound(handle.id)
-
-    sandbox = _AlreadyGone()
     addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
     registry = InvestigationRegistry(sandbox=sandbox, address=addr)
-    await registry.ensure_handle(await registry.session("ws-1"))
+    handle = await registry.ensure_handle(await registry.session("ws-1"))
+
+    await registry.close_session("ws-1")  # a clean, completed kill
+
+    assert await addr.get("ws-1") is not None, "a completed kill still erased the address"
+    # …and the stale row costs nothing: the next acquire probes it, finds it
+    # dead, and swaps its own in.
+    fresh = await registry.ensure_handle(await registry.session("ws-1"))
+    assert fresh != handle
+    assert await addr.get("ws-1") == fresh
+
+
+async def test_close_session_frees_the_slot_even_when_it_could_not_find_anything():
+    """The case with no way back.
+
+    Nothing named the sandbox: no session on this replica, no published address
+    (the pod that created it died before the CAS publish), and the listing
+    covers only the host replica that answered. Keeping the row then gives the
+    person a 204 that says it worked, a row that stays, and a slot they cannot
+    free until the idle window expires — 8 hours by default. Clearing it when we
+    are wrong has a way back: the panel asks the backend what is running and
+    re-arms what it finds."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
+
+    spec = SpecStar()
+    register_sandbox_activity(spec)
+    activity = SpecstarActivityStore(spec)
+    # A pod that knows nothing about this item: no session, no address store,
+    # and a backend whose listing does not name it.
+    registry = InvestigationRegistry(
+        sandbox=_HttpStyleSandbox(), activity=activity, owner_of=lambda _i: "alice"
+    )
+    await activity.bump("ws-1", owner="alice", cpu_milli=1000)
 
     await registry.close_session("ws-1")
 
-    assert await addr.get("ws-1") is not None, "erased the only way to find a live sandbox"
+    assert await activity.last_active_ms("ws-1") is None, (
+        "the owner is charged for something nothing here can reach or close"
+    )
 
 
 async def test_close_session_falls_back_to_the_address_when_its_own_handle_is_stale():
@@ -1348,4 +1385,32 @@ async def test_close_session_writes_back_before_it_gives_up_on_the_kill():
 
     assert sync.calls == [("mirror", "ws-1")], "the durable snapshot was skipped"
     assert await activity.last_active_ms("ws-1") is None
-    assert await addr.get("ws-1") is not None
+
+
+async def test_close_session_leaves_a_session_that_woke_up_under_it():
+    """The lock is released before the teardown, so a turn can re-acquire into
+    the SAME session object while it runs.
+
+    Popping that session drops a live handle on the floor: the next file op
+    builds a fresh one for an item that already has a running sandbox, and the
+    two working dirs diverge. Only a session still holding the `None` this
+    method put there may be evicted."""
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox)
+    session = await registry.session("ws-1")
+    await registry.ensure_handle(session)
+
+    reacquired = []
+
+    async def _wake_mid_teardown(handle):
+        # stands in for a turn arriving while the kill is in flight
+        if not reacquired:
+            reacquired.append(await registry.ensure_handle(session))
+        return await _HttpStyleSandbox.kill(sandbox, handle)
+
+    sandbox.kill = _wake_mid_teardown  # ty: ignore[invalid-assignment]
+    await registry.close_session("ws-1")
+
+    assert reacquired, "the test never exercised the race it is about"
+    assert registry._sessions.get("ws-1") is session, "evicted a session holding a live handle"
+    assert session.handle == reacquired[0]
