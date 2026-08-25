@@ -749,3 +749,70 @@ def test_run_a_workspace_authored_workflow_end_to_end():
         assert data["status"] == "done"
         note = client.get(f"{_base(item_id)}/files/note.md").content
     assert b"a drafted note" in note
+
+
+# ── A run's controls must not depend on the PROFILE shipping a workflow ───────
+# The three run-control routes (gate decision / steer / steer confirm) only need the
+# item + its profile — the orchestrator re-resolves the run's own manifest from the
+# `workflow_id` the run recorded (`_resolve_manifest`, which is what finds a workspace
+# `.workflows/<id>.json`). Asking "does this profile ship a workflow?" answers a
+# different question, and on the profiles that ship none — `pm/default`, every `rca`
+# profile, `playground/default` — it refused every control on a run that had legitimately
+# started. The FE composer posts to `steer` for any chat carrying a `run_id`
+# (ItemChatShell → AgentPanel), so on those apps a workflow chat was dead on arrival.
+
+
+# A plan the steerer accepts (it refuses one that neither edits an input nor invalidates
+# a step): redo `_WS_WORKFLOW`'s single step.
+_STEER_REDO_NOTE_PLAN = '{"rationale": "redo the note", "input_edits": [], "invalidate": ["note"]}'
+
+
+def _ws_run_on_profileless_item(client: TestClient, item_id: str) -> str:
+    """Author a workflow in the item, run it to completion, and hand back its run id."""
+    _put_ws_workflow(client, item_id, "myflow", _WS_WORKFLOW)
+    run_id = client.post(f"{_base(item_id)}/run?workflow_id=myflow").json()["run_id"]
+    _poll(client, item_id, run_id, "done")
+    return run_id
+
+
+def test_decision_works_on_a_profile_that_ships_no_package_workflow():
+    """`playground/default` ships no package workflow, so the run below exists only
+    because the item authored one. A decision on it must reach the run (409 — the run is
+    terminal, not at a gate), not be refused before the run is ever looked at."""
+    app, _spec, item_id = _app(profile="default", reply="a drafted note")
+    with TestClient(app) as client:
+        run_id = _ws_run_on_profileless_item(client, item_id)
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/decisions", json={"choice": "approve"})
+    assert r.status_code == 409
+
+
+def test_steer_works_on_a_profile_that_ships_no_package_workflow():
+    """The composer's Enter key in a workflow chat lands here — it must be accepted."""
+    app, _spec, item_id = _app(profile="default", reply=_STEER_REDO_NOTE_PLAN)
+    with TestClient(app) as client:
+        run_id = _ws_run_on_profileless_item(client, item_id)
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/steer", json={"instruction": "again"})
+        assert r.status_code == 202
+        paused = _poll(client, item_id, run_id, "awaiting_human")
+        assert paused["pending_steer"]["instruction"] == "again"
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/steer/confirm", json={"approve": True})
+        assert r.status_code == 202
+        assert _poll(client, item_id, run_id, "done")["pending_steer"] is None
+
+
+def test_confirm_steer_without_a_plan_is_409_on_a_profile_with_no_package_workflow():
+    app, _spec, item_id = _app(profile="default", reply="a drafted note")
+    with TestClient(app) as client:
+        run_id = _ws_run_on_profileless_item(client, item_id)
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/steer/confirm", json={"approve": True})
+    assert r.status_code == 409
+
+
+def test_decision_and_confirm_on_an_unknown_run_are_404_like_steer():
+    """An unknown / expired run id is a missing run, not a server error — `steer` already
+    said 404 while its two siblings let the specstar lookup escape as a 500."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        d = client.post(f"{_base(item_id)}/runs/nope/decisions", json={"choice": "approve"})
+        c = client.post(f"{_base(item_id)}/runs/nope/steer/confirm", json={"approve": True})
+    assert (d.status_code, c.status_code) == (404, 404)
