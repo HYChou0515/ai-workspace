@@ -86,6 +86,22 @@ class EnforcedLimits:
 
 
 @dataclass(frozen=True)
+class RunningSandbox:
+    """One sandbox a backend reports as ACTUALLY running, right now.
+
+    `item_id` is what the app calls it — the only name it has — and is `None`
+    for a sandbox created without one. An unnamed orphan is still worth showing,
+    and it cannot be matched to an item: `_close_unrecorded` will never pick it,
+    which is the safe direction.
+
+    The handle is the real, addressable one, so what is found can be acted on.
+    """
+
+    handle: SandboxHandle
+    item_id: str | None
+
+
+@dataclass(frozen=True)
 class SandboxSpec:
     """Everything `create()` needs to provision a sandbox."""
 
@@ -218,6 +234,33 @@ class Sandbox(Protocol):
         This exists because "what was requested" and "what will be enforced" are
         different questions over the same fields, and the quota needs the second.
         See `EnforcedLimits`."""
+        ...
+
+    async def running_sandboxes(self) -> list[RunningSandbox] | None:
+        """What this backend is REALLY running — or `None` when it cannot say.
+
+        Everything else the app knows about live sandboxes is stored belief: a
+        heartbeat that bills someone, an address that routes, a panel offering a
+        Close button. None of it could be checked against the machine, so a
+        stale record was indistinguishable from a true one — and clearing a
+        record became the only way to express "it is gone", including when it
+        was not. That is how closing an environment could report success while
+        the sandbox kept running, and how a sandbox the app had lost track of
+        kept costing its owner from a place they could not click.
+
+        **Positive evidence only.** A returned entry means that sandbox exists.
+        The absence of one does NOT mean it does not: the http host runs several
+        replicas behind a load balancer, so an answer covers the pod that took
+        the request and no more. To decide that a PARTICULAR sandbox is gone,
+        probe its handle (`exists`) — that routes to the pod that owns it.
+
+        `None` and `[]` are different answers and must not collapse: `[]` says
+        nothing is running here, `None` says we failed to ask (host unreachable,
+        or too old to answer). Reading `None` as `[]` would let one blip retire
+        the records of every live sandbox — the unrecoverable direction.
+
+        A backend with no way to enumerate returns `None` for the same reason.
+        """
         ...
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:

@@ -9,7 +9,7 @@
  * could render a pair that never coexisted, and "3 of 2 used" reads as a bug.
  */
 
-import { apiFetch } from "./http";
+import { apiFetch, httpErrorFrom } from "./http";
 
 /** One live sandbox charged to me. */
 export type LiveEnvironment = {
@@ -87,9 +87,14 @@ export const myResourcesApi: MyResourcesApi = {
     return (await r.json()) as MyResources;
   },
   async closeEnvironment(itemId: string) {
-    await apiFetch(`/me/resources/live/${encodeURIComponent(itemId)}`, {
+    const r = await apiFetch(`/me/resources/live/${encodeURIComponent(itemId)}`, {
       method: "DELETE",
     });
+    // The status was ignored, so a refusal resolved exactly like a success and
+    // the page cheerfully refetched. That is the whole failure mode this button
+    // had: the backend can now say "I found it and could not confirm it went",
+    // and swallowing that would leave the message unsaid.
+    if (!r.ok) throw await httpErrorFrom(r, `close environment failed: ${r.status}`);
   },
   async adminList() {
     try {

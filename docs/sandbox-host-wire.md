@@ -49,6 +49,25 @@ sandbox。
 | `POST /sandboxes/{rid}/rename` | `{src, dst}` | `204` | rename |
 | `POST /tools/resolve` | `{tools: {名稱: manifest 網址}}` | `200 {tools: {名稱: {sha, version, stale, commands}}, refused: {名稱: 原因}}` | 第三方工具:抓→驗→裝,並回傳要掛的 sha 與要給模型的 schema(#674) |
 
+**`GET /sandboxes` —— app 唯一能問「現在到底有什麼」的地方**:回
+`{sandboxes: [{remote_id, item_id, pod_url}]}`。`item_id` 是 app 唯一認得的名字
+(沒帶 item 建的沙盒回 `null`);`pod_url` 跟 `POST /sandboxes` 回的是同一個東西,**不可省略**
+——Service 會做負載平衡,這份答案是**回答的那個 pod** 的,之後要對某個沙盒做任何事都得打回那個
+pod,少了它 app 只能看著孤兒卻殺不掉。
+
+在它之前,app 保存的每一樣東西都是「某個過去時刻寫下來的信念」——計費用的心跳、路由用的位址、
+面板上那顆 Close 按鈕——而**沒有任何方法拿它們去對現實**。一筆過期的紀錄跟一筆真的紀錄長得
+一模一樣,於是「清掉紀錄」變成表達「它不在了」的唯一手段,包括它其實還在的時候。這正是
+「關閉回報成功但 sandbox 還在跑」以及「清掉心跳等於告訴每個 replica 的 reaper:那個有人正在
+用的目錄是閒置的」的共同來源。
+
+資料源是 `_last_active`——idle reaper 走的同一張表,所以這份清單不可能漏掉 reaper 還看得到的沙盒。
+item 名字在旁邊查(`_item_of`),而 `item_id` 現在**每次 create 都記**(以前只在接了 NFS archive
+時才記,因為當時唯一的讀者是 `persist`)。
+
+**這份答案是「存在的證據」,不是「不存在的證明」**:host 是多 replica,列表只涵蓋接下這次請求的
+那一個 pod。要判定**某一個**沙盒沒了,只能拿它自己的 handle 去探(那會直接打到擁有它的 pod)。
+
 維運用(不屬於 sandbox 表面)：`GET /healthz`(回
 `{status, version, capabilities: [str], defaults: {cpu_cores, memory_bytes}}`——能力名與行為同
 commit,不會像手維護的相容性表那樣漂移)、`GET /readyz`、`POST /drain`。
@@ -133,6 +152,10 @@ host 把「沒送」和「空的」視為同一件事。
 rsync)、`exec`(有自己的期限)**一律不重試**。
 
 ## Auth
+
+`GET /sandboxes` 是唯一一支**列舉**的端點:不需要先知道任何 `remote_id`,一次就吐出這個 pod 上
+所有租戶的 item id。其餘端點都要先有 handle。在下面這個「namespace 內全開」的模型下這不改變
+結論,但哪天要上 auth,這支是門檻最低的那一支。
 
 v1 沒有:host 只在 cluster namespace 內可達
 (NetworkPolicy / ClusterIP)。任何 namespace 內的 caller 都能驅動它——這是可接受的。

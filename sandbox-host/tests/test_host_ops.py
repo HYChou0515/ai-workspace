@@ -179,3 +179,119 @@ async def test_healthz_survives_a_backend_that_cannot_answer():
         resp = await c.get("/healthz")
     assert resp.status_code == 200
     assert resp.json()["defaults"] == {"cpu_cores": None, "memory_bytes": None}
+
+
+async def test_the_host_can_say_which_items_have_a_live_sandbox():
+    """The app cannot otherwise find out what exists.
+
+    Every record it keeps — the heartbeat that bills people, the address that
+    routes to a sandbox, the panel that offers a Close button — is a belief
+    written down at some past moment. Nothing could check those beliefs against
+    the machine, so a stale one was indistinguishable from a true one, and
+    clearing a record became the only way to say "gone" even when it was not.
+
+    Keyed by ITEM, because that is the only name the app has. The host already
+    tracks both halves for its own idle reaper."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")
+    async with _client(app) as c:
+        assert (await c.get("/sandboxes")).json()["sandboxes"] == []
+
+        first = (await c.post("/sandboxes", json={"item_id": "item-a"})).json()["remote_id"]
+        second = (await c.post("/sandboxes", json={"item_id": "item-b"})).json()["remote_id"]
+        listed = (await c.get("/sandboxes")).json()["sandboxes"]
+        assert sorted(s["item_id"] for s in listed) == ["item-a", "item-b"]
+        assert {s["remote_id"] for s in listed} == {first, second}, (
+            "each entry names the sandbox it is about"
+        )
+
+        await c.delete(f"/sandboxes/{first}")
+        assert [s["item_id"] for s in (await c.get("/sandboxes")).json()["sandboxes"]] == ["item-b"]
+
+
+async def test_a_sandbox_created_without_an_archive_still_remembers_its_item():
+    """`_item_of` was filled only when an NFS archive was wired, because until
+    now its only reader was `persist`. A listing keyed by item is useless on a
+    deployment with no archive if the mapping is not there."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")  # no archive
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={"item_id": "item-a"})
+        assert [s["item_id"] for s in (await c.get("/sandboxes")).json()["sandboxes"]] == ["item-a"]
+
+
+async def test_a_sandbox_created_without_an_item_is_listed_as_anonymous():
+    """An older app, or a caller that has no item, still gets a sandbox — and it
+    must appear in the listing, or the host would under-report what it is
+    running."""
+    app = make_host_app(MockSandbox(), advertise_url="http://h")
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={})
+        listed = (await c.get("/sandboxes")).json()["sandboxes"]
+        assert len(listed) == 1
+        assert listed[0]["item_id"] is None
+
+
+async def test_a_listed_sandbox_can_be_addressed_directly():
+    """Naming the item is not enough to DO anything about it.
+
+    The service in front of the host load-balances, so a listing answers for the
+    one pod that happened to take the request, and every later call has to reach
+    THAT pod. `create` already solves this by returning the answering pod's own
+    directly-addressable url; a listing that omitted it would let the app see an
+    orphaned sandbox and still have no way to kill it."""
+    app = make_host_app(MockSandbox(), advertise_url="http://pod-7:8000")
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={"item_id": "item-a"})
+        listed = (await c.get("/sandboxes")).json()["sandboxes"]
+        assert [s["pod_url"] for s in listed] == ["http://pod-7:8000"]
+
+
+async def test_a_sandbox_whose_teardown_failed_is_still_listed():
+    """Forgetting it would leave it running and invisible to everything.
+
+    The idle reaper walks the same table, so dropping the entry before the kill
+    succeeded meant nothing would ever retry the teardown AND nothing could
+    report the sandbox — the app's last-resort way of finding an orphan would be
+    blind to precisely the sandbox most likely to have become one."""
+
+    class _StubbornSandbox(MockSandbox):
+        async def kill(self, handle):
+            raise RuntimeError("device busy")
+
+    app = make_host_app(_StubbornSandbox(), advertise_url="http://h")
+    ctrl = app.state.controller
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-a"})).json()["remote_id"]
+        # Driven on the controller: the route has no handler for an arbitrary
+        # backend failure, and this is about what the host REMEMBERS afterwards,
+        # not about which status that failure maps to.
+        with pytest.raises(RuntimeError):
+            await ctrl.kill(rid)
+
+        listed = (await c.get("/sandboxes")).json()["sandboxes"]
+        assert [s["item_id"] for s in listed] == ["item-a"]
+
+
+async def test_one_sandbox_that_will_not_die_does_not_strand_the_rest():
+    """The reaper used to stop at the first failure, so every idle sandbox after
+    it survived the pass — and the next pass hits the same one first and stops
+    in the same place, so they survive forever."""
+    clock = {"t": 0.0}
+
+    class _OneStubborn(MockSandbox):
+        stubborn = ""
+
+        async def kill(self, handle):
+            if handle.id == self.stubborn:
+                raise RuntimeError("device busy")
+            await super().kill(handle)
+
+    backend = _OneStubborn()
+    app = make_host_app(backend, advertise_url="http://h", idle_ttl=100.0, clock=lambda: clock["t"])
+    ctrl = app.state.controller
+    async with _client(app) as c:
+        first = (await c.post("/sandboxes", json={"item_id": "a"})).json()["remote_id"]
+        second = (await c.post("/sandboxes", json={"item_id": "b"})).json()["remote_id"]
+    backend.stubborn = first
+
+    clock["t"] = 201.0
+    assert await ctrl.reap_idle() == [second], "the second sandbox was stranded by the first"

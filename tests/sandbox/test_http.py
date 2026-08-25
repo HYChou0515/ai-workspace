@@ -57,6 +57,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     # field names. These are the names `sandbox_host.app._CreateBody` declares.
     app.state.created_limits = []
     app.state.resolved = []  # #674: tool declarations seen by /tools/resolve
+    app.state.live = {}  # remote_id -> item_id: what this pod is really running
 
     @app.exception_handler(SandboxNotFound)
     async def _nf(_r: Request, exc: SandboxNotFound) -> JSONResponse:
@@ -74,7 +75,17 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
             (body.get("cpu_cores"), body.get("memory_bytes"), body.get("pids_max"))
         )
         h = await backend.create(SandboxSpec())
+        app.state.live[h.id] = body.get("item_id")
         return {"pod_url": advertise_url, "remote_id": h.id}
+
+    @app.get("/sandboxes")
+    async def list_sandboxes() -> dict:
+        return {
+            "sandboxes": [
+                {"remote_id": rid, "item_id": item, "pod_url": advertise_url, "last_active": 1.0}
+                for rid, item in app.state.live.items()
+            ]
+        }
 
     @app.post("/tools/resolve")
     async def resolve_tools(body: dict) -> dict:
@@ -101,6 +112,7 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     @app.delete("/sandboxes/{rid}", status_code=204)
     async def kill(rid: str) -> None:
         await backend.kill(SandboxHandle(id=rid))
+        app.state.live.pop(rid, None)
 
     @app.put("/sandboxes/{rid}/file", status_code=204)
     async def upload(rid: str, path: str, request: Request) -> None:
@@ -874,3 +886,111 @@ async def test_a_down_host_is_not_re_asked_by_every_caller_in_turn():
 
     assert all(g == EnforcedLimits(None, None) for g in got)  # nothing invented
     assert state["calls"] == 1, "twenty callers must not each pay their own timeout"
+
+
+async def test_the_client_can_ask_what_is_really_running(http_sandbox: HttpSandbox):
+    """The only question the app could never ask before.
+
+    Everything it knows about live sandboxes is stored belief — a heartbeat that
+    bills someone, an address that routes, a panel offering a Close button — and
+    a stale record read exactly like a true one. So an environment the app had
+    lost track of kept running, kept costing its owner, and appeared nowhere it
+    could be clicked.
+
+    The entries must be USABLE, not merely informative: the answering pod names
+    itself, so a handle built from the listing addresses the same sandbox that
+    `create` returned."""
+    a = await http_sandbox.create(SandboxSpec(), sandbox_id="item-a")
+    await http_sandbox.create(SandboxSpec(), sandbox_id="item-b")
+
+    live = await http_sandbox.running_sandboxes()
+    assert live is not None
+    assert sorted(e.item_id or "" for e in live) == ["item-a", "item-b"]
+    # the handle the listing hands back is the one create minted, so the app can
+    # act on what it finds rather than only look at it
+    assert a in {e.handle for e in live}
+
+    await http_sandbox.kill(a)
+    live = await http_sandbox.running_sandboxes()
+    assert live is not None
+    assert [e.item_id for e in live] == ["item-b"]
+
+
+async def test_a_host_that_cannot_be_reached_says_so_rather_than_nothing():
+    """`None` and `[]` must never collapse into one answer.
+
+    `[]` is an ANSWER — nothing is running here — and a caller may act on it. An
+    unreachable host is our own failure to ask, and reading that as "nothing is
+    running" would let one blip retire the records of every live sandbox: the
+    unrecoverable direction this listing exists to prevent."""
+    async with httpx.AsyncClient() as client:
+        sandbox = HttpSandbox(base_url=f"http://127.0.0.1:{_closed_port()}", client=client)
+        assert await sandbox.running_sandboxes() is None
+
+
+async def test_a_host_too_old_to_answer_is_not_read_as_empty():
+    """Same case as unreachable: it has told us nothing, and it is very much
+    still running sandboxes. The listing rolls out with the app, but a host
+    mid-rollout answers 404 for a minute or two."""
+    app = FastAPI()  # no /sandboxes route at all
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sandbox = HttpSandbox(base_url=_ADVERTISE, client=client)
+        assert await sandbox.running_sandboxes() is None
+
+
+async def test_a_listing_entry_the_client_cannot_decode_is_not_an_exception():
+    """The contract is that this method ANSWERS `None` rather than failing, and
+    its two callers are a panel render and the close path.
+
+    A host mid-rollout, or one built from an older reading of the wire doc, can
+    answer with an entry missing the pod url — and decoding outside the guard
+    turned that into a `KeyError` raised through a method nobody catches."""
+    app = FastAPI()
+
+    @app.get("/sandboxes")
+    async def list_sandboxes() -> dict:
+        return {"sandboxes": [{"remote_id": "r-1", "item_id": "item-a"}]}  # no pod_url
+
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        sandbox = HttpSandbox(base_url=_ADVERTISE, client=client)
+        assert await sandbox.running_sandboxes() is None
+
+
+async def test_a_down_host_is_not_asked_for_its_listing_by_every_caller_in_turn():
+    """The listing sits on the panel render and on the close path, so "down
+    host" means many callers at once — and each was paying its own full timeout
+    to be told the same nothing.
+
+    The ceilings' own `_host_defaults_retry_at` exists for exactly this, guarded
+    by `test_a_down_host_is_not_re_asked_by_every_caller_in_turn`; adding a
+    second endpoint on the same shape without the same guard just reopens it
+    somewhere else."""
+    asked = 0
+
+    app = FastAPI()
+
+    @app.get("/sandboxes")
+    async def list_sandboxes() -> dict:
+        nonlocal asked
+        asked += 1
+        raise RuntimeError("host is down")
+
+    clock = {"t": 100.0}
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app, raise_app_exceptions=False)
+    ) as client:
+        sandbox = HttpSandbox(
+            base_url=_ADVERTISE,
+            client=client,
+            host_defaults_retry_after=30.0,
+            monotonic=lambda: clock["t"],
+        )
+        assert await sandbox.running_sandboxes() is None
+        assert asked == 1
+        for _ in range(5):
+            assert await sandbox.running_sandboxes() is None
+        assert asked == 1, "every caller paid its own timeout against a host we knew was down"
+
+        clock["t"] += 31.0  # the backoff expires: ask again rather than believe it forever
+        assert await sandbox.running_sandboxes() is None
+        assert asked == 2

@@ -9,6 +9,7 @@ from .protocol import (
     ExecResult,
     FileEntry,
     OutputSink,
+    RunningSandbox,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
@@ -50,6 +51,8 @@ class MockSandbox:
         # it never appears in walk/exists (it lives outside the workspace on a
         # real backend). A handle id here ⇔ its sandbox is marked authoritative.
         self._ready: set[str] = set()
+        # handle id -> the item it serves, `None` for an anonymous create.
+        self._item_of: dict[str, str | None] = {}
 
     def _require(self, handle: SandboxHandle) -> dict[str, bytes]:
         if handle.id not in self._fs:
@@ -68,6 +71,12 @@ class MockSandbox:
         # a fresh random handle.
         hid = sandbox_id if sandbox_id is not None else str(uuid.uuid4())
         self._fs.setdefault(hid, {})
+        # Kept apart from the handle id even though they are equal here: a
+        # sandbox created WITHOUT an id has no item, and the host reports
+        # `item_id: null` for it. Reporting the uuid instead would make this
+        # stand-in the one backend that disagrees with the wire, in exactly the
+        # case a caller has to handle.
+        self._item_of[hid] = sandbox_id
         self._exposed[hid] = list(spec.exposed_ports)
         return SandboxHandle(id=hid)
 
@@ -75,9 +84,19 @@ class MockSandbox:
         # #345: the in-memory store is keyed by id, so the handle is the id.
         return SandboxHandle(id=sandbox_id)
 
+    async def running_sandboxes(self) -> list[RunningSandbox] | None:
+        # An entry exists exactly while the sandbox does, so this stand-in can
+        # answer truthfully rather than shrug — which is what lets anything
+        # built on the listing be tested against it at all.
+        return [
+            RunningSandbox(handle=SandboxHandle(id=hid), item_id=self._item_of.get(hid))
+            for hid in self._fs
+        ]
+
     async def kill(self, handle: SandboxHandle) -> None:
         self._require(handle)
         del self._fs[handle.id]
+        self._item_of.pop(handle.id, None)
         self._dirs.pop(handle.id, None)
         self._exposed.pop(handle.id, None)
         self._ready.discard(handle.id)  # #366: teardown drops the readiness mark

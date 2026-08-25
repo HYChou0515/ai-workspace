@@ -285,6 +285,14 @@ class _HostController:
     async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
         handle = await self.sandbox.create(spec)
         self._last_active[handle.id] = self.clock()
+        # Recorded whether or not an archive is wired. It began as `persist`'s
+        # private lookup, so it was only filled on the archive path — but it is
+        # also the only name the APP knows a sandbox by, and `GET /sandboxes`
+        # exists so the app can check its records against what is really running.
+        # Keyed on every create, or that listing is blank on any deployment
+        # without an archive.
+        if item_id is not None:
+            self._item_of[handle.id] = item_id
         # #492: restore the durable archive into the fresh local dir (no-op when
         # nothing archived yet — a brand-new item starts empty), then mark the
         # sandbox ready. rsync restore is SYNCHRONOUS here, so by the time create
@@ -293,7 +301,6 @@ class _HostController:
         # is written LAST so a crash mid-restore leaves it absent and persist
         # (gated on ready) can't push a half-restored dir back over the archive.
         if self._archive is not None and item_id is not None:
-            self._item_of[handle.id] = item_id
             await self._archive.restore(item_id, self.sandbox.workspace_dir(handle))
             # #504: the bulk rsync restore writes files as root (no `-o`), so the
             # restored tree comes back root-owned. Re-own it to the sandbox uid
@@ -301,6 +308,19 @@ class _HostController:
             await self.sandbox.reown(handle)
             await self.sandbox.mark_ready(handle)
         return handle
+
+    def live(self) -> list[dict[str, object]]:
+        """Every sandbox this host is running, and which item it serves.
+
+        Driven by `_last_active`, which is the same dict the idle reaper walks —
+        so this listing cannot miss a sandbox the reaper can still see. The item
+        name is looked up beside it and may be absent (an anonymous create), which
+        is reported as `None` rather than skipped: a sandbox nobody can name is
+        exactly the kind worth showing."""
+        # No last-active timestamp: this host's clock is `time.monotonic()`,
+        # which is process-relative and means nothing to another service. A
+        # field a reader cannot interpret is worse than an absent one.
+        return [{"remote_id": rid, "item_id": self._item_of.get(rid)} for rid in self._last_active]
 
     async def persist(self, rid: str, *, delete: bool) -> None:
         """#492: rsync the sandbox's live working dir → its durable NFS archive.
@@ -317,9 +337,17 @@ class _HostController:
         await self._archive.persist(item, self.sandbox.workspace_dir(handle), delete=delete)
 
     async def kill(self, rid: str) -> None:
+        """Forget it only once it is really gone.
+
+        Popping first meant a kill that raised left a sandbox still running and
+        invisible to BOTH the idle reaper (`_last_active`) and `GET /sandboxes`
+        — so nothing would ever retry it and nothing could report it, which
+        defeats the one mechanism the app has for finding an orphan. An
+        already-unknown handle raises `SandboxNotFound` from the backend before
+        anything is dropped, which is the same answer as before."""
+        await self.sandbox.kill(SandboxHandle(id=rid))
         self._last_active.pop(rid, None)
         self._item_of.pop(rid, None)
-        await self.sandbox.kill(SandboxHandle(id=rid))
 
     async def sweep_tool_cache(self, *, max_bytes: int | None = None) -> list[str]:
         """#674: reclaim third-party bundles nothing is running any more.
@@ -341,9 +369,18 @@ class _HostController:
             return []
         now = self.clock()
         stale = [r for r, t in self._last_active.items() if now - t > self.idle_ttl]
+        reaped = []
         for rid in stale:
-            await self.kill(rid)
-        return stale
+            # Per item: one sandbox whose teardown fails used to abort the whole
+            # sweep, so every idle sandbox after it survived the pass — and the
+            # next pass hits the same one first and stops in the same place.
+            try:
+                await self.kill(rid)
+            except Exception:  # noqa: BLE001 - one bad sandbox must not strand the rest
+                logger.warning("host: idle reap failed for %s", rid, exc_info=True)
+                continue
+            reaped.append(rid)
+        return reaped
 
 
 def make_host_app(
@@ -469,6 +506,27 @@ def make_host_app(
     @app.exception_handler(FileNotFoundError)
     async def _file_not_found(_request: Request, exc: FileNotFoundError) -> JSONResponse:
         return _error(exc)
+
+    @app.get("/sandboxes")
+    async def list_sandboxes() -> dict[str, object]:
+        """What is ACTUALLY running here, keyed by item.
+
+        The app keeps records — a heartbeat that bills people, an address that
+        routes, a panel offering a Close button — and until this existed it had
+        no way to check any of them against reality. A stale record read exactly
+        like a true one, so clearing a record became the only available way to
+        say "gone", including when it was not: that is how closing an
+        environment could report success while the sandbox kept running, and how
+        clearing a heartbeat could tell every replica's reaper that a directory
+        somebody was working in was idle."""
+        # `advertise_url` for the same reason `create` returns it: the Service in
+        # front of this deployment load-balances, so this answer is THIS pod's,
+        # and anything the app then wants to do to a listed sandbox has to reach
+        # this pod. Without it the app could see an orphan and not be able to
+        # kill it. For the same reason the listing is evidence that something
+        # EXISTS and never evidence that something does not — another pod's
+        # sandboxes are simply not in this answer.
+        return {"sandboxes": [{**s, "pod_url": advertise_url} for s in controller.live()]}
 
     @app.post("/sandboxes")
     async def create(body: _CreateBody) -> Response:

@@ -9,7 +9,12 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.filestore.migrating import MigratingFileStore
 from workspace_app.filestore.nfs_tree import NfsTreeFileStore
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
+from workspace_app.sandbox.protocol import (
+    RunningSandbox,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 
 
 class _CountingSandbox(MockSandbox):
@@ -39,10 +44,33 @@ class _HttpStyleSandbox(MockSandbox):
         super().__init__()
         self.create_calls = 0
         self.kill_calls = 0
+        # The host records which item each sandbox serves and can be asked. Not
+        # modelling that would make every test of the listing vacuous — the
+        # double would answer about handles nobody asked about.
+        self._item_of: dict[str, str] = {}
+        # Handles the LISTING will not name. The real host runs several replicas
+        # behind a load balancer, so `GET /sandboxes` answers for the one pod
+        # that took the request and no more — put a handle here to place it on
+        # another pod. Answering about everything instead made the double
+        # STRICTLY more informative than the wire, which silently retired the
+        # published address: `_close_unrecorded` reached every sandbox the
+        # address existed to reach, so deleting the address branch outright left
+        # every test green, including the one named after it.
+        self.on_other_replica: set[str] = set()
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         self.create_calls += 1
-        return await super().create(spec, sandbox_id=None)  # ignore id → fresh uuid
+        handle = await super().create(spec, sandbox_id=None)  # ignore id → fresh uuid
+        if sandbox_id is not None:
+            self._item_of[handle.id] = sandbox_id
+        return handle
+
+    async def running_sandboxes(self):
+        return [
+            RunningSandbox(handle=SandboxHandle(id=hid), item_id=self._item_of.get(hid))
+            for hid in self._fs
+            if hid not in self.on_other_replica
+        ]
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
         return None
@@ -988,3 +1016,491 @@ async def test_host_managed_wake_refuses_to_build_a_sandbox_it_cannot_fill_492()
     with pytest.raises(OSError, match="nfs unreachable"):
         await registry.ensure_handle(await registry.session("ws-1"))
     assert sandbox._fs == {}  # never created — not even an empty one to work in
+
+
+async def test_close_session_closes_a_sandbox_this_pod_never_warmed():
+    """Closing must not depend on which replica the request landed on.
+
+    `_sessions` is one pod's memory. A close handled by a pod that never woke
+    the item found nothing and returned — while the route went on to clear the
+    ledger row, so the panel stopped listing an environment that was still
+    running. Restarting the backend produces the same state on a single pod:
+    the sessions map is empty, the sandbox and its published address are not."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    warm_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+    other_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    handle = await warm_pod.ensure_handle(await warm_pod.session("ws-1"))
+    await sandbox.exists(handle, "/a")  # alive: a live handle answers, dead one raises
+
+    await other_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(handle, "/a")  # the sandbox outlived its close
+    # The address row is deliberately left behind — see
+    # `test_close_session_never_erases_the_published_address`. What matters is
+    # that it cannot resurrect the dead sandbox: the next acquire probes it,
+    # finds it dead, and swaps its own in.
+    rebuilt = await other_pod.ensure_handle(await other_pod.session("ws-1"))
+    assert rebuilt != handle
+    await sandbox.exists(rebuilt, "/a")
+
+
+async def test_close_session_tolerates_a_sandbox_someone_already_deleted():
+    """An operator deleting a sandbox out of band is a supported thing to do.
+
+    `kill` then raises `SandboxNotFound` — which IS the goal, the same reasoning
+    `kill_idle` already applies. Letting it propagate meant the session was never
+    evicted and the ledger row never cleared, so the panel kept offering a Close
+    that could only ever fail: the one entry you could neither use nor remove."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    session = await registry.session("ws-1")
+    handle = await registry.ensure_handle(session)
+    await sandbox.kill(handle)  # the operator went in and removed it
+
+    await registry.close_session("ws-1")  # must not raise
+
+    assert await registry.session("ws-1") is not session, "the dead session was kept"
+    # The address is deliberately NOT erased. `SandboxNotFound` cannot tell
+    # "reaped" from "could not reach it" — the http client maps every transport
+    # error onto it — and erasing the address of a sandbox that is actually
+    # alive strands it where no pod can find it. Leaving a dead one costs
+    # nothing, which the next line demonstrates:
+    fresh = await registry.ensure_handle(await registry.session("ws-1"))
+    assert fresh != handle, "the next acquire should have rebuilt"
+    await sandbox.exists(fresh, "/a")  # …and the rebuilt one is live
+
+
+async def test_close_session_kills_what_the_address_names_when_the_session_has_no_handle():
+    """A session with no handle is the NORMAL state, not an edge case.
+
+    Sandboxes are lazy — only `exec` creates one — so any pod that has served a
+    chat turn holds a session whose handle is None. Deciding the teardown on
+    "is there a session" rather than "is there a live handle" skipped the kill
+    while still erasing the address, which strands the sandbox where no pod can
+    address it and lets the next acquire build a SECOND one beside it."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    warm_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+    chat_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    handle = await warm_pod.ensure_handle(await warm_pod.session("ws-1"))
+    await chat_pod.session("ws-1")  # a chat turn: session exists, handle is None
+
+    await chat_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(handle, "/a")  # it really was killed
+
+
+async def test_close_session_keeps_every_record_when_it_could_not_finish():
+    """A busy host is told to retry — which is only useful if there is still
+    something to retry against.
+
+    Anything other than `SandboxNotFound` propagates, and then neither the
+    heartbeat nor the address may be touched: clearing them turns "try again in
+    a moment" into an environment that is gone from the panel, still running,
+    and unreachable."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+    from workspace_app.sandbox.protocol import SandboxBusy
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    register_sandbox_activity(spec)
+
+    class _BusyOnKill(_HttpStyleSandbox):
+        async def kill(self, handle):
+            raise SandboxBusy(handle.id)
+
+    sandbox = _BusyOnKill()
+    addr = SpecstarAddressStore(spec)
+    activity = SpecstarActivityStore(spec)
+    registry = InvestigationRegistry(
+        sandbox=sandbox, address=addr, activity=activity, owner_of=lambda _i: "alice"
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+
+    with pytest.raises(SandboxBusy):
+        await registry.close_session("ws-1")
+
+    assert await addr.get("ws-1") is not None, "the address was erased on a failed close"
+    assert await activity.last_active_ms("ws-1") is not None, "the row was cleared anyway"
+
+
+async def test_close_session_does_not_report_a_kill_it_never_attempted():
+    """When the writeback cannot reach the sandbox, the kill has nothing to act
+    on — and the address must survive.
+
+    Suppressing `SandboxNotFound` across BOTH steps reported success for a close
+    that never tried: `persist` raising on a refused connection skipped the kill
+    entirely, cleared both records, and answered 204. The sandbox was alive, the
+    panel no longer showed it, and nothing could address it."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    class _UnreachableWriteback:
+        async def restore(self, workspace_id, handle, *, on_progress=None):
+            return 0
+
+        async def mirror(self, workspace_id, handle):
+            raise SandboxNotFound(handle.id)  # what a refused connection becomes
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, address=addr, sync=_UnreachableWriteback())
+
+    handle = await registry.ensure_handle(await registry.session("ws-1"))
+    await registry.close_session("ws-1")  # must not raise
+
+    assert await addr.get("ws-1") is not None, "an unconfirmed kill erased the address"
+    await sandbox.exists(handle, "/a")  # still alive — nothing claimed otherwise
+
+
+async def test_close_session_frees_the_slot_when_the_sandbox_is_not_there():
+    """`SandboxNotFound` means it is not there, which is the goal.
+
+    That is the reading `kill_idle` and `_alive` already give the same signal,
+    and #492 already carved out the case where the sandbox is ALIVE: a
+    reachable-but-slow host raises `SandboxBusy`, which clears nothing. Making
+    `SandboxNotFound` a third category — "found it, could not confirm" — left an
+    operator who had deleted a sandbox out of band with a row that refused to
+    clear and a Close button that said so for the whole 8-hour idle window.
+
+    The ADDRESS is a different question and stays where it is; see the next
+    test."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    register_sandbox_activity(spec)
+
+    class _AlreadyGone(_HttpStyleSandbox):
+        async def kill(self, handle):
+            raise SandboxNotFound(handle.id)
+
+    sandbox = _AlreadyGone()
+    addr = SpecstarAddressStore(spec)
+    activity = SpecstarActivityStore(spec)
+    registry = InvestigationRegistry(
+        sandbox=sandbox, address=addr, activity=activity, owner_of=lambda _i: "alice"
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+
+    await registry.close_session("ws-1")  # tolerated — it must not raise
+
+    assert await activity.last_active_ms("ws-1") is None, (
+        "the owner is still charged for an environment that is not there"
+    )
+
+
+async def test_close_session_never_erases_the_published_address():
+    """`kill_idle` does not clear it either, and it does not need to be cleared:
+    `_acquire` probes a published address and CAS-swaps a dead one for the
+    sandbox it builds, so a stale row costs nothing.
+
+    Deleting it is what carries risk, and the risk cannot be designed away here:
+    specstar's `delete` takes no expected-etag, so the delete cannot be made
+    conditional on the handle we killed. A peer that rebuilt the item while this
+    teardown was in flight would have ITS live address erased, and the next
+    acquire would build a second sandbox beside it — the split-brain the address
+    store exists to prevent."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, address=addr)
+    handle = await registry.ensure_handle(await registry.session("ws-1"))
+
+    await registry.close_session("ws-1")  # a clean, completed kill
+
+    assert await addr.get("ws-1") is not None, "a completed kill still erased the address"
+    # …and the stale row costs nothing: the next acquire probes it, finds it
+    # dead, and swaps its own in.
+    fresh = await registry.ensure_handle(await registry.session("ws-1"))
+    assert fresh != handle
+    assert await addr.get("ws-1") == fresh
+
+
+async def test_close_session_frees_the_slot_even_when_it_could_not_find_anything():
+    """The case with no way back.
+
+    Nothing named the sandbox: no session on this replica, no published address
+    (the pod that created it died before the CAS publish), and the listing
+    covers only the host replica that answered. Keeping the row then gives the
+    person a 204 that says it worked, a row that stays, and a slot they cannot
+    free until the idle window expires — 8 hours by default. Clearing it when we
+    are wrong has a way back: the panel asks the backend what is running and
+    re-arms what it finds."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
+
+    spec = SpecStar()
+    register_sandbox_activity(spec)
+    activity = SpecstarActivityStore(spec)
+    # A pod that knows nothing about this item: no session, no address store,
+    # and a backend whose listing does not name it.
+    registry = InvestigationRegistry(
+        sandbox=_HttpStyleSandbox(), activity=activity, owner_of=lambda _i: "alice"
+    )
+    await activity.bump("ws-1", owner="alice", cpu_milli=1000)
+
+    await registry.close_session("ws-1")
+
+    assert await activity.last_active_ms("ws-1") is None, (
+        "the owner is charged for something nothing here can reach or close"
+    )
+
+
+async def test_close_session_falls_back_to_the_address_when_its_own_handle_is_stale():
+    """A cached handle is this pod's memory, and it can be out of date.
+
+    The host reaps on its own idle timer and pods die, so the handle a session
+    holds may name a sandbox that no longer exists while the item has since been
+    rebuilt somewhere else — `ensure_handle` already probes for exactly this. A
+    close that stopped at the stale handle killed nothing, reported that it had,
+    and left the real sandbox running."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    stale_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+    live_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    old_handle = await stale_pod.ensure_handle(await stale_pod.session("ws-1"))
+    await sandbox.kill(old_handle)  # the host reaped it out from under this pod
+    await addr.forget("ws-1")
+    live = await live_pod.ensure_handle(await live_pod.session("ws-1"))
+    assert live != old_handle
+
+    await stale_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(live, "/a")  # the one that was really running
+
+
+async def test_close_session_finds_a_sandbox_no_record_names():
+    """The last resort, and the only one that can clear an orphan.
+
+    A sandbox whose address was lost — an app pod that died between `create` and
+    the CAS publish, a record cleared by an older build of this very method — is
+    invisible to every record the app keeps. It keeps running and keeps costing
+    its owner, from a row that either is not there or has nothing behind it.
+    Asking the backend what it is actually running is the only way to reach it."""
+    sandbox = _HttpStyleSandbox()
+    orphaning_pod = InvestigationRegistry(sandbox=sandbox)
+    handle = await orphaning_pod.ensure_handle(await orphaning_pod.session("ws-1"))
+    orphaning_pod._sessions.clear()  # the pod died; nothing records this sandbox
+
+    fresh_pod = InvestigationRegistry(sandbox=sandbox)
+    await fresh_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(handle, "/a")
+
+
+async def test_close_session_does_not_kill_a_sandbox_belonging_to_another_item():
+    """The listing names every sandbox on the answering pod, not just ours.
+
+    Picking the wrong entry closes a stranger's environment mid-turn, which is
+    the worst thing this method could do and the reason it matches on item id
+    rather than on "the only one running"."""
+    sandbox = _HttpStyleSandbox()
+    pod = InvestigationRegistry(sandbox=sandbox)
+    mine = await pod.ensure_handle(await pod.session("ws-1"))
+    theirs = await pod.ensure_handle(await pod.session("ws-2"))
+    pod._sessions.clear()
+
+    await InvestigationRegistry(sandbox=sandbox).close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(mine, "/a")
+    await sandbox.exists(theirs, "/a")  # untouched
+
+
+async def test_close_session_writes_back_before_it_gives_up_on_the_kill():
+    """The write-back succeeding says nothing about the kill.
+
+    They are separate calls to the same host and only the second frees the
+    machine, so the write-back must run and must not be read as a completed
+    close: the heartbeat goes (the sandbox is not there), the address stays (we
+    did not end it ourselves)."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_activity import SpecstarActivityStore, register_sandbox_activity
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    register_sandbox_activity(spec)
+
+    class _KillVanishes(_HttpStyleSandbox):
+        async def kill(self, handle):
+            raise SandboxNotFound(handle.id)
+
+    sandbox = _KillVanishes()
+    addr = SpecstarAddressStore(spec)
+    activity = SpecstarActivityStore(spec)
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(
+        sandbox=sandbox,
+        address=addr,
+        activity=activity,
+        sync=sync,
+        owner_of=lambda _i: "alice",
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+    sync.calls.clear()
+
+    await registry.close_session("ws-1")
+
+    assert sync.calls == [("mirror", "ws-1")], "the durable snapshot was skipped"
+    assert await activity.last_active_ms("ws-1") is None
+
+
+async def test_close_session_leaves_a_session_that_woke_up_under_it():
+    """The fallbacks run OUTSIDE the session lock, so a turn can re-acquire into
+    the same session object while one of them is in flight.
+
+    (The pod's own cached handle is torn down under the lock — that is the #345
+    guarantee, and a concurrent file op simply waits and then re-acquires. The
+    address and the listing name handles this pod does not own, and holding a
+    local lock across a call to another replica would buy nothing.)
+
+    Popping such a session drops a live handle on the floor: the next file op
+    builds a fresh sandbox for an item that already has one, and the two working
+    dirs diverge. Only a session still holding the `None` this method put there
+    may be evicted."""
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox)
+    # A session with no cached handle — the normal state for a pod that served a
+    # chat turn — so the teardown comes from the listing, outside the lock.
+    session = await registry.session("ws-1")
+    orphan = await sandbox.create(SandboxSpec(), sandbox_id="ws-1")
+
+    reacquired = []
+    real_kill = sandbox.kill
+
+    async def _wake_mid_teardown(handle):
+        if not reacquired:  # stands in for a turn arriving while the kill runs
+            reacquired.append(await registry.ensure_handle(session))
+        return await real_kill(handle)
+
+    sandbox.kill = _wake_mid_teardown  # ty: ignore[invalid-assignment]
+    await registry.close_session("ws-1")
+
+    assert reacquired, "the test never exercised the race it is about"
+    assert registry._sessions.get("ws-1") is session, "evicted a session holding a live handle"
+    assert session.handle == reacquired[0]
+    assert reacquired[0] != orphan
+
+
+async def test_close_session_kills_what_only_the_address_can_name():
+    """The listing cannot stand in for the published address.
+
+    `GET /sandboxes` answers for the ONE host replica that took the request, so
+    a sandbox on any other pod is simply absent from it — which is the whole
+    reason the address store exists. A close that reached only the listing would
+    work or not by which replica the load balancer picked."""
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    warm_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+    other_pod = InvestigationRegistry(sandbox=sandbox, address=addr)
+
+    handle = await warm_pod.ensure_handle(await warm_pod.session("ws-1"))
+    sandbox.on_other_replica.add(handle.id)  # the listing will not name it
+    assert [e.item_id for e in await sandbox.running_sandboxes() or []] == []
+
+    await other_pod.close_session("ws-1")
+
+    with pytest.raises(SandboxNotFound):
+        await sandbox.exists(handle, "/a")
+
+
+async def test_close_all_keeps_a_sandbox_whose_durable_snapshot_did_not_land():
+    """Shutdown must not kill past a failed write-back.
+
+    `kill` can rmtree the item's shared dir (#345), so ending a sandbox whose
+    durable snapshot we know is stale trades a slow shutdown for lost work. The
+    dir outlives this process either way — the next pod warms it — so stopping
+    at that item is free, and the alternative is not."""
+    sandbox = _CountingSandbox()
+
+    class _FailingSync(_RecordingSync):
+        async def mirror(self, workspace_id, handle):
+            raise RuntimeError("the durable store is unreachable")
+
+    registry = InvestigationRegistry(sandbox=sandbox, sync=_FailingSync())
+    await registry.ensure_handle(await registry.session("ws-1"))
+
+    await registry.close_all()  # must not raise
+
+    assert sandbox.kill_calls == 0, "killed a sandbox whose snapshot never landed"
+
+
+async def test_close_all_carries_on_past_one_item_it_could_not_finish():
+    """The one path whose whole job is to leave nothing behind used to leak
+    every session after the first failure."""
+    sandbox = _CountingSandbox()
+    real_kill = sandbox.kill
+
+    async def _first_one_fails(handle):
+        if sandbox.kill_calls == 0:
+            sandbox.kill_calls += 1
+            raise RuntimeError("device busy")
+        return await real_kill(handle)
+
+    registry = InvestigationRegistry(sandbox=sandbox)
+    await registry.ensure_handle(await registry.session("ws-1"))
+    await registry.ensure_handle(await registry.session("ws-2"))
+    sandbox.kill = _first_one_fails  # ty: ignore[invalid-assignment]
+
+    await registry.close_all()
+
+    assert sandbox.kill_calls == 2, "the second session was stranded by the first"
+    assert registry._sessions == {}

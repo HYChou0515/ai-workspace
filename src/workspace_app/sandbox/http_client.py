@@ -31,6 +31,7 @@ from .protocol import (
     ExecResult,
     FileEntry,
     OutputSink,
+    RunningSandbox,
     SandboxBusy,
     SandboxHandle,
     SandboxNotFound,
@@ -148,6 +149,13 @@ class HttpSandbox:
         # each wrote the cache and the LAST writer won — so a failing probe
         # could overwrite an answer the host had already given correctly.
         self._host_defaults_lock = asyncio.Lock()
+        # Same backoff, for the listing. It is on the panel render AND the close
+        # path, and it has no cache on purpose — a stale answer to "what is
+        # running" is worth much less than a stale ceiling, which only changes
+        # when the host is redeployed. What it does need is the FAILURE memory:
+        # without it a down host makes every concurrent caller pay its own full
+        # timeout, which is the queue `_host_defaults_retry_at` exists to stop.
+        self._listing_retry_at = 0.0
 
     async def effective_limits(self, spec: SandboxSpec) -> EnforcedLimits:
         """What the HOST will really cap this sandbox at.
@@ -346,6 +354,45 @@ class HttpSandbox:
         data = resp.json()
         logger.info("sandbox-http: created sandbox for item %s", sandbox_id)
         return SandboxHandle(id=_encode_handle(data["pod_url"], data["remote_id"]))
+
+    async def running_sandboxes(self) -> list[RunningSandbox] | None:
+        """Ask the host what it is running. See `Sandbox.running_sandboxes`.
+
+        Sent to the SERVICE, so it is answered by one arbitrary pod — hence the
+        contract that this is evidence of existence and never of absence. Each
+        entry carries the answering pod's own url, so the handle built here
+        addresses that pod directly, exactly like the one `create` returns.
+
+        Every failure yields `None`, never `[]`: an unreachable or too-old host
+        has told us nothing, and a caller that mistook that for "nothing is
+        running" would retire live sandboxes' records on a blip.
+
+        A failure is remembered briefly (`host_defaults_retry_after`, the same
+        budget the ceilings use). Not remembering it meant a down host cost every
+        concurrent caller a full timeout each, on a page anyone can open — and
+        the answer they would all wait for is the same `None`. Successes are NOT
+        cached: what is running changes constantly, unlike a ceiling."""
+        if self._monotonic() < self._listing_retry_at:
+            return None
+        try:
+            resp = await self._client.get(f"{self._base_url}/sandboxes", timeout=5.0)
+            resp.raise_for_status()
+            listed = resp.json()["sandboxes"]
+            # Decoded INSIDE the try, or the promise above is not kept: a
+            # malformed entry would raise `KeyError` out of a method whose whole
+            # contract is that it answers `None` instead of failing, and the two
+            # callers are a panel render and the close path.
+            return [
+                RunningSandbox(
+                    handle=SandboxHandle(id=_encode_handle(e["pod_url"], e["remote_id"])),
+                    item_id=e.get("item_id"),
+                )
+                for e in listed
+            ]
+        except Exception:  # noqa: BLE001 — "could not ask" is an answer here, not a failure
+            logger.warning("sandbox-http: could not list the host's sandboxes", exc_info=True)
+            self._listing_retry_at = self._monotonic() + self._host_defaults_retry_after
+            return None
 
     async def resolve_tools(self, declared: Mapping[str, str]) -> dict[str, Any]:
         """#674: ask the host to make these third-party tools available.

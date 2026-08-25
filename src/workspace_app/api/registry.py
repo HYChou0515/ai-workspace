@@ -265,6 +265,39 @@ class InvestigationRegistry:
             disk_bytes=0,  # admission weighs the flow dimensions only
         )
 
+    async def running_items(self) -> list[str] | None:
+        """Which items the BACKEND says have a sandbox running — or `None` when
+        it cannot say.
+
+        Everything else the app knows about live sandboxes is stored belief, and
+        no record can be checked against another record. This is the one source
+        that is not a record.
+
+        Positive evidence only, and the `None` matters for the same reason: the
+        hosted backend answers for the replica that took the request, so an item
+        missing from the answer may simply be on another pod, and a failed call
+        must never read as "nothing is running". Use it to FIND things, never to
+        conclude that something is gone — for that, probe the item's own handle.
+        """
+        listed = await self.sandbox.running_sandboxes()
+        if listed is None:
+            return None
+        # Deduped: an item can legitimately have two live sandboxes for a moment
+        # (a #366 CAS loser before it kills its orphan; a rebuild after a probe
+        # read a blip as death), and a caller counting what a person holds must
+        # not charge them twice for one environment.
+        return list(dict.fromkeys(e.item_id for e in listed if e.item_id))
+
+    async def record_running(self, item: str) -> None:
+        """Say that this item's sandbox is alive right now.
+
+        The heartbeat is a lease, and re-arming one for something that is
+        demonstrably running is not bookkeeping — it is what makes the person's
+        limit count it and what stops another replica's reaper treating the
+        directory as idle. Its natural caller is whoever just learned, from the
+        backend itself, that a sandbox exists which no row named."""
+        await self._bump(item)
+
     async def _bump(self, item: str) -> None:
         """Refresh the item's global heartbeat, carrying what its live sandbox
         costs and who owes it.
@@ -585,46 +618,222 @@ class InvestigationRegistry:
         return ms is None or ms < cutoff_ms
 
     async def close_all(self) -> None:
+        """Shutdown: tear down every sandbox this pod is holding.
+
+        Per item, like `kill_idle` and `mirror_warm`: one sandbox the host had
+        already reaped (its own idle TTL, a restart) raises `SandboxNotFound`
+        here, and letting that abort the loop leaked every session after it —
+        on the one path whose whole job is to leave nothing behind. Already gone
+        is the goal, so it is not even a warning.
+
+        Anything else IS a warning, and stops that one item rather than killing
+        past it: a kill can rmtree the item's shared dir, so proceeding after a
+        write-back we know did not land trades a slow shutdown for lost work."""
         logger.info("registry: close_all reaping %d session(s)", len(self._sessions))
         for inv_id in list(self._sessions):
             s = self._sessions.pop(inv_id)
-            if s.handle is not None:
+            if s.handle is None:
+                continue
+            try:
                 if self._has_durable:
-                    await self._writeback(inv_id, s.handle, delete=True)
-                await self.sandbox.kill(s.handle)
+                    # A write-back that fails for any reason OTHER than "the
+                    # sandbox is already gone" stops this item here, KEEPING the
+                    # sandbox: killing it can rmtree the item's shared dir, and
+                    # doing that on top of a durable snapshot we know is stale
+                    # is how shutdown turns a bad minute into lost work. The dir
+                    # outlives this process; the next pod warms it.
+                    try:
+                        await self._writeback(inv_id, s.handle, delete=True)
+                    except SandboxNotFound:
+                        continue  # already gone — nothing to mirror, nothing to kill
+                with contextlib.suppress(SandboxNotFound):
+                    await self.sandbox.kill(s.handle)
+            except Exception:  # noqa: BLE001 — one bad item must not strand the rest
+                logger.warning(
+                    "registry: close_all left item %s behind (teardown failed)",
+                    inv_id,
+                    exc_info=True,
+                )
 
     async def close_session(self, investigation_id: str) -> None:
-        """Manually tear down one investigation's sandbox + remove from
-        the registry. Used by the close-investigation API endpoint
-        (plan-backend §6) and by a workflow pause freeing its sandbox.
+        """Tear down one item's sandbox, from ANY replica.
 
-        Runs UNDER the session lock, and clears the cached handle before the
-        teardown. It used to pop the session first and then write back + kill —
-        which loses writes, because #345 keys the sandbox dir to the ITEM: a
-        request arriving in that window built a NEW session (with its own new
-        lock, so nothing serialised it), warmed the SAME dir and wrote into it,
-        and then this method's ``kill`` rmtree'd the dir underneath it. The write
-        had already been acknowledged. Symptom: a 204 PUT followed by a 404 GET,
-        which is how the workflow-pause test found it intermittently.
+        Used by the panel's Close button and by the close-investigation endpoint.
 
-        Holding the lock means a concurrent file op either lands BEFORE the
-        write-back (so it is mirrored to the durable store) or waits and then
-        finds ``handle is None`` and re-acquires a fresh dir. Either way the write
-        survives. `kill_idle` already reasons this way about the shared dir; this
-        path simply never did."""
+        **Finding it.** Three sources, in order, because each covers what the one
+        before it cannot:
+
+        1. this pod's session — but `_sessions` is one pod's memory, so a close
+           that landed on a different replica (or after a restart) found nothing;
+        2. the shared address — including when the session's own handle is stale,
+           which happens on its own whenever the host reaps on its idle timer or
+           a pod dies (`ensure_handle` already probes for exactly this);
+        3. what the backend says it is actually RUNNING — the last resort, and
+           the only thing that can reach a sandbox whose address was lost.
+
+        **Clearing the heartbeat.** It goes whenever this returns — including
+        when no source could name a sandbox at all. The heartbeat is a record of
+        what the app believes is running, and if nothing the app can reach is
+        running for this item, continuing to charge for it is charging for a
+        belief nothing supports. `SandboxNotFound` counts as gone for the same
+        reason `kill_idle` and `_alive` already read it that way; #492 already
+        carved out the case where the sandbox IS alive, and it has its own
+        signal — a reachable-but-slow host raises `SandboxBusy`, which
+        propagates from here before anything is cleared (503, retry).
+
+        Refusing to clear when nothing was found is the version of this that got
+        written first, and it was worse than the bug it was meant to prevent.
+        The listing covers only the host replica that answered, so a genuinely
+        orphaned sandbox is found with probability 1/N — and on a miss the
+        person got a 204 saying it worked, a row that stayed, and a slot they
+        could not free for the whole `idle_timeout` window (8 hours by default).
+        Over-clearing has a way back: the panel asks the backend what is running
+        and re-arms what it finds (`record_running`). Under-clearing has none.
+
+        **The address is never cleared here**, exactly as `kill_idle` never
+        clears it. It does not need to be: `_acquire` probes a published address
+        and CAS-swaps a dead one for the sandbox it builds, so a stale row costs
+        nothing. Deleting it is what carries risk — the delete cannot be made
+        conditional on the handle we killed (specstar's `delete` takes no
+        expected-etag), so a peer that rebuilt the item while this teardown was
+        in flight would have ITS live address erased, and the next acquire would
+        build a second sandbox beside it. That is the split-brain the address
+        store exists to prevent.
+
+        The session's cached handle is taken UNDER its lock and before the
+        teardown. Popping the session first and then writing back + killing loses
+        writes, because #345 keys the sandbox dir to the ITEM: a request arriving
+        in that window built a new session with its own new lock, warmed the SAME
+        dir, wrote into it, and then this method's `kill` rmtree'd the dir
+        underneath an already-acknowledged write. Holding the lock means a
+        concurrent file op either lands before the write-back (so it is mirrored)
+        or waits and then finds `handle is None` and re-acquires a fresh dir.
+
+        The lock covers only what this pod cached. A handle found through the
+        address or the listing belongs to whichever replica warmed it, and
+        nothing here serialises against that pod — which is inherent to closing
+        something another process owns.
+        """
         s = self._sessions.get(investigation_id)
-        if s is None:
-            return
-        async with s.lock:
-            # Re-read under the lock: a concurrent close may have finished first.
-            if self._sessions.get(investigation_id) is not s:
-                return
-            logger.info("registry: close_session tearing down item %s", investigation_id)
-            handle, s.handle = s.handle, None
-            if handle is not None:
-                if self._has_durable:
-                    await self._writeback(investigation_id, handle, delete=True)
-                await self.sandbox.kill(handle)
-                if self.activity is not None:
-                    await self.activity.forget(investigation_id)
-        self._sessions.pop(investigation_id, None)
+        handle: SandboxHandle | None = None
+        killed_here = False
+        # Each source can name a sandbox an earlier one already tried, and a
+        # teardown is not free — it rsyncs the whole workspace to the durable
+        # archive before killing. Carrying the ids keeps the fallbacks a search
+        # for something NEW rather than a retry of the same handle.
+        tried: set[str] = set()
+        if s is not None:
+            async with s.lock:
+                # Re-read under the lock: a concurrent close may have finished
+                # and replaced the session. Its sandbox still has to be torn
+                # down, so the search below carries on either way.
+                if self._sessions.get(investigation_id) is s:
+                    handle, s.handle = s.handle, None
+                if handle is not None:
+                    # INSIDE the lock — see the paragraph above. Taking the
+                    # handle under it and then tearing down outside restores the
+                    # #345 race in full: the window between the two is exactly
+                    # where a concurrent file op re-warms the same item dir and
+                    # writes into it, and this kill then rmtrees the dir under
+                    # an acknowledged write.
+                    tried.add(handle.id)
+                    killed_here = await self._teardown(investigation_id, handle)
+
+        # A session with no handle at all is the NORMAL state, not an edge case:
+        # sandboxes are lazy, so every pod that has served one chat turn holds
+        # one. And a cached handle can simply be out of date. Both land here —
+        # which is why the fallbacks are gated on "did WE end one", not on
+        # "is it gone": a stale handle reports gone and the live sandbox the
+        # address names is still running.
+        if not killed_here and self.address is not None:
+            published = await self.address.get(investigation_id)
+            if published is not None and published.id not in tried:
+                tried.add(published.id)
+                killed_here = await self._teardown(investigation_id, published)
+
+        if not killed_here:
+            killed_here = await self._close_unrecorded(investigation_id, tried)
+
+        if self.activity is not None:
+            await self.activity.forget(investigation_id)
+        # Pop only a session that is still the one we emptied. `ensure_handle`
+        # may have re-acquired into the SAME object while the teardown ran (the
+        # lock is released before it), and popping that drops a live handle on
+        # the floor; a concurrent close may have replaced the object outright.
+        current = self._sessions.get(investigation_id)
+        if current is not None and current is s and current.handle is None:
+            del self._sessions[investigation_id]
+        elif s is None:
+            self._sessions.pop(investigation_id, None)
+
+    async def _close_unrecorded(self, item: str, tried: set[str]) -> bool:
+        """Tear down a sandbox for `item` that no record of ours names.
+
+        This is how an orphan gets cleared. A sandbox whose address was lost —
+        an app pod that died between `create` and the CAS publish, a record
+        wiped by an older build of this method — is invisible to everything the
+        app stores, while it keeps running and keeps costing its owner from a
+        row that either is not there or has nothing behind it. Asking the
+        backend what it is really running is the only way to reach it.
+
+        Matched on item id, never on "the only one running": the answer names
+        every sandbox on the pod that took the request, and picking the wrong
+        entry closes a stranger's environment mid-turn.
+
+        `tried` names handles an earlier source already tore down, so this stays
+        a search for something NEW: the listing usually still names the sandbox
+        the session just failed to kill, and re-running the teardown would rsync
+        the whole workspace to the archive a second time for nothing.
+
+        True if any match was killed here. A backend that cannot say (`None`)
+        reports the same as an empty answer — this only ever ADDS a way to find
+        something, so its silence leaves the earlier sources to it.
+        """
+        listed = await self.sandbox.running_sandboxes()
+        if not listed:
+            return False
+        killed = False
+        for entry in listed:
+            if entry.item_id == item and entry.handle.id not in tried:
+                tried.add(entry.handle.id)
+                killed = await self._teardown(item, entry.handle) or killed
+        return killed
+
+    async def _teardown(self, item: str, handle: SandboxHandle) -> bool:
+        """Persist and kill one sandbox. True when THIS call completed the kill.
+
+        The answer steers the SEARCH and nothing else: while no source has
+        actually ended a sandbox, the next source is still worth asking. That is
+        why it is not "is it gone" — a stale cached handle is gone, and the
+        sandbox the published address names is still running, so stopping there
+        would leave the live one behind.
+
+        It governs no deletion, so being wrong about it costs a redundant lookup
+        rather than a record. `SandboxNotFound` is therefore just False: the
+        sandbox is not there (the same reading `kill_idle` and `_alive` already
+        give that signal), and the caller carries on looking. The case where the
+        sandbox IS alive has its own signal — a reachable-but-slow host raises
+        `SandboxBusy` (#492), which propagates from here untouched so every
+        record stays put and the caller is told to retry (503).
+
+        A write-back that cannot reach the sandbox means the kill has nothing to
+        act on, so it stops there. A write-back that SUCCEEDS says nothing about
+        the kill: they are separate calls to the same host and only the second
+        frees the machine."""
+        if self._has_durable:
+            try:
+                await self._writeback(item, handle, delete=True)
+            except SandboxNotFound:
+                logger.info(
+                    "registry: sandbox %s for item %s was already gone at write-back",
+                    handle.id,
+                    item,
+                )
+                return False
+        logger.info("registry: close_session killing sandbox %s for item %s", handle.id, item)
+        try:
+            await self.sandbox.kill(handle)
+        except SandboxNotFound:
+            logger.info("registry: sandbox %s for item %s was already gone", handle.id, item)
+            return False
+        return True

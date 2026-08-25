@@ -114,6 +114,7 @@ def register_quota_routes(
     spec: SpecStar,
     locator: ItemLocator,
     registry: InvestigationRegistry,
+    facts_of: Callable[[str], tuple[str, str]],
     files: WorkspaceFiles,
     activity: IActivityStore | None,
     disk_ledger: DiskLedger,
@@ -127,6 +128,67 @@ def register_quota_routes(
 
     def _describe(item_id: str) -> tuple[str, str]:
         return locator.slug_of(item_id) or "", locator.title_of(item_id) or ""
+
+    async def _found_running(owner: str, already_listed: set[str]) -> list[_LiveEnvironment]:
+        """This person's environments that are RUNNING but that no ledger row
+        names — and, on the way past, put them back in the ledger.
+
+        The list used to be drawn entirely from the heartbeat, which is belief,
+        and belief goes missing: a pod that died between `create` and its first
+        bump, a row cleared by a close that killed nothing, a heartbeat that
+        aged out of the window while the sandbox kept running. Whatever the
+        cause, the environment disappeared from the one page that offers a Close
+        button — so there was nothing left to click — while it went on costing
+        its owner. Only the backend can settle it, because no record can be
+        checked against another record.
+
+        Re-arming the heartbeat is half the point. The per-person limit counts
+        the ledger, not this page, so a panel that were merely honest would
+        leave the gate blind — the environment would be visible and still not
+        charged. It runs, so it costs.
+
+        Scoped to the SUBJECT — `owner`, who is the reader on `/me/resources`
+        and somebody else on the admin read. The backend answers about every
+        sandbox on the replica that took the request, and one belonging to a
+        third party must not appear here, let alone with a Close button. An item
+        nobody owns any more is skipped for the same reason, which leaves it
+        visible on no page at all — known, and wanting an operator-facing
+        listing rather than a wrong owner.
+
+        Re-arming a heartbeat from a GET also postpones app-side idle reaping of
+        what it finds. That is deliberate: the row it writes is both the cost
+        ledger and the liveness signal (one row, so a quota can never disagree
+        with itself), and the sandbox really is running. The host's own idle TTL
+        is unaffected — this listing does not touch its activity clock.
+
+        A backend that cannot say (`None`) simply adds nothing; this only ever
+        finds MORE, so its absence leaves today's behaviour untouched."""
+        running = await registry.running_items()
+        found = []
+        for item_id in running or []:
+            # `facts_of` and NOT `locator.owner_of`: the answer names every
+            # sandbox on the replica that took the request — every tenant's, not
+            # the reader's — so this runs once per sandbox on that host, and
+            # `owner_of` is an uncached synchronous specstar round trip
+            # (~200ms in production). One page load measured 42 of them. That is
+            # the #657 shape, on a page anyone can open.
+            if item_id in already_listed:
+                continue
+            if facts_of(item_id)[1] != owner:
+                continue
+            await registry.record_running(item_id)
+            cost = await registry.would_cost(item_id)
+            slug, title = _describe(item_id)
+            found.append(
+                _LiveEnvironment(
+                    item_id=item_id,
+                    slug=slug,
+                    title=title,
+                    cpu_cores=cost.cpu_cores or 0.0,
+                    memory_bytes=cost.memory_bytes or 0,
+                )
+            )
+        return found
 
     async def _resources_of(owner: str) -> _MyResources:
         limits = await user_limits.for_user(owner)
@@ -147,6 +209,7 @@ def register_quota_routes(
                     memory_bytes=row.memory_bytes,
                 )
             )
+        live += await _found_running(owner, {row.item_id for row in live_rows})
         owned = []
         for item_id, used in await disk_ledger.per_item_for(owner):
             slug, title = _describe(item_id)
@@ -183,9 +246,19 @@ def register_quota_routes(
         owner = locator.owner_of(item_id)
         if owner != get_user_id() and get_user_id() not in superusers:
             raise HTTPException(status_code=404, detail="unknown environment")
+        # `close_session` owns the whole teardown, INCLUDING clearing the
+        # heartbeat. Clearing it here as well was the shape of the bug: the close
+        # could quietly do nothing — no session on this replica — and this line
+        # still ran, so the panel stopped listing an environment that was still
+        # running, and there was no longer anything to click. A refusal to close
+        # must leave the row alone, which it can only do if one place owns both.
+        # A close that cannot be done RIGHT NOW raises rather than returning:
+        # a reachable-but-slow host is `SandboxBusy` → 503 + Retry-After, and
+        # every record stays put so there is something left to retry against.
+        # Nothing to close is not a failure — a stale page or a double click
+        # both arrive that way, and refusing them would teach people the button
+        # is broken.
         await registry.close_session(item_id)
-        if activity is not None:
-            await activity.forget(item_id)
 
     # Registered BEFORE the `/{user_id}` route: a bare GET on the collection
     # would otherwise be matched as a person literally called "".

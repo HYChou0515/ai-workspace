@@ -299,3 +299,21 @@ async def test_size_of_reports_one_file_without_walking():
     await sb.upload(h, b"x" * 30, "/a.bin")
     assert await sb.size_of(h, "/a.bin") == 30
     assert await sb.size_of(h, "/missing.bin") is None
+
+
+async def test_the_mock_reports_what_it_is_holding():
+    """The stand-in has to be able to answer this, or nothing built on the
+    listing can be tested against it — and `None` (cannot say) would make every
+    such test vacuously pass."""
+    sandbox = MockSandbox()
+    assert await sandbox.running_sandboxes() == []
+
+    await sandbox.create(SandboxSpec(), sandbox_id="item-a")
+    b = await sandbox.create(SandboxSpec(), sandbox_id="item-b")
+    assert sorted(e.item_id or "" for e in await sandbox.running_sandboxes() or []) == [
+        "item-a",
+        "item-b",
+    ]
+
+    await sandbox.kill(b)
+    assert [e.item_id for e in await sandbox.running_sandboxes() or []] == ["item-a"]

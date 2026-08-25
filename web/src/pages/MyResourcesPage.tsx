@@ -90,6 +90,11 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
   const close = useMutation({
     mutationFn: (itemId: string) => client.closeEnvironment(itemId),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.myResources }),
+    // This failure is reported on the row it happened to, below. Without the
+    // opt-out the query client ALSO routes it to the app-wide write-failure
+    // toast, so one press raises two messages — and the page-level one names no
+    // item, which is the thing the per-row alert exists to avoid.
+    meta: { silentError: true },
   });
 
   if (isLoading || !data) return <p>{t("resources.loading")}</p>;
@@ -149,6 +154,15 @@ export function MyResourcesPage({ client = myResourcesApi }: { client?: MyResour
                 >
                   {t("resources.live.close")}
                 </button>
+                {/* On the row it is about, not above the list: a page-level
+                    message names no item, and with more than one environment
+                    the reader cannot tell which press failed. `variables` is
+                    the item id the failed mutation was called with. */}
+                {close.isError && close.variables === env.item_id ? (
+                  <p className="error" role="alert">
+                    {t("resources.live.close_failed")}
+                  </p>
+                ) : null}
               </li>
             ))}
           </ul>

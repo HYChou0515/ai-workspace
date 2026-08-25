@@ -33,6 +33,7 @@ from .protocol import (
     ExecResult,
     FileEntry,
     OutputSink,
+    RunningSandbox,
     SandboxHandle,
     SandboxNotFound,
     SandboxSpec,
@@ -110,6 +111,11 @@ class DockerSandbox:
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
         # DEPRECATED (#252); per-container sandboxes aren't id-addressable.
+        return None
+
+    async def running_sandboxes(self) -> list[RunningSandbox] | None:
+        """`None` — not enumerated. This backend is a dev convenience (see the
+        deprecation note above); the containers are visible with `docker ps`."""
         return None
 
     async def kill(self, handle: SandboxHandle) -> None:
