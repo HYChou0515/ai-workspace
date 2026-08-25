@@ -124,7 +124,13 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     requires: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
     check: dict[str, Any] | None = None
-    retries: int = 0
+    # A model that misses its node's shape gets told what was wrong (`run_step` feeds the
+    # gate's reason back into the prompt) and answers again. That has to be the DEFAULT:
+    # the miss is a formatting slip, not a reason to fail a whole run, and no author can
+    # predict which node a model will fumble — a default of 0 meant the feedback path
+    # existed but never ran. Two extra attempts, author-overridable; a step whose gate
+    # keeps failing still fails, just not on the first slip.
+    retries: int = 2
     name: str = ""
     # #428 §1/§2: declared output fields (name → type). When set, the agent replies with
     # a JSON object; the step parses + records it as ``result.fields``, referenceable

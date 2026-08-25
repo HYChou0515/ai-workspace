@@ -46,10 +46,14 @@
 - 宣告了 `outputs`（§2）的 **agent** step：`agent_write_step` 把模型輸出的 JSON **parse**、
   對 `outputs` schema **驗證**後，存進 `result.fields`（例：`result = {out, bytes, fields:{type,score}}`）。
   `{steps.x.type}` 讀 `result.fields.type`。
-- 宣告了 `outputs` 的 **sandbox** step：它的腳本**自己寫一個 json 檔**，引擎**讀入**當
-  `result.fields`、對 schema 驗證。
+- 宣告了 `outputs` 的 **sandbox** step：它的腳本把 JSON 物件**印到 stdout**，引擎 parse
+  後當 `result.fields`、對 schema 驗證。（不是寫檔再讀檔——`sandbox_node` 讀的是
+  `run_sandbox` 回傳的 stdout。）
 - `out`（內容檔，如 `report.md`）與 `fields`（具名欄位）是**兩種產出**。`{steps.x.field}`
-  **只碰 fields**，不碰 `out`。一個 step 可兩者兼有。
+  **只碰 fields**，不碰 `out`。一個 agent step **只能擇一**：見
+  [`plan-workflow-language-alignment.md`](plan-workflow-language-alignment.md) 的 **D5**
+  （`outputs` XOR `out`+`kind`，兩者皆有或皆無都是 schema error），理由是兩種產出擠在同
+  一輪對本地模型不可靠。本節原本寫「一個 step 可兩者兼有」，那是 D5 之前的說法。
 
 ### 1.3 `{p.field}`（map 變數的欄位存取）——保留，不移除
 

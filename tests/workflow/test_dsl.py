@@ -1151,7 +1151,9 @@ async def test_run_gate_summary_reads_text_and_json():
 
 def test_agentstep_struct_defaults():
     s = AgentStep(prompt="p", phase="p")
-    assert s.out == "" and s.tools == [] and s.retries == 0 and s.check is None
+    # `retries` is deliberately non-zero: a model that misses its node's shape is told
+    # why and answers again. A default of 0 left `run_step`'s feedback path unreachable.
+    assert s.out == "" and s.tools == [] and s.retries == 2 and s.check is None
 
 
 # ─── P1: unified reference model {steps.<name>.<field>} ──────────────────────
