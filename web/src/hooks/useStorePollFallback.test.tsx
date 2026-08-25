@@ -84,9 +84,18 @@ describe("useStorePollFallback", () => {
 
   it("reports a failed poll while the caller is still there", async () => {
     // The guard must not silence the case the callback exists for.
+    //
+    // Unmounted at the end, and the warn silenced, because this file has no
+    // auto-cleanup: a still-mounted poller keeps rejecting every `pollMs`
+    // forever, and each rejection logs. Vitest ships console output to its
+    // worker over an rpc that closes when the FILE finishes, so a poller left
+    // running is a log in flight at teardown — which is an unhandled rejection
+    // and fails the run with every test green. Locally it got away with it
+    // four times; CI caught it first try.
     const onError = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fetchThread = vi.fn().mockRejectedValue(new Error("store unreachable"));
-    renderHook(() =>
+    const { unmount } = renderHook(() =>
       useStorePollFallback({
         active: true,
         isLive: () => false,
@@ -98,6 +107,9 @@ describe("useStorePollFallback", () => {
     );
 
     await waitFor(() => expect(onError).toHaveBeenCalled());
+
+    unmount();
+    warn.mockRestore();
   });
 
   it("stops polling once the turn is no longer active", async () => {
