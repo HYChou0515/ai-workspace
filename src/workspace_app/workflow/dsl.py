@@ -124,7 +124,13 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     requires: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
     check: dict[str, Any] | None = None
-    retries: int = 0
+    # A model that misses its node's shape gets told what was wrong (`run_step` feeds the
+    # gate's reason back into the prompt) and answers again. That has to be the DEFAULT:
+    # the miss is a formatting slip, not a reason to fail a whole run, and no author can
+    # predict which node a model will fumble — a default of 0 meant the feedback path
+    # existed but never ran. Two extra attempts, author-overridable; a step whose gate
+    # keeps failing still fails, just not on the first slip.
+    retries: int = 2
     name: str = ""
     # #428 §1/§2: declared output fields (name → type). When set, the agent replies with
     # a JSON object; the step parses + records it as ``result.fields``, referenceable
@@ -136,6 +142,13 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     # #429 P1 rule 3: opt out of the journal skip — always re-run (an honest 'always fresh'
     # for a step whose inputs the author can't fingerprint).
     cache: bool = True
+    # The third output kind: this node's output is the FILES it wrote, named by a glob.
+    # `outputs` and `out` both route the payload through the model's reply, which caps an
+    # artifact at the model's output limit and makes handing 1000 records downstream a
+    # retyping job. A node holding `exec` writes those files itself and says so here; the
+    # reply is then free prose. Gated on the glob matching at least one file, and
+    # referenceable downstream as ``{steps.<name>.produces}`` (the matched paths).
+    produces: str = ""
 
 
 class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
@@ -155,6 +168,11 @@ class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
     reads: list[str] = field(default_factory=list)
     # #429 P1 rule 3: opt out of the journal skip — always re-run.
     cache: bool = True
+    # Same third output kind as the agent node: the files this command WROTE, named by a
+    # glob. Bulk output is precisely the work that should not pass through a model — a
+    # thousand files is a loop — and this is the node with no LLM in it, so it is the one
+    # that most needs to be able to say what it produced.
+    produces: str = ""
 
 
 class GateStep(Struct, tag="gate", forbid_unknown_fields=True):
@@ -294,6 +312,12 @@ def build_manifest(d: WorkflowDef) -> WorkflowManifest:
 # ─── interpolation (deterministic, async, no eval) ───────────────────────────
 
 _TOKEN = re.compile(r"\{([^{}]+)\}")
+# `{{` / `}}` are literal braces — the escape `str.format` uses. An `outputs` node asks
+# the model for a JSON object, and the one thing its prompt has to contain is what that
+# object looks like; with every `{...}` read as a reference and no escape, the author was
+# not allowed to write the shape they were demanding. `_SCAN` walks escapes and references
+# together, left to right, so an escape is never taken for a reference.
+_SCAN = re.compile(r"\{\{|\}\}|\{([^{}]+)\}")
 
 
 def _stringify(val: Any) -> str:
@@ -381,6 +405,24 @@ def _field_type_ok(value: Any, tname: Any) -> bool:
     return isinstance(value, dict)  # obj
 
 
+def _produces_check(glob: str) -> Check:
+    """The implicit gate for a ``produces`` node: the declared glob has to match something.
+
+    Without it the node's success is the model's word for it — "done, I wrote them" over an
+    empty folder passes, and the map downstream iterates nothing. The run then reports
+    success having done none of the work, which is the failure mode the declaration exists
+    to close."""
+
+    async def check(_wf: WorkflowHandle, result: Any) -> CheckResult:
+        fields = result.get("fields") if isinstance(result, dict) else None
+        paths = fields.get("produces") if isinstance(fields, dict) else None
+        if paths:
+            return CheckResult(True)
+        return CheckResult(False, f"the step declared it produces {glob!r}, but no file matched")
+
+    return check
+
+
 def _outputs_check(outputs: dict[str, Any]) -> Check:
     """The implicit gate for a step that declares ``outputs`` (#428 §1.2/§2.2): the reply
     must parse into a JSON object whose declared fields are present and match their
@@ -418,9 +460,13 @@ async def _resolve(template: Any, ns: dict[str, Any], wf: WorkflowHandle) -> Any
         return await _lookup(whole.group(1).strip(), ns, wf)
     out: list[str] = []
     last = 0
-    for m in _TOKEN.finditer(template):
+    for m in _SCAN.finditer(template):
         out.append(template[last : m.start()])
-        out.append(_stringify(await _lookup(m.group(1).strip(), ns, wf)))
+        expr = m.group(1)
+        if expr is None:  # `{{` / `}}` — emit the single literal brace
+            out.append(m.group(0)[0])
+        else:
+            out.append(_stringify(await _lookup(expr.strip(), ns, wf)))
         last = m.end()
     out.append(template[last:])
     return "".join(out)
@@ -793,12 +839,15 @@ async def _exec_step(
         await _exec_capability(wf, step, ns, key)
         return
     if isinstance(step, SandboxStep):
-        # #428 §1.2: ``outputs`` ⇒ parse stdout JSON into result.fields, gated on it.
-        check = (
-            _outputs_check(step.outputs)
-            if step.outputs
-            else (await _build_check(step.check, ns, wf) if step.check else None)
-        )
+        # #428 §1.2: ``outputs`` ⇒ parse stdout JSON into result.fields, gated on it;
+        # ``produces`` ⇒ gate on the glob and record the matched paths instead.
+        sb_produces = _stringify(await _resolve(step.produces, ns, wf)) if step.produces else ""
+        if step.outputs:
+            check = _outputs_check(step.outputs)
+        elif sb_produces:
+            check = _produces_check(sb_produces)
+        else:
+            check = await _build_check(step.check, ns, wf) if step.check else None
         await sandbox_node(
             wf,
             run=await _resolve(step.run, ns, wf),
@@ -807,6 +856,7 @@ async def _exec_step(
             name=step.name or None,
             key=key,
             outputs=step.outputs or None,
+            produces=sb_produces,
             reads=await _resolve_reads(step.reads, ns, wf),
             cache=step.cache,
         )
@@ -818,8 +868,11 @@ async def _exec_step(
     # #428 §1.2: an ``outputs`` step parses its reply into result.fields, gated on it; a
     # prose ``out`` step defaults to artifact_valid(out, kind) (plan §2.2) unless the
     # author gives an explicit ``check``.
+    produces = _stringify(await _resolve(step.produces, ns, wf)) if step.produces else ""
     if step.outputs:
         check: Check | None = _outputs_check(step.outputs)
+    elif produces:
+        check = _produces_check(produces)
     elif step.check:
         check = await _build_check(step.check, ns, wf)
     else:
@@ -837,6 +890,7 @@ async def _exec_step(
         retries=step.retries,
         check=check,
         outputs=step.outputs or None,
+        produces=produces,
         reads=await _resolve_reads(step.reads, ns, wf),
         cache=step.cache,
     )
@@ -902,7 +956,9 @@ def _check_interp(
     time). When ``steps_seen`` is given, also resolve ``{steps.x.f}`` references against
     it (#428 §1.5). Recurses into the lists/dicts a check spec carries."""
     if isinstance(value, str):
-        for m in _TOKEN.finditer(value):
+        for m in _SCAN.finditer(value):
+            if m.group(1) is None:
+                continue  # an escaped brace is literal text, not a reference to check
             expr = m.group(1).strip()
             root = expr.split(".")[0]
             if root not in scope:
@@ -1145,6 +1201,14 @@ def _validate_step(
         if step.check is not None:
             _validate_check(step.check, scope, where, errs, steps_seen)
         _validate_outputs(step.outputs, where, errs)
+        # D5 for the deterministic node: at most ONE declared output kind. `check` is not
+        # an output kind — a plain command that produces nothing stays expressible.
+        if step.outputs and step.produces:
+            errs.append(
+                f"{where}: a sandbox step declares ONE output kind — 'outputs' (stdout "
+                "JSON) or 'produces' (the files it wrote), not both (plan §2.1)"
+            )
+        _check_interp(step.produces, scope, where, errs, steps_seen)
         _validate_reads(step.reads, scope, where, errs, steps_seen)
         return
     # AgentStep — plan §2.1 (P2): exactly ONE output kind, so a node is either a
@@ -1153,15 +1217,26 @@ def _validate_step(
     # output has no gate) and 'two output kinds in one turn' (unreliable on local models).
     if not step.prompt:
         errs.append(f"{where}: agent needs a 'prompt'")
-    if step.out and step.outputs:
+    kinds = [
+        k
+        for k, declared in (
+            ("outputs", bool(step.outputs)),
+            ("out", bool(step.out)),
+            ("produces", bool(step.produces)),
+        )
+        if declared
+    ]
+    if len(kinds) > 1:
         errs.append(
             f"{where}: an agent step declares ONE output kind — 'outputs' (structured "
-            "decision) XOR 'out'+'kind' (prose artifact), not both (plan §2.1)"
+            "decision), 'out'+'kind' (prose artifact) or 'produces' (the files it wrote); "
+            f"got {kinds} (plan §2.1)"
         )
-    elif not step.out and not step.outputs:
+    elif not kinds:
         errs.append(
             f"{where}: an agent step must produce an output — declare 'outputs' "
-            "(structured decision) or 'out'+'kind' (prose artifact) (plan §2.1)"
+            "(structured decision), 'out'+'kind' (prose artifact) or 'produces' "
+            "(a glob of the files it writes) (plan §2.1)"
         )
     if step.requires:  # plan §2.3 L2: only on a channel-P ``out`` step, folds into its gate
         if not step.out:
@@ -1277,8 +1352,8 @@ def _references_feedback(step: Step, gatename: str) -> bool:
     §6)? The revise target must, or the feedback would be threaded nowhere."""
     text = getattr(step, "prompt", "") or getattr(step, "run", "")
     return any(
-        m.group(1).strip().split(".") == ["steps", gatename, "feedback"]
-        for m in _TOKEN.finditer(text)
+        m.group(1) is not None and m.group(1).strip().split(".") == ["steps", gatename, "feedback"]
+        for m in _SCAN.finditer(text)
     )
 
 
@@ -1345,7 +1420,11 @@ def _register_step(
         assert isinstance(step, AgentStep | SandboxStep)
         # #428 §1.5/§3.4: keep the whole ``outputs`` declaration so a reference can be
         # checked for field existence AND a switch can check its cases against an enum.
-        steps_seen[name] = dict(step.outputs)
+        # A ``produces`` node exposes one field: the list of paths it matched.
+        if getattr(step, "produces", ""):
+            steps_seen[name] = {"produces": "list"}
+        else:
+            steps_seen[name] = dict(step.outputs)
 
 
 def _validate_steps(
@@ -1456,6 +1535,10 @@ def describe_dsl_grammar() -> str:
         "config), {inputs.Y} (from the trigger), {item} / {item.field} (the current map "
         "element), or {steps.NAME.FIELD} (a named earlier step's declared output field).",
         "",
+        "Write `{{` and `}}` for a LITERAL brace — needed whenever a prompt shows the model "
+        'a JSON shape, e.g. reply with {{"count": 3}}. A single `{…}` is always a lookup, so '
+        "an unescaped JSON example is rejected as a reference to an unknown variable.",
+        "",
         'Each step\'s "type" is one of:',
     ]
     for cls in _STEP_CLASSES:
@@ -1472,8 +1555,18 @@ def describe_dsl_grammar() -> str:
         f"deterministic `check` ∈ {list(_CHECKS)} (an agent may instead declare `outputs`).",
         f'`outputs` field types ∈ {list(_OUTPUT_TYPES)} (optionally {{"type":…, "enum":[…]}}).',
         f"prose `out` `kind` ∈ {list(ARTIFACT_KINDS)}; `requires` keys ∈ {list(_REQUIRES_KEYS)}.",
-        "An agent step declares exactly ONE output kind: `outputs` (structured) XOR "
-        "`out`+`kind` (prose).",
+        "An agent step declares exactly ONE output kind: `outputs` (structured decision — "
+        "the reply is a JSON object) XOR `out`+`kind` (prose artifact — the reply IS the "
+        "file's content) XOR `produces` (a glob of the files the step WROTE itself).",
+        "Reach for `produces` whenever the data is bigger than a reply should carry, or the "
+        "step already has it from a tool: the step writes the files (a loop through `exec`), "
+        "its reply is not parsed at all, and `{steps.NAME.produces}` hands the matched paths "
+        "to a `map`. `outputs` is for a small decision, not for moving a dataset.",
+        "A **sandbox** step may declare `produces` too, and for bulk that is the better "
+        "node: writing a thousand files is a loop, so put the script in a `sandbox` step "
+        "and keep the model out of the data path entirely. (A sandbox step declares at "
+        "most one of `outputs` / `produces`; `check` is still there for a command that "
+        "produces nothing.)",
     ]
     return "\n".join(lines)
 

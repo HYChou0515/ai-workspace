@@ -54,6 +54,28 @@ RunSubagent = Callable[..., Awaitable[tuple[str, list]]]
 logger = logging.getLogger(__name__)
 
 
+def _reply_text(produced: list[TurnMessage]) -> str:
+    """The model's ANSWER for a workflow node: the LAST assistant message carrying text.
+
+    One turn can produce several assistant messages — ``_TurnReducer`` starts a fresh one
+    after every tool message — so a node whose model says something before reaching for a
+    tool produces "let me look at the file" and then, separately, its answer. Joining them
+    made the narration part of the payload: a prose node wrote it into the artifact, and an
+    ``outputs`` node ran ``json.loads`` over ``"let me look\\n{...}"`` and failed (#428
+    §1.2). Since a node that holds tools NEEDS the model to use them, and models narrate
+    when they do, that join made a structured node essentially unpassable.
+
+    The answer is the last message with text, the same rule every chat surface uses. Empty
+    assistant messages (the turn whose only act was a tool call) are skipped, and a turn
+    with no assistant text at all answers ``""`` so the node's gate reports it rather than
+    the step raising.
+    """
+    for msg in reversed(produced):
+        if msg.role == "assistant" and msg.content.strip():
+            return msg.content
+    return ""
+
+
 class WorkflowExecutor:
     """Binds ``create_app``'s services into a workflow run's execution callbacks.
     See the module docstring for the seam this replaces."""
@@ -186,9 +208,10 @@ class WorkflowExecutor:
         # skip it.
         if ctx.history_reduced_note:
             self._notice_history_reduced(rid, captured_user, ctx.history_reduced_note)
-        answer: list[str] = []
+        answer = ""
 
         def persist(produced: list[TurnMessage]) -> None:
+            nonlocal answer
             if produced:
                 conv2 = self._conv_rm.get(rid).data  # re-fetch the workflow chat
                 assert isinstance(conv2, Conversation)
@@ -198,7 +221,7 @@ class WorkflowExecutor:
                     for tm in produced:
                         conv2.messages.append(to_rca_message(tm))
                     self._conv_rm.update(rid, conv2)
-            answer.extend(tm.content for tm in produced if tm.role == "assistant")
+            answer = _reply_text(produced)
 
         enqueue_key = lane or chat_key
         logger.debug(
@@ -210,11 +233,21 @@ class WorkflowExecutor:
         await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
         if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
             await self._turn_engine.forget(lane)
+        # Reconcile the sandbox into the snapshot, exactly as the deterministic
+        # `run_sandbox` node does after its command. A turn's shell writes land in the
+        # SANDBOX; the snapshot is what `wf.glob` / `wf.read` see, and until now only
+        # the periodic mirror sweep bridged the two. That is a race for anything a node
+        # produced by running a script — a `produces` node globbed the snapshot the
+        # instant its turn ended and found nothing, so a step that had done its work
+        # failed its own gate. Same suppression as the sandbox node: a failed
+        # write-back must not lose the turn.
+        with contextlib.suppress(Exception):
+            await self._registry.flush(item_id)
         # A Stop that landed DURING this turn advanced the epoch past the baseline
         # (the watcher already cancelled the turn) → abort the run, don't step on.
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:
             raise asyncio.CancelledError
-        return "\n".join(answer)
+        return answer
 
     def _notice_history_reduced(self, rid: str, acting_user: str, note: str) -> None:
         """Leave the #624 marker in the workflow chat.

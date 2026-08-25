@@ -230,7 +230,7 @@
   <div class="section-head" id="s2"><span class="n">2</span><h2>節點型別</h2><span class="gloss">六種積木</span></div>
   <div class="card full">
     <table class="ref">
-      <tr><td class="ty">agent</td><td>LLM 一回合。<code class="i">out</code> 寫內容檔；<code class="i">outputs</code> 宣告具名欄位；否則需 <code class="i">check</code>。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">agent</td><td>LLM 一回合。三選一的產出：<code class="i">out</code> 寫內容檔；<code class="i">outputs</code> 宣告具名欄位；<code class="i">produces</code> 宣告它自己寫出的檔案 glob（回覆不被 parse，適合大量資料）。</td><td class="st"><span class="tg now">現行</span></td></tr>
       <tr><td class="ty">sandbox</td><td>確定性指令，無 LLM。純計算、無憑證（可靠副作用走 capability）。</td><td class="st"><span class="tg now">現行</span></td></tr>
       <tr><td class="ty">gate</td><td>人工閘。approve 續、reject 終止；<code class="i">revise</code> 帶 user 回饋 <code class="i">{steps.&lt;gate&gt;.feedback}</code> 打回某步重做。</td><td class="st"><span class="tg now">現行</span></td></tr>
       <tr><td class="ty">capability</td><td>可靠且冪等的副作用：<code class="i">ingest_to_collection</code> / <code class="i">upsert_context_card</code>。</td><td class="st"><span class="tg now">現行</span></td></tr>
