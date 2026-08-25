@@ -8,13 +8,14 @@ manifest, resolved against the backend, and the answer arrives whole.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from workspace_app.agent.context import AgentToolContext
+from workspace_app.api.locator import ItemLocator
 from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.api.turn_context import TurnContextBuilder
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+from workspace_app.sandbox.protocol import Sandbox, SandboxHandle, SandboxSpec
 
 
 class _Session:
@@ -93,18 +94,30 @@ def _declaring(monkeypatch, **tools: str) -> None:
     )
 
 
+async def _resolve(host: _Host, item: str = "item-1"):
+    """Call the module function with this file's doubles.
+
+    `Sandbox` and `ItemLocator` are cast rather than implemented: the function
+    reaches for `resolve_tools` and `slug_of` and nothing else, and standing up
+    the full surface of either would be a lot of code that tests nothing and
+    hides which two methods actually matter here."""
+    from workspace_app.api.turn_context import resolve_item_tools
+
+    return await resolve_item_tools(
+        cast("Sandbox", host), cast("ItemLocator", _Locator("rca")), item
+    )
+
+
 async def test_what_an_item_actually_got_is_recorded(monkeypatch, caplog) -> None:
     """#674 P8 / #724: the trail behind "that tool was behaving oddly".
 
     The URL points at the author's latest, so what ran can differ between two
     turns with nothing in the app changing. Resolve time is the only moment
     anything knows which bundle this was."""
-    from workspace_app.api.turn_context import resolve_item_tools
-
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
 
     with caplog.at_level("INFO", logger="workspace_app.api.turn_context"):
-        await resolve_item_tools(_Host(), _Locator("rca"), "item-1")
+        await _resolve(_Host())
 
     (line,) = [r.getMessage() for r in caplog.records if "third-party tools" in r.getMessage()]
     assert "item-1" in line
@@ -118,12 +131,10 @@ async def test_the_record_says_when_a_tool_came_from_the_cached_copy(monkeypatch
     """A stale answer and a fresh one are the same bytes to everything
     downstream, and the difference is exactly what a person chasing "it used
     to work" needs."""
-    from workspace_app.api.turn_context import resolve_item_tools
-
     _declaring(monkeypatch, **{"wafer-history": "https://g/m"})
 
     with caplog.at_level("INFO", logger="workspace_app.api.turn_context"):
-        await resolve_item_tools(_Host(stale=True), _Locator("rca"), "item-1")
+        await _resolve(_Host(stale=True))
 
     (line,) = [r.getMessage() for r in caplog.records if "third-party tools" in r.getMessage()]
     assert "LAST-KNOWN-GOOD" in line
@@ -132,12 +143,10 @@ async def test_the_record_says_when_a_tool_came_from_the_cached_copy(monkeypatch
 async def test_an_item_with_no_third_party_tools_records_nothing(monkeypatch, caplog) -> None:
     """Almost every item. A line per turn saying "none" would bury the ones
     that matter."""
-    from workspace_app.api.turn_context import resolve_item_tools
-
     _declaring(monkeypatch)
 
     with caplog.at_level("INFO", logger="workspace_app.api.turn_context"):
-        await resolve_item_tools(_Host(), _Locator("rca"), "item-1")
+        await _resolve(_Host())
 
     assert not [r for r in caplog.records if "third-party tools" in r.getMessage()]
 
