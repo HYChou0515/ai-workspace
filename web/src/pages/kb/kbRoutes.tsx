@@ -5,7 +5,7 @@
  * view is URL-addressable (#93); the shell (KbHome) frames the matched child.
  */
 
-import { Navigate, Route, useSearchParams } from "react-router-dom";
+import { Navigate, Route, useLocation, useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi } from "../../api/kb";
 import { CardsTab, DocumentsTab, KbCollectionPage, ReviewTab, WikiTab } from "./KbCollectionPage";
@@ -22,6 +22,19 @@ function KbIndexRedirect() {
   return <Navigate to={sp.get("tab") === "chats" ? "/kb/chats" : "/kb/collections"} replace />;
 }
 
+/** The bare collection path lands on Documents.
+ *
+ * As its own component rather than an inline `<Navigate to="documents">`,
+ * because a relative `<Navigate>` drops the SEARCH string: a query param set
+ * just before the redirect — #715 puts the running import's id there so the
+ * progress survives the jump from the landing page — would be gone on arrival,
+ * and nothing would say why. Any future param hits the same wall, so the fix
+ * belongs to the redirect, not to the one caller that noticed. */
+function DefaultTabRedirect() {
+  const { search } = useLocation();
+  return <Navigate to={{ pathname: "documents", search }} replace />;
+}
+
 export function kbRoutes(client: KbApi = kbApi) {
   return (
     <Route path="/kb" element={<KbHome client={client} />}>
@@ -30,7 +43,7 @@ export function kbRoutes(client: KbApi = kbApi) {
       {/* An open collection frames a tab (documents / cards / wiki) via Outlet;
           the bare path lands on Documents. */}
       <Route path="collections/:cid" element={<KbCollectionPage client={client} />}>
-        <Route index element={<Navigate to="documents" replace />} />
+        <Route index element={<DefaultTabRedirect />} />
         {/* The leaf (open doc / card / wiki page) is the URL too (#93): a splat
             for the slash-bearing file paths, a plain segment for the card id. */}
         <Route path="documents/*" element={<DocumentsTab />} />

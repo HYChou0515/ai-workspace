@@ -95,6 +95,8 @@ export function useCollectionOutlet(): KbCollectionCtx {
 // A DialogProvider wraps the body so the re-index confirm prompts (and any
 // future confirms on this page or its tab Outlet) can use the shared modal —
 // the same one the file-tree bulk re-index uses, so all three feel identical.
+import { ArchiveImportStatus } from "./ArchiveImportStatus";
+
 export function KbCollectionPage(props: { client?: KbApi }) {
   return (
     <DialogProvider>
@@ -319,22 +321,23 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
   // #101: merge a zip INTO the open collection. Picking a file stages it; the
   // mode dialog then commits with overwrite|skip (overwrite is destructive, so
   // the user confirms rather than it being silent).
-  const importIntoMut = useMutation({
-    mutationFn: (vars: { file: File; mode: "overwrite" | "skip" }) =>
-      client.importCollectionInto(cid as string, vars.file, vars.mode),
-    onSuccess: () => {
-      if (cid) void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
-      void qc.invalidateQueries({ queryKey: qk.kb.collections });
-      setImportFile(null);
-    },
-  });
+  // #715: the merge runs on a worker, so the dialog closes as soon as the
+  // archive is staged and the progress takes over from there. The hook
+  // invalidates the document list when the run reports finished — refetching
+  // any earlier caches a collection that is still filling.
+  // The run may have been STARTED on the landing page. The shell owns it, so
+  // this page sees the same one either way.
+  const { archiveImport } = useKbOutlet();
   const pickImportInto = (files: FileList | null) => {
     const file = files?.[0];
     if (file) setImportFile(file);
     if (importIntoRef.current) importIntoRef.current.value = "";
   };
   const runImportInto = (mode: "overwrite" | "skip") => {
-    if (importFile) importIntoMut.mutate({ file: importFile, mode });
+    if (importFile && cid) {
+      archiveImport.startInto(cid, importFile, mode);
+      setImportFile(null);
+    }
   };
 
   // Live "uploaded N of M" progress (#170) — a folder pick can be hundreds of
@@ -735,10 +738,12 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
             />
           )}
 
+          <ArchiveImportStatus run={archiveImport.run} onDismiss={archiveImport.clear} />
+
           {importFile && (
             <ImportModeDialog
               fileName={importFile.name}
-              busy={importIntoMut.isPending}
+              busy={archiveImport.busy}
               onOverwrite={() => runImportInto("overwrite")}
               onSkip={() => runImportInto("skip")}
               onCancel={() => setImportFile(null)}

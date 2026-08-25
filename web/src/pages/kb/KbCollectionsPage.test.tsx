@@ -25,13 +25,25 @@ type Client = Parameters<typeof KbCollectionsGrid>[0]["client"];
  * minimal shell that supplies the Outlet context the page reads (the real
  * shell — KbHome — is exercised in KbHome/kbRoutes tests). Opening a card
  * navigates to /kb/collections/:cid/documents (#93). */
+/** Stands in for `KbHome`. It calls the REAL `useArchiveImport`, because #715's
+ * whole point is that the run outlives the navigation between the grid and the
+ * collection page — a stubbed context would hold nothing and the pages would
+ * pass while the shipped shell dropped the import halfway. */
+import type { KbApi } from "../../api/kb";
+import { useArchiveImport } from "./useArchiveImport";
+
+function TestShell({ client, openDoc }: { client: Client; openDoc: (id: string) => void }) {
+  const archiveImport = useArchiveImport(client as KbApi);
+  return (
+    <Outlet context={{ openDoc, openCite: () => {}, archiveImport } satisfies KbOutletCtx} />
+  );
+}
+
 function renderKb(client: Client, start = "/kb/collections", openDoc: (id: string) => void = () => {}) {
   return render(
     <MemoryRouter initialEntries={[start]}>
       <Routes>
-        <Route
-          element={<Outlet context={{ openDoc, openCite: () => {} } satisfies KbOutletCtx} />}
-        >
+        <Route element={<TestShell client={client} openDoc={openDoc} />}>
           <Route path="/kb/collections" element={<KbCollectionsGrid client={client} />} />
           <Route path="/kb/collections/:cid" element={<KbCollectionPage client={client} />}>
             <Route index element={<Navigate to="documents" replace />} />
@@ -1011,7 +1023,7 @@ describe("KbCollectionsPage", () => {
 
   it("imports a zip into the open collection after choosing overwrite", async () => {
     await mockKbApi.createCollection("kb");
-    const intoSpy = vi.spyOn(mockKbApi, "importCollectionInto");
+    const intoSpy = vi.spyOn(mockKbApi, "startImportInto");
     renderKb(mockKbApi);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
@@ -1029,7 +1041,7 @@ describe("KbCollectionsPage", () => {
 
   it("imports into the open collection with skip mode when chosen", async () => {
     await mockKbApi.createCollection("kb");
-    const intoSpy = vi.spyOn(mockKbApi, "importCollectionInto");
+    const intoSpy = vi.spyOn(mockKbApi, "startImportInto");
     renderKb(mockKbApi);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
@@ -1086,5 +1098,56 @@ describe("KbCollectionPage — Manage access gate", () => {
     // the menu is open (delete is there) but the access entry is not
     expect(screen.getByRole("menuitem", { name: "Delete collection" })).toBeInTheDocument();
     expect(screen.queryByTestId("manage-access")).not.toBeInTheDocument();
+  });
+});
+
+describe("#715 archive import runs on a worker, not in the request", () => {
+  it("opens the new collection before the documents have landed", async () => {
+    // The whole point of the asynchronous route: the 202 carries a collection
+    // id, so the page can open a collection that is still filling. The old
+    // synchronous route only answered once every document was written — which
+    // for a large archive meant a gateway timeout and nothing to show.
+    renderKb(mockKbApi);
+
+    const input = screen.getByLabelText("Import collection from file") as HTMLInputElement;
+    const file = new File(["zipbytes"], "Archive.zip", { type: "application/zip" });
+    await userEvent.upload(input, file);
+
+    // the collection page is open...
+    expect(await screen.findByRole("button", { name: "Collection settings" })).toBeInTheDocument();
+    // ...and it says the import is still going, naming how far along it is.
+    expect(await screen.findByRole("status")).toHaveTextContent(/Importing \d of 3 documents/);
+  });
+
+  it("polls until the run finishes and then reports the outcome", async () => {
+    // A UI that started the import and never asked again would pass every
+    // assertion above while leaving the user watching a bar that never moves.
+    // The mock's first read is deliberately still-running, so only a second
+    // read can produce this text.
+    renderKb(mockKbApi);
+
+    const input = screen.getByLabelText("Import collection from file") as HTMLInputElement;
+    await userEvent.upload(input, new File(["z"], "Archive.zip", { type: "application/zip" }));
+    await screen.findByRole("button", { name: "Collection settings" });
+
+    // The mock closes one document per read, so this text only appears after
+    // three polls — a UI that asked once cannot reach it.
+    await waitFor(
+      () =>
+        expect(
+          screen
+            .getAllByRole("status")
+            .some((el) => /Imported 3 of 3 documents/.test(el.textContent ?? "")),
+        ).toBe(true),
+      { timeout: 8000 },
+    );
+  }, 15000);
+
+  it("does not call the synchronous import route", async () => {
+    // #715's locked decision, asserted rather than assumed: the UI has ONE
+    // import path. A size threshold would be a boundary to get wrong, and the
+    // synchronous route is the one that times out.
+    expect("importCollectionNew" in mockKbApi).toBe(false);
+    expect("importCollectionInto" in mockKbApi).toBe(false);
   });
 });

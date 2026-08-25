@@ -19,18 +19,24 @@ import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { useT } from "../../lib/i18n";
 import { AskAgentLauncher } from "./AskAgentLauncher";
 import { KbDocViewer } from "./KbDocViewer";
+import { useArchiveImport, type ArchiveImportState } from "./useArchiveImport";
 
 /** What the shell shares with its routed children: the doc-viewer openers
  * (the overlay itself is owned by the shell). */
 export type KbOutletCtx = {
   openDoc: (documentId: string) => void;
   openCite: (c: KbCitation) => void;
+  /** #715: the archive import in flight, if any. Owned HERE because it starts on
+   * the collection grid and finishes on the collection page — anything holding
+   * it inside either one is unmounted by the navigation between them. */
+  archiveImport: ArchiveImportState;
 };
 export function useKbOutlet(): KbOutletCtx {
   return useOutletContext<KbOutletCtx>();
 }
 
 export function KbHome({ client = kbApi }: { client?: KbApi }) {
+  const archiveImport = useArchiveImport(client);
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const t = useT();
@@ -114,7 +120,7 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
         </header>
 
         <div className="kb-surface">
-          <Outlet context={{ openDoc, openCite } satisfies KbOutletCtx} />
+          <Outlet context={{ openDoc, openCite, archiveImport } satisfies KbOutletCtx} />
         </div>
       </main>
 
