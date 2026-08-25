@@ -33,7 +33,9 @@ import tarfile
 import tempfile
 import tomllib
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from workspace_app.tooling import grant as grant_policy
 from workspace_app.tooling.artifact import (
@@ -144,8 +146,47 @@ def _default_build_bundle(*, name: str, source: Path, dst: Path) -> None:
     prebuild.build_package(name=name, source=source, dst=dst, force=True)
 
 
-def read_project(source: Path) -> tuple[str, str]:
-    """The tool's name and version, from the author's own ``pyproject.toml``.
+@dataclass(frozen=True)
+class Project:
+    """What an author's own ``pyproject.toml`` settles about their tool."""
+
+    name: str
+    version: str
+    author: str | None
+    """``None`` when they declared no usable ``[project].authors`` — see
+    ``_read_author``."""
+
+
+def _read_author(project: dict[str, Any]) -> str | None:
+    """Render ``[project].authors`` as one display string, or ``None``.
+
+    PEP 621 already gives every author a place to say who they are, so #724
+    adds no new field for them to fill in: the file they must edit to cut a
+    release is the file we read.
+
+    Lenient on purpose. This string decides nothing downstream — it is shown,
+    never gated on — so a table we cannot make sense of contributes nothing
+    rather than failing a build over a courtesy. `main` says what it published,
+    which is where an author sees that theirs did not come through."""
+    listed = project.get("authors")
+    if not isinstance(listed, list):
+        return None
+    rendered = []
+    for entry in listed:
+        if not isinstance(entry, dict):
+            continue
+        name, email = entry.get("name"), entry.get("email")
+        if name and email:
+            rendered.append(f"{name} <{email}>")
+        elif name or email:
+            # A bare email reads better than `<email>` in a sentence that
+            # already says "by".
+            rendered.append(str(name or email))
+    return ", ".join(rendered) or None
+
+
+def read_project(source: Path) -> Project:
+    """The tool's name, version and author, from their own ``pyproject.toml``.
 
     The name is the ``[project.scripts]`` key rather than ``[project].name``
     because that is the entry point the bundle's launcher invokes — the same
@@ -158,16 +199,17 @@ def read_project(source: Path) -> tuple[str, str]:
     except tomllib.TOMLDecodeError as exc:
         raise BuildError(f"pyproject.toml is not valid toml: {exc}") from exc
 
-    scripts = body.get("project", {}).get("scripts", {})
+    project = body.get("project", {})
+    scripts = project.get("scripts", {})
     if len(scripts) != 1:
         raise BuildError(
             f"expected exactly one [project.scripts] entry, found {sorted(scripts)} — "
             "the single console script is the command the bundle's launcher runs"
         )
-    version = body.get("project", {}).get("version")
+    version = project.get("version")
     if not version:
         raise BuildError("[project].version is required — it is how a human names a release")
-    return next(iter(scripts)), str(version)
+    return Project(name=next(iter(scripts)), version=str(version), author=_read_author(project))
 
 
 def read_commands(bundle: Path) -> tuple[CommandSpec, ...]:
@@ -319,7 +361,8 @@ def build_artifact(
 ) -> Manifest:
     """Build an author's source tree into the artifact pair, and return the
     manifest that was published beside the bundle."""
-    name, version = read_project(source)
+    project = read_project(source)
+    name, version = project.name, project.version
     token = _read_grant(source)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -345,6 +388,7 @@ def build_artifact(
         bundle=BundleRef(sha256=hashlib.sha256(packed).hexdigest(), size=len(packed)),
         source=None,
         grant=token,
+        author=project.author,
     )
     (out / BUNDLE_NAME).write_bytes(packed)
     (out / MANIFEST_NAME).write_bytes(render_manifest(manifest))
@@ -464,10 +508,19 @@ def main(argv: list[str]) -> int:
         except ArtifactError as exc:
             print(f"build failed: {exc}", file=sys.stderr)
             return 1
+        by = f" by {manifest.author}" if manifest.author else ""
         print(
-            f"published {manifest.name} {manifest.version} "
+            f"published {manifest.name} {manifest.version}{by} "
             f"({len(manifest.commands)} command(s), sha256={manifest.bundle.sha256})"
         )
+        if not manifest.author:
+            # The only feedback loop this field has. Nothing refuses a build
+            # over it, so an author who meant to be reachable and mistyped the
+            # table would otherwise never find out.
+            print(
+                "note: no author published — add `authors = [{name = ..., email = ...}]` "
+                "to [project] so whoever hits a problem knows who to ask"
+            )
         return 0
 
     if len(argv) == 2 and argv[0] == "smoke":
