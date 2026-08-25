@@ -134,6 +134,7 @@ async def agent_write_step(
     cache: bool = True,
     check: Check | None = None,
     outputs: dict[str, Any] | None = None,
+    produces: str = "",
     reads: list[str] | None = None,
 ) -> Any:
     """Decision/action content step (issue #107): the agent PRODUCES the file's
@@ -174,6 +175,11 @@ async def agent_write_step(
             await wf.write(out, text)
         if outputs is not None:  # #428 §1.2: expose the reply's JSON as result.fields
             result["fields"] = _parse_fields(text)
+        if produces:
+            # The node's output is what it WROTE, so the reply is not parsed at all — the
+            # model is free to narrate. Recorded as `fields` so the existing
+            # `{steps.<name>.<field>}` lookup resolves it with no second mechanism.
+            result["fields"] = {"produces": sorted(await wf.glob(produces))}
         return result
 
     args: dict[str, Any] = {
@@ -183,6 +189,7 @@ async def agent_write_step(
         "kind": kind,
         "requires": requires,
         "outputs": outputs,
+        "produces": produces,
         "phase": phase,
     }
     fp = await reads_fingerprint(wf, reads)

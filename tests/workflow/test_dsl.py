@@ -243,7 +243,8 @@ def test_validate_agent_needs_prompt_output_and_nonneg_retries():
 
 
 def test_validate_agent_rejects_both_output_kinds():
-    """§2.1 (P2): one output kind — declaring both 'outputs' and 'out' is a static error."""
+    """§2.1 (P2): one output kind. The error has to NAME the kinds that clashed — an
+    author holding two of the three needs to know which two."""
     errs = _errs(
         [
             {
@@ -255,7 +256,7 @@ def test_validate_agent_rejects_both_output_kinds():
             }
         ]
     )
-    assert any("not both" in e for e in errs)
+    assert any("ONE output kind" in e and "'outputs'" in e and "'out'" in e for e in errs)
 
 
 def test_validate_requires_only_on_prose_out():
