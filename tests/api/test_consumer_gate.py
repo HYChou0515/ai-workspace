@@ -35,6 +35,10 @@ async def test_consumers_run_in_process_by_default():
         assert app.state.index_coordinator.consuming
         assert app.state.wiki_coordinator.consuming
         assert app.state.card_gen_coordinator.consuming
+        # #715: archive imports. Listed here because this gate is enumerated, so a
+        # coordinator that is wired everywhere EXCEPT this line accepts uploads and
+        # silently never writes them — which is exactly how it shipped first.
+        assert app.state.import_coordinator.consuming
 
 
 async def test_run_consumers_false_disables_consumers_but_keeps_the_producer():
@@ -52,6 +56,7 @@ async def test_run_consumers_false_disables_consumers_but_keeps_the_producer():
         assert not app.state.index_coordinator.consuming
         assert not app.state.wiki_coordinator.consuming
         assert not app.state.card_gen_coordinator.consuming
+        assert not app.state.import_coordinator.consuming
         # …but enqueue still works: a job is created and left for a worker pod.
         assert app.state.index_coordinator.enqueue(doc_id, cid) is True
         assert not app.state.index_coordinator.consuming  # enqueue never starts a consumer

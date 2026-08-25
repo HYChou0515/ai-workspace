@@ -18,7 +18,11 @@ from workspace_app.agent.config_catalog import AgentConfigCatalog
 from workspace_app.api import ScriptedAgentRunner
 from workspace_app.coordinators import build_coordinators
 from workspace_app.resources import Collection, SourceDoc, make_spec
-from workspace_app.worker import consume_until_stopped, select_coordinator
+from workspace_app.worker import (
+    _JOBTYPE_ATTR,
+    consume_until_stopped,
+    select_coordinator,
+)
 
 
 class _FakeIngestor:
@@ -49,10 +53,40 @@ def _bundle(spec, ingestor, **overrides):
 
 
 def test_select_coordinator_maps_each_jobtype_to_its_coordinator():
-    bundle = _bundle(make_spec(default_user="u"), _FakeIngestor())
-    assert select_coordinator(bundle, "index") is bundle.index
-    assert select_coordinator(bundle, "wiki") is bundle.wiki
-    assert select_coordinator(bundle, "card-gen") is bundle.card_gen
+    """Every jobtype a pod can be started with, not a sample of them.
+
+    This asserted three of seven while claiming "each", so a new JobType could be
+    added — as #715's `kb-import` was — and reach production with its `workers.yaml`
+    Deployment pointing at a name nothing had ever resolved. The expected mapping is
+    written out rather than read from `_JOBTYPE_ATTR`, or the test would just be
+    that dict compared with itself; the exhaustiveness check below is what keeps the
+    two from drifting apart.
+    """
+    bundle = _bundle(
+        make_spec(default_user="u"),
+        _FakeIngestor(),
+        sanity_llm_factory=lambda *a, **k: None,
+        # `eval` and `graph` are LLM-gated; a placeholder is enough to build them,
+        # because what is under test is the NAME → coordinator mapping, not the model.
+        eval_llm=object(),
+        graph_llm=object(),
+    )
+    expected = {
+        "index": bundle.index,
+        "wiki": bundle.wiki,
+        "card-gen": bundle.card_gen,
+        "sanity": bundle.sanity,
+        "eval": bundle.eval,
+        "graph": bundle.graph,
+        "kb-import": bundle.kb_import,
+    }
+    assert set(expected) == set(_JOBTYPE_ATTR), (
+        "a jobtype was added or renamed without a case here — a worker pod can be "
+        "started with a name this test has never resolved"
+    )
+    for jobtype, coordinator in expected.items():
+        assert coordinator is not None, f"{jobtype} is unwired — the case below proves nothing"
+        assert select_coordinator(bundle, jobtype) is coordinator, jobtype
 
 
 def test_select_coordinator_rejects_an_unknown_jobtype():

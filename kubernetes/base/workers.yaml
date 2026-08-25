@@ -185,6 +185,75 @@ spec:
           type: Utilization
           averageUtilization: 70
 ---
+# ── archive import (#715; IO-bound: blob + row writes, no model) ──────────────
+# Without this Deployment an upload is accepted with 202, staged, and never
+# written under the documented pod-split shape (`server.run_consumers: false`,
+# API as pure producer) — a queue nobody drains looks exactly like a queue that
+# never moves. The archive is streamed to scratch disk rather than held in RAM,
+# so the sizing that matters here is `ephemeral-storage`, not memory.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-kb-import
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-kb-import
+  template:
+    metadata:
+      labels:
+        app: rca-worker-kb-import
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "kb-import"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+              # The archive is streamed to a temp file (`_archive_file`) so a batch
+              # costs a chunk of RAM and one archive of SCRATCH DISK. Declaring it
+              # matters: unrequested ephemeral storage is how a pod gets evicted
+              # mid-import, which looks to the caller like a run that stopped for no
+              # reason. This bounds the archive a worker can take.
+              ephemeral-storage: "1Gi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+              ephemeral-storage: "4Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rca-worker-kb-import
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rca-worker-kb-import
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
 # ── model-sanity battery (manual, infrequent) — fixed 1 replica, no HPA ───────
 apiVersion: apps/v1
 kind: Deployment

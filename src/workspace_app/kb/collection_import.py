@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -65,7 +66,14 @@ def read_manifest(zip_data: bytes) -> dict[str, Any] | None:
     return parsed
 
 
-def _create_collection(spec: SpecStar, settings: dict[str, Any], fallback_name: str) -> str:
+def create_collection_row(spec: SpecStar, settings: dict[str, Any], fallback_name: str) -> str:
+    """Create the collection an archive's manifest describes, and nothing else.
+
+    Public because #715's asynchronous route creates the row in the REQUEST — one
+    cheap write — so the caller gets a collection id at once and the collection is
+    visible while a worker fills it. Copying these few lines into the route would
+    put "what an archive's settings restore to" in two places.
+    """
     coll = Collection(
         name=settings.get("name") or fallback_name,
         description=settings.get("description", ""),
@@ -80,11 +88,46 @@ def _create_collection(spec: SpecStar, settings: dict[str, Any], fallback_name: 
     return rev.resource_id
 
 
-def _restore_cards(
+def document_members(zf: zipfile.ZipFile) -> Iterator[tuple[zipfile.ZipInfo, str]]:
+    """The archive members that are DOCUMENTS, each with its canonical path.
+
+    Both importers need exactly this predicate, and it was written out twice: a
+    directory entry is not a file, the reserved manifest dir is metadata rather
+    than a document, and a member whose name escapes its root (zip-slip) or
+    canonicalises to nothing is dropped. Two copies of a rule is one rule that
+    will be wrong — a hardening applied here would have left the asynchronous
+    path exactly as it was, which is the shape #701 spent four rounds fixing for
+    cards and #715's `mode` handling repeated for documents.
+
+    Yields ENTRIES, never names: a malformed archive can hold one name twice and
+    `read(name)` resolves to the last of them, so one member would be written
+    twice and the other never. Order is the archive's own — a caller that needs a
+    reproducible one (``split`` hands batches out by index) sorts it.
+    """
+    for info in zf.infolist():
+        if info.is_dir():
+            continue
+        name = info.filename
+        if name == MANIFEST_PATH or name.startswith(MANIFEST_DIR):
+            continue
+        try:
+            path = canonical_path(name)
+        except ValueError:
+            continue  # zip-slip: a member escaping its root — drop it
+        if not path:
+            continue  # empty after canonicalisation
+        yield info, path
+
+
+def restore_cards(
     spec: SpecStar, collection_id: str, cards: list[dict[str, Any]], mode: str
 ) -> None:
     """Restore the manifest's cards, obeying ``mode`` exactly as a colliding document
     does (#701).
+
+    Public because the ASYNCHRONOUS importer (#715) restores cards from a worker
+    rather than from the request, and both paths must apply the one rule — the
+    whole point of #701 was that a second copy of a card rule drifts.
 
     This used to create unconditionally, so a card was the one thing a round-trip
     could not survive: re-importing an archive to correct a typo left the collection
@@ -148,7 +191,12 @@ def _restore_cards(
             rm.update(target[0], restored)
 
 
-def _doc_exists(spec: SpecStar, collection_id: str, path: str) -> bool:
+def doc_exists(spec: SpecStar, collection_id: str, path: str) -> bool:
+    """Whether ``path`` already names a document here — the `skip` test.
+
+    Public because BOTH importers ask it (#715). A second copy of "what counts as a
+    colliding document" is the same split #701 spent four rounds closing for cards.
+    """
     rm = spec.get_resource_manager(SourceDoc)
     try:
         rm.get(encode_doc_id(collection_id, path))
@@ -172,24 +220,12 @@ def import_collection(
     ``None``). Blocking (zip parse + blob writes) — call off the event loop."""
     manifest = read_manifest(zip_data) or {}
     if collection_id is None:
-        collection_id = _create_collection(spec, manifest.get("collection", {}), fallback_name)
+        collection_id = create_collection_row(spec, manifest.get("collection", {}), fallback_name)
 
     document_ids: list[str] = []
     with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
-            name = info.filename
-            # The reserved manifest dir is metadata, never a document.
-            if name == MANIFEST_PATH or name.startswith(MANIFEST_DIR):
-                continue
-            try:
-                path = canonical_path(name)
-            except ValueError:
-                continue  # zip-slip: a member escaping its root — drop it
-            if not path:
-                continue  # empty after canonicalisation
-            if mode == "skip" and _doc_exists(spec, collection_id, path):
+        for info, path in document_members(zf):
+            if mode == "skip" and doc_exists(spec, collection_id, path):
                 continue
             doc_id = ingestor.store_file(
                 collection_id=collection_id, user=user, path=path, data=zf.read(info)
@@ -199,5 +235,5 @@ def import_collection(
 
     for doc_id in document_ids:
         index_coordinator.enqueue(doc_id, collection_id)
-    _restore_cards(spec, collection_id, manifest.get("context_cards", []), mode)
+    restore_cards(spec, collection_id, manifest.get("context_cards", []), mode)
     return ImportResult(collection_id=collection_id, document_ids=document_ids)

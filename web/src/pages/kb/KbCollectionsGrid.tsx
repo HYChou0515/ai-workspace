@@ -25,6 +25,9 @@ import { WikiBadge } from "./RetrievalToggles";
 
 type Tab = "all" | "mine" | "pinned";
 
+
+import { useKbOutlet } from "./KbHome";
+
 export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
   const qc = useQueryClient();
   const t = useT();
@@ -63,17 +66,20 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
   });
 
-  // #101: import a zip as a NEW collection. On success open it at its URL.
-  const importNewMut = useMutation({
-    mutationFn: (file: File) => client.importCollectionNew(file),
-    onSuccess: (res) => {
-      void qc.invalidateQueries({ queryKey: qk.kb.collections });
-      navigate(`/kb/collections/${encodeURIComponent(res.collection_id)}`);
-    },
-  });
+  // #101/#715: import a zip as a NEW collection, on a worker. The 202 carries
+  // the collection id before any document is written, so the page opens the
+  // collection AT ONCE — empty and filling — rather than after a wait that used
+  // to end in a gateway timeout for anything large. The progress then belongs to
+  // that page, which is where `onStarted` navigates.
+  const { archiveImport } = useKbOutlet();
   const pickImportNew = (files: FileList | null) => {
     const file = files?.[0];
-    if (file) importNewMut.mutate(file);
+    // The 202 carries the collection id, so open it AT ONCE — empty and
+    // filling. The progress belongs to the shell, so it survives this jump.
+    if (file)
+      archiveImport.startNew(file, (run) =>
+        navigate(`/kb/collections/${encodeURIComponent(run.collection_id)}`),
+      );
     // Clear so re-picking the same file fires onChange again.
     if (importNewRef.current) importNewRef.current.value = "";
   };
@@ -200,7 +206,7 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
           aria-label="Import collection from file"
           onChange={(e) => pickImportNew(e.target.files)}
         />
-        <button type="button" className="kb-btn" disabled={importNewMut.isPending} onClick={() => importNewRef.current?.click()}>
+        <button type="button" className="kb-btn" disabled={archiveImport.busy} onClick={() => importNewRef.current?.click()}>
           <Icon name="upload" size={13} /> Import
         </button>
         <button type="button" className="kb-btn kb-btn--primary" onClick={() => setNewOpen(true)}>

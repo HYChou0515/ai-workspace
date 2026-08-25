@@ -8,6 +8,7 @@
 import type { AgentEvent } from "../events";
 import type { CollectionPermission } from "../lib/permission";
 import type {
+  ArchiveImport,
   KbApi,
   KbCardGenStatus,
   KbChatDetail,
@@ -140,6 +141,25 @@ function summarize(chat: KbChatDetail): KbChatSummary {
     name_hint: firstUser ? firstUser.content.split(/\s+/).join(" ").slice(0, 60) : "",
     updated_ms: chatStamps.get(chat.resource_id) ?? null,
   };
+}
+
+// #715: archive imports the mock is "running". Keyed by import id, exactly as
+// the BE keys runs — the UI polls by that id and nothing else.
+const imports = new Map<string, ArchiveImport>();
+let importSeq = 0;
+
+function startImport(collectionId: string): ArchiveImport {
+  const run: ArchiveImport = {
+    collection_id: collectionId,
+    import_id: `import-run:mock${++importSeq}`,
+    status: "queued",
+    members: 3,
+    written: 0,
+    errors: [],
+    finished: false,
+  };
+  imports.set(run.import_id, run);
+  return { ...run };
 }
 
 export const mockKbApi: KbApi = {
@@ -312,7 +332,7 @@ export const mockKbApi: KbApi = {
   folderDownloadUrl(collectionId, downloadId, prefix) {
     return `/kb/collections/${collectionId}/folder-download/${downloadId}?prefix=${encodeURIComponent(prefix)}`;
   },
-  async importCollectionNew(file) {
+  async startImportNew(file) {
     // Simulate a new collection materialised from the uploaded zip, named after
     // the file (mirrors the BE manifest-less fallback the tests exercise).
     const name = file.name.replace(/\.zip$/i, "") || "imported";
@@ -336,10 +356,29 @@ export const mockKbApi: KbApi = {
       use_graph: false,
     };
     collections.set(c.resource_id, c);
-    return { collection_id: c.resource_id, document_ids: [], status: "indexing" };
+    return startImport(c.resource_id);
   },
-  async importCollectionInto(collectionId, _file, _mode) {
-    return { collection_id: collectionId, document_ids: [], status: "indexing" };
+  async startImportInto(collectionId, _file, _mode) {
+    return startImport(collectionId);
+  },
+  async getImport(importId) {
+    const run = imports.get(importId);
+    if (!run) throw new Error("import not found");
+    // #715: the work is NOT done when the POST answers. A mock that reported
+    // `finished` on the first read would let a UI that never polls pass every
+    // assertion — and polling is the behaviour under test. So this advances one
+    // document per read, exactly as a worker closing one batch at a time does,
+    // and only reports `finished` once every member is accounted for.
+    if (!run.finished) {
+      run.written = Math.min(run.written + 1, run.members);
+      if (run.written >= run.members) {
+        run.finished = true;
+        run.status = "finished";
+        const c = collections.get(run.collection_id);
+        if (c) c.doc_count += run.members;
+      }
+    }
+    return { ...run };
   },
   async probeFindability(body) {
     // #328/#356: a deterministic mock — the doc surfaces at #2, and any candidate

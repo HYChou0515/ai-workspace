@@ -139,6 +139,10 @@ export const qk = {
     // "documents" prefix, so invalidating the list doesn't re-tick the poll).
     documentsStatus: (collectionId: string) =>
       ["kb", "documents-status", collectionId] as const,
+    // #715: one archive import's progress. Keyed by the RUN id, not the
+    // collection — two imports into one collection are two runs, and the poll
+    // must stop with the run it belongs to.
+    archiveImport: (importId: string) => ["kb", "archive-import", importId] as const,
     chats: ["kb", "chats"] as const,
     chat: (id: string) => ["kb", "chat", id] as const,
     // #310: a collection's current access state (share dialog pre-fill).

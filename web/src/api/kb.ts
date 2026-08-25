@@ -645,6 +645,27 @@ export type KbReviewInbox = {
 /** #481: a proposal to commit, addressed by its run + stable card id. */
 export type KbCardRef = { run_id: string; card_id: string };
 
+/**
+ * #715: an archive import a WORKER is doing, not the request. The POST answers
+ * `202` with this before a single document is written, so `collection_id` is
+ * usable at once — the collection exists, empty and filling.
+ *
+ * `written` vs `members` is the verdict (`written` counts SKIPPED members too:
+ * it means "no longer outstanding", not "added"). `errors` is one `path: reason`
+ * line per document that did not land, capped at 100 — a whole-run refusal adds
+ * one line with no path. `finished` says the worker is done, not that it
+ * succeeded: a half-applied import has `finished: true` and a short `written`.
+ */
+export interface ArchiveImport {
+  collection_id: string;
+  import_id: string;
+  status: string;
+  members: number;
+  written: number;
+  errors: string[];
+  finished: boolean;
+}
+
 export interface KbApi {
   /** The KB agent picker (issue #32): an ARRAY of {name, model,
    * suggestions}. FE renders a dropdown; first entry is the default. */
@@ -761,17 +782,28 @@ export interface KbApi {
   /** Issue #247: the `<a href>` URL to stream a prepared folder zip; `prefix` is
    * echoed so the streamed file is named after the folder. */
   folderDownloadUrl(collectionId: string, downloadId: string, prefix: string): string;
-  /** Issue #101: import an exported zip as a NEW collection (settings + cards
+  /** #101/#715: import an exported zip as a NEW collection (settings + cards
    * restored from its manifest; a manifest-less zip becomes a plain-files
-   * import named after the file). Returns the new collection id. */
-  importCollectionNew(file: File): Promise<CollectionImported>;
-  /** Issue #101: merge an exported zip INTO an existing collection. `mode`
-   * resolves a path collision: `overwrite` (last-write-wins) or `skip`. */
-  importCollectionInto(
+   * import named after the file). Answers `202` as soon as the archive is
+   * staged — the collection id comes back before the documents land, so the UI
+   * can open it and show it filling. Poll `getImport` for the outcome.
+   *
+   * The SYNCHRONOUS route still exists for API callers restoring their own
+   * backup, but the UI does not use it: it writes every document before it
+   * answers, so a large archive dies on a gateway timeout with no resume and no
+   * way to see how far it got. There is deliberately no size threshold here —
+   * one import path means no boundary to get wrong. */
+  startImportNew(file: File): Promise<ArchiveImport>;
+  /** #101/#715: merge an exported zip INTO an existing collection, on a worker.
+   * `mode` resolves a path collision: `overwrite` (last-write-wins) or `skip`. */
+  startImportInto(
     collectionId: string,
     file: File,
     mode: "overwrite" | "skip",
-  ): Promise<CollectionImported>;
+  ): Promise<ArchiveImport>;
+  /** #715: how one import is going. Owner-only — the run belongs to whoever
+   * started it, so this 404s for anyone else. */
+  getImport(importId: string): Promise<ArchiveImport>;
   /** #328 findability probe: rank a doc's content for a question (`before`) and,
    * when a candidate `guidance` is given, a non-persisted re-parse of the doc
    * (`after`). Read-only — nothing is written. */
@@ -1100,24 +1132,31 @@ export const realKbApi: KbApi = {
   folderDownloadUrl(collectionId, downloadId, prefix) {
     return `${API_PREFIX}/kb/collections/${encodeURIComponent(collectionId)}/folder-download/${encodeURIComponent(downloadId)}?prefix=${encodeURIComponent(prefix)}`;
   },
-  async importCollectionNew(file) {
+  async startImportNew(file) {
     const form = new FormData();
     form.append("file", file, file.name);
     const resp = await ok(
-      await apiFetch("/kb/collections/import", { method: "POST", body: form }),
-      "import collection",
+      await apiFetch("/kb/collections/imports", { method: "POST", body: form }),
+      "start import",
     );
     return resp.json();
   },
-  async importCollectionInto(collectionId, file, mode) {
+  async startImportInto(collectionId, file, mode) {
     const form = new FormData();
     form.append("file", file, file.name);
     const resp = await ok(
       await apiFetch(
-        `/kb/collections/${encodeURIComponent(collectionId)}/import?mode=${mode}`,
+        `/kb/collections/${encodeURIComponent(collectionId)}/imports?mode=${mode}`,
         { method: "POST", body: form },
       ),
-      "import into collection",
+      "start import into collection",
+    );
+    return resp.json();
+  },
+  async getImport(importId) {
+    const resp = await ok(
+      await apiFetch(`/kb/collections/imports/${encodeURIComponent(importId)}`),
+      "read import",
     );
     return resp.json();
   },

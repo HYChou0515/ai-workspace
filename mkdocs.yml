@@ -114,6 +114,7 @@ nav:
       - 共創 Skills: skills-authoring.md
       - 發布與更新紀錄: releasing.md
   - 功能手冊:
+      - 知識庫封存包（批次建庫 / 備份還原）: collection-archive.md
       - Workflows 規格: workflows.md
       - Workflow 視覺手冊（全語法 + 動畫）: workflows-syntax.html
       - Workflow 參考模型（#428 釘死決策）: workflow-reference-model.md

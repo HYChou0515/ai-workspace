@@ -332,6 +332,73 @@ def graph_mirror_event_handler(
     return PermissionEventHandler(GraphMirrorChecker(resolve_collection))
 
 
+# The writes an owner-only row gates. CREATE is absent on purpose: there is no
+# stored row to own yet, and specstar stamps the creator.
+_OWNER_ONLY_WRITE_ACTIONS: frozenset[ResourceAction] = frozenset(
+    {
+        ResourceAction.update,
+        ResourceAction.modify,
+        ResourceAction.patch,
+        ResourceAction.delete,
+    }
+)
+
+
+class OwnerOnlyChecker(IPermissionChecker):
+    """#715 — only the creator may write a row that is private to them.
+
+    The read fence (``owner_only_access_scope``) hides someone else's row; this is
+    the other half, because auto-CRUD serves PATCH and DELETE for every registered
+    model and the spec-level default allows them. For an :class:`ImportRun` the
+    write is the dangerous side: a worker stores documents into the row's
+    ``collection_id``, so a stranger who can rewrite that field redirects someone
+    else's upload into a collection of their choosing, and one who can delete the
+    row strands the import — every step reads it, finds nothing, and returns.
+
+    CREATE is allowed: there is no stored row to own yet, and specstar stamps the
+    creator. Everything else compares the acting user against ``created_by`` on the
+    stored snapshot.
+    """
+
+    def __init__(self, superusers: frozenset[str] = frozenset()) -> None:
+        self._superusers = superusers
+
+    def required_resource_parts(self, action: ResourceAction) -> frozenset[ResourcePart]:
+        """Only a gated write needs the stored snapshot loaded — asking for it on a
+        read would make every get pay for a check that allows it anyway."""
+        if action in _OWNER_ONLY_WRITE_ACTIONS:
+            return frozenset({ResourcePart.META})
+        return frozenset()
+
+    def check_permission(self, context: Any) -> PermissionResult:
+        action = getattr(context, "action", None)
+        if action not in _OWNER_ONLY_WRITE_ACTIONS:
+            # Reads are fenced by `owner_only_access_scope`, which hides another
+            # user's row rather than refusing it. Gating them here too would deny
+            # the OWNER as well: this handler fires on every action, and a read does
+            # not load the stored snapshot, so there is no `created_by` to compare.
+            return PermissionResult.allow
+        user = _context_user(context)
+        if user in self._superusers:
+            return PermissionResult.allow
+        current = _current(context)
+        meta = getattr(current, "meta", None) if current is not None else None
+        owner = getattr(meta, "created_by", None)
+        if owner is None:
+            # No stored row to compare against — refuse rather than guess. A write
+            # we cannot attribute is exactly the one worth losing loudly.
+            return PermissionResult.deny
+        return PermissionResult.allow if owner == user else PermissionResult.deny
+
+
+def owner_only_event_handler(
+    superusers: frozenset[str] = frozenset(),
+) -> PermissionEventHandler:
+    """#715 — wrap the owner-only write check for the per-model ``event_handlers``
+    slot (the ``permission_checker`` slot is shadowed — see the module docstring)."""
+    return PermissionEventHandler(OwnerOnlyChecker(superusers))
+
+
 def source_doc_permission_event_handler(
     superusers: frozenset[str] = frozenset(),
 ) -> PermissionEventHandler:
