@@ -41,7 +41,9 @@ Two consequences you design around:
     bigger than a reply should carry or the step already fetched it with a tool: a reply is
     capped by the model's output limit, and making a model retype a thousand records is both
     the slow way and the lossy way to move data it already has. `{steps.NAME.produces}` hands
-    the matched paths straight to a `map`.
+    the matched paths straight to a `map`. A **`sandbox` step can declare `produces` too** —
+    for bulk that is the better node, because writing a thousand files is a loop and a
+    sandbox step has no model in it at all.
 - **Side-effects go only through a `capability`.** A `sandbox` step is compute-only; filing
   into a collection, writing a card, or creating an entity is always a capability.
 

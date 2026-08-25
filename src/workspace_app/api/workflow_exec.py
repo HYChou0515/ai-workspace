@@ -233,6 +233,16 @@ class WorkflowExecutor:
         await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
         if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
             await self._turn_engine.forget(lane)
+        # Reconcile the sandbox into the snapshot, exactly as the deterministic
+        # `run_sandbox` node does after its command. A turn's shell writes land in the
+        # SANDBOX; the snapshot is what `wf.glob` / `wf.read` see, and until now only
+        # the periodic mirror sweep bridged the two. That is a race for anything a node
+        # produced by running a script — a `produces` node globbed the snapshot the
+        # instant its turn ended and found nothing, so a step that had done its work
+        # failed its own gate. Same suppression as the sandbox node: a failed
+        # write-back must not lose the turn.
+        with contextlib.suppress(Exception):
+            await self._registry.flush(item_id)
         # A Stop that landed DURING this turn advanced the epoch past the baseline
         # (the watcher already cancelled the turn) → abort the run, don't step on.
         if await self._turn_engine.cancel_epoch(chat_key) > baseline:

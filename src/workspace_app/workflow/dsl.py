@@ -168,6 +168,11 @@ class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
     reads: list[str] = field(default_factory=list)
     # #429 P1 rule 3: opt out of the journal skip — always re-run.
     cache: bool = True
+    # Same third output kind as the agent node: the files this command WROTE, named by a
+    # glob. Bulk output is precisely the work that should not pass through a model — a
+    # thousand files is a loop — and this is the node with no LLM in it, so it is the one
+    # that most needs to be able to say what it produced.
+    produces: str = ""
 
 
 class GateStep(Struct, tag="gate", forbid_unknown_fields=True):
@@ -834,12 +839,15 @@ async def _exec_step(
         await _exec_capability(wf, step, ns, key)
         return
     if isinstance(step, SandboxStep):
-        # #428 §1.2: ``outputs`` ⇒ parse stdout JSON into result.fields, gated on it.
-        check = (
-            _outputs_check(step.outputs)
-            if step.outputs
-            else (await _build_check(step.check, ns, wf) if step.check else None)
-        )
+        # #428 §1.2: ``outputs`` ⇒ parse stdout JSON into result.fields, gated on it;
+        # ``produces`` ⇒ gate on the glob and record the matched paths instead.
+        sb_produces = _stringify(await _resolve(step.produces, ns, wf)) if step.produces else ""
+        if step.outputs:
+            check = _outputs_check(step.outputs)
+        elif sb_produces:
+            check = _produces_check(sb_produces)
+        else:
+            check = await _build_check(step.check, ns, wf) if step.check else None
         await sandbox_node(
             wf,
             run=await _resolve(step.run, ns, wf),
@@ -848,6 +856,7 @@ async def _exec_step(
             name=step.name or None,
             key=key,
             outputs=step.outputs or None,
+            produces=sb_produces,
             reads=await _resolve_reads(step.reads, ns, wf),
             cache=step.cache,
         )
@@ -1192,6 +1201,14 @@ def _validate_step(
         if step.check is not None:
             _validate_check(step.check, scope, where, errs, steps_seen)
         _validate_outputs(step.outputs, where, errs)
+        # D5 for the deterministic node: at most ONE declared output kind. `check` is not
+        # an output kind — a plain command that produces nothing stays expressible.
+        if step.outputs and step.produces:
+            errs.append(
+                f"{where}: a sandbox step declares ONE output kind — 'outputs' (stdout "
+                "JSON) or 'produces' (the files it wrote), not both (plan §2.1)"
+            )
+        _check_interp(step.produces, scope, where, errs, steps_seen)
         _validate_reads(step.reads, scope, where, errs, steps_seen)
         return
     # AgentStep — plan §2.1 (P2): exactly ONE output kind, so a node is either a
@@ -1404,7 +1421,7 @@ def _register_step(
         # #428 §1.5/§3.4: keep the whole ``outputs`` declaration so a reference can be
         # checked for field existence AND a switch can check its cases against an enum.
         # A ``produces`` node exposes one field: the list of paths it matched.
-        if isinstance(step, AgentStep) and step.produces:
+        if getattr(step, "produces", ""):
             steps_seen[name] = {"produces": "list"}
         else:
             steps_seen[name] = dict(step.outputs)
@@ -1545,6 +1562,11 @@ def describe_dsl_grammar() -> str:
         "step already has it from a tool: the step writes the files (a loop through `exec`), "
         "its reply is not parsed at all, and `{steps.NAME.produces}` hands the matched paths "
         "to a `map`. `outputs` is for a small decision, not for moving a dataset.",
+        "A **sandbox** step may declare `produces` too, and for bulk that is the better "
+        "node: writing a thousand files is a loop, so put the script in a `sandbox` step "
+        "and keep the model out of the data path entirely. (A sandbox step declares at "
+        "most one of `outputs` / `produces`; `check` is still there for a command that "
+        "produces nothing.)",
     ]
     return "\n".join(lines)
 

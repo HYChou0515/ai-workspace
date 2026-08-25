@@ -722,6 +722,9 @@ implicit gate**——回覆不 parse 成物件、缺欄位、型別/enum 不符 
 - **在 map 裡面**:`produces` 可以內插元素(`"images/{img.id}.png"`),跟 `out` 一樣,所以
   各元素不會互相覆蓋。
 - 一個 agent step 仍然只能宣告**一種**產出(D5);同時宣告兩種是靜態錯誤。
+- **`sandbox` step 也可以宣告 `produces`**,而且大量產出時它才是對的節點——寫一千個檔是一個
+  迴圈,`sandbox` 步驟裡完全沒有模型。它一樣只能擇一(`outputs` 或 `produces`);沒有產出的
+  單純指令仍然用 `check`。
 
 ### 22.5 `map`：唯一的迴圈（#428 擴充 `over`）
 

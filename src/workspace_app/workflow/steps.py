@@ -218,6 +218,7 @@ async def sandbox_node(
     key: str = "",
     cache: bool = True,
     outputs: dict[str, Any] | None = None,
+    produces: str = "",
     reads: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run one deterministic node — a command in the sandbox, no LLM (manual §5.2).
@@ -250,9 +251,16 @@ async def sandbox_node(
         result: dict[str, Any] = {"exit_code": exit_code, "stdout": stdout}
         if outputs is not None:  # #428 §1.2: parse stdout JSON into result.fields
             result["fields"] = _parse_fields(stdout)
+        if produces:  # the node's output is what it WROTE; stdout is not parsed at all
+            result["fields"] = {"produces": sorted(await wf.glob(produces))}
         return result
 
-    args: dict[str, Any] = {"run": run, "phase": phase, "outputs": outputs}
+    args: dict[str, Any] = {
+        "run": run,
+        "phase": phase,
+        "outputs": outputs,
+        "produces": produces,
+    }
     fp = await reads_fingerprint(wf, reads)
     if fp is not None:  # only when declared → untouched steps keep their prior hash
         args["reads"] = fp
