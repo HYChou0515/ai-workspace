@@ -8,6 +8,7 @@ when a chat pipeline is wired, promotes the dialogue to the insights KB).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import uuid
@@ -24,6 +25,7 @@ from ..kb.ingest import Ingestor
 from ..perm import Actor, Permission, Verb, authorize
 from ..perm.model import user_subject
 from ..resources.groups import groups_of
+from ..sandbox.protocol import SandboxBusy
 from .activity import ActivityLog
 from .item_authz import require_item_access
 from .item_conversation_perm import push_item_mirror_to_conversations
@@ -427,6 +429,13 @@ def register_item_routes(
                 f"Closed the workspace for “{title}”",
                 {"item_id": item_id},
             )
-        await registry.close_session(item_id)
+        # Best effort, deliberately. By this point the status flip is persisted,
+        # the activity recorded and the notifications fanned out — so failing
+        # the request here reports "close failed" for work that is already done,
+        # and a retry re-runs all of it (duplicate notifications, a second
+        # promote task). A sandbox that could not be torn down right now is left
+        # to the idle reaper, which is what would have collected it anyway.
+        with contextlib.suppress(SandboxBusy):
+            await registry.close_session(item_id)
         await turn_engine.forget(item_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)

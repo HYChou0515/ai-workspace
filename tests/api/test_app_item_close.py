@@ -179,3 +179,37 @@ def test_close_unknown_item_is_404():
     app, _ = _app_and_spec()
     resp = TestClient(app).post("/a/rca/items/no-such-id/close", json={"status": "resolved"})
     assert resp.status_code == 404
+
+
+def test_a_busy_sandbox_does_not_fail_a_close_that_already_happened():
+    """By the time the teardown runs, the status flip is persisted, the activity
+    is recorded and the notifications have gone out.
+
+    Failing the request there reports "close failed" for work that is already
+    done — and a retry re-runs all of it, so the owner gets the notification
+    twice and a second promote task is scheduled. A sandbox that cannot be torn
+    down right now is left to the idle reaper, which would have collected it
+    anyway."""
+    from workspace_app.sandbox.protocol import SandboxBusy
+
+    class _BusyOnKill(MockSandbox):
+        async def kill(self, handle):
+            raise SandboxBusy(handle.id)
+
+    spec = make_spec(default_user="default-user")
+    app = create_app(
+        spec=spec,
+        sandbox=_BusyOnKill(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        agent_config_catalog=AgentConfigCatalog(),
+    )
+    client = TestClient(app)
+    item_id = _create_rca_item(client, title="busy at teardown")
+    client.post(f"/a/rca/items/{item_id}/exec", json={"cmd": ["echo", "hi"]})
+
+    resp = client.post(f"/a/rca/items/{item_id}/close", json={"status": Status.RESOLVED.value})
+    assert resp.status_code == 204, resp.text
+
+    rm = spec.get_resource_manager(RcaInvestigation)
+    assert rm.get(item_id).data.status is Status.RESOLVED
