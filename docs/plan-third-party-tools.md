@@ -51,6 +51,7 @@
 | Q12 | 第三方支不支援 `pkg:cmd` 只授權單一 command？ | **支援，且零成本**——第三方一旦成為 `PackageInfo`，`build_function_tools` 的展開邏輯與來源無關 |
 | Q13 | private GitLab 的 token 怎麼給？ | **先一個全域 token**（host env）。per-project token 留待有需求再說 |
 | Q14 | 要不要人類可讀的版本號？ | **要**：manifest 帶 `version`（取自作者的 `pyproject`）。**不參與信任**（信任錨仍是 sha），純粹讓「他跑的是 1.4.2」比一串 sha 好溝通 |
+| Q14b | 要不要知道工具是**誰**發布的？（#724，事後補） | **要**：manifest 帶 `author`，取自作者的 `pyproject` `[project].authors`——跟 `version` 同一個檔案，作者不用學新欄位。信任層級**等同 `source`**：純顯示，`check_compatible` 與 `admit` 都不看它。`grant.py` 反對「payload 裡放名字」的論證因此不適用——身分仍然只認憑證，這個欄位只回答「出事找誰」。與 `version` 不同的是**缺了不擋 build**：版本是平台會推理的發版語意，作者名只是禮貌，為了它讓現存所有工具在 builder image 發版當天一起掛掉並不划算 |
 | Q15 | 要不要規定作者附測試？ | **不強制他們的單元測試**（我們管不到、也不該管），但 **`smoke` 是 build 的一部分：不過就不產出 artifact**。這是唯一有牙齒的那條 |
 | Q16 | 上架前平台要不要先驗一次？ | **要，但是人工執行的指令**（`python -m workspace_app.tooling.verify <url> --name <本地名>`），不是自動閘。貼進 `app.json` 之前跑它 |
 | Q16b | verify 要不要真的把 bundle 跑起來？ | **不要**（實作時改的，P9）：作者的 build 已經在**正確的 base** 裡強制跑過 smoke（Q15），而在維運者的機器上執行陌生人的程式碼是錯的地方、錯的環境、學到的還更少。verify 改做「抓 + 閘門 + 結構比對（bundle 內容是否與 manifest 一致）」 |
@@ -379,7 +380,7 @@ jailed bootstrap 改成逐支 bind-mount（只掛這次授權的）。
 
 ### P8 · app 端：`external_tools` 宣告 + turn 起點 resolve + 記錄 sha/version
 
-**✅ 完成**。`agent.external_tools` → turn 起點 resolve → sha 釘住整個 turn → `PackageInfo` 進 `ctx.packages`；拿不到的工具在 prompt 裡說明原因（不送去 tool picker，因為那裡沒有開關可按）。
+**✅ 完成**（但下面那筆「記錄」當時**沒做**，直到 #724 才補上——見本節末）。`agent.external_tools` → turn 起點 resolve → sha 釘住整個 turn → `PackageInfo` 進 `ctx.packages`；拿不到的工具在 prompt 裡說明原因（不送去 tool picker，因為那裡沒有開關可按）。
 
 `app.json` schema 加 `agent.external_tools`；`turn_context` 在組 context 時打 host resolve，
 把回來的 commands/schemas 轉成 `PackageInfo` 併進 `ctx.packages`
@@ -389,6 +390,17 @@ jailed bootstrap 改成逐支 bind-mount（只掛這次授權的）。
 唯一查得回去的線索，也是 R8 的事後補償。
 resolve 失敗且無 last-known-good → **該工具缺席但 turn 繼續**，並讓 agent 與使用者都看得到原因
 （沿用 #480 的「停用工具也要揭露」形狀）。
+
+> **訂正（#724）**：上面那句「同時落一筆記錄」當年**沒有實作**，這一節卻標成完成。實際情況是
+> host 的 `/tools/resolve` 一直有回 `version` 與 `stale`，但 app 端的 `resolve_external_tools`
+> 只取 `commands` / `sha`，兩個都丟掉；`ExternalTools.stale` 更是算出來以後全 codebase 沒有任何
+> 消費者。#724 補齊：`ToolProvenance`（version / author / stale）留在 `ExternalTools` 上，
+> `resolve_item_tools` 落一行結構化 log（item → name + version + author + sha + 是否 last-known-good），
+> 並在 `GET /a/{slug}/items/{item_id}/tools` 多一段**唯讀**的 `external` 給 tool picker 顯示。
+>
+> 記錄做成 log 而不是 specstar resource 是刻意的：這是「使用者說工具怪怪的」當下要查的近期線索，
+> 而一張新表要跟著配 access_scope、列表、權限與回收才服務得了它（#723 剛示範過 `add_model`
+> 連帶生成無權限 auto-CRUD 路由的代價）。
 
 ### P9 · `verify` 指令（上架前驗收）+ 開機 best-effort 預熱
 
