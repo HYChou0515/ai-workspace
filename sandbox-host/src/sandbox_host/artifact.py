@@ -250,6 +250,16 @@ class Manifest:
     #: of an operator having to go and ask for it. Optional and last, so a
     #: manifest written before certificates existed still parses.
     grant: str | None = None
+    #: Who published this tool, as a display string ("Name <email>"), taken
+    #: from the author's own ``pyproject``. Provenance only — the SAME tier as
+    #: ``source``, and for the same reason: the platform never reads it to
+    #: decide anything, so an author writing whatever they like in it costs
+    #: nobody. Who a tool IS remains the certificate (`grant.admit`); this is
+    #: only who to go to when it misbehaves.
+    #:
+    #: Optional, because every bundle already in the field was built before the
+    #: builder wrote this — and a display string may not take those down.
+    author: str | None = None
 
 
 def parse_manifest(raw: bytes) -> Manifest:
@@ -291,6 +301,7 @@ def parse_manifest(raw: bytes) -> Manifest:
             bundle=BundleRef(sha256=bundle["sha256"], size=bundle["size"]),
             source=SourceRef(git=src["git"], sha=src["sha"]) if src else None,
             grant=body.get("grant"),
+            author=body.get("author"),
         )
     except (KeyError, TypeError) as exc:
         raise ManifestError(f"manifest is missing or malformed at {exc}") from exc
@@ -363,6 +374,8 @@ def render_manifest(manifest: Manifest) -> bytes:
         body["source"] = {"git": manifest.source.git, "sha": manifest.source.sha}
     if manifest.grant is not None:
         body["grant"] = manifest.grant
+    if manifest.author is not None:
+        body["author"] = manifest.author
     # Indented and newline-terminated: a manifest lands in CI logs and in
     # review diffs, where a single long line helps nobody.
     return (json.dumps(body, indent=2, sort_keys=True) + "\n").encode()
