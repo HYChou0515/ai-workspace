@@ -187,6 +187,59 @@ def test_an_unreachable_store_serves_the_last_version_that_worked(tmp_path: Path
     assert fallen_back.stale is True
 
 
+def test_resolve_carries_the_author_through_to_the_app(tmp_path: Path) -> None:
+    """#724: the app cannot read the manifest itself (that is the whole point
+    of resolving here), so anything a person needs from it has to come back in
+    this answer or it does not exist downstream."""
+    data = _bundle()
+    wire = _Wire(manifest=_manifest(data, author="Wafer Team <wafer@example.com>"), bundle=data)
+
+    resolved = _resolver(tmp_path, wire).resolve("wafer-history", _MANIFEST_URL)
+
+    assert resolved.author == "Wafer Team <wafer@example.com>"
+
+
+def test_a_manifest_with_no_author_resolves_to_no_author(tmp_path: Path) -> None:
+    data = _bundle()
+    wire = _Wire(manifest=_manifest(data), bundle=data)
+
+    assert _resolver(tmp_path, wire).resolve("wafer-history", _MANIFEST_URL).author is None
+
+
+def test_the_remembered_copy_keeps_the_author(tmp_path: Path) -> None:
+    """An outage is exactly when someone asks who to contact, so provenance
+    must not be the thing that disappears with the artifact store."""
+    data = _bundle()
+    resolver = _resolver(
+        tmp_path, _Wire(manifest=_manifest(data, author="Wafer Team <w@x>"), bundle=data)
+    )
+    resolver.resolve("wafer-history", _MANIFEST_URL)
+
+    fallen_back = _resolver(tmp_path, _Wire()).resolve("wafer-history", _MANIFEST_URL)
+
+    assert fallen_back.stale is True
+    assert fallen_back.author == "Wafer Team <w@x>"
+
+
+def test_a_note_written_before_authors_existed_still_falls_back(tmp_path: Path) -> None:
+    """`last-known-good.json` outlives the host that wrote it — an upgrade must
+    not turn every remembered tool into a KeyError during an outage, which is
+    the one moment the file exists for."""
+    data = _bundle()
+    resolver = _resolver(tmp_path, _Wire(manifest=_manifest(data), bundle=data))
+    resolver.resolve("wafer-history", _MANIFEST_URL)
+    note = tmp_path / "last-known-good.json"
+    body = json.loads(note.read_text())
+    for entry in body.values():
+        entry.pop("author", None)
+    note.write_text(json.dumps(body))
+
+    fallen_back = _resolver(tmp_path, _Wire()).resolve("wafer-history", _MANIFEST_URL)
+
+    assert fallen_back.stale is True
+    assert fallen_back.author is None
+
+
 def test_an_unreachable_store_with_nothing_cached_says_which_tool_failed(
     tmp_path: Path,
 ) -> None:

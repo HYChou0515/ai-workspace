@@ -442,6 +442,7 @@ def make_host_app(
             resolved[name] = {
                 "sha": tool.sha,
                 "version": tool.version,
+                "author": tool.author,
                 "stale": tool.stale,
                 "commands": [
                     {

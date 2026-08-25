@@ -108,6 +108,10 @@ class ResolvedTool:
     stale: bool
     """True when the artifact store could not be reached and this is the last
     version that resolved. The turn still runs; the app can say so."""
+    author: str | None = None
+    """Who published it, verbatim from the manifest — provenance the app
+    cannot obtain any other way, because it never reads a manifest itself.
+    ``None`` for a bundle built before the builder wrote the field."""
 
 
 class ToolResolver:
@@ -177,6 +181,7 @@ class ToolResolver:
             version=manifest.version,
             commands=manifest.commands,
             stale=False,
+            author=manifest.author,
         )
 
     def _fall_back(self, name: str, url: str, cause: Exception) -> ResolvedTool:
@@ -212,6 +217,10 @@ class ToolResolver:
                 for c in remembered["commands"]
             ),
             stale=True,
+            # `.get`, not `[]`: this file outlives the host that wrote it, and
+            # an outage is the worst possible moment to discover that an
+            # upgrade made every remembered tool raise instead of resolve.
+            author=remembered.get("author"),
         )
 
     def _recall(self) -> dict[str, dict]:
@@ -227,6 +236,7 @@ class ToolResolver:
         known[url] = {
             "sha": manifest.bundle.sha256,
             "version": manifest.version,
+            "author": manifest.author,
             # Kept so the fallback can ask again. Without it, an outage was a
             # way around the only revocation this design has.
             "grant": manifest.grant,
