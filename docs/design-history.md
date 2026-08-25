@@ -49,6 +49,7 @@
 | [plan-llm-failover.md](plan-llm-failover.md) | LLM failover / 多供應商備援 |
 | [plan-sanity-checks.md](plan-sanity-checks.md) | 開機健康檢查 / sanity matrix |
 | [plan-repetition-guard.md](plan-repetition-guard.md) | #113 重複迴圈偵測與優雅阻擋 |
+| [plan-max-turns-continues-goal.md](plan-max-turns-continues-goal.md) | #721 撞到 `runner.max_turns` 不再被當成失敗——goal 的自動續跑改由「工具呼叫指紋」判斷是否在原地打轉,而不是「這輪結束得好不好」 |
 | [plan-turn-replay-buffer.md](plan-turn-replay-buffer.md) | 同台重連無損：#43 broadcast 加 in-pod seq + ring buffer，`?since=` replay 斷線期間漏掉的事件 |
 | [plan-event-bus-cross-pod-streaming.md](plan-event-bus-cross-pod-streaming.md) | 跨 pod live 串流：RabbitMQ fanout 事件匯流排（IEventBus，memory 預設 + rabbitmq），不再依賴 sticky |
 | [plan-skills-and-tools.md](plan-skills-and-tools.md) | Skills 與 tools 套件設計 |

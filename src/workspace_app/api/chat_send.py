@@ -102,6 +102,21 @@ async def _load_inline_image_urls(
     return urls
 
 
+def _ran_out_of_steps(outcome: str) -> bool:
+    """Did the turn stop because it hit `runner.max_turns`, rather than fail?
+
+    #721: the two are opposite kinds of ending, and collapsing them into "not
+    ok" is what made a goal's budget unspendable. A tool that errored means the
+    turn went WRONG and, with someone at their desk, belongs back in their hands
+    (#613). Running out of steps means it did not go wrong — it did not FINISH,
+    which is the one case where continuing is the whole point.
+
+    The thread still shows the step-limit banner either way: what changes is
+    whether the goal takes another round, not what the person is told.
+    """
+    return outcome == "max_turns"
+
+
 def _last_user_was_the_driver(conv: Conversation) -> bool:
     """Was the turn that just ended started by the goal driver rather than by a
     person? (#615) The driver's round is stored as `role="user"` under the
@@ -350,14 +365,17 @@ class ChatSendService:
                 and _last_user_was_the_driver(conv)
                 and self._offhours_calendar().is_offhours(datetime.now(UTC))
             )
-            if outcome != "ok" and not unattended:
+            if outcome != "ok" and not _ran_out_of_steps(outcome) and not unattended:
                 return
             baseline = await self._turn_engine.cancel_epoch(engine_key)
             checker = self._goal_checker
             assert checker is not None  # guarded by _maybe_continue_goal
             # An errored turn produced no new evidence, so there is nothing for
-            # the checker to judge — skip the call and treat it as unmet.
-            met = outcome == "ok" and await asyncio.to_thread(
+            # the checker to judge — skip the call and treat it as unmet. A turn
+            # that merely ran out of steps DID produce evidence (#721), and it
+            # may even have finished the job on its last one, so it is judged
+            # like any other.
+            met = (outcome == "ok" or _ran_out_of_steps(outcome)) and await asyncio.to_thread(
                 check_goal_met, checker, goal.condition, transcript_tail(conv.messages)
             )
             # Re-read: the user may have cleared or replaced the goal while the
@@ -402,8 +420,15 @@ class ChatSendService:
             # in a row and the goal parks for a person. Counted separately from
             # the round budget, so recovering from a blip costs a round while
             # being stuck costs the night instead of thirty rounds of it.
+            #
+            # #721: running out of steps is NOT one of those failures. Reading it
+            # as no-progress meant a long job — the exact thing a budget of
+            # rounds exists to serve — was parked for a human two rounds in.
+            # Circling is still caught, by the signature, which is the judgement
+            # that actually distinguishes it; "the turn ended badly" was only
+            # ever a proxy for it.
             signature = turn_signature(latest)
-            no_progress = outcome != "ok" or (
+            no_progress = (outcome != "ok" and not _ran_out_of_steps(outcome)) or (
                 bool(signature) and signature == current.last_signature
             )
             current.stall_count = current.stall_count + 1 if no_progress else 0
@@ -451,6 +476,15 @@ class ChatSendService:
             )
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
             return  # the chat was deleted mid-flight
+        except Exception:
+            # #721: a step-capped turn now reaches the checker, where before it
+            # returned early — so an outage on that endpoint is newly reachable
+            # here. Hand back rather than continue: the verdict is unknown, and
+            # "unknown" must fall toward the behaviour we know is safe, which is
+            # the one a person is already watching. Escaping instead would only
+            # surface as "Task exception was never retrieved" — the goal would
+            # stop either way, but nothing would say why.
+            logger.exception("chat_send: goal follow-up failed for chat %s", rid)
 
     def _notice_history_reduced(self, rid: str, note: str) -> None:
         """Tell the thread that older messages no longer reach the model (#624).
