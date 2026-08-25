@@ -57,6 +57,14 @@ export function useStorePollFallback<T>({
         const snapshot = await ref.current.fetchThread();
         if (!cancelled) ref.current.onSnapshot(snapshot);
       } catch (err: unknown) {
+        // Cancelled means this tick's outcome belongs to nobody — the same
+        // rule the success path applies, and it has to cover the whole catch,
+        // not just the callback. A read that rejects after unmount was
+        // reporting to a component that is gone (a stray setState in a
+        // browser; under happy-dom an unhandled `window is not defined`) and
+        // logging into a worker whose console channel has already closed.
+        // Either one reds an entire test run in which every test passed.
+        if (cancelled) return;
         // Transient store-read failure — retry on the next tick, but say so:
         // silently, a dead store read is indistinguishable from a quiet chat.
         console.warn("store-poll: read failed", err);
