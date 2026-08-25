@@ -15,6 +15,7 @@ import io
 import json
 import os
 import tarfile
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -40,11 +41,17 @@ _SOURCE = "https://gitlab.example/api/v4/projects/rca%2Fwafer-history/"
 _BUILDER = "registry.example/tool-builder@sha256:beef"
 
 
-def _source(tmp_path: Path, *, name: str = "wafer-history", version: str = "1.4.2") -> Path:
+def _source(
+    tmp_path: Path,
+    *,
+    name: str = "wafer-history",
+    version: str = "1.4.2",
+    authors: str = "",
+) -> Path:
     src = tmp_path / "src-tree"
     (src / "src").mkdir(parents=True)
     (src / "pyproject.toml").write_text(
-        f'[project]\nname = "{name}"\nversion = "{version}"\n'
+        f'[project]\nname = "{name}"\nversion = "{version}"\n{authors}'
         f'\n[project.scripts]\n{name} = "pkg.cli:main"\n'
     )
     (src / "uv.lock").write_text("# pinned")
@@ -108,12 +115,30 @@ def test_build_artifact_emits_the_two_files_the_author_publishes(tmp_path: Path)
     assert published.name == "wafer-history"
     assert published.version == "1.4.2"
     assert published.builder == _BUILDER
+    assert published.author is None  # this source tree declares none
     # The sha the platform will gate on has to describe the bytes shipped
     # beside it, or nothing downstream can be trusted.
     assert published.bundle.sha256 == hashlib.sha256(bundle).hexdigest()
     assert published.bundle.size == len(bundle)
     assert [c.name for c in published.commands] == ["trend"]
     assert published.commands[0].description == "Yield trend for a lot."
+
+
+def test_build_artifact_publishes_the_author_beside_the_version(tmp_path: Path) -> None:
+    out = tmp_path / "dist"
+
+    manifest = build_artifact(
+        source=_source(
+            tmp_path, authors='authors = [{name = "Wafer Team", email = "wafer@example.com"}]\n'
+        ),
+        out=out,
+        builder_id=_BUILDER,
+        build_bundle=_fake_bundle({"trend": "t"}),
+        smoke_check=lambda _dist: None,
+    )
+
+    assert manifest.author == "Wafer Team <wafer@example.com>"
+    assert parse_manifest((out / MANIFEST_NAME).read_bytes()).author == manifest.author
 
 
 def test_the_published_bundle_carries_the_runnable_tree(tmp_path: Path) -> None:
@@ -284,6 +309,65 @@ def test_read_project_requires_a_version_humans_can_name(tmp_path: Path) -> None
         read_project(tmp_path)
 
 
+def _pyproject(tmp_path: Path, authors: str) -> Path:
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "t"\nversion = "1"\n{authors}\n[project.scripts]\nt = "p:m"\n'
+    )
+    return tmp_path
+
+
+def test_read_project_takes_the_author_from_the_same_file_as_the_version(tmp_path: Path) -> None:
+    """#724: no new place for an author to fill in. `[project].authors` is
+    already in the file they must edit to cut a release."""
+    src = _pyproject(tmp_path, 'authors = [{name = "Wafer Team", email = "wafer@example.com"}]\n')
+
+    assert read_project(src).author == "Wafer Team <wafer@example.com>"
+
+
+def test_read_project_names_every_author_a_tool_has(tmp_path: Path) -> None:
+    src = _pyproject(
+        tmp_path,
+        'authors = [{name = "A", email = "a@x"}, {name = "B", email = "b@x"}]\n',
+    )
+
+    assert read_project(src).author == "A <a@x>, B <b@x>"
+
+
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ('{name = "Solo"}', "Solo"),
+        ('{email = "solo@x"}', "solo@x"),
+        # Neither half is a way to reach anyone, so it contributes nothing
+        # rather than rendering as an empty pair of brackets.
+        ("{}", None),
+    ],
+)
+def test_read_project_renders_a_half_filled_author(tmp_path: Path, entry, expected) -> None:
+    src = _pyproject(tmp_path, f"authors = [{entry}]\n")
+
+    assert read_project(src).author == expected
+
+
+def test_read_project_leaves_the_author_absent_instead_of_failing_the_build(
+    tmp_path: Path,
+) -> None:
+    """Deliberately unlike `version`, which is required. A version is release
+    semantics the platform reasons about; an author is a courtesy, and refusing
+    to build without one would break every tool already in the field the day
+    the builder image ships."""
+    src = _pyproject(tmp_path, "")
+
+    assert read_project(src).author is None
+
+
+def test_read_project_ignores_an_authors_table_it_cannot_read(tmp_path: Path) -> None:
+    """A field that decides nothing must not be able to fail a build."""
+    src = _pyproject(tmp_path, 'authors = "Wafer Team"\n')
+
+    assert read_project(src).author is None
+
+
 def test_read_commands_reports_a_build_that_never_finished(tmp_path: Path) -> None:
     with pytest.raises(BuildError, match="did not complete"):
         read_commands(tmp_path)
@@ -331,6 +415,33 @@ def test_build_tool_wires_the_arguments_and_the_builder_identity(tmp_path, monke
     assert seen["builder_id"] == _BUILDER
     # The author needs to see what they just published, in their CI log.
     assert "wafer-history" in capsys.readouterr().out
+
+
+def test_build_tool_names_the_author_in_the_ci_log(tmp_path, monkeypatch, capsys):
+    """#724: the author's own build is the first place the string is ever
+    shown, so a typo surfaces to the one person who can fix it."""
+    published = replace(_stub_manifest(), author="Wafer Team <wafer@example.com>")
+    monkeypatch.setattr(builder_mod, "build_artifact", lambda **kw: published)
+    monkeypatch.setenv("TOOL_BUILDER_ID", _BUILDER)
+
+    assert main(["build", str(tmp_path / "src"), str(tmp_path / "dist")]) == 0
+
+    out = capsys.readouterr().out
+    assert "by Wafer Team <wafer@example.com>" in out
+    assert "note:" not in out
+
+
+def test_build_tool_says_how_to_add_a_missing_author(tmp_path, monkeypatch, capsys):
+    """Nothing refuses a build over this field, so without a word here an
+    author who mistyped the table would never learn that it did not publish."""
+    monkeypatch.setattr(builder_mod, "build_artifact", lambda **kw: _stub_manifest())
+    monkeypatch.setenv("TOOL_BUILDER_ID", _BUILDER)
+
+    assert main(["build", str(tmp_path / "src"), str(tmp_path / "dist")]) == 0
+
+    out = capsys.readouterr().out
+    assert "no author published" in out
+    assert "authors = [" in out
 
 
 def test_build_tool_refuses_to_run_outside_a_builder_image(tmp_path, monkeypatch, capsys):

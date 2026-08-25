@@ -74,7 +74,37 @@ async def resolve_item_tools(sandbox: Sandbox, locator: ItemLocator, item_id: st
     and not others depending on who opened them."""
     slug = locator.slug_of(item_id)
     declared = load_app_manifest(slug).agent.external_tools if slug else {}
-    return await resolve_external_tools(sandbox, declared)
+    external = await resolve_external_tools(sandbox, declared)
+    _record_what_this_item_got(item_id, external)
+    return external
+
+
+def _record_what_this_item_got(item_id: str, external: ExternalTools) -> None:
+    """#674 P8 / #724: the trail behind "that tool was behaving oddly".
+
+    A third-party bundle can change under us between one turn and the next —
+    the URL points at the author's latest, which is the whole point — so the
+    only account of what a given turn actually ran is written at the moment it
+    is resolved. Nothing else records it: the sha never appears in a path the
+    agent sees, and the manifest is read on a machine the app cannot reach.
+
+    A log line rather than a resource. This is forensics for a question asked
+    about the recent past, and a stored row would have to be scoped, listed,
+    permissioned and reaped to serve it — see #723 for what a model added for
+    one field costs."""
+    if not external.provenance:
+        return
+    logger.info(
+        "item %s third-party tools: %s",
+        item_id,
+        "; ".join(
+            f"{name} {p.version}"
+            + (f" by {p.author}" if p.author else "")
+            + f" sha={external.shas[name][:12]}"
+            + (" LAST-KNOWN-GOOD" if p.stale else "")
+            for name, p in sorted(external.provenance.items())
+        ),
+    )
 
 
 class TurnContextBuilder:

@@ -16,7 +16,7 @@ vi.mock("../../api", async (orig) => {
     ...actual,
     api: {
       ...actual.api,
-      getItemTools: vi.fn(async () => []),
+      getItemTools: vi.fn(async () => ({ tools: [], external: [] })),
       getItemSkills: vi.fn(async () => []),
     },
   };

@@ -17,7 +17,7 @@
 
 ```
 my-wafer-tools/
-  pyproject.toml          # 一個 [project.scripts] 進入點 + version
+  pyproject.toml          # 一個 [project.scripts] 進入點 + version（+ authors）
   uv.lock                 # 依賴釘死 —— 沒有它就沒有可重現的 build
   src/wafer_tools/
     cli.py                # 三段式契約（見下）
@@ -31,10 +31,19 @@ my-wafer-tools/
 [project]
 name = "wafer-tools"
 version = "1.4.2"          # 必填。這是人在對話裡講的版本號
+authors = [{name = "Wafer Team", email = "wafer@example.com"}]   # 選填，但請填
 
 [project.scripts]
 wafer-history = "wafer_tools.cli:main"   # 必須「剛好一個」
 ```
+
+**`authors` 請填。** 它會進 manifest，然後出現在使用者的工具面板上：「這支工具是誰發布的、
+現在跑的是哪一版」。工具出狀況時，那是使用者唯一找得到你的地方——不填的話那一欄會寫「未註明作者」。
+
+它**不是**身分驗證。平台認的身分是我們簽發給你的憑證（§6），跟這個字串無關；也因為它不決定任何事，
+你想怎麼寫就怎麼寫，寫錯也不會擋 build。代價是沒有人會替你檢查，所以 `build-tool` 會在 CI log
+把它印出來（`published wafer-history 1.4.2 by Wafer Team <wafer@example.com>`）——**發版後看一眼那一行**，
+沒印出名字就是沒填成功。
 
 **為什麼只能一個 script**：bundle 的啟動器就是去執行這個進入點。兩個會讓「AI 剛才到底跑了哪一個」
 變得沒有答案，零個則沒東西可跑。一個 package 可以有**很多 command**——那是下一節的事，不是靠多個
@@ -245,6 +254,7 @@ https://gitlab.example/api/v4/projects/<id>/jobs/artifacts/<ref>/raw/dist/tool.m
 |---|---|
 | `format_version` | manifest 的格式版本。平台不認得就拒絕 |
 | `name` / `version` | 你的工具叫什麼、哪一版（`version` 純粹給人看） |
+| `author` | 誰發布的，取自你的 `[project].authors`。純顯示，跟信任無關；沒填就沒有這個欄位 |
 | `commands` | 每個 command 的 name / description / JSON schema |
 | `builder` | **你是在哪個 builder image 裡 build 的**。平台拿它比對 ABI |
 | `python` / `arch` | 直譯器版本與 CPU 架構 |

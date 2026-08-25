@@ -208,6 +208,32 @@ def test_source_is_optional_and_survives_the_round_trip_as_absent() -> None:
     assert parse_manifest(render_manifest(m)) == m
 
 
+def test_parse_manifest_carries_the_author_who_published_it() -> None:
+    """#724: who to go to when a tool misbehaves.
+
+    Display-only provenance, at exactly the tier `source` lives at: the
+    platform never reads it to decide anything, so an author writing whatever
+    they like in it costs nobody. Identity is the certificate."""
+    m = parse_manifest(_manifest_bytes(author="Wafer Team <wafer@example.com>"))
+
+    assert m.author == "Wafer Team <wafer@example.com>"
+    assert parse_manifest(render_manifest(m)) == m
+
+
+def test_a_manifest_published_before_authors_existed_still_parses() -> None:
+    """Every tool already in the field was built by a builder that never wrote
+    this field. Requiring it would take them all down at once, which is not a
+    price a display string may charge."""
+    body = json.loads(_manifest_bytes())
+    assert "author" not in body
+
+    m = parse_manifest(json.dumps(body).encode())
+
+    assert m.author is None
+    assert "author" not in json.loads(render_manifest(m))
+    assert parse_manifest(render_manifest(m)) == m
+
+
 def test_the_host_carries_a_byte_identical_copy_of_this_contract() -> None:
     """sandbox-host is a separate service that deliberately imports nothing
     from workspace_app (see its `protocol.py`), so the artifact contract must

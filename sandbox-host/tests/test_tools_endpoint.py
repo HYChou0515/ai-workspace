@@ -33,13 +33,14 @@ class _Resolver:
         return answer
 
 
-def _tool(name: str, *, stale: bool = False) -> ResolvedTool:
+def _tool(name: str, *, stale: bool = False, author: str | None = None) -> ResolvedTool:
     return ResolvedTool(
         name=name,
         sha="a" * 64,
         version="1.4.2",
         commands=(CommandSpec("trend", "Yield trend.", {"type": "object"}),),
         stale=stale,
+        author=author,
     )
 
 
@@ -61,10 +62,22 @@ async def test_resolve_answers_with_the_sha_to_mount_and_the_schema_to_publish()
     assert tool["sha"] == "a" * 64
     assert tool["version"] == "1.4.2"
     assert tool["stale"] is False
+    assert tool["author"] is None
     assert tool["commands"] == [
         {"name": "trend", "description": "Yield trend.", "params_json_schema": {"type": "object"}}
     ]
     assert resolver.seen == [("wafer-history", "https://g/m")]
+
+
+async def test_resolve_names_the_author_so_the_app_can_show_who_to_ask() -> None:
+    """#724. The app never reads a manifest, so a field the host does not
+    forward is a field that does not exist for anyone downstream."""
+    resolver = _Resolver(**{"wafer-history": _tool("wafer-history", author="Wafer Team <w@x>")})
+
+    async with _client(resolver) as c:
+        r = await c.post("/tools/resolve", json={"tools": {"wafer-history": "https://g/m"}})
+
+    assert r.json()["tools"]["wafer-history"]["author"] == "Wafer Team <w@x>"
 
 
 async def test_one_broken_tool_does_not_take_the_others_down() -> None:
