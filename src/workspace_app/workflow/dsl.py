@@ -1518,6 +1518,10 @@ def describe_dsl_grammar() -> str:
         "config), {inputs.Y} (from the trigger), {item} / {item.field} (the current map "
         "element), or {steps.NAME.FIELD} (a named earlier step's declared output field).",
         "",
+        "Write `{{` and `}}` for a LITERAL brace — needed whenever a prompt shows the model "
+        'a JSON shape, e.g. reply with {{"count": 3}}. A single `{…}` is always a lookup, so '
+        "an unescaped JSON example is rejected as a reference to an unknown variable.",
+        "",
         'Each step\'s "type" is one of:',
     ]
     for cls in _STEP_CLASSES:
@@ -1534,8 +1538,13 @@ def describe_dsl_grammar() -> str:
         f"deterministic `check` ∈ {list(_CHECKS)} (an agent may instead declare `outputs`).",
         f'`outputs` field types ∈ {list(_OUTPUT_TYPES)} (optionally {{"type":…, "enum":[…]}}).',
         f"prose `out` `kind` ∈ {list(ARTIFACT_KINDS)}; `requires` keys ∈ {list(_REQUIRES_KEYS)}.",
-        "An agent step declares exactly ONE output kind: `outputs` (structured) XOR "
-        "`out`+`kind` (prose).",
+        "An agent step declares exactly ONE output kind: `outputs` (structured decision — "
+        "the reply is a JSON object) XOR `out`+`kind` (prose artifact — the reply IS the "
+        "file's content) XOR `produces` (a glob of the files the step WROTE itself).",
+        "Reach for `produces` whenever the data is bigger than a reply should carry, or the "
+        "step already has it from a tool: the step writes the files (a loop through `exec`), "
+        "its reply is not parsed at all, and `{steps.NAME.produces}` hands the matched paths "
+        "to a `map`. `outputs` is for a small decision, not for moving a dataset.",
     ]
     return "\n".join(lines)
 

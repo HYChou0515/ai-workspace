@@ -224,6 +224,26 @@ def test_describe_dsl_grammar_is_machine_derived_and_current():
     assert "markdown" in g  # an artifact kind, from the registry
 
 
+def test_the_grammar_tells_the_author_how_to_write_a_literal_brace():
+    """An `outputs` node asks the model for a JSON object, so the author has to be able to
+    show it one in the prompt. A section that only explains references leaves them writing
+    `{"count": 3}` and being told it references an unknown variable."""
+    from workspace_app.workflow.dsl import describe_dsl_grammar
+
+    g = describe_dsl_grammar()
+    assert "{{" in g and "}}" in g
+
+
+def test_the_grammar_names_all_three_output_kinds():
+    """The one-output-kind sentence is where an author learns what a node may produce. Left
+    saying "outputs XOR out" it reads as a closed pair, and the file channel — the only one
+    that carries more than a model can retype — is never discovered."""
+    from workspace_app.workflow.dsl import describe_dsl_grammar
+
+    line = next(x for x in describe_dsl_grammar().splitlines() if "ONE output kind" in x)
+    assert "outputs" in line and "out" in line and "produces" in line
+
+
 def test_describe_workflow_boundaries_lists_ceiling_and_capabilities():
     """plan §3.2 (P6): the per-app boundary tells the AI what it can/can't do."""
     from workspace_app.workflow.dsl import describe_workflow_boundaries

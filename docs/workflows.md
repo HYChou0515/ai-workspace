@@ -650,12 +650,14 @@ DSL 的界線是一條線：**流程圖的*形狀*必須事先靜態宣告**—�
 
 | type | 做什麼 |
 | --- | --- |
-| `agent` | LLM 一回合。`out` 寫內容檔；`outputs` 宣告具名欄位（§22.4）；否則需 `check`。必有 gate。 |
+| `agent` | LLM 一回合。三選一的產出:`out` 寫內容檔;`outputs` 宣告具名欄位（§22.4）;`produces` 宣告它自己寫出的檔案 glob（§22.4b）。必有 gate。 |
 | `sandbox` | 確定性指令，無 LLM。純計算、**無憑證**（可靠副作用只走 capability）。 |
 | `gate` | 人工閘。`approve` 續、`reject` 終止；`revise` 帶回饋打回重做（§22.7）。 |
 | `capability` | 可靠且冪等的副作用：`ingest_to_collection` / `upsert_context_card` / `create_entity`。 |
 | `map` | 唯一的迴圈（§22.5）。`over` 展開集合、`do` 是元素內序列。一層到底，不准巢狀。 |
 | `switch` | 有界條件分支（§22.6）。`cases` 預先列舉，只走一條。 |
+
+字面的大括號寫 `{{` / `}}`——prompt 要給模型看 JSON 範例時一定會用到（例如要它回 `{{"count": 3}}`）。單層 `{…}` 一律是查值，所以沒跳脫的 JSON 範例會被當成引用不存在的變數而被擋下。
 
 值從兩處**進來**：`{config.x}`（workflow 設定）、`{inputs.y}`（觸發時傳入）。值在 step
 之間**流動**：`{item}`（map 當下元素、它的欄位 `{item.field}`）、`{steps.<name>.<field>}`
@@ -695,6 +697,31 @@ implicit gate**——回覆不 parse 成物件、缺欄位、型別/enum 不符 
   "score": "float"
 }
 ```
+
+### 22.4b `produces`：產出是「它寫出的檔案」
+
+`outputs` 和 `out` 都讓**回覆本身**當載體,所以一個 step 產出的量被模型的輸出上限綁死,
+把一千筆交給下一步等於要模型把它已經抓到的資料重打一遍——又慢又會失真。
+
+`produces` 是第三種產出:一個 glob,指向這步**自己寫出來**的檔案(通常是用 `exec` 跑一個
+迴圈)。它的**回覆完全不被 parse**,模型愛講什麼講什麼。
+
+```jsonc
+{ "type": "agent", "name": "listing", "phase": "list",
+  "tools": ["exec"],
+  "produces": "data/*.json",
+  "prompt": "查最近上傳的 1000 張圖，每筆寫成 data/<id>.json（含 url），用腳本寫。" },
+
+{ "type": "map", "over": "{steps.listing.produces}", "as": "img", "phase": "download",
+  "do": [ /* 每個元素從自己的檔案讀 {img.url} */ ] }
+```
+
+- **implicit gate**:glob 沒對到任何檔案 → 當 check 失敗、帶原因重試。這擋掉「模型說做完了、
+  資料夾其實是空的」——否則下游 map 會安靜地跑零個元素,整條 run 報成功卻什麼都沒做。
+- **引用**:`{steps.<name>.produces}` 是對到的路徑清單,可以直接給 `map over`。
+- **在 map 裡面**:`produces` 可以內插元素(`"images/{img.id}.png"`),跟 `out` 一樣,所以
+  各元素不會互相覆蓋。
+- 一個 agent step 仍然只能宣告**一種**產出(D5);同時宣告兩種是靜態錯誤。
 
 ### 22.5 `map`：唯一的迴圈（#428 擴充 `over`）
 

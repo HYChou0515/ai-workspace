@@ -27,11 +27,21 @@ lets the user approve, and only *then* a capability commits. A reject commits no
 
 Two consequences you design around:
 
-- **Every step is verified before the next one runs.** An agent produces *either* a
-  structured decision (`outputs`) *or* a prose artifact (`out` + a declared `kind`), and the
-  platform checks it — a malformed or missing output fails and retries; it never flows
-  downstream unchecked. So a later step can trust what an earlier one produced. (For a prose
-  artifact you can also declare `requires` — required sections / minimum length.)
+- **Every step is verified before the next one runs.** An agent produces exactly one of
+  three things, and the platform checks it — a malformed or missing output fails and
+  retries; it never flows downstream unchecked. So a later step can trust what an earlier
+  one produced.
+  - a structured decision (`outputs`) — the reply is a JSON object. For a *small* decision:
+    a classification, a count, an id. Show the model the shape in the prompt using `{{` and
+    `}}` for literal braces.
+  - a prose artifact (`out` + a declared `kind`) — the reply IS the file's content. You can
+    also declare `requires` (required sections / minimum length).
+  - **the files it wrote** (`produces`, a glob) — the step writes them itself, typically a
+    loop through `exec`, and its reply is not parsed at all. Use this whenever the data is
+    bigger than a reply should carry or the step already fetched it with a tool: a reply is
+    capped by the model's output limit, and making a model retype a thousand records is both
+    the slow way and the lossy way to move data it already has. `{steps.NAME.produces}` hands
+    the matched paths straight to a `map`.
 - **Side-effects go only through a `capability`.** A `sandbox` step is compute-only; filing
   into a collection, writing a card, or creating an entity is always a capability.
 
