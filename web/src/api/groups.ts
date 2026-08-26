@@ -16,6 +16,9 @@ export type Group = {
   members: string[];
   owner: string | null;
   maintainers: string[];
+  /** Epoch ms of the group's last write — specstar's own `info.updated_time`,
+   * not a column we maintain. */
+  updated_at: number;
 };
 
 /** A group as the share-dialog picker sees it — enough to grant to, never the
@@ -134,17 +137,34 @@ export const mockGroupsApi: GroupsApi = {
       members: [],
       owner: body.owner,
       maintainers: [],
+      updated_at: 0,
     };
   },
   async renameGroup(groupId, name) {
-    return { resource_id: groupId, name, description: "", members: [], owner: null, maintainers: [] };
+    return {
+      resource_id: groupId,
+      name,
+      description: "",
+      members: [],
+      owner: null,
+      maintainers: [],
+      updated_at: 0,
+    };
   },
   async addMembers() {},
   async removeMember() {},
   async addMaintainers() {},
   async removeMaintainer() {},
   async transferOwner(groupId, owner) {
-    return { resource_id: groupId, name: "", description: "", members: [], owner, maintainers: [] };
+    return {
+      resource_id: groupId,
+      name: "",
+      description: "",
+      members: [],
+      owner,
+      maintainers: [],
+      updated_at: 0,
+    };
   },
   async deleteGroup() {},
 };

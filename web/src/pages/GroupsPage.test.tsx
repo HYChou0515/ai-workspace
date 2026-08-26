@@ -32,6 +32,7 @@ const grp = (over: Partial<Group> = {}): Group => ({
   members: ["bob"],
   owner: "alice",
   maintainers: [],
+  updated_at: Date.parse("2026-08-20T00:00:00Z"),
   ...over,
 });
 
@@ -310,5 +311,64 @@ describe("GroupsPage renaming", () => {
 
     expect(renameGroup).not.toHaveBeenCalled();
     expect(screen.getByText("Engineering")).toBeInTheDocument();
+  });
+});
+
+/**
+ * "When did this last change?" is the question you ask of a list of groups you
+ * did not create — and the answer was nowhere on the page.
+ */
+describe("GroupsPage last-updated column", () => {
+  const rows = () =>
+    screen.queryAllByTestId(/^group-row-/).map((el) => el.getAttribute("data-group-name"));
+
+  const dated = [
+    grp({ resource_id: "g1", name: "Older", updated_at: Date.parse("2026-08-01T00:00:00Z") }),
+    grp({ resource_id: "g2", name: "Newest", updated_at: Date.parse("2026-08-25T00:00:00Z") }),
+    grp({ resource_id: "g3", name: "Middle", updated_at: Date.parse("2026-08-10T00:00:00Z") }),
+  ];
+  const renderDated = () => render(<GroupsPage client={client({ listGroups: async () => dated })} />);
+
+  it("shows when each group last changed", async () => {
+    renderDated();
+    await screen.findByRole("table");
+
+    expect(screen.getByRole("columnheader", { name: /Last updated/i })).toBeInTheDocument();
+    // A relative time, not a raw epoch number — "1755000000000" tells nobody
+    // anything.
+    const cell = within(screen.getByTestId("group-row-g2")).getByTestId("group-updated-g2");
+    expect(cell.textContent).not.toMatch(/^\d{10,}$/);
+    expect(cell.textContent?.trim()).toBeTruthy();
+  });
+
+  it("sorts by it, newest first on the first press", async () => {
+    // Recency is the useful direction, so it leads rather than making everyone
+    // click twice.
+    renderDated();
+    await screen.findByRole("table");
+
+    await userEvent.click(screen.getByTestId("groups-sort-updated"));
+    expect(rows()).toEqual(["Newest", "Middle", "Older"]);
+
+    await userEvent.click(screen.getByTestId("groups-sort-updated"));
+    expect(rows()).toEqual(["Older", "Middle", "Newest"]);
+  });
+
+  it("compares it as a number", async () => {
+    // The value is epoch ms; comparing it as text would order by first digit.
+    render(
+      <GroupsPage
+        client={client({
+          listGroups: async () => [
+            grp({ resource_id: "a", name: "Nine", updated_at: 900_000_000_000 }),
+            grp({ resource_id: "b", name: "Eleven", updated_at: 1_100_000_000_000 }),
+          ],
+        })}
+      />,
+    );
+    await screen.findByRole("table");
+
+    await userEvent.click(screen.getByTestId("groups-sort-updated"));
+    expect(rows()).toEqual(["Eleven", "Nine"]);
   });
 });

@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { type Group, type GroupsApi, groupsApi } from "../api/groups";
+import { relativeTime } from "../api/types";
 import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
 import { UserChip } from "../components/UserChip";
@@ -18,7 +19,7 @@ import { useIsSuperuser } from "../hooks/useIsSuperuser";
 import { groupCapabilities, groupRoleLabel } from "../lib/groupRole";
 import { pxToRem } from "../lib/pxToRem";
 
-type SortKey = "name" | "owner" | "members";
+type SortKey = "name" | "owner" | "members" | "updated";
 type SortState = { by: SortKey; dir: "asc" | "desc" };
 
 /** Does this group answer what was typed? Name, description and owner — the
@@ -44,9 +45,15 @@ function sortGroups(groups: Group[], { by, dir }: SortState): Group[] {
     const cmp =
       by === "members"
         ? a.members.length - b.members.length
-        : by === "owner"
-          ? text(a.owner ?? "", b.owner ?? "")
-          : text(a.name, b.name);
+        : by === "updated"
+          ? // Epoch ms, so numeric — as text it would order by first digit.
+            // Negated because "asc" on a time column means MOST RECENT first:
+            // recency is the question being asked, and leading with the stalest
+            // row makes everyone click twice.
+            b.updated_at - a.updated_at
+          : by === "owner"
+            ? text(a.owner ?? "", b.owner ?? "")
+            : text(a.name, b.name);
     // Ties fall back to name, so the order is stable and reproducible rather
     // than dependent on the input order.
     return sign * (cmp || text(a.name, b.name));
@@ -171,6 +178,12 @@ export function GroupsPage({ client = groupsApi }: { client?: GroupsApi }) {
                     onSort={toggleSort}
                     style={{ textAlign: "right" }}
                   />
+                  <SortHeader
+                    id="updated"
+                    label="Last updated"
+                    sort={sort}
+                    onSort={toggleSort}
+                  />
                   <th style={{ ...th, width: 1 }} />
                 </tr>
               </thead>
@@ -274,6 +287,15 @@ function GroupRow({
             {n} member{n === 1 ? "" : "s"}
           </span>
         </td>
+        <td
+          style={{ ...td, whiteSpace: "nowrap", color: "var(--text-paper-d)", fontSize: pxToRem(12) }}
+          data-testid={`group-updated-${group.resource_id}`}
+          // The exact stamp on hover; the cell itself stays a relative time,
+          // which is what "is this current?" actually asks.
+          title={group.updated_at ? new Date(group.updated_at).toLocaleString() : ""}
+        >
+          {group.updated_at ? relativeTime(new Date(group.updated_at).toISOString()) : "—"}
+        </td>
         <td style={{ ...td, textAlign: "right" }}>
           {caps.canManageMembers && (
             <button
@@ -293,7 +315,7 @@ function GroupRow({
         <tr>
           {/* The editor is wide — it spans the row rather than being crushed
               into the name column. */}
-          <td colSpan={4} style={{ ...td, paddingTop: 0 }}>
+          <td colSpan={5} style={{ ...td, paddingTop: 0 }}>
             <GroupEditor group={group} caps={caps} client={client} onChanged={onChanged} />
           </td>
         </tr>

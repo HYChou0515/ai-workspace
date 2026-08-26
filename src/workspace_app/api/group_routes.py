@@ -73,6 +73,11 @@ class GroupOut(BaseModel):
     members: list[str]
     owner: str | None = None
     maintainers: list[str] = []
+    # Epoch MILLIseconds, matching every other timestamp the FE is handed. Read
+    # off specstar's own `info.updated_time` rather than a field of our own: a
+    # stored column is one more thing every write has to remember to touch, and
+    # whichever write forgot would go quietly stale.
+    updated_at: int = 0
 
 
 class PickableGroupOut(BaseModel):
@@ -146,6 +151,7 @@ def register_group_routes(
             members=data.members,
             owner=effective_owner(data, rev.info.created_by),
             maintainers=data.maintainers,
+            updated_at=int(rev.info.updated_time.timestamp() * 1000),
         )
 
     @app.post("/groups")
@@ -159,14 +165,10 @@ def register_group_routes(
         rev = rm.create(
             Group(name=body.name, description=body.description, members=members, owner=body.owner)
         )
-        return GroupOut(
-            resource_id=rev.resource_id,
-            name=body.name,
-            description=body.description,
-            members=members,
-            owner=owner,
-            maintainers=[],
-        )
+        # Read it back through `_out` rather than assembling a second GroupOut by
+        # hand: two construction paths drift, and this one had already stopped
+        # being able to report anything specstar owns (the timestamp).
+        return _out(rm.get(rev.resource_id))
 
     @app.get("/groups")
     async def list_groups() -> list[GroupOut]:

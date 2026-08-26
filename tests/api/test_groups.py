@@ -394,3 +394,61 @@ def test_renaming_a_missing_group_is_404():
     holder = {"id": "root"}
     client, _ = _client_and_spec(holder)
     assert client.patch("/groups/ghost", json={"name": "x"}).status_code == 404
+
+
+# ── when a group last changed ────────────────────────────────────────────────
+# Read off specstar's own `info.updated_time` rather than a field of our own: a
+# stored column would be one more thing every write has to remember to touch,
+# and the one that forgot would go quietly stale.
+
+
+def test_a_group_carries_when_it_last_changed():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=[])
+
+    body = client.get(f"/groups/{gid}").json()
+    assert isinstance(body["updated_at"], int)
+    # Epoch MILLIseconds, like every other timestamp the FE is handed. A seconds
+    # value would be ~1e9 and render as 1970 after the FE multiplies nothing.
+    assert body["updated_at"] > 1_600_000_000_000
+
+
+def test_creating_a_group_reports_its_timestamp_too():
+    holder = {"id": "root"}
+    client, _ = _client_and_spec(holder)
+    created = client.post("/groups", json={"name": "eng", "owner": "root"}).json()
+
+    assert created["updated_at"] > 1_600_000_000_000
+    assert created == client.get(f"/groups/{created['resource_id']}").json()
+
+
+def test_the_timestamp_moves_when_the_group_changes():
+    import time
+
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    gid = _mk(client, holder, owner="bob", members=[])
+    first = client.get(f"/groups/{gid}").json()["updated_at"]
+
+    time.sleep(0.01)  # so the two writes cannot land in the same millisecond
+    client.patch(f"/groups/{gid}", json={"name": "renamed"})
+    after_rename = client.get(f"/groups/{gid}").json()["updated_at"]
+    # An implementation that reported the CREATED time would fail here — the
+    # only assertion that tells the two apart.
+    assert after_rename > first
+
+    time.sleep(0.01)
+    client.post(f"/groups/{gid}/members", json={"user_ids": ["carol"]})
+    assert client.get(f"/groups/{gid}").json()["updated_at"] > after_rename
+
+
+def test_the_list_carries_the_timestamp_as_well():
+    # The overview sorts on this column, so it has to arrive with the LIST, not
+    # only from a per-group fetch.
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    _mk(client, holder, owner="bob", members=[])
+
+    rows = client.get("/groups").json()
+    assert rows and all(r["updated_at"] > 1_600_000_000_000 for r in rows)

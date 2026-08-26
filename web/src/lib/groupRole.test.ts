@@ -10,6 +10,7 @@ const g = (over: Partial<Group> = {}): Group => ({
   members: [],
   owner: "alice",
   maintainers: [],
+  updated_at: 0,
   ...over,
 });
 
