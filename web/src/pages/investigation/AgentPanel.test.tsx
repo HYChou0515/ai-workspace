@@ -808,3 +808,98 @@ describe("AgentPanel — a quota refusal is reachable, not just readable (#692)"
     expect(screen.queryByRole("link", { name: "我的資源" })).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Attaching a FOLDER hands the composer however many files the folder holds.
+ * The draft TEXT was bounded for this long ago — `attachPrompt` collapses more
+ * than ten paths into a one-line summary — but the two things rendered beside it
+ * were not: one thumbnail per image and one line per rejected file, both
+ * unbounded, in a container with no height limit. A few hundred files pushed the
+ * composer, and the conversation above it, off the screen.
+ */
+describe("AgentPanel attaching a large folder", () => {
+  function renderBig() {
+    const agent = stubAgent();
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={agent}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+        />
+      </DialogProvider>,
+    );
+    return agent;
+  }
+  const pngs = (n: number) =>
+    Array.from(
+      { length: n },
+      (_, i) => new File([new Uint8Array(4)], `p${i}.png`, { type: "image/png" }),
+    );
+  const selectFiles = (files: File[]) => {
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files } });
+  };
+
+  beforeEach(() => {
+    Object.assign(URL, { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} });
+  });
+
+  it("caps how many thumbnails it renders, and says how many it is holding back", async () => {
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    renderBig();
+
+    selectFiles(pngs(200));
+
+    await screen.findByTestId("image-chips");
+    await waitFor(() => expect(screen.getAllByTestId("image-chip").length).toBeGreaterThan(0));
+    expect(screen.getAllByTestId("image-chip").length).toBeLessThanOrEqual(12);
+    // Capped, not silently truncated: the count has to stay visible or the
+    // composer is lying about what the message carries.
+    expect(screen.getByTestId("image-chips-overflow").textContent).toMatch(/188/);
+  });
+
+  it("still sends every attached path, not only the visible ones", async () => {
+    // The cap is a rendering budget. If it dropped attachments too it would be a
+    // data-loss bug wearing a layout fix's clothes.
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    const agent = renderBig();
+
+    selectFiles(pngs(40));
+    await screen.findByTestId("image-chips");
+    await waitFor(() => expect(screen.getByTestId("image-chips-overflow")).toBeInTheDocument());
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "look" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+    const opts = (agent.send as ReturnType<typeof vi.fn>).mock.calls[0]![1] as {
+      imagePaths?: string[];
+    };
+    expect(opts.imagePaths).toHaveLength(40);
+  });
+
+  it("keeps a rejected folder's report to a few names and a count", async () => {
+    // Every refused file used to contribute its full path to ONE joined line, so
+    // a folder the server refused wholesale printed a wall of text under the box.
+    vi.spyOn(api, "uploadFile").mockRejectedValue(Object.assign(new Error("nope"), { status: 413 }));
+    renderBig();
+
+    selectFiles(
+      Array.from(
+        { length: 60 },
+        (_, i) => new File([new Uint8Array(4)], `doc${i}.txt`, { type: "text/plain" }),
+      ),
+    );
+
+    const hint = await screen.findByTestId("composer-hint");
+    await waitFor(() => expect(hint.textContent).toMatch(/未附加/));
+    expect(hint.textContent!.match(/doc\d+\.txt/g)!.length).toBeLessThanOrEqual(5);
+    // The ones it did not name are counted, not dropped from the report.
+    expect(hint.textContent).toMatch(/55/);
+  });
+});
