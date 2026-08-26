@@ -1216,7 +1216,7 @@ export function AgentHeader({
           onClose={() => setShowTools(false)}
         />
       )}
-      {appIcon ? <AppIcon icon={appIcon} color={appColor} size={20} /> : null}
+      {appIcon ? <AppIcon icon={appIcon} slug={slug} color={appColor} size={20} /> : null}
       <div
         data-testid="agent-header-identity"
         // `flex: 1` (basis 0%) let this block collapse to ~21px while the action

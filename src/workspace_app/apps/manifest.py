@@ -11,6 +11,7 @@ NOT restated here (decision 19).
 from __future__ import annotations
 
 from importlib import resources
+from importlib.resources.abc import Traversable
 from typing import Literal
 
 import msgspec
@@ -179,7 +180,9 @@ class AppManifest(Struct):
     item: ItemNouns
     onboarding: Onboarding | None = None
     description: str = ""
-    icon: str = ""  # "icon.svg" (file) | emoji | named-icon key
+    # A file the App ships beside app.json ("icon.png", "icon.svg", … — served
+    # from GET /apps/{slug}/icon), an emoji, or a named-icon key.
+    icon: str = ""
     color: str = ""  # hex → --accent trio (full re-theme inside the App)
     function: FunctionToggles = field(default_factory=FunctionToggles)
     layout: Layout = field(default_factory=Layout)
@@ -196,7 +199,50 @@ class AppManifest(Struct):
     resources: AppResources | None = None
 
 
+def apps_root() -> Traversable:
+    """Where the bundled Apps live. A function, not a constant, so a test can
+    point the loaders at a temp tree without touching the installed package."""
+    return resources.files(_APPS_PKG)
+
+
 def load_app_manifest(slug: str) -> AppManifest:
     """Decode ``apps/<slug>/app.json`` into a typed ``AppManifest``."""
-    raw = (resources.files(_APPS_PKG) / slug / _MANIFEST_FILE).read_bytes()
+    raw = (apps_root() / slug / _MANIFEST_FILE).read_bytes()
     return msgspec.json.decode(raw, type=AppManifest)
+
+
+# What an App may ship its `icon` as. The extension decides the media type, so
+# the browser gets a real `Content-Type` — SVG is served as a file like any
+# other image rather than inlined into the manifest JSON.
+ICON_MEDIA_TYPES = {
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+def load_app_icon(slug: str, icon: str) -> tuple[bytes, str] | None:
+    """The bytes + media type of an App's file-based ``icon``, or ``None`` when
+    there is no file to serve.
+
+    ``None`` covers every way an icon is not a shipped image — a named-icon key
+    or an emoji (the other two manifest forms), an extension we don't serve, and
+    a manifest naming a file that isn't there. The caller turns all of them into
+    one 404, so a mis-typed filename degrades to the FE's fallback glyph instead
+    of a 500.
+
+    An icon is a plain filename BESIDE ``app.json``: anything with a separator
+    is refused outright rather than resolved, so a manifest can never reach out
+    of its own App directory.
+    """
+    suffix = icon[icon.rfind(".") :].lower() if "." in icon else ""
+    media_type = ICON_MEDIA_TYPES.get(suffix)
+    if media_type is None or "/" in icon or "\\" in icon:
+        return None
+    path = apps_root() / slug / icon
+    if not path.is_file():
+        return None
+    return path.read_bytes(), media_type

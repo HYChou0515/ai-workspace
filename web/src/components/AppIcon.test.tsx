@@ -8,9 +8,13 @@ import { AppIcon } from "./AppIcon";
 afterEach(cleanup);
 
 describe("AppIcon", () => {
-  it("renders inline svg markup as-is", () => {
-    const { container } = render(<AppIcon icon='<svg data-testid="m"></svg>' />);
-    expect(container.querySelector("svg")).toBeInTheDocument();
+  it("renders a file icon as an <img> pointing at the App's icon route", () => {
+    // The manifest names the FILE; the picture itself is fetched. That is what
+    // lets an App ship a PNG — a raster has no markup to inline.
+    const { container } = render(<AppIcon icon="icon.png" slug="rca" />);
+    const img = container.querySelector("img");
+    expect(img).toBeInTheDocument();
+    expect(img).toHaveAttribute("src", "/api/apps/rca/icon");
   });
 
   it("renders a short non-name grapheme as an emoji", () => {

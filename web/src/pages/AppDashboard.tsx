@@ -245,7 +245,7 @@ export function AppDashboard() {
       >
         <div style={{ padding: "0 18px 16px", borderBottom: "1px solid var(--paper-3)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <AppIcon icon={manifest.icon} color={manifest.color} size={40} />
+            <AppIcon icon={manifest.icon} slug={manifest.slug} color={manifest.color} size={40} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontWeight: 800, fontSize: pxToRem(16), letterSpacing: "-0.02em", lineHeight: 1.1 }}>
                 {manifest.title}
@@ -345,7 +345,7 @@ export function AppDashboard() {
                 padding: 28,
               }}
             >
-              <AppIcon icon={manifest.icon} color={manifest.color} />
+              <AppIcon icon={manifest.icon} slug={manifest.slug} color={manifest.color} />
               <h1 style={{ fontSize: pxToRem(28), fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>
                 No {noun.toLowerCase()} yet
               </h1>

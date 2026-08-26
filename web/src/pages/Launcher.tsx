@@ -58,7 +58,7 @@ function AppCard({ app }: { app: AppSummary }) {
             flexShrink: 0,
           }}
         >
-          <AppIcon icon={app.icon} color={app.color} />
+          <AppIcon icon={app.icon} slug={app.slug} color={app.color} />
         </span>
         <span style={{ flex: 1 }}>
           <span style={{ display: "block", fontWeight: 700, fontSize: pxToRem(18) }}>{app.title}</span>

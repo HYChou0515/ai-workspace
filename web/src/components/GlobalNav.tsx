@@ -119,7 +119,7 @@ function Switcher() {
         <div onClick={close} style={{ padding: "6px 0" }}>
           {apps.map((app) => (
             <MenuLink key={app.slug} to={`/a/${app.slug}`} active={isActive(pathname, `/a/${app.slug}`)}>
-              <AppIcon icon={app.icon} color={app.color} size={22} />
+              <AppIcon icon={app.icon} slug={app.slug} color={app.color} size={22} />
               {app.title}
             </MenuLink>
           ))}

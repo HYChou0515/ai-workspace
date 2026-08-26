@@ -51,7 +51,7 @@ apps/<slug>/
 |---|---|
 | `slug` | App id——**必須等於目錄名稱** |
 | `title` / `description` | launcher 卡片文字 |
-| `icon` | `flame`(具名)、一個 emoji,或 `icon.svg`(同層檔案,內嵌) |
+| `icon` | `flame`(具名)、一個 emoji,或**與 `app.json` 同層的圖檔名稱**(`icon.png` / `icon.svg` / `.jpg` / `.webp` / `.gif`)。填檔名時瀏覽器會去 `GET /apps/{slug}/icon` 抓圖;檔案不存在或副檔名不支援就退回具名圖示的預設字符,不會壞掉 |
 | `color` | 一個 hex → App 的 `--accent` 三色組(App 內整套重新配色) |
 | `function.workspace` | file IDE(tree + editor + file tools)。`false` → 只有 chat 的 shell |
 | `function.sandbox` | exec + package tools。不需要 terminal;控制 exec 相關功能的開啟 |

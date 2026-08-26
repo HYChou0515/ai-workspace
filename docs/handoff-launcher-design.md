@@ -40,7 +40,9 @@ fixed KB card. Each app card has exactly:
 | `color` | string | hex, e.g. `#c0392b` — the app's accent/theme color |
 
 `icon` is one of:
-- **inline SVG** markup (the app shipped its own `icon.svg`) — most apps will use this,
+- the **name of an image file** the app ships beside its `app.json` (`icon.png`,
+  `icon.svg`, `.jpg`, `.webp`, `.gif`) — the card fetches it from
+  `GET /apps/{slug}/icon`; the manifest carries the name, never the picture,
 - an **emoji** (e.g. `🔥`),
 - a **named icon** key from the existing `Icon` component's 44-name set (e.g. `flame`).
 
