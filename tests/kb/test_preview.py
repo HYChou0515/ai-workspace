@@ -17,9 +17,10 @@ The contract per type:
 
 from __future__ import annotations
 
+import contextlib
 import io
 
-from workspace_app.kb.preview import is_structured_text, preview_markdown
+from workspace_app.kb.preview import is_structured_text, once, preview_markdown
 
 
 def _xlsx(sheets: dict[str, list[dict[str, object]]]) -> bytes:
@@ -173,3 +174,87 @@ def test_markdown_and_plain_text_decode_as_before():
 def test_code_files_decode_by_extension_even_with_x_mime():
     py = preview_markdown(path="a.py", content_type="text/x-script.python", raw=b"def f(): ...")
     assert py == "def f(): ..."
+
+
+def test_once_calls_through_exactly_one_time():
+    """#730: `preview_markdown` takes a callable because the fetch is expensive.
+
+    Probed HERE rather than through `preview_markdown`, because no branch there
+    reads twice — so deleting the memoisation changes nothing that function can
+    show, and the first version of this test passed with it removed.
+    """
+    calls = []
+
+    def fetch() -> bytes:
+        calls.append(1)
+        return b"payload"
+
+    read = once(fetch)
+    assert read() == b"payload"
+    assert read() == b"payload"
+    assert read() == b"payload"
+    assert calls == [1], f"the expensive call was made {len(calls)} times"
+
+
+def test_once_caches_an_EMPTY_result_too():
+    """The classic memoisation bug: `if not cached: cached = fn()` re-fetches
+    forever when `fn` legitimately returns b"" — an empty file is a real
+    document, and it is the cheapest one to fetch twice by accident."""
+    calls = []
+
+    def fetch() -> bytes:
+        calls.append(1)
+        return b""
+
+    read = once(fetch)
+    assert read() == b""
+    assert read() == b""
+    assert calls == [1], "an empty result was re-fetched"
+
+
+def test_once_does_not_cache_a_failure():
+    """A raise is not a result. Caching one would turn a transient blob-store
+    error into a permanently broken document for the life of the call."""
+    calls = []
+
+    def fetch() -> bytes:
+        calls.append(1)
+        raise RuntimeError("blob store said no")
+
+    read = once(fetch)
+    for _ in range(2):
+        with contextlib.suppress(RuntimeError):
+            read()
+    assert calls == [1, 1], "a failure was cached instead of retried"
+
+
+def test_once_is_lazy_until_asked():
+    """Never asked ⇒ never fetched. That is the half that saves the ten seconds."""
+    calls = []
+    once(lambda: (calls.append(1), b"x")[1])
+    assert calls == []
+
+
+def test_preview_markdown_fetches_a_lazy_blob_for_a_projected_type():
+    calls = []
+
+    def fetch() -> bytes:
+        calls.append(1)
+        return b"# hi"
+
+    assert preview_markdown(path="a.md", content_type="text/markdown", raw=fetch) == "# hi"
+    assert calls == [1]
+
+
+def test_preview_markdown_never_fetches_for_a_type_the_browser_renders():
+    """The other half: an image must not touch the blob at all."""
+    calls = []
+
+    def fetch() -> bytes:  # pragma: no cover - must never run
+        calls.append(1)
+        return b""
+
+    assert preview_markdown(path="a.png", content_type="image/png", raw=fetch) == ""
+    assert preview_markdown(path="a.pdf", content_type="application/pdf", raw=fetch) == ""
+    assert preview_markdown(path="x.bin", content_type="application/octet-stream", raw=fetch) == ""
+    assert calls == [], "the bytes were fetched for a type that never reads them"

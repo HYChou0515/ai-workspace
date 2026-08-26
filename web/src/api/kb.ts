@@ -833,6 +833,15 @@ export interface KbApi {
    * parser_guidance_override} from the SourceDoc envelope (GET /source-doc/{id}),
    * NOT the heavy renderDocument. */
   getSourceDocMeta(documentId: string): Promise<KbDocMeta>;
+  /** #730: the envelopes for MANY documents, keyed by id, in one request.
+   *
+   * A card resolved its attachments one at a time — a request each, only to
+   * learn a content type and a blob id — and a picture could not start loading
+   * until its own request came back. One query answers for all of them.
+   *
+   * Keyed rather than positional: the caller has ids, and a backend free to
+   * return rows in any order would otherwise put the wrong picture on a tile. */
+  getSourceDocMetas(documentIds: readonly string[]): Promise<Record<string, KbDocMeta>>;
   /** A document's indexed chunks + their cited counts (the chunks debug view). */
   getDocChunks(documentId: string): Promise<KbDocChunk[]>;
   /** Re-chunk + re-embed a single document (flips it back to `indexing`). */
@@ -1165,6 +1174,35 @@ export const realKbApi: KbApi = {
     // it round-trips a URL untouched.
     const url = `/kb/documents?id=${encodeURIComponent(documentId)}`;
     return (await ok(await apiFetch(url), "render document")).json();
+  },
+  async getSourceDocMetas(documentIds) {
+    // No ids ⇒ no request. An unfiltered `in_([])` is not "nothing", it is a
+    // query the backend still has to answer, and a card with no attachments is
+    // the common case.
+    if (documentIds.length === 0) return {};
+    // specstar's auto-CRUD list with a QB predicate — the same shape the card
+    // list already uses. A built-in beats a bespoke batch endpoint: nothing new
+    // to authorise, and the access scope applies exactly as it does per-id.
+    const qb = `QB.resource_id().in_(${JSON.stringify([...documentIds])})`;
+    const rows: {
+      data: { content?: { file_id?: string; content_type?: string } } & Partial<KbDocMeta>;
+      revision_info: { resource_id: string };
+    }[] = await (
+      await ok(await apiFetch(`/source-doc?qb=${encodeURIComponent(qb)}`), "read document metas")
+    ).json();
+    const out: Record<string, KbDocMeta> = {};
+    for (const r of rows) {
+      const d = r.data;
+      out[r.revision_info.resource_id] = {
+        quality_score: d.quality_score ?? null,
+        quality_rationale: d.quality_rationale ?? "",
+        quality_breakdown: d.quality_breakdown ?? {},
+        parser_guidance_override: d.parser_guidance_override ?? "",
+        file_id: d.content?.file_id,
+        content_type: d.content?.content_type,
+      };
+    }
+    return out;
   },
   async getSourceDocMeta(documentId) {
     // The doc IDE only needs the quality rationale + parser-guidance override on

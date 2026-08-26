@@ -2031,3 +2031,221 @@ def test_the_reported_count_is_not_raced_down_by_a_fast_worker():
     body = client.post(f"/kb/collections/{cid}/reindex", params={"only": "failed"}).json()
     assert body["queued"] is True
     assert body["documents"] == 1  # counted before the worker could move it
+
+
+def test_render_document_does_not_read_the_blob_it_will_not_use():
+    """#730: opening an image took ten seconds because the bytes were fetched twice.
+
+    `preview_markdown` returns "" for a browser-native type — an image or a PDF
+    is rendered by the browser from `/blobs/{file_id}`, not projected to text —
+    so `raw` is never used for those, and `size` comes off `doc.content.size`
+    rather than `len(raw)`. Restoring the blob anyway means the backend pulls the
+    whole picture out of the blob store, drops it, answers `markdown=""`, and then
+    the browser fetches the SAME bytes: two reads, one of them pure waste, and
+    the waste is the one the person is waiting for.
+
+    Asserted by counting `restore_binary`, because "it is faster now" is not
+    something a test can hold — the read either happens or it does not.
+    """
+    from unittest.mock import patch
+
+    from specstar.types import Binary
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    rm = spec.get_resource_manager(SourceDoc)
+
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 4096
+    doc_id = encode_doc_id(cid, "shot.png")
+    rm.create(
+        SourceDoc(
+            collection_id=cid,
+            path="shot.png",
+            content=Binary(data=png, content_type="image/png"),
+            status="ready",
+        ),
+        resource_id=doc_id,
+    )
+
+    real = type(rm).restore_binary
+    calls: list[str] = []
+
+    def counting(self, obj):
+        calls.append(getattr(obj, "path", "?"))
+        return real(self, obj)
+
+    with patch.object(type(rm), "restore_binary", counting):
+        rd = client.get(f"/kb/documents?id={doc_id}").json()
+
+    assert rd["content_type"] == "image/png"
+    assert rd["markdown"] == ""  # the browser renders the blob; there is no projection
+    assert rd["size"] == len(png)  # ...and the size still comes back
+    assert calls == [], f"the blob was restored for a type that never reads it: {calls}"
+
+
+def test_render_document_still_reads_the_blob_for_a_type_it_projects():
+    """The other half: skipping the read must be decided by the TYPE, not by
+    skipping it everywhere. A markdown document has no text without its bytes."""
+    from unittest.mock import patch
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    _upload(client, cid, "a.md", b"# hello")
+    _drain(client)
+    doc_id = encode_doc_id(cid, "a.md")
+
+    rm = spec.get_resource_manager(SourceDoc)
+    real = type(rm).restore_binary
+    calls: list[str] = []
+
+    def counting(self, obj):
+        calls.append(getattr(obj, "path", "?"))
+        return real(self, obj)
+
+    with patch.object(type(rm), "restore_binary", counting):
+        rd = client.get(f"/kb/documents?id={doc_id}").json()
+
+    assert "hello" in rd["markdown"]
+    assert calls, "a projected type still needs its bytes"
+
+
+def test_render_document_resolves_crossref_siblings_in_one_query():
+    """#730: the same N+1 the card's attachments stopped doing on the client.
+
+    `rewrite_md_links` asks `resolve` one id at a time, and `resolve` answered
+    with a point-get each — so a report cross-referencing twelve siblings cost
+    thirteen `SourceDoc.get` calls, every one of them on the event loop, three
+    lines below the fix for the identical shape on the client.
+
+    Counted rather than timed: a latency assertion is a wall-clock assertion,
+    while "how many round trips does one render cost" is a number a test can
+    hold. Siblings are seeded through the zip upload because that is how the
+    other crossref tests make them — a direct POST of a PNG is silently dropped
+    by this harness (no image parser wired), which would leave the links
+    unresolved and the count meaningless.
+    """
+    import io
+    import zipfile
+    from unittest.mock import patch
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    siblings = 12
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        body = "# report\n\n" + "\n\n".join(f"See [fig {i}](./fig{i}.md)." for i in range(siblings))
+        z.writestr("report.md", body)
+        for i in range(siblings):
+            z.writestr(f"fig{i}.md", f"# figure {i}\n")
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("docs.zip", buf.getvalue(), "application/zip")},
+    )
+    doc_id = encode_doc_id(cid, "report.md")
+
+    rm = spec.get_resource_manager(SourceDoc)
+    real = type(rm).get
+    calls: list[str] = []
+
+    def counting(self, rid, *a, **k):
+        calls.append(rid)
+        return real(self, rid, *a, **k)
+
+    with patch.object(type(rm), "get", counting):
+        rd = client.get(f"/kb/documents?id={doc_id}").json()
+
+    # the rewrite still happened — every sibling link was resolved
+    assert rd["markdown"].count("kb://doc/") == siblings, rd["markdown"][:200]
+    # ...and it cost a bounded number of reads, not one per sibling
+    assert len(calls) <= 3, f"{siblings} siblings cost {len(calls)} SourceDoc.get calls"
+
+
+def test_crossref_batching_rewrites_exactly_as_a_point_get_each_would():
+    """#730 P4 replaced a mechanism, so this compares OUTPUT, not just cost.
+
+    The batched `resolve` reads from a map filled by one query; the old one did a
+    point-get per candidate id. Counting queries proves it is cheaper, not that
+    it is the same — and what a replacement drops is whatever the old one ALSO
+    did. So: both mechanisms, one corpus, byte-for-byte.
+
+    The corpus is the edges the old resolve had to handle, not the case that
+    prompted the change: extension fallback, a parent-relative path, a missing
+    sibling (left untouched), the same id twice, fragments, query strings,
+    absolute URLs, fenced code, and case.
+    """
+    import io
+    import zipfile
+
+    from specstar.types import ResourceIDNotFoundError
+
+    from workspace_app.kb.links import rewrite_md_links
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for name, body in (("a.md", "# A"), ("nested/b.md", "# B"), ("c.txt", "plain")):
+            z.writestr(name, body)
+        z.writestr("seed.md", "seed")
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("docs.zip", buf.getvalue(), "application/zip")},
+    )
+    rm = spec.get_resource_manager(SourceDoc)
+
+    def url_for(sib, rid):
+        ct, fid = sib.content.content_type, sib.content.file_id
+        if isinstance(ct, str) and ct.startswith("image/") and isinstance(fid, str):
+            return f"/blobs/{fid}"
+        return f"kb://doc/{rid}"
+
+    def point_get_each(text, doc_path):
+        def resolve(rid):
+            try:
+                return url_for(rm.get(rid).data, rid)
+            except ResourceIDNotFoundError:
+                return None
+
+        return rewrite_md_links(text, doc_path=doc_path, collection_id=cid, resolve=resolve)
+
+    cases = [
+        ("seed.md", "[A](./a.md)"),
+        ("seed.md", "[A](a.md)"),
+        ("seed.md", "[A](./a)"),
+        ("seed.md", "[B](./nested/b)"),
+        ("nested/seed.md", "[A](../a.md)"),
+        ("seed.md", "[gone](./gone.md)"),
+        ("seed.md", "[A](./a.md) and [A again](./a.md)"),
+        ("seed.md", "![img](./c.txt)"),
+        ("seed.md", "[ext](https://example.com/a.md)"),
+        ("seed.md", "[anchor](./a.md#section)"),
+        ("seed.md", "```\n[code](./a.md)\n```"),
+        ("seed.md", "[A](./A.MD)"),
+        ("seed.md", ""),
+    ]
+    for doc_path, text in cases:
+        expected = point_get_each(text, doc_path)
+        # the shipped path, reached through the route's own helper shape
+        wanted: set[str] = set()
+
+        def collect(rid, _w=wanted):
+            _w.add(rid)
+            return None
+
+        rewrite_md_links(text, doc_path=doc_path, collection_id=cid, resolve=collect)
+        found = {}
+        if wanted:
+            for row in rm.list_resources(QB.resource_id().in_(sorted(wanted)).build()):
+                if isinstance(row.data, SourceDoc):
+                    found[row.info.resource_id] = row.data  # ty: ignore[unresolved-attribute]
+        actual = rewrite_md_links(
+            text,
+            doc_path=doc_path,
+            collection_id=cid,
+            # bound as a default: a lambda closing over a loop variable is the
+            # classic late-binding trap, and ruff is right to refuse it here.
+            resolve=lambda rid, _f=found: None if (s_ := _f.get(rid)) is None else url_for(s_, rid),
+        )
+        assert actual == expected, (
+            f"{doc_path} :: {text!r}\n  point-get: {expected!r}\n  batched:  {actual!r}"
+        )

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import io
 import logging
+from collections.abc import Callable
 
 from .code_lang import is_code_file
 from .ingest import normalize_text
@@ -54,26 +55,69 @@ def is_structured_text(path: str, content_type: str) -> bool:
     return ext_match or content_type in _STRUCTURED_TEXT_MIMES
 
 
-def preview_markdown(*, path: str, content_type: str, raw: bytes) -> str:
+def once(fn: Callable[[], bytes]) -> Callable[[], bytes]:
+    """Call `fn` at most once, then hand back what it returned.
+
+    Named and exported rather than inlined as a closure so it can be PROBED. As
+    a closure inside `preview_markdown` the memoisation was unreachable from any
+    test: no branch there calls it twice, so deleting the memoisation changed no
+    observable behaviour and the guard for it passed either way. A guarantee that
+    cannot fail a test is not a guarantee.
+
+    It earns its place because `preview_markdown`'s whole reason for taking a
+    callable is that fetching the bytes is expensive (#730): a future branch that
+    reads twice would silently pay twice, which is the defect that change removed.
+    """
+    cached: list[bytes] = []
+
+    def read() -> bytes:
+        if not cached:
+            cached.append(fn())
+        return cached[0]
+
+    return read
+
+
+def preview_markdown(*, path: str, content_type: str, raw: bytes | Callable[[], bytes]) -> str:
     """The body the doc viewer shows for this document, or "" when the FE
     should render (or refuse) the blob itself. Structured-data types return
     verbatim decoded text (the FE builds the tree/grid); xlsx/docx are still
-    projected to markdown here."""
+    projected to markdown here.
+
+    ``raw`` may be a CALLABLE, and a caller for whom fetching the bytes is
+    expensive should pass one: three of the branches below never look at them.
+    An image or a PDF is rendered by the browser from its own blob, and an
+    unrecognised binary gets a download notice — so restoring the blob to answer
+    "" meant the bytes were pulled once here, dropped, and then fetched again by
+    the browser. For a photograph that was the ten seconds a person spent
+    waiting (#730).
+
+    Deliberately NOT a second `needs_bytes(path, content_type)` predicate beside
+    this function: two copies of one branch table drift, and the copy that
+    decides whether to do the expensive thing would be the one nobody re-reads.
+    Asking for the bytes IS the condition.
+    """
     p = path.lower()
     ct = content_type
+    # `isinstance(bytes)` rather than `callable(...)`: the latter narrows to a
+    # top callable whose signature is unknown, which a type checker cannot verify
+    # at the call sites below.
+    fetch: Callable[[], bytes] = (lambda data=raw: data) if isinstance(raw, bytes) else raw
+    read = once(fetch)
+
     if ct.startswith("image/"):
         return ""
     if ct in _BLOB_NATIVE_MIMES or p.endswith(_BLOB_NATIVE_EXTENSIONS):
         return ""
     if is_structured_text(path, content_type):
         # FE renders the tree/grid from this — hand back the verbatim text.
-        return normalize_text(raw.decode("utf-8", errors="replace"))
+        return normalize_text(read().decode("utf-8", errors="replace"))
     if p.endswith(".xlsx"):
-        return _xlsx_preview(raw)
+        return _xlsx_preview(read())
     if p.endswith(".docx"):
-        return _docx_preview(raw)
+        return _docx_preview(read())
     if ct.startswith("text/") or is_code_file(p):
-        return normalize_text(raw.decode("utf-8", errors="replace"))
+        return normalize_text(read().decode("utf-8", errors="replace"))
     # Undisplayable binary (pptx, unknown) — FE shows the download notice.
     return ""
 
