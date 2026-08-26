@@ -84,7 +84,7 @@ describe("WikiBrowser (#50 P7)", () => {
     const chip = await screen.findByRole("button", { name: /reflow\.md/ });
     expect(chip).toHaveAttribute("title", "Open reflow.md");
     await userEvent.click(chip);
-    expect(onOpenDoc).toHaveBeenCalledWith("col-3/me/reflow.md");
+    expect(onOpenDoc).toHaveBeenCalledWith("col-3\u2215reflow.md"); // encode_doc_id shape
   });
 
   it("ignores .gitkeep placeholder files in the page tree (#79)", async () => {

@@ -19,7 +19,7 @@ const renderTab = () =>
  * title is the doc's stem, so a distinctive filename gives a findable title. */
 async function seedRun() {
   await mockKbApi.uploadDocument("col-1", new File(["RZ3 is the third zone"], "reflow.md"));
-  return mockKbApi.generateContextCards("col-1", ["col-1/me/reflow.md"]);
+  return mockKbApi.generateContextCards("col-1", ["col-1\u2215reflow.md"]);
 }
 
 describe("<CollectionReviewTab /> (#415 → #481 table)", () => {

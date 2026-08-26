@@ -3,6 +3,20 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/** Build a doc id the way the BACKEND does — `encode_doc_id(collection, path)`
+ * joins them with "/" and then rewrites EVERY ASCII slash to U+2215, so the id
+ * is slash-free and survives a URL untouched.
+ *
+ * These fixtures used to be `encodeURIComponent("collection/user/path")`, which
+ * is a format the backend has never emitted: it is path-keyed, so there is no
+ * user segment, and the separator is not an ASCII slash. The component's label
+ * parser agreed with the fixtures and disagreed with production, so every
+ * non-image attachment displayed its raw id — and the whole suite stayed green.
+ * A fixture that models the wrong world tests the wrong world. */
+function docId(naturalKey: string): string {
+  return naturalKey.replace(/\//g, "\u2215");
+}
+
 import { CardAttachments, docLabel } from "./CardAttachments";
 
 afterEach(cleanup);
@@ -10,7 +24,7 @@ afterEach(cleanup);
 describe("docLabel", () => {
   it("shows the document's filename, not the opaque token", () => {
     // encode_doc_id = percent-encoded collection/user/path.
-    const id = encodeURIComponent("coll-1/alice/reports/ring-defect.png");
+    const id = docId("coll-1/reports/ring-defect.png");
     expect(docLabel(id)).toBe("ring-defect.png");
   });
 
@@ -21,8 +35,8 @@ describe("docLabel", () => {
 
 describe("CardAttachments", () => {
   const ids = [
-    encodeURIComponent("c/u/a.png"),
-    encodeURIComponent("c/u/spec.pdf"),
+    docId("c/a.png"),
+    docId("c/spec.pdf"),
   ];
 
   it("lists every linked document by name", () => {
@@ -56,7 +70,7 @@ describe("CardAttachments", () => {
 });
 
 describe("CardAttachments — attach", () => {
-  const ids = [encodeURIComponent("c/u/a.png")];
+  const ids = [docId("c/a.png")];
 
   it("hands a picked file to onAttach so the card can link it", async () => {
     const onAttach = vi.fn();
@@ -89,7 +103,7 @@ describe("CardAttachments — attach", () => {
 });
 
 describe("CardAttachments — open", () => {
-  const ids = [encodeURIComponent("c/u/a.png")];
+  const ids = [docId("c/a.png")];
 
   it("opens a linked document when its name is clicked (a link that can't be opened is useless)", () => {
     const onOpen = vi.fn();
@@ -118,8 +132,8 @@ describe("CardAttachments — open", () => {
 });
 
 describe("CardAttachments — image thumbnails", () => {
-  const img = encodeURIComponent("c/u/diagram.png");
-  const pdf = encodeURIComponent("c/u/spec.pdf");
+  const img = docId("c/diagram.png");
+  const pdf = docId("c/spec.pdf");
 
   it("shows an image attachment as a real thumbnail, not a text pill", () => {
     render(

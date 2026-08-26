@@ -14,17 +14,27 @@
  * by dropping a file is a later, heavier piece; this is see + detach.
  */
 
-/** A doc-id is `encode_doc_id` = percent-encoded `collection/user/path`. For a
- * DISPLAY label we recover the path's basename; logic never parses it. */
+/** U+2215 DIVISION SLASH — what `encode_doc_id` substitutes for every ASCII "/"
+ * so the id stays slash-free and a path round-trips a URL untouched. */
+const DOC_ID_SLASH = "\u2215";
+
+/** A doc-id is `encode_doc_id(collection_id, path)`: the two joined by "/", with
+ * EVERY ASCII slash — the separator and any inside the path — rewritten to
+ * U+2215. For a DISPLAY label we recover the path's basename; logic never
+ * parses it.
+ *
+ * This used to split on ASCII "/" after a `decodeURIComponent`, describing a
+ * three-part percent-encoded `collection/user/path` that the backend does not
+ * produce and, being path-keyed rather than per-user, never did. Nothing
+ * matched, so the fallback fired and every non-image attachment displayed its
+ * raw id — `collection:288b59a1-…∕M4∕report.csv` where a filename belonged. The
+ * unit tests agreed with the code because they BUILT their fixtures the same
+ * wrong way; only a real document proved otherwise. */
 export function docLabel(docId: string): string {
-  try {
-    const decoded = decodeURIComponent(docId);
-    const path = decoded.split("/").slice(2).join("/") || decoded;
-    const base = path.split("/").filter(Boolean).pop();
-    return base || docId;
-  } catch {
-    return docId;
-  }
+  const parts = docId.split(DOC_ID_SLASH).filter(Boolean);
+  // [collection, ...path segments] — anything shorter has no path to show.
+  const base = parts.length > 1 ? parts[parts.length - 1] : "";
+  return base || docId;
 }
 
 export function CardAttachments({
